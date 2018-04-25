@@ -1,4 +1,4 @@
-include "mkl_vsl.f90"
+! include "mkl_vsl.f90"
 
 module misc
 use MODULE_FILE
@@ -1742,8 +1742,8 @@ end subroutine RandomizedSVD
 subroutine RandomMat(m,n,k,A,Oflag)
 	! ! use lapack95
 	! ! use blas95
-	use mkl_vsl_type
-	use mkl_vsl				 
+	! use mkl_vsl_type
+	! use mkl_vsl				 
 	implicit none
 	
 	integer m,n,k,mn_min,ktmp
@@ -1755,7 +1755,7 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	integer ii,jj,kk,i,j,flag0,rank
 	integer:: Oflag
 	
-	type(VSL_STREAM_STATE) ::stream(2)
+	! type(VSL_STREAM_STATE) ::stream(2)
 	integer brng, method, seedd,ierror								   
  	ktmp = k
 	if(ktmp>min(m,n))then
@@ -1768,24 +1768,24 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	
 
 
-	allocate(Ar(m,n))
-	allocate(Ai(m,n))
-	brng   = VSL_BRNG_MCG31
-	method = VSL_RNG_METHOD_UNIFORM_STD
-	call random_number(c)
-	seedd = NINT(1000*c)
-	ierror=vslnewstream( stream(1), brng,  seedd )
-	call random_number(c)
-	seedd = NINT(1000*c)
-	ierror=vslnewstream( stream(2), brng,  seedd )
-	ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
-	ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
-	! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
-	ierror=vsldeletestream(stream(1))	
-	ierror=vsldeletestream(stream(2))	
-	A = Ar + junit*Ai
-	deallocate(Ar)
-	deallocate(Ai)
+	! allocate(Ar(m,n))
+	! allocate(Ai(m,n))
+	! brng   = VSL_BRNG_MCG31
+	! method = VSL_RNG_METHOD_UNIFORM_STD
+	! call random_number(c)
+	! seedd = NINT(1000*c)
+	! ierror=vslnewstream( stream(1), brng,  seedd )
+	! call random_number(c)
+	! seedd = NINT(1000*c)
+	! ierror=vslnewstream( stream(2), brng,  seedd )
+	! ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
+	! ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
+	! ! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
+	! ierror=vsldeletestream(stream(1))	
+	! ierror=vsldeletestream(stream(2))	
+	! A = Ar + junit*Ai
+	! deallocate(Ar)
+	! deallocate(Ai)
 
 
 
@@ -2966,8 +2966,8 @@ n=size(B,2)
 
 ldb=m
 
-if(side=='L' .or. 'l')lda=m
-if(side=='R' .or. 'r')lda=n
+if(side=='L' .or. side=='l')lda=m
+if(side=='R' .or. side=='r')lda=n
 
 call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
@@ -2991,22 +2991,22 @@ m=size(MatC,1)
 n=size(MatC,2)
 ldc=m
 
-if(transa=='N' .or. 'n')then
+if(transa=='N' .or. transa=='n')then
 k=size(MatA,2)
 lda=m
 endif
 
-if(transa=='T' .or. 't')then
+if(transa=='T' .or. transa=='t')then
 k=size(MatA,1)
 lda=k
 endif
 
 
-if(transb=='N' .or. 'n')then
+if(transb=='N' .or. transb=='n')then
 ldb=k
 endif
 
-if(transb=='T' .or. 't')then
+if(transb=='T' .or. transb=='t')then
 ldb=n
 endif
 

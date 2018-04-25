@@ -1804,8 +1804,7 @@ subroutine Butterfly_compress_N15(blocks,Memory)
     ! blocks%level_butterfly=level_butterfly
 
 	level_butterfly = blocks%level_butterfly
-	
-	
+		
     num_blocks=2**level_butterfly
 
     allocate(blocks%ButterflyU(num_blocks))
@@ -2138,11 +2137,17 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 		! construct the middle level and the left half
 		
 		do index_i_m=1, 2**levelm
+			
+			write(*,*)'ddc1'
+			
 			level_loc = 0
 			index_i_loc = 1
 			allocate(ButterflyP_old%blocks(2**(level_loc+1),2**(level_butterflyL-level_loc)))
 			
 			do index_j_m=1, 2**(level_butterfly-levelm)	
+				
+				write(*,*)index_i_m,2**levelm,index_j_m,2**(level_butterfly-levelm),'c1'
+				
 				index_j_loc = index_j_m
 				group_m=blocks%row_group   ! Note: row_group and col_group interchanged here 
 				group_n=blocks%col_group    
@@ -2158,9 +2163,13 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 				allocate(matU(mm,rmax))
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
+				
+				write(*,*)index_i_m,2**levelm,index_j_m,2**(level_butterfly-levelm),'cao'
+				
 				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,SVD_tolerance_forward*0.1,SVD_tolerance_forward)					
 				! rank = min(rank,37)
 				
+				write(*,*)index_i_m,2**levelm,index_j_m,2**(level_butterfly-levelm),'cao1',Singular(1:rank)
 				
 				! if(rank==53)then
 					! write(*,*)group_m,group_n,blocks%row_group,blocks%col_group,blocks%level_butterfly,blocks%level
@@ -2206,7 +2215,7 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 					end do
 				! end if
 				
-
+				write(*,*)'aaa'
 				
 				allocate(mat_tmp(mm,rank))
 				!$omp parallel do default(shared) private(i,j,k,ctemp)
@@ -2217,6 +2226,8 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 				enddo
 				!$omp end parallel do
 				
+				write(*,*)'aaass'
+				
 				mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
 				allocate(ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%matrix(mm1,rank))
 				allocate(ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%matrix(mm-mm1,rank))
@@ -2225,6 +2236,9 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 				ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%matrix=mat_tmp(1+mm1:mm,1:rank)				
 				
 				deallocate(matU,matV,Singular,mat_tmp)
+				
+				write(*,*)'addaa'
+				
 			end do
 			
 			n1 = OMP_get_wtime()
@@ -3797,7 +3811,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
         norm_Z=norm_Z+inner_UV+norm_U*norm_V
 
         rank=rank+1
-		if(rank>rmax)then
+		if(rank+1>rmax)then
 			write(*,*)'increase rmax',rank,rmax
 			stop
 		end if
@@ -4083,7 +4097,7 @@ subroutine ACA_CompressionForward_givenfullmat(matU,matV,Singular,header_m,heade
 		! end if
 		
 		
-		if(rank>rmax)then
+		if(rank+1>rmax)then
 			write(*,*)'increase rmax',rank,rmax
 			stop
 		end if

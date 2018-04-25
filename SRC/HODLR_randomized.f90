@@ -1440,61 +1440,61 @@ subroutine GetOutputs_BlackBox(trans,Vin,Vout,num_vect)
 		call MVM_Z_forward_partial(trans,Maxedge,num_vect,Maxlevel_for_blocks+1,Vin,Vout,cascading_factors_ref)
 	else 
 
-		if(trans=='N')fl_transpose=0
-		if(trans=='T')fl_transpose=1
+		! if(trans=='N')fl_transpose=0
+		! if(trans=='T')fl_transpose=1
 		
-		allocate(Vin_tmp(Maxedge,1))
-		allocate(Vout_tmp(Maxedge,1))
+		! allocate(Vin_tmp(Maxedge,1))
+		! allocate(Vout_tmp(Maxedge,1))
 		
-		do ii=1,num_vect
+		! do ii=1,num_vect
 			
-			do kk=1,Maxedge
-				Vin_tmp(new2old(kk),1) = Vin(kk,ii)
-			enddo
+			! do kk=1,Maxedge
+				! Vin_tmp(new2old(kk),1) = Vin(kk,ii)
+			! enddo
 			
-			! write(*,*) "Blackbox Computing ......"
+			! ! write(*,*) "Blackbox Computing ......"
 
-			! t3 = OMP_get_wtime()	
+			! ! t3 = OMP_get_wtime()	
 
-			open(unit=12,file='../curr_input.inp',status='unknown')	
-			write(12,*)fl_transpose
-			do kk=1,Maxedge
-				write(12,*),dble(Vin_tmp(kk,1)),aimag(Vin_tmp(kk,1))
-			end do
-			close(12)
+			! open(unit=12,file='../curr_input.inp',status='unknown')	
+			! write(12,*)fl_transpose
+			! do kk=1,Maxedge
+				! write(12,*),dble(Vin_tmp(kk,1)),aimag(Vin_tmp(kk,1))
+			! end do
+			! close(12)
 
-			black_step=1
-			open(unit=246,file='../black_box_flag.inp',status='unknown')
-				write(246,*),black_step
-			close(unit=246)
+			! black_step=1
+			! open(unit=246,file='../black_box_flag.inp',status='unknown')
+				! write(246,*),black_step
+			! close(unit=246)
 			
-			do while ((black_step .ne. 4))
-			   open(unit=246,file='../black_box_flag.inp',status='old')
-			   call sleepqq(50)
-			   read(246,*)black_step
-			   close(unit=246)
-			end do			
+			! do while ((black_step .ne. 4))
+			   ! open(unit=246,file='../black_box_flag.inp',status='old')
+			   ! call sleepqq(50)
+			   ! read(246,*)black_step
+			   ! close(unit=246)
+			! end do			
 			
 
-			open(unit=210,file='../curr_out.out',status='old')
-			do kk=1,Maxedge
-				read(210,*)tmp(1),tmp(2)
-				Vout_tmp(kk,1) = cmplx(tmp(1),tmp(2),dp) 
-			end do
-			close(unit=210)
+			! open(unit=210,file='../curr_out.out',status='old')
+			! do kk=1,Maxedge
+				! read(210,*)tmp(1),tmp(2)
+				! Vout_tmp(kk,1) = cmplx(tmp(1),tmp(2),dp) 
+			! end do
+			! close(unit=210)
 			
 			
-			do kk=1,Maxedge
-				Vout(kk,ii) = Vout_tmp(new2old(kk),1) 
-			enddo
+			! do kk=1,Maxedge
+				! Vout(kk,ii) = Vout_tmp(new2old(kk),1) 
+			! enddo
 			
-			! t4 = OMP_get_wtime()	
-			! write(*,*)'Blackbox Computing finish: ',t4-t3,'secnds'
+			! ! t4 = OMP_get_wtime()	
+			! ! write(*,*)'Blackbox Computing finish: ',t4-t3,'secnds'
 
-		end do
+		! end do
 		
-		deallocate(Vin_tmp)
-		deallocate(Vout_tmp)
+		! deallocate(Vin_tmp)
+		! deallocate(Vout_tmp)
 		
 	end if
 	n2 = OMP_get_wtime()

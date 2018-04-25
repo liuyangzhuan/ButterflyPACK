@@ -319,14 +319,14 @@ subroutine H_matrix_structuring(para)
             basis_group(group)%level=level
 
             groupcenter(1:dimn)=0.0d0
-            !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
+            ! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
             do edge=basis_group(group)%head, basis_group(group)%tail
                 do ii=1,dimn
                     groupcenter(ii)=groupcenter(ii)+xyz(ii,node_patch_of_edge(0,edge))
                 enddo
 				! if(group==24)write(*,*)edge,groupcenter(:),xyz(1,node_patch_of_edge(0,edge))
 			enddo
-            !$omp end parallel do
+            ! !$omp end parallel do
             do ii=1,dimn
                 groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
             enddo
@@ -529,8 +529,10 @@ subroutine BPlus_structuring()
 	real*8::minbound,theta,phi,r,rmax,phi_tmp,measure
 	real*8,allocatable::Centroid_M(:,:),Centroid_N(:,:)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
+	integer Dimn
 
-
+	Dimn = size(xyz,1)
+	
 	do level_c = 1,Maxlevel_for_blocks+1
 		do ii =1,cascading_factors(level_c)%N_block_forward
            
@@ -605,6 +607,7 @@ subroutine BPlus_structuring()
 								allocate(Centroid_M(2**levelm,3))
 								allocate(Isboundary_M(2**levelm))
 								Isboundary_M = 0
+								Centroid_M = 0
 								
 								do index_i_m=1, 2**levelm
 									group_m=blocks%row_group   ! Note: row_group and col_group interchanged here 
@@ -666,7 +669,7 @@ subroutine BPlus_structuring()
 								allocate(Centroid_N(2**(level_butterfly-levelm),3))
 								allocate(Isboundary_N(2**(level_butterfly-levelm)))
 								Isboundary_N = 0
-								
+								Centroid_N = 0
 								
 								
 								do index_j_m=1, 2**(level_butterfly-levelm)	
@@ -680,6 +683,8 @@ subroutine BPlus_structuring()
 											if(measure<3*minedgelength)then
 												Isboundary_N(index_j_m) = 1 
 												CNT = CNT + 1
+												! write(*,*)nn,index_j_m,'ok'
+												! write(*,*)Centroid_N(index_j_m,1),xyz(1,node_patch_of_edge(0,nn))
 												Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
 												Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + xyz(2,node_patch_of_edge(0,nn))
 												Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + xyz(3,node_patch_of_edge(0,nn))
@@ -854,13 +859,12 @@ subroutine BPlus_structuring()
 				end if			
 								
 				! if(level_c==1 .and. ii==1)then
-				
+				 
 				! write(177,*)'Bplus:', level_c,ii
 				do ll=1,cascading_factors(level_c)%BP(ii)%Lplus
 				! write(*,*)cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
 					do bb = 1,cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound
-						! write(177,*)ll,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group
-						write(177,'(I3,I7,I3,I3,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7)')level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center,basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center
+						write(177,'(I3,I7,I3,I3,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7)')level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
 					end do
 				end do
 				! end if

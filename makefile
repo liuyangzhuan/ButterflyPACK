@@ -1,10 +1,10 @@
 # Rules:
 .PHONY: all checkdirs clean mvp randh em3d ctest
 
-Compiler=Intel#GNU#
+Compiler=GNU#Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =NERSC#Laptop
+Platform =Laptop#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -26,10 +26,11 @@ endif
 
 ifeq ($(Platform),Laptop)
 LIB_MKL = -L/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64 \
-        -lmkl_blas95_lp64 -lmkl_lapack95_lp64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core
+	-lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core
 INCLUDE_MKL = -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include/intel64/lp64 \
-F90 = mpiifort
-CPPC = mpiicpc 
+
+F90 = ifort
+CPPC = icpc 
 LinkFlagC = -Bdynamic -cxxlib -lifcore $(LIB_MKL) 
 LinkFlagF = -Bdynamic 
 endif
@@ -38,8 +39,8 @@ ifeq ($(Platform),CAC)
 LIB_MKL = -L$(MKL_LIB) \
            -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core
 INCLUDE_MKL = -I$(MKL_INCLUDE)/intel64/lp64 -I$(MKL_INCLUDE)
-F90 = mpiifort
-CPPC = mpiicpc 
+F90 = ifort
+CPPC = icpc 
 LinkFlagC = -Bdynamic -cxxlib -lifcore $(LIB_MKL) 
 LinkFlagF = -Bdynamic 
 endif
@@ -55,26 +56,32 @@ endif
 ifeq ($(Compiler),GNU)
 MODFLAGS = -J$(TargetDir) -I$(TargetDir)
 
-
-
-
 ifeq ($(Platform),Laptop)
 LIB_MKL = -L/home/administrator/Desktop/software/MKL_INSTALL/lib/intel64 \
-       -lmkl_blas95_lp64 -lmkl_lapack95_lp64 -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
+       -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
 INCLUDE_MKL = -I/home/administrator/Desktop/software/MKL_INSTALL/include/intel64/lp64 \
-
-
-F90 = mpif90
-CPPC = mpicxx
-
+F90 = ifort
+CPPC = icpc
 LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL) 
 LinkFlagF = -Bdynamic
-
-#F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-#CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
-CFLAGS=-std=c++11 -O3 -fopenmp 
 endif
+
+
+ifeq ($(Platform),CAC)
+LIB_MKL = -L$(MKL_LIB) \
+           -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
+INCLUDE_MKL = -I$(MKL_INCLUDE)/intel64/lp64 -I$(MKL_INCLUDE)
+F90 = ifort
+CPPC = icpc
+LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL) 
+LinkFlagF = -Bdynamic
+endif
+
+F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+#F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
+#CFLAGS=-std=c++11 -O3 -fopenmp 
+
 endif
 
 

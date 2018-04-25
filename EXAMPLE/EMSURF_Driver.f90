@@ -120,7 +120,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	preconditioner=0
 	verboselevel=2
 	xyzsort=1
-	LnoBP=4
+	LnoBP=4000
 	TwoLayerOnly=0
 	CFIE_alpha=1
 	explicitflag=1

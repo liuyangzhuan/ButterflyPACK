@@ -1,0 +1,7 @@
+ EFIE computing
+ wavelength:  0.50000000000000000     
+ Maxedge:        3379
+ Maxlevel_for_blocks:           7
+ Forward ACA error threshold   1.0000000000000000E-004
+ Forward SVD error threshold   1.0000000000000000E-004
+ 
