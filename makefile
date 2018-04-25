@@ -60,8 +60,9 @@ ifeq ($(Platform),Laptop)
 LIB_MKL = -L/home/administrator/Desktop/software/MKL_INSTALL/lib/intel64 \
        -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
 INCLUDE_MKL = -I/home/administrator/Desktop/software/MKL_INSTALL/include/intel64/lp64 \
-F90 = ifort
-CPPC = icpc
+
+F90 = mpif90
+CPPC = mpicxx
 LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL) 
 LinkFlagF = -Bdynamic
 endif
@@ -71,8 +72,8 @@ ifeq ($(Platform),CAC)
 LIB_MKL = -L$(MKL_LIB) \
            -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
 INCLUDE_MKL = -I$(MKL_INCLUDE)/intel64/lp64 -I$(MKL_INCLUDE)
-F90 = ifort
-CPPC = icpc
+F90 = mpif90
+CPPC = mpicxx
 LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL) 
 LinkFlagF = -Bdynamic
 endif
