@@ -623,9 +623,9 @@ subroutine BPlus_structuring()
 										end do
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
 										
-										if(blocks%col_group==8 .or. blocks%col_group==9)then
+										! if(blocks%col_group==8 .or. blocks%col_group==9)then
 											write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT
-										endif
+										! endif
 										
 										
 									else if(xyzsort==2)then
