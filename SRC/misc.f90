@@ -2622,9 +2622,12 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
 			UU=0
 			VV=0
 		else 
-			write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
+			! write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
+			Singular=0
+			UU=0
+			VV=0
 			call gesvdf90(Matrix,Singular,UU,VV)
-			write(*,*)'gani'
+			! write(*,*)'gani'
 		endif
 	endif
 	
@@ -2652,12 +2655,16 @@ n=size(Matrix,2)
 mn_min = min(m,n)
 
 
-allocate(RWORK(5*m))
+allocate(RWORK(5*mn_min))
+RWORK=0
 LWORK=-1
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
 
 LWORK=TEMP(1)*1.001
 allocate(WORK(LWORK))     
+WORK=0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
 
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, INFO)
 
@@ -2694,7 +2701,7 @@ call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
 LWORK=TEMP(1)*1.001
 allocate(WORK(LWORK))     
-
+WORK=0
 call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
 
 
@@ -2731,11 +2738,12 @@ n=size(Matrix,2)
 mn_min = min(m,n)
 
 allocate(RWORK(2*m))
-
+RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
 LWORK=TEMP(1)*1.001
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK)) 
+WORK=0    
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
 
 if(INFO/=0)then
@@ -2784,7 +2792,8 @@ end if
 LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
 LWORK=TEMP(1)*1.001
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
+WORK=0     
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
 if(INFO/=0)then
@@ -2825,7 +2834,7 @@ call ZUNGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
 LWORK=TEMP(1)*1.001
 allocate(WORK(LWORK))     
-
+WORK=0
 call ZUNGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
 
 
@@ -2931,7 +2940,7 @@ call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
 LWORK=TEMP(1)*1.001
 allocate(WORK(LWORK))     
-
+WORK=0
 call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
 
 

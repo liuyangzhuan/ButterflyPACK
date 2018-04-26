@@ -2245,20 +2245,20 @@ subroutine Butterfly_compress_N15(blocks,Memory)
 				! do index_i_loc=1, 2**level_loc
 					! do index_j_loc=1, 2**(level_butterflyL-level_loc)
 				
-				write(*,*)'addaa111111'
+				! write(*,*)'addaa111111'
 
 				
-				! !$omp parallel do default(shared) private(index_ij_loc,index_i_loc,index_j_loc)
+				!$omp parallel do default(shared) private(index_ij_loc,index_i_loc,index_j_loc)
 				do index_ij_loc = 1, 2**level_butterflyL
 					index_j_loc = mod(index_ij_loc-1,2**(level_butterflyL-level_loc))+1
 					index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**(level_butterflyL-level_loc)))
 				
 					call LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,SVD_tolerance_forward,ButterflyP_old,ButterflyP)				
 				enddo
-				! !$omp end parallel do
+				!$omp end parallel do
 				
 				
-				write(*,*)'addaa1111112222'
+				! write(*,*)'addaa1111112222'
 				
 				
 				do index_ij_loc = 1, 2**level_butterflyL
@@ -4312,7 +4312,7 @@ real*8:: SVD_tolerance
 	enddo
 	! !$omp end parallel do						
 
-	write(*,*)'dddd',fnorm(QQ,mm,nn)
+	! write(*,*)'dddd',fnorm(QQ,mm,nn)
 
 	mn=min(mm,nn)
 	allocate (UU(mm,mn),VV(mn,nn),Singular(mn))
@@ -4320,7 +4320,7 @@ real*8:: SVD_tolerance
 	! rank = min(rank,37)
 
 	! rank = 7
-	write(*,*)'dddd', rank
+	! write(*,*)'dddd', rank
 	
 	! rankmax_for_butterfly(level_loc)=max(rank,rankmax_for_butterfly(level_loc))
 	! rankmin_for_butterfly(level_loc)=min(rank,rankmin_for_butterfly(level_loc))
