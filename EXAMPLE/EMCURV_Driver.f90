@@ -128,7 +128,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	TwoLayerOnly=0
 	explicitflag=1
 	fullmatflag=0
-	
+	touch_para=3
 	
 	! open (90,file='input.txt')
 	! read (90,*)

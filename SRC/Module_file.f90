@@ -174,7 +174,7 @@ module MODULE_FILE
      integer Test_blocks, Test_i, Test_j, Preset_level_butterfly, Optimizing_forward
 	 real*8 Bigvalue, ACA_tolerance_forward, SVD_tolerance_forward,SVD_tolerance_factor, ACA_tolerance_split, SVD_tolerance_split,relax_lamda,Rank_detection_factor
 	 real*8 SVD_tolerance_add, ACA_tolerance_add, Discret, levelpara_control, ACA_tolerance_aggregate, SVD_tolerance_aggregate
-	 real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3
+	 real*8 touch_para, rank_approximate_para1, rank_approximate_para2, rank_approximate_para3
      integer Maxgroup,Maxblock, Split_method, Forward_method, Add_method, Aggregate_method, Add_method_of_base_level
      integer Nmin_leaf, Static, Fast_inverse, rank_control_forward, rank_control_add, rank_control_split, rank_control_aggregate
      real*8 Time_Direct_LLD, Time_Add_Multiply_Baselevel, Time_Multiply_Butterfly, Time_Solve_XLM

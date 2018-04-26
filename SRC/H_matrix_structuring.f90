@@ -382,7 +382,7 @@ subroutine H_matrix_structuring(para)
 					phi_end = 0
 					do edge=basis_group(group)%head, basis_group(group)%tail
 						call Cart2Sph(xyz(1,node_patch_of_edge(0,edge)),xyz(2,node_patch_of_edge(0,edge)),xyz(3,node_patch_of_edge(0,edge)),Origins,r,theta,phi)					
-						if(abs(phi-2*pi)< 3*minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
+						if(abs(phi-2*pi)< touch_para*minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
 					enddo
 					mm = basis_group(group)%tail - basis_group(group)%head + 1
 					allocate (distance(mm))	
@@ -615,7 +615,7 @@ subroutine BPlus_structuring()
 									if(xyzsort==1)then	
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<3*minedgelength)then
+											if(measure<touch_para*minedgelength)then
 												Isboundary_M(index_i_m) = 1 
 												CNT = CNT + 1
 												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ xyz(1:Dimn,node_patch_of_edge(0,nn))
@@ -624,7 +624,7 @@ subroutine BPlus_structuring()
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
 										
 										! if(blocks%col_group==8 .or. blocks%col_group==9)then
-											write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT,sortdirec,seperator
+											! write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT,sortdirec,seperator
 										! endif
 										
 										
@@ -633,7 +633,7 @@ subroutine BPlus_structuring()
 											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< 3*minedgelength/r)then
+												if(measure< touch_para*minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
 													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -649,7 +649,7 @@ subroutine BPlus_structuring()
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< 3*minedgelength/r)then
+												if(measure< touch_para*minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
 													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -681,7 +681,7 @@ subroutine BPlus_structuring()
 									if(xyzsort==1)then	
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
 											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<3*minedgelength)then
+											if(measure<touch_para*minedgelength)then
 												Isboundary_N(index_j_m) = 1 
 												CNT = CNT + 1
 												! write(*,*)nn,index_j_m,'ok'
@@ -696,7 +696,7 @@ subroutine BPlus_structuring()
 											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< 3*minedgelength/r)then
+												if(measure< touch_para*minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
 													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -712,7 +712,7 @@ subroutine BPlus_structuring()
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< 3*minedgelength/r)then
+												if(measure< touch_para*minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
 													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -774,9 +774,9 @@ subroutine BPlus_structuring()
 								
 							end do	
 							
-							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
-								write(*,*)level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
-							endif
+							! if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+								! write(*,*)level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
+							! endif
 							
 							call assert(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								

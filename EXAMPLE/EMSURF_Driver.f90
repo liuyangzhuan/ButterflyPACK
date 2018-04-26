@@ -135,7 +135,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	CFIE_alpha=1
 	explicitflag=1
 	fullmatflag=0
-	
+	touch_para=3
 	
 	! open (90,file='input.txt')
 	! read (90,*)
