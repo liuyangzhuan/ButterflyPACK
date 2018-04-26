@@ -1,10 +1,10 @@
 # Rules:
-.PHONY: all checkdirs clean mvp randh em3d ctest
+.PHONY: all checkdirs clean mvp randh em3d em2d ctest
 
-Compiler=GNU#Intel#GNU#
+Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =Laptop#CAC#NERSC#Laptop
+Platform =NERSC#Laptop#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -56,6 +56,7 @@ endif
 ifeq ($(Compiler),GNU)
 MODFLAGS = -J$(TargetDir) -I$(TargetDir)
 
+
 ifeq ($(Platform),Laptop)
 LIB_MKL = -L/home/administrator/Desktop/software/MKL_INSTALL/lib/intel64 \
        -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
@@ -96,13 +97,15 @@ OBJECTS = $(obj_Files:%.o= $(TargetDir)/%.o)
 
 OBJECTS_fmvpmain = $(TargetDir)/ButterflyMVP.o
 OBJECTS_frandhmain = $(TargetDir)/HODLR_Randconst.o
+OBJECTS_fem2dmain = $(TargetDir)/EMCURV_Driver.o
 OBJECTS_fem3dmain = $(TargetDir)/EMSURF_Driver.o
 OBJECTS_cmain = $(TargetDir)/testH.o
 
-all: mvp randh em3d ctest
+all: mvp randh em3d em2d ctest
 
 mvp: EXECUTABLE = fmvpexe
 randh: EXECUTABLE = frandhexe
+em2d: EXECUTABLE = em2dexe
 em3d: EXECUTABLE = em3dexe
 ctest: EXECUTABLE = ctestexe
 
@@ -115,6 +118,9 @@ mvp: checkdirs $(OBJECTS) $(OBJECTS_fmvpmain)
 randh: checkdirs $(OBJECTS) $(OBJECTS_frandhmain)
 	@echo Linking $@ version...
 	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_frandhmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
+em2d: checkdirs $(OBJECTS) $(OBJECTS_fem2dmain)
+	@echo Linking $@ version...
+	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_fem2dmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
 em3d: checkdirs $(OBJECTS) $(OBJECTS_fem3dmain)
 	@echo Linking $@ version...
 	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_fem3dmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
@@ -145,6 +151,7 @@ clean:
 	rm -rf ctestexe
 	rm -rf fmvpexe
 	rm -rf frandhexe
+	rm -rf em2dexe
 	rm -rf em3dexe
 checkdirs: $(TargetDir)
 
