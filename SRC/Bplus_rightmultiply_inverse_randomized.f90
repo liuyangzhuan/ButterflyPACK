@@ -1163,7 +1163,6 @@ subroutine OneL_Get_Randomized_Vectors_RR_Sblock(level_c,rowblock,nth_s,nth_e,nu
 				tailer_n=basis_group(groupn_start+i-1)%tail
 				nn=tailer_n-header_n+1
 				k=header_n-header_nn
-
 				! allocate(matrixtemp1(num_vect_subsub,nn))
 				call RandomMat(nn,num_vect_subsub,min(nn,num_vect_subsub),RandomVectors_InOutput(1)%vector(1+k:nn+k,(nth-nth_s)*num_vect_subsub+1:(nth-nth_s)*num_vect_subsub+num_vect_subsub),0)
 
@@ -1186,6 +1185,8 @@ subroutine OneL_Get_Randomized_Vectors_RR_Sblock(level_c,rowblock,nth_s,nth_e,nu
     random1=>RandomVectors_InOutput(1)
     random2=>RandomVectors_InOutput(2)
     ctemp1=1.0d0 ; ctemp2=0.0d0
+	
+	
 n1 = OMP_get_wtime()  
   call butterfly_block_MVP_randomized(block_o,'N',random1,random2,ctemp1,ctemp2)
 n2 = OMP_get_wtime()
@@ -1247,6 +1248,7 @@ n2 = OMP_get_wtime()
 	end do
 	! ! write(*,*)vec_new(1,1),RandomVectors_InOutput(2)%vector(1,1)
 	RandomVectors_InOutput(3)%vector = vec_new
+
 	deallocate(vec_old)
 	deallocate(vec_new)
 

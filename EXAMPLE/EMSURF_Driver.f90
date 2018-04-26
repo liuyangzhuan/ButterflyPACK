@@ -104,7 +104,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     rank_approximate_para1=6.0
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
-	threads_num=8
+	threads_num=1
 	LS_tolerance=1d-10
 	tfqmr_tolerance=1d-6
 	tfqmr_tolerance_solving=3d-3

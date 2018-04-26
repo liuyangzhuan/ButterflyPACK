@@ -1789,11 +1789,11 @@ subroutine RandomMat(m,n,k,A,Oflag)
 
 
 
-	! do ii=1,m
-	! do jj=1,n
-		! A(ii,jj)=random_complex_number()
-	! end do
-	! end do
+	do ii=1,m
+	do jj=1,n
+		A(ii,jj)=random_complex_number()
+	end do
+	end do
 
 
 	
@@ -2622,8 +2622,9 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
 			UU=0
 			VV=0
 		else 
-			! write(*,*)fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
+			write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
 			call gesvdf90(Matrix,Singular,UU,VV)
+			write(*,*)'gani'
 		endif
 	endif
 	
