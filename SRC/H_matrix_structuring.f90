@@ -748,6 +748,10 @@ subroutine BPlus_structuring()
 											group_n=blocks%col_group  
 											group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 											
+											if(blocks%col_group==8 .or blocks%col_group==9)then
+												write(*,*)group_m,group_n,sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)),'nima'
+											end	if
+											
 											if(Isboundary_N(index_j_m)==1)then
 												if(dist > sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)))then
 													! if(level_c==1)write(*,*)index_i_m,index_j_m
@@ -765,9 +769,9 @@ subroutine BPlus_structuring()
 								
 							end do	
 							
-							! if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
-								write(*,*)level_c,ii,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
-							! endif
+							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+								write(*,*)level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
+							endif
 							
 							call assert(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								
