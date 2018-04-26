@@ -623,6 +623,11 @@ subroutine BPlus_structuring()
 										end do
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
 										
+										if(blocks%col_group==8 .or. blocks%col_group==9)then
+											write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT
+										endif
+										
+										
 									else if(xyzsort==2)then
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
@@ -748,7 +753,7 @@ subroutine BPlus_structuring()
 											group_n=blocks%col_group  
 											group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 											
-											if(blocks%col_group==8 .or blocks%col_group==9)then
+											if(blocks%col_group==8 .or. blocks%col_group==9)then
 												write(*,*)group_m,group_n,sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)),'nima'
 											end	if
 											
