@@ -1,4 +1,4 @@
-PROGRAM HODLR_BUTTERFLY_SOLVER_3D
+PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     use MODULE_FILE
 	use geometry_model
 	use H_structure
@@ -28,7 +28,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	integer :: ierr
 	integer*8 oldmode,newmode
 		
-		
+
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
@@ -36,8 +36,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 		read(strings , *) threads_num
 	endif
 	write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-	
+	call OMP_set_num_threads(threads_num)		
+		
 		
 	call DATE_AND_TIME(values=times)     ! Get the current time 
 	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
@@ -49,7 +49,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! call vmlsetmode(VML_FTZDAZ_ON)
 	
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "HODLR_BUTTERFLY_SOLVER_3D"
+    write(*,*) "HODLR_BUTTERFLY_SOLVER_2D"
     write(*,*) "FOR X64 COMPILER"
     write(*,*) "   "
 
@@ -74,28 +74,22 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     mu0=pi*4d-7
     gamma=1.781072418d0
     impedence=sqrt(mu0/eps0)
-    integral_points=6
-    allocate (ng1(integral_points), ng2(integral_points), ng3(integral_points), gauss_w(integral_points))
-    call gauss_points()
+    ! integral_points=6
+    ! allocate (ng1(integral_points), ng2(integral_points), ng3(integral_points), gauss_w(integral_points))
+    ! call gauss_points()
 
-	
-	! x = 1d0
-	! y = 1d0
-	! z = 0d0
-	! call Cart2Sph(x,y,z,Origins,r,theta,phi)
-	! write(*,*)r,theta,phi,sin(theta)
-	! stop
-	
+
      !*************************input******************************
 
     !tol=0.000001
 	!itmax=10000
 	
 	CALL getarg(1, DATA_DIR)
-	Kernel = EMSURF	
+	Kernel = EMCURV	
 	
-	Nmin_leaf=40
-	mesh_normal=1
+	geo_model=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	Maxedge=5000
+	Nmin_leaf=50
 	Refined_level=0
 	para=0.001
 	levelpara_control=0
@@ -105,10 +99,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	Rank_detection_factor=3d-5
     Preset_level_butterfly=0
 	Scale=1d0
-	wavelength=0.5
+	wavelength=0.08
 	Discret=0.05
 	Static=1
-    RCS_sample=2000
+    RCS_sample=1000
     Optimizing_forward=0
     Fast_inverse=0
     Add_method_of_base_level=2
@@ -116,7 +110,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
 	LS_tolerance=1d-12
-	tfqmr_tolerance=1d-6
+	tfqmr_tolerance=1d-5
 	tfqmr_tolerance_solving=3d-3
 	iter_tolerance=5d-3
 	up_tolerance=1d-4
@@ -132,7 +126,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	xyzsort=1
 	LnoBP=4
 	TwoLayerOnly=0
-	CFIE_alpha=1
 	explicitflag=1
 	fullmatflag=0
 	
@@ -189,7 +182,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	!alpha=0.5
     !wavelength=2.
     tolerance=ACA_tolerance_forward
-    
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
@@ -336,4 +328,4 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
     ! ! ! ! pause
 
-end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
+end PROGRAM HODLR_BUTTERFLY_SOLVER_2D

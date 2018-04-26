@@ -1,9 +1,11 @@
-! include "mkl_vsl.f90"
+#ifdef Intel
+include "mkl_vsl.f90"
+#endif
 
 module misc
 use MODULE_FILE
 #ifdef Intel
-USE IFPORT    !! uncomment this when using ifort
+USE IFPORT    
 #endif  
 use omp_lib
 
@@ -412,7 +414,7 @@ else
 		do i=1,mn
 			if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/mnl<=eps) then
 				rank=i
-				if(abs(A_tmp(i,i))<1d-300)rank = i -1
+				if(abs(A_tmp(i,i))<SafeUnderflow)rank = i -1
 				exit
 			end if
 		end do
@@ -513,7 +515,7 @@ end if
 		do i=1,mn
 			if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/mnl<=eps) then
 				rank=i
-				if(abs(A_tmp(i,i))<1d-300)rank = i -1
+				if(abs(A_tmp(i,i))<SafeUnderflow)rank = i -1
 				exit
 			end if
 		end do
@@ -1264,8 +1266,8 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 	call assert(m>=n,'m should not be less than n for least square')
 	
 	
-	if(fnorm(b,m,k)<1d-80)then
-		write(*,*)'warning: RHS zero in least square'
+	if(fnorm(b,m,k)<SafeUnderflow)then
+		write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k)
 		x = 0
 	else 
 	
@@ -1454,6 +1456,8 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 	alpha=1d0
 	beta=0d0
 	
+	A_inv=0
+	
 	allocate(Atmp(m,n))
 	
 	! SVD
@@ -1538,8 +1542,7 @@ end subroutine GeneralInverse
 	real*8, allocatable :: Singularsml(:)
 	integer,allocatable:: jpvt(:)
 	
-	allocate(select_column(rankmax_c))
-	allocate(select_row(rankmax_r))
+
 	allocate(matZRcol1(rankmax_r,rmax))
 	allocate(matZcRrow1(rankmax_c,rmax))
 	allocate(tau(rmax))
@@ -1558,6 +1561,7 @@ end subroutine GeneralInverse
 
 	QQ1 = matZRcol
 	jpvt = 0
+	tau=0
 	call geqp3f90(QQ1,jpvt,tau)
 	!  call geqrff90(QQ1,tau)
 	RR1=(0,0)
@@ -1579,7 +1583,7 @@ end subroutine GeneralInverse
 		do i=1,rmax
 			if (abs(RR1(i,i))/abs(RR1(1,1))/rankmax_r<=tolerance) then   ! be careful with the tolerance here
 				rank1=i
-				if(abs(RR1(i,i))<1d-300)rank1 = i -1
+				if(abs(RR1(i,i))<SafeUnderflow)rank1 = i -1
 				exit
 			end if
 		end do
@@ -1588,6 +1592,7 @@ end subroutine GeneralInverse
 	
 	QQ2 = matZcRrow
 	jpvt = 0
+	tau = 0
 	call geqp3f90(QQ2,jpvt,tau)
 	!  call geqrff90(QQ2,tau)
 	RR2=(0,0)
@@ -1607,7 +1612,7 @@ end subroutine GeneralInverse
 		do i=1,rmax
 			if (abs(RR2(i,i))/abs(RR2(1,1))/rankmax_c<=tolerance) then  ! be careful with the tolerance here
 				rank2=i
-				if(abs(RR2(i,i))<1d-300)rank2 = i -1
+				if(abs(RR2(i,i))<SafeUnderflow)rank2 = i -1
 				exit
 			end if
 		end do
@@ -1629,7 +1634,9 @@ end subroutine GeneralInverse
 	!  enddo
 
 	allocate(RrowcQ1(rmax,rank1))
+	RrowcQ1=0
 	allocate(RrowcQ1inv(rank1,rmax))
+	RrowcQ1inv=0
 	call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rankmax_r,rank1)
 	
 	call GeneralInverse(rmax,rank1,RrowcQ1,RrowcQ1inv,tolerance)
@@ -1647,7 +1654,9 @@ end subroutine GeneralInverse
 	
 	
 	allocate(Q2cRcol(rank2,rmax))
+	Q2cRcol=0
 	allocate(Q2cRcolinv(rmax,rank2))
+	Q2cRcolinv=0
 	call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rankmax_c,rmax)
 	
 	call GeneralInverse(rank2,rmax,Q2cRcol,Q2cRcolinv,tolerance)
@@ -1661,15 +1670,15 @@ end subroutine GeneralInverse
 	! deallocate(Q2cRcol)	
 	
 	
-	
 	call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rankmax_r,rmax)	
 	allocate(matrixtemp(rmax,rank2))
+	matrixtemp=0
 	allocate(matM(rank1,rank2))
+	matM=0
 	call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rmax,rank2)
 	call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rmax,rank2)
 	deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)
 	
-
 	! allocate(matrixtemp(rankmax_r,rank2))
 	! allocate(matM(rank1,rank2))
 	! call gemm_omp(matZRcol,Q2cRcolinv,matrixtemp,rankmax_r,rmax,rank2)
@@ -1678,6 +1687,9 @@ end subroutine GeneralInverse
 	
 	rank12 = min(rank1,rank2)
 	allocate(UUsml(rank1,rank12),VVsml(rank12,rank2),Singularsml(rank12))
+	UUsml=0
+	VVsml=0
+	Singularsml=0
 	call SVD_Truncate(matM,rank1,rank2,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank)
 	
 	! write(111,*)UUsml(1:rank1,1:rank)
@@ -1688,8 +1700,7 @@ end subroutine GeneralInverse
 	Singular(1:rank) = Singularsml(1:rank)
 	deallocate(UUsml,VVsml,Singularsml,matM)
 	
-	deallocate(select_column)
-	deallocate(select_row)
+
 	deallocate(matZRcol1)
 	deallocate(matZcRrow1)
 	deallocate(tau)
@@ -1740,10 +1751,15 @@ end subroutine RandomizedSVD
 	
 
 subroutine RandomMat(m,n,k,A,Oflag)
+
+
 	! ! use lapack95
 	! ! use blas95
-	! use mkl_vsl_type
-	! use mkl_vsl				 
+#ifdef Intel
+	use mkl_vsl_type
+	use mkl_vsl				 
+#endif	
+
 	implicit none
 	
 	integer m,n,k,mn_min,ktmp
@@ -1754,9 +1770,11 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	complex(kind=8),allocatable:: UU(:,:),VV(:,:)
 	integer ii,jj,kk,i,j,flag0,rank
 	integer:: Oflag
+#ifdef Intel	
+	type(VSL_STREAM_STATE) ::stream(2)
+#endif		
+	integer brng, method, seedd,ierror	
 	
-	! type(VSL_STREAM_STATE) ::stream(2)
-	integer brng, method, seedd,ierror								   
  	ktmp = k
 	if(ktmp>min(m,n))then
 		! write(*,*)'k is not properly set in RandomMat'
@@ -1767,33 +1785,31 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	call assert(k<=min(m,n),'k too large in RandomMat')
 	
 
-
-	! allocate(Ar(m,n))
-	! allocate(Ai(m,n))
-	! brng   = VSL_BRNG_MCG31
-	! method = VSL_RNG_METHOD_UNIFORM_STD
-	! call random_number(c)
-	! seedd = NINT(1000*c)
-	! ierror=vslnewstream( stream(1), brng,  seedd )
-	! call random_number(c)
-	! seedd = NINT(1000*c)
-	! ierror=vslnewstream( stream(2), brng,  seedd )
-	! ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
-	! ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
-	! ! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
-	! ierror=vsldeletestream(stream(1))	
-	! ierror=vsldeletestream(stream(2))	
-	! A = Ar + junit*Ai
-	! deallocate(Ar)
-	! deallocate(Ai)
-
-
-
-	do ii=1,m
-	do jj=1,n
-		A(ii,jj)=random_complex_number()
-	end do
-	end do
+#ifdef Intel
+	allocate(Ar(m,n))
+	allocate(Ai(m,n))
+	brng   = VSL_BRNG_MCG31
+	method = VSL_RNG_METHOD_UNIFORM_STD
+	call random_number(c)
+	seedd = NINT(1000*c)
+	ierror=vslnewstream( stream(1), brng,  seedd )
+	call random_number(c)
+	seedd = NINT(1000*c)
+	ierror=vslnewstream( stream(2), brng,  seedd )
+	ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
+	ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
+	! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
+	ierror=vsldeletestream(stream(1))	
+	ierror=vsldeletestream(stream(2))	
+	A = Ar + junit*Ai
+	deallocate(Ar)
+	deallocate(Ai)
+#else
+	! do ii=1,m
+	! do jj=1,n
+		! A(ii,jj)=random_complex_number()
+	! end do
+	! end do
 
 
 	
@@ -1826,9 +1842,10 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	! deallocate(Singular)
 	! deallocate(UU)
 	! deallocate(VV)
-	
-	
-	
+			 
+#endif	
+
+
 end subroutine RandomMat	
 	
 
@@ -2417,6 +2434,10 @@ complex(kind=8)::mat(mm,nn),UU(mm,mn),VV(mn,nn)
 complex(kind=8),allocatable::mat0(:,:)					 
 real*8:: Singular(mn)
 integer::i,flag
+
+UU=0
+VV=0
+Singular=0
 
 allocate(mat0(mm,nn))
 mat0 = mat

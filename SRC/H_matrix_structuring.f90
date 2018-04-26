@@ -356,17 +356,21 @@ subroutine H_matrix_structuring(para)
 							xyzmin(ii) = min(xyzmin(ii),xyz(ii,node_patch_of_edge(0,edge)))
 						enddo
 					enddo
-					xyzrange(ii) = xyzmax(ii)-xyzmin(ii)
+					xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
 					
 					mm = basis_group(group)%tail - basis_group(group)%head + 1
 					allocate (distance(mm))	
-					sortdirec = maxloc(xyzrange,1)
+					sortdirec = maxloc(xyzrange(1:Dimn),1)
+					! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
 					
-					if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
-						sortdirec=2
-					else 
-						sortdirec=3
-					end if
+					! if(Kernel==EMSURF)then
+					! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
+						! sortdirec=2
+					! else 
+						! sortdirec=3
+					! end if
+					! endif
+					
 					
 					!$omp parallel do default(shared) private(i)
 					do i=basis_group(group)%head, basis_group(group)%tail
@@ -481,14 +485,15 @@ subroutine H_matrix_structuring(para)
     enddo
 	
 	
-	! do level=0, Maxlevel
-        ! do group=2**level, 2**(level+1)-1
-            ! do edge=basis_group(group)%head, basis_group(group)%tail
-				! ! write(*,*)edge,node_patch_of_edge(0,edge)
-                ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,xyz(1,node_patch_of_edge(0,edge)),xyz(2,node_patch_of_edge(0,edge)),xyz(3,node_patch_of_edge(0,edge))
-			! enddo
-        ! enddo
-    ! enddo	   
+	do level=0, Maxlevel
+        do group=2**level, 2**(level+1)-1
+            do edge=basis_group(group)%head, basis_group(group)%tail
+				! write(*,*)edge,node_patch_of_edge(0,edge)
+				! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
+				write(113,'(I5,I8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
+			enddo
+        enddo
+    enddo	   
     !*************************************************************************************
    
 	
@@ -504,17 +509,10 @@ subroutine H_matrix_structuring(para)
 end subroutine H_matrix_structuring
 
 
-
-
-
-
-
 subroutine BPlus_structuring()
 	use MODULE_FILE
 	use misc
 	implicit none 
-	
-
 	
     integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch
     integer level, edge, patch, node, group, group_touch
@@ -604,7 +602,7 @@ subroutine BPlus_structuring()
 							do bb = 1,cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound
 								blocks => cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
 								
-								allocate(Centroid_M(2**levelm,3))
+								allocate(Centroid_M(2**levelm,Dimn))
 								allocate(Isboundary_M(2**levelm))
 								Isboundary_M = 0
 								Centroid_M = 0
@@ -620,9 +618,7 @@ subroutine BPlus_structuring()
 											if(measure<3*minedgelength)then
 												Isboundary_M(index_i_m) = 1 
 												CNT = CNT + 1
-												Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1)+ xyz(1,node_patch_of_edge(0,nn))
-												Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2)+ xyz(2,node_patch_of_edge(0,nn))
-												Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3)+ xyz(3,node_patch_of_edge(0,nn))
+												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ xyz(1:Dimn,node_patch_of_edge(0,nn))
 											end if
 										end do
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
@@ -666,7 +662,7 @@ subroutine BPlus_structuring()
 								end do
 														
 								
-								allocate(Centroid_N(2**(level_butterfly-levelm),3))
+								allocate(Centroid_N(2**(level_butterfly-levelm),Dimn))
 								allocate(Isboundary_N(2**(level_butterfly-levelm)))
 								Isboundary_N = 0
 								Centroid_N = 0
@@ -685,9 +681,7 @@ subroutine BPlus_structuring()
 												CNT = CNT + 1
 												! write(*,*)nn,index_j_m,'ok'
 												! write(*,*)Centroid_N(index_j_m,1),xyz(1,node_patch_of_edge(0,nn))
-												Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
-												Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + xyz(2,node_patch_of_edge(0,nn))
-												Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + xyz(3,node_patch_of_edge(0,nn))
+												Centroid_N(index_j_m,1:Dimn) = Centroid_N(index_j_m,1:Dimn) + xyz(1:Dimn,node_patch_of_edge(0,nn))
 											end if
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
@@ -770,6 +764,11 @@ subroutine BPlus_structuring()
 								deallocate(Centroid_N)
 								
 							end do	
+							
+							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+								write(*,*)level_c,ii,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
+							endif
+							
 							call assert(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								
 							allocate(cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound))

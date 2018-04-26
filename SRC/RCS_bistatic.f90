@@ -4,7 +4,7 @@ use analytic_part
 use current_mapping
 contains 
 
-subroutine RCS_bistatic()
+subroutine RCS_bistatic_SURF()
     !integer flag
 	use MODULE_FILE
     implicit none
@@ -47,7 +47,7 @@ subroutine RCS_bistatic()
         rcs=0
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp)   
         do edge=1,maxedge
-            call VV_polar(theta,phi,edge,ctemp_1)
+            call VV_polar_SURF(theta,phi,edge,ctemp_1)
             ctemp=ctemp+ctemp_1    
         enddo
         !$omp end parallel do
@@ -87,7 +87,7 @@ subroutine RCS_bistatic()
         rcs=0
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp)   
         do edge=1,maxedge
-            call HH_polar(theta,phi,edge,ctemp_1)
+            call HH_polar_SURF(theta,phi,edge,ctemp_1)
             ctemp=ctemp+ctemp_1    
         enddo
         !$omp end parallel do
@@ -101,9 +101,9 @@ subroutine RCS_bistatic()
 	
     return
     
-end subroutine RCS_bistatic
+end subroutine RCS_bistatic_SURF
 
-subroutine VV_polar(theta,phi,edge,ctemp_1)
+subroutine VV_polar_SURF(theta,phi,edge,ctemp_1)
     
     use MODULE_FILE
     implicit none
@@ -139,9 +139,9 @@ subroutine VV_polar(theta,phi,edge,ctemp_1)
     
     return
     
-end subroutine VV_polar
+end subroutine VV_polar_SURF
 
-subroutine HH_polar(theta,phi,edge,ctemp_1)
+subroutine HH_polar_SURF(theta,phi,edge,ctemp_1)
     
     use MODULE_FILE
     implicit none
@@ -177,6 +177,66 @@ subroutine HH_polar(theta,phi,edge,ctemp_1)
     
     return
     
-end subroutine HH_polar
+end subroutine HH_polar_SURF
+
+
+
+
+subroutine RCS_bistatic_CURV()
+    !integer flag
+	use MODULE_FILE
+    implicit none
+    
+    real*8 rcs
+    complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
+    real*8 ddphi,dphi
+    
+    integer i,j,ii,jj,iii,jjj,patch,flag
+    real*8 l_edge,l_edgefine
+
+    integer edge,edge_m,edge_n
+         
+    open (100, file='VV_bistatic.txt')
+    Current = Current2com(:,1)	  
+    ddphi=180./RCS_sample
+    
+    do i=0, RCS_sample   !phi=0
+        dphi=i*ddphi
+        ctemp=0
+        rcs=0
+        !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp)   
+        do edge=1,maxedge
+            call VV_polar_CURV(dphi,edge,ctemp_1)
+            ctemp=ctemp+ctemp_1    
+        enddo
+        !$omp end parallel do
+        rcs=(abs(impedence*ctemp))**2/4d0*wavenum
+        !rcs=rcs/wavelength
+        rcs=10*log10(rcs)
+        write(100,*)dphi,rcs
+    enddo
+    close(100)
+    
+    return
+    
+end subroutine RCS_bistatic_CURV
+
+subroutine VV_polar_CURV(dphi,edge,ctemp_1)
+    
+    use MODULE_FILE
+    implicit none
+    
+    complex(kind=8) ctemp,phase,ctemp_1
+    real*8 dsita,dphi    
+    integer edge
+    
+    phase=junit*wavenum*(xyz(1,node_patch_of_edge(0,edge))*cos(dphi*pi/180.)+xyz(2,node_patch_of_edge(0,edge))*sin(dphi*pi/180.))
+    ctemp_1=current(edge)*Delta_ll*exp(phase)
+
+    return
+    
+end subroutine VV_polar_CURV
+
+
 
 end module RCS_Bi

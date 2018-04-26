@@ -2,7 +2,28 @@ module element_Vinc
 use gauss_rule
 use analytic_part
 contains 
-subroutine element_Vinc_VV(theta,phi,edge,value)
+
+
+subroutine element_Vinc_VV_CURV(phi,edge,value)
+
+    use MODULE_FILE
+    implicit none
+    
+    integer edge
+    complex(kind=8) value
+    real*8 theta, phi
+    complex(kind=8)  phase
+
+    phase=junit*wavenum*(xyz(1,node_patch_of_edge(0,edge))*cos(phi*pi/180.)+xyz(2,node_patch_of_edge(0,edge))*sin(phi*pi/180.))
+    value=exp(phase)
+    
+    return
+    
+end subroutine element_Vinc_VV_CURV
+
+
+
+subroutine element_Vinc_VV_SURF(theta,phi,edge,value)
 
     use MODULE_FILE
     implicit none
@@ -51,9 +72,9 @@ subroutine element_Vinc_VV(theta,phi,edge,value)
     
     return
     
-end subroutine element_Vinc_VV
+end subroutine element_Vinc_VV_SURF
 
-subroutine element_Vinc_HH(theta,phi,edge,value)
+subroutine element_Vinc_HH_SURF(theta,phi,edge,value)
 
     use MODULE_FILE
     implicit none
@@ -102,5 +123,5 @@ subroutine element_Vinc_HH(theta,phi,edge,value)
     
     return
     
-end subroutine element_Vinc_HH
+end subroutine element_Vinc_HH_SURF
 end module element_Vinc

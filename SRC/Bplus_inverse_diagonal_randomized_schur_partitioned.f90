@@ -1208,7 +1208,8 @@ subroutine MultiL_inverse_schur_partitionedinverse(level_c,rowblock,Memory)
 			
 			
    
-			write(*,*)block_o%level_butterfly,'ahaha'
+			! write(*,*)block_o%level_butterfly,'ahaha'
+			
 			!!!!! invert I+B1 to be I+B2		
 			allocate(partitioned_blocks(0:block_o%level_butterfly+1))
 			do ll=0,block_o%level_butterfly+1
@@ -1553,22 +1554,9 @@ subroutine MultiLrandomized_Onesubblock_minusBC(level_c,rowblock,bb_o)
 		matZcRrow = conjg(matZcRrow)
 					
 		!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!		
-		
-		
 
-					  
-																								  
-																					  
-		
 		! !!!!!!!!!!!!!!!!!!!!!!!! get right multiplied results
-							
-																	 
-						 
-							 
-																	  
-						  
-													   
-		
+
 		! allocate(RandVectInR(N,rmax))
 		! RandVectInR=0
 		! allocate(RandVectOutR(M,rmax))

@@ -2816,6 +2816,9 @@ subroutine Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
 	call butterfly_block_MVP_inverse_ABCD_dat(blocks_A,blocks_B,blocks_C,blocks_D,'T',mm,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(3)%vector - RandomVectors_InOutput(1)%vector
 	
+	! write(*,*)'aha',fnorm(RandomVectors_InOutput(1)%vector,mm,num_vect_sub),fnorm(RandomVectors_InOutput(3)%vector,mm,num_vect_sub)
+	
+	
 	k=0
 	random=>random_Block(1)
 	do i=1, num_blocks

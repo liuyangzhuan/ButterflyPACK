@@ -10,6 +10,22 @@ contains
 subroutine EM_calculating()
     
     use MODULE_FILE
+    implicit none
+	if(Kernel==EMCURV)then
+		call EM_calculating_CURV()
+	elseif(Kernel==EMSURF)then
+		call EM_calculating_SURF()
+	else
+		write(*,*)'unknown Kernel for EM_calculating'
+		stop
+	endif	
+	
+end subroutine EM_calculating  
+
+
+subroutine EM_calculating_SURF()
+    
+    use MODULE_FILE
     ! use blas95
     implicit none
     
@@ -34,7 +50,7 @@ subroutine EM_calculating()
 		
         !$omp parallel do default(shared) private(edge,value_Z)
         do edge=1, Maxedge
-            call element_Vinc_VV(theta,phi,edge,value_Z)
+            call element_Vinc_VV_SURF(theta,phi,edge,value_Z)
             voltage(edge)=value_Z
         enddo    
         !$omp end parallel do
@@ -60,7 +76,7 @@ subroutine EM_calculating()
 		
         !$omp parallel do default(shared) private(edge,value_Z)
         do edge=1, Maxedge
-            call element_Vinc_HH(theta,phi,edge,value_Z)
+            call element_Vinc_HH_SURF(theta,phi,edge,value_Z)
             voltage(edge)=value_Z
         enddo    
         !$omp end parallel do
@@ -88,7 +104,7 @@ subroutine EM_calculating()
         write (*,*) ''
 
 		T0=secnds(0.0)
-        call RCS_bistatic()
+        call RCS_bistatic_SURF()
         
 
         write (*,*) ''
@@ -114,7 +130,7 @@ subroutine EM_calculating()
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
 			do edge=1, Maxedge
-				call element_Vinc_HH(theta,phi,edge,value_Z)
+				call element_Vinc_HH_SURF(theta,phi,edge,value_Z)
 				voltage(edge)=value_Z
 			enddo    
 			!$omp end parallel do
@@ -133,13 +149,13 @@ subroutine EM_calculating()
 				call MVM_Z_factorized(Maxedge,Voltage,Current)
 			end if
 			
-            call RCS_monostatic_HH(theta,phi,rcs_H)
+            call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
 !             !$omp parallel do default(shared) private(i)
 !             do i=1, Maxedge
 !                 current(i)=vectors_block(0)%vector(i,2)
 !             enddo
 !             !$omp end parallel do
-!             call RCS_monostatic_HH(theta,phi,rcs_H)
+!             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
             
             write (100,*) phi,rcs_H !,rcs_H
             
@@ -155,9 +171,129 @@ subroutine EM_calculating()
         
     return
     
-end subroutine EM_calculating
+end subroutine EM_calculating_SURF
 
 
+
+subroutine EM_calculating_CURV()
+    
+    use MODULE_FILE
+    ! use blas95
+    implicit none
+    
+    integer i, j, ii, jj, iii, jjj
+    integer level, blocks, edge, patch, node, group
+    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter 
+    real*8 theta, phi, dphi, rcs_V, rcs_H
+    real T0
+    complex(kind=8) value_Z
+    complex(kind=8),allocatable:: Voltage_pre(:)
+	real*8:: rel_error
+	
+    if (Static==2) then
+    
+        phi=180d0
+        
+        allocate (current(Maxedge))
+        allocate (voltage(Maxedge))
+
+		allocate(current2com(Maxedge,1))								  
+        !$omp parallel do default(shared) private(edge,value_Z)
+        do edge=1, Maxedge
+            call element_Vinc_VV_CURV(phi,edge,value_Z)
+            voltage(edge)=value_Z
+        enddo    
+        !$omp end parallel do
+        
+        T0=secnds(0.0)
+        
+
+		if(preconditioner==1)then
+			call initialize_r0(Maxedge)
+			allocate(Voltage_pre(Maxedge))
+			call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+			N_iter_max = 100
+			iter = 0
+			rel_error = tfqmr_tolerance_solving
+			call ztfqmr_MLMDA(N_iter_max,Maxedge,Voltage_pre,Current,rel_error,iter)
+			deallocate(Voltage_pre)
+			deallocate(r0_initial)
+		else 			
+			call MVM_Z_factorized(Maxedge,Voltage,Current)
+		end if		
+		current2com(:,1) = Current		
+		
+        write (*,*) ''
+        write (*,*) 'Solving:',secnds(T0),'Seconds'
+        write (*,*) ''
+
+		T0=secnds(0.0)
+        call RCS_bistatic_CURV()
+
+        write (*,*) ''
+        write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+        write (*,*) ''
+    
+    elseif (Static==1) then
+    
+        allocate (current(Maxedge))
+        allocate (voltage(Maxedge))
+        
+        
+        num_sample=RCS_sample
+        dphi=180./num_sample
+        
+        open (100, file='RCS_monostatic.txt')
+
+        T0=secnds(0.0)        
+        do j=0, num_sample 
+        
+
+            phi=j*dphi
+			!$omp parallel do default(shared) private(edge,value_Z)
+			do edge=1, Maxedge
+				call element_Vinc_VV_CURV(phi,edge,value_Z)
+				voltage(edge)=value_Z
+			enddo    
+			!$omp end parallel do
+            
+			if(preconditioner==1)then
+				call initialize_r0(Maxedge)				
+				allocate(Voltage_pre(Maxedge))
+				call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+				N_iter_max = 100
+				iter = 0
+				rel_error = tfqmr_tolerance_solving
+				call ztfqmr_MLMDA(N_iter_max,Maxedge,Voltage_pre,Current,rel_error,iter)
+				deallocate(Voltage_pre)
+				deallocate(r0_initial)
+			else 			
+				call MVM_Z_factorized(Maxedge,Voltage,Current)
+			end if
+			
+            call RCS_monostatic_VV_CURV(phi,rcs_V)
+!             !$omp parallel do default(shared) private(i)
+!             do i=1, Maxedge
+!                 current(i)=vectors_block(0)%vector(i,2)
+!             enddo
+!             !$omp end parallel do
+!             call RCS_monostatic_HH(theta,phi,rcs_H)
+            
+            write (100,*) j,phi,rcs_V !,rcs_H
+            
+            ! deallocate (vectors_block)
+            
+        enddo
+        
+        close(100)
+        write (*,*) ''
+        write (*,*) 'Solving:',secnds(T0),'Seconds'
+        write (*,*) ''        
+    endif
+        
+    return
+    
+end subroutine EM_calculating_CURV
 
 
 
