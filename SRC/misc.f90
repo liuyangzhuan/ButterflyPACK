@@ -1805,11 +1805,11 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	deallocate(Ar)
 	deallocate(Ai)
 #else
-	! do ii=1,m
-	! do jj=1,n
-		! A(ii,jj)=random_complex_number()
-	! end do
-	! end do
+	do ii=1,m
+	do jj=1,n
+		A(ii,jj)=random_complex_number()
+	end do
+	end do
 
 
 	

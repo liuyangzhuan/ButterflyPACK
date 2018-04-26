@@ -774,9 +774,9 @@ subroutine BPlus_structuring()
 								
 							end do	
 							
-							! if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
 								! write(*,*)level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
-							! endif
+							endif
 							
 							call assert(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								
