@@ -61,7 +61,7 @@ subroutine EM_calculating_SURF()
 		if(preconditioner==1)then
 			call initialize_r0(Maxedge)
 			allocate(Voltage_pre(Maxedge))
-			call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Voltage_pre)
 			N_iter_max = 100
 			iter = 0
 			rel_error = tfqmr_tolerance_solving
@@ -69,7 +69,7 @@ subroutine EM_calculating_SURF()
 			deallocate(Voltage_pre)
 			deallocate(r0_initial)
 		else 			
-			call MVM_Z_factorized(Maxedge,Voltage,Current)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Current)
 		end if		
 		current2com(:,1) = Current
 		
@@ -87,7 +87,7 @@ subroutine EM_calculating_SURF()
 		if(preconditioner==1)then
 			call initialize_r0(Maxedge)
 			allocate(Voltage_pre(Maxedge))
-			call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Voltage_pre)
 			N_iter_max = 100
 			iter = 0
 			rel_error = tfqmr_tolerance_solving
@@ -95,7 +95,7 @@ subroutine EM_calculating_SURF()
 			deallocate(Voltage_pre)
 			deallocate(r0_initial)
 		else 			
-			call MVM_Z_factorized(Maxedge,Voltage,Current)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Current)
 		end if		
 		current2com(:,2) = Current		
 		
@@ -138,7 +138,7 @@ subroutine EM_calculating_SURF()
 			if(preconditioner==1)then
 				call initialize_r0(Maxedge)				
 				allocate(Voltage_pre(Maxedge))
-				call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+				call MVM_Z_factorized(Maxedge,1,Voltage,Voltage_pre)
 				N_iter_max = 100
 				iter = 0
 				rel_error = tfqmr_tolerance_solving
@@ -146,7 +146,7 @@ subroutine EM_calculating_SURF()
 				deallocate(Voltage_pre)
 				deallocate(r0_initial)
 			else 			
-				call MVM_Z_factorized(Maxedge,Voltage,Current)
+				call MVM_Z_factorized(Maxedge,1,Voltage,Current)
 			end if
 			
             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
@@ -211,7 +211,7 @@ subroutine EM_calculating_CURV()
 		if(preconditioner==1)then
 			call initialize_r0(Maxedge)
 			allocate(Voltage_pre(Maxedge))
-			call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Voltage_pre)
 			N_iter_max = 100
 			iter = 0
 			rel_error = tfqmr_tolerance_solving
@@ -219,7 +219,7 @@ subroutine EM_calculating_CURV()
 			deallocate(Voltage_pre)
 			deallocate(r0_initial)
 		else 			
-			call MVM_Z_factorized(Maxedge,Voltage,Current)
+			call MVM_Z_factorized(Maxedge,1,Voltage,Current)
 		end if		
 		current2com(:,1) = Current		
 		
@@ -260,7 +260,7 @@ subroutine EM_calculating_CURV()
 			if(preconditioner==1)then
 				call initialize_r0(Maxedge)				
 				allocate(Voltage_pre(Maxedge))
-				call MVM_Z_factorized(Maxedge,Voltage,Voltage_pre)
+				call MVM_Z_factorized(Maxedge,1,Voltage,Voltage_pre)
 				N_iter_max = 100
 				iter = 0
 				rel_error = tfqmr_tolerance_solving
@@ -268,7 +268,7 @@ subroutine EM_calculating_CURV()
 				deallocate(Voltage_pre)
 				deallocate(r0_initial)
 			else 			
-				call MVM_Z_factorized(Maxedge,Voltage,Current)
+				call MVM_Z_factorized(Maxedge,1,Voltage,Current)
 			end if
 			
             call RCS_monostatic_VV_CURV(phi,rcs_V)
@@ -334,7 +334,7 @@ end subroutine EM_calculating_CURV
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)    
     call MVM_Z_forward(nn,x,ytmp,cascading_factors_copy)
-	call MVM_Z_factorized(nn,ytmp,r)
+	call MVM_Z_factorized(nn,1,ytmp,r)
 	
     r=bb-r !residual from the initial guess
     w=r
@@ -346,7 +346,7 @@ end subroutine EM_calculating_CURV
 		! ! end if		
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)    
     call MVM_Z_forward(nn,yo,ytmp,cascading_factors_copy)
-	call MVM_Z_factorized(nn,ytmp,ayo)
+	call MVM_Z_factorized(nn,1,ytmp,ayo)
 	
     v=ayo
     we=0.0_dp
@@ -375,7 +375,7 @@ end subroutine EM_calculating_CURV
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,ye,aye)
 	   call MVM_Z_forward(nn,ye,ytmp,cascading_factors_copy)
-	   call MVM_Z_factorized(nn,ytmp,aye)
+	   call MVM_Z_factorized(nn,1,ytmp,aye)
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -411,7 +411,7 @@ end subroutine EM_calculating_CURV
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
 		  call MVM_Z_forward(nn,x,ytmp,cascading_factors_copy)
-		  call MVM_Z_factorized(nn,ytmp,r)
+		  call MVM_Z_factorized(nn,1,ytmp,r)
 	
           r=bb-r
           rerr_local=dot_product(r,r)
@@ -447,7 +447,7 @@ end subroutine EM_calculating_CURV
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)
 		call MVM_Z_forward(nn,yo,ytmp,cascading_factors_copy)
-		call MVM_Z_factorized(nn,ytmp,ayo)
+		call MVM_Z_factorized(nn,1,ytmp,ayo)
 	
        !MAGIC
        v=ayo+beta*( aye+beta*v )
@@ -455,7 +455,7 @@ end subroutine EM_calculating_CURV
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
     call MVM_Z_forward(nn,x,ytmp,cascading_factors_copy)
-	call MVM_Z_factorized(nn,ytmp,r)	   
+	call MVM_Z_factorized(nn,1,ytmp,r)	   
     !MAGIC
     r=bb-r
     err_local=dot_product(r,r)
