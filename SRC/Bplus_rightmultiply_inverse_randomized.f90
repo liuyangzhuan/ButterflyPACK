@@ -3531,7 +3531,7 @@ end subroutine MultiLGet_Randomized_Vectors_RR_Test_Outter_Sblock
 
 
 
-subroutine Bplus_block_MVP_inverse_dat(level,ii,trans,N,num_vect_sub,Vin,Vout)
+subroutine Bplus_block_MVP_inverse_dat(cascading_factors1,level,ii,trans,N,num_vect_sub,Vin,Vout)
    use MODULE_FILE
    ! use lapack95
    ! use blas95
@@ -3544,14 +3544,15 @@ subroutine Bplus_block_MVP_inverse_dat(level,ii,trans,N,num_vect_sub,Vin,Vout)
    type(matrixblock),pointer::block_o,block_off1,block_off2
    type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
    integer groupn,groupm,mm,nn
+   type(cascadingfactors)::cascading_factors1(:)
 
    ctemp1=1.0d0
    ctemp2=0.0d0
    allocate(Vin_tmp(N,num_vect_sub))
    Vin_tmp = Vin
    
-	bplus_off1 => cascading_factors(level)%BP(ii*2-1)	
-	bplus_off2 => cascading_factors(level)%BP(ii*2)
+	bplus_off1 => cascading_factors1(level)%BP(ii*2-1)	
+	bplus_off2 => cascading_factors1(level)%BP(ii*2)
 	
 	groupn=bplus_off1%col_group    ! Note: row_group and col_group interchanged here   
 	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
@@ -3562,12 +3563,12 @@ subroutine Bplus_block_MVP_inverse_dat(level,ii,trans,N,num_vect_sub,Vin,Vout)
    if(schurinv==0)then
 		write(*,*)'schurinv=0 removed '
 		stop
-		! block_o => cascading_factors(level)%matrices_block_inverse(ii)
+		! block_o => cascading_factors1(level)%matrices_block_inverse(ii)
 		! call butterfly_block_MVP_randomized_dat(block_o,trans,N,N,num_vect_sub,&
 		! &Vin(1:N,1:num_vect_sub),Vout(1:N,1:num_vect_sub),ctemp1,ctemp2)
 		! Vout(1:N,1:num_vect_sub) = Vin(1:N,1:num_vect_sub) + Vout(1:N,1:num_vect_sub)
    else 
-		bplus_o => cascading_factors(level)%BP_inverse_schur(ii)
+		bplus_o => cascading_factors1(level)%BP_inverse_schur(ii)
 		if(trans=='N')then
 			call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
 			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
@@ -3721,7 +3722,7 @@ subroutine Bplus_block_MVP_Sblock_dat(level_c,rowblock,trans,num_vect_sub,Vin,Vo
 					
 					! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vect_sub,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 ! write(*,*)'5 I am'
-					call Bplus_block_MVP_inverse_dat(level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))
+					call Bplus_block_MVP_inverse_dat(cascading_factors, level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))
 ! write(*,*)'6 I am'					
 					! ! vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub)	
 				end do		
@@ -3803,7 +3804,7 @@ subroutine Bplus_block_MVP_Sblock_dat(level_c,rowblock,trans,num_vect_sub,Vin,Vo
 					groupm_diag = cascading_factors(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
 					idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 					idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
-					call Bplus_block_MVP_inverse_dat(level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))			
+					call Bplus_block_MVP_inverse_dat(cascading_factors,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))			
 					! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)			
 				end do
 				n2 = OMP_get_wtime()

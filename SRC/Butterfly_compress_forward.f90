@@ -4199,7 +4199,7 @@ subroutine ACA_CompressionForward_givenfullmat(matU,matV,Singular,header_m,heade
 end subroutine ACA_CompressionForward_givenfullmat
 
 
-subroutine MVM_Z_forward(Ns,Vin,Vout,cascading_factors1)
+subroutine MVM_Z_forward(Ns,num_vectors,Vin,Vout,cascading_factors1)
 
     use MODULE_FILE
     ! use lapack95
@@ -4221,18 +4221,16 @@ subroutine MVM_Z_forward(Ns,Vin,Vout,cascading_factors1)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n
 	
 	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
-	complex(kind=8)::Vin(:),Vout(:)
-	! complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	! complex(kind=8)::Vin(:),Vout(:)
+	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
 	type(cascadingfactors)::cascading_factors1(:)
- 
-	num_vectors = 1   
-	
+  	
 	
 	! get the right multiplied vectors
 	ctemp1=1.0d0 ; ctemp2=1.0d0
 	allocate(vec_old(Ns,num_vectors))
 	allocate(vec_new(Ns,num_vectors))
-	vec_old(1:Ns,1) = Vin
+	vec_old = Vin
 	vec_new = 0
 
 
@@ -4258,7 +4256,7 @@ subroutine MVM_Z_forward(Ns,Vin,Vout,cascading_factors1)
 	end do
 	
 
-	Vout = vec_new(1:Ns,1)
+	Vout = vec_new
 	deallocate(vec_old)
 	deallocate(vec_new)	
 	 
