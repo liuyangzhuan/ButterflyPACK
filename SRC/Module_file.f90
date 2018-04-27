@@ -190,7 +190,7 @@ module MODULE_FILE
 	 type(blockplus),allocatable:: agent_bplus(:)
      type(butterflyblock_randomized),pointer :: butterfly_block_randomized(:)
      type(blockplus),pointer :: Bplus_randomized(:)
-	 type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:),cascading_factors_ref(:)
+	 type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
 	 type(partitionedblocks),allocatable::partitioned_blocks(:)
      type(vectorsblock),allocatable:: vectors_block(:)
 	 type(vectorsblock),pointer:: RandomVectors_InOutput(:)

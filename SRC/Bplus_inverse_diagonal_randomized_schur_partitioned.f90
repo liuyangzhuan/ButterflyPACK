@@ -1145,15 +1145,6 @@ subroutine MultiL_inverse_schur_partitionedinverse(level_c,rowblock,Memory)
 							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'L')
 							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group)							
 															
-						   
-															
-
-				
-						   
-																				   
-																								
-						   
-																	
 
 							do tt=1,10
 								n1 = OMP_get_wtime()							
@@ -2079,10 +2070,7 @@ subroutine MultiLInitialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 
     allocate (butterfly_block_randomized(1)%ButterflyU(2**level_butterfly))
     allocate (butterfly_block_randomized(1)%ButterflyV(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyUInv(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyVInv(2**level_butterfly))
-    
-	
+
 	dimension_max = 2*dimension_rank
  
  
@@ -2102,8 +2090,7 @@ subroutine MultiLInitialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 		dimension_m=size(block_off1%ButterflyU(blocks)%matrix,1)
 		! write(*,*)dimension_rank,dimension_m,'1a'
         allocate (butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(dimension_m,dimension_rank_dummy))
-        ! allocate (butterfly_block_randomized(1)%ButterflyUInv(blocks)%matrix(dimension_rank,dimension_m))
-        
+
 		allocate(matrixtemp1(dimension_rank_dummy,dimension_m))
 		call RandomMat(dimension_rank_dummy,dimension_m,min(dimension_m,dimension_rank_dummy),matrixtemp1,0)
         
@@ -2136,14 +2123,12 @@ subroutine MultiLInitialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 		deallocate(matrixtemp1)		
 		
     enddo
-    ! call invert_Butterfly_U()
-    ! call invert_Butterfly_V()
-    
+
     if (level_butterfly/=0) then
 	
         allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
         allocate (butterfly_block_randomized(1)%ButterflyKerl(level_butterfly))
-        allocate (butterfly_block_randomized(1)%ButterflyInv(level_butterfly))
+
         do level=1, level_butterfly
 		! write(*,*)dimension_rank,level,level_butterfly,'1c'
             num_row=2**level
@@ -2151,31 +2136,7 @@ subroutine MultiLInitialize_Butterfly_inverse_BC(level_c,rowblock,kover)
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_row=num_row
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_col=num_col
             allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(num_row,num_col))
-            allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(num_row/2,num_col/2))
-            ! do j=1, num_col, 2
-                ! index_j=int((j+1)/2)
-                ! do i=1, num_row, 2
-                    ! index_i=int((i+1)/2)
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(dimension_rank,dimension_rank))
-				    ! ! ! call RandomMat(2*dimension_rank,2*dimension_rank,2*dimension_rank,matrixtemp1,0)	
-					
-                    ! ! ! ! !$omp parallel do default(shared) private(ii,jj)
-                    ! ! ! do jj=1, dimension_rank
-                        ! ! ! do ii=1, dimension_rank
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=matrixtemp1(ii,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(ii,jj)=matrixtemp1(ii,jj+dimension_rank)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj+dimension_rank)
-                        ! ! ! enddo
-                    ! ! ! enddo
-                    ! ! ! ! !$omp end parallel do
-                    ! allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(index_i,index_j)%matrix(2*dimension_rank,2*dimension_rank))
-                ! enddo
-            ! enddo
-            ! call invert_Butterfly_Kernel(level)
+
         enddo
         deallocate (matrixtemp1)
     endif	

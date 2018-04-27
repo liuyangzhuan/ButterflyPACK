@@ -13,14 +13,25 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     real*8 para,error
     real*8 tolerance
     integer Primary_block, nn, mm
-    integer i,j,k, threads_num,ii
+    integer i,j,k, threads_num,ii,jj
 	real*8,parameter :: cd = 299792458d0
 	integer seed_myid(12)
 	integer times(8)	
 	real*8 t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
 	complex(kind=8),allocatable:: InputVec(:)
+	complex(kind=8):: ctemp
 	integer Ntunnel,kk,black_step,rankmax
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
+	character(len=1024)  :: strings
+	
+ 	threads_num=1
+    CALL getenv("OMP_NUM_THREADS", strings)
+	strings = TRIM(strings)	
+	if(LEN_TRIM(strings)>0)then
+		read(strings , *) threads_num
+	endif
+	write(*,*)'OMP_NUM_THREADS=',threads_num
+	call OMP_set_num_threads(threads_num)	
 	
 	call DATE_AND_TIME(values=times)     ! Get the current time 
 	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
@@ -99,7 +110,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     rank_approximate_para1=6.0
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
-	threads_num=8
 	LS_tolerance=1d-10
 	tfqmr_tolerance=1d-6
 	tfqmr_tolerance_solving=3d-3
@@ -184,7 +194,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	!alpha=0.5
     !wavelength=2.
     tolerance=ACA_tolerance_forward
-    call OMP_set_num_threads(threads_num)
     ! call OMP_set_dynamic(.true.)
     !call OMP_set_nested(.true.)
 
@@ -317,7 +326,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward(Maxedge,Vin(:,1),Vout1(:,1),cascading_factors)
+		call MVM_Z_forward(Maxedge,1,Vin(:,1),Vout1(:,1),cascading_factors)
 		
 		do ii=1,Maxedge
 			ctemp = 0d0

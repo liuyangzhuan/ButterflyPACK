@@ -1025,8 +1025,6 @@ subroutine Initialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 
     allocate (butterfly_block_randomized(1)%ButterflyU(2**level_butterfly))
     allocate (butterfly_block_randomized(1)%ButterflyV(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyUInv(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyVInv(2**level_butterfly))
 
 
 	dimension_max = 2*dimension_rank
@@ -1045,8 +1043,7 @@ subroutine Initialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 		
 		dimension_m=size(block_off1%ButterflyU(blocks)%matrix,1)
         allocate (butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(dimension_m,dimension_rank))
-        ! allocate (butterfly_block_randomized(1)%ButterflyUInv(blocks)%matrix(dimension_rank,dimension_m))
-        
+
 		allocate(matrixtemp1(dimension_rank,dimension_m))
 		call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
         
@@ -1079,44 +1076,18 @@ subroutine Initialize_Butterfly_inverse_BC(level_c,rowblock,kover)
 		deallocate(matrixtemp1)		
 		
     enddo
-    ! call invert_Butterfly_U()
-    ! call invert_Butterfly_V()
-    
+
     if (level_butterfly/=0) then
         allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
         allocate (butterfly_block_randomized(1)%ButterflyKerl(level_butterfly))
-        allocate (butterfly_block_randomized(1)%ButterflyInv(level_butterfly))
+
         do level=1, level_butterfly
             num_row=2**level
             num_col=2**(level_butterfly-level+1)
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_row=num_row
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_col=num_col
             allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(num_row,num_col))
-            allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(num_row/2,num_col/2))
-            ! do j=1, num_col, 2
-                ! index_j=int((j+1)/2)
-                ! do i=1, num_row, 2
-                    ! index_i=int((i+1)/2)
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(dimension_rank,dimension_rank))
-				    ! ! ! call RandomMat(2*dimension_rank,2*dimension_rank,2*dimension_rank,matrixtemp1,0)	
-					
-                    ! ! ! ! !$omp parallel do default(shared) private(ii,jj)
-                    ! ! ! do jj=1, dimension_rank
-                        ! ! ! do ii=1, dimension_rank
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=matrixtemp1(ii,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(ii,jj)=matrixtemp1(ii,jj+dimension_rank)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj+dimension_rank)
-                        ! ! ! enddo
-                    ! ! ! enddo
-                    ! ! ! ! !$omp end parallel do
-                    ! allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(index_i,index_j)%matrix(2*dimension_rank,2*dimension_rank))
-                ! enddo
-            ! enddo
-            ! call invert_Butterfly_Kernel(level)
+
         enddo
         deallocate (matrixtemp1)
     endif	
@@ -2134,8 +2105,6 @@ subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B
 	
     allocate (butterfly_block_randomized(1)%ButterflyU(2**level_butterfly))
     allocate (butterfly_block_randomized(1)%ButterflyV(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyUInv(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyVInv(2**level_butterfly))
 
 	dimension_max = 2*dimension_rank
 	do blocks=1, num_blocks	
@@ -2151,8 +2120,7 @@ subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B
 		
 		dimension_m= basis_group(groupm_start+blocks-1)%tail-basis_group(groupm_start+blocks-1)%head+1
         allocate (butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(dimension_m,dimension_rank))
-        ! allocate (butterfly_block_randomized(1)%ButterflyUInv(blocks)%matrix(dimension_rank,dimension_m))
-        
+
 		allocate(matrixtemp1(dimension_rank,dimension_m))
 		call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
         
@@ -2185,44 +2153,18 @@ subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B
 		deallocate(matrixtemp1)		
 		
     enddo
-    ! call invert_Butterfly_U()
-    ! call invert_Butterfly_V()
-    
+
     if (level_butterfly/=0) then
         allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
         allocate (butterfly_block_randomized(1)%ButterflyKerl(level_butterfly))
-        allocate (butterfly_block_randomized(1)%ButterflyInv(level_butterfly))
+
         do level=1, level_butterfly
             num_row=2**level
             num_col=2**(level_butterfly-level+1)
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_row=num_row
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_col=num_col
             allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(num_row,num_col))
-            allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(num_row/2,num_col/2))
-            ! do j=1, num_col, 2
-                ! index_j=int((j+1)/2)
-                ! do i=1, num_row, 2
-                    ! index_i=int((i+1)/2)
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(dimension_rank,dimension_rank))
-				    ! ! ! call RandomMat(2*dimension_rank,2*dimension_rank,2*dimension_rank,matrixtemp1,0)	
-					
-                    ! ! ! ! !$omp parallel do default(shared) private(ii,jj)
-                    ! ! ! do jj=1, dimension_rank
-                        ! ! ! do ii=1, dimension_rank
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=matrixtemp1(ii,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(ii,jj)=matrixtemp1(ii,jj+dimension_rank)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj+dimension_rank)
-                        ! ! ! enddo
-                    ! ! ! enddo
-                    ! ! ! ! !$omp end parallel do
-                    ! allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(index_i,index_j)%matrix(2*dimension_rank,2*dimension_rank))
-                ! enddo
-            ! enddo
-            ! call invert_Butterfly_Kernel(level)
+
         enddo
         deallocate (matrixtemp1)
     endif	
@@ -2408,12 +2350,6 @@ subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, b
     return
 
 end subroutine Butterfly_inverse_ABCD
-
-
-
-
-
-
 
 
 subroutine Reconstruction_LL_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D)
@@ -3169,9 +3105,7 @@ subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, 
 	
     allocate (butterfly_block_randomized(1)%ButterflyU(2**level_butterfly))
     allocate (butterfly_block_randomized(1)%ButterflyV(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyUInv(2**level_butterfly))
-    allocate (butterfly_block_randomized(1)%ButterflyVInv(2**level_butterfly))
-    
+
 	dimension_max = 2*dimension_rank
 	do blocks=1, num_blocks	
 		dimension_m=basis_group(groupm_start+blocks-1)%tail-basis_group(groupm_start+blocks-1)%head+1        
@@ -3187,8 +3121,7 @@ subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, 
 		! dimension_m=size(blocks_o%ButterflyU(blocks)%matrix,1)
 		dimension_m= basis_group(groupm_start+blocks-1)%tail-basis_group(groupm_start+blocks-1)%head+1        
 		allocate (butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(dimension_m,dimension_rank))
-        ! allocate (butterfly_block_randomized(1)%ButterflyUInv(blocks)%matrix(dimension_rank,dimension_m))
-        
+
 		allocate(matrixtemp1(dimension_rank,dimension_m))
 		call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
         
@@ -3222,44 +3155,17 @@ subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, 
 		deallocate(matrixtemp1)		
 		
     enddo
-    ! call invert_Butterfly_U()
-    ! call invert_Butterfly_V()
-    
+
     if (level_butterfly/=0) then
         allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
         allocate (butterfly_block_randomized(1)%ButterflyKerl(level_butterfly))
-        allocate (butterfly_block_randomized(1)%ButterflyInv(level_butterfly))
+		
         do level=1, level_butterfly
             num_row=2**level
             num_col=2**(level_butterfly-level+1)
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_row=num_row
             butterfly_block_randomized(1)%ButterflyKerl(level)%num_col=num_col
             allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(num_row,num_col))
-            allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(num_row/2,num_col/2))
-            ! do j=1, num_col, 2
-                ! index_j=int((j+1)/2)
-                ! do i=1, num_row, 2
-                    ! index_i=int((i+1)/2)
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(dimension_rank,dimension_rank))
-                    ! ! ! allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(dimension_rank,dimension_rank))
-				    ! ! ! call RandomMat(2*dimension_rank,2*dimension_rank,2*dimension_rank,matrixtemp1,0)	
-					
-                    ! ! ! ! !$omp parallel do default(shared) private(ii,jj)
-                    ! ! ! do jj=1, dimension_rank
-                        ! ! ! do ii=1, dimension_rank
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=matrixtemp1(ii,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i,j+1)%matrix(ii,jj)=matrixtemp1(ii,jj+dimension_rank)
-                            ! ! ! butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(i+1,j+1)%matrix(ii,jj)=matrixtemp1(ii+dimension_rank,jj+dimension_rank)
-                        ! ! ! enddo
-                    ! ! ! enddo
-                    ! ! ! ! !$omp end parallel do
-                    ! allocate (butterfly_block_randomized(1)%ButterflyInv(level)%blocks(index_i,index_j)%matrix(2*dimension_rank,2*dimension_rank))
-                ! enddo
-            ! enddo
-            ! call invert_Butterfly_Kernel(level)
         enddo
         deallocate (matrixtemp1)
     endif	

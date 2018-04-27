@@ -46,10 +46,10 @@ LinkFlagF = -Bdynamic
 endif
 
 					  
-F90FLAGS = -nologo -fpe0 -traceback -cpp -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
-#F90FLAGS = -O3 -cpp -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
-CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
-#CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
+#F90FLAGS = -nologo -fpe0 -traceback -cpp -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
+F90FLAGS = -O3 -cpp -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
+#CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
+CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
 endif
 
 
@@ -89,7 +89,7 @@ endif
 
 SOURCES = Module_file.o misc.o Utilites.o Utilites_randomized.o analytic_part.o gaussian_point.o element_Vinc_cfie.o element_Zmn_cfie.o \
 	 	H_matrix_structuring.o Butterfly_compress_forward.o Butterfly_rightmultiply_inverse_randomized.o Bplus_rightmultiply_inverse_randomized.o \
-		Butterfly_exact_randomized.o Butterfly_inverse_diagonal_randomized.o Butterfly_inverse_diagonal_randomized_schur_partitioned.o Bplus_inverse_diagonal_randomized_schur_partitioned.o geo_modeling.o current_node_patch_mapping.o RCS_bistatic.o RCS_monostatic.o EM_calculating.o matrices_filling.o HODLR_randomized.o cascading_factorizing.o 
+		Butterfly_exact_randomized.o Butterfly_inverse_diagonal_randomized.o Butterfly_inverse_diagonal_randomized_schur_partitioned.o Bplus_inverse_diagonal_randomized_schur_partitioned.o geo_modeling.o current_node_patch_mapping.o RCS_bistatic.o RCS_monostatic.o HODLR_solve.o EM_calculating.o matrices_filling.o HODLR_randomized.o cascading_factorizing.o 
 		
 obj_Files = $(filter %.o, $(SOURCES))
 
