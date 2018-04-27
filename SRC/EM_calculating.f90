@@ -33,7 +33,7 @@ subroutine EM_calculating_SURF()
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:)
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
 	
     if (Static==2) then
@@ -85,32 +85,41 @@ subroutine EM_calculating_SURF()
         write (*,*) ''
         write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
         write (*,*) ''
-    
+		deallocate(Current)
+		deallocate(Voltage)
+	
     elseif (Static==1) then
     
         allocate (current(Maxedge))
-        allocate (voltage(Maxedge))
-        
+
         
         num_sample=RCS_sample
 		theta=90.
         dphi=180./num_sample
-        
+		allocate (b(Maxedge,num_sample+1))
+		allocate (x(Maxedge,num_sample+1))        
+		
+		
+		
         open (100, file='bistaticH.out')
 
         T0=secnds(0.0)        
         do j=0, num_sample 
-        
-
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
 			do edge=1, Maxedge
 				call element_Vinc_HH_SURF(theta,phi,edge,value_Z)
-				voltage(edge)=value_Z
+				b(edge,j+1)=value_Z
 			enddo    
 			!$omp end parallel do
-            
-			call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)
+        enddo
+		
+		call HODLR_Solution(cascading_factors_copy,cascading_factors,x,b,Maxedge,num_sample+1)
+			
+		do j=0, num_sample 			
+			phi=j*dphi
+			
+			Current=x(:,j+1)
 			
             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
 !             !$omp parallel do default(shared) private(i)
@@ -129,7 +138,9 @@ subroutine EM_calculating_SURF()
         close(100)
         write (*,*) ''
         write (*,*) 'Solving:',secnds(T0),'Seconds'
-        write (*,*) ''        
+        write (*,*) ''   
+		deallocate(Current)
+		
     endif
         
     return
@@ -150,7 +161,7 @@ subroutine EM_calculating_CURV()
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:)
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
 	
     if (Static==2) then
@@ -170,8 +181,6 @@ subroutine EM_calculating_CURV()
         
         T0=secnds(0.0)
         
-
-
 		call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)
 		
 		current2com(:,1) = Current		
@@ -187,31 +196,37 @@ subroutine EM_calculating_CURV()
         write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
         write (*,*) ''
     
+		deallocate(current)
+		deallocate(voltage)
+	
     elseif (Static==1) then
     
         allocate (current(Maxedge))
-        allocate (voltage(Maxedge))
-        
-        
         num_sample=RCS_sample
         dphi=180./num_sample
         
+		allocate (b(Maxedge,num_sample+1))
+		allocate (x(Maxedge,num_sample+1))
+		
         open (100, file='RCS_monostatic.txt')
 
         T0=secnds(0.0)        
         do j=0, num_sample 
-        
-
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
 			do edge=1, Maxedge
 				call element_Vinc_VV_CURV(phi,edge,value_Z)
-				voltage(edge)=value_Z
+				b(edge,j+1)=value_Z
 			enddo    
 			!$omp end parallel do
-            
-			call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)
+		enddo
+		
+		call HODLR_Solution(cascading_factors_copy,cascading_factors,x,b,Maxedge,num_sample+1)
 			
+			
+		do j=0, num_sample 	
+			phi=j*dphi
+			Current=x(:,j+1)
             call RCS_monostatic_VV_CURV(phi,rcs_V)
 !             !$omp parallel do default(shared) private(i)
 !             do i=1, Maxedge
@@ -229,7 +244,12 @@ subroutine EM_calculating_CURV()
         close(100)
         write (*,*) ''
         write (*,*) 'Solving:',secnds(T0),'Seconds'
-        write (*,*) ''        
+        write (*,*) ''     
+
+		deallocate(b)
+		deallocate(x)
+		deallocate(Current)
+		
     endif
         
     return
