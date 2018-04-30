@@ -3464,7 +3464,7 @@ subroutine Resolving_Butterfly_LL_new_adaptive(num_vect_sub,nth_s,nth_e,Ng,uniqu
    num_blocks=2**level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
 	
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
 
 	   
@@ -3506,7 +3506,7 @@ subroutine Resolving_Butterfly_LL_new_adaptive(num_vect_sub,nth_s,nth_e,Ng,uniqu
 		   endif	   
 	   end do
 	   
-   endif
+   ! endif
    
    
    return
@@ -3697,7 +3697,7 @@ subroutine Resolving_Butterfly_RR_new_adaptive(num_vect_sub,nth_s,nth_e,Ng,uniqu
    num_blocks=2**level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
    
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
 
 	   level_left_start= floor_safe(level_butterfly/2d0)+1    !  check here later		   
@@ -3740,7 +3740,7 @@ subroutine Resolving_Butterfly_RR_new_adaptive(num_vect_sub,nth_s,nth_e,Ng,uniqu
 			   enddo	   
 			end if
 	   end do
-   endif
+   ! endif
    
    
    return
@@ -3761,26 +3761,41 @@ subroutine OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s)
    level_butterfly=blocks%level_butterfly 
    
 	if(level_left==unique_nth)then
-		dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
-		allocate(matB(mm,dimension_mm))
-		call copymatT_omp(random_Block(1)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
-		call GetRank(mm,dimension_mm,matB,rank,Rank_detection_factor)
-		if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
-		
-		if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
-		if(allocated(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))deallocate(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix)
-		allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
-		allocate(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
-		allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
-		call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
-		if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
-		 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
-		 stop
-	    end if		
-		call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)							
-		call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
-		call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
-		deallocate(matB,matC,matA,matinv)
+		if(level_butterfly>0)then
+			dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
+			allocate(matB(mm,dimension_mm))
+			call copymatT_omp(random_Block(1)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
+			call GetRank(mm,dimension_mm,matB,rank,Rank_detection_factor)
+			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+			
+			if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
+			if(allocated(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))deallocate(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix)
+			allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
+			allocate(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
+			allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
+			call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
+			if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
+			 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
+			 stop
+			end if		
+			call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)							
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
+			call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
+			deallocate(matB,matC,matA,matinv)
+		else 
+			dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
+			allocate(matB(mm,dimension_mm))
+			call copymatT_omp(random_Block(1)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)									
+			rank = size(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix,1)
+			if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
+			allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
+			allocate(matC(rank,dimension_mm),matA(mm,rank))	
+			call copymatT_omp(random_Block(1)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
+			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
+			call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
+			deallocate(matB,matC,matA)			
+		endif			
 	else 
 		dimension_mm=size(blocks%butterflyU(i)%matrix,1)						
 		rank=size(blocks%butterflyU(i)%matrix,2)						
@@ -3955,7 +3970,7 @@ subroutine Resolving_Butterfly_LL_new_uniform(num_vect_sub,nth_s,nth_e,Ng,unique
    ! write(*,*)rank,'how come'
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
 	
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
        nn=2*rank
        error=1000.
@@ -4095,7 +4110,7 @@ subroutine Resolving_Butterfly_LL_new_uniform(num_vect_sub,nth_s,nth_e,Ng,unique
 		   endif	   
 	   end do
 	   
-   endif
+   ! endif
    
    
    return
@@ -4132,7 +4147,7 @@ subroutine Resolving_Butterfly_RR_new_uniform(num_vect_sub,nth_s,nth_e,Ng,unique
    rank=butterfly_block_randomized(1)%dimension_rank
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
    
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
        nn=2*rank
        error=1000.
@@ -4271,7 +4286,7 @@ subroutine Resolving_Butterfly_RR_new_uniform(num_vect_sub,nth_s,nth_e,Ng,unique
 			   deallocate(matB,matC,matA,matinv)
 			end if
 	   end do
-   endif
+   ! endif
    
    
    return

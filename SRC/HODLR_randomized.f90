@@ -31,24 +31,24 @@ subroutine HODLR_MVP(rankmax,Memory,error)
 		
 			level_butterfly = 0   !!! uncomment out this to enable low-rank only reconstruction
 		
-			if(level_butterfly==0)then
-				call HODLR_MVP_OneL_Lowrank(level_c,rankmax,Memtmp)
-				! write(*,*)'sorry man'
-				! stop
-				Memory = Memory + Memtmp
-			else 
+			! if(level_butterfly==0)then
+				! call HODLR_MVP_OneL_Lowrank(level_c,rankmax,Memtmp)
+				! ! write(*,*)'sorry man'
+				! ! stop
+				! Memory = Memory + Memtmp
+			! else 
 				time_gemm1 = 0
 				! write(*,*)'before init'
-				call Initialize_Butterfly_HODLR_MVP(rankmax,level_c)
+				call Initialize_Butterfly_HODLR_MVP(rankmax,level_c,level_butterfly)
 				! write(*,*)'before reconstructLL'
 				n1 = OMP_get_wtime()
-				call Reconstruction_LL_HODLR_MVP(level_c)
+				call Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructLL: ', n2-n1, 'time_gemm1',time_gemm1,'vecCNT',vecCNT
 				time_gemm1 = 0
 				! write(*,*)'before reconstructRR'
 				n1 = OMP_get_wtime()
-				call Reconstruction_RR_HODLR_MVP(level_c,error_inout)
+				call Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error_inout)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructRR: ', n2-n1, 'time_gemm1',time_gemm1,'vecCNT',vecCNT
 				
@@ -64,7 +64,7 @@ subroutine HODLR_MVP(rankmax,Memory,error)
 				write(*,'(A10,I5,A6,I3,A8,I3,A7,Es14.7)')' Level ',level_c,' rank:',rank_new_max,' L_butt:',level_butterfly,' error:',error_inout
 				deallocate (butterfly_block_randomized)
 				rankmax_of_level(level_c) = rank_new_max
-			end if
+			! end if
 		end if
 	end do
 
@@ -560,7 +560,7 @@ end subroutine HODLR_MVP_OneL_Fullmat
 
 
 
-subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c)
+subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c,level_butterfly)
 	use misc
     use MODULE_FILE
 	! use lapack95
@@ -579,7 +579,7 @@ subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c)
 	
 	
     allocate (butterfly_block_randomized(cascading_factors(level_c)%N_block_forward))
-    level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
+    ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = rankmax
 	num_blocks=2**level_butterfly
 	
@@ -631,7 +631,7 @@ subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c)
 			
 			dimension_n=basis_group(groupn_start+blocks-1)%tail-basis_group(groupn_start+blocks-1)%head+1
 			allocate (butterfly_block_randomized(bb)%ButterflyV(blocks)%matrix(dimension_n,dimension_rank))
-			allocate (butterfly_block_randomized(bb)%ButterflyVInv(blocks)%matrix(dimension_rank,dimension_n))		
+			! allocate (butterfly_block_randomized(bb)%ButterflyVInv(blocks)%matrix(dimension_rank,dimension_n))		
 
 			allocate(matrixtemp1(dimension_rank,dimension_n))
 			call RandomMat(dimension_rank,dimension_n,min(dimension_rank,dimension_n),matrixtemp1,0)
@@ -700,7 +700,7 @@ end subroutine Initialize_Butterfly_HODLR_MVP
 
 
 
-subroutine Reconstruction_LL_HODLR_MVP(level_c)
+subroutine Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
     
     use MODULE_FILE
     implicit none
@@ -734,7 +734,7 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c)
 	vecCNT = 0
 	
     allocate (Random_Block(cascading_factors(level_c)%N_block_forward))
-    level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
+    ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = butterfly_block_randomized(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly	
 	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
@@ -759,9 +759,9 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c)
 			
 			n1 = OMP_get_wtime()
 			! First: The odd numbered blocks at level_c
-			call Get_Randomized_Vectors_LL_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,1)
+			call Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,1)
 			! Second: The even numbered blocks at level_c
-			call Get_Randomized_Vectors_LL_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,0)
+			call Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,0)
 			vecCNT = vecCNT + num_vect_sub*2
 			
 			n2 = OMP_get_wtime()
@@ -804,7 +804,7 @@ end subroutine Reconstruction_LL_HODLR_MVP
 
 
 
-subroutine Reconstruction_RR_HODLR_MVP(level_c,error)
+subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
     
     use MODULE_FILE
     implicit none
@@ -838,7 +838,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,error)
 	vecCNT = 0
 	
     ! allocate (Random_Block(cascading_factors(level_c)%N_block_forward))
-    level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
+    ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = butterfly_block_randomized(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly	
 	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
@@ -867,9 +867,9 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,error)
 			
 			n1 = OMP_get_wtime()
 			! First: The odd numbered blocks at level_c
-			call Get_Randomized_Vectors_RR_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,1)
+			call Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,1)
 			! Second: The even numbered blocks at level_c
-			call Get_Randomized_Vectors_RR_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,0)
+			call Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,0)
 			vecCNT = vecCNT + num_vect_sub*2
 			
 			n2 = OMP_get_wtime()
@@ -1696,7 +1696,7 @@ subroutine Resolving_Butterflys_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
    num_blocks=2**level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
 	
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
 
 	   
@@ -1738,7 +1738,7 @@ subroutine Resolving_Butterflys_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
 		   endif	   
 	   end do
 	   
-   endif
+   ! endif
    
    
    return
@@ -1928,7 +1928,7 @@ subroutine Resolving_Butterflys_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
    num_blocks=2**level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
    
-   if (level_butterfly/=0) then
+   ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
 
 	   level_left_start= floor_safe(level_butterfly/2d0)+1    !  check here later		   
@@ -1973,7 +1973,7 @@ subroutine Resolving_Butterflys_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
 				! write(*,*)'good1'			   
 			end if
 	   end do
-   endif
+   ! endif
    
    
    return
@@ -1994,27 +1994,43 @@ subroutine OneUs_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,bb)
    level_butterfly=blocks%level_butterfly 
    
 	if(level_left==unique_nth)then
-		dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
-		allocate(matB(mm,dimension_mm))
-		call copymatT_omp(random_Block(bb)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
-		call GetRank(mm,dimension_mm,matB,rank,Rank_detection_factor)
-		if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
-		
-		if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
-		if(allocated(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))deallocate(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix)
-		allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
-		allocate(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
-		allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
-		call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)
-		if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
-		 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
-		 stop
-	    end if		
-		call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)							
-		call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
-		! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
-		call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
-		deallocate(matB,matC,matA,matinv)
+
+		if(level_butterfly>0)then
+			dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
+			allocate(matB(mm,dimension_mm))
+			call copymatT_omp(random_Block(bb)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
+			call GetRank(mm,dimension_mm,matB,rank,Rank_detection_factor)
+			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+			
+			if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
+			if(allocated(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))deallocate(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix)
+			allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
+			allocate(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
+			allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
+			call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)
+			if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
+			 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
+			 stop
+			end if		
+			call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)							
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
+			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
+			call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
+			deallocate(matB,matC,matA,matinv)
+		else 
+			dimension_mm=size(blocks%butterflyU(i)%matrix,1)	
+			allocate(matB(mm,dimension_mm))
+			call copymatT_omp(random_Block(bb)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)									
+			rank = size(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix,1)
+			if(allocated(blocks%butterflyU(i)%matrix))deallocate(blocks%butterflyU(i)%matrix)
+			allocate(blocks%butterflyU(i)%matrix(dimension_mm,rank))
+			allocate(matC(rank,dimension_mm),matA(mm,rank))	
+			call copymatT_omp(random_Block(bb)%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,LS_tolerance)
+			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
+			call copymatT_omp(matC,blocks%ButterflyU(i)%matrix,rank,dimension_mm)							
+			deallocate(matB,matC,matA)			
+		endif		
 	else 
 		dimension_mm=size(blocks%butterflyU(i)%matrix,1)						
 		rank=size(blocks%butterflyU(i)%matrix,2)						
@@ -2824,7 +2840,7 @@ end subroutine Delete_randomized_butterflys
 
 
 
-subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,oddeven)
+subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,oddeven)
 
     use MODULE_FILE
     ! use lapack95
@@ -2860,7 +2876,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,
 	! block_o =>  cascading_factors(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
-    level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
+    ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     num_blocks=2**level_butterfly
 	level_right_start = floor_safe(level_butterfly/2d0)
 	Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later		
@@ -2976,7 +2992,7 @@ end subroutine Get_Randomized_Vectors_LL_HODLR_MVP
 
 
 
-subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,unique_nth,oddeven)
+subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,oddeven)
 
     use MODULE_FILE
     ! use lapack95
@@ -3012,7 +3028,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,nth_s,nth_e,num_vect_sub,
 	! block_o =>  cascading_factors(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
-    level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
+    ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     num_blocks=2**level_butterfly
 	level_left_start= floor_safe(level_butterfly/2d0)+1
 	

@@ -4,7 +4,7 @@
 Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =NERSC#Laptop#CAC#NERSC#Laptop
+Platform =Laptop#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -79,10 +79,10 @@ LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL)
 LinkFlagF = -Bdynamic
 endif
 
-F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-#F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
-#CFLAGS=-std=c++11 -O3 -fopenmp 
+#F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+#CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
+CFLAGS=-std=c++11 -O3 -fopenmp 
 
 endif
 

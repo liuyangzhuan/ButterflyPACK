@@ -126,7 +126,7 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 			level_butterfly = Maxlevel-blocks_A%level
 		end if
 		! write(*,*)'A-BDC',level_butterfly,level
-		call Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C, blocks_D,error_inout) 
+		call Butterfly_A_minusBDinvC(level_butterfly,partitioned_blocks(level+1),error_inout) 
 		error_cnt = error_cnt + 1
 		error_avr_glo = error_avr_glo + error_inout
 		
@@ -142,7 +142,7 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 			if(level==0)level_butterfly = int((Maxlevel-blocks_io%level)/2)*2
 		end if
 		! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
-		call Butterfly_inverse_ABCD(level_butterfly,blocks_io,blocks_A, blocks_B, blocks_C, blocks_D,error_inout) 
+		call Butterfly_inverse_ABCD(level_butterfly,blocks_io,partitioned_blocks(level+1),error_inout) 
 		error_cnt = error_cnt + 1
 		error_avr_glo = error_avr_glo + error_inout
 		! stop
@@ -1099,7 +1099,7 @@ end subroutine Initialize_Butterfly_inverse_BC
 
 
 
-subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C, blocks_D,error_inout) 
+subroutine Butterfly_A_minusBDinvC(level_butterfly,partitioned_block,error_inout) 
 
     use MODULE_FILE
 	use misc
@@ -1115,7 +1115,7 @@ subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C,
     character chara
     real*8 T0
     type(matrixblock),pointer::block_o,block_off1,block_off2
-    type(matrixblock)::blocks_A, blocks_B, blocks_C, blocks_D, blocks_Schur
+    type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D
     integer rank_new_max
 	real*8:: rank_new_avr,error
 	integer niter
@@ -1126,9 +1126,16 @@ subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C,
 	real*8,allocatable :: Singular(:)
 	complex (kind=8), allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:)
 	complex (kind=8)::ctemp1,ctemp2
+	type(partitionedblocks)::partitioned_block
+	
 	
 	ctemp1 = 1d0; ctemp2 = 0d0
 	Memory = 0
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D
 	
 	if(blocks_A%level_butterfly==0)then
 		
@@ -1208,13 +1215,13 @@ subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C,
 				do ntry=1,1
 				itermax = 0
 				n1 = OMP_get_wtime()
-				call Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C, blocks_D,tt-1)
+				call Initialize_Butterfly_A_minusBDinvC(level_butterfly,partitioned_block,tt-1)
 				n2 = OMP_get_wtime()
 				Time_Init_inverse = Time_Init_inverse + n2-n1
 				
 				n1 = OMP_get_wtime()
-				call Reconstruction_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D)	
-				call Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error_inout)
+				call Reconstruction_LL_A_minusBDinvC(partitioned_block)	
+				call Reconstruction_RR_A_minusBDinvC(partitioned_block,error_inout)
 				n2 = OMP_get_wtime()	
 				Time_Reconstruct_inverse = Time_Reconstruct_inverse + n2 - n1
 				
@@ -1289,13 +1296,13 @@ subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C,
 			do ntry=1,1
 			itermax = 0
 			n1 = OMP_get_wtime()
-			call Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C, blocks_D,tt-1)
+			call Initialize_Butterfly_A_minusBDinvC(level_butterfly,partitioned_block,tt-1)
 			n2 = OMP_get_wtime()
 			Time_Init_inverse = Time_Init_inverse + n2-n1
 			
 			n1 = OMP_get_wtime()
-			call Reconstruction_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D)	
-			call Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error_inout)
+			call Reconstruction_LL_A_minusBDinvC(partitioned_block)	
+			call Reconstruction_RR_A_minusBDinvC(partitioned_block,error_inout)
 			n2 = OMP_get_wtime()	
 			Time_Reconstruct_inverse = Time_Reconstruct_inverse + n2 - n1
 			
@@ -1327,7 +1334,7 @@ subroutine Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C,
 end subroutine Butterfly_A_minusBDinvC
 
 
-subroutine Reconstruction_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D)
+subroutine Reconstruction_LL_A_minusBDinvC(partitioned_block)
     
     use MODULE_FILE
     implicit none
@@ -1350,13 +1357,15 @@ subroutine Reconstruction_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D)
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
 	real*8::rank_new_avr,error 
 	complex(kind=8),allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
 	real*8:: error_inout
 	integer,allocatable::perms(:)
+	type(partitionedblocks)::partitioned_block
+	
 	
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
     num_blocks=2**level_butterfly
@@ -1394,7 +1403,7 @@ subroutine Reconstruction_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D)
 			! nth_e = perms(ii)
 			
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+			call Get_Randomized_Vectors_LL_A_minusBDinvC(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
@@ -1420,7 +1429,7 @@ end subroutine Reconstruction_LL_A_minusBDinvC
 
 
 
-subroutine Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error)
+subroutine Reconstruction_RR_A_minusBDinvC(partitioned_block,error)
     
     use MODULE_FILE
     implicit none
@@ -1443,12 +1452,13 @@ subroutine Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,e
 	
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
 	real*8::rank_new_avr 
 	complex(kind=8),allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
-	
+	type(partitionedblocks)::partitioned_block
+
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
 		
     num_blocks=2**level_butterfly
@@ -1487,7 +1497,7 @@ subroutine Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,e
 			nth_s = (ii-1)*Nbind+1
 			nth_e = ii*Nbind
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+			call Get_Randomized_Vectors_RR_A_minusBDinvC(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1	
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
@@ -1504,7 +1514,7 @@ subroutine Reconstruction_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,e
 	
 	deallocate(Random_Block)
 
-	call Test_Error_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error)
+	call Test_Error_RR_A_minusBDinvC(partitioned_block,error)
 
 
 	
@@ -1515,7 +1525,7 @@ end subroutine Reconstruction_RR_A_minusBDinvC
 
 
 
-subroutine Test_Error_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error)
+subroutine Test_Error_RR_A_minusBDinvC(partitioned_block,error)
 
     use MODULE_FILE
     implicit none
@@ -1533,7 +1543,13 @@ subroutine Test_Error_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error
 	real*8::error
 	integer level_c,rowblock,dimension_m 
 	complex(kind=8),allocatable::RandomVectors_Output_ref(:,:),Id(:,:),Vd(:,:)
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
+	type(partitionedblocks)::partitioned_block
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
 	
 
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
@@ -1551,7 +1567,7 @@ subroutine Test_Error_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,error
 	
 	call Init_RandVect_Empty('N',random,num_vect)	
 
-	call Get_Randomized_Vectors_RR_Test_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,num_vect)
+	call Get_Randomized_Vectors_RR_Test_A_minusBDinvC(partitioned_block,num_vect)
 	
 	k=0
 	do i=1, num_blocks
@@ -1620,7 +1636,7 @@ end subroutine Test_Error_RR_A_minusBDinvC
 
 
 
-subroutine Get_Randomized_Vectors_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+subroutine Get_Randomized_Vectors_LL_A_minusBDinvC(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 
     use MODULE_FILE
     ! use lapack95
@@ -1634,7 +1650,7 @@ subroutine Get_Randomized_Vectors_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,bl
 	character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -1651,6 +1667,13 @@ subroutine Get_Randomized_Vectors_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,bl
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_right_start
 	type(RandomBlock), pointer :: random
+	type(partitionedblocks)::partitioned_block
+	
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D
 	
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
@@ -1787,7 +1810,7 @@ subroutine Get_Randomized_Vectors_LL_A_minusBDinvC(blocks_A,blocks_B,blocks_C,bl
 end subroutine Get_Randomized_Vectors_LL_A_minusBDinvC
 
 
-subroutine Get_Randomized_Vectors_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+subroutine Get_Randomized_Vectors_RR_A_minusBDinvC(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 
     use MODULE_FILE
     ! use lapack95
@@ -1800,7 +1823,7 @@ subroutine Get_Randomized_Vectors_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,bl
     character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -1817,6 +1840,12 @@ subroutine Get_Randomized_Vectors_RR_A_minusBDinvC(blocks_A,blocks_B,blocks_C,bl
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_left_start
 	type(RandomBlock), pointer :: random
+	type(partitionedblocks)::partitioned_block
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
 	
     level_butterfly=butterfly_block_randomized(1)%level_butterfly
 	level_left_start= floor_safe(level_butterfly/2d0)+1   !  check here later
@@ -1933,7 +1962,7 @@ end subroutine Get_Randomized_Vectors_RR_A_minusBDinvC
 
 
 
-subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC(blocks_A,blocks_B,blocks_C,blocks_D,num_vect_sub)
+subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC(partitioned_block,num_vect_sub)
 
     use MODULE_FILE
     ! use lapack95
@@ -1946,7 +1975,7 @@ subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC(blocks_A,blocks_B,blocks
     character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -1963,7 +1992,12 @@ subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC(blocks_A,blocks_B,blocks
 	
 	integer num_vect_sub
 	type(RandomBlock), pointer :: random
-	
+	type(partitionedblocks)::partitioned_block
+
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
 
     level_butterfly=butterfly_block_randomized(1)%level_butterfly
     num_blocks=2**level_butterfly
@@ -2058,7 +2092,7 @@ subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC(blocks_A,blocks_B,blocks
 end subroutine Get_Randomized_Vectors_RR_Test_A_minusBDinvC
 
 
-subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B, blocks_C, blocks_D,kover)
+subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,partitioned_block,kover)
 
     use MODULE_FILE
     implicit none
@@ -2068,11 +2102,18 @@ subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B
     integer dimension_max,dimension_rank, dimension_m, dimension_n, blocks, groupm, groupm_start,groupn,index_j,index_i
     real*8 a,b,c,d
     complex (kind=8) ctemp
-	type(matrixblock)::blocks_A, blocks_B, blocks_C, blocks_D
+	type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D
 	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
 	real*8, allocatable:: Singular(:)
 	integer rankmax
-    
+    type(partitionedblocks)::partitioned_block
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
+	
+	
 	allocate (butterfly_block_randomized(1))
     
     ! level_butterfly=blocks_A%level_butterfly
@@ -2174,7 +2215,7 @@ subroutine Initialize_Butterfly_A_minusBDinvC(level_butterfly,blocks_A, blocks_B
 end subroutine Initialize_Butterfly_A_minusBDinvC
 
 
-subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, blocks_C, blocks_D,error_inout) 
+subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,partitioned_block,error_inout) 
 
     use MODULE_FILE
 	use misc
@@ -2191,7 +2232,8 @@ subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, b
     character chara
     real*8 T0
     type(matrixblock),pointer::block_o,block_off1,block_off2
-    type(matrixblock)::blocks_o,blocks_A, blocks_B, blocks_C, blocks_D,block_tmp
+    type(matrixblock)::blocks_o
+    type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D,block_tmp
     integer rank_new_max
 	real*8:: rank_new_avr,error
 	integer niter
@@ -2204,7 +2246,12 @@ subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, b
 	complex (kind=8)::ctemp1,ctemp2
 	complex(kind=8),allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
 	integer idx_start_m_ref
-	
+	type(partitionedblocks)::partitioned_block
+
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D
 	
 	
 	ctemp1 = 1d0; ctemp2 = 0d0
@@ -2212,113 +2259,19 @@ subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, b
 	
 	! write(*,*)blocks_A%level_butterfly,blocks_A%rankmax,blocks_B%level_butterfly,blocks_B%rankmax,blocks_C%level_butterfly,blocks_C%rankmax,blocks_D%level_butterfly,blocks_D%rankmax
 	! write(*,*)'AD group ',blocks_A%row_group,blocks_D%row_group
-		
-		
-	! mm = basis_group(blocks_A%row_group)%tail - basis_group(blocks_A%row_group)%head + 1
-		! ! write(*,*)'e',mm
-	! allocate(matin(mm,mm))
-	! allocate(matout(mm,mm))
-		! ! write(*,*)'f'
-	! matin = 0
-	! do ii=1,mm
-		! matin(ii,ii) = 1
-	! end do
-	! call Butterfly_block_MVP_randomized_dat(blocks_A,'N',mm,mm,mm,matin,matout,ctemp1,ctemp2)
-	! write(*,*)'A',fnorm(matout,mm,mm)
-	! deallocate(matin)
-	! deallocate(matout)	
-
-		
-	! mm = basis_group(blocks_D%row_group)%tail - basis_group(blocks_D%row_group)%head + 1
-		! ! write(*,*)'e',mm
-	! allocate(matin(mm,mm))
-	! allocate(matout(mm,mm))
-		! ! write(*,*)'f'
-	! matin = 0
-	! do ii=1,mm
-		! matin(ii,ii) = 1
-	! end do
-	! call Butterfly_block_MVP_randomized_dat(blocks_D,'N',mm,mm,mm,matin,matout,ctemp1,ctemp2)
-	! write(*,*)'D',fnorm(matout,mm,mm)
-	! deallocate(matin)
-	! deallocate(matout)			
-		
-	
-
-	! mm = basis_group(blocks_o%row_group)%tail - basis_group(blocks_o%row_group)%head + 1
-		! ! write(*,*)'e',mm
-	! allocate(matin(mm,mm))
-	! ! allocate(matout(mm,mm))
-	! allocate(matsub_glo(mm,mm))
-	! matin = 0
-	! do ii=1,mm
-		! matin(ii,ii) = 1
-	! end do
-	
-	! call butterfly_block_MVP_inverse_ABCD_dat(blocks_A,blocks_B,blocks_C,blocks_D,'N',mm,mm,matin,matsub_glo)
-	! matsub_glo = matsub_glo - matin		
-		
-	! block_tmp%row_group = blocks_o%row_group
-	! block_tmp%col_group = blocks_o%col_group
-	! block_tmp%level = blocks_o%level
-	! block_tmp%style = blocks_o%style
-	
-	! idx_start_m_ref = basis_group(blocks_o%row_group)%head
-
-	! call Butterfly_compress_N15_givenfullmat(block_tmp,idx_start_m_ref,idx_start_m_ref)
-	
-	! write(*,*)'wocaonimaABCD',block_tmp%rankmax,block_tmp%level_butterfly,block_tmp%level,fnorm(matsub_glo,mm,mm)
-
-	! deallocate(matin)
-	! deallocate(matsub_glo)
-	! call delete_blocks(block_tmp)	
-	
-	
-	
-	! mm = basis_group(blocks_o%row_group)%tail - basis_group(blocks_o%row_group)%head + 1
-		! ! write(*,*)'e',mm
-	! allocate(matin(mm,mm))
-	! ! allocate(matout(mm,mm))
-	! allocate(matsub_glo(mm,mm))
-	! allocate(matsub_tmp(mm,mm))
-	! matin = 0
-	! do ii=1,mm
-		! matin(ii,ii) = 1
-	! end do
-	
-	! call butterfly_block_MVP_inverse_ABCD_dat(blocks_A,blocks_B,blocks_C,blocks_D,'T',mm,mm,matin,matsub_tmp)
-	! matsub_tmp = matsub_tmp - matin	
-	! call copymatT_omp(matsub_tmp,matsub_glo,mm,mm)
-	! deallocate(matsub_tmp)
-	
-	! block_tmp%row_group = blocks_o%row_group
-	! block_tmp%col_group = blocks_o%col_group
-	! block_tmp%level = blocks_o%level
-	! block_tmp%style = blocks_o%style
-	
-	! idx_start_m_ref = basis_group(blocks_o%row_group)%head
-
-	! call Butterfly_compress_N15_givenfullmat(block_tmp,idx_start_m_ref,idx_start_m_ref)
-	
-	! write(*,*)'wocaonimaABCD',block_tmp%rankmax,block_tmp%level_butterfly,block_tmp%level,fnorm(matsub_glo,mm,mm)
-
-	! deallocate(matin)
-	! deallocate(matsub_glo)
-	! call delete_blocks(block_tmp)		
-	
 	
 	do tt = 1,10
 		do ntry=1,1
 		itermax = 0
 		n1 = OMP_get_wtime()
-		call Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, blocks_C, blocks_D,(tt-1))
+		call Initialize_Butterfly_inverse_ABCD(level_butterfly,partitioned_block,(tt-1))
 		n2 = OMP_get_wtime()
 		Time_Init_inverse = Time_Init_inverse + n2-n1
 		
 		n1 = OMP_get_wtime()
 
-		call Reconstruction_LL_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D)	
-		call Reconstruction_RR_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,error_inout)
+		call Reconstruction_LL_inverse_ABCD(partitioned_block)	
+		call Reconstruction_RR_inverse_ABCD(partitioned_block,error_inout)
 		n2 = OMP_get_wtime()	
 		Time_Reconstruct_inverse = Time_Reconstruct_inverse + n2 - n1
 		
@@ -2352,7 +2305,7 @@ subroutine Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, b
 end subroutine Butterfly_inverse_ABCD
 
 
-subroutine Reconstruction_LL_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D)
+subroutine Reconstruction_LL_inverse_ABCD(partitioned_block)
     
     use MODULE_FILE
     implicit none
@@ -2375,14 +2328,15 @@ subroutine Reconstruction_LL_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,bl
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
 	real*8::rank_new_avr,error 
 	complex(kind=8),allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
 	real*8:: error_inout
 	integer,allocatable::perms(:)
-	
+	type(partitionedblocks)::partitioned_block
+		
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
     num_blocks=2**level_butterfly
 	dimension_rank =butterfly_block_randomized(1)%dimension_rank 
@@ -2419,7 +2373,7 @@ subroutine Reconstruction_LL_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,bl
 			! nth_e = perms(ii)
 			
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+			call Get_Randomized_Vectors_LL_inverseABCD(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
@@ -2446,7 +2400,7 @@ end subroutine Reconstruction_LL_inverse_ABCD
 
 
 
-subroutine Reconstruction_RR_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,error)
+subroutine Reconstruction_RR_inverse_ABCD(partitioned_block,error)
     
     use MODULE_FILE
     implicit none
@@ -2469,11 +2423,12 @@ subroutine Reconstruction_RR_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,bl
 	
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
+	! type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
 	real*8::rank_new_avr 
 	complex(kind=8),allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
+	type(partitionedblocks)::partitioned_block
 	
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
 		
@@ -2513,7 +2468,7 @@ subroutine Reconstruction_RR_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,bl
 			nth_s = (ii-1)*Nbind+1
 			nth_e = ii*Nbind
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+			call Get_Randomized_Vectors_RR_inverseABCD(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1	
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
@@ -2530,7 +2485,7 @@ subroutine Reconstruction_RR_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,bl
 	
 	deallocate(Random_Block)
 
-	call Test_Error_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,error)
+	call Test_Error_RR_inverseABCD(partitioned_block,error)
 
 
 	
@@ -2543,7 +2498,7 @@ end subroutine Reconstruction_RR_inverse_ABCD
 
 
 
-subroutine Test_Error_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,error)
+subroutine Test_Error_RR_inverseABCD(partitioned_block,error)
 
     use MODULE_FILE
     implicit none
@@ -2561,9 +2516,11 @@ subroutine Test_Error_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_
 	real*8::error
 	integer level_c,rowblock,dimension_m 
 	complex(kind=8),allocatable::RandomVectors_Output_ref(:,:),Id(:,:),Vd(:,:)
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
-	
+	type(matrixblock),pointer::blocks_A
+	type(partitionedblocks)::partitioned_block
 
+	blocks_A => partitioned_block%blocks_A
+	
 	level_butterfly=butterfly_block_randomized(1)%level_butterfly
 	num_blocks=2**level_butterfly
 	
@@ -2573,13 +2530,13 @@ subroutine Test_Error_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_
 	num_vect = 1
     random=>Random_Block(1)	
 	
-    groupm=blocks_o%row_group  ! Note: row_group and col_group interchanged here   
+    groupm=NINT(blocks_A%row_group/2d0)  ! Note: row_group and col_group interchanged here   
     mm=basis_group(groupm)%tail-basis_group(groupm)%head+1
     allocate (RandomVectors_Output_ref(mm,num_vect))		
 	
 	call Init_RandVect_Empty('N',random,num_vect)	
 
-	call Get_Randomized_Vectors_RR_Test_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,num_vect)
+	call Get_Randomized_Vectors_RR_Test_inverse_ABCD(partitioned_block,num_vect)
 	
 	k=0
 	do i=1, num_blocks
@@ -2651,7 +2608,7 @@ end subroutine Test_Error_RR_inverseABCD
 
 
 
-subroutine Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+subroutine Get_Randomized_Vectors_LL_inverseABCD(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 
     use MODULE_FILE
     ! use lapack95
@@ -2665,7 +2622,7 @@ subroutine Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
 	character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -2683,6 +2640,12 @@ subroutine Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_right_start
 	type(RandomBlock), pointer :: random
 	
+	type(partitionedblocks)::partitioned_block
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
 	
@@ -2692,9 +2655,9 @@ subroutine Get_Randomized_Vectors_LL_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
     num_blocks=2**level_butterfly
     allocate (RandomVectors_InOutput(3))
 
-    groupn=blocks_o%col_group  ! Note: row_group and col_group interchanged here   
+    groupn=NINT(blocks_A%col_group/2d0)  ! Note: row_group and col_group interchanged here   
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-    groupm=blocks_o%row_group  ! Note: row_group and col_group interchanged here   
+    groupm=NINT(blocks_A%row_group/2d0)  ! Note: row_group and col_group interchanged here   
     mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 	
 	Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later	
@@ -2798,7 +2761,7 @@ end subroutine Get_Randomized_Vectors_LL_inverseABCD
 
 
 
-subroutine Get_Randomized_Vectors_RR_inverseABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,nth_s,nth_e,num_vect_sub,unique_nth)
+subroutine Get_Randomized_Vectors_RR_inverseABCD(partitioned_block,nth_s,nth_e,num_vect_sub,unique_nth)
 
     use MODULE_FILE
     ! use lapack95
@@ -2811,7 +2774,7 @@ subroutine Get_Randomized_Vectors_RR_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
     character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -2828,14 +2791,21 @@ subroutine Get_Randomized_Vectors_RR_inverseABCD(blocks_o,blocks_A,blocks_B,bloc
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_left_start
 	type(RandomBlock), pointer :: random
+	type(partitionedblocks)::partitioned_block
+
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D
+	
 	
     level_butterfly=butterfly_block_randomized(1)%level_butterfly
 	level_left_start= floor_safe(level_butterfly/2d0)+1   !  check here later
     num_blocks=2**level_butterfly
     allocate (RandomVectors_InOutput(3))
 
-    groupn=blocks_o%col_group  ! Note: row_group and col_group interchanged here   
-    groupm=blocks_o%row_group
+    groupn=NINT(blocks_A%col_group/2d0)  ! Note: row_group and col_group interchanged here   
+    groupm=NINT(blocks_A%row_group/2d0)
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 	
@@ -2939,7 +2909,7 @@ end subroutine Get_Randomized_Vectors_RR_inverseABCD
 
 
 
-subroutine Get_Randomized_Vectors_RR_Test_inverse_ABCD(blocks_o,blocks_A,blocks_B,blocks_C,blocks_D,num_vect_sub)
+subroutine Get_Randomized_Vectors_RR_Test_inverse_ABCD(partitioned_block,num_vect_sub)
 
     use MODULE_FILE
     ! use lapack95
@@ -2952,7 +2922,7 @@ subroutine Get_Randomized_Vectors_RR_Test_inverse_ABCD(blocks_o,blocks_A,blocks_
     character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
-	type(matrixblock)::blocks_o,blocks_A,blocks_B,blocks_C,blocks_D
+	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
 	
     type(vectorsblock), pointer :: random1, random2
     
@@ -2970,13 +2940,19 @@ subroutine Get_Randomized_Vectors_RR_Test_inverse_ABCD(blocks_o,blocks_A,blocks_
 	integer num_vect_sub
 	type(RandomBlock), pointer :: random
 	
+	type(partitionedblocks)::partitioned_block
 
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
+	
     level_butterfly=butterfly_block_randomized(1)%level_butterfly
     num_blocks=2**level_butterfly
     allocate (RandomVectors_InOutput(3))
 
-    groupn=blocks_o%col_group  ! Note: row_group and col_group interchanged here   
-    groupm=blocks_o%row_group
+    groupn=NINT(blocks_A%col_group/2d0)  ! Note: row_group and col_group interchanged here   
+    groupm=NINT(blocks_A%row_group/2d0)
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 
@@ -3059,7 +3035,7 @@ end subroutine Get_Randomized_Vectors_RR_Test_inverse_ABCD
 
 
 
-subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, blocks_B, blocks_C, blocks_D,kover)
+subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,partitioned_block,kover)
 
     use MODULE_FILE
     implicit none
@@ -3069,11 +3045,17 @@ subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, 
     integer dimension_max, dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,groupm_start,index_j,index_i
     real*8 a,b,c,d
     complex (kind=8) ctemp
-	type(matrixblock)::blocks_o,blocks_A, blocks_B, blocks_C, blocks_D
+	type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D
 	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
 	real*8, allocatable:: Singular(:)
 	integer rankmax
-    
+    type(partitionedblocks)::partitioned_block
+	
+	blocks_A => partitioned_block%blocks_A
+	blocks_B => partitioned_block%blocks_B
+	blocks_C => partitioned_block%blocks_C
+	blocks_D => partitioned_block%blocks_D	
+	
 	allocate (butterfly_block_randomized(1))
     
     ! level_butterfly=blocks_o%level_butterfly
@@ -3097,7 +3079,7 @@ subroutine Initialize_Butterfly_inverse_ABCD(level_butterfly,blocks_o,blocks_A, 
 	
 	! write(*,*)dimension_rank
 	
-    groupm=blocks_o%row_group   ! Note: row_group and col_group interchanged here   
+    groupm=NINT(blocks_A%row_group/2d0)   ! Note: row_group and col_group interchanged here   
 	groupm_start=groupm*2**level_butterfly
     mm=basis_group(groupm)%tail-basis_group(groupm)%head+1
     butterfly_block_randomized(1)%dimension_rank=dimension_rank

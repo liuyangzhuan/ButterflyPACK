@@ -753,9 +753,9 @@ subroutine BPlus_structuring()
 											group_n=blocks%col_group  
 											group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 											
-											if(blocks%col_group==8 .or. blocks%col_group==9)then
-												write(*,*)group_m,group_n,sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)),'nima'
-											end	if
+											! if(blocks%col_group==8 .or. blocks%col_group==9)then
+												! write(*,*)group_m,group_n,sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)),'nima'
+											! end	if
 											
 											if(Isboundary_N(index_j_m)==1)then
 												if(dist > sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)))then

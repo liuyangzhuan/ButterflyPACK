@@ -128,7 +128,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	LnoBP=600
 	TwoLayerOnly=1
 	CFIE_alpha=1
-	explicitflag=1
+	explicitflag=0
 	fullmatflag=1
 
 	
