@@ -97,7 +97,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	ACA_tolerance_forward=1d-4
 	SVD_tolerance_forward=1d-4
 	SVD_tolerance_factor=1d-4
-	Rank_detection_factor=3d-5
+	Rank_detection_factor=1d-4 !3d-5
     Preset_level_butterfly=0
 	Scale=1d0
 	wavelength=0.25
@@ -128,7 +128,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	LnoBP=600
 	TwoLayerOnly=1
 	CFIE_alpha=1
-	explicitflag=0
+	explicitflag=1
 	fullmatflag=1
 
 	
@@ -326,7 +326,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward(Maxedge,1,Vin(:,1),Vout1(:,1),cascading_factors)
+		call MVM_Z_forward(Maxedge,1,Vin(:,1),Vout1(:,1),ho_bf%levels)
 		
 		do ii=1,Maxedge
 			ctemp = 0d0

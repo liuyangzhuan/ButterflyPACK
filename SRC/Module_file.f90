@@ -104,6 +104,13 @@ module MODULE_FILE
 		type(blockplus),pointer:: BP_inverse_schur(:)
 	 end type cascadingfactors
 
+	 
+	type hobf
+		integer Maxlevel_for_blocks
+		integer ind_lv,ind_bk
+		type(cascadingfactors),allocatable::levels(:)	 
+	end type hobf 
+	 
 
 	 type partitionedblocks
 		integer level
@@ -190,7 +197,8 @@ module MODULE_FILE
 	 type(blockplus),allocatable:: agent_bplus(:)
      type(butterflyblock_randomized),pointer :: butterfly_block_randomized(:)
      type(blockplus),pointer :: Bplus_randomized(:)
-	 type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
+	 ! type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
+	 type(hobf)::ho_bf,ho_bf_copy
 	 type(partitionedblocks),allocatable::partitioned_blocks(:)
      type(vectorsblock),allocatable:: vectors_block(:)
 	 type(vectorsblock),pointer:: RandomVectors_InOutput(:)
@@ -237,6 +245,7 @@ module MODULE_FILE
 	 integer,parameter:: RBF=3
 	 integer,parameter:: FULL=4
 	 integer Kernel
+	 
 	 
 	 CHARACTER (LEN=1000) DATA_DIR	 
 	 

@@ -25,7 +25,7 @@ subroutine Initialize_Butterfly_Outter_Exact(block,kover)
 	type(matrixblock)::block
 	
 	
-    ! ! block =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    ! ! block =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
     allocate (butterfly_block_randomized(1))
     
     level_butterfly=int((maxlevel_for_blocks-block%level)/2)*2
@@ -353,7 +353,7 @@ subroutine Test_Error_RR_Outter_Exact(Bplus,error)
 	
 
 	
-	! block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	! block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	level_butterfly=int((maxlevel_for_blocks-Bplus%level)/2)*2
 	num_blocks=2**level_butterfly
 	! write(*,*)level_butterfly,'heiyou',maxlevel_for_blocks,block_o%level
@@ -455,7 +455,7 @@ subroutine Get_Randomized_Vectors_LL_Outter_Exact(Bplus,nth_s,nth_e,num_vect_sub
     ctemp1=1.0d0 ; ctemp2=0.0d0	
     ctemp3=-1.0d0 ; ctemp4=1.0d0	
 	
-	! block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	! block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
     level_butterfly=int((maxlevel_for_blocks-Bplus%level)/2)*2
@@ -605,7 +605,7 @@ subroutine Get_Randomized_Vectors_RR_Outter_Exact(Bplus,nth_s,nth_e,num_vect_sub
 	real*8::n2,n1
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-	! block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	! block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-Bplus%level)/2)*2
     num_blocks=2**level_butterfly
@@ -761,7 +761,7 @@ subroutine Get_Randomized_Vectors_RR_Test_Outter_Exact(Bplus,num_vect_sub)
 	type(RandomBlock), pointer :: random
 	
 	
-	! block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	! block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-Bplus%level)/2)*2
     num_blocks=2**level_butterfly

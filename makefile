@@ -4,7 +4,7 @@
 Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =Laptop#CAC#NERSC#Laptop
+Platform =NERSC#Laptop#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -79,16 +79,16 @@ LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL)
 LinkFlagF = -Bdynamic
 endif
 
-#F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-#CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
-CFLAGS=-std=c++11 -O3 -fopenmp 
+F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+#F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
+#CFLAGS=-std=c++11 -O3 -fopenmp 
 
 endif
 
 
 SOURCES = Module_file.o misc.o Utilites.o Utilites_randomized.o analytic_part.o gaussian_point.o element_Vinc_cfie.o element_Zmn_cfie.o \
-	 	H_matrix_structuring.o Butterfly_compress_forward.o Butterfly_rightmultiply_inverse_randomized.o Bplus_rightmultiply_inverse_randomized.o \
+	 	H_matrix_structuring.o Butterfly_compress_forward.o Butterfly_rightmultiply_inverse_randomized.o Randomized_reconstruction.o Bplus_rightmultiply_inverse_randomized.o \
 		Butterfly_exact_randomized.o Butterfly_inverse_diagonal_randomized.o Butterfly_inverse_diagonal_randomized_schur_partitioned.o Bplus_inverse_diagonal_randomized_schur_partitioned.o geo_modeling.o current_node_patch_mapping.o RCS_bistatic.o RCS_monostatic.o HODLR_solve.o EM_calculating.o matrices_filling.o HODLR_randomized.o cascading_factorizing.o 
 		
 obj_Files = $(filter %.o, $(SOURCES))

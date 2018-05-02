@@ -10,7 +10,7 @@ contains
 
 
 
-subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,cascading_factors1)
+subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1)
 
     use MODULE_FILE
     ! use lapack95
@@ -33,13 +33,12 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,cascading_factors1)
 	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
 	! complex(kind=8)::Vin(:),Vout(:)
 	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
-    type(cascadingfactors)::cascading_factors1(:)
- 
+	type(hobf)::ho_bf1
     
 	level_c = 1
 	rowblock = 1
 	
-	! block_o =>  cascading_factors1(level_c)%matrices_block(rowblock) 
+	! block_o =>  ho_bf%levels1(level_c)%matrices_block(rowblock) 
 	
 
 	idx_start_glo = 1	 
@@ -63,7 +62,7 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,cascading_factors1)
 			vec_new = 0
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
 				! write(*,*)level,ii
-				groupm_diag = cascading_factors1(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+				groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 			
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 				idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
@@ -72,11 +71,11 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,cascading_factors1)
 				
 				! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vectors,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 				if(level==Maxlevel_for_blocks+1)then
-					call fullmat_block_MVP_randomized_dat(cascading_factors1(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+					call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
 					&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 					! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)			
 				else 
-					call Bplus_block_MVP_inverse_dat(cascading_factors1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors))
+					call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors))
 					! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)	
 				end if
 			end do

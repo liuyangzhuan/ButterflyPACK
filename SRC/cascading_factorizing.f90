@@ -62,28 +62,28 @@ subroutine cascading_factorizing(tolerance)
 	
     write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
 	level_c = Maxlevel_for_blocks+1
-	! allocate(cascading_factors(level_c)%matrices_block_inverse(cascading_factors(level_c)%N_block_inverse))
+	! allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
 	do ii = 1, 2**(level_c-1)
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%level = cascading_factors(level_c)%matrices_block(ii)%level
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%col_group = cascading_factors(level_c)%matrices_block(ii)%col_group
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%row_group = cascading_factors(level_c)%matrices_block(ii)%row_group
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%nested_num = cascading_factors(level_c)%matrices_block(ii)%nested_num
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%level = ho_bf%levels(level_c)%matrices_block(ii)%level
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%col_group = ho_bf%levels(level_c)%matrices_block(ii)%col_group
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%row_group = ho_bf%levels(level_c)%matrices_block(ii)%row_group
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%nested_num = ho_bf%levels(level_c)%matrices_block(ii)%nested_num
 		
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%style = cascading_factors(level_c)%matrices_block(ii)%style
-		! cascading_factors(level_c)%matrices_block_inverse(ii)%data_type = cascading_factors(level_c)%matrices_block(ii)%data_type
-		nn = size(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,1)
-		allocate(cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%style = ho_bf%levels(level_c)%matrices_block(ii)%style
+		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%data_type = ho_bf%levels(level_c)%matrices_block(ii)%data_type
+		nn = size(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,1)
+		allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
 		allocate(matrixtemp1(nn,nn))
 		allocate(ipiv(nn))
-		matrixtemp1 = cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
+		matrixtemp1 = ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 	    call getrff90(matrixtemp1,ipiv)
 		! write(*,*)shape(matrixtemp1)
         call getrif90(matrixtemp1,ipiv)		
-		cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = matrixtemp1
+		ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = matrixtemp1
 		
-		Memory_direct_inverse=Memory_direct_inverse+SIZEOF(cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
+		Memory_direct_inverse=Memory_direct_inverse+SIZEOF(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
 		
-		call delete_blocks(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1))
+		call delete_blocks(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 		
 		deallocate(matrixtemp1)
 		deallocate(ipiv)
@@ -113,7 +113,7 @@ subroutine cascading_factorizing(tolerance)
 				! call Bplus_Sblock_randomized_symmetric(level_c,rowblock) 
 				
 				! call Butterfly_Sblock_randomized_symmetric(level_c,rowblock) 
-				! call Butterfly_sym2asym(cascading_factors(level_c)%matrices_block(rowblock))
+				! call Butterfly_sym2asym(ho_bf%levels(level_c)%matrices_block(rowblock))
 				
 				
 				! call Butterfly_Sblock_randomized_logN(level_c,rowblock)
@@ -129,7 +129,7 @@ subroutine cascading_factorizing(tolerance)
 			
 			
 			! if(level_c==6)then			
-				! call print_butterfly_size_rank(cascading_factors(level_c)%matrices_block(rowblock))
+				! call print_butterfly_size_rank(ho_bf%levels(level_c)%matrices_block(rowblock))
 				! stop
 			! end if	
 				
@@ -152,17 +152,17 @@ subroutine cascading_factorizing(tolerance)
 		write(*,*)'compute block inverse at level:',level_c
 		! compute the inverse butterfly
 		n1 = OMP_get_wtime()
-		! allocate(cascading_factors(level_c)%matrices_block_inverse(cascading_factors(level_c)%N_block_inverse))
+		! allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
 		do rowblock = 1,2**(level_c-1)
 			
 			if(schurinv==0)then
 				write(*,*)'schurinv=0 removed'
 				stop
 			else 
-				! ! ! block_o => cascading_factors(level_c)%matrices_block_inverse(rowblock)
-				! ! block_off => cascading_factors(level_c)%matrices_block(rowblock*2-1)			
+				! ! ! block_o => ho_bf%levels(level_c)%matrices_block_inverse(rowblock)
+				! ! block_off => ho_bf%levels(level_c)%matrices_block(rowblock*2-1)			
 				! ! ! block_o%level_butterfly = block_off%level_butterfly+1
-				! ! block_o => cascading_factors(level_c)%matrices_block_inverse_schur(rowblock)
+				! ! block_o => ho_bf%levels(level_c)%matrices_block_inverse_schur(rowblock)
 				! ! block_o%level_butterfly = block_off%level_butterfly
 				
 
@@ -242,7 +242,7 @@ end subroutine cascading_factorizing
 	! ! ! complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
    
     
-	! ! ! block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	! ! ! block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	
 	
     ! ! ! level_butterfly=maxlevel_for_blocks-block_o%level
@@ -328,7 +328,7 @@ end subroutine cascading_factorizing
 		! ! ! vec_new = 0
 		! ! ! do ii = idx_start_diag,idx_start_diag+N_diag-1
 			! ! ! ! write(*,*)level,ii
-			! ! ! groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+			! ! ! groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 			! ! ! idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 			! ! ! idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 			
@@ -336,11 +336,11 @@ end subroutine cascading_factorizing
 			
 			! ! ! ! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vectors,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 			! ! ! if(level==Maxlevel_for_blocks+1)then
-				! ! ! call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+				! ! ! call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
 				! ! ! &vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! ! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)			
 			! ! ! else 
-				! ! ! call butterfly_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,idx_end_loc-idx_start_loc+1,num_vectors,&
+				! ! ! call butterfly_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,idx_end_loc-idx_start_loc+1,num_vectors,&
 				! ! ! &vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = vec_old(idx_start_loc:idx_end_loc,1:num_vectors) + vec_new(idx_start_loc:idx_end_loc,1:num_vectors)
 				! ! ! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)	

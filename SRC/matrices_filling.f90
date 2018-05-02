@@ -53,14 +53,14 @@ subroutine matrices_filling(tolerance)
 	
 	
 	do level_c = 1,Maxlevel_for_blocks+1
-		do ii =1,cascading_factors(level_c)%N_block_forward
+		do ii =1,ho_bf%levels(level_c)%N_block_forward
             if (level_c/=Maxlevel_for_blocks+1) then
-                if (cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+                if (ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+                    level=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
                     write (*,*) 'level',level,'is filling...'
                 endif
 				if(level_c>=Maxlevel_for_blocks)t1=OMP_GET_WTIME()									  
-				call Bplus_compress_N15(cascading_factors(level_c)%BP(ii),rtemp)				
+				call Bplus_compress_N15(ho_bf%levels(level_c)%BP(ii),rtemp)				
                 
 				if(level_c>=Maxlevel_for_blocks)then
 					t2=OMP_GET_WTIME()
@@ -68,7 +68,7 @@ subroutine matrices_filling(tolerance)
 				end if
 				
 				if(level==level_tmp)then
-					call Bplus_randomized_Exact_test(cascading_factors(level_c)%BP(ii))
+					call Bplus_randomized_Exact_test(ho_bf%levels(level_c)%BP(ii))
 					stop
 				end if
 				
@@ -76,17 +76,17 @@ subroutine matrices_filling(tolerance)
 				Memory_butterfly_forward=Memory_butterfly_forward+rtemp
             else
 
-                if (cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+                if (ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+                    level=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
                     write (*,*) 'level',level,'is filling...'
                 endif
-                call full_filling(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1))
-                Memory_direct_forward=Memory_direct_forward+SIZEOF(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+                call full_filling(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+                Memory_direct_forward=Memory_direct_forward+SIZEOF(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
             endif
-			! write(*,*)level_c,ii,cascading_factors(level_c)%N_block_forward
+			! write(*,*)level_c,ii,ho_bf%levels(level_c)%N_block_forward
 			
 			! if(level==level_tmp)then
-				! call Butterfly_compress_test(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				! call Butterfly_compress_test(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 			! end if
 			
 		end do
@@ -95,13 +95,14 @@ subroutine matrices_filling(tolerance)
 	
 	
 	if(preconditioner==1)then
-		allocate(cascading_factors_copy(Maxlevel_for_blocks+1))
+		ho_bf_copy%Maxlevel_for_blocks = ho_bf%Maxlevel_for_blocks
+		allocate(ho_bf_copy%levels(Maxlevel_for_blocks+1))
 		do level_c = 1,Maxlevel_for_blocks+1
-			cascading_factors_copy(level_c)%level = cascading_factors(level_c)%level
-			cascading_factors_copy(level_c)%N_block_forward = cascading_factors(level_c)%N_block_forward
-			allocate(cascading_factors_copy(level_c)%BP(cascading_factors_copy(level_c)%N_block_forward))
-			do ii = 1, cascading_factors_copy(level_c)%N_block_forward
-				call copy_Bplus(cascading_factors(level_c)%BP(ii),cascading_factors_copy(level_c)%BP(ii))
+			ho_bf_copy%levels(level_c)%level = ho_bf%levels(level_c)%level
+			ho_bf_copy%levels(level_c)%N_block_forward = ho_bf%levels(level_c)%N_block_forward
+			allocate(ho_bf_copy%levels(level_c)%BP(ho_bf_copy%levels(level_c)%N_block_forward))
+			do ii = 1, ho_bf_copy%levels(level_c)%N_block_forward
+				call copy_Bplus(ho_bf%levels(level_c)%BP(ii),ho_bf_copy%levels(level_c)%BP(ii))
 			end do
 		end do		
 	end if

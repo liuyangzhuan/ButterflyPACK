@@ -2130,5 +2130,109 @@ subroutine Initialize_Bplus_FromInput(Bplus)
 end subroutine Initialize_Bplus_FromInput
 
  
+ 
+ 
+
+subroutine Initialize_Butterfly_randomized(level_butterfly,rankmax,groupm,groupn)
+
+    use MODULE_FILE
+    implicit none
+    
+    integer level_c,rowblock,kover
+	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
+    integer dimension_max,dimension_rank, dimension_m, dimension_n, blocks, groupm, groupm_start,groupn_start,groupn,index_j,index_i
+    real*8 a,b,c,d
+    complex (kind=8) ctemp
+	type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D
+	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
+	real*8, allocatable:: Singular(:)
+	integer rankmax
+    type(partitionedblocks)::partitioned_block
+	
+	allocate (butterfly_block_randomized(1))
+
+    butterfly_block_randomized(1)%level_butterfly=level_butterfly
+    num_blocks=2**level_butterfly
+	dimension_rank= rankmax 
+	
+	! write(*,*)dimension_rank
+	 
+    mm=basis_group(groupm)%tail-basis_group(groupm)%head+1
+    nn=basis_group(groupn)%tail-basis_group(groupn)%head+1
+    butterfly_block_randomized(1)%dimension_rank=dimension_rank
+
+	groupm_start=groupm*2**level_butterfly
+	groupn_start=groupn*2**level_butterfly
+
+	
+    allocate (butterfly_block_randomized(1)%ButterflyU(2**level_butterfly))
+    allocate (butterfly_block_randomized(1)%ButterflyV(2**level_butterfly))
+
+	dimension_max = 2*dimension_rank
+	do blocks=1, num_blocks	
+		dimension_m=basis_group(groupm_start+blocks-1)%tail-basis_group(groupm_start+blocks-1)%head+1
+		dimension_n=basis_group(groupn_start+blocks-1)%tail-basis_group(groupn_start+blocks-1)%head+1
+		dimension_max = max(dimension_max,dimension_m)	
+		dimension_max = max(dimension_max,dimension_n)	
+	end do	
+	allocate(butterfly_block_randomized(1)%KerInv(dimension_max,dimension_max))
+	call RandomMat(dimension_max,dimension_max,dimension_max,butterfly_block_randomized(1)%KerInv,3)	
+    
+    do blocks=1, num_blocks
+		
+		dimension_m= basis_group(groupm_start+blocks-1)%tail-basis_group(groupm_start+blocks-1)%head+1
+        allocate (butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(dimension_m,dimension_rank))
+
+		allocate(matrixtemp1(dimension_rank,dimension_m))
+		call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
+        
+		! !$omp parallel do default(shared) private(i,j)		
+		do j=1, dimension_rank
+            do i=1, dimension_m
+				butterfly_block_randomized(1)%ButterflyU(blocks)%matrix(i,j) = matrixtemp1(j,i)
+			end do
+		end do
+		! !$omp end parallel do
+		
+		deallocate(matrixtemp1)		
+		
+		dimension_n=basis_group(groupn_start+blocks-1)%tail-basis_group(groupn_start+blocks-1)%head+1
+        allocate (butterfly_block_randomized(1)%ButterflyV(blocks)%matrix(dimension_n,dimension_rank))
+
+		allocate(matrixtemp1(dimension_rank,dimension_n))
+		call RandomMat(dimension_rank,dimension_n,min(dimension_n,dimension_rank),matrixtemp1,0)
+		
+		! !$omp parallel do default(shared) private(i,j)		
+        do j=1, dimension_rank
+            do i=1, dimension_n
+				butterfly_block_randomized(1)%ButterflyV(blocks)%matrix(i,j) = matrixtemp1(j,i)
+			end do
+		end do
+		! !$omp end parallel do
+		
+		deallocate(matrixtemp1)		
+		
+    enddo
+
+    if (level_butterfly/=0) then
+        allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
+        allocate (butterfly_block_randomized(1)%ButterflyKerl(level_butterfly))
+
+        do level=1, level_butterfly
+            num_row=2**level
+            num_col=2**(level_butterfly-level+1)
+            butterfly_block_randomized(1)%ButterflyKerl(level)%num_row=num_row
+            butterfly_block_randomized(1)%ButterflyKerl(level)%num_col=num_col
+            allocate (butterfly_block_randomized(1)%ButterflyKerl(level)%blocks(num_row,num_col))
+
+        enddo
+        deallocate (matrixtemp1)
+    endif	
+    
+    return
+
+end subroutine Initialize_Butterfly_randomized
+ 
+ 
 
 end module Utilites_randomized

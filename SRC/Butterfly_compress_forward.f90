@@ -4199,7 +4199,7 @@ subroutine ACA_CompressionForward_givenfullmat(matU,matV,Singular,header_m,heade
 end subroutine ACA_CompressionForward_givenfullmat
 
 
-subroutine MVM_Z_forward(Ns,num_vectors,Vin,Vout,cascading_factors1)
+subroutine MVM_Z_forward(Ns,num_vectors,Vin,Vout,ho_bf1)
 
     use MODULE_FILE
     ! use lapack95
@@ -4223,7 +4223,7 @@ subroutine MVM_Z_forward(Ns,num_vectors,Vin,Vout,cascading_factors1)
 	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
 	! complex(kind=8)::Vin(:),Vout(:)
 	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
-	type(cascadingfactors)::cascading_factors1(:)
+	type(hobf)::ho_bf1
   	
 	
 	! get the right multiplied vectors
@@ -4236,8 +4236,8 @@ subroutine MVM_Z_forward(Ns,num_vectors,Vin,Vout,cascading_factors1)
 
 	
 	do level = 1,Maxlevel_for_blocks+1
-		do ii =1, cascading_factors1(level)%N_block_forward
-			bplus_o =>  cascading_factors1(level)%BP(ii)
+		do ii =1, ho_bf1%levels(level)%N_block_forward
+			bplus_o =>  ho_bf1%levels(level)%BP(ii)
 			groupm = bplus_o%row_group
 			groupn = bplus_o%col_group
 			idx_start_m = basis_group(groupm)%head

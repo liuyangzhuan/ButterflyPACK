@@ -29,7 +29,7 @@ subroutine Butterfly_Sblock_randomized_memfree(level_c,rowblock,Memory)
 	
 	Memory = 0
 	
-    block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	
 	! ! ! call copy_butterfly(block_o,block_old)
 	
@@ -47,7 +47,7 @@ subroutine Butterfly_Sblock_randomized_memfree(level_c,rowblock,Memory)
 			! mm=size(block_o%ButterflyU(1)%matrix,1)
 			! nn=size(block_o%ButterflyU(1)%matrix,2)
 			! allocate(matrixtmp(mm,nn))
-			! call gemmf90(cascading_factors(Maxlevel_for_blocks+1)%matrices_block_inverse(rowblock)%fullmat, block_o%ButterflyU(1)%matrix, matrixtmp,'N','N')
+			! call gemmf90(ho_bf%levels(Maxlevel_for_blocks+1)%matrices_block_inverse(rowblock)%fullmat, block_o%ButterflyU(1)%matrix, matrixtmp,'N','N')
 			! block_o%ButterflyU(1)%matrix = matrixtmp
 			! deallocate(matrixtmp)
 
@@ -135,7 +135,7 @@ subroutine Butterfly_Sblock_randomized_partialupdate_memfree(level_c,rowblock,Me
 	type(RandomBlock), pointer :: random
 	real*8::n2,n1,Memory
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
 	
 	if(level_butterfly==0)then
@@ -161,7 +161,7 @@ subroutine Butterfly_Sblock_randomized_partialupdate_memfree(level_c,rowblock,Me
 					ii_loc = ii - idx_start_diag + 1
 					dimension_m = size(block_o%ButterflyU(ii_loc)%matrix,1)
 					dimension_rank = size(block_o%ButterflyU(ii_loc)%matrix,2)
-					call gemm_omp(cascading_factors(level)%matrices_block_inverse(ii)%fullmat,block_o%ButterflyU(ii_loc)%matrix, block_o%ButterflyU(ii_loc)%matrix,dimension_m,dimension_m,dimension_rank)
+					call gemm_omp(ho_bf%levels(level)%matrices_block_inverse(ii)%fullmat,block_o%ButterflyU(ii_loc)%matrix, block_o%ButterflyU(ii_loc)%matrix,dimension_m,dimension_m,dimension_rank)
 				end do
 				!$omp end parallel do
 				
@@ -670,7 +670,7 @@ subroutine Initialize_Butterfly_Sblock(block,level_c,kover)
 	type(matrixblock)::block
 	
 	
-    ! ! block =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    ! ! block =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
     allocate (butterfly_block_randomized(1))
     
     level_butterfly=int((maxlevel_for_blocks-block%level)/2)*2
@@ -802,7 +802,7 @@ subroutine Initialize_Butterfly_Sblock_Empty(block,level_c,kover)
 	integer mn_min,index_i,index_j
 	type(matrixblock)::block
 	
-    ! ! block =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    ! ! block =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
     allocate (butterfly_block_randomized(1))
     
     level_butterfly=int((maxlevel_for_blocks-block%level)/2)*2
@@ -918,7 +918,7 @@ subroutine Get_Randomized_Vectors_Sblock(level_c,rowblock)
     integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -1014,7 +1014,7 @@ subroutine Get_Randomized_Vectors_Sblock(level_c,rowblock)
 		vec_new = 0
 		do ii = idx_start_diag,idx_start_diag+N_diag-1
 			! write(*,*)level,ii
-			groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   	
+			groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   	
 
 			idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 			idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
@@ -1023,7 +1023,7 @@ subroutine Get_Randomized_Vectors_Sblock(level_c,rowblock)
 			
 			! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vectors,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 			if(level==Maxlevel_for_blocks+1)then
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)			
 			else 
@@ -1049,12 +1049,12 @@ subroutine Get_Randomized_Vectors_Sblock(level_c,rowblock)
 		idx_start_diag = (rowblock-1)*N_diag+1
 		vec_new = 0
 		do ii = idx_start_diag,idx_start_diag+N_diag-1
-			groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+			groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 			
 			idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 			idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 			if(level==Maxlevel_for_blocks+1)then
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vectors,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vectors,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = vec_old(idx_start_loc:idx_end_loc,1:num_vectors)
 			else 				
@@ -1113,7 +1113,7 @@ subroutine Get_Randomized_Vectors_LL_Sblock_exact(level_c,rowblock,nth_s,nth_e,n
 	type(RandomBlock), pointer :: random
 	
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -1378,7 +1378,7 @@ subroutine Get_Randomized_Vectors_LL_Sblock(level_c,rowblock,nth_s,nth_e,num_vec
 	real*8::n1,n2
 	
     ctemp1=1.0d0 ; ctemp2=0.0d0	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
@@ -1453,10 +1453,10 @@ subroutine Get_Randomized_Vectors_LL_Sblock(level_c,rowblock,nth_s,nth_e,num_vec
 			n1 = OMP_get_wtime()   !!!! comment: will the omp cause segment fault?
 			! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 				idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 				! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = vec_old(idx_start_loc:idx_end_loc,1:num_vectors)
 			end do
@@ -1466,7 +1466,7 @@ subroutine Get_Randomized_Vectors_LL_Sblock(level_c,rowblock,nth_s,nth_e,num_vec
 		else 
 			n1 = OMP_get_wtime()
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 				idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
 				call butterfly_block_MVP_inverse_dat(level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))			
@@ -1564,7 +1564,7 @@ subroutine Get_Randomized_Vectors_RR_Sblock(level_c,rowblock,nth_s,nth_e,num_vec
 	real*8::n2,n1
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -1656,7 +1656,7 @@ n2 = OMP_get_wtime()
 			! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
 				! write(*,*)level,ii
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -1665,7 +1665,7 @@ n2 = OMP_get_wtime()
 				! write(*,*)level,ii,idx_start_loc,idx_end_loc,mm,N_diag
 				! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vect_sub,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 				! vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub)			
 			end do
@@ -1677,7 +1677,7 @@ n2 = OMP_get_wtime()
 			n1 = OMP_get_wtime()
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
 				! write(*,*)level,ii
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -1773,7 +1773,7 @@ subroutine Butterfly_Sblock_LowRank(level_c,rowblock)
 	real*8::n2,n1
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     call assert(level_butterfly==0,'Butterfly_Sblock_LowRank only works with LowRank blocks')
@@ -1807,7 +1807,7 @@ subroutine Butterfly_Sblock_LowRank(level_c,rowblock)
 			! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
 				! write(*,*)level,ii
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -1816,7 +1816,7 @@ subroutine Butterfly_Sblock_LowRank(level_c,rowblock)
 				! write(*,*)level,ii,idx_start_loc,idx_end_loc,mm,N_diag
 				! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vect_sub,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 				! vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub)			
 			end do
@@ -1828,7 +1828,7 @@ subroutine Butterfly_Sblock_LowRank(level_c,rowblock)
 			n1 = OMP_get_wtime()
 			do ii = idx_start_diag,idx_start_diag+N_diag-1
 				! write(*,*)level,ii
-				groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+				groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 				
 				idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -1894,7 +1894,7 @@ subroutine Get_Randomized_Vectors_RR_Sblock_exact(level_c,rowblock,nth_s,nth_e,n
 	type(RandomBlock), pointer :: random
 	
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -2027,7 +2027,7 @@ subroutine Get_Randomized_Vectors_RR_Test_Sblock(level_c,rowblock,num_vect_sub)
 	type(RandomBlock), pointer :: random
 	
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -2092,7 +2092,7 @@ subroutine Get_Randomized_Vectors_RR_Test_Sblock(level_c,rowblock,num_vect_sub)
 		vec_new = 0
 		do ii = idx_start_diag,idx_start_diag+N_diag-1
 			! write(*,*)level,ii
-			groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+			groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 			
 			idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 			idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
@@ -2101,7 +2101,7 @@ subroutine Get_Randomized_Vectors_RR_Test_Sblock(level_c,rowblock,num_vect_sub)
 			
 			! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vect_sub,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 			if(level==Maxlevel_for_blocks+1)then
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 				! vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub)			
 			else 
@@ -2189,7 +2189,7 @@ subroutine Get_Randomized_Vectors_RR_Test_Sblock_exact(level_c,rowblock,num_vect
 	type(RandomBlock), pointer :: random
 	
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	  
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
     num_blocks=2**level_butterfly
@@ -2559,7 +2559,7 @@ subroutine Test_Randomized_Sblock(level_c,rowblock,block_old,error)
 	real*8::error
 	
     
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	
 	
     level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
@@ -2642,7 +2642,7 @@ subroutine Test_Randomized_Sblock(level_c,rowblock,block_old,error)
 		vec_new = 0
 		do ii = idx_start_diag,idx_start_diag+N_diag-1
 			! write(*,*)level,ii
-			groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+			groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 			
 			idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -2652,7 +2652,7 @@ subroutine Test_Randomized_Sblock(level_c,rowblock,block_old,error)
 			
 			! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vectors,mm !,block_o%col_group,basis_group(block_o%col_group)%head
 			if(level==Maxlevel_for_blocks+1)then
-				call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+				call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)			
 			else 
@@ -2687,15 +2687,15 @@ subroutine Test_Randomized_Sblock(level_c,rowblock,block_old,error)
 		! ! ! N_diag = 2**(level-level_c-1)
 		! ! ! idx_start_diag = (rowblock-1)*N_diag+1
 		! ! ! do ii = idx_start_diag,idx_start_diag+N_diag-1
-			! ! ! groupm_diag = cascading_factors(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+			! ! ! groupm_diag = ho_bf%levels(level)%matrices_block_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 			! ! ! idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 			! ! ! idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 			! ! ! if(level==Maxlevel_for_blocks+1)then
-				! ! ! call fullmat_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vectors,&
+				! ! ! call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,num_vectors,&
 				! ! ! &vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! ! ! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = vec_old(idx_start_loc:idx_end_loc,1:num_vectors)
 			! ! ! else 				
-				! ! ! call butterfly_block_MVP_randomized_dat(cascading_factors(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,idx_end_loc-idx_start_loc+1,num_vectors,&
+				! ! ! call butterfly_block_MVP_randomized_dat(ho_bf%levels(level)%matrices_block_inverse(ii),'T',idx_end_loc-idx_start_loc+1,idx_end_loc-idx_start_loc+1,num_vectors,&
 				! ! ! &vec_old(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = vec_old(idx_start_loc:idx_end_loc,1:num_vectors) + vec_new(idx_start_loc:idx_end_loc,1:num_vectors)
 				! ! ! ! ! vec_new(idx_start_loc:idx_end_loc,1:num_vectors) = 	vec_old(idx_start_loc:idx_end_loc,1:num_vectors)	
@@ -2762,7 +2762,7 @@ subroutine Reconstruction_LL_Sblock(level_c,rowblock)
 	real*8:: error_inout
 	integer,allocatable::perms(:)
 
-    block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
 	
 	
@@ -2950,7 +2950,7 @@ subroutine Reconstruction_RR_Sblock(level_c,rowblock,error)
 	integer niter,unique_nth  ! level# where each block is touched only once  
 	integer,allocatable::perms(:)
 		
-    block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+    block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
 		
     num_blocks=2**level_butterfly
@@ -3152,7 +3152,7 @@ subroutine Test_Error_RR_Sblock_exact(level_c,rowblock,error)
 	type(matrixblock),pointer::block_o
 	
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
 	num_blocks=2**level_butterfly
 	
@@ -3236,7 +3236,7 @@ subroutine Test_Error_RR_Sblock(level_c,rowblock,error)
 	
 
 	
-	block_o =>  cascading_factors(level_c)%matrices_block(rowblock) 
+	block_o =>  ho_bf%levels(level_c)%matrices_block(rowblock) 
 	level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
 	num_blocks=2**level_butterfly
 	! write(*,*)level_butterfly,'heiyou',maxlevel_for_blocks,block_o%level
@@ -4314,8 +4314,8 @@ subroutine butterfly_block_MVP_inverse_dat(level,ii,trans,N,num_vect_sub,Vin,Vou
    allocate(Vin_tmp(N,num_vect_sub))
    Vin_tmp = Vin
    
-	block_off1 => cascading_factors(level)%matrices_block(ii*2-1)	
-	block_off2 => cascading_factors(level)%matrices_block(ii*2)
+	block_off1 => ho_bf%levels(level)%matrices_block(ii*2-1)	
+	block_off2 => ho_bf%levels(level)%matrices_block(ii*2)
 	
 	groupn=block_off1%col_group    ! Note: row_group and col_group interchanged here   
 	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
@@ -4324,12 +4324,12 @@ subroutine butterfly_block_MVP_inverse_dat(level,ii,trans,N,num_vect_sub,Vin,Vou
 	call assert(mm+nn==N,'mm+nn/=N')  
 		
    if(schurinv==0)then
-		block_o => cascading_factors(level)%matrices_block_inverse(ii)
+		block_o => ho_bf%levels(level)%matrices_block_inverse(ii)
 		call butterfly_block_MVP_randomized_dat(block_o,trans,N,N,num_vect_sub,&
 		&Vin(1:N,1:num_vect_sub),Vout(1:N,1:num_vect_sub),ctemp1,ctemp2)
 		Vout(1:N,1:num_vect_sub) = Vin(1:N,1:num_vect_sub) + Vout(1:N,1:num_vect_sub)
    else 
-		block_o => cascading_factors(level)%matrices_block_inverse_schur(ii)
+		block_o => ho_bf%levels(level)%matrices_block_inverse_schur(ii)
 		if(trans=='N')then
 			call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
 			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)

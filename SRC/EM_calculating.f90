@@ -55,7 +55,7 @@ subroutine EM_calculating_SURF()
         
         T0=secnds(0.0)
         		
-		call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)
 
 		current2com(:,1) = Current
 		
@@ -70,7 +70,7 @@ subroutine EM_calculating_SURF()
         T0=secnds(0.0)
         
 
-		call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)		
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)		
 		
 		current2com(:,2) = Current		
 		
@@ -114,7 +114,7 @@ subroutine EM_calculating_SURF()
 			!$omp end parallel do
         enddo
 		
-		call HODLR_Solution(cascading_factors_copy,cascading_factors,x,b,Maxedge,num_sample+1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1)
 			
 		do j=0, num_sample 			
 			phi=j*dphi
@@ -181,7 +181,7 @@ subroutine EM_calculating_CURV()
         
         T0=secnds(0.0)
         
-		call HODLR_Solution(cascading_factors_copy,cascading_factors,Current,Voltage,Maxedge,1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)
 		
 		current2com(:,1) = Current		
 		
@@ -221,7 +221,7 @@ subroutine EM_calculating_CURV()
 			!$omp end parallel do
 		enddo
 		
-		call HODLR_Solution(cascading_factors_copy,cascading_factors,x,b,Maxedge,num_sample+1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1)
 			
 			
 		do j=0, num_sample 	

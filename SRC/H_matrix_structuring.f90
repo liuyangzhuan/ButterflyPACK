@@ -186,58 +186,60 @@ subroutine H_matrix_structuring(para)
     !***************************************************************************************	   
     
     Maxblock=(4**Maxlevel_for_blocks-1)*4/3+1
-	allocate(cascading_factors(Maxlevel_for_blocks+1))
+	
+	ho_bf%Maxlevel_for_blocks=Maxlevel_for_blocks
+	allocate(ho_bf%levels(Maxlevel_for_blocks+1))
 
 	do level_c = 1,Maxlevel_for_blocks
-		cascading_factors(level_c)%level = level_c
-		cascading_factors(level_c)%N_block_forward = 2**level_c
-		cascading_factors(level_c)%N_block_inverse = 2**(level_c-1)
-		allocate(cascading_factors(level_c)%matrices_block(cascading_factors(level_c)%N_block_forward))
-		allocate(cascading_factors(level_c)%matrices_block_inverse(cascading_factors(level_c)%N_block_inverse))
-		allocate(cascading_factors(level_c)%matrices_block_inverse_schur(cascading_factors(level_c)%N_block_inverse))
+		ho_bf%levels(level_c)%level = level_c
+		ho_bf%levels(level_c)%N_block_forward = 2**level_c
+		ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)
+		allocate(ho_bf%levels(level_c)%matrices_block(ho_bf%levels(level_c)%N_block_forward))
+		allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
+		allocate(ho_bf%levels(level_c)%matrices_block_inverse_schur(ho_bf%levels(level_c)%N_block_inverse))
 		
-		allocate(cascading_factors(level_c)%BP(cascading_factors(level_c)%N_block_forward))		
-		allocate(cascading_factors(level_c)%BP_inverse(cascading_factors(level_c)%N_block_inverse))
-		allocate(cascading_factors(level_c)%BP_inverse_schur(cascading_factors(level_c)%N_block_inverse))
+		allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))		
+		allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
+		allocate(ho_bf%levels(level_c)%BP_inverse_schur(ho_bf%levels(level_c)%N_block_inverse))
 		
 		
 	end do
 	level_c = Maxlevel_for_blocks+1
-	cascading_factors(level_c)%level = level_c
-	cascading_factors(level_c)%N_block_forward = 2**(level_c-1)
-	cascading_factors(level_c)%N_block_inverse = 2**(level_c-1)	
-	allocate(cascading_factors(level_c)%matrices_block(cascading_factors(level_c)%N_block_forward))
-	allocate(cascading_factors(level_c)%matrices_block_inverse(cascading_factors(level_c)%N_block_inverse))
+	ho_bf%levels(level_c)%level = level_c
+	ho_bf%levels(level_c)%N_block_forward = 2**(level_c-1)
+	ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)	
+	allocate(ho_bf%levels(level_c)%matrices_block(ho_bf%levels(level_c)%N_block_forward))
+	allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
 	
-	allocate(cascading_factors(level_c)%BP(cascading_factors(level_c)%N_block_forward))	
-	allocate(cascading_factors(level_c)%BP_inverse(cascading_factors(level_c)%N_block_inverse))
+	allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))	
+	allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
 	
-	cascading_factors(1)%BP_inverse(1)%level = 0
-	cascading_factors(1)%BP_inverse(1)%col_group = 1
-	cascading_factors(1)%BP_inverse(1)%row_group = 1
-	! cascading_factors(1)%BP_inverse(1)%style = 2
+	ho_bf%levels(1)%BP_inverse(1)%level = 0
+	ho_bf%levels(1)%BP_inverse(1)%col_group = 1
+	ho_bf%levels(1)%BP_inverse(1)%row_group = 1
+	! ho_bf%levels(1)%BP_inverse(1)%style = 2
 	
 	do level_c = 1,Maxlevel_for_blocks
-		do ii = 1, cascading_factors(level_c)%N_block_inverse
-			col_group = cascading_factors(level_c)%BP_inverse(ii)%col_group
-			row_group = cascading_factors(level_c)%BP_inverse(ii)%row_group
+		do ii = 1, ho_bf%levels(level_c)%N_block_inverse
+			col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group
+			row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group
 			
-			cascading_factors(level_c)%matrices_block(ii*2-1)%level = level_c
-			cascading_factors(level_c)%matrices_block(ii*2-1)%col_group = col_group*2+1
-			cascading_factors(level_c)%matrices_block(ii*2-1)%row_group = row_group*2
-			cascading_factors(level_c)%matrices_block(ii*2-1)%style = 2			
-			cascading_factors(level_c)%matrices_block(ii*2)%level = level_c
-			cascading_factors(level_c)%matrices_block(ii*2)%col_group = col_group*2
-			cascading_factors(level_c)%matrices_block(ii*2)%row_group = row_group*2+1
-			cascading_factors(level_c)%matrices_block(ii*2)%style = 2		
+			ho_bf%levels(level_c)%matrices_block(ii*2-1)%level = level_c
+			ho_bf%levels(level_c)%matrices_block(ii*2-1)%col_group = col_group*2+1
+			ho_bf%levels(level_c)%matrices_block(ii*2-1)%row_group = row_group*2
+			ho_bf%levels(level_c)%matrices_block(ii*2-1)%style = 2			
+			ho_bf%levels(level_c)%matrices_block(ii*2)%level = level_c
+			ho_bf%levels(level_c)%matrices_block(ii*2)%col_group = col_group*2
+			ho_bf%levels(level_c)%matrices_block(ii*2)%row_group = row_group*2+1
+			ho_bf%levels(level_c)%matrices_block(ii*2)%style = 2		
 
-			cascading_factors(level_c)%BP(ii*2-1)%level = level_c
-			cascading_factors(level_c)%BP(ii*2-1)%col_group = col_group*2+1
-			cascading_factors(level_c)%BP(ii*2-1)%row_group = row_group*2
+			ho_bf%levels(level_c)%BP(ii*2-1)%level = level_c
+			ho_bf%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
+			ho_bf%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
 		
-			cascading_factors(level_c)%BP(ii*2)%level = level_c
-			cascading_factors(level_c)%BP(ii*2)%col_group = col_group*2
-			cascading_factors(level_c)%BP(ii*2)%row_group = row_group*2+1
+			ho_bf%levels(level_c)%BP(ii*2)%level = level_c
+			ho_bf%levels(level_c)%BP(ii*2)%col_group = col_group*2
+			ho_bf%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
 			
 			
 
@@ -245,42 +247,42 @@ subroutine H_matrix_structuring(para)
 			
 			if(level_c/=Maxlevel_for_blocks)then
 			
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%level = level_c
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-				! cascading_factors(level_c+1)%BP_inverse(ii*2-1)%style = 2
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%level = level_c
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
-				! cascading_factors(level_c+1)%BP_inverse(ii*2)%style = 2	
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
+				! ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%style = 2
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
+				! ho_bf%levels(level_c+1)%BP_inverse(ii*2)%style = 2	
 
 			else 
 
 				
-				cascading_factors(level_c+1)%matrices_block(ii*2-1)%level = level_c+1
-				cascading_factors(level_c+1)%matrices_block(ii*2-1)%col_group = col_group*2
-				cascading_factors(level_c+1)%matrices_block(ii*2-1)%row_group = row_group*2
-				cascading_factors(level_c+1)%matrices_block(ii*2-1)%style = 1
-				cascading_factors(level_c+1)%matrices_block(ii*2)%level = level_c+1
-				cascading_factors(level_c+1)%matrices_block(ii*2)%col_group = col_group*2+1
-				cascading_factors(level_c+1)%matrices_block(ii*2)%row_group = row_group*2+1
-				cascading_factors(level_c+1)%matrices_block(ii*2)%style = 1						
+				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%level = level_c+1
+				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%col_group = col_group*2
+				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%row_group = row_group*2
+				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%style = 1
+				ho_bf%levels(level_c+1)%matrices_block(ii*2)%level = level_c+1
+				ho_bf%levels(level_c+1)%matrices_block(ii*2)%col_group = col_group*2+1
+				ho_bf%levels(level_c+1)%matrices_block(ii*2)%row_group = row_group*2+1
+				ho_bf%levels(level_c+1)%matrices_block(ii*2)%style = 1						
 
-				cascading_factors(level_c+1)%BP(ii*2-1)%level = level_c+1
-				cascading_factors(level_c+1)%BP(ii*2-1)%col_group = col_group*2
-				cascading_factors(level_c+1)%BP(ii*2-1)%row_group = row_group*2
-				cascading_factors(level_c+1)%BP(ii*2)%level = level_c+1
-				cascading_factors(level_c+1)%BP(ii*2)%col_group = col_group*2+1
-				cascading_factors(level_c+1)%BP(ii*2)%row_group = row_group*2+1
+				ho_bf%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
+				ho_bf%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
+				ho_bf%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
+				ho_bf%levels(level_c+1)%BP(ii*2)%level = level_c+1
+				ho_bf%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
+				ho_bf%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
 
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%level = level_c+1
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-				cascading_factors(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-				! cascading_factors(level_c+1)%BP_inverse(ii*2-1)%style = 1
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%level = level_c+1
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-				cascading_factors(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
-				! cascading_factors(level_c+1)%BP_inverse(ii*2)%style = 1	
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c+1
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
+				! ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%style = 1
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c+1
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
+				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
+				! ho_bf%levels(level_c+1)%BP_inverse(ii*2)%style = 1	
 				
 			end if
 
@@ -290,11 +292,11 @@ subroutine H_matrix_structuring(para)
 
 	if(schurinv==1)then	
 		do level_c = 1,Maxlevel_for_blocks
-			do ii = 1, cascading_factors(level_c)%N_block_inverse
-				cascading_factors(level_c)%BP_inverse_schur(ii)%level = cascading_factors(level_c)%BP_inverse(ii)%level+1
-				! cascading_factors(level_c)%BP_inverse_schur(ii)%style = 2
-				cascading_factors(level_c)%BP_inverse_schur(ii)%col_group = cascading_factors(level_c)%BP_inverse(ii)%col_group * 2
-				cascading_factors(level_c)%BP_inverse_schur(ii)%row_group = cascading_factors(level_c)%BP_inverse(ii)%row_group * 2
+			do ii = 1, ho_bf%levels(level_c)%N_block_inverse
+				ho_bf%levels(level_c)%BP_inverse_schur(ii)%level = ho_bf%levels(level_c)%BP_inverse(ii)%level+1
+				! ho_bf%levels(level_c)%BP_inverse_schur(ii)%style = 2
+				ho_bf%levels(level_c)%BP_inverse_schur(ii)%col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group * 2
+				ho_bf%levels(level_c)%BP_inverse_schur(ii)%row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group * 2
 				
 			end do
 		end do	
@@ -457,12 +459,12 @@ subroutine H_matrix_structuring(para)
 					
 					
 					fidx = (2*group)- 2**(level+1)+1
-					cascading_factors(level+1)%BP(fidx)%boundary(1) = sortdirec
-					cascading_factors(level+1)%BP(fidx)%boundary(2) = seperator
+					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = seperator
 					
 					fidx = (2*group+1)- 2**(level+1)+1
-					cascading_factors(level+1)%BP(fidx)%boundary(1) = sortdirec
-					cascading_factors(level+1)%BP(fidx)%boundary(2) = seperator				 					
+					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
 				endif	
 
 			else 
@@ -473,12 +475,12 @@ subroutine H_matrix_structuring(para)
 					basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
 					
 					fidx = (2*group)- 2**(level+1)+1
-					cascading_factors(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
-					cascading_factors(level+1)%BP(fidx)%boundary(2) = 0
+					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
+					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = 0
 					
 					fidx = (2*group+1)- 2**(level+1)+1
-					cascading_factors(level+1)%BP(fidx)%boundary(1) = 0
-					cascading_factors(level+1)%BP(fidx)%boundary(2) = 0				 
+					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = 0
+					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = 0				 
 				endif					
 			end if
         enddo
@@ -532,75 +534,75 @@ subroutine BPlus_structuring()
 	Dimn = size(xyz,1)
 	
 	do level_c = 1,Maxlevel_for_blocks+1
-		do ii =1,cascading_factors(level_c)%N_block_forward
+		do ii =1,ho_bf%levels(level_c)%N_block_forward
            
 			if(level_c==Maxlevel_for_blocks+1)then
 
 
-				cascading_factors(level_c)%BP(ii)%Lplus=1				
-				allocate(cascading_factors(level_c)%BP(ii)%LL(LplusMax))
+				ho_bf%levels(level_c)%BP(ii)%Lplus=1				
+				allocate(ho_bf%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
-					cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound=0
+					ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
 				end do
-				cascading_factors(level_c)%BP(ii)%LL(1)%Nbound = 1
-				allocate(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = cascading_factors(level_c)%BP(ii)%level
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = cascading_factors(level_c)%BP(ii)%col_group
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = cascading_factors(level_c)%BP(ii)%row_group
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%col_group
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
 				
-				cascading_factors(level_c)%BP_inverse(ii)%Lplus=1
-				allocate(cascading_factors(level_c)%BP_inverse(ii)%LL(LplusMax))
+				ho_bf%levels(level_c)%BP_inverse(ii)%Lplus=1
+				allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(LplusMax))
 				do ll=1,LplusMax
-					cascading_factors(level_c)%BP_inverse(ii)%LL(ll)%Nbound=0
+					ho_bf%levels(level_c)%BP_inverse(ii)%LL(ll)%Nbound=0
 				end do	
-				cascading_factors(level_c)%BP_inverse(ii)%LL(1)%Nbound = 1
-				allocate(cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1))
-				cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%level = cascading_factors(level_c)%BP_inverse(ii)%level
-				cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%col_group = cascading_factors(level_c)%BP_inverse(ii)%col_group
-				cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%row_group = cascading_factors(level_c)%BP_inverse(ii)%row_group
-				cascading_factors(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here				
+				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1))
+				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP_inverse(ii)%level
+				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group
+				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group
+				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here				
 				
 			
 			else 
-				allocate(cascading_factors(level_c)%BP(ii)%LL(LplusMax))
+				allocate(ho_bf%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
-					cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound=0
+					ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
 				end do
 				
-				cascading_factors(level_c)%BP(ii)%LL(1)%Nbound = 1
-				allocate(cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = cascading_factors(level_c)%BP(ii)%level
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = cascading_factors(level_c)%BP(ii)%col_group
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = cascading_factors(level_c)%BP(ii)%row_group			
-				cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 2
-				allocate(cascading_factors(level_c)%BP(ii)%LL(1)%boundary_map(1))
-				cascading_factors(level_c)%BP(ii)%LL(1)%boundary_map(1) = cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
-				cascading_factors(level_c)%BP(ii)%Lplus=0
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%col_group
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group			
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 2
+				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%boundary_map(1))
+				ho_bf%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
+				ho_bf%levels(level_c)%BP(ii)%Lplus=0
 				
-				sortdirec = NINT(cascading_factors(level_c)%BP(ii)%boundary(1))
-				seperator = cascading_factors(level_c)%BP(ii)%boundary(2)
+				sortdirec = NINT(ho_bf%levels(level_c)%BP(ii)%boundary(1))
+				seperator = ho_bf%levels(level_c)%BP(ii)%boundary(2)
 				
 				do ll=1,LplusMax-1
-					if(cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound>0)then
-						cascading_factors(level_c)%BP(ii)%Lplus = cascading_factors(level_c)%BP(ii)%Lplus + 1
-						call assert(cascading_factors(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
+					if(ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
+						ho_bf%levels(level_c)%BP(ii)%Lplus = ho_bf%levels(level_c)%BP(ii)%Lplus + 1
+						call assert(ho_bf%levels(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
 						
-						level_butterfly = int((Maxlevel_for_blocks - cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
-						! write(*,*)'nini',Maxlevel_for_blocks - cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,LnoBP
-						if(Maxlevel_for_blocks - cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<LnoBP)then
-							cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound=0
+						level_butterfly = int((Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
+						! write(*,*)'nini',Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,LnoBP
+						if(Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<LnoBP)then
+							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 						else 
-							level_BP = cascading_factors(level_c)%BP(ii)%level
+							level_BP = ho_bf%levels(level_c)%BP(ii)%level
 							levelm = ceiling_safe(dble(level_butterfly)/2d0)						
-							groupm_start=cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(1)%row_group*2**levelm						
-							Nboundall = 2**(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level+levelm-level_BP)
-							allocate(cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map(Nboundall))
-							cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map = -1
-							cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound=0
+							groupm_start=ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%row_group*2**levelm						
+							Nboundall = 2**(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level+levelm-level_BP)
+							allocate(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(Nboundall))
+							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map = -1
+							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 							
-							do bb = 1,cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound
-								blocks => cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
+							do bb = 1,ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
+								blocks => ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
 								
 								allocate(Centroid_M(2**levelm,Dimn))
 								allocate(Isboundary_M(2**levelm))
@@ -747,7 +749,7 @@ subroutine BPlus_structuring()
 									group_m=group_m*2**levelm-1+index_i_m  								
 
 									if(Isboundary_M(index_i_m)==1)then
-										cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound = cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound + 1									
+										ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound + 1									
 										dist = 100000000d0
 										do index_j_m=1, 2**(level_butterfly-levelm)	
 											group_n=blocks%col_group  
@@ -761,7 +763,7 @@ subroutine BPlus_structuring()
 												if(dist > sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)))then
 													! if(level_c==1)write(*,*)index_i_m,index_j_m
 													dist = sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0))
-													cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map(group_m - groupm_start + 1) = group_n
+													ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(group_m - groupm_start + 1) = group_n
 												end if
 											end if
 										end do
@@ -774,25 +776,25 @@ subroutine BPlus_structuring()
 								
 							end do	
 							
-							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
-								! write(*,*)level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,cascading_factors(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
+							if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+								! write(*,*)level_c,ii,ll,ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
 							endif
 							
-							call assert(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
+							call assert(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								
-							allocate(cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound))
+							allocate(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound))
 							
 							cnt = 0
 							do bb = 1,	Nboundall
-								if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)/=-1)then
+								if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)/=-1)then
 									cnt = cnt + 1
 									group_m = bb+groupm_start-1
-									group_n = cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)
+									group_n = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)
 									
-									cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%row_group = group_m
-									cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%col_group = group_n
-									cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level = basis_group(group_m)%level
-									cascading_factors(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%style = 2
+									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%row_group = group_m
+									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%col_group = group_n
+									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level = basis_group(group_m)%level
+									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%style = 2
 									
 								end if
 							end do
@@ -803,60 +805,60 @@ subroutine BPlus_structuring()
 				end do
 
 				
-				! write(*,*)level_c,ii,cascading_factors(level_c)%BP(ii)%Lplus,'gaogao '
+				! write(*,*)level_c,ii,ho_bf%levels(level_c)%BP(ii)%Lplus,'gaogao '
 				
 				if(mod(ii,2)==1)then
 					ii_sch = ceiling_safe(ii/2d0)
 					
-					allocate(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(LplusMax))
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%Lplus=cascading_factors(level_c)%BP(ii)%Lplus
+					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(LplusMax))
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%Lplus=ho_bf%levels(level_c)%BP(ii)%Lplus
 					do ll=1,LplusMax
-						cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound=0
+						ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound=0
 					end do	
 									
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%rankmax = 0
-					allocate(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1))
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level = cascading_factors(level_c)%BP(ii)%level
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%col_group = cascading_factors(level_c)%BP(ii)%row_group
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%row_group = cascading_factors(level_c)%BP(ii)%row_group			
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%style = 2
-					allocate(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
-					cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = cascading_factors(level_c)%BP(ii)%row_group		
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%rankmax = 0
+					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1))
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%row_group
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group			
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%style = 2
+					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
+					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = ho_bf%levels(level_c)%BP(ii)%row_group		
 					
 								
 					do ll=1,LplusMax-1
-						if(cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound>0)then
+						if(ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
 
-							cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%rankmax = 0
-							cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound = cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound
+							ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%rankmax = 0
+							ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound = ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
 							
-							allocate(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound))
+							allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound))
 							
-							do bb =1,cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%row_group = cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%col_group = cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%style = cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%style
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level = cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level
+							do bb =1,ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%row_group = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%col_group = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%style = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%style
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level
 							end do
 							
 							
-							if(cascading_factors(level_c)%BP(ii)%LL(ll+1)%Nbound==0)then		
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%Nbound=0
+							if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound==0)then		
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%Nbound=0
 							else 
-								level_butterfly = int((Maxlevel_for_blocks - cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level)/2)*2 
-								level_BP = cascading_factors(level_c)%BP_inverse_schur(ii_sch)%level
+								level_butterfly = int((Maxlevel_for_blocks - ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level)/2)*2 
+								level_BP = ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%level
 								levelm = ceiling_safe(dble(level_butterfly)/2d0)						
-								groupm_start=cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%row_group*2**levelm		
-								Nboundall = 2**(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
+								groupm_start=ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%row_group*2**levelm		
+								Nboundall = 2**(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
 								
-								allocate(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(Nboundall))
+								allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(Nboundall))
 								! write(*,*)shape(Bplus%LL(ll+1)%boundary_map),shape(Bplus_randomized(1)%LL(ll+1)%boundary_map),'didi',ll
 								
-								cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map = cascading_factors(level_c)%BP(ii)%LL(ll+1)%boundary_map
+								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map
 								do bb=1,Nboundall
-									if(cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb)/=-1)then
-										cascading_factors(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb) = bb + groupm_start - 1
+									if(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb)/=-1)then
+										ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb) = bb + groupm_start - 1
 									end if
 								end do
 							end if
@@ -869,10 +871,10 @@ subroutine BPlus_structuring()
 				! if(level_c==1 .and. ii==1)then
 				 
 				! write(177,*)'Bplus:', level_c,ii
-				do ll=1,cascading_factors(level_c)%BP(ii)%Lplus
-				! write(*,*)cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
-					do bb = 1,cascading_factors(level_c)%BP(ii)%LL(ll)%Nbound
-						write(177,'(I3,I7,I3,I3,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7)')level_c,ii,ll,cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(cascading_factors(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
+				do ll=1,ho_bf%levels(level_c)%BP(ii)%Lplus
+				! write(*,*)ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
+					do bb = 1,ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
+						write(177,'(I3,I7,I3,I3,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7)')level_c,ii,ll,ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
 					end do
 				end do
 				! end if

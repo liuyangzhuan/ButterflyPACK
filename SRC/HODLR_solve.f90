@@ -5,7 +5,7 @@ use Butterfly_compress_forward
 contains 
 
 
-subroutine HODLR_Solution(cascading_factors_forward,cascading_factors_inverse,x,b,Ns,num_vectors)
+subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
     
     use MODULE_FILE
     implicit none
@@ -20,7 +20,8 @@ subroutine HODLR_Solution(cascading_factors_forward,cascading_factors_inverse,x,
 	real*8:: rel_error
 	
 	
-	type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+	type(hobf)::hobf_forward,hobf_inverse
 	complex(kind=8)::x(Ns,num_vectors),b(Ns,num_vectors)
 	complex(kind=8),allocatable::r0_initial(:)
 
@@ -34,12 +35,12 @@ subroutine HODLR_Solution(cascading_factors_forward,cascading_factors_inverse,x,
 			N_iter_max = 100
 			iter = 0
 			rel_error = tfqmr_tolerance_solving
-			call HODLR_Ztfqmr(N_iter_max,Ns,b(:,ii),x(:,ii),rel_error,iter,r0_initial,cascading_factors_forward,cascading_factors_inverse)
+			call HODLR_Ztfqmr(N_iter_max,Ns,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse)
 		end do
 		
 		deallocate(r0_initial)
 	else 			
-		call MVM_Z_factorized(Ns,num_vectors,b,x,cascading_factors_inverse)
+		call MVM_Z_factorized(Ns,num_vectors,b,x,hobf_inverse)
 	end if	
  
     return
@@ -47,7 +48,7 @@ subroutine HODLR_Solution(cascading_factors_forward,cascading_factors_inverse,x,
 end subroutine HODLR_Solution
 
 
-  subroutine HODLR_Ztfqmr(ntotal,nn,b,x,err,iter,r0_initial,cascading_factors_forward,cascading_factors_inverse)
+  subroutine HODLR_Ztfqmr(ntotal,nn,b,x,err,iter,r0_initial,hobf_forward,hobf_inverse)
     implicit none
 	integer level_c,rowblock
     integer,intent(in)::ntotal
@@ -67,12 +68,13 @@ end subroutine HODLR_Solution
     complex(kind=dp),dimension(:),allocatable::curr_coefs_dum_local,curr_coefs_dum_global
     real(kind=dp)::mem_est
 	character:: trans
-	type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+	type(hobf)::hobf_forward,hobf_inverse
 	complex(kind=8)::r0_initial(:)
 	
     itmax=iter
 
-	call MVM_Z_factorized(nn,1,b,bb,cascading_factors_inverse)	
+	call MVM_Z_factorized(nn,1,b,bb,hobf_inverse)	
 	bb=b 
 	
 	
@@ -89,8 +91,8 @@ end subroutine HODLR_Solution
     d=cmplx(0.0_dp,0.0_dp,dp)
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)    
-    call MVM_Z_forward(nn,1,x,ytmp,cascading_factors_forward)
-	call MVM_Z_factorized(nn,1,ytmp,r,cascading_factors_inverse)
+    call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+	call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
 	
     r=bb-r !residual from the initial guess
     w=r
@@ -101,8 +103,8 @@ end subroutine HODLR_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)    
-    call MVM_Z_forward(nn,1,yo,ytmp,cascading_factors_forward)
-	call MVM_Z_factorized(nn,1,ytmp,ayo,cascading_factors_inverse)
+    call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
+	call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
 	
     v=ayo
     we=0.0_dp
@@ -130,8 +132,8 @@ end subroutine HODLR_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,ye,aye)
-	   call MVM_Z_forward(nn,1,ye,ytmp,cascading_factors_forward)
-	   call MVM_Z_factorized(nn,1,ytmp,aye,cascading_factors_inverse)
+	   call MVM_Z_forward(nn,1,ye,ytmp,hobf_forward)
+	   call MVM_Z_factorized(nn,1,ytmp,aye,hobf_inverse)
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -166,8 +168,8 @@ end subroutine HODLR_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
-		  call MVM_Z_forward(nn,1,x,ytmp,cascading_factors_forward)
-		  call MVM_Z_factorized(nn,1,ytmp,r,cascading_factors_inverse)
+		  call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+		  call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
 	
           r=bb-r
           rerr_local=dot_product(r,r)
@@ -202,16 +204,16 @@ end subroutine HODLR_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)
-		call MVM_Z_forward(nn,1,yo,ytmp,cascading_factors_forward)
-		call MVM_Z_factorized(nn,1,ytmp,ayo,cascading_factors_inverse)
+		call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
+		call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
 	
        !MAGIC
        v=ayo+beta*( aye+beta*v )
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
-    call MVM_Z_forward(nn,1,x,ytmp,cascading_factors_forward)
-	call MVM_Z_factorized(nn,1,ytmp,r,cascading_factors_inverse)	   
+    call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+	call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)	   
     !MAGIC
     r=bb-r
     err_local=dot_product(r,r)

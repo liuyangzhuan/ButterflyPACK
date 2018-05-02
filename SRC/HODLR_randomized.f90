@@ -53,8 +53,8 @@ subroutine HODLR_MVP(rankmax,Memory,error)
 				write(*,*)'reconstructRR: ', n2-n1, 'time_gemm1',time_gemm1,'vecCNT',vecCNT
 				
 				rank_new_max = 0
-				do bb = 1, cascading_factors(level_c)%N_block_forward
-					block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+				do bb = 1, ho_bf%levels(level_c)%N_block_forward
+					block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 					call get_randomizedbutterfly_minmaxrank(butterfly_block_randomized(bb))
 					rank_new_max = max(rank_new_max,butterfly_block_randomized(bb)%rankmax)
 					call copy_randomizedbutterfly(butterfly_block_randomized(bb),block_o,Memtmp)
@@ -80,7 +80,7 @@ subroutine HODLR_MVP(rankmax,Memory,error)
 		Vin(ii,1) = random_complex_number()
 	end do
 	call GetOutputs_BlackBox('N',Vin,Vout1,1)
-	call MVM_Z_forward_partial('N',Maxedge,1,Maxlevel_for_blocks+1,Vin,Vout2,cascading_factors)	
+	call MVM_Z_forward_partial('N',Maxedge,1,Maxlevel_for_blocks+1,Vin,Vout2,ho_bf)	
 	error = fnorm(Vout2-Vout1,Maxedge,1)/fnorm(Vout1,Maxedge,1)
 	deallocate(Vin,Vout1,Vout2)
 	
@@ -118,10 +118,10 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		RandVectInR=0
 		allocate(RandVectOutR(Maxedge,num_vect))
 		
-		allocate(ranks(cascading_factors(level_c)%N_block_forward))
+		allocate(ranks(ho_bf%levels(level_c)%N_block_forward))
 		
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 			nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 			header_n=basis_group(groupn)%head
@@ -153,8 +153,8 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		
 		
 		! computation of range Q
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 			header_m=basis_group(groupm)%head
 			tailer_m=basis_group(groupm)%tail
@@ -176,8 +176,8 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		RandVectOutR=conjg(RandVectOutR)
 		
 		! computation of SVD of B and LR of A
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 			header_m=basis_group(groupm)%head
 			tailer_m=basis_group(groupm)%tail
@@ -232,8 +232,8 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		
 		
 		num_vect = 0
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 			nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 			num_vect = max(num_vect,nn)
@@ -244,8 +244,8 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		allocate(RandVectTmp(Maxedge,num_vect))
 		allocate(RandVectOutR(Maxedge,num_vect))
 		
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 			nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 			header_n=basis_group(groupn)%head
@@ -258,8 +258,8 @@ subroutine HODLR_MVP_OneL_Lowrank(level_c,rmax,Memory)
 		
 		call HODLR_MVP_OneL('N', RandVectInR, RandVectOutR, level_c,num_vect)
 		
-		do bb=1,cascading_factors(level_c)%N_block_forward
-			block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+		do bb=1,ho_bf%levels(level_c)%N_block_forward
+			block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 			mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 			header_m=basis_group(groupm)%head
@@ -348,8 +348,8 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			
 			! Compute the odd block MVP first
 			RandVectIn=0
-			do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 				header_n=basis_group(groupn)%head
@@ -360,11 +360,11 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			end do	
 			
 			call GetOutputs_BlackBox('N',RandVectIn,RandVectTmp,num_vect)
-			call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,cascading_factors)
+			call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,ho_bf)
 			RandVectOut = RandVectTmp-RandVectOut			
 				
-			do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 				header_m=basis_group(groupm)%head
@@ -374,8 +374,8 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 
 			! Compute the even block MVP next
 			RandVectIn=0
-			do bb=2,cascading_factors(level_c)%N_block_forward,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 				header_n=basis_group(groupn)%head
@@ -386,11 +386,11 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			end do	
 			
 			call GetOutputs_BlackBox('N',RandVectIn,RandVectTmp,num_vect)
-			call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,cascading_factors)
+			call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,ho_bf)
 			RandVectOut = RandVectTmp-RandVectOut			
 				
-			do bb=2,cascading_factors(level_c)%N_block_forward,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 				header_m=basis_group(groupm)%head
@@ -412,8 +412,8 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			
 			! Compute the odd block MVP first
 			RandVectIn=0
-			do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 				header_m=basis_group(groupm)%head
@@ -424,11 +424,11 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			end do	
 		
 			call GetOutputs_BlackBox('T',RandVectIn,RandVectTmp,num_vect)
-			call MVM_Z_forward_partial('T',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,cascading_factors)
+			call MVM_Z_forward_partial('T',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,ho_bf)
 			RandVectOut = RandVectTmp-RandVectOut		
 		
-			do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 				header_n=basis_group(groupn)%head
@@ -438,8 +438,8 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 
 			! Compute the even block MVP next
 			RandVectIn=0
-			do bb=2,cascading_factors(level_c)%N_block_forward,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 				header_m=basis_group(groupm)%head
@@ -450,11 +450,11 @@ subroutine HODLR_MVP_OneL(trans, VectIn, VectOut, level_c,num_vect)
 			end do	
 		
 			call GetOutputs_BlackBox('T',RandVectIn,RandVectTmp,num_vect)
-			call MVM_Z_forward_partial('T',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,cascading_factors)
+			call MVM_Z_forward_partial('T',Maxedge,num_vect,level_c-1,RandVectIn,RandVectOut,ho_bf)
 			RandVectOut = RandVectTmp-RandVectOut		
 		
-			do bb=2,cascading_factors(level_c)%N_block_forward,2
-				block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+				block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 				header_n=basis_group(groupn)%head
@@ -504,8 +504,8 @@ subroutine HODLR_MVP_OneL_Fullmat(level_c,Memory)
 	
 	
 	num_vect = 0
-	do bb=1,cascading_factors(level_c)%N_block_forward
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		num_vect = max(num_vect,nn)
@@ -516,8 +516,8 @@ subroutine HODLR_MVP_OneL_Fullmat(level_c,Memory)
 	allocate(RandVectTmp(Maxedge,num_vect))
 	allocate(RandVectOutR(Maxedge,num_vect))
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		header_n=basis_group(groupn)%head
@@ -529,11 +529,11 @@ subroutine HODLR_MVP_OneL_Fullmat(level_c,Memory)
 	end do		
 	
 	call GetOutputs_BlackBox('N',RandVectInR,RandVectTmp,num_vect)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectInR,RandVectOutR,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandVectInR,RandVectOutR,ho_bf)
 	RandVectOutR = RandVectTmp-RandVectOutR	
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		header_m=basis_group(groupm)%head
@@ -578,7 +578,7 @@ subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c,level_butterfly)
 	! type(matrixblock),pointer::block
 	
 	
-    allocate (butterfly_block_randomized(cascading_factors(level_c)%N_block_forward))
+    allocate (butterfly_block_randomized(ho_bf%levels(level_c)%N_block_forward))
     ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = rankmax
 	num_blocks=2**level_butterfly
@@ -586,11 +586,11 @@ subroutine Initialize_Butterfly_HODLR_MVP(rankmax,level_c,level_butterfly)
 	
 	
 	
-	do bb = 1, cascading_factors(level_c)%N_block_forward
+	do bb = 1, ho_bf%levels(level_c)%N_block_forward
 		butterfly_block_randomized(bb)%level_butterfly=level_butterfly
 		
-		groupm=cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
-		groupn=cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here   
+		groupm=ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
+		groupn=ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1
 		
 		butterfly_block_randomized(bb)%dimension_rank=dimension_rank
@@ -733,7 +733,7 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
 	
 	vecCNT = 0
 	
-    allocate (Random_Block(cascading_factors(level_c)%N_block_forward))
+    allocate (Random_Block(ho_bf%levels(level_c)%N_block_forward))
     ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = butterfly_block_randomized(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly	
@@ -741,7 +741,7 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
 	Nbind = 1	
 	num_vect_sub = num_vect_subsub*Nbind
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
 		allocate (Random_Block(bb)%RandomVectorLL(0:level_butterfly+2)) 
 		random=>Random_Block(bb)
 		call Init_RandVects('T',random,num_vect_sub,bb)
@@ -769,7 +769,7 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
 			Time_Vector_forward = Time_Vector_forward + n2-n1
 			
 			n1 = OMP_get_wtime()
-			do bb=1,cascading_factors(level_c)%N_block_forward
+			do bb=1,ho_bf%levels(level_c)%N_block_forward
 				call Resolving_Butterflys_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb)
 			end do
 			n2 = OMP_get_wtime()
@@ -778,7 +778,7 @@ subroutine Reconstruction_LL_HODLR_MVP(level_c,level_butterfly)
 	end do
 	
 
-	do bb=1,cascading_factors(level_c)%N_block_forward
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
 		random=>Random_Block(bb)
 		do level=0, level_butterfly+2
 			num_row=random%RandomVectorLL(level)%num_row
@@ -837,7 +837,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
 	
 	vecCNT = 0
 	
-    ! allocate (Random_Block(cascading_factors(level_c)%N_block_forward))
+    ! allocate (Random_Block(ho_bf%levels(level_c)%N_block_forward))
     ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
     dimension_rank = butterfly_block_randomized(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly	
@@ -845,7 +845,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
 	Nbind = 1	
 	num_vect_sub = num_vect_subsub*Nbind
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
 		allocate (Random_Block(bb)%RandomVectorRR(0:level_butterfly+2)) 
 		random=>Random_Block(bb)
 		call Init_RandVects('N',random,num_vect_sub,bb)
@@ -877,7 +877,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
 			Time_Vector_forward = Time_Vector_forward + n2-n1
 			
 			n1 = OMP_get_wtime()
-			do bb=1,cascading_factors(level_c)%N_block_forward
+			do bb=1,ho_bf%levels(level_c)%N_block_forward
 				
 				
 				rtemp = 0
@@ -886,7 +886,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
 					nn=size(random%RandomVectorRR(0)%blocks(1,j)%matrix,1)
 					rtemp = rtemp + fnorm(random%RandomVectorRR(0)%blocks(1,j)%matrix,nn,num_vect_subsub)
 				end do
-				! write(*,*)bb,cascading_factors(level_c)%N_block_forward,'woca',unique_nth,level_left_start,rtemp
+				! write(*,*)bb,ho_bf%levels(level_c)%N_block_forward,'woca',unique_nth,level_left_start,rtemp
 				
 				call Resolving_Butterflys_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb)
 			end do
@@ -896,7 +896,7 @@ subroutine Reconstruction_RR_HODLR_MVP(level_c,level_butterfly,error)
 	end do
 	
 
-	do bb=1,cascading_factors(level_c)%N_block_forward
+	do bb=1,ho_bf%levels(level_c)%N_block_forward
 		random=>Random_Block(bb)
 		do level=0, level_butterfly+2
 			num_row=random%RandomVectorRR(level)%num_row
@@ -955,8 +955,8 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 	end do
 	
 	! Test the odd block accuracy first
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		header_n=basis_group(groupn)%head
@@ -971,11 +971,11 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 	end do	
 	
 	call GetOutputs_BlackBox('N',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		header_m=basis_group(groupm)%head
@@ -998,9 +998,9 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
 	RandomVectors_InOutput(2)%vector = 0d0	
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		! write(*,*)bb,cascading_factors(level_c)%N_block_forward-1,'ha?'
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		! write(*,*)bb,ho_bf%levels(level_c)%N_block_forward-1,'ha?'
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -1025,8 +1025,8 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 	do ii=1,3
 		RandomVectors_InOutput(ii)%vector = 0d0
 	end do	 
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		header_n=basis_group(groupn)%head
@@ -1041,11 +1041,11 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 	end do	
 	
 	call GetOutputs_BlackBox('N',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		header_m=basis_group(groupm)%head
@@ -1062,8 +1062,8 @@ subroutine Test_Error_RR_HODLR_MVP(level_c,error)
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
 	RandomVectors_InOutput(2)%vector = 0d0	
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -1129,8 +1129,8 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 	end do
 	
 	! Test the odd block accuracy first
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		header_n=basis_group(groupn)%head
@@ -1145,11 +1145,11 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 	end do	
 	
 	call GetOutputs_BlackBox('N',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		header_m=basis_group(groupm)%head
@@ -1172,9 +1172,9 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
 	RandomVectors_InOutput(2)%vector = 0d0	
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		! write(*,*)bb,cascading_factors(level_c)%N_block_forward-1,'ha?'
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		! write(*,*)bb,ho_bf%levels(level_c)%N_block_forward-1,'ha?'
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -1200,8 +1200,8 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 	do ii=1,3
 		RandomVectors_InOutput(ii)%vector = 0d0
 	end do	 
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		header_n=basis_group(groupn)%head
@@ -1216,11 +1216,11 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 	end do	
 	
 	call GetOutputs_BlackBox('N',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
-	do bb=1,cascading_factors(level_c)%N_block_forward-1,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=1,ho_bf%levels(level_c)%N_block_forward-1,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		header_m=basis_group(groupm)%head
@@ -1237,9 +1237,9 @@ subroutine Test_Error_RR_HODLR_MVP_Lowrank(level_c,error)
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
 	RandomVectors_InOutput(2)%vector = 0d0	
-	do bb=2,cascading_factors(level_c)%N_block_forward,2
-		! write(*,*)bb,cascading_factors(level_c)%N_block_forward-1,'ha?'
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2,ho_bf%levels(level_c)%N_block_forward,2
+		! write(*,*)bb,ho_bf%levels(level_c)%N_block_forward-1,'ha?'
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -1326,7 +1326,7 @@ end subroutine GetOutputs_BlackBox
 
 
 
-subroutine MVM_Z_forward_partial(trans,Ns,num_vectors,level_end,Vin,Vout,cascading_factors1)
+subroutine MVM_Z_forward_partial(trans,Ns,num_vectors,level_end,Vin,Vout,ho_bf1)
 
     use MODULE_FILE
     ! use lapack95
@@ -1351,7 +1351,7 @@ subroutine MVM_Z_forward_partial(trans,Ns,num_vectors,level_end,Vin,Vout,cascadi
 	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
 	complex(kind=8)::Vin(:,:),Vout(:,:)
 	! complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
-	type(cascadingfactors)::cascading_factors1(:)
+	type(hobf)::ho_bf1
  
 	! num_vectors = 1   
 	
@@ -1366,8 +1366,8 @@ subroutine MVM_Z_forward_partial(trans,Ns,num_vectors,level_end,Vin,Vout,cascadi
 
 	if(trans=='N')then
 		do level = 1,level_end !Maxlevel_for_blocks+1
-			do ii =1, cascading_factors1(level)%N_block_forward
-				bplus_o =>  cascading_factors1(level)%BP(ii)
+			do ii =1, ho_bf1%levels(level)%N_block_forward
+				bplus_o =>  ho_bf1%levels(level)%BP(ii)
 				groupm = bplus_o%row_group
 				groupn = bplus_o%col_group
 				idx_start_m = basis_group(groupm)%head
@@ -1386,8 +1386,8 @@ subroutine MVM_Z_forward_partial(trans,Ns,num_vectors,level_end,Vin,Vout,cascadi
 		end do
 	else if(trans=='T')then
 		do level = 1,level_end !Maxlevel_for_blocks+1
-			do ii =1, cascading_factors1(level)%N_block_forward
-				bplus_o =>  cascading_factors1(level)%BP(ii)
+			do ii =1, ho_bf1%levels(level)%N_block_forward
+				bplus_o =>  ho_bf1%levels(level)%BP(ii)
 				groupm = bplus_o%row_group
 				groupn = bplus_o%col_group
 				idx_start_m = basis_group(groupm)%head
@@ -2873,7 +2873,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 	real*8::n1,n2
 	
     ! ctemp1=1.0d0 ; ctemp2=0.0d0	
-	! block_o =>  cascading_factors(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
+	! block_o =>  ho_bf%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
     ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
@@ -2890,11 +2890,11 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 		RandomVectors_InOutput(ii)%vector = 0d0
 	end do
 	
-	call assert(cascading_factors(level_c)%N_block_forward>1,'N_block_forward not correct')
+	call assert(ho_bf%levels(level_c)%N_block_forward>1,'N_block_forward not correct')
 	call assert(oddeven==0 .or. oddeven==1,'oddeven not correct')
 	
-	do bb=2-oddeven,cascading_factors(level_c)%N_block_forward-oddeven,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2-oddeven,ho_bf%levels(level_c)%N_block_forward-oddeven,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -2930,13 +2930,13 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 	
 
 	call GetOutputs_BlackBox('T',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect_sub)
-	call MVM_Z_forward_partial('T',Maxedge,num_vect_sub,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('T',Maxedge,num_vect_sub,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
 	
 	
-	do bb=2-oddeven,cascading_factors(level_c)%N_block_forward-oddeven,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2-oddeven,ho_bf%levels(level_c)%N_block_forward-oddeven,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
@@ -3025,7 +3025,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 	real*8::n1,n2
 	
     ! ctemp1=1.0d0 ; ctemp2=0.0d0	
-	! block_o =>  cascading_factors(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
+	! block_o =>  ho_bf%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)	
     ! level_butterfly=int((maxlevel_for_blocks-level_c)/2)*2
@@ -3045,11 +3045,11 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 		RandomVectors_InOutput(ii)%vector = 0d0
 	end do
 	
-	call assert(cascading_factors(level_c)%N_block_forward>1,'N_block_forward not correct')
+	call assert(ho_bf%levels(level_c)%N_block_forward>1,'N_block_forward not correct')
 	call assert(oddeven==0 .or. oddeven==1,'oddeven not correct')
 	
-	do bb=2-oddeven,cascading_factors(level_c)%N_block_forward-oddeven,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2-oddeven,ho_bf%levels(level_c)%N_block_forward-oddeven,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
@@ -3085,13 +3085,13 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(level_c,level_butterfly,nth_s,nth
 	
 
 	call GetOutputs_BlackBox('N',RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,num_vect_sub)
-	call MVM_Z_forward_partial('N',Maxedge,num_vect_sub,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cascading_factors)
+	call MVM_Z_forward_partial('N',Maxedge,num_vect_sub,level_c-1,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,ho_bf)
 	RandomVectors_InOutput(3)%vector = RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector
 	
 	
 	
-	do bb=2-oddeven,cascading_factors(level_c)%N_block_forward-oddeven,2
-		block_o =>  cascading_factors(level_c)%BP(bb)%LL(1)%matrices_block(1)
+	do bb=2-oddeven,ho_bf%levels(level_c)%N_block_forward-oddeven,2
+		block_o =>  ho_bf%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
