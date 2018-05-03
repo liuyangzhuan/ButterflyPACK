@@ -507,7 +507,7 @@ subroutine Get_Randomized_Vectors_LL(blocks_o,operand,blackbox_MVP_dat,nth_s,nth
     mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
 	
 
-	call blackbox_MVP_dat(operand,'T',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)		
+	call blackbox_MVP_dat(operand,blocks_o,'T',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)		
 
 
 	! write(*,*)'aha',fnorm(RandomVectors_InOutput(1)%vector,mm,num_vect_sub),fnorm(RandomVectors_InOutput(3)%vector,mm,num_vect_sub)
@@ -643,7 +643,7 @@ subroutine Get_Randomized_Vectors_RR(blocks_o,operand,blackbox_MVP_dat,nth_s,nth
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 	
 	
-	call blackbox_MVP_dat(operand,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)		
+	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)		
 
 	
 	k=0
@@ -756,7 +756,7 @@ subroutine Get_Randomized_Vectors_RR_Test(block_o,operand,blackbox_MVP_dat,num_v
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 	
-	call blackbox_MVP_dat(operand,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)
+	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)
 
 	
 	k=0
