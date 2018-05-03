@@ -756,7 +756,7 @@ subroutine Get_Randomized_Vectors_RR_Test(block_o,operand,blackbox_MVP_dat,num_v
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
     nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 	
-	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)
+	call blackbox_MVP_dat(operand,block_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector)
 
 	
 	k=0
@@ -1191,7 +1191,7 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 			idx_start_glo = basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 		n1 = OMP_get_wtime()  
-		  call butterfly_block_MVP_randomized_dat(block_o,'N',Vin,Vbuff,ctemp1,ctemp2)
+		  call butterfly_block_MVP_randomized_dat(block_o,'N',mm,nn,Vin,Vbuff,ctemp1,ctemp2)
 		n2 = OMP_get_wtime()
 		! time_tmp = time_tmp + n2 - n1	
 			mm=basis_group(groupm)%tail-basis_group(groupm)%head+1	
@@ -1305,8 +1305,10 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 			
 			deallocate(vec_new)	
 
+			mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+			nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 			n1 = OMP_get_wtime()
-			call butterfly_block_MVP_randomized_dat(block_o,'T',Vbuff,Vout,ctemp1,ctemp2)	
+			call butterfly_block_MVP_randomized_dat(block_o,'T',mm,nn,Vbuff,Vout,ctemp1,ctemp2)	
 			n2 = OMP_get_wtime()
 			! time_tmp = time_tmp + n2 - n1		
 
