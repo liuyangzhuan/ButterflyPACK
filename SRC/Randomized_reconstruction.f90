@@ -39,6 +39,7 @@ subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -139,6 +140,7 @@ subroutine Reconstruction_LL(blocks_o,operand,blackbox_MVP_dat)
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -244,6 +246,7 @@ subroutine Reconstruction_RR(blocks_o,operand,blackbox_MVP_dat)
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -342,6 +345,7 @@ subroutine Test_Reconstruction_Error(block_o,operand,blackbox_MVP_dat,error)
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -442,6 +446,7 @@ subroutine Get_Randomized_Vectors_LL(blocks_o,operand,blackbox_MVP_dat,nth_s,nth
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -580,6 +585,7 @@ subroutine Get_Randomized_Vectors_RR(blocks_o,operand,blackbox_MVP_dat,nth_s,nth
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
@@ -713,6 +719,7 @@ subroutine Get_Randomized_Vectors_RR_Test(block_o,operand,blackbox_MVP_dat,num_v
 	
 	interface
 		subroutine blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout)
+			use MODULE_FILE
 			implicit none
 			class(*)::operand	
 			type(matrixblock)::block_o
