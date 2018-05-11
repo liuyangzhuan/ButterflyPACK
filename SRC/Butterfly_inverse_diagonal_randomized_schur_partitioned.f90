@@ -66,7 +66,7 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 
 		call get_minmaxrank_ABCD(partitioned_blocks(level+1),rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_blocks(level+1),butterfly_block_MVP_inverse_A_minusBDinvC_dat,error_inout) 
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_blocks(level+1),butterfly_block_MVP_inverse_A_minusBDinvC_dat,error_inout,'A-BD^-1C') 
 					
 		
 		error_cnt = error_cnt + 1
@@ -89,7 +89,7 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 		
 		call get_minmaxrank_ABCD(partitioned_blocks(level+1),rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_blocks(level+1),butterfly_block_MVP_inverse_ABCD_dat,error_inout) 
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_blocks(level+1),butterfly_block_MVP_inverse_ABCD_dat,error_inout,'ABCDinverse') 
 		
 		
 		error_cnt = error_cnt + 1

@@ -1,9 +1,24 @@
 clear all;
 close all;
 clc;
-rcs_new = load('HH_bistatic.txt');
-% % % rcs_new1 = load('VV_bistatic1.txt');
-plot(rcs_new(:,1),rcs_new(:,2));
+% rcs_new = load('HH_bistatic.txt');
+rcs_new = load('RCS_monostatic_ABCD_fix.txt');
+% rcs_new = load('RCS_monostatic_new_tfqmr.txt');
+% rcs_new = load('RCS_monostatic_new_tfqmr.txt');
+plot(rcs_new(:,2),rcs_new(:,3),'r');
+hold on
+
+% rcs_new = load('RCS_monostatic_early_twolayer.txt');
+% plot(rcs_new(:,2),rcs_new(:,3),'k');
+% hold on
+
+rcs_new = load('RCS_monostatic_new.txt');
+plot(rcs_new(:,2),rcs_new(:,3),'b');
+hold on
+
+% 
+% % % % rcs_new1 = load('VV_bistatic1.txt');
+% plot(rcs_new(:,1),rcs_new(:,2));
 hold on
 % plot(rcs_new1(:,1),rcs_new1(:,2),'g');
 % hold on
@@ -16,4 +31,4 @@ hold on
 % plot(rcs1(:,2),rcs1(:,3),'k');
 hold on
 % plot(rcs2(:,1),rcs2(:,2),'k');
-legend('new','reference')
+legend('ref nobplus','ref twolayer','new')

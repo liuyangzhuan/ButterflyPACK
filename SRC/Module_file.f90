@@ -64,8 +64,10 @@ module MODULE_FILE
          integer data_type
          integer level_butterfly
 		 integer rankmax,rankmin
+		 integer dimension_rank
          complex(kind=8),allocatable :: fullmat(:,:)
-         type(butterflymatrix),allocatable :: ButterflyU(:)
+         complex(kind=8),allocatable:: KerInv(:,:)	
+		 type(butterflymatrix),allocatable :: ButterflyU(:)
          type(butterflymatrix),allocatable :: ButterflyV(:)
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:)		 
          type(butterfly_Kerl),allocatable :: ButterflyKerl(:)
@@ -134,26 +136,18 @@ module MODULE_FILE
          type(butterfly_Kerl), allocatable :: RandomVectorLL(:)
      end type RandomBlock
      
-     type butterflyblock_randomized
-         integer dimension_m
-         integer dimension_n
-         integer dimension_rank
-		 integer rankmax,rankmin
-         integer level_butterfly
-		 complex(kind=8),allocatable:: KerInv(:,:)									
-         type(butterflymatrix),allocatable :: ButterflyU(:)
-         type(butterflymatrix),allocatable :: ButterflyV(:)
-         type(butterflymatrix),allocatable :: ButterflyMiddle(:,:)			 
-         type(butterfly_Kerl),allocatable :: ButterflyKerl(:)
-         type(butterfly_Kerl),allocatable :: ButterflyKerl_old(:)
-         type(butterfly_Kerl),allocatable :: ButterflyKerl_qr(:)		 		 
-         type(butterfly_Kerl),allocatable :: ButterflyInv(:)
-         type(butterflymatrix),allocatable :: ButterflyU_old(:)
-         type(butterflymatrix),allocatable :: ButterflyV_old(:)
-         ! type(butterflymatrix),allocatable :: ButterflyV_qr(:)		 
-         type(butterflymatrix),allocatable :: ButterflyUInv(:)
-         type(butterflymatrix),allocatable :: ButterflyVInv(:)
-     end type butterflyblock_randomized
+     ! type matrixblock
+         ! integer dimension_m
+         ! integer dimension_n
+         ! integer dimension_rank
+		 ! integer rankmax,rankmin
+         ! integer level_butterfly
+		 ! complex(kind=8),allocatable:: KerInv(:,:)									
+         ! type(butterflymatrix),allocatable :: ButterflyU(:)
+         ! type(butterflymatrix),allocatable :: ButterflyV(:)
+         ! type(butterflymatrix),allocatable :: ButterflyMiddle(:,:)			 
+         ! type(butterfly_Kerl),allocatable :: ButterflyKerl(:)
+     ! end type matrixblock
 
      real*8, allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:)
      integer,allocatable:: node_of_patch(:,:),node_patch_of_edge(:,:)
@@ -195,7 +189,7 @@ module MODULE_FILE
      type(matrixblock),allocatable:: matrices_block(:,:)
 	 type(matrixblock),allocatable:: agent_block(:)
 	 type(blockplus),allocatable:: agent_bplus(:)
-     type(butterflyblock_randomized),pointer :: butterfly_block_randomized(:)
+     type(matrixblock),pointer :: butterfly_block_randomized(:)
      type(blockplus),pointer :: Bplus_randomized(:)
 	 ! type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
 	 type(hobf)::ho_bf,ho_bf_copy

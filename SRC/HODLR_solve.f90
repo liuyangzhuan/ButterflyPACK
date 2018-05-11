@@ -28,7 +28,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
 	if(preconditioner==1)then
         allocate(r0_initial(1:Ns))	
 		do ii=1,Ns
-		   r0_initial(i)= random_complex_number()
+		   r0_initial(ii)= random_complex_number()
 		end do			
 		
 		do ii=1,num_vectors
@@ -75,7 +75,7 @@ end subroutine HODLR_Solution
     itmax=iter
 
 	call MVM_Z_factorized(nn,1,b,bb,hobf_inverse)	
-	bb=b 
+	! bb=b 
 	
 	
     ! ! ! if (myid == main_id) then

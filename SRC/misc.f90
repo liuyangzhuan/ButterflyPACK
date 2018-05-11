@@ -9,9 +9,20 @@ USE IFPORT
 #endif  
 use omp_lib
 
+
 integer, parameter :: int64 = selected_int_kind(18) 
 
 contains
+ 
+! #ifndef mymacro(x)
+
+! #define mymacro(x) print *, "Now giving information about ", "x" ; \
+                   ! call mysub( x, size(x,1), size(x,2) ) ; \
+                   ! print *, "About to do function on ", "x"; \
+                   ! call dofunction(x) ; \
+                   ! print *, "x"," is a nice matrix! Huzzah!"
+! #endif		
+
 
 subroutine linspaceI(startI,endI,N,array)
 implicit none
@@ -264,17 +275,7 @@ implicit none
 	deallocate(B1)		
  end subroutine gemmNT_omp  
  
- 
- 
-! #ifndef mymacro(x)
 
-! #define mymacro(x) print *, "Now giving information about ", "x" ; \
-                   ! call mysub( x, size(x,1), size(x,2) ) ; \
-                   ! print *, "About to do function on ", "x"; \
-                   ! call dofunction(x) ; \
-                   ! print *, "x"," is a nice matrix! Huzzah!"
-! #endif				   
- 
  
   subroutine copymatN_omp(A,B,m,n)
 	implicit none 

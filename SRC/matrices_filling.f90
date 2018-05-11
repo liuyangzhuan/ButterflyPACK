@@ -1,7 +1,8 @@
 module matrices_fill
 use Butterfly_rightmultiply
-use Butterfly_exact
+! use Butterfly_exact
 use Butterfly_compress_forward
+use Randomized_reconstruction
 contains 
 
 
@@ -14,9 +15,9 @@ subroutine matrices_filling(tolerance)
 
     integer i, j, ii, jj, kk, iii, jjj,ll
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, itemp
+    integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter
     real T0
-	real*8:: tolerance, rtemp,rel_error,error,t1,t2,tim_tmp
+	real*8:: tolerance, rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
     real*8 Memory_direct_forward,Memory_butterfly_forward
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2
 	complex(kind=8)::ctemp,ctemp1,ctemp2
@@ -68,7 +69,16 @@ subroutine matrices_filling(tolerance)
 				end if
 				
 				if(level==level_tmp)then
-					call Bplus_randomized_Exact_test(ho_bf%levels(level_c)%BP(ii))
+					! call Bplus_randomized_Exact_test(ho_bf%levels(level_c)%BP(ii))
+					
+					rank0_inner=ho_bf%levels(level_c)%BP(ii)%LL(2)%rankmax
+					rankrate_inner=1.2d0
+					rank0_outter=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
+					rankrate_outter=1.2d0
+					
+					call Buplus_randomized(ho_bf%levels(level_c)%BP(ii),ho_bf%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact')
+					
+					
 					stop
 				end if
 				

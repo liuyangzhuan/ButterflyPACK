@@ -1686,7 +1686,7 @@ subroutine Resolving_Butterflys_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
    complex(kind=8), allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer num_vect_sub,num_vect_subsub,nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly
    real*8::n1,n2
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    
    call assert(nth_e==nth_e,'Nbind/=1')
    
@@ -1750,7 +1750,7 @@ subroutine OneVs_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,bb)
    ! use lapack95
    ! use blas95
    implicit none 
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,level_butterfly,bb
 	
@@ -1809,7 +1809,7 @@ subroutine OneKernels_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_su
    ! use lapack95
    ! use blas95
    implicit none 
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer bb,index_i,index_j,i,j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,ieo,noe,rs,re,level_butterfly
 
@@ -1909,7 +1909,7 @@ subroutine Resolving_Butterflys_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
    real*8 a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
    complex(kind=8) ctemp
    
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    type(RandomBlock), pointer :: random
    
    integer, allocatable :: ipiv(:), kernel_selection(:)
@@ -1938,7 +1938,6 @@ subroutine Resolving_Butterflys_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,bb
 	   if(level_left_start>0 .and. level_left_start==unique_nth)then
 			n1 = OMP_get_wtime()
 			call Butterflys_partial_MVP_Half('N',0,level_left_start-1,random,num_vect_sub,nth_s,nth_e,Ng,bb)
-			! call Butterfly_partial_MVP(blocks,'N',0,level_left_start-1,random,num_vect_sub)
 			n2 = OMP_get_wtime()
 			time_halfbuttermul = time_halfbuttermul + n2-n1		 
 		endif 
@@ -1986,7 +1985,7 @@ subroutine OneUs_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,bb)
    ! use lapack95
    ! use blas95
    implicit none 
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer i,level_left,unique_nth,dimension_mm,mm,rank,num_vect_sub,nth,nth_s,level_butterfly,bb
 	
@@ -2056,7 +2055,7 @@ subroutine OneKernels_RR(index_i, index_j,noe,level_left,level_left_start,unique
    ! use lapack95
    ! use blas95
    implicit none 
-   type(butterflyblock_randomized), pointer :: blocks
+   type(matrixblock), pointer :: blocks
    complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer index_i,index_j,i,j,bb,level_left,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,jeo,noe,rs,re,level_left_start,level_butterfly
 
