@@ -104,7 +104,7 @@ subroutine matrices_filling(tolerance)
 	end do	
 	
 	
-	if(preconditioner==1)then
+	if(preconditioner/=DIRECT)then
 		ho_bf_copy%Maxlevel_for_blocks = ho_bf%Maxlevel_for_blocks
 		allocate(ho_bf_copy%levels(Maxlevel_for_blocks+1))
 		do level_c = 1,Maxlevel_for_blocks+1

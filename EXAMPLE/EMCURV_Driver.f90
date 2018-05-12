@@ -102,7 +102,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	wavelength=0.08
 	Discret=0.05
 	Static=1
-    RCS_sample=1000
+    RCS_sample=2000
     Optimizing_forward=0
     Fast_inverse=0
     Add_method_of_base_level=2
@@ -111,8 +111,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     rank_approximate_para3=6.0
 	LS_tolerance=1d-12
 	tfqmr_tolerance=1d-5
-	tfqmr_tolerance_solving=3d-3
-	iter_tolerance=5d-3
+	tfqmr_tolerance_solving=1d-6
+	iter_tolerance=1d-3
 	up_tolerance=1d-4
 	relax_lamda=1d0
 	SolvingMethod=1
@@ -121,11 +121,11 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	schurinv=1
 	reducelevel_flag=0
 	directschur=1
-	preconditioner=0
+	preconditioner=DIRECT
 	verboselevel=2
 	xyzsort=1
-	LnoBP=4
-	TwoLayerOnly=0
+	LnoBP=40000
+	TwoLayerOnly=1
 	explicitflag=1
 	fullmatflag=0
 	touch_para=3
@@ -233,11 +233,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
  	t2 = OMP_get_wtime()   
 	write(*,*)t2-t1
 	
+	if(preconditioner/=NOPRECON)then
     write(*,*) "Cascading factorizing......"
     call cascading_factorizing(tolerance)
     write(*,*) "Cascading factorizing finished"
     write(*,*) "    "	
-
+	end if
 
     write(*,*) "EM_calculating......"
     call EM_calculating()

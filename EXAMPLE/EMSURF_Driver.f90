@@ -127,7 +127,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	schurinv=1
 	reducelevel_flag=0
 	directschur=1
-	preconditioner=0
+	preconditioner=DIRECT
 	verboselevel=2
 	xyzsort=1
 	LnoBP=4

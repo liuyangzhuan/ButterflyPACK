@@ -3,19 +3,16 @@ close all;
 clc;
 % rcs_new = load('HH_bistatic.txt');
 rcs_new = load('RCS_monostatic_ABCD_fix.txt');
-plot(rcs_new(:,2),rcs_new(:,3),'k');
-hold on
-
+rcs_new = load('RCS_monostatic_new_tfqmr.txt');
 % rcs_new = load('RCS_monostatic_new_tfqmr.txt');
-% % rcs_new = load('RCS_monostatic_new_tfqmr.txt');
-% plot(rcs_new(:,2),rcs_new(:,3),'.r');
-% hold on
-
-rcs_new = load('RCS_monostatic_new_cori_intel17.txt');
 plot(rcs_new(:,2),rcs_new(:,3),'r');
 hold on
 
-rcs_new = load('RCS_monostatic_new_twolayer_cac.txt');
+% rcs_new = load('RCS_monostatic_early_twolayer.txt');
+% plot(rcs_new(:,2),rcs_new(:,3),'k');
+% hold on
+
+rcs_new = load('RCS_monostatic_new.txt');
 plot(rcs_new(:,2),rcs_new(:,3),'b');
 hold on
 

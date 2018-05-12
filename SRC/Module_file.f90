@@ -241,6 +241,11 @@ module MODULE_FILE
 	 integer Kernel
 	 
 	 
+	 integer,parameter:: DIRECT=1
+	 integer,parameter:: NOPRECON=2
+	 integer,parameter:: SAIPRECON=3
+	 
+	 
 	 CHARACTER (LEN=1000) DATA_DIR	 
 	 
 end module

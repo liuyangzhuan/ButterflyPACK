@@ -25,17 +25,17 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
 	complex(kind=8)::x(Ns,num_vectors),b(Ns,num_vectors)
 	complex(kind=8),allocatable::r0_initial(:)
 
-	if(preconditioner==1)then
+	if(preconditioner/=DIRECT)then
         allocate(r0_initial(1:Ns))	
 		do ii=1,Ns
 		   r0_initial(ii)= random_complex_number()
 		end do			
 		
 		do ii=1,num_vectors
-			N_iter_max = 100
+			N_iter_max = 1000
 			iter = 0
 			rel_error = tfqmr_tolerance_solving
-			call HODLR_Ztfqmr(N_iter_max,Ns,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse)
+			call HODLR_Ztfqmr(preconditioner,N_iter_max,Ns,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse)
 		end do
 		
 		deallocate(r0_initial)
@@ -48,7 +48,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
 end subroutine HODLR_Solution
 
 
-  subroutine HODLR_Ztfqmr(ntotal,nn,b,x,err,iter,r0_initial,hobf_forward,hobf_inverse)
+  subroutine HODLR_Ztfqmr(precond,ntotal,nn,b,x,err,iter,r0_initial,hobf_forward,hobf_inverse)
     implicit none
 	integer level_c,rowblock
     integer,intent(in)::ntotal
@@ -71,11 +71,13 @@ end subroutine HODLR_Solution
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
 	type(hobf)::hobf_forward,hobf_inverse
 	complex(kind=8)::r0_initial(:)
+	integer precond
 	
     itmax=iter
 
-	call MVM_Z_factorized(nn,1,b,bb,hobf_inverse)	
+	! ! call MVM_Z_factorized(nn,1,b,bb,hobf_inverse)	
 	! bb=b 
+	call HODLR_ApplyPrecon(precond,nn,b,bb,hobf_inverse)	
 	
 	
     ! ! ! if (myid == main_id) then
@@ -92,7 +94,9 @@ end subroutine HODLR_Solution
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)    
     call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
-	call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
+	! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
+	! r=ytmp
+	call HODLR_ApplyPrecon(precond,nn,ytmp,r,hobf_inverse)	
 	
     r=bb-r !residual from the initial guess
     w=r
@@ -104,7 +108,9 @@ end subroutine HODLR_Solution
 		! ! end if		
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)    
     call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
-	call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
+	! ! call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
+	! ayo=ytmp
+	call HODLR_ApplyPrecon(precond,nn,ytmp,ayo,hobf_inverse)	
 	
     v=ayo
     we=0.0_dp
@@ -133,7 +139,9 @@ end subroutine HODLR_Solution
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,ye,aye)
 	   call MVM_Z_forward(nn,1,ye,ytmp,hobf_forward)
-	   call MVM_Z_factorized(nn,1,ytmp,aye,hobf_inverse)
+	   ! ! call MVM_Z_factorized(nn,1,ytmp,aye,hobf_inverse)
+	   ! aye=ytmp
+		call HODLR_ApplyPrecon(precond,nn,ytmp,aye,hobf_inverse)	
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -169,7 +177,9 @@ end subroutine HODLR_Solution
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
 		  call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
-		  call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
+		  ! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
+		  ! r=ytmp
+		  call HODLR_ApplyPrecon(precond,nn,ytmp,r,hobf_inverse)	
 	
           r=bb-r
           rerr_local=dot_product(r,r)
@@ -205,7 +215,9 @@ end subroutine HODLR_Solution
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)
 		call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
-		call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
+		! ! call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
+		! ayo=ytmp
+		call HODLR_ApplyPrecon(precond,nn,ytmp,ayo,hobf_inverse)	
 	
        !MAGIC
        v=ayo+beta*( aye+beta*v )
@@ -213,7 +225,12 @@ end subroutine HODLR_Solution
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
     call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
-	call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)	   
+	
+	! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)	 
+	! r=ytmp
+	call HODLR_ApplyPrecon(precond,nn,ytmp,r,hobf_inverse)	
+	
+	
     !MAGIC
     r=bb-r
     err_local=dot_product(r,r)
@@ -233,5 +250,17 @@ end subroutine HODLR_Solution
 
 
 
+  subroutine HODLR_ApplyPrecon(precond,nn,x,y,hobf_inverse)
+    implicit none
+	integer nn
+	complex(kind=dp),dimension(1:nn)::x,y
+	integer precond
+	type(hobf),optional::hobf_inverse
+	if(precond==NOPRECON)then
+		y=x
+	else if (precond==SAIPRECON)then 
+		call MVM_Z_factorized(nn,1,x,y,hobf_inverse)	 
+	endif
+	end subroutine HODLR_ApplyPrecon
 
 end module HODLR_Solve

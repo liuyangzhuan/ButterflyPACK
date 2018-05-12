@@ -122,7 +122,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	schurinv=1
 	reducelevel_flag=0
 	directschur=1
-	preconditioner=0
+	preconditioner=DIRECT
 	verboselevel=2
 	xyzsort=1
 	LnoBP=600
