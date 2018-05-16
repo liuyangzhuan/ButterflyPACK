@@ -5,7 +5,7 @@ use Bplus_rightmultiply
 use Bplus_inversion_schur_partition
 contains 
 
-subroutine cascading_factorizing(tolerance)
+subroutine cascading_factorizing(ho_bf1,option)
 
     use MODULE_FILE
     ! use lapack95
@@ -18,7 +18,7 @@ subroutine cascading_factorizing(tolerance)
     integer level, blocks, edge, patch, node, group,level_c,groupm_diag
     integer rank, index_near, m, n, length, flag, itemp
     real T0
-	real*8 tolerance, rtemp,tmpfact
+	real*8 rtemp,tmpfact
     real*8 Memory, Memory_near,Memory_butterfly_inverse,Memory_direct_inverse,Memory_butterfly_Sblock
 	integer,allocatable:: index_old(:),index_new(:) 
 	integer::block_num,block_num_new,num_blocks,level_butterfly	
@@ -29,7 +29,8 @@ subroutine cascading_factorizing(tolerance)
 	type(matrixblock)::block_tmp
 	real*8 n1,n2
 	complex(kind=8),allocatable::Vin(:,:),Vout(:,:)
-	
+	type(Hoption)::option
+	type(hobf)::ho_bf1
 	
     Memory_direct_inverse=0
     Memory_butterfly_inverse=0
@@ -57,35 +58,19 @@ subroutine cascading_factorizing(tolerance)
 	! ! call Butterfly_forward_acc_check
 	! ! stop
 	
-	
-	
-	
     write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
 	level_c = Maxlevel_for_blocks+1
-	! allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
+	! allocate(ho_bf1%levels(level_c)%matrices_block_inverse(ho_bf1%levels(level_c)%N_block_inverse))
 	do ii = 1, 2**(level_c-1)
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%level = ho_bf%levels(level_c)%matrices_block(ii)%level
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%col_group = ho_bf%levels(level_c)%matrices_block(ii)%col_group
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%row_group = ho_bf%levels(level_c)%matrices_block(ii)%row_group
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%nested_num = ho_bf%levels(level_c)%matrices_block(ii)%nested_num
-		
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%style = ho_bf%levels(level_c)%matrices_block(ii)%style
-		! ho_bf%levels(level_c)%matrices_block_inverse(ii)%data_type = ho_bf%levels(level_c)%matrices_block(ii)%data_type
-		nn = size(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,1)
-		allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
-		allocate(matrixtemp1(nn,nn))
+
+		nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,1)
+
 		allocate(ipiv(nn))
-		matrixtemp1 = ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
-	    call getrff90(matrixtemp1,ipiv)
-		! write(*,*)shape(matrixtemp1)
-        call getrif90(matrixtemp1,ipiv)		
-		ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = matrixtemp1
-		
-		Memory_direct_inverse=Memory_direct_inverse+SIZEOF(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
-		
-		call delete_blocks(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-		
-		deallocate(matrixtemp1)
+	    call getrff90(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)
+        call getrif90(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)		
+
+		Memory_direct_inverse=Memory_direct_inverse+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
+
 		deallocate(ipiv)
 	end do		
 
@@ -96,24 +81,22 @@ subroutine cascading_factorizing(tolerance)
 
 		! update the forward butterfly after left multiplication of inverse 
 		write(*,*)'update forward blocks at level:',level_c
-		tmpfact = Rank_detection_factor
-		! Rank_detection_factor = Rank_detection_factor * 0.1														
+					
 		n1 = OMP_get_wtime()
 		do rowblock = 1,2**level_c
 			
-			adaptive_flag=1   ! use adaptive rank in S block construction
 			if(level_c/=0)then	
 			! if(level_c<Maxlevel_for_blocks-8)then
 				
 				! call Butterfly_Sblock_randomized_memfree(level_c,rowblock,rtemp)
 				! call Butterfly_Sblock_randomized_partialupdate_memfree(level_c,rowblock,rtemp)
 				
-				call Bplus_Sblock_randomized_memfree(level_c,rowblock,rtemp) 
+				call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,rtemp) 
 				
 				! call Bplus_Sblock_randomized_symmetric(level_c,rowblock) 
 				
 				! call Butterfly_Sblock_randomized_symmetric(level_c,rowblock) 
-				! call Butterfly_sym2asym(ho_bf%levels(level_c)%matrices_block(rowblock))
+				! call Butterfly_sym2asym(ho_bf1%levels(level_c)%matrices_block(rowblock))
 				
 				
 				! call Butterfly_Sblock_randomized_logN(level_c,rowblock)
@@ -129,7 +112,7 @@ subroutine cascading_factorizing(tolerance)
 			
 			
 			! if(level_c==6)then			
-				! call print_butterfly_size_rank(ho_bf%levels(level_c)%matrices_block(rowblock))
+				! call print_butterfly_size_rank(ho_bf1%levels(level_c)%matrices_block(rowblock),option%tol_SVD)
 				! stop
 			! end if	
 				
@@ -144,47 +127,20 @@ subroutine cascading_factorizing(tolerance)
 		end do
 		n2 = OMP_get_wtime()
 		Time_Rightmultiply_inverse_randomized=Time_Rightmultiply_inverse_randomized+n2-n1 
-		Rank_detection_factor = tmpfact
-
+	
 		! write(*,*)'aha'
 		! stop
 		
 		write(*,*)'compute block inverse at level:',level_c
 		! compute the inverse butterfly
 		n1 = OMP_get_wtime()
-		! allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
+		! allocate(ho_bf1%levels(level_c)%matrices_block_inverse(ho_bf1%levels(level_c)%N_block_inverse))
 		do rowblock = 1,2**(level_c-1)
 			
-			if(schurinv==0)then
-				write(*,*)'schurinv=0 removed'
-				stop
-			else 
-				! ! ! block_o => ho_bf%levels(level_c)%matrices_block_inverse(rowblock)
-				! ! block_off => ho_bf%levels(level_c)%matrices_block(rowblock*2-1)			
-				! ! ! block_o%level_butterfly = block_off%level_butterfly+1
-				! ! block_o => ho_bf%levels(level_c)%matrices_block_inverse_schur(rowblock)
-				! ! block_o%level_butterfly = block_off%level_butterfly
-				
-
-				
-				if(directschur==1)then
-					! use fixed rank in block inverse
-					adaptive_flag=1
-					tmpfact = Rank_detection_factor
-					! Rank_detection_factor = Rank_detection_factor * 0.001						
-					! call Butterfly_inverse_schur_partitionedinverse(level_c,rowblock,rtemp)
-					call Bplus_inverse_schur_partitionedinverse(level_c,rowblock,rtemp)
-					Rank_detection_factor = tmpfact
-				else				
-					write(*,*)'directshur==0 removed'
-				end if
-
-				
-			end if
-			
+			call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,rtemp)
+		
 			Memory_butterfly_inverse=Memory_butterfly_inverse+rtemp
-			
-	
+
 		end do
 		n2 = OMP_get_wtime()		
 		Time_Inversion_diagnal_randomized=Time_Inversion_diagnal_randomized + n2-n1	

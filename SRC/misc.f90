@@ -1993,7 +1993,7 @@ end if
 end subroutine KernelUpdate	
 
 
-subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank)
+subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
 
     use MODULE_FILE
     implicit none
@@ -2069,7 +2069,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
 
     rank=1
 	! write(*,*)sum(column_R),sum(row_R),norm_U,norm_V,'hehe'
-    do while (norm_Z*ACA_tolerance_forward**2<norm_U*norm_V .and. rank<rankmax_min)
+    do while (norm_Z*tolerance**2<norm_U*norm_V .and. rank<rankmax_min)
 
         ! !$omp parallel do default(shared) private(j,i,value_Z,value_UV)
         do j=1,rankmax_c

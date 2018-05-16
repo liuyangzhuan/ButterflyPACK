@@ -27,7 +27,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-		
+	type(Hoption)::option	
 
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -85,103 +85,52 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	!itmax=10000
 	
 	CALL getarg(1, DATA_DIR)
+	
+	para=0.001
+	
 	Kernel = EMCURV	
 	
 	geo_model=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	Maxedge=5000
-	Nmin_leaf=50
-	Refined_level=0
-	para=0.001
-	levelpara_control=0
-	ACA_tolerance_forward=1d-4
-	SVD_tolerance_forward=1d-4
-	SVD_tolerance_factor=1d-4
-	Rank_detection_factor=3d-5
-    Preset_level_butterfly=0
+	
+	! Refined_level=0
+	
+
+
+
+	
+	
 	Scale=1d0
 	wavelength=0.08
 	Discret=0.05
 	Static=1
     RCS_sample=2000
-    Optimizing_forward=0
-    Fast_inverse=0
-    Add_method_of_base_level=2
-    rank_approximate_para1=6.0
+
+	
+	
+	rank_approximate_para1=6.0
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
-	LS_tolerance=1d-12
-	tfqmr_tolerance=1d-5
-	tfqmr_tolerance_solving=1d-6
-	iter_tolerance=1d-3
-	up_tolerance=1d-4
-	relax_lamda=1d0
-	SolvingMethod=1
-	level_tmp=100
-	rank_tmp=7
-	schurinv=1
-	reducelevel_flag=0
-	directschur=1
-	preconditioner=DIRECT
-	verboselevel=2
-	xyzsort=1
-	LnoBP=40000
-	TwoLayerOnly=1
-	explicitflag=1
-	fullmatflag=0
-	touch_para=3
 	
-	! open (90,file='input.txt')
-	! read (90,*)
+	
+	option%Nmin_leaf=50
+	option%tol_SVD=1d-4
+	option%tol_Rdetect=3d-5	
+	option%tol_LS=1d-12
+	option%tol_itersol=1d-6
+	option%N_iter=1000
+	option%tol_rand=1d-3
+	option%level_check=100
+	option%precon=DIRECT
+	option%xyzsort=3
+	option%LnoBP=40000
+	option%TwoLayerOnly=1
+	option%touch_para=3
+    option%schulzorder=3
+    option%schulzlevel=3000
 
-	! read (90,*) Nmin_leaf
-	! read (90,*) mesh_normal
-	! read (90,*) Refined_level
-	! read (90,*) para
-	! read (90,*) levelpara_control
-	! read (90,*) ACA_tolerance_forward
-	! read (90,*) SVD_tolerance_forward
-	! read (90,*) SVD_tolerance_factor
-	! read (90,*) Rank_detection_factor
-    ! read (90,*) Preset_level_butterfly
-	! read (90,*) Scale
-	! read (90,*) wavelength
-	! read (90,*) Discret
-	! read (90,*) Static
-    ! read (90,*) RCS_sample
-    ! read (90,*) Optimizing_forward
-    ! read (90,*) Fast_inverse
-    ! read (90,*) Add_method_of_base_level
-    ! read (90,*) rank_approximate_para1
-    ! read (90,*) rank_approximate_para2
-    ! read (90,*) rank_approximate_para3
-	! read (90,*) threads_num
-	! read (90,*) LS_tolerance
-	! read (90,*) tfqmr_tolerance
-	! read (90,*) tfqmr_tolerance_solving
-	! read (90,*) iter_tolerance
-	! read (90,*) up_tolerance
-	! read (90,*) relax_lamda
-	! read (90,*) SolvingMethod
-	! read (90,*) level_tmp
-	! read (90,*) rank_tmp
-	! read (90,*) schurinv
-	! read (90,*) reducelevel_flag
-	! read (90,*) directschur
-	! read (90,*) preconditioner
-	! read (90,*) verboselevel
-	! read (90,*) xyzsort
-	! read (90,*) LnoBP
-	! read (90,*) TwoLayerOnly
-	! read (90,*) CFIE_alpha
 	
-	! close (90)
-	!Nmin_leaf=250
-	!para=0.01
-	!tolerance=0.001
-	!Scale=1.
-	!alpha=0.5
-    !wavelength=2.
-    tolerance=ACA_tolerance_forward
+
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
@@ -214,8 +163,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(para)
-	call BPlus_structuring()
+    call H_matrix_structuring(para,option)
+	call BPlus_structuring(option)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -227,21 +176,21 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     write(*,*) "H_matrices filling......"
-    call matrices_filling(tolerance)
+    call matrices_filling(option)
     write(*,*) "H_matrices filling finished"
     write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	write(*,*)t2-t1
 	
-	if(preconditioner/=NOPRECON)then
+	if(option%precon/=NOPRECON)then
     write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(tolerance)
+    call cascading_factorizing(ho_bf,option)
     write(*,*) "Cascading factorizing finished"
     write(*,*) "    "	
 	end if
 
     write(*,*) "EM_calculating......"
-    call EM_calculating()
+    call EM_calculating(option)
     write(*,*) "EM_calculating finished"
     write(*,*) "    "	
 	

@@ -128,82 +128,7 @@ subroutine geo_modeling_CURV()
             node_patch_of_edge(0,edge)=node_patch_of_edge(0,edge-1)+2
         enddo
     
-    elseif (geo_model==4) then   !******corner reflector with random rough surface***********
-        
-        open(10,file='rrs1.txt')
-        read (10,*) num_node
-        allocate (node_xy_original(2,2*num_node), num_edge_of_node(2*num_node-1))       
-        do node=1, num_node
-            read (10,*) xx,yy
-            rr=sqrt(xx**2+yy**2)
-            theta=atan2(yy,xx)
-            theta=theta-0.25d0*pi
-            node_xy_original(1,node)=cos(theta)*rr
-            node_xy_original(2,node)=sin(theta)*rr
-        enddo
-        close(10)        
-        open(20,file='rrs2.txt')
-        read (20,*) num_node        
-        do node=num_node+1, 2*num_node
-            read (20,*) xx,yy
-            rr=sqrt(xx**2+yy**2)
-            theta=atan2(yy,xx)
-            theta=theta+0.25d0*pi
-            node_xy_original(1,node)=cos(theta)*rr
-            node_xy_original(2,node)=sin(theta)*rr
-        enddo
-        close(20)
-        
-        Delta_ll=Discret*wavelength
-        
-        i=0
-        !$omp parallel do default(shared) private(node,rr,dx,ii) reduction(+:i)
-        do node=1, 2*num_node-1
-            rr=(node_xy_original(1,node)-node_xy_original(1,node+1))**2+(node_xy_original(2,node)-node_xy_original(2,node+1))**2
-            rr=sqrt(rr)
-            dx=rr/Delta_ll-real(int(rr/Delta_ll))
-            if (int(rr/Delta_ll)==0) then
-                ii=1
-            else
-                if (dx>0.5d0) then
-                    ii=int(rr/Delta_ll)+1
-                else
-                    ii=int(rr/Delta_ll)
-                endif
-            endif
-            i=i+ii
-            num_edge_of_node(node)=ii
-        enddo
-        !$omp  end parallel do
-        Maxedge=i
-        Maxnode=2*i+1
-        
-        allocate (xyz(2,0:Maxnode-1),node_patch_of_edge(0:2,Maxedge))
-
-       ! open (30,file='node.txt')
-        jj=0
-        do node=1, 2*num_node-1
-            ii=2*num_edge_of_node(node)
-            xx=node_xy_original(1,node+1)-node_xy_original(1,node)
-            yy=node_xy_original(2,node+1)-node_xy_original(2,node)
-            do i=0, ii-1
-                xyz(1,jj+i)=node_xy_original(1,node)+real(i)/real(ii)*xx
-                xyz(2,jj+i)=node_xy_original(2,node)+real(i)/real(ii)*yy
-                !write (30,*) jj+i, xyz(1,jj+i), xyz(2,jj+i)
-            enddo
-            jj=jj+ii
-        enddo
-       ! close (30)
-
-        node_patch_of_edge(1,1)=0 ; node_patch_of_edge(2,1)=2 ; node_patch_of_edge(0,1)=1
-        do edge=2, Maxedge
-            node_patch_of_edge(1,edge)=node_patch_of_edge(2,edge-1)
-            node_patch_of_edge(2,edge)=node_patch_of_edge(2,edge-1)+2
-            node_patch_of_edge(0,edge)=node_patch_of_edge(0,edge-1)+2
-        enddo        
-        
-        deallocate(node_xy_original,num_edge_of_node)
-        
+    
     elseif (geo_model==5) then !************cylinder*****************
         
         Delta_ll=  2.0d0*pi/Maxedge
@@ -476,16 +401,16 @@ subroutine geo_modeling_CURV()
             node_patch_of_edge(0,edge)=node_patch_of_edge(0,edge-1)+2
         enddo  		
 
-		Ncorner = 4
-		allocate(corner_points(2,Ncorner))
-		corner_points(1,1) = -L/2
-		corner_points(2,1) = 0
-		corner_points(1,2) = L/2
-		corner_points(2,2) = 0
-		corner_points(1,3) = -(L/2-L3/sqrt(2d0))
-		corner_points(2,3) = (L3)/sqrt(2d0)		
-		corner_points(1,4) = (L/2-L3/sqrt(2d0))
-		corner_points(2,4) = (L3)/sqrt(2d0)			
+		! Ncorner = 4
+		! allocate(corner_points(2,Ncorner))
+		! corner_points(1,1) = -L/2
+		! corner_points(2,1) = 0
+		! corner_points(1,2) = L/2
+		! corner_points(2,2) = 0
+		! corner_points(1,3) = -(L/2-L3/sqrt(2d0))
+		! corner_points(2,3) = (L3)/sqrt(2d0)		
+		! corner_points(1,4) = (L/2-L3/sqrt(2d0))
+		! corner_points(2,4) = (L3)/sqrt(2d0)			
 
     elseif (geo_model==11) then  !*****longer cup*****
 		L1 = 1

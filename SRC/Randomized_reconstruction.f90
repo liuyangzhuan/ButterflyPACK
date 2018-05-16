@@ -7,7 +7,7 @@ contains
 #define interfacesub subroutine 
 #endif	
 
-subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,operand1) 
+subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,operand1) 
 
     use MODULE_FILE
 	use misc
@@ -37,11 +37,12 @@ subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,
 	complex (kind=8), allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:)
 	complex (kind=8)::ctemp1,ctemp2
 	complex(kind=8),allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
-	integer idx_start_m_ref,option
+	integer idx_start_m_ref
 	class(*):: operand
 	class(*),optional:: operand1
 	character(*)  :: strings	
 	type(matrixblock),allocatable::block_rand(:)
+	type(Hoption)::option
 	
 	interface
 		interfacesub blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
@@ -59,8 +60,6 @@ subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,
 	ctemp1 = 1d0; ctemp2 = 0d0
 	Memory = 0
 	
-
-	
 	do tt = 1,10
 	
 		rank_pre_max = rank0*rankrate**(tt-1)
@@ -77,33 +76,31 @@ subroutine Butterfly_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,
 		
 		n1 = OMP_get_wtime()
 
-		call Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1)	
-		call Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1)
+		call Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option)	
+		call Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option)
 		call Test_Reconstruction_Error(block_rand(1),blocks_o,operand,blackbox_MVP_dat,error_inout,operand1)
 		n2 = OMP_get_wtime()	
 		Time_Reconstruct_inverse = Time_Reconstruct_inverse + n2 - n1
 		
-		call get_randomizedbutterfly_minmaxrank(block_rand(1))
+		call get_butterfly_minmaxrank(block_rand(1))
 		
-		write(*,*)tt,error_inout,block_rand(1)%dimension_rank,block_rand(1)%rankmax,TRIM(strings)
-		
-		if(error_inout>iter_tolerance)then
+#if PRNTlevel >= 2			
+		write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout
+#endif	
+
+		if(error_inout>option%tol_rand)then
 		! if(0)then
-			call get_randomizedbutterfly_minmaxrank(block_rand(1))
+			call get_butterfly_minmaxrank(block_rand(1))
 			rank_new_max = block_rand(1)%rankmax
-			call Delete_randomized_butterfly(block_rand(1))
+			call delete_blocks(block_rand(1))
 			deallocate(block_rand)
 		else 
 			call delete_blocks(blocks_o)
-			call get_randomizedbutterfly_minmaxrank(block_rand(1))
+			call get_butterfly_minmaxrank(block_rand(1))
 			rank_new_max = block_rand(1)%rankmax
 			call copy_delete_randomizedbutterfly(block_rand(1),blocks_o,Memory) 
 			deallocate(block_rand)
-			! call copy_randomizedbutterfly(block_rand(1),blocks_o,Memory) 
-			! call Delete_randomized_butterfly()
-			if(verboselevel>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7)')' '//TRIM(strings)//' ',' rank:',rank_new_max,' Ntrial:',tt,' L_butt:',blocks_o%level_butterfly,' error:',error_inout
-			
-			
+
 			return			
 		end if		
 	end do
@@ -118,7 +115,7 @@ end subroutine Butterfly_randomized
 
 
 
-subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1)
+subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option)
     
     use MODULE_FILE
     implicit none
@@ -131,7 +128,7 @@ subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
     complex(kind=8) ctemp, a, b
     character chara
-	integer level_right_start,num_col,num_row,option
+	integer level_right_start,num_col,num_row
 	
     ! type(matricesblock), pointer :: blocks
     type(RandomBlock), pointer :: random
@@ -154,6 +151,9 @@ subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 	
 	type(matrixblock)::blocks_o,block_rand
 	
+	type(RandomBlock),allocatable :: vec_rand(:)
+	type(Hoption)::option
+	
 	interface
 		interfacesub blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
 			use MODULE_FILE
@@ -173,15 +173,15 @@ subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 	dimension_rank =block_rand%dimension_rank 
 	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
 	
-    allocate (Random_Block(1))
+    allocate (vec_rand(1))
     
-    allocate (Random_Block(1)%RandomVectorLL(0:level_butterfly+2))    
+    allocate (vec_rand(1)%RandomVectorLL(0:level_butterfly+2))    
 	Nbind = 1
 	
 	num_vect_sub = num_vect_subsub*Nbind
 	
-    random=>Random_Block(1)
-	call Init_RandVect_Empty('T',random,num_vect_sub,block_rand)	
+    ! random=>vec_rand(1)
+	call Init_RandVect_Empty('T',vec_rand(1),num_vect_sub,block_rand)	
 	
 	level_right_start = floor_safe(level_butterfly/2d0) !  check here later
 	! ! level_right_start = level_butterfly+1
@@ -204,13 +204,13 @@ subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 			! nth_e = perms(ii)
 			
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
+			call Get_Randomized_Vectors_LL(block_rand,vec_rand(1),blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
 			
 			n1 = OMP_get_wtime()
-			call Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand)
+			call Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand,vec_rand(1),option)
 			n2 = OMP_get_wtime()
 			time_resolve = time_resolve + n2-n1		
 		end do
@@ -219,8 +219,9 @@ subroutine Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 	! deallocate(perms)
 	
 	
-	random=>Random_Block(1)
-	call Delete_RandVect('T',random,level_butterfly)
+	! random=>vec_rand(1)
+	call Delete_RandVect('T',vec_rand(1),level_butterfly)
+	deallocate(vec_rand)
 
     return
     
@@ -228,7 +229,7 @@ end subroutine Reconstruction_LL
 
 
 
-subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1)
+subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option)
     
     use MODULE_FILE
     implicit none
@@ -243,9 +244,10 @@ subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
     character chara
 	integer level_left_start,num_row,num_col
     real*8::n1,n2
+	type(Hoption)::option
 	
     ! type(matricesblock), pointer :: blocks
-    type(RandomBlock), pointer :: random
+    ! type(RandomBlock), pointer :: random
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
 	
@@ -261,6 +263,7 @@ subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 	type(matrixblock)::blocks_o,block_rand
 	class(*):: operand
 	class(*),optional::operand1
+	type(RandomBlock),allocatable :: vec_rand(:)
 	
 	interface
 		interfacesub blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
@@ -288,14 +291,15 @@ subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 	
     ! ! allocate (Random_Block(1))   !  check here later 
     
-    allocate (Random_Block(1)%RandomVectorRR(0:level_butterfly+2))    
+	allocate (vec_rand(1))
+    allocate (vec_rand(1)%RandomVectorRR(0:level_butterfly+2))    
 	
 	Nbind = 1
 	
 	num_vect_sub = num_vect_subsub*Nbind
 	
-    random=>Random_Block(1)
-	call Init_RandVect_Empty('N',random,num_vect_sub,block_rand)
+    ! random=>Random_Block(1)
+	call Init_RandVect_Empty('N',vec_rand(1),num_vect_sub,block_rand)
 
     level_left_start= floor_safe(level_butterfly/2d0)+1   !  check here later
     ! level_left_start = 0
@@ -314,22 +318,22 @@ subroutine Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operan
 			nth_s = (ii-1)*Nbind+1
 			nth_e = ii*Nbind
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
+			call Get_Randomized_Vectors_RR(block_rand,vec_rand(1),blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
 			n2 = OMP_get_wtime()
 			time_getvec = time_getvec + n2-n1	
 			Time_Vector_inverse = Time_Vector_inverse + n2-n1
 			
 			n1 = OMP_get_wtime()		
-			call Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand)
+			call Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand,vec_rand(1),option)
 			n2 = OMP_get_wtime()
 			time_resolve = time_resolve + n2-n1			
 		end do
 	end do
 
-	random=>Random_Block(1)
-	call Delete_RandVect('N',random,level_butterfly)
+	! random=>Random_Block(1)
+	call Delete_RandVect('N',vec_rand(1),level_butterfly)
 	
-	deallocate(Random_Block)
+	deallocate(vec_rand)
 	
     return
     
@@ -355,7 +359,7 @@ subroutine Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_dat
 	integer*8 idx_start
 	real*8::error
 	integer level_c,rowblock,dimension_m 
-	complex(kind=8),allocatable::RandomVectors_Output_ref(:,:),Id(:,:),Vd(:,:)
+	complex(kind=8),allocatable::Vdref(:,:),Id(:,:),Vd(:,:)
 
 	
 	
@@ -380,67 +384,35 @@ subroutine Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_dat
 	level_butterfly=block_rand%level_butterfly
 	num_blocks=2**level_butterfly
 	
-	allocate (Random_Block(1))
-    allocate (Random_Block(1)%RandomVectorRR(0:level_butterfly+2))    
-
 	num_vect = 1
-    random=>Random_Block(1)	
-	
-    ! groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-    ! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1
-    
+
 	mm=0
+	nn=0
 	do i=1, num_blocks
 		mm= mm + size(block_rand%butterflyU(i)%matrix,1)
+		nn= nn + size(block_rand%butterflyV(i)%matrix,1)
 	enddo
 	
 	
-	allocate (RandomVectors_Output_ref(mm,num_vect))		
+	allocate (Vdref(mm,num_vect))		
+	Vdref=0
+	allocate (Id(nn,num_vect))		
+	Id=0
+	allocate (Vd(mm,num_vect))		
+	Vd=0
 	
-	call Init_RandVect_Empty('N',random,num_vect,block_rand)	
+	call RandomMat(nn,num_vect,min(nn,num_vect),Id,0)
 
-	call Get_Randomized_Vectors_RR_Test(block_rand,block_o,operand,blackbox_MVP_dat,num_vect,operand1)
-	
-	
-	k=0
-	do i=1, num_blocks
-		dimension_m=size(block_rand%butterflyU(i)%matrix,1)
-		! !$omp parallel do default(shared) private(ii,jj)
-		do ii=1, dimension_m
-			do jj=1, num_vect
-				RandomVectors_Output_ref(ii+k,jj)=random%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)
-			enddo
-		enddo
-		! !$omp end parallel do
-		k=k+dimension_m
-	enddo 
+	call blackbox_MVP_dat(operand,block_o,'N',mm,nn,num_vect,Id,Vdref,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8),operand1)
 
-	
-	call Butterfly_partial_MVP(block_rand,'N',0,level_butterfly+1,random)
+	call butterfly_block_MVP_randomized_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
 
-	k=0
-	norm3_R=0 ; norm4_R=0
-	do i=1, num_blocks
-		 dimension_m=size(block_rand%butterflyU(i)%matrix,1)
-		 norm1_R=0 ; norm2_R=0
-		 do ii=1, dimension_m
-			do jj =1,num_vect
-				 norm1_R=norm1_R+abs(random%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj))**2
-				 norm2_R=norm2_R+abs(random%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)-RandomVectors_Output_ref(ii+k,jj))**2
-			enddo
- 		 enddo
-		 norm3_R=norm3_R+norm1_R
-		 norm4_R=norm4_R+norm2_R
-		 k=k+dimension_m
-	enddo 
-	error = sqrt(norm4_R/norm3_R)
+	error = fnorm(Vd-Vdref,mm,num_vect)/fnorm(Vdref,mm,num_vect)
 	
 	
-	random=>Random_Block(1)
-	call Delete_RandVect('N',random,level_butterfly)
-	deallocate(Random_Block)
-
-	deallocate(RandomVectors_Output_ref)
+	deallocate(Vdref)
+	deallocate(Vd)
+	deallocate(Id)
 	
     return                
 
@@ -449,7 +421,7 @@ end subroutine Test_Reconstruction_Error
 
 
 
-subroutine Get_Randomized_Vectors_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
+subroutine Get_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
 
     use MODULE_FILE
     ! use lapack95
@@ -466,7 +438,8 @@ subroutine Get_Randomized_Vectors_LL(block_rand,blocks_o,operand,blackbox_MVP_da
 	integer header_m, header_n, tailer_m, tailer_n
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_right_start
-	type(RandomBlock), pointer :: random
+	! type(RandomBlock), pointer :: random
+	type(RandomBlock) :: vec_rand
 	integer Nsub,Ng
 	integer,allocatable:: mm_end(:),nn_end(:)
 	
@@ -564,13 +537,13 @@ subroutine Get_Randomized_Vectors_LL(block_rand,blocks_o,operand,blackbox_MVP_da
 	
 	
 	k=0
-	random=>random_Block(1)
+	! random=>random_Block(1)
 	do i=1, num_blocks
 		mm=size(block_rand%butterflyU(i)%matrix,1)
 		! !$omp parallel do default(shared) private(ii,jj)
 		do ii=1, mm
 			do jj=1, num_vect_sub
-				random%RandomVectorLL(0)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
+				vec_rand%RandomVectorLL(0)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -583,7 +556,7 @@ subroutine Get_Randomized_Vectors_LL(block_rand,blocks_o,operand,blackbox_MVP_da
 		! !$omp parallel do default(shared) private(ii,jj)
 		do ii=1, nn
 			do jj=1, num_vect_sub
-				random%RandomVectorLL(level_butterfly+2)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
+				vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -607,7 +580,7 @@ end subroutine Get_Randomized_Vectors_LL
 
 
 
-subroutine Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
+subroutine Get_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,operand1)
 
     use MODULE_FILE
     ! use lapack95
@@ -624,7 +597,8 @@ subroutine Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_da
 	! integer header_m, header_n, tailer_m, tailer_n
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_left_start
-	type(RandomBlock), pointer :: random
+	! type(RandomBlock), pointer :: random
+	type(RandomBlock) :: vec_rand
 	integer Nsub,Ng,groupm_start,groupn_start
 	integer,allocatable::mm_end(:),nn_end(:)
 	
@@ -723,13 +697,13 @@ subroutine Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_da
 
 	
 	k=0
-	random=>random_Block(1)
+	! random=>random_Block(1)
 	do i=1, num_blocks
 		nn=size(block_rand%butterflyV(i)%matrix,1)
 		! !$omp parallel do default(shared) private(ii,jj)
 		do ii=1, nn
 			do jj=1, num_vect_sub
-				random%RandomVectorRR(0)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
+				vec_rand%RandomVectorRR(0)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -742,7 +716,7 @@ subroutine Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_da
 		! !$omp parallel do default(shared) private(ii,jj)
 		do ii=1, mm
 			do jj=1, num_vect_sub
-				random%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
+				vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -763,142 +737,6 @@ subroutine Get_Randomized_Vectors_RR(block_rand,blocks_o,operand,blackbox_MVP_da
 
 end subroutine Get_Randomized_Vectors_RR
 
-
-subroutine Get_Randomized_Vectors_RR_Test(block_rand,blocks_o,operand,blackbox_MVP_dat,num_vect_sub,operand1)
-
-    use MODULE_FILE
-    ! use lapack95
-	use misc
-    implicit none
-    
-    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
-    integer mm1,nn1,mm,nn,mn,level_butterfly,groupm_start,groupn_start
-    character chara
-    complex(kind=8) ctemp, ctemp1, ctemp2
-
-    real*8,allocatable :: Singular(:)
-
-	integer*8 idx_start   
-    integer dimension_rank
-    ! integer header_nn
-	! integer header_n, tailer_n
-	
-	type(RandomBlock), pointer :: random
-	
-	type(matrixblock)::blocks_o,block_rand
-	class(*)::operand
-	class(*),optional::operand1	
-	integer num_vect_sub
-	integer,allocatable::mm_end(:),nn_end(:)
-	
-	interface
-		interfacesub blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
-			use MODULE_FILE
-			implicit none
-			class(*)::operand	
-			class(*),optional::operand1	
-			type(matrixblock)::block_o
-			character trans
-			integer M, N, num_vect_sub
-			complex(kind=8) :: Vin(:,:), Vout(:,:),a,b
-		end interfacesub blackbox_MVP_dat
-	end interface
-	
-    level_butterfly=block_rand%level_butterfly
-    num_blocks=2**level_butterfly
-    allocate (RandomVectors_InOutput(3))
-
-	groupm_start=blocks_o%row_group*2**level_butterfly
-	groupn_start=blocks_o%col_group*2**level_butterfly	
-
-	allocate(mm_end(0:num_blocks))
-	mm_end=0
-	allocate(nn_end(0:num_blocks))
-	nn_end=0
-    mm1=0
-	nn1=0	
-	do i=1, num_blocks
-		if(allocated(blocks_o%ButterflyU) .and. size(blocks_o%ButterflyU)==num_blocks)then
-			mm1 = size(blocks_o%butterflyU(i)%matrix,1)
-			nn1=size(blocks_o%ButterflyV(i)%matrix,1)
-		else 	
-			mm1=basis_group(groupm_start+i-1)%tail-basis_group(groupm_start+i-1)%head+1
-			nn1=basis_group(groupn_start+i-1)%tail-basis_group(groupn_start+i-1)%head+1
-		endif	
-		mm_end(i)=mm_end(i-1)+mm1
-		nn_end(i)=nn_end(i-1)+nn1		
-	end do	
-	mm = mm_end(num_blocks)
-	nn = nn_end(num_blocks)
-	
-	dimension_rank =block_rand%dimension_rank 
-
-	allocate (RandomVectors_InOutput(1)%vector(nn,num_vect_sub))
-    allocate (RandomVectors_InOutput(2)%vector(mm,num_vect_sub))
-	allocate (RandomVectors_InOutput(3)%vector(mm,num_vect_sub))
-	do ii =1,3
-		RandomVectors_InOutput(ii)%vector = 0
-	end do	 
-	 
-	! groupn_start=groupn*2**(level_butterfly)
-	! header_nn=basis_group(groupn_start)%head
-	! idx_start = 1
-	
-	do i=1, num_blocks			
-		! header_n=basis_group(groupn_start+i-1)%head
-		! tailer_n=basis_group(groupn_start+i-1)%tail
-		! nn=tailer_n-header_n+1
-		! k=header_n-header_nn	
-		call RandomMat(nn_end(i)-nn_end(i-1),num_vect_sub,min(nn_end(i)-nn_end(i-1),num_vect_sub),RandomVectors_InOutput(1)%vector(nn_end(i-1)+1:nn_end(i),1:num_vect_sub),0)
-	end do
-
-	! get the right multiplied vectors
-	! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-    ! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-	
-	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8),operand1)
-
-	
-	k=0
-	random=>random_Block(1)
-	do i=1, num_blocks
-		nn=size(block_rand%butterflyV(i)%matrix,1)
-		!$omp parallel do default(shared) private(ii,jj)
-		do ii=1, nn
-			do jj=1, num_vect_sub
-				random%RandomVectorRR(0)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
-			enddo
-		enddo
-		!$omp end parallel do
-		k=k+nn
-	enddo 
-
-	k=0
-	do i=1, num_blocks
-		mm=size(block_rand%butterflyU(i)%matrix,1)
-		!$omp parallel do default(shared) private(ii,jj)
-		do ii=1, mm
-			do jj=1, num_vect_sub
-				random%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
-			enddo
-		enddo
-		!$omp end parallel do
-		k=k+mm
-	enddo 
-	
-    !$omp parallel do default(shared) private(i)
-    do i=1, 3
-        deallocate (RandomVectors_InOutput(i)%vector)
-    enddo
-    !$omp end parallel do
-    deallocate (RandomVectors_InOutput)		
-
-	deallocate(mm_end)
-	deallocate(nn_end)	
-	
-    return                
-
-end subroutine Get_Randomized_Vectors_RR_Test
 
 
 
@@ -958,6 +796,8 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
 		groupm=blocks_B%row_group    ! Note: row_group and col_group interchanged here   
 		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+		
+		if(mm+nn/=N)write(*,*)'d3d',mm,nn,N
 		call assert(mm+nn==N,'mm+nn/=N')  
 		
 		mv=size(Vout,1)
@@ -1204,8 +1044,8 @@ subroutine butterfly_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_
    
    type is (hobf)
 
-		block_off1 => ho_bf%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2-1)%LL(1)%matrices_block(1)	
-		block_off2 => ho_bf%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2)%LL(1)%matrices_block(1)			
+		block_off1 => ho_bf1%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2-1)%LL(1)%matrices_block(1)	
+		block_off2 => ho_bf1%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2)%LL(1)%matrices_block(1)			
 		
 		groupn=block_off1%col_group    ! Note: row_group and col_group interchanged here   
 		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
@@ -1254,6 +1094,242 @@ subroutine butterfly_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_
    
    
 end subroutine butterfly_block_MVP_inverse_minusBC_dat
+
+
+
+
+subroutine butterfly_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
+   use MODULE_FILE
+   ! use lapack95
+   ! use blas95
+   implicit none
+   integer level, ii, M, N, num_vect_sub,mv,nv
+   character trans
+   complex(kind=8) :: Vin(:,:), Vout(:,:)
+   complex(kind=8),allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vbuff1(:,:),Vout_tmp(:,:)
+   complex(kind=8) :: ctemp1,ctemp2,a,b
+   type(matrixblock)::block_Xn
+   integer groupn,groupm,mm,nn
+   class(*)::schulz_op
+   class(*),optional::operand1
+   type(matrixblock)::block_o
+   real*8::scale_new
+
+   select TYPE(schulz_op)   
+   type is (schulz_operand)
+	   select TYPE(operand1)
+	   type is (integer)
+			
+			groupn=block_Xn%col_group    ! Note: row_group and col_group interchanged here   
+			nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
+			groupm=block_Xn%row_group    ! Note: row_group and col_group interchanged here   
+			mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+			call assert(mm==nn,'block nonsquare')
+			
+			if(schulz_op%order==2)then
+				mv=size(Vout,1)
+				nv=size(Vout,2)
+				allocate(Vout_tmp(mv,nv))
+				Vout_tmp = Vout		
+				
+				allocate(Vin_tmp(N,num_vect_sub))
+				Vin_tmp = Vin
+				Vout = 0  
+
+				allocate(Vbuff(nn,num_vect_sub))
+				Vbuff = 0			
+				
+				
+				if(trans=='N')then			
+					ctemp1=1.0d0 ; ctemp2=0.0d0
+					! XnR
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,operand1)
+					
+					! AXnR
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2)
+					Vout = 	Vbuff+Vout	
+					
+					! (2-AXn)R
+					Vbuff = 2*Vin-Vout
+					
+					! Xn(2-AXn)R
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,operand1)					
+
+				else if(trans=='T')then
+					ctemp1=1.0d0 ; ctemp2=0.0d0
+					! RXn
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,operand1)				
+					
+					! RXnA
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vout,Vbuff,ctemp1,ctemp2)
+					Vbuff=	Vout+Vbuff
+					
+					! RXnAXn
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vin,ctemp1,ctemp2,operand1)
+					
+					! 2RXn - RXnAXn
+					Vout = 2*Vout - Vin
+				end if			
+
+				
+				Vin = Vin_tmp
+
+				scale_new=schulz_op%scale*(2-schulz_op%scale)
+				
+				Vout = Vout-Vin*scale_new ! Xn(2-AXn)-I
+				
+				deallocate(Vin_tmp)
+				deallocate(Vbuff)  
+			
+			else if(schulz_op%order==3)then
+				
+				mv=size(Vout,1)
+				nv=size(Vout,2)
+				allocate(Vout_tmp(mv,nv))
+				Vout_tmp = Vout		
+				
+				allocate(Vin_tmp(nn,num_vect_sub))
+				Vin_tmp = Vin
+				Vout = 0  
+
+				allocate(Vbuff(nn,num_vect_sub))
+				Vbuff = 0				
+				allocate(Vbuff1(nn,num_vect_sub))
+				Vbuff1 = 0				
+			
+			
+			
+				if(trans=='N')then			
+					ctemp1=1.0d0 ; ctemp2=0.0d0
+					
+					! AXnR
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,operand1)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2)
+					Vbuff1 = 	Vbuff+Vbuff1	
+					
+					
+					! (AXn)^2R
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,operand1)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2)
+					Vout = 	Vout+Vbuff
+					
+					! (3-3AXn+(AXn)^2)R
+					Vbuff1 = 3*Vin-3*Vbuff1+Vout
+					
+					! Xn(3-3AXn+(AXn)^2)R
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff1,Vout,ctemp1,ctemp2,operand1)					
+
+				else if(trans=='T')then
+					ctemp1=1.0d0 ; ctemp2=0.0d0
+					! RXn
+					Vout=Vin
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vout,Vin,ctemp1,ctemp2,operand1)				
+					
+					! RXn*AXn
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2)
+					Vbuff=	Vin+Vbuff
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,operand1)
+
+					! RXn*(AXn)^2
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2)
+					Vbuff=	Vbuff1+Vbuff
+					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,operand1)
+
+					
+					! RXn*(3-3AXn+(AXn)^2)
+					Vout = 3*Vin - 3*Vbuff1+Vout
+				end if				
+			
+			
+				Vin = Vin_tmp
+
+				scale_new=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
+				
+				Vout = Vout-Vin*scale_new ! Xn(2-AXn)-I
+				
+				deallocate(Vin_tmp)
+				deallocate(Vbuff)  			
+				deallocate(Vbuff1)  			
+						
+			endif
+
+
+			Vout = a*Vout + b*Vout_tmp	
+			deallocate(Vout_tmp)			
+
+	   end select
+   class default
+		write(*,*)"unexpected type"
+		stop
+	   
+   end select
+   
+   
+end subroutine butterfly_block_MVP_schulz_dat
+
+
+
+
+subroutine butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
+   use MODULE_FILE
+   ! use lapack95
+   ! use blas95
+   implicit none
+   integer level, ii, M, N, num_vect_sub,mv,nv
+   character trans,trans_new
+   real*8::eps,memory
+   complex(kind=8) :: Vin(:,:), Vout(:,:)
+   complex(kind=8),allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:),matrixtmp(:,:)
+   complex(kind=8) :: ctemp1,ctemp2,a,b
+   type(matrixblock)::block_Xn
+   integer groupn,groupm,mm,nn
+   class(*)::schulz_op
+   class(*),optional::operand1
+   type(matrixblock)::block_o
+
+   select TYPE(schulz_op)   
+   type is (schulz_operand)
+		select TYPE(operand1)
+		type is (integer)
+			eps=0.8d0
+			ctemp1=1d0
+			ctemp2=0d0
+			if(operand1==1)then ! X0
+				Vin=conjg(Vin)
+				if(trans=='N')trans_new='T'
+				if(trans=='T')trans_new='N'				
+				call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				Vout = Vout + Vin
+				Vin=conjg(Vin)
+				Vout=conjg(Vout)
+				schulz_op%scale=(2d0-eps)/schulz_op%A2norm**2d0
+				Vout = Vout*schulz_op%scale
+				
+
+				
+				! if(trans=='N')trans_new='T'
+				! if(trans=='T')trans_new='N'				
+				! call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				! Vout = Vin - Vout/schulz_op%A2norm	
+
+				
+				
+				! call copy_butterfly(schulz_op%matrices_block,block_o,memory)
+				! call Butterfly_inverse_IplusButter_woodbury(block_o,memory)
+				
+				! call butterfly_block_MVP_randomized_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				! Vout = Vout + Vin
+	
+				
+			else ! Xn
+				call butterfly_block_MVP_randomized_dat(block_Xn,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				Vout=	Vout+Vin*schulz_op%scale					
+			endif
+			
+		end select	   
+   end select	   
+			
+end subroutine butterfly_block_MVP_schulz_Xn_dat
 
 
 
@@ -1345,12 +1421,12 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 					! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
 						! write(*,*)level,ii
-						groupm_diag = ho_bf%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+						groupm_diag = ho_bf1%levels(level)%BP(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 
-						call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 		
 					end do
@@ -1362,12 +1438,12 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 					n1 = OMP_get_wtime()
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
 						! write(*,*)level,ii
-						groupm_diag = ho_bf%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+						groupm_diag = ho_bf1%levels(level)%BP_inverse_schur(ii)%row_group/2 ! Note: row_group and col_group interchanged here   
 
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 						
-						call OneL_block_MVP_inverse_dat(ho_bf,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))
+						call OneL_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))
 
 					end do		
 					n2 = OMP_get_wtime()
@@ -1415,10 +1491,10 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 					n1 = OMP_get_wtime() ! comment: will this omp cause segment fault?
 					! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
-						groupm_diag = ho_bf%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+						groupm_diag = ho_bf1%levels(level)%BP(ii)%row_group ! Note: row_group and col_group interchanged here   				
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
-						call fullmat_block_MVP_randomized_dat(ho_bf%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 
 					end do
@@ -1428,10 +1504,10 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 				else 
 					n1 = OMP_get_wtime()
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
-						groupm_diag = ho_bf%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+						groupm_diag = ho_bf1%levels(level)%BP_inverse_schur(ii)%row_group/2 ! Note: row_group and col_group interchanged here   				
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
-						call OneL_block_MVP_inverse_dat(ho_bf,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))					
+						call OneL_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))					
 					end do
 					n2 = OMP_get_wtime()
 					! time_tmp = time_tmp + n2 - n1	
@@ -1806,13 +1882,13 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					n1 = OMP_get_wtime()
 					! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
-						groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+						groupm_diag = ho_bf1%levels(level)%BP(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 						
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 						
-						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)		
 					end do
 					! !$omp end parallel do
@@ -1823,7 +1899,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					n1 = OMP_get_wtime()
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
 						! write(*,*)level,ii
-						groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
+						groupm_diag = ho_bf1%levels(level)%BP_inverse_schur(ii)%row_group/2 ! Note: row_group and col_group interchanged here   
 
 						
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
@@ -1864,10 +1940,10 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					n1 = OMP_get_wtime()
 					! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
-						groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+						groupm_diag = ho_bf1%levels(level)%BP(ii)%row_group ! Note: row_group and col_group interchanged here   				
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
-						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 					end do
 					! !$omp end parallel do
@@ -1876,7 +1952,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 				else 
 					n1 = OMP_get_wtime()
 					do ii = idx_start_diag,idx_start_diag+N_diag-1
-						groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
+						groupm_diag = ho_bf1%levels(level)%BP_inverse_schur(ii)%row_group/2 ! Note: row_group and col_group interchanged here   				
 						idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 						idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
 						call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub))					
@@ -1985,58 +2061,54 @@ subroutine OneL_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,V
 	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
 	groupm=block_off1%row_group    ! Note: row_group and col_group interchanged here   
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+	
+	if(mm+nn/=N)write(*,*)'d33d',mm,nn,N
+	
 	call assert(mm+nn==N,'mm+nn/=N')  
 		
-   if(schurinv==0)then
-		write(*,*)'schurinv=0 removed '
-		stop
-		! block_schur => ho_bf1%levels(level)%matrices_block_inverse(ii)
-		! call butterfly_block_MVP_randomized_dat(block_schur,trans,N,N,num_vect_sub,&
-		! &Vin(1:N,1:num_vect_sub),Vout(1:N,1:num_vect_sub),ctemp1,ctemp2)
-		! Vout(1:N,1:num_vect_sub) = Vin(1:N,1:num_vect_sub) + Vout(1:N,1:num_vect_sub)
-   else 
-		
-		if(trans=='N')then
-			call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
-			
-			! write(2111,*)abs(Vout)
-			
-			call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)			
-			Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
-			Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
 
-			! write(2112,*)abs(Vin)			
-			
-			call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)			
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-			
-			! write(2113,*)abs(Vout)
-			! stop
-			
-		else if(trans=='T')then
-			call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
-			
-			call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)				
-			Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
-			Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
-			
-			call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-			
-		end if
-   end if
+		
+	if(trans=='N')then
+		call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
+		&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
+		
+		! write(2111,*)abs(Vout)
+		
+		call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
+		&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)			
+		Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
+		Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
+
+		! write(2112,*)abs(Vin)			
+		
+		call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
+		&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)			
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
+		
+		! write(2113,*)abs(Vout)
+		! stop
+		
+	else if(trans=='T')then
+		call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
+		&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
+		
+		call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
+		&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)				
+		Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
+		Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
+		
+		call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
+		&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
+		
+	end if
+
 
 
    Vin = Vin_tmp
@@ -2074,59 +2146,57 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
 	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1     
 	groupm=bplus_off1%row_group    ! Note: row_group and col_group interchanged here   
 	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+	
+	if(mm+nn/=N)write(*,*)'dd',mm,nn,N
+	
 	call assert(mm+nn==N,'mm+nn/=N')  
 		
-   if(schurinv==0)then
-		write(*,*)'schurinv=0 removed '
-		stop
-		! block_o => ho_bf1%levels(level)%matrices_block_inverse(ii)
-		! call butterfly_block_MVP_randomized_dat(block_o,trans,N,N,num_vect_sub,&
-		! &Vin(1:N,1:num_vect_sub),Vout(1:N,1:num_vect_sub),ctemp1,ctemp2)
-		! Vout(1:N,1:num_vect_sub) = Vin(1:N,1:num_vect_sub) + Vout(1:N,1:num_vect_sub)
-   else 
-		bplus_o => ho_bf1%levels(level)%BP_inverse_schur(ii)
-		if(trans=='N')then
-			call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
-			
-			! write(2111,*)abs(Vout)
-			
-			call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)			
-			Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
-			Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
+  
+	bplus_o => ho_bf1%levels(level)%BP_inverse_schur(ii)
+	if(trans=='N')then
+		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
+		&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
+		
+		! write(2111,*)abs(Vout)
+		
+		
+		
+		call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
+		&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)			
+		Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
+		Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
 
-			! write(2112,*)abs(Vin)			
-			
-			call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)			
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-			
-			! write(2113,*)abs(Vout)
-			! stop
-			
-		else if(trans=='T')then
-		! write(*,*)'good1'
-			call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
-		! write(*,*)'good2'	
-			call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)				
-			Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
-			Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
-		! write(*,*)'good3'	
-			call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-		! write(*,*)'good4'	
-		end if
-   end if
+		! write(2112,*)abs(Vin)			
+		
+		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
+		&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)			
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
+		
+		! write(2113,*)abs(Vout)
+		! stop
+		
+	else if(trans=='T')then
+	! write(*,*)'good1'
+		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
+		&Vin(1+mm:N,1:num_vect_sub),Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
+	! write(*,*)'good2'	
+		call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
+		&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2)				
+		Vin(1:mm,1:num_vect_sub) = Vout(1:mm,1:num_vect_sub) + Vin(1:mm,1:num_vect_sub)
+		Vin(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub) 
+	! write(*,*)'good3'	
+		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
+		&Vin(1:mm,1:num_vect_sub),Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2)
+		Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+		Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
+	! write(*,*)'good4'	
+	end if
+  
 
 
    Vin = Vin_tmp
@@ -2345,7 +2415,7 @@ end subroutine Bplus_block_MVP_BBplus_dat
 
 	
 
-subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,operand1)
+subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,operand1)
 
    use MODULE_FILE
    ! use lapack95
@@ -2371,6 +2441,7 @@ subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operan
 	class(*):: operand
 	class(*),optional:: operand1
 	character(*)  :: strings
+	type(Hoption)::option
 
 	interface
 		interfacesub blackbox_MVP_dat(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
@@ -2522,7 +2593,7 @@ subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operan
 				
 				! write(*,*)mm,nn,rmax,'didi'
 				
-				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,LS_tolerance,SVD_tolerance_factor)				
+				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_SVD)				
 				rankthusfar = max(rankthusfar,rank)
 				! write(*,*)'yani 4'
 				do ii=1,rank
@@ -2575,7 +2646,7 @@ subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operan
 				
 				! write(*,*)tt,rmax,rank,'Sblock',error_inout
 				
-				if(error_inout>iter_tolerance*1d-1)then
+				if(error_inout>option%tol_rand*1d-1)then
 					if(min(mm,nn)==rmax)then
 						write(*,*)tt,rmax,strings,error_inout,rank
 						write(*,*)'no need to increase rmax, try increase RandomizedSVD tolerance'
@@ -2584,16 +2655,17 @@ subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operan
 					deallocate(matU_glo)
 					deallocate(matV_glo)
 				else
-					if(verboselevel>=2)write(*,'(A33,A8,I4,A8,I2,A7,Es14.7)')' Onesub ',' rank:',rank,'Ntrial:',tt,' error:',error_inout		
-					error_avr_glo = error_avr_glo + error_inout
-					error_cnt = error_cnt + 1
+#if PRNTlevel >= 2				
+					write(*,'(A33,A8,I4,A8,I2,A7,Es14.7)')' Onesub ',' rank:',rank,'Ntrial:',tt,' error:',error_inout
+#endif					
+
 					! write(*,*)bb_o,error_inout,rmax,rank,'good'
 					exit
 				end if
 				!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!	
 			end do
 
-			if(error_inout>iter_tolerance*1d-1)then
+			if(error_inout>option%tol_rand*1d-1)then
 				write(*,*)'matSub_glo no correct, needs more work'
 				stop
 			end if
@@ -2605,7 +2677,7 @@ subroutine MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operan
 			idx_start_m_ref = idx_start_m_loc + idx_start_m - 1
 			idx_end_m_ref = idx_end_m_loc + idx_start_m - 1	
 			
-			if(TwoLayerOnly==1)then
+			if(option%TwoLayerOnly==1)then
 				ll=2
 				Nactive = 0
 				do bb = 1,operand1%LL(ll)%Nbound
@@ -2653,7 +2725,7 @@ end subroutine MultiLrandomized_Onesubblock
 
 
 
-subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox_MVP_dat_inner,rank0_outter,rankrate_outter,blackbox_MVP_dat_outter,error_inout,strings)
+subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox_MVP_dat_inner,rank0_outter,rankrate_outter,blackbox_MVP_dat_outter,error_inout,strings,option)
 
    use MODULE_FILE
    ! use lapack95
@@ -2664,8 +2736,8 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
     ! type(blockplus),pointer::bplus
     type(blockplus)::bplus_o
 	integer:: ii,ll,bb
-    real*8 rtemp,error,Memory,n2,n1,rate,error_inout,rankrate_inner,rankrate_outter	
-	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall,M,N
+    real*8 rtemp,error,Memory,n2,n1,rate,error_inout,err_avr,rankrate_inner,rankrate_outter	
+	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall,M,N,err_cnt
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	complex(kind=8) ctemp, ctemp1, ctemp2	
 	integer level_c,rowblock,rank_new_max,rank0_inner,rank0_outter
@@ -2673,6 +2745,7 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 	class(*)::operand
 	character(*)  :: strings
 	integer rankthusfar
+	type(Hoption)::option
 	
 	interface
 		interfacesub blackbox_MVP_dat_inner(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
@@ -2699,9 +2772,7 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 		
 	end interface	
 	
-	
-	! bplus =>  ho_bf%levels(level_c)%BP_inverse_schur(rowblock)
-	
+	error_inout=0
 	! Memory = 0	
 	call assert(bplus_o%Lplus>=2,'this is not a multi Bplus in Buplus_randomized')
 	
@@ -2709,8 +2780,7 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 	
 	! write(*,*)'hhhhh1',Bplus_randomized(1)%LL(1)%matrices_block(1)%level
 	n1 = OMP_get_wtime()
-	error_cnt = 0
-	error_avr_glo = 0
+
 	rankthusfar = 0	
 	do bb =1,Bplus_randomized(1)%LL(2)%Nbound
 		! ! write(*,*)bb,Bplus_randomized(1)%LL(2)%Nbound,'dddd'
@@ -2723,9 +2793,8 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 		! ho_bf1%ind_lv = level_c
 		! ho_bf1%ind_bk = rowblock
 		
-		call MultiLrandomized_Onesubblock(rank0_inner,rankrate_inner,rankthusfar,block_o,operand,blackbox_MVP_dat_inner,error_inout,strings,Bplus_randomized(1))		
-		
-		
+		call MultiLrandomized_Onesubblock(rank0_inner,rankrate_inner,rankthusfar,block_o,operand,blackbox_MVP_dat_inner,error,strings,option,Bplus_randomized(1))		
+		error_inout = max(error_inout, error)
 		! write(*,*)'go'
 	end do
 	! call Test_Error_RR_Inner_Exact(bplus_o)
@@ -2744,8 +2813,10 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 	level_butterfly=int((maxlevel_for_blocks-bplus_o%level)/2)*2
 	! rank0_outter = max(block_off1%rankmax,block_off2%rankmax)
 	! rate_outter=1.2d0
-	call Butterfly_randomized(level_butterfly,rank0_outter,rankrate_outter,Bplus_randomized(1)%LL(1)%matrices_block(1),operand,blackbox_MVP_dat_outter,error_inout,'Outter',Bplus_randomized(1)) 	
+	call Butterfly_randomized(level_butterfly,rank0_outter,rankrate_outter,Bplus_randomized(1)%LL(1)%matrices_block(1),operand,blackbox_MVP_dat_outter,error,'Outter',option,Bplus_randomized(1))
+	error_inout = max(error_inout, error)
 
+	
 	call delete_Bplus(bplus_o)
 	call copy_delete_Bplus(Bplus_randomized(1),bplus_o,Memory)
 	deallocate(Bplus_randomized)
@@ -2756,12 +2827,68 @@ subroutine Buplus_randomized(bplus_o,operand,rank0_inner,rankrate_inner,blackbox
 		rank_new_max = max(rank_new_max,bplus_o%LL(ll)%rankmax)
 	end do	
 	
-	if(verboselevel>=1)write(*,'(A20,A8,I3,A8,I3,A11,Es14.7)')strings,' rank:',rank_new_max,' L_butt:',bplus_o%LL(1)%matrices_block(1)%level_butterfly,' error_avr:',error_avr_glo/error_cnt
 	
+	
+#if PRNTlevel >= 2
+	write(*,'(A20,A8,I3,A8,I3,A11,Es14.7)')strings,' rank:',rank_new_max,' L_butt:',bplus_o%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
+#endif	
     return
 
 end subroutine Buplus_randomized
 
+
+
+subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory)
+
+    use MODULE_FILE
+    ! use lapack95
+	! use blas95
+    implicit none
+    
+    integer level_c,rowblock,kover,rank,kk1,kk2
+	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
+    integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,index_j,index_i
+    real*8 a,b,c,d,Memory
+    complex (kind=8) ctemp
+	type(matrixblock)::block_o
+	complex (kind=8), allocatable::matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),matrix_eye(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:)
+	real*8, allocatable:: Singular(:)
+    integer, allocatable :: ipiv(:)
+	
+
+	nn = size(block_o%ButterflyV(1)%matrix,1)
+	rank = size(block_o%ButterflyV(1)%matrix,2)
+
+	call assert(size(block_o%ButterflyV(1)%matrix,2)==size(block_o%ButterflyU(1)%matrix,2),'rank not correct in woodbury')
+
+	allocate(matrix_small(rank,rank))
+	allocate(matrix_eye(rank,rank))
+	matrix_eye = 0
+	do ii=1,rank
+	matrix_eye(ii,ii) = 1
+	end do	
+	call gemmTN_omp(block_o%ButterflyV(1)%matrix,block_o%ButterflyU(1)%matrix,matrix_small,rank,nn,rank)
+	matrix_small = matrix_eye+matrix_small
+	allocate(ipiv(rank))
+	call getrff90(matrix_small,ipiv)
+	call getrif90(matrix_small,ipiv)	
+	deallocate(ipiv)		
+		
+	allocate(matrixtemp1(nn,rank))	
+		
+		
+	call gemm_omp(block_o%ButterflyU(1)%matrix,matrix_small,matrixtemp1,nn,rank,rank)	
+	block_o%ButterflyU(1)%matrix = 	-matrixtemp1
+		
+	deallocate(matrixtemp1,matrix_small,matrix_eye)
+		
+	Memory = 0	
+	Memory = Memory + SIZEOF(block_o%ButterflyV(1)%matrix)/1024.0d3
+	Memory = Memory + SIZEOF(block_o%ButterflyU(1)%matrix)/1024.0d3
+
+    return
+
+end subroutine Butterfly_inverse_IplusButter_woodbury
 
 
 

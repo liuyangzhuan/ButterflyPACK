@@ -18,24 +18,7 @@ subroutine RCS_bistatic_SURF()
     real*8 a(3),x(integral_points),y(integral_points),z(integral_points),w(integral_points)
     
     integer edge,edge_m,edge_n
-         
-!     if (preconditioner==0) then
-!         open(100,file='VV_bistatic_N.txt')
-!     elseif (preconditioner==1) then
-!         if (Diag_level==1) then
-!             open(100,file='VV_bistatic_D1.txt')
-!         elseif (Diag_level==2) then
-!             open(100,file='VV_bistatic_D2.txt')
-!         endif
-!     elseif (preconditioner==2) then
-!         if (SAI_level==1) then
-!             open(100,file='VV_bistatic_S1.txt')
-!         elseif (SAI_level==2) then
-!             open(100,file='VV_bistatic_S2.txt')
-!         elseif (SAI_level==3) then
-!             open(100,file='VV_bistatic_S3.txt')
-!         endif
-!     endif
+    
     open (100, file='VV_bistatic.txt')
 	Current = Current2com(:,1)		
     theta=90.
@@ -62,23 +45,6 @@ subroutine RCS_bistatic_SURF()
 	
 	
    
-!     if (preconditioner==0) then
-!         open(1000,file='HH_bistatic_N.txt')
-!     elseif (preconditioner==1) then
-!          if (Diag_level==1) then
-!             open(1000,file='HH_bistatic_D1.txt')
-!         elseif (Diag_level==2) then
-!             open(1000,file='HH_bistatic_D2.txt')
-!         endif
-!     elseif (preconditioner==2) then
-!         if (SAI_level==1) then
-!             open(1000,file='HH_bistatic_S1.txt')
-!         elseif (SAI_level==2) then
-!             open(1000,file='HH_bistatic_S2.txt')
-!         elseif (SAI_level==3) then
-!             open(1000,file='HH_bistatic_S3.txt')
-!         endif
-!     endif
     open (1000, file='HH_bistatic.txt')
 	Current = Current2com(:,2)	    
     do i=0, RCS_sample

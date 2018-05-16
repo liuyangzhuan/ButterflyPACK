@@ -92,15 +92,21 @@ module MODULE_FILE
 		 type(onelplus),pointer:: LL(:) 
 	 end type blockplus
 	 
-	 
+
+	 type schulz_operand
+		type(matrixblock):: matrices_block
+		real*8::A2norm,scale
+		real*8,allocatable::diags(:)
+		integer order
+	 end type schulz_operand
 	
 	 type cascadingfactors
 		integer level
 		integer N_block_forward
 		integer N_block_inverse
-		type(matrixblock),pointer:: matrices_block(:)	
-		type(matrixblock),pointer:: matrices_block_inverse(:)		
-		type(matrixblock),pointer:: matrices_block_inverse_schur(:)		
+		! type(matrixblock),pointer:: matrices_block(:)	
+		! type(matrixblock),pointer:: matrices_block_inverse(:)		
+		! type(matrixblock),pointer:: matrices_block_inverse_schur(:)		
 		type(blockplus),pointer:: BP(:)
 		type(blockplus),pointer:: BP_inverse(:)
 		type(blockplus),pointer:: BP_inverse_schur(:)
@@ -108,7 +114,7 @@ module MODULE_FILE
 
 	 
 	type hobf
-		integer Maxlevel_for_blocks
+		integer Maxlevel,N
 		integer ind_lv,ind_bk
 		type(cascadingfactors),allocatable::levels(:)	 
 	end type hobf 
@@ -135,28 +141,33 @@ module MODULE_FILE
          type(butterfly_Kerl), allocatable :: RandomVectorRR(:)
          type(butterfly_Kerl), allocatable :: RandomVectorLL(:)
      end type RandomBlock
-     
-     ! type matrixblock
-         ! integer dimension_m
-         ! integer dimension_n
-         ! integer dimension_rank
-		 ! integer rankmax,rankmin
-         ! integer level_butterfly
-		 ! complex(kind=8),allocatable:: KerInv(:,:)									
-         ! type(butterflymatrix),allocatable :: ButterflyU(:)
-         ! type(butterflymatrix),allocatable :: ButterflyV(:)
-         ! type(butterflymatrix),allocatable :: ButterflyMiddle(:,:)			 
-         ! type(butterfly_Kerl),allocatable :: ButterflyKerl(:)
-     ! end type matrixblock
-
+	 
+	 type Hoption
+		real*8 tol_Rdetect
+		real*8 tol_SVD
+		real*8 tol_LS
+		real*8 tol_rand
+		real*8 tol_itersol
+		real*8 touch_para
+		
+		integer N_iter
+		integer precon
+		integer:: TwoLayerOnly 
+		integer:: LnoBP 
+		integer xyzsort
+		integer::level_check
+		integer::Nmin_leaf
+		integer::schulzorder
+		integer::schulzlevel
+	 end type
+	 
+	 
      real*8, allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:)
      integer,allocatable:: node_of_patch(:,:),node_patch_of_edge(:,:)
      real*8,allocatable:: normal_of_patch(:,:)
      real*8,allocatable:: xyz(:,:)
      complex(kind=8),allocatable:: current2com(:,:),current(:),current_pre(:),vector_Vinc(:,:),voltage(:)
 	 
-	 integer error_cnt
-	 real*8 error_avr_glo
      real*8 wa,wb,wc
      real*8 pi,impedence
      real*8 wavenum,wavelength
@@ -166,34 +177,34 @@ module MODULE_FILE
      complex(kind=8) junit
      integer maxpatch,maxnode,maxedge, geo_model, RCS_sample
 	 real*8 maxedgelength,minedgelength
-     integer Maxlevel, Maxlevel_for_blocks, Refined_level, mesh_normal
+     integer Maxlevel, Maxlevel_for_blocks, mesh_normal
      integer RCS_static, Recompress_method, Forward_recompress
      integer integral_points, SAI_level, Diag_level
      integer maxvector_near, maxvector_SAI, Maxvector_Diagblock
-     integer preconditioner, Forward_compress_elem,adaptive_flag,reducelevel_flag,verboselevel,directschur  
+     integer Forward_compress_elem,reducelevel_flag,directschur  
      complex(kind=8) Test_value
-     integer Test_blocks, Test_i, Test_j, Preset_level_butterfly, Optimizing_forward
-	 real*8 Bigvalue, ACA_tolerance_forward, SVD_tolerance_forward,SVD_tolerance_factor, ACA_tolerance_split, SVD_tolerance_split,relax_lamda,Rank_detection_factor
-	 real*8 SVD_tolerance_add, ACA_tolerance_add, Discret, levelpara_control, ACA_tolerance_aggregate, SVD_tolerance_aggregate
-	 real*8 touch_para, rank_approximate_para1, rank_approximate_para2, rank_approximate_para3
-     integer Maxgroup,Maxblock, Split_method, Forward_method, Add_method, Aggregate_method, Add_method_of_base_level
-     integer Nmin_leaf, Static, Fast_inverse, rank_control_forward, rank_control_add, rank_control_split, rank_control_aggregate
+     integer Test_blocks, Test_i, Test_j
+	 real*8 Bigvalue,SVD_tolerance_forward,SVD_tolerance_factor, ACA_tolerance_split, SVD_tolerance_split
+	 real*8 SVD_tolerance_add, ACA_tolerance_add, Discret, ACA_tolerance_aggregate, SVD_tolerance_aggregate
+	 real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3
+     integer Maxgroup,Maxblock, Split_method, Forward_method, Add_method, Aggregate_method
+     integer Static, rank_control_forward, rank_control_add, rank_control_split, rank_control_aggregate
      real*8 Time_Direct_LLD, Time_Add_Multiply_Baselevel, Time_Multiply_Butterfly, Time_Solve_XLM
      real*8 Time_Split_Blocks, Time_Aggregate_Blocks, Time_Aggregate_blocks_OPT, Time_Add_Butterfly,Time_Rightmultiply_inverse_randomized,Time_Inversion_diagnal_randomized
 	 real*8 Time_Init_forward,Time_Vector_forward,Time_Reconstruct_forward,Time_Oneblock_forward,Time_Init_inverse,Time_Vector_inverse,Time_Reconstruct_inverse,Time_Oneblock_inverse,Time_InvertBlock,Time_Init_HODLR_MVP
      real*8::mem_target,mem_recons,time_indexarray,time_leastsquare,time_kernelupdate,time_buttermul,time_buttermulinv
 	 real*8::time_getvec,time_halfbuttermul,time_resolve,time_memcopy,time_gemm,time_tmp,time_gemm1
 	 
-     type(RandomBlock),pointer :: Random_Block(:)
+     ! type(RandomBlock),pointer :: Random_Block(:)
      type(basisgroup),allocatable:: basis_group(:)
      type(matrixblock),allocatable:: matrices_block(:,:)
 	 type(matrixblock),allocatable:: agent_block(:)
 	 type(blockplus),allocatable:: agent_bplus(:)
-     type(matrixblock),pointer :: butterfly_block_randomized(:)
+     ! type(matrixblock),pointer :: butterfly_block_randomized(:)
      type(blockplus),pointer :: Bplus_randomized(:)
 	 ! type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
 	 type(hobf)::ho_bf,ho_bf_copy
-	 type(partitionedblocks),allocatable::partitioned_blocks(:)
+	 ! type(partitionedblocks),allocatable::partitioned_blocks(:)
      type(vectorsblock),allocatable:: vectors_block(:)
 	 type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	 ! type(vectorsblock),pointer:: RandomVectors_InOutput_tmp(:)
@@ -209,23 +220,22 @@ module MODULE_FILE
      real*8,allocatable:: Single_1(:),Single_2(:),Single_3(:),Single_4(:)
      integer(kind=8),allocatable:: CPU_clocks(:)
      integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
-	 real*8:: LS_tolerance, iter_tolerance,tfqmr_tolerance,tfqmr_tolerance_solving,up_tolerance
-	 integer:: schurinv,SolvingMethod,level_tmp,rank_tmp,ForwardSymmetricFlag,SblockSymmetricFlag
+	 integer:: schurinv,rank_tmp,ForwardSymmetricFlag,SblockSymmetricFlag
 	 real*8:: Memory_int_vec,Memory_tfqmr_vec
 	 complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	 complex(kind=8), allocatable :: Basis_split(:,:)
 	 integer::Ncorner, ranktmp_glo
 	 real*8,allocatable::corner_points(:,:),edge_cen(:,:)
 	 real*8::corner_radius
-	 integer xyzsort
+
 	 integer,parameter:: LplusMax=5
-	 integer:: LnoBP 
-	 integer:: TwoLayerOnly 
+	 
+	 
 	 real*8:: CFIE_alpha
 		 
 	 real*8:: Origins(3)
 	 complex(kind=8), allocatable :: matU_glo(:,:), matV_glo(:,:),matSub_glo(:,:),matZ_glo(:,:)
-	 integer explicitflag, fullmatflag, Nin1,Nout1,Nin2,Nout2, vecCNT
+	 integer fullmatflag, Nin1,Nout1,Nin2,Nout2, vecCNT
 	 integer,allocatable:: new2old(:)
 	 integer,allocatable:: basis_group_pre(:,:)
 	 
@@ -250,8 +260,3 @@ module MODULE_FILE
 	 
 end module
 
-module Super_Block
-    integer,allocatable :: index_of_superblock(:,:)
-    logical,allocatable :: nearorfar_of_superblock(:,:)
-    integer Maxsuperblock
-end module

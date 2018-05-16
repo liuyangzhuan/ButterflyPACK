@@ -3,11 +3,7 @@ use Butterfly_inversion
 use Randomized_reconstruction
 contains 
 
-
-
-
-
-recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADflag)
+recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,option,error_inout)
 
     use MODULE_FILE
 	use misc
@@ -17,12 +13,13 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 	
     implicit none
     
-	integer level_c,rowblock,ADflag
+	integer level_c,rowblock
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
-    integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,rank
+    integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,rank,err_cnt
     character chara
-    real*8 T0
-    type(matrixblock),pointer::blocks_io,blocks_A,blocks_B,blocks_C,blocks_D
+    real*8 T0,err_avr
+    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
+    type(matrixblock)::blocks_io
     type(matrixblock)::blocks_schur
     integer rank_new_max,rank0
 	real*8:: rank_new_avr,error,rate
@@ -31,73 +28,74 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(level,ADfl
 	integer itermax,ntry
 	real*8:: n1,n2,Memory
 	complex (kind=8), allocatable::matrix_small(:,:)
+	type(Hoption)::option
+	type(partitionedblocks)::partitioned_block
 	
-	if(ADflag==1)then
-		blocks_io=> partitioned_blocks(level)%blocks_D
-	else 
-		blocks_io=> partitioned_blocks(level)%blocks_A
-	end if
+	error_inout=0
 	
 	! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
 	
 	if(blocks_io%level_butterfly==0)then
 		call Butterfly_inverse_IplusButter_woodbury(blocks_io,Memory)
 		return
-    else 
-		blocks_A => partitioned_blocks(level+1)%blocks_A
-		blocks_B => partitioned_blocks(level+1)%blocks_B
-		blocks_C => partitioned_blocks(level+1)%blocks_C
-		blocks_D => partitioned_blocks(level+1)%blocks_D	
+    else
+		allocate(partitioned_block%blocks_A)
+		allocate(partitioned_block%blocks_B)
+		allocate(partitioned_block%blocks_C)
+		allocate(partitioned_block%blocks_D)
+	
+		blocks_A => partitioned_block%blocks_A
+		blocks_B => partitioned_block%blocks_B
+		blocks_C => partitioned_block%blocks_C
+		blocks_D => partitioned_block%blocks_D	
+		
 		! split into four smaller butterflies
 		call Butterfly_split(blocks_io, blocks_A, blocks_B, blocks_C, blocks_D)
 		
 		! partitioned inverse of D
-		call Butterfly_inverse_partitionedinverse_IplusButter(level+1,1)
+		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_D,option,error)
+		error_inout = max(error_inout, error)
 		
 		! construct the schur complement A-BD^-1C
-		if(reducelevel_flag==1)then
-			level_butterfly = blocks_A%level_butterfly
-		else 
+		
+		! if(reducelevel_flag==1)then
+			! level_butterfly = blocks_A%level_butterfly
+		! else 
 			! level_butterfly = int((Maxlevel-blocks_A%level)/2)*2
 			level_butterfly = Maxlevel-blocks_A%level
-		end if
+		! end if
 		! write(*,*)'A-BDC',level_butterfly,level
 		
 
-		call get_minmaxrank_ABCD(partitioned_blocks(level+1),rank0)
+		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_blocks(level+1),butterfly_block_MVP_inverse_A_minusBDinvC_dat,error_inout,'A-BD^-1C') 
-					
-		
-		error_cnt = error_cnt + 1
-		error_avr_glo = error_avr_glo + error_inout
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,butterfly_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option) 
+		error_inout = max(error_inout, error)
 		
 		! partitioned inverse of the schur complement 
-		call Butterfly_inverse_partitionedinverse_IplusButter(level+1,2)
-		
+		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_A,option,error)
+		error_inout = max(error_inout, error)		
 		
 		! construct the inverse
-		if(reducelevel_flag==1)then
-			level_butterfly = blocks_io%level_butterfly
-		else 
+		! if(reducelevel_flag==1)then
+			! level_butterfly = blocks_io%level_butterfly
+		! else 
 			level_butterfly = Maxlevel-blocks_io%level
 			if(level==0)level_butterfly = int((Maxlevel-blocks_io%level)/2)*2
-		end if
+		! end if
 		! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
 		
-		! call Butterfly_inverse_ABCD(level_butterfly,blocks_io,partitioned_blocks(level+1),error_inout) 
-		
-		call get_minmaxrank_ABCD(partitioned_blocks(level+1),rank0)
+		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_blocks(level+1),butterfly_block_MVP_inverse_ABCD_dat,error_inout,'ABCDinverse') 
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,butterfly_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option) 
+		error_inout = max(error_inout, error)		
 		
 		
-		error_cnt = error_cnt + 1
-		error_avr_glo = error_avr_glo + error_inout
+		
 		! stop
-		
-		if(level==0 .and. verboselevel>=1)write(*,'(A23,A6,I3,A8,I3,A7,Es14.7)')' SchurI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
-			
+#if PRNTlevel >= 2		
+		if(level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' SchurI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
+#endif			
 		call delete_blocks(blocks_A)
 		call delete_blocks(blocks_B)
 		call delete_blocks(blocks_C)
@@ -110,59 +108,15 @@ end subroutine Butterfly_inverse_partitionedinverse_IplusButter
 
 
 
-subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory)
 
-    use MODULE_FILE
-    ! use lapack95
-	! use blas95
-    implicit none
-    
-    integer level_c,rowblock,kover,rank,kk1,kk2
-	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
-    integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,index_j,index_i
-    real*8 a,b,c,d,Memory
-    complex (kind=8) ctemp
-	type(matrixblock)::block_o
-	complex (kind=8), allocatable::matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),matrix_eye(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:)
-	real*8, allocatable:: Singular(:)
-    integer, allocatable :: ipiv(:)
-	
 
-	nn = size(block_o%ButterflyV(1)%matrix,1)
-	rank = size(block_o%ButterflyV(1)%matrix,2)
 
-	call assert(size(block_o%ButterflyV(1)%matrix,2)==size(block_o%ButterflyU(1)%matrix,2),'rank not correct in woodbury')
 
-	allocate(matrix_small(rank,rank))
-	allocate(matrix_eye(rank,rank))
-	matrix_eye = 0
-	do ii=1,rank
-	matrix_eye(ii,ii) = 1
-	end do	
-	call gemmTN_omp(block_o%ButterflyV(1)%matrix,block_o%ButterflyU(1)%matrix,matrix_small,rank,nn,rank)
-	matrix_small = matrix_eye+matrix_small
-	allocate(ipiv(rank))
-	call getrff90(matrix_small,ipiv)
-	call getrif90(matrix_small,ipiv)	
-	deallocate(ipiv)		
-		
-	allocate(matrixtemp1(nn,rank))	
-		
-		
-	call gemm_omp(block_o%ButterflyU(1)%matrix,matrix_small,matrixtemp1,nn,rank,rank)	
-	block_o%ButterflyU(1)%matrix = 	-matrixtemp1
-		
-	deallocate(matrixtemp1,matrix_small,matrix_eye)
-		
-	Memory = 0	
-	Memory = Memory + SIZEOF(block_o%ButterflyV(1)%matrix)/1024.0d3
-	Memory = Memory + SIZEOF(block_o%ButterflyU(1)%matrix)/1024.0d3
-	
-	! error_cnt = error_cnt+1
-	
-    return
 
-end subroutine Butterfly_inverse_IplusButter_woodbury
+
+
+
+
 
 
 
@@ -534,9 +488,6 @@ subroutine Butterfly_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		
 	end if
 	
-	! if(verboselevel>=1)write(*,'(A33,I5,A7,I3,I3,I3,I3)')'  In split. L_butt: ',blocks_i%level_butterfly,' rank: ', blocks_A%rankmax,blocks_B%rankmax,blocks_C%rankmax,blocks_D%rankmax
-	
-
 	
 	mm1=basis_group(blocks_A%row_group)%tail-basis_group(blocks_A%row_group)%head+1
 	nn1=basis_group(blocks_A%col_group)%tail-basis_group(blocks_A%col_group)%head+1

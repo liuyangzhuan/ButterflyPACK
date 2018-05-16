@@ -5,7 +5,7 @@ use Butterfly_compress_forward
 contains 
 
 
-subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
+subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors,option)
     
     use MODULE_FILE
     implicit none
@@ -18,24 +18,22 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns,num_vectors)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:)
 	real*8:: rel_error
-	
+	type(Hoption)::option
 	
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
 	type(hobf)::hobf_forward,hobf_inverse
 	complex(kind=8)::x(Ns,num_vectors),b(Ns,num_vectors)
 	complex(kind=8),allocatable::r0_initial(:)
 
-	if(preconditioner/=DIRECT)then
+	if(option%precon/=DIRECT)then
         allocate(r0_initial(1:Ns))	
 		do ii=1,Ns
 		   r0_initial(ii)= random_complex_number()
 		end do			
 		
 		do ii=1,num_vectors
-			N_iter_max = 1000
 			iter = 0
-			rel_error = tfqmr_tolerance_solving
-			call HODLR_Ztfqmr(preconditioner,N_iter_max,Ns,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse)
+			call HODLR_Ztfqmr(option%precon,option%N_iter,Ns,b(:,ii),x(:,ii),option%tol_itersol,iter,r0_initial,hobf_forward,hobf_inverse)
 		end do
 		
 		deallocate(r0_initial)
@@ -93,7 +91,7 @@ end subroutine HODLR_Solution
     d=cmplx(0.0_dp,0.0_dp,dp)
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)    
-    call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+    call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward)
 	! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
 	! r=ytmp
 	call HODLR_ApplyPrecon(precond,nn,ytmp,r,hobf_inverse)	
@@ -107,7 +105,7 @@ end subroutine HODLR_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)    
-    call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
+    call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward)
 	! ! call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
 	! ayo=ytmp
 	call HODLR_ApplyPrecon(precond,nn,ytmp,ayo,hobf_inverse)	
@@ -138,7 +136,7 @@ end subroutine HODLR_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,ye,aye)
-	   call MVM_Z_forward(nn,1,ye,ytmp,hobf_forward)
+	   call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,ye,ytmp,hobf_forward)
 	   ! ! call MVM_Z_factorized(nn,1,ytmp,aye,hobf_inverse)
 	   ! aye=ytmp
 		call HODLR_ApplyPrecon(precond,nn,ytmp,aye,hobf_inverse)	
@@ -176,7 +174,7 @@ end subroutine HODLR_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
-		  call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+		  call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward)
 		  ! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)
 		  ! r=ytmp
 		  call HODLR_ApplyPrecon(precond,nn,ytmp,r,hobf_inverse)	
@@ -214,7 +212,7 @@ end subroutine HODLR_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn,level_c,rowblock,1,yo,ayo)
-		call MVM_Z_forward(nn,1,yo,ytmp,hobf_forward)
+		call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward)
 		! ! call MVM_Z_factorized(nn,1,ytmp,ayo,hobf_inverse)
 		! ayo=ytmp
 		call HODLR_ApplyPrecon(precond,nn,ytmp,ayo,hobf_inverse)	
@@ -224,7 +222,7 @@ end subroutine HODLR_Solution
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn,level_c,rowblock,1,x,r)
-    call MVM_Z_forward(nn,1,x,ytmp,hobf_forward)
+    call MVM_Z_forward('N',nn,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward)
 	
 	! ! call MVM_Z_factorized(nn,1,ytmp,r,hobf_inverse)	 
 	! r=ytmp

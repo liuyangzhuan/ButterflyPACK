@@ -5,14 +5,16 @@ use element_vinc
 use HODLR_Solve
 contains 
 
-subroutine EM_calculating()
+subroutine EM_calculating(option)
     
     use MODULE_FILE
     implicit none
+	type(Hoption)::option
+	
 	if(Kernel==EMCURV)then
-		call EM_calculating_CURV()
+		call EM_calculating_CURV(option)
 	elseif(Kernel==EMSURF)then
-		call EM_calculating_SURF()
+		call EM_calculating_SURF(option)
 	else
 		write(*,*)'unknown Kernel for EM_calculating'
 		stop
@@ -21,7 +23,7 @@ subroutine EM_calculating()
 end subroutine EM_calculating  
 
 
-subroutine EM_calculating_SURF()
+subroutine EM_calculating_SURF(option)
     
     use MODULE_FILE
     ! use blas95
@@ -35,6 +37,7 @@ subroutine EM_calculating_SURF()
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
+	type(Hoption)::option
 	
     if (Static==2) then
     
@@ -55,7 +58,7 @@ subroutine EM_calculating_SURF()
         
         T0=secnds(0.0)
         		
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)
 
 		current2com(:,1) = Current
 		
@@ -70,7 +73,7 @@ subroutine EM_calculating_SURF()
         T0=secnds(0.0)
         
 
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)		
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)		
 		
 		current2com(:,2) = Current		
 		
@@ -114,7 +117,7 @@ subroutine EM_calculating_SURF()
 			!$omp end parallel do
         enddo
 		
-		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1,option)
 			
 		do j=0, num_sample 			
 			phi=j*dphi
@@ -149,7 +152,7 @@ end subroutine EM_calculating_SURF
 
 
 
-subroutine EM_calculating_CURV()
+subroutine EM_calculating_CURV(option)
     
     use MODULE_FILE
     ! use blas95
@@ -163,6 +166,7 @@ subroutine EM_calculating_CURV()
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
+	type(Hoption)::option
 	
     if (Static==2) then
     
@@ -181,7 +185,7 @@ subroutine EM_calculating_CURV()
         
         T0=secnds(0.0)
         
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)
 		
 		current2com(:,1) = Current		
 		
@@ -221,7 +225,7 @@ subroutine EM_calculating_CURV()
 			!$omp end parallel do
 		enddo
 		
-		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1)
+		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1,option)
 			
 			
 		do j=0, num_sample 	

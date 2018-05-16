@@ -126,7 +126,7 @@ end function rank_approximate_func
 
 
 
-subroutine H_matrix_structuring(para)
+subroutine H_matrix_structuring(para,option)
     
     use MODULE_FILE
 	use misc
@@ -149,16 +149,17 @@ subroutine H_matrix_structuring(para)
 
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
 	integer dimn
+	type(Hoption)::option
   
     !**********************Maxlevel*******************
     level=0; i=1
-    do while (int(Maxedge/i)>Nmin_leaf)
+    do while (int(Maxedge/i)>option%Nmin_leaf)
         level=level+1
         i=2**level
     enddo
     
     Maxlevel=level
-    Maxlevel_for_blocks=Maxlevel-Refined_level
+    Maxlevel_for_blocks=Maxlevel
     !***************************************************
     
     Maxgroup=2**(Maxlevel+1)-1
@@ -187,17 +188,15 @@ subroutine H_matrix_structuring(para)
     
     Maxblock=(4**Maxlevel_for_blocks-1)*4/3+1
 	
-	ho_bf%Maxlevel_for_blocks=Maxlevel_for_blocks
+	ho_bf%Maxlevel=Maxlevel_for_blocks
+	ho_bf%N=Maxedge
 	allocate(ho_bf%levels(Maxlevel_for_blocks+1))
 
 	do level_c = 1,Maxlevel_for_blocks
 		ho_bf%levels(level_c)%level = level_c
 		ho_bf%levels(level_c)%N_block_forward = 2**level_c
 		ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)
-		allocate(ho_bf%levels(level_c)%matrices_block(ho_bf%levels(level_c)%N_block_forward))
-		allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
-		allocate(ho_bf%levels(level_c)%matrices_block_inverse_schur(ho_bf%levels(level_c)%N_block_inverse))
-		
+
 		allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))		
 		allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
 		allocate(ho_bf%levels(level_c)%BP_inverse_schur(ho_bf%levels(level_c)%N_block_inverse))
@@ -208,9 +207,7 @@ subroutine H_matrix_structuring(para)
 	ho_bf%levels(level_c)%level = level_c
 	ho_bf%levels(level_c)%N_block_forward = 2**(level_c-1)
 	ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)	
-	allocate(ho_bf%levels(level_c)%matrices_block(ho_bf%levels(level_c)%N_block_forward))
-	allocate(ho_bf%levels(level_c)%matrices_block_inverse(ho_bf%levels(level_c)%N_block_inverse))
-	
+
 	allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))	
 	allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
 	
@@ -223,84 +220,43 @@ subroutine H_matrix_structuring(para)
 		do ii = 1, ho_bf%levels(level_c)%N_block_inverse
 			col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group
 			row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group
-			
-			ho_bf%levels(level_c)%matrices_block(ii*2-1)%level = level_c
-			ho_bf%levels(level_c)%matrices_block(ii*2-1)%col_group = col_group*2+1
-			ho_bf%levels(level_c)%matrices_block(ii*2-1)%row_group = row_group*2
-			ho_bf%levels(level_c)%matrices_block(ii*2-1)%style = 2			
-			ho_bf%levels(level_c)%matrices_block(ii*2)%level = level_c
-			ho_bf%levels(level_c)%matrices_block(ii*2)%col_group = col_group*2
-			ho_bf%levels(level_c)%matrices_block(ii*2)%row_group = row_group*2+1
-			ho_bf%levels(level_c)%matrices_block(ii*2)%style = 2		
-
+	
+			! off-diagonal blocks and their updates
 			ho_bf%levels(level_c)%BP(ii*2-1)%level = level_c
 			ho_bf%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
 			ho_bf%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
-		
 			ho_bf%levels(level_c)%BP(ii*2)%level = level_c
 			ho_bf%levels(level_c)%BP(ii*2)%col_group = col_group*2
 			ho_bf%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
 			
-			
-
-			
-			
-			if(level_c/=Maxlevel_for_blocks)then
-			
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-				! ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%style = 2
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
-				! ho_bf%levels(level_c+1)%BP_inverse(ii*2)%style = 2	
-
-			else 
-
-				
-				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%level = level_c+1
-				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%col_group = col_group*2
-				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%row_group = row_group*2
-				ho_bf%levels(level_c+1)%matrices_block(ii*2-1)%style = 1
-				ho_bf%levels(level_c+1)%matrices_block(ii*2)%level = level_c+1
-				ho_bf%levels(level_c+1)%matrices_block(ii*2)%col_group = col_group*2+1
-				ho_bf%levels(level_c+1)%matrices_block(ii*2)%row_group = row_group*2+1
-				ho_bf%levels(level_c+1)%matrices_block(ii*2)%style = 1						
-
+			! schur complement of every two off-diagonal blocks
+			ho_bf%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
+			ho_bf%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
+			ho_bf%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
+	
+			! diagonal blocks and their inverses at bottom level
+			if(level_c==Maxlevel_for_blocks)then
 				ho_bf%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
 				ho_bf%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
 				ho_bf%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
 				ho_bf%levels(level_c+1)%BP(ii*2)%level = level_c+1
 				ho_bf%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
 				ho_bf%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
-
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c+1
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-				! ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%style = 1
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c+1
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-				ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1
-				! ho_bf%levels(level_c+1)%BP_inverse(ii*2)%style = 1	
-				
 			end if
-
+	
+			
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
+			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1				
 		end do
 	end do
-	
 
-	if(schurinv==1)then	
-		do level_c = 1,Maxlevel_for_blocks
-			do ii = 1, ho_bf%levels(level_c)%N_block_inverse
-				ho_bf%levels(level_c)%BP_inverse_schur(ii)%level = ho_bf%levels(level_c)%BP_inverse(ii)%level+1
-				! ho_bf%levels(level_c)%BP_inverse_schur(ii)%style = 2
-				ho_bf%levels(level_c)%BP_inverse_schur(ii)%col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group * 2
-				ho_bf%levels(level_c)%BP_inverse_schur(ii)%row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group * 2
-				
-			end do
-		end do	
-	end if
+	do level_c = 1,Maxlevel_for_blocks+1
+	deallocate(ho_bf%levels(level_c)%BP_inverse)
+	enddo
   
 	allocate(new2old(Maxedge))    
 
@@ -344,12 +300,13 @@ subroutine H_matrix_structuring(para)
 				radius=sqrt(radius)
 				if (radius>radiusmax) then
 					radiusmax=radius
+					center_edge=edge
 				endif			
 			enddo
 			basis_group(group)%radius=radiusmax		
 				
 			if(size(basis_group_pre,1)<2*group+1)then ! if groups not predefined, need to order the points
-				if(xyzsort==1)then !xyz sort		 
+				if(option%xyzsort==1)then !xyz sort		 
 					xyzmin= 1d300
 					xyzmax= -1d300
 					do edge=basis_group(group)%head, basis_group(group)%tail
@@ -380,11 +337,11 @@ subroutine H_matrix_structuring(para)
 					enddo
 					!$omp end parallel do
 
-				else if(xyzsort==2)then ! spherical sort
+				else if(option%xyzsort==2)then ! spherical sort
 					phi_end = 0
 					do edge=basis_group(group)%head, basis_group(group)%tail
 						call Cart2Sph(xyz(1,node_patch_of_edge(0,edge)),xyz(2,node_patch_of_edge(0,edge)),xyz(3,node_patch_of_edge(0,edge)),Origins,r,theta,phi)					
-						if(abs(phi-2*pi)< touch_para*minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
+						if(abs(phi-2*pi)< option%touch_para*minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
 					enddo
 					mm = basis_group(group)%tail - basis_group(group)%head + 1
 					allocate (distance(mm))	
@@ -409,6 +366,19 @@ subroutine H_matrix_structuring(para)
 						end if
 					enddo
 					!$omp end parallel do
+					
+				else if(option%xyzsort==3)then !cobblestone sort
+					
+					mm = basis_group(group)%tail - basis_group(group)%head + 1
+					allocate (distance(mm))	
+					
+					distance(1:mm)=Bigvalue
+					!$omp parallel do default(shared) private(i)
+					do i=basis_group(group)%head, basis_group(group)%tail
+						distance(i-basis_group(group)%head+1)=func_distance(node_patch_of_edge(0,i),node_patch_of_edge(0,center_edge))
+					enddo
+					!$omp end parallel do					
+
 				end if
 				
 				Ninfo_edge=size(node_patch_of_edge,1)-1
@@ -445,10 +415,10 @@ subroutine H_matrix_structuring(para)
 					basis_group(2*group+1)%tail=basis_group(group)%tail
 					
 					
-					if(xyzsort==1)then 
+					if(option%xyzsort==1)then 
 						seperator = xyz(sortdirec,node_patch_of_edge(0,basis_group(2*group)%tail))
 						
-					else 
+					else if(option%xyzsort==2)then  
 						call Cart2Sph(xyz(1,node_patch_of_edge(0,basis_group(2*group)%tail)),xyz(2,node_patch_of_edge(0,basis_group(2*group)%tail)),xyz(3,node_patch_of_edge(0,basis_group(2*group)%tail)),Origins,r,theta,phi)
 						if(sortdirec==1)seperator = theta
 						if(sortdirec==2)then
@@ -487,15 +457,15 @@ subroutine H_matrix_structuring(para)
     enddo
 	
 	
-	do level=0, Maxlevel
-        do group=2**level, 2**(level+1)-1
-            do edge=basis_group(group)%head, basis_group(group)%tail
-				! write(*,*)edge,node_patch_of_edge(0,edge)
-				! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
-				write(113,'(I5,I8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
-			enddo
-        enddo
-    enddo	   
+	! do level=0, Maxlevel
+        ! do group=2**level, 2**(level+1)-1
+            ! do edge=basis_group(group)%head, basis_group(group)%tail
+				! ! write(*,*)edge,node_patch_of_edge(0,edge)
+				! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
+				! write(113,'(I5,I8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
+			! enddo
+        ! enddo
+    ! enddo	   
     !*************************************************************************************
    
 	
@@ -511,7 +481,7 @@ subroutine H_matrix_structuring(para)
 end subroutine H_matrix_structuring
 
 
-subroutine BPlus_structuring()
+subroutine BPlus_structuring(option)
 	use MODULE_FILE
 	use misc
 	implicit none 
@@ -530,7 +500,8 @@ subroutine BPlus_structuring()
 	real*8,allocatable::Centroid_M(:,:),Centroid_N(:,:)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
 	integer Dimn
-
+	type(Hoption)::option
+	
 	Dimn = size(xyz,1)
 	
 	do level_c = 1,Maxlevel_for_blocks+1
@@ -551,17 +522,7 @@ subroutine BPlus_structuring()
 				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group
 				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
 				
-				ho_bf%levels(level_c)%BP_inverse(ii)%Lplus=1
-				allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(LplusMax))
-				do ll=1,LplusMax
-					ho_bf%levels(level_c)%BP_inverse(ii)%LL(ll)%Nbound=0
-				end do	
-				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%Nbound = 1
-				allocate(ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1))
-				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP_inverse(ii)%level
-				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group
-				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group
-				ho_bf%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here				
+						
 				
 			
 			else 
@@ -590,7 +551,7 @@ subroutine BPlus_structuring()
 						
 						level_butterfly = int((Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
 						! write(*,*)'nini',Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,LnoBP
-						if(Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<LnoBP)then
+						if(Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<option%LnoBP)then
 							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 						else 
 							level_BP = ho_bf%levels(level_c)%BP(ii)%level
@@ -614,10 +575,10 @@ subroutine BPlus_structuring()
 									group_m=group_m*2**levelm-1+index_i_m  										
 
 									CNT = 0
-									if(xyzsort==1)then	
+									if(option%xyzsort==1)then	
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<touch_para*minedgelength)then
+											if(measure<option%touch_para*minedgelength)then
 												Isboundary_M(index_i_m) = 1 
 												CNT = CNT + 1
 												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ xyz(1:Dimn,node_patch_of_edge(0,nn))
@@ -630,12 +591,12 @@ subroutine BPlus_structuring()
 										! endif
 										
 										
-									else if(xyzsort==2)then
+									else if(option%xyzsort==2)then
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< touch_para*minedgelength/r)then
+												if(measure< option%touch_para*minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
 													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -651,7 +612,7 @@ subroutine BPlus_structuring()
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< touch_para*minedgelength/r)then
+												if(measure< option%touch_para*minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
 													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -665,6 +626,9 @@ subroutine BPlus_structuring()
 										
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
 										! if(level_c==1)write(*,*)Centroid_M(1,:),CNT,'dddddd'
+									else 
+										write(*,*)'Bplus for other sorting not considered yet'
+										stop
 									end if									
 								end do
 														
@@ -680,10 +644,10 @@ subroutine BPlus_structuring()
 									group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 								
 									CNT = 0
-									if(xyzsort==1)then	
+									if(option%xyzsort==1)then	
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
 											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<touch_para*minedgelength)then
+											if(measure<option%touch_para*minedgelength)then
 												Isboundary_N(index_j_m) = 1 
 												CNT = CNT + 1
 												! write(*,*)nn,index_j_m,'ok'
@@ -693,12 +657,12 @@ subroutine BPlus_structuring()
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
 										
-									else if(xyzsort==2)then
+									else if(option%xyzsort==2)then
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
 											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< touch_para*minedgelength/r)then
+												if(measure< option%touch_para*minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
 													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -714,7 +678,7 @@ subroutine BPlus_structuring()
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< touch_para*minedgelength/r)then
+												if(measure< option%touch_para*minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
 													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
@@ -724,6 +688,9 @@ subroutine BPlus_structuring()
 											end if
 										end do										
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
+									else 
+										write(*,*)'Bplus for other sorting not considered yet'
+										stop
 									end if	
 								end do								
 								

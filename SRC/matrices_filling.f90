@@ -7,7 +7,7 @@ contains
 
 
 
-subroutine matrices_filling(tolerance)
+subroutine matrices_filling(option)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -17,7 +17,7 @@ subroutine matrices_filling(tolerance)
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter
     real T0
-	real*8:: tolerance, rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
+	real*8:: rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
     real*8 Memory_direct_forward,Memory_butterfly_forward
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2
 	complex(kind=8)::ctemp,ctemp1,ctemp2
@@ -27,20 +27,20 @@ subroutine matrices_filling(tolerance)
 	complex(kind=8), allocatable :: UU(:,:), VV(:,:),testin(:,:),testout(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:)
 	real*8,allocatable :: Singular(:)
 	integer level_c,iter,level_cc
-	
+	type(Hoption)::option
 	
     Memory_direct_forward=0
     Memory_butterfly_forward=0
 	tim_tmp = 0	
     !tolerance=0.001
     open (256,file='Info.txt',position='append')
-    write (256,*) 'Forward ACA error threshold',tolerance
-    write (256,*) 'Forward SVD error threshold',SVD_tolerance_forward
+    ! write (256,*) 'Forward ACA error threshold',tolerance
+    write (256,*) 'Forward SVD error threshold',option%tol_SVD
     write (256,*) ''
     close (256)
     write (*,*) ''
-    write (*,*) 'ACA error threshold',tolerance
-    write (*,*) 'SVD error threshold',SVD_tolerance_forward
+    ! write (*,*) 'ACA error threshold',tolerance
+    write (*,*) 'SVD error threshold',option%tol_SVD
     write (*,*) ''
 
     write(*,*) "Filling Leaf-blocks......"
@@ -61,14 +61,14 @@ subroutine matrices_filling(tolerance)
                     write (*,*) 'level',level,'is filling...'
                 endif
 				if(level_c>=Maxlevel_for_blocks)t1=OMP_GET_WTIME()									  
-				call Bplus_compress_N15(ho_bf%levels(level_c)%BP(ii),rtemp)				
+				call Bplus_compress_N15(ho_bf%levels(level_c)%BP(ii),option,rtemp)				
                 
 				if(level_c>=Maxlevel_for_blocks)then
 					t2=OMP_GET_WTIME()
 					tim_tmp = tim_tmp + t2 - t1
 				end if
 				
-				if(level==level_tmp)then
+				if(level==option%level_check)then
 					! call Bplus_randomized_Exact_test(ho_bf%levels(level_c)%BP(ii))
 					
 					rank0_inner=ho_bf%levels(level_c)%BP(ii)%LL(2)%rankmax
@@ -76,7 +76,7 @@ subroutine matrices_filling(tolerance)
 					rank0_outter=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
 					rankrate_outter=1.2d0
 					
-					call Buplus_randomized(ho_bf%levels(level_c)%BP(ii),ho_bf%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact')
+					call Buplus_randomized(ho_bf%levels(level_c)%BP(ii),ho_bf%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option)
 					
 					
 					stop
@@ -95,7 +95,7 @@ subroutine matrices_filling(tolerance)
             endif
 			! write(*,*)level_c,ii,ho_bf%levels(level_c)%N_block_forward
 			
-			! if(level==level_tmp)then
+			! if(level==option%level_check)then
 				! call Butterfly_compress_test(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 			! end if
 			
@@ -104,8 +104,9 @@ subroutine matrices_filling(tolerance)
 	end do	
 	
 	
-	if(preconditioner/=DIRECT)then
-		ho_bf_copy%Maxlevel_for_blocks = ho_bf%Maxlevel_for_blocks
+	if(option%precon/=DIRECT)then
+		ho_bf_copy%Maxlevel = ho_bf%Maxlevel
+		ho_bf_copy%N = ho_bf%N
 		allocate(ho_bf_copy%levels(Maxlevel_for_blocks+1))
 		do level_c = 1,Maxlevel_for_blocks+1
 			ho_bf_copy%levels(level_c)%level = ho_bf%levels(level_c)%level

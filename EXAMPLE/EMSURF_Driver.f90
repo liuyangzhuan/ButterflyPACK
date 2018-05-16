@@ -27,7 +27,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-		
+	type(Hoption)::option	
 		
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -94,48 +94,49 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	CALL getarg(1, DATA_DIR)
 	Kernel = EMSURF	
 	
-	Nmin_leaf=40
+	option%Nmin_leaf=40
 	mesh_normal=1
-	Refined_level=0
+	! Refined_level=0
 	para=0.001
-	levelpara_control=0
-	ACA_tolerance_forward=1d-4
-	SVD_tolerance_forward=1d-4
-	SVD_tolerance_factor=1d-4
-	Rank_detection_factor=3d-5
-    Preset_level_butterfly=0
+	! levelpara_control=0
+	! ACA_tolerance_forward=1d-4
+	option%tol_SVD=1d-4
+	! SVD_tolerance_factor=1d-4
+	option%tol_Rdetect=3d-5
+    ! Preset_level_butterfly=0
 	Scale=1d0
 	wavelength=0.5
 	Discret=0.05
 	Static=1
     RCS_sample=2000
-    Optimizing_forward=0
-    Fast_inverse=0
-    Add_method_of_base_level=2
+    ! Optimizing_forward=0
+    ! Fast_inverse=0
+    ! Add_method_of_base_level=2
     rank_approximate_para1=6.0
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
-	LS_tolerance=1d-12
-	tfqmr_tolerance=1d-6
-	tfqmr_tolerance_solving=3d-3
-	iter_tolerance=5d-3
-	up_tolerance=1d-4
-	relax_lamda=1d0
-	SolvingMethod=1
-	level_tmp=100
-	rank_tmp=7
-	schurinv=1
-	reducelevel_flag=0
-	directschur=1
-	preconditioner=DIRECT
-	verboselevel=2
-	xyzsort=1
-	LnoBP=4
-	TwoLayerOnly=0
+	option%tol_LS=1d-12
+	! tfqmr_tolerance=1d-6
+	option%tol_itersol=3d-3
+	option%N_iter=1000
+	option%tol_rand=5d-3
+	! up_tolerance=1d-4
+	! relax_lamda=1d0
+	! SolvingMethod=1
+	option%level_check=100
+	! rank_tmp=7
+	! schurinv=1
+	! reducelevel_flag=0
+	! directschur=1
+	option%precon=DIRECT
+	! verboselevel=2
+	option%xyzsort=1
+	option%LnoBP=4000
+	option%TwoLayerOnly=0
 	CFIE_alpha=1
-	explicitflag=1
-	fullmatflag=0
-	touch_para=3
+	! explicitflag=1
+	! fullmatflag=0
+	option%touch_para=3
 	
 	! open (90,file='input.txt')
 	! read (90,*)
@@ -174,7 +175,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! read (90,*) schurinv
 	! read (90,*) reducelevel_flag
 	! read (90,*) directschur
-	! read (90,*) preconditioner
+	! read (90,*) option%precon
 	! read (90,*) verboselevel
 	! read (90,*) xyzsort
 	! read (90,*) LnoBP
@@ -188,7 +189,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	!Scale=1.
 	!alpha=0.5
     !wavelength=2.
-    tolerance=ACA_tolerance_forward
+    ! tolerance=ACA_tolerance_forward
     
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
@@ -222,8 +223,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(para)
-	call BPlus_structuring()
+    call H_matrix_structuring(para,option)
+	call BPlus_structuring(option)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -235,20 +236,20 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     write(*,*) "H_matrices filling......"
-    call matrices_filling(tolerance)
+    call matrices_filling(option)
     write(*,*) "H_matrices filling finished"
     write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	write(*,*)t2-t1
 	
     write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(tolerance)
+    call cascading_factorizing(ho_bf,option)
     write(*,*) "Cascading factorizing finished"
     write(*,*) "    "	
 
 
     write(*,*) "EM_calculating......"
-    call EM_calculating()
+    call EM_calculating(option)
     write(*,*) "EM_calculating finished"
     write(*,*) "    "	
 	

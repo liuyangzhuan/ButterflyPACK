@@ -7,6 +7,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	use EM_calculation
 	use matrices_fill
 	use omp_lib
+	use Butterfly_compress_forward
 	use HODLR_randomMVP
     implicit none
 
@@ -23,6 +24,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Ntunnel,kk,black_step,rankmax
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
+	type(Hoption):: option
+	integer:: explicitflag
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -89,46 +92,47 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	Kernel = FULL
 
-	Nmin_leaf=100
+	option%Nmin_leaf=100
 	mesh_normal=1
-	Refined_level=0
+	! Refined_level=0
 	para=0.001
-	levelpara_control=0
-	ACA_tolerance_forward=1d-4
-	SVD_tolerance_forward=1d-4
-	SVD_tolerance_factor=1d-4
-	Rank_detection_factor=1d-4 !3d-5
-    Preset_level_butterfly=0
+	! levelpara_control=0
+	! ACA_tolerance_forward=1d-4
+	option%tol_SVD=1d-4
+	! SVD_tolerance_factor=1d-4
+	option%tol_Rdetect=1d-4 !3d-5
+    ! Preset_level_butterfly=0
 	Scale=1d0
 	wavelength=0.25
 	Discret=0.05
 	Static=2
     RCS_sample=1000
-    Optimizing_forward=0
-    Fast_inverse=0
-    Add_method_of_base_level=2
+    ! Optimizing_forward=0
+    ! Fast_inverse=0
+    ! Add_method_of_base_level=2
     rank_approximate_para1=6.0
     rank_approximate_para2=6.0
     rank_approximate_para3=6.0
-	LS_tolerance=1d-10
-	tfqmr_tolerance=1d-6
-	tfqmr_tolerance_solving=3d-3
-	iter_tolerance=1d0
-	up_tolerance=1
-	relax_lamda=1d0
-	SolvingMethod=1
-	level_tmp=100
-	rank_tmp=7
-	schurinv=1
-	reducelevel_flag=0
-	directschur=1
-	preconditioner=DIRECT
-	verboselevel=2
-	xyzsort=1
-	LnoBP=600
-	TwoLayerOnly=1
+	option%tol_LS=1d-10
+	! tfqmr_tolerance=1d-6
+	option%tol_itersol=3d-3
+	option%N_iter=1000
+	option%tol_rand=1d0
+	! up_tolerance=1
+	! relax_lamda=1d0
+	! SolvingMethod=1
+	option%level_check=100
+	! rank_tmp=7
+	! schurinv=1
+	! reducelevel_flag=0
+	! directschur=1
+	option%precon=DIRECT
+	! verboselevel=2
+	option%xyzsort=1
+	option%LnoBP=600
+	option%TwoLayerOnly=1
 	CFIE_alpha=1
-	explicitflag=1
+	explicitflag=0
 	fullmatflag=1
 
 	
@@ -172,7 +176,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! read (90,*) schurinv
 	! read (90,*) reducelevel_flag
 	! read (90,*) directschur
-	! read (90,*) preconditioner
+	! read (90,*) option%precon
 	! read (90,*) verboselevel
 	! read (90,*) xyzsort
 	! read (90,*) LnoBP
@@ -274,8 +278,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(para)
-	call BPlus_structuring()
+    call H_matrix_structuring(para,option)
+	call BPlus_structuring(option)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -311,7 +315,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
-		call matrices_filling(tolerance)
+		call matrices_filling(option)
 		write(*,*) "H_matrices filling finished"
 		write(*,*) "    "
 		t2 = OMP_get_wtime()   
@@ -326,7 +330,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward(Maxedge,1,Vin(:,1),Vout1(:,1),ho_bf%levels)
+		call MVM_Z_forward('N',Maxedge,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf)
 		
 		do ii=1,Maxedge
 			ctemp = 0d0
@@ -397,7 +401,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		t1 = OMP_get_wtime()	
 		write(*,*) "MVP-based HODLR construction......"		
 		rankmax = 300
-		call HODLR_MVP(rankmax,Memory,error)
+		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,Maxedge,rankmax,Memory,error,option)
 		t2 = OMP_get_wtime()  
 		write(*,*) "MVP-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
 		
@@ -411,7 +415,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call cascading_factorizing(tolerance)
+    ! call cascading_factorizing(ho_bf,option)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 

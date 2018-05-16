@@ -243,51 +243,7 @@ if(allocated(block_i%ButterflyMiddle))then
 end if
 
 end subroutine copy_delete_randomizedbutterfly
-subroutine get_randomizedbutterfly_minmaxrank(block_i)
-use MODULE_FILE
-use misc
-implicit none 
-type(matrixblock)::block_i
 
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly	
-
-
-block_i%rankmin = 100000
-block_i%rankmax = -100000
-
-
-level_butterfly = block_i%level_butterfly
-num_blocks=2**level_butterfly
-
-do level=0, level_butterfly
-	index_ij=0
-	do index_i=1, 2**level
-		do index_j=1, 2**(level_butterfly-level)
-			index_ij=index_ij+1
-			if (level==0) then
-				nn=size(block_i%ButterflyV(index_ij)%matrix,1)
-				rank=size(block_i%ButterflyV(index_ij)%matrix,2)
-				block_i%rankmin = min(block_i%rankmin,rank)
-				block_i%rankmax = max(block_i%rankmax,rank)
-			else                    
-				nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,2)
-				rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,1)
-				block_i%rankmin = min(block_i%rankmin,rank)
-				block_i%rankmax = max(block_i%rankmax,rank)				
-			endif
-			if (level==level_butterfly) then
-				mm=size(block_i%ButterflyU(index_ij)%matrix,1)
-				rank=size(block_i%ButterflyU(index_ij)%matrix,2)
-				block_i%rankmin = min(block_i%rankmin,rank)
-				block_i%rankmax = max(block_i%rankmax,rank)		
-			endif
-		enddo
-	enddo
-enddo
-
-end subroutine get_randomizedbutterfly_minmaxrank
 
 
 
@@ -1088,82 +1044,6 @@ subroutine condition_internalmatrices(random,chara,level,dimension_rank,level_bu
 end subroutine condition_internalmatrices
 
 
-subroutine Delete_randomized_butterfly(block_rand)
-
-    use MODULE_FILE
-	use misc
-	! use lapack95
-	! use blas95
-    use omp_lib
-	
-    implicit none
-    
-	integer level_c,rowblock
-    integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
-    integer num_col, num_row, level, mm, nn, ii, jj
-    character chara
-    real*8 T0
-    type(matrixblock)::block_rand
-    integer rank_new_max
-	real*8:: rank_new_avr,error
-	integer niter
-	real*8:: error_inout
-	integer itermax,levelm,index_i_m,index_j_m
-	! real*8:: n1,n2
-		
-
-    level_butterfly=block_rand%level_butterfly
-    num_blocks=2**level_butterfly
-	
-	
-	if(allocated(block_rand%ButterflyMiddle))then
-		levelm = ceiling_safe(dble(level_butterfly)/2d0)
-		do index_i_m=1, 2**levelm
-			do index_j_m=1, 2**(level_butterfly-levelm)	
-				if(allocated(block_rand%ButterflyMiddle(index_i_m,index_j_m)%matrix))deallocate(block_rand%ButterflyMiddle(index_i_m,index_j_m)%matrix)
-			end do
-		end do
-		deallocate(block_rand%ButterflyMiddle)
-	end if	
-
-
-	if(allocated(block_rand%KerInv))deallocate(block_rand%KerInv)
-	
-	
-	
-	
-    do i=1, num_blocks
-		if(allocated(block_rand%ButterflyU(i)%matrix))deallocate (block_rand%ButterflyU(i)%matrix)
-        if(allocated(block_rand%ButterflyV(i)%matrix))deallocate (block_rand%ButterflyV(i)%matrix)
-    enddo
-    deallocate (block_rand%ButterflyU, block_rand%ButterflyV)
-	
-	if (level_butterfly/=0) then
-        do level=1, level_butterfly
-            num_row=block_rand%ButterflyKerl(level)%num_row
-            num_col=block_rand%ButterflyKerl(level)%num_col
-            do j=1, num_col
-                do i=1, num_row
-					if(allocated(block_rand%ButterflyKerl(level)%blocks(i,j)%matrix))then
-						mm=size(block_rand%ButterflyKerl(level)%blocks(i,j)%matrix,1)
-						nn=size(block_rand%ButterflyKerl(level)%blocks(i,j)%matrix,2)
-						deallocate (block_rand%ButterflyKerl(level)%blocks(i,j)%matrix)
-					end if
-                enddo
-            enddo
-            deallocate (block_rand%ButterflyKerl(level)%blocks)
-        enddo
-        deallocate (block_rand%ButterflyKerl)
-    endif
-    
-    ! deallocate (butterfly_block_randomized)
-    
-    return
-
-end subroutine Delete_randomized_butterfly
-
-
-
 subroutine Delete_RandVect(chara,random,level_butterfly)
 	use MODULE_FILE
 	implicit none 
@@ -1222,7 +1102,7 @@ subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand)
 	type(matrixblock):: block_rand
     
     ! type(matricesblock), pointer :: blocks
-    type(RandomBlock), pointer :: random
+    type(RandomBlock) :: random
     
     level_butterfly=block_rand%level_butterfly
 	
@@ -1340,112 +1220,8 @@ end subroutine Init_RandVect_Empty
 
 
 
-subroutine Butterfly_value_randomized(mi,nj,block_rand,value)
 
-    use MODULE_FILE
-    implicit none
-    
-    integer mm, nn, mi, nj, groupm_start, groupn_start, level_butterfly, flag
-    integer i, j, ii, jj, rank, group_m, group_n, header_mm, header_nn, k, kk
-    integer group, level, mii, njj, rank1, rank2, index_ij, level_blocks, flag1
-    complex(kind=8) ctemp, value
-    
-    type(matrixblock) :: block_rand
-    type(vectorset),allocatable:: vectors_set(:)    
-    integer,allocatable :: group_index_mm(:), group_index_nn(:)
-    
-    level_butterfly=block_rand%level_butterfly
-    
-    allocate (group_index_mm(0:level_butterfly),group_index_nn(0:level_butterfly))
-    
-    flag=0; i=0; k=0
-    do while (flag==0)
-        i=i+1
-        if (size(block_rand%ButterflyU(i)%matrix,1)+k>=mi) then
-            flag=1
-        endif
-        k=k+size(block_rand%ButterflyU(i)%matrix,1)
-    enddo
-    group_index_mm(0)=i
-    mii=mi-k+size(block_rand%ButterflyU(i)%matrix,1)
-    
-    flag=0; j=0; k=0
-    do while (flag==0)
-        j=j+1
-        if (size(block_rand%ButterflyV(j)%matrix,1)+k>=nj) then
-            flag=1
-        endif
-        k=k+size(block_rand%ButterflyV(j)%matrix,1)
-    enddo
-    group_index_nn(0)=j
-    njj=nj-k+size(block_rand%ButterflyV(j)%matrix,1)
-    
-    if (level_butterfly>0) then
-        group_index_mm(1)=group_index_mm(0)
-        group_index_nn(1)= group_index_nn(0)
-        do level=1, level_butterfly-1
-            group_index_mm(level+1)=int((group_index_mm(level)+1)/2)
-            group_index_nn(level+1)=int((group_index_nn(level)+1)/2)
-        enddo
-    endif
-    
-!     if (group_index_mm(0)/=group_m .or. group_index_nn(0)/=group_n) then
-!         write (*,*) 'Butterfly_value_func error1!'
-!         pause
-!         continue
-!     endif
-    
-!     do level=0, level_butterfly
-!         group_index_mm(level)=group_index_mm(level)-group_m*2**level+1
-!         group_index_nn(level)=group_index_nn(level)-group_n*2**level+1
-!     enddo
-    
-    allocate (vectors_set(0:level_butterfly))
-    do level=0, level_butterfly
-        if (level==0) then
-            rank=size(block_rand%ButterflyV(group_index_nn(0))%matrix,2)
-            allocate (vectors_set(level)%vector(rank))
-            !!$omp parallel do default(shared) private(i)
-            do i=1, rank
-                vectors_set(level)%vector(i)=block_rand%ButterflyV(group_index_nn(0))%matrix(njj,i)
-            enddo
-            !!$omp end parallel do
-        else
-            rank1=size(block_rand%ButterflyKerl(level)%blocks(group_index_mm(level_butterfly-level+1),group_index_nn(level))%matrix,2)
-            rank2=size(block_rand%ButterflyKerl(level)%blocks(group_index_mm(level_butterfly-level+1),group_index_nn(level))%matrix,1)
-            allocate (vectors_set(level)%vector(rank2))
-            !!$omp parallel do default(shared) private(i,j,ctemp)
-            do i=1, rank2
-                ctemp=0
-                do j=1, rank1
-                    ctemp=ctemp+block_rand%ButterflyKerl(level)%blocks(group_index_mm(level_butterfly-level+1),group_index_nn(level))%matrix(i,j)*vectors_set(level-1)%vector(j)
-                enddo
-                vectors_set(level)%vector(i)=ctemp
-            enddo
-            !!$omp end parallel do
-            deallocate (vectors_set(level-1)%vector)
-        endif
-        if (level==level_butterfly) then
-            rank=size(vectors_set(level)%vector,1)
-            ctemp=0
-            !!$omp parallel do default(shared) private(i) reduction(+:ctemp)
-            do i=1, rank
-                ctemp=ctemp+block_rand%butterflyU(group_index_mm(0))%matrix(mii,i)*vectors_set(level)%vector(i)
-            enddo
-            !!$omp end parallel do
-            value=ctemp
-            deallocate (vectors_set(level)%vector)
-        endif
-    enddo
-    deallocate (vectors_set)        
-     
-    return
-
-end subroutine Butterfly_value_randomized
-
-
-
-subroutine check_results(blocks3,chara,blocks1,blocks2)
+subroutine check_results(blocks3,chara,blocks1,blocks2,block_rand)
 
     use MODULE_FILE
     implicit none
@@ -1455,6 +1231,7 @@ subroutine check_results(blocks3,chara,blocks1,blocks2)
     complex(kind=8) ctemp1, ctemp2, ctemp3, ctemp4
     real*8 rtemp
     character chara
+	type(matrixblock)::block_rand
     
     !write(*,*) 'Butterfly addition multiplication test: block', blocks3
     
@@ -1488,7 +1265,7 @@ subroutine check_results(blocks3,chara,blocks1,blocks2)
              ctemp3=ctemp3-ctemp4
          endif
          ctemp1=ctemp3
-         call Butterfly_value_randomized(ii,jj,butterfly_block_randomized(1),ctemp2)
+         call Butterfly_value(ii,jj,block_rand,ctemp2)
          write(*,*) blocks3, ii, jj, abs(ctemp1-ctemp2)/abs(ctemp1), abs(ctemp1-ctemp2)/abs(ctemp2)
          pause
      enddo
@@ -1614,6 +1391,10 @@ subroutine Initialize_Butterfly_randomized(level_butterfly,rankmax,groupm,groupn
 	 
 
     block_rand%dimension_rank=dimension_rank
+	
+    block_rand%style=2
+    block_rand%row_group=-1
+    block_rand%col_group=-1
 
 	groupm_start=groupm*2**level_butterfly
 	groupn_start=groupn*2**level_butterfly
