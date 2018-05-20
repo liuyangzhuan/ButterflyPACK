@@ -7,7 +7,7 @@ contains
 
 
 
-subroutine matrices_filling(option)
+subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -26,18 +26,18 @@ subroutine matrices_filling(option)
 	integer, allocatable :: ipiv(:)
 	complex(kind=8), allocatable :: UU(:,:), VV(:,:),testin(:,:),testout(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:)
 	real*8,allocatable :: Singular(:)
-	integer level_c,iter,level_cc
+	integer level_c,iter,level_cc,level_butterfly
 	type(Hoption)::option
+	type(Hstat)::stats
+	type(hobf)::ho_bf1
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
     Memory_direct_forward=0
     Memory_butterfly_forward=0
 	tim_tmp = 0	
     !tolerance=0.001
-    open (256,file='Info.txt',position='append')
-    ! write (256,*) 'Forward ACA error threshold',tolerance
-    write (256,*) 'Forward SVD error threshold',option%tol_SVD
-    write (256,*) ''
-    close (256)
     write (*,*) ''
     ! write (*,*) 'ACA error threshold',tolerance
     write (*,*) 'SVD error threshold',option%tol_SVD
@@ -48,35 +48,35 @@ subroutine matrices_filling(option)
     T0=secnds(0.0)
     level=0
     flag=0
-	ForwardSymmetricFlag = 0
-	allocate (rankmax_of_level(Maxlevel_for_blocks))
-	rankmax_of_level = 0
+	! ForwardSymmetricFlag = 0
+	allocate (stats%rankmax_of_level(ho_bf1%Maxlevel))
+	stats%rankmax_of_level = 0
 	
 	
-	do level_c = 1,Maxlevel_for_blocks+1
-		do ii =1,ho_bf%levels(level_c)%N_block_forward
-            if (level_c/=Maxlevel_for_blocks+1) then
-                if (ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+	do level_c = 1,ho_bf1%Maxlevel+1
+		do ii =1,ho_bf1%levels(level_c)%N_block_forward
+            if (level_c/=ho_bf1%Maxlevel+1) then
+                if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+                    level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
                     write (*,*) 'level',level,'is filling...'
                 endif
-				if(level_c>=Maxlevel_for_blocks)t1=OMP_GET_WTIME()									  
-				call Bplus_compress_N15(ho_bf%levels(level_c)%BP(ii),option,rtemp)				
+				if(level_c>=ho_bf1%Maxlevel)t1=OMP_GET_WTIME()	
+				call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn)				
                 
-				if(level_c>=Maxlevel_for_blocks)then
+				if(level_c>=ho_bf1%Maxlevel)then
 					t2=OMP_GET_WTIME()
 					tim_tmp = tim_tmp + t2 - t1
 				end if
 				
 				if(level==option%level_check)then
-					! call Bplus_randomized_Exact_test(ho_bf%levels(level_c)%BP(ii))
+					! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 					
-					rank0_inner=ho_bf%levels(level_c)%BP(ii)%LL(2)%rankmax
+					rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
 					rankrate_inner=1.2d0
-					rank0_outter=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
+					rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
 					rankrate_outter=1.2d0
-					
-					call Buplus_randomized(ho_bf%levels(level_c)%BP(ii),ho_bf%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option)
+					level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
+					call Buplus_randomized(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats)
 					
 					
 					stop
@@ -86,39 +86,24 @@ subroutine matrices_filling(option)
 				Memory_butterfly_forward=Memory_butterfly_forward+rtemp
             else
 
-                if (ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+                if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+                    level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
                     write (*,*) 'level',level,'is filling...'
                 endif
-                call full_filling(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-                Memory_direct_forward=Memory_direct_forward+SIZEOF(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+                call full_filling(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn)
+                Memory_direct_forward=Memory_direct_forward+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
             endif
-			! write(*,*)level_c,ii,ho_bf%levels(level_c)%N_block_forward
+			! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
 			
 			! if(level==option%level_check)then
-				! call Butterfly_compress_test(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn)
 			! end if
 			
 		end do
-		write(*,*)  'rankmax_of_level so far:',rankmax_of_level
+		write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level
 	end do	
-	
-	
-	if(option%precon/=DIRECT)then
-		ho_bf_copy%Maxlevel = ho_bf%Maxlevel
-		ho_bf_copy%N = ho_bf%N
-		allocate(ho_bf_copy%levels(Maxlevel_for_blocks+1))
-		do level_c = 1,Maxlevel_for_blocks+1
-			ho_bf_copy%levels(level_c)%level = ho_bf%levels(level_c)%level
-			ho_bf_copy%levels(level_c)%N_block_forward = ho_bf%levels(level_c)%N_block_forward
-			allocate(ho_bf_copy%levels(level_c)%BP(ho_bf_copy%levels(level_c)%N_block_forward))
-			do ii = 1, ho_bf_copy%levels(level_c)%N_block_forward
-				call copy_Bplus(ho_bf%levels(level_c)%BP(ii),ho_bf_copy%levels(level_c)%BP(ii))
-			end do
-		end do		
-	end if
-	
-	write(*,*)  'rankmax_of_level:',rankmax_of_level
+		
+	write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
 	write (*,*) ''
 	write (*,*) 'Total filling time:',secnds(T0),'Seconds'
 
@@ -132,7 +117,7 @@ subroutine matrices_filling(option)
 end subroutine matrices_filling
 
 
-subroutine full_filling(blocks)
+subroutine full_filling(blocks,msh,ker,element_Zmn)
 
     use MODULE_FILE
     implicit none
@@ -142,7 +127,10 @@ subroutine full_filling(blocks)
     integer head_m, head_n, tail_m, tail_n
     complex(kind=8) value_Z
 	type(matrixblock)::blocks
-
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
+	
     group_m=blocks%row_group ! Note: row_group and col_group interchanged here   
     group_n=blocks%col_group
     head_m=basis_group(group_m)%head
@@ -157,7 +145,7 @@ subroutine full_filling(blocks)
 	!$omp parallel do default(shared) private(j,i,value_Z)
 	do j=head_n, tail_n
 		do i=head_m, tail_m
-			call element_Zmn(i,j,value_Z)
+			call element_Zmn(i,j,value_Z,msh,ker)
 			blocks%fullmat(i-head_m+1,j-head_n+1)=value_Z
 		enddo
 	enddo
@@ -169,7 +157,7 @@ end subroutine full_filling
 
 
 
-subroutine Butterfly_compress_test(matrices_block1)
+subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn)
 
     use MODULE_FILE
 	use Utilities	
@@ -180,7 +168,8 @@ subroutine Butterfly_compress_test(matrices_block1)
     integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj
     complex(kind=8) value1, value2, ctemp1, ctemp2
 	complex(kind=8),allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
-    
+    type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	
@@ -204,7 +193,7 @@ subroutine Butterfly_compress_test(matrices_block1)
 	! write(*,*)matrices_block1%level,Maxlevel_for_blocks
 	! write(*,*)'h22'
 	
-	if(matrices_block1%level==Maxlevel_for_blocks+1)then
+	if(allocated(matrices_block1%fullmat))then
 		! write(*,*)'h3'
 		call fullmat_block_MVP_randomized_dat(matrices_block1,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
 		! write(*,*)'h4'
@@ -215,7 +204,7 @@ subroutine Butterfly_compress_test(matrices_block1)
 	do ii=1,mm
 		ctemp1 = 0d0
 		do jj=1,nn
-			ctemp1 = ctemp1 + matZ_glo(new2old(ii+basis_group(group_m)%head-1),new2old(jj+basis_group(group_n)%head-1))*Vin(jj,1)
+			ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+basis_group(group_m)%head-1),new2old(jj+basis_group(group_n)%head-1))*Vin(jj,1)
 		end do
 		Vout2(ii,1) = ctemp1
 	end do

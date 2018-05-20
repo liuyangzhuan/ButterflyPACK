@@ -3,7 +3,7 @@ use Butterfly_inversion
 use Randomized_reconstruction
 contains 
 
-recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,option,error_inout)
+recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats)
 
     use MODULE_FILE
 	use misc
@@ -29,6 +29,10 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,
 	real*8:: n1,n2,Memory
 	complex (kind=8), allocatable::matrix_small(:,:)
 	type(Hoption)::option
+	type(Hstat)::stats
+	integer level_butterfly_target
+	
+	
 	type(partitionedblocks)::partitioned_block
 	
 	error_inout=0
@@ -53,41 +57,35 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,
 		call Butterfly_split(blocks_io, blocks_A, blocks_B, blocks_C, blocks_D)
 		
 		! partitioned inverse of D
-		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_D,option,error)
+		! level_butterfly=level_butterfly_target-1
+		level_butterfly=blocks_D%level_butterfly
+		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,option,error,stats)
 		error_inout = max(error_inout, error)
 		
 		! construct the schur complement A-BD^-1C
-		
-		! if(reducelevel_flag==1)then
-			! level_butterfly = blocks_A%level_butterfly
-		! else 
-			! level_butterfly = int((Maxlevel-blocks_A%level)/2)*2
-			level_butterfly = Maxlevel-blocks_A%level
-		! end if
+
+		! level_butterfly = level_butterfly_target-1
+		level_butterfly = blocks_A%level_butterfly
+
 		! write(*,*)'A-BDC',level_butterfly,level
 		
 
 		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,butterfly_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option) 
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,butterfly_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats) 
 		error_inout = max(error_inout, error)
 		
 		! partitioned inverse of the schur complement 
-		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_A,option,error)
+		! level_butterfly=level_butterfly_target-1
+		level_butterfly=blocks_A%level_butterfly
+		call Butterfly_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,option,error,stats)
 		error_inout = max(error_inout, error)		
 		
-		! construct the inverse
-		! if(reducelevel_flag==1)then
-			! level_butterfly = blocks_io%level_butterfly
-		! else 
-			level_butterfly = Maxlevel-blocks_io%level
-			if(level==0)level_butterfly = int((Maxlevel-blocks_io%level)/2)*2
-		! end if
-		! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
-		
+
+		level_butterfly = level_butterfly_target
 		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,butterfly_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option) 
+		call Butterfly_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,butterfly_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats) 
 		error_inout = max(error_inout, error)		
 		
 		

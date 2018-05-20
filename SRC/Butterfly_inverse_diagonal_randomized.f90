@@ -51,10 +51,10 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1)
 		! allocate(vec_old(Ns,num_vectors))
 		allocate(vec_new(Ns,num_vectors))
 		Vout = Vin
-
+		! write(*,*)'ddddd',Ns,num_vectors
 		! write(*,*)'begin'
 		
-		do level = Maxlevel_for_blocks+1,1,-1
+		do level = ho_bf1%Maxlevel+1,1,-1
 			N_diag = 2**(level-1)
 			idx_start_diag = (rowblock-1)*N_diag+1
 			vec_new = 0
@@ -64,7 +64,7 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1)
 				! write(*,*)level,ii,idx_start_loc,idx_end_loc,mm,N_diag
 				
 				! write(*,*)idx_start_loc,idx_end_loc,idx_start_glo,basis_group(groupm_diag)%head,num_vectors,mm !,block_o%col_group,basis_group(block_o%col_group)%head
-				if(level==Maxlevel_for_blocks+1)then
+				if(level==ho_bf1%Maxlevel+1)then
 					! write(*,*)level,ii
 					groupm_diag = ho_bf1%levels(level)%BP(ii)%row_group ! Note: row_group and col_group interchanged here   
 					idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1

@@ -12,10 +12,10 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	complex(kind=8) ctemp, ctemp1, ctemp2
 	complex(kind=8),allocatable:: vec_in(:,:),vec_out(:,:)
 	
-	time_indexarray = 0
-	time_leastsquare = 0
-	time_buttermul = 0
-	time_buttermulinv = 0
+	! time_indexarray = 0
+	! time_leastsquare = 0
+	! time_buttermul = 0
+	! time_buttermulinv = 0
 	
     ! open (90,file='input.txt')
 	! read (90,*)

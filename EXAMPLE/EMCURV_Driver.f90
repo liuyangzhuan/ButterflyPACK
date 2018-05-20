@@ -15,7 +15,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     real*8 tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
-	real*8,parameter :: cd = 299792458d0
 	integer seed_myid(12)
 	integer times(8)	
 	real*8 t1,t2,x,y,z,r,theta,phi
@@ -28,6 +27,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer :: ierr
 	integer*8 oldmode,newmode
 	type(Hoption)::option	
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(hobf)::ho_bf,ho_bf_copy
 
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -53,31 +56,23 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     write(*,*) "FOR X64 COMPILER"
     write(*,*) "   "
 
-	time_indexarray = 0
-	time_leastsquare = 0
-	time_buttermul = 0
-	time_buttermulinv = 0
-	time_kernelupdate = 0
-	time_memcopy = 0
-	time_gemm = 0
-	time_gemm1 = 0		   
-    time_getvec = 0
-	time_resolve = 0
-	time_halfbuttermul = 0
+	call InitStat(stats)
+	
+	! time_indexarray = 0
+	! time_leastsquare = 0
+	! time_buttermul = 0
+	! time_buttermulinv = 0
+	! time_kernelupdate = 0
+	! time_memcopy = 0
+	! time_gemm = 0
+	! time_gemm1 = 0		   
+    ! time_getvec = 0
+	! time_resolve = 0
+	! time_halfbuttermul = 0
 	time_tmp = 0
 	
-	Origins=(/0d0,0d0,0d0/)
-    Bigvalue=10000000.0d0
-    junit=(0d0,1d0)
-    pi=4d0*atan(1d0)
-    eps0=1d7/(4d0*pi*cd**2)
-    mu0=pi*4d-7
-    gamma=1.781072418d0
-    impedence=sqrt(mu0/eps0)
-    ! integral_points=6
-    ! allocate (ng1(integral_points), ng2(integral_points), ng3(integral_points), gauss_w(integral_points))
-    ! call gauss_points()
-
+	msh%Origins=(/0d0,0d0,0d0/)
+ 
 
      !*************************input******************************
 
@@ -88,10 +83,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	para=0.001
 	
-	Kernel = EMCURV	
+	ker%Kernel = EMCURV	
 	
-	geo_model=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
-	Maxedge=5000
+	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	msh%Nunk=5000
 	
 	! Refined_level=0
 	
@@ -100,17 +95,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	
 	
-	Scale=1d0
-	wavelength=0.08
-	Discret=0.05
-	Static=1
-    RCS_sample=2000
+	msh%scaling=1d0
+	ker%wavelength=0.08
+	! Discret=0.05
+	ker%RCS_static=1
+    ker%RCS_Nsample=2000
 
 	
 	
-	rank_approximate_para1=6.0
-    rank_approximate_para2=6.0
-    rank_approximate_para3=6.0
+	ker%rank_approximate_para1=6.0
+    ker%rank_approximate_para2=6.0
+    ker%rank_approximate_para3=6.0
 	
 	
 	option%Nmin_leaf=50
@@ -139,23 +134,19 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
     !*********************************************************
 
-    omiga=2*pi/wavelength/sqrt(mu0*eps0)
-    wavenum=2*pi/wavelength
+    ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
+    ker%wavenum=2*pi/ker%wavelength
 
    !***********************************************************************
-   open (256,file='Info.txt')
-   write (256,*) 'EFIE computing'
-   write (256,*) 'wavelength:',wavelength
-   close (256)
    write (*,*) ''
    write (*,*) 'EFIE computing'
-   write (*,*) 'wavelength:',wavelength
+   write (*,*) 'ker%wavelength:',ker%wavelength
    write (*,*) ''
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
     write(*,*) "geometry modeling......"
-    call geo_modeling()
+    call geo_modeling_CURV(msh,ker)
     write(*,*) "modeling finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -163,8 +154,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(para,option)
-	call BPlus_structuring(option)
+    call H_matrix_structuring(ho_bf,para,option,msh)
+	call BPlus_structuring(ho_bf,option,msh)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -176,7 +167,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     write(*,*) "H_matrices filling......"
-    call matrices_filling(option)
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMCURV)
+	if(option%precon/=DIRECT)then
+		call copy_HOBF(ho_bf,ho_bf_copy)	
+	end if
     write(*,*) "H_matrices filling finished"
     write(*,*) "    "
  	t2 = OMP_get_wtime()   
@@ -184,96 +178,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	if(option%precon/=NOPRECON)then
     write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option)
+    call cascading_factorizing(ho_bf,option,stats)
     write(*,*) "Cascading factorizing finished"
     write(*,*) "    "	
 	end if
 
-    write(*,*) "EM_calculating......"
-    call EM_calculating(option)
-    write(*,*) "EM_calculating finished"
+    write(*,*) "EM_solve......"
+    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,ker)
+    write(*,*) "EM_solve finished"
     write(*,*) "    "	
 	
-	! ! pause 
 	
-    !call butterfly_extraction_test()
-    !pause
-
-    !pause
-
-    !call lowrank_test()
-
-    !pause
-
-!   write(*,*) "full matrix filling......"
-!   call full_matrix()
-!   write(*,*) "full matrix filling finished"
-!   write(*,*) "    "
-!!
-!   write(*,*) "compare test......"
-!   call compare_test0()
-!   write(*,*) "compare test finished"
-!   write(*,*) "    "
-
-!    write(*,*) " generating random vectors......"
-!    nn=20; mm=Maxedge
-!    allocate (vectors_1(Maxedge,nn),vectors_2(Maxedge,nn),vectors_3(Maxedge,nn))
-!    call random_vectors(Maxedge,nn)
-!    write(*,*) "    "
-
-!   write(*,*) " H multiplying vectors......"
-!   vectors_2=(0.,0.)
-!       call H_multiply_vector0(nn,1)
-!   write(*,*) "    "
-
-
-    ! ! ! write(*,*) "MLMDA LL Decompositing......"
-    ! ! ! write(*,*) ''
-    ! ! ! if (Fast_inverse==1) then
-        ! ! ! write (*,*) 'Fast Inverse Option: Yes'
-    ! ! ! else
-        ! ! ! write (*,*) 'Fast Inverse Option: No'
-    ! ! ! endif
-    ! ! ! if (Add_method_of_base_level==1) then
-        ! ! ! write (*,*) 'Addition method of base level: SVD'
-    ! ! ! elseif (Add_method_of_base_level==2) then
-        ! ! ! write (*,*) 'Addition method of base level: ACA'
-    ! ! ! elseif (Add_method_of_base_level==3) then
-        ! ! ! write (*,*) 'Addition method of base level: Regulation'
-    ! ! ! endif
-
-    ! ! !Primary_block=0
-    ! ! call MLMDA_LUDecomposition()
-    ! ! write(*,*) "MLMDA LL Decomposition finished"
-    ! ! write(*,*) "    "
-    ! ! ! pause
-
-!   write(*,*) "full matrix LUD......"
-!   call full_matrix_LUD()
-!   !call full_matrix_inverse()
-!   !pause
-!   write(*,*) "full matrix LUD finished"
-!   write(*,*) "    "
-
-    ! ! ! ! write(*,*) "EM_calculating......"
-    ! ! ! ! call EM_calculating()
-    ! ! ! ! write(*,*) "EM_calculating finished"
-    ! ! ! ! write(*,*) "    "
-
-!    write(*,*) " compare test......"
-!    call compare_test1()
-!    write(*,*) "compare test finished"
-!    write(*,*) "    "
-
-!    write(*,*) "H multiplying vectors......"
-!   vectors_3=(0.,0.)
-!       call H_multiply_vector0(nn,2)
-!   write(*,*) "    "
-!
-!    write(*,*) "comparing results......"
-!    call compare_vectors(mm,nn)
-!    write(*,*) "    "
-
     write(*,*) "-------------------------------program end-------------------------------------"
 
     ! ! ! ! pause

@@ -3,68 +3,6 @@ use misc
 contains
  
 
-real*8 function memory_of_blocks_func(blocks)
-    
-    use MODULE_FILE
-    implicit none
-    
-    integer blocks, butterflyB_inuse, level_actual, num_col, num_row
-    integer i, j, mm, nn, rank, num_blocks, level, level_butterfly
-    real*8 memory_butterfly, rtemp
-    
-    level_butterfly=matrices_block(blocks,0)%level_butterfly
-    level_actual=Maxlevel_for_blocks-matrices_block(blocks,0)%level
-    
-    memory_butterfly=0.
-    
-    if (matrices_block(blocks,0)%style==2) then
-    
-        rtemp=0
-        !$omp parallel do default(shared) private(i,mm,nn,rank) reduction(+:rtemp)
-        do i=1, 2**level_actual
-            mm=size(matrices_block(blocks,0)%ButterflyU(i)%matrix,1)
-            rank=size(matrices_block(blocks,0)%ButterflyU(i)%matrix,2)
-            rtemp=rtemp+real(mm*rank)
-            nn=size(matrices_block(blocks,0)%ButterflyV(i)%matrix,1)
-            rank=size(matrices_block(blocks,0)%ButterflyV(i)%matrix,2)
-            rtemp=rtemp+real(nn*rank)
-        enddo
-        !$omp end parallel do
-        memory_butterfly=memory_butterfly+rtemp
-                
-        if (level_butterfly/=0) then
-            do level=1, level_butterfly
-                num_col=matrices_block(blocks,0)%ButterflyKerl(level)%num_col
-                num_row=matrices_block(blocks,0)%ButterflyKerl(level)%num_row
-                rtemp=0
-                !$omp parallel do default(shared) private(i,j,mm,nn) reduction(+:rtemp)
-                do j=1, num_col
-                    do i=1, num_row
-                        mm=size(matrices_block(blocks,0)%ButterflyKerl(level)%blocks(i,j)%matrix,1)
-                        nn=size(matrices_block(blocks,0)%ButterflyKerl(level)%blocks(i,j)%matrix,2)
-                        rtemp=rtemp+real(mm*nn)
-                    enddo
-                enddo
-                !$omp end parallel do
-                memory_butterfly=memory_butterfly+rtemp
-            enddo
-        endif
-        
-    elseif (matrices_block(blocks,0)%style==1) then
-        
-        mm=size(matrices_block(blocks,0)%fullmat,1)
-        nn=size(matrices_block(blocks,0)%fullmat,2)
-        memory_butterfly=real(mm*nn)
-    
-    endif
-    
-    memory_of_blocks_func=memory_butterfly
-   
-    return
-
-end function memory_of_blocks_func
-
-
 
 subroutine delete_blocks(blocks)
 
@@ -632,6 +570,34 @@ end do
 end function CheckNAN_Bplus
 
 
+
+subroutine copy_HOBF(ho_bf_i,ho_bf_o)
+use MODULE_FILE
+use misc
+implicit none 
+
+type(hobf)::ho_bf_i,ho_bf_o
+
+integer ii
+integer level_c
+
+! real*8,optional::memory
+! real*8::rtemp
+
+
+ho_bf_o%Maxlevel = ho_bf_i%Maxlevel
+ho_bf_o%N = ho_bf_i%N
+allocate(ho_bf_o%levels(ho_bf_o%Maxlevel+1))
+do level_c = 1,ho_bf_o%Maxlevel+1
+	ho_bf_o%levels(level_c)%level = ho_bf_i%levels(level_c)%level
+	ho_bf_o%levels(level_c)%N_block_forward = ho_bf_i%levels(level_c)%N_block_forward
+	allocate(ho_bf_o%levels(level_c)%BP(ho_bf_o%levels(level_c)%N_block_forward))
+	do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
+		call copy_Bplus(ho_bf_i%levels(level_c)%BP(ii),ho_bf_o%levels(level_c)%BP(ii))
+	end do
+end do		
+
+end subroutine copy_HOBF
 
 
 
@@ -1680,7 +1646,7 @@ subroutine fullmat_block_MVP_randomized_dat(blocks,chara,M,N,random1,random2,a,b
         group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
         group_n=blocks%col_group
 		call assert(group_m==group_n,'fullmat not square')
-        level_blocks=blocks%level
+        ! level_blocks=blocks%level
 		! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
 		! call gemmf90(blocks%fullmat, random1, random2,'N','N',al,be)                   
 		call gemm_omp(blocks%fullmat, random1, random2,M,M,N)                   
@@ -1688,7 +1654,7 @@ subroutine fullmat_block_MVP_randomized_dat(blocks,chara,M,N,random1,random2,a,b
         group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
         group_n=blocks%col_group
 		call assert(group_m==group_n,'fullmat not square')
-        level_blocks=blocks%level
+        ! level_blocks=blocks%level
 		! call gemmf90(blocks%fullmat, random1, random2,'T','N',al,be)    
 		call gemmTN_omp(blocks%fullmat, random1, random2,M,M,N)
 	end if
@@ -2279,6 +2245,21 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 end subroutine Butterfly_MoveSingulartoRight
 
 
+
+subroutine InitStat(stats)
+	implicit none 
+	type(Hstat)::stats	
+	
+	stats%Time_random=0  ! Intialization, MVP, Reconstruction 
+	stats%Time_Sblock=0
+	stats%Time_SMW=0
+	stats%Mem_peak=0
+	stats%Mem_Sblock=0
+	stats%Mem_SMW=0
+	stats%Mem_Direct=0
+	stats%Mem_int_vec=0
+	
+end subroutine 
 
 
 end module Utilities

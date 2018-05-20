@@ -1086,7 +1086,7 @@ subroutine Delete_RandVect(chara,random,level_butterfly)
 end subroutine Delete_RandVect
 
 
-subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand)
+subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
     
     use MODULE_FILE
     implicit none
@@ -1100,7 +1100,7 @@ subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand)
     character chara
 	integer num_col,num_row
 	type(matrixblock):: block_rand
-    
+    type(Hstat)::stats
     ! type(matricesblock), pointer :: blocks
     type(RandomBlock) :: random
     
@@ -1156,7 +1156,7 @@ subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand)
 				enddo
 			enddo
 		enddo
-		Memory_int_vec = max(Memory_int_vec,mem_vec) 
+		stats%Mem_int_vec = max(stats%Mem_int_vec,mem_vec) 
         
     elseif (chara=='T') then
     
@@ -1207,7 +1207,7 @@ subroutine Init_RandVect_Empty(chara,random,num_vect_sub,block_rand)
 				enddo
 			enddo
 		enddo
-		Memory_int_vec = max(Memory_int_vec,mem_vec) 
+		stats%Mem_int_vec = max(stats%Mem_int_vec,mem_vec) 
 	
 	
     endif
@@ -1221,63 +1221,8 @@ end subroutine Init_RandVect_Empty
 
 
 
-subroutine check_results(blocks3,chara,blocks1,blocks2,block_rand)
 
-    use MODULE_FILE
-    implicit none
-    
-    integer blocks1, blocks2, blocks3, mm, nn, mn
-    integer i, ii, j, jj, k, kk, group_m, group_n, header_m, header_n
-    complex(kind=8) ctemp1, ctemp2, ctemp3, ctemp4
-    real*8 rtemp
-    character chara
-	type(matrixblock)::block_rand
-    
-    !write(*,*) 'Butterfly addition multiplication test: block', blocks3
-    
-    group_m=matrices_block(blocks3,0)%col_group
-    group_n=matrices_block(blocks3,0)%row_group
-    header_m=basis_group(group_m)%head
-    header_n=basis_group(group_n)%head
-    mm=basis_group(group_m)%tail-header_m+1
-    nn=basis_group(group_n)%tail-header_n+1
-    group_n=matrices_block(blocks1,0)%row_group   
-    header_n=basis_group(group_n)%head
-    mn=basis_group(group_n)%tail-header_n+1
-    
-    do k=1, 10
-         call random_number(rtemp)
-         ii=int(rtemp*mm)+1
-         call random_number(rtemp)
-         jj=int(rtemp*nn)+1
-         call Butterfly_value(ii,jj,matrices_block(blocks3,0),ctemp3)
-         ctemp4=0
-         !$omp parallel do default(shared) private(kk,ctemp1,ctemp2) reduction(+:ctemp4)
-         do kk=1, mn
-             call Butterfly_value(ii,kk,matrices_block(blocks1,0),ctemp1)
-             call Butterfly_value(jj,kk,matrices_block(blocks2,0),ctemp2)
-             ctemp4=ctemp4+ctemp1*ctemp2
-         enddo
-         !$omp end parallel do
-         if(chara=='+') then
-             ctemp3=ctemp3+ctemp4
-         else
-             ctemp3=ctemp3-ctemp4
-         endif
-         ctemp1=ctemp3
-         call Butterfly_value(ii,jj,block_rand,ctemp2)
-         write(*,*) blocks3, ii, jj, abs(ctemp1-ctemp2)/abs(ctemp1), abs(ctemp1-ctemp2)/abs(ctemp2)
-         pause
-     enddo
-    
-    return
-
-end subroutine check_results
-
-
-
-
-subroutine Initialize_Bplus_FromInput(Bplus)
+subroutine Initialize_Bplus_FromInput(Bplus,Bplus_randomized)
 	use misc
     use MODULE_FILE
 	! use lapack95
@@ -1293,66 +1238,68 @@ subroutine Initialize_Bplus_FromInput(Bplus)
 	real*8, allocatable:: Singular(:)
 	integer mn_min,index_i,index_j,blocks_idx
 	type(matrixblock)::block
-	type(blockplus)::Bplus
+	type(blockplus)::Bplus,Bplus_randomized
 	integer seed_myid(2)
 	integer time(8)
 	integer ll,bb
 	integer:: level_BP,levelm,groupm_start,Nboundall	
 	
 	
-	allocate(Bplus_randomized(1))
+	! allocate(Bplus_randomized)
 	
-	Bplus_randomized(1)%level = Bplus%level
-	Bplus_randomized(1)%col_group = Bplus%col_group
-	Bplus_randomized(1)%row_group = Bplus%row_group
-	Bplus_randomized(1)%Lplus = Bplus%Lplus
-	Bplus_randomized(1)%boundary = Bplus%boundary
+	Bplus_randomized%level = Bplus%level
+	Bplus_randomized%col_group = Bplus%col_group
+	Bplus_randomized%row_group = Bplus%row_group
+	Bplus_randomized%Lplus = Bplus%Lplus
+	Bplus_randomized%boundary = Bplus%boundary
 	
-	allocate(Bplus_randomized(1)%LL(LplusMax))
+	allocate(Bplus_randomized%LL(LplusMax))
 	
 
-	! Bplus_randomized(1)%LL(1)%Nbound = 1
-	! allocate(Bplus_randomized(1)%LL(1)%matrices_block(1))
-	! Bplus_randomized(1)%LL(1)%matrices_block(1)%level = Bplus_randomized(1)%level
-	! Bplus_randomized(1)%LL(1)%matrices_block(1)%col_group = Bplus_randomized(1)%col_group
-	! Bplus_randomized(1)%LL(1)%matrices_block(1)%row_group = Bplus_randomized(1)%row_group			
-	! Bplus_randomized(1)%LL(1)%matrices_block(1)%style = Bplus%LL(1)%matrices_block(1)%style
-	allocate(Bplus_randomized(1)%LL(1)%boundary_map(1))
-	Bplus_randomized(1)%LL(1)%boundary_map(1) = Bplus%LL(1)%boundary_map(1)
+	! Bplus_randomized%LL(1)%Nbound = 1
+	! allocate(Bplus_randomized%LL(1)%matrices_block(1))
+	! Bplus_randomized%LL(1)%matrices_block(1)%level = Bplus_randomized%level
+	! Bplus_randomized%LL(1)%matrices_block(1)%col_group = Bplus_randomized%col_group
+	! Bplus_randomized%LL(1)%matrices_block(1)%row_group = Bplus_randomized%row_group			
+	! Bplus_randomized%LL(1)%matrices_block(1)%style = Bplus%LL(1)%matrices_block(1)%style
+	allocate(Bplus_randomized%LL(1)%boundary_map(1))
+	Bplus_randomized%LL(1)%boundary_map(1) = Bplus%LL(1)%boundary_map(1)
 	
 	do ll=1,LplusMax
-	Bplus_randomized(1)%LL(ll)%Nbound = 0
+	Bplus_randomized%LL(ll)%Nbound = 0
 	end do	
 	
 	do ll=1,LplusMax-1
 		if(Bplus%LL(ll)%Nbound>0)then
 
-			Bplus_randomized(1)%LL(ll)%rankmax = Bplus%LL(ll)%rankmax
-			Bplus_randomized(1)%LL(ll)%Nbound = Bplus%LL(ll)%Nbound
-			allocate(Bplus_randomized(1)%LL(ll)%matrices_block(Bplus_randomized(1)%LL(ll)%Nbound))
+			Bplus_randomized%LL(ll)%rankmax = Bplus%LL(ll)%rankmax
+			Bplus_randomized%LL(ll)%Nbound = Bplus%LL(ll)%Nbound
+			allocate(Bplus_randomized%LL(ll)%matrices_block(Bplus_randomized%LL(ll)%Nbound))
 			
-			do bb =1,Bplus_randomized(1)%LL(ll)%Nbound
-				Bplus_randomized(1)%LL(ll)%matrices_block(bb)%row_group = Bplus%LL(ll)%matrices_block(bb)%row_group
-				Bplus_randomized(1)%LL(ll)%matrices_block(bb)%col_group = Bplus%LL(ll)%matrices_block(bb)%col_group
-				Bplus_randomized(1)%LL(ll)%matrices_block(bb)%style = Bplus%LL(ll)%matrices_block(bb)%style
-				Bplus_randomized(1)%LL(ll)%matrices_block(bb)%level = Bplus%LL(ll)%matrices_block(bb)%level
+			do bb =1,Bplus_randomized%LL(ll)%Nbound
+				Bplus_randomized%LL(ll)%matrices_block(bb)%row_group = Bplus%LL(ll)%matrices_block(bb)%row_group
+				Bplus_randomized%LL(ll)%matrices_block(bb)%col_group = Bplus%LL(ll)%matrices_block(bb)%col_group
+				Bplus_randomized%LL(ll)%matrices_block(bb)%style = Bplus%LL(ll)%matrices_block(bb)%style
+				Bplus_randomized%LL(ll)%matrices_block(bb)%level = Bplus%LL(ll)%matrices_block(bb)%level
 			end do
 			
 			
 			if(Bplus%LL(ll+1)%Nbound==0)then		
-				Bplus_randomized(1)%LL(ll+1)%Nbound=0
+				Bplus_randomized%LL(ll+1)%Nbound=0
 			else 
-				level_butterfly = int((Maxlevel_for_blocks - Bplus%LL(ll)%matrices_block(1)%level)/2)*2 
+				level_butterfly = Bplus%LL(ll)%matrices_block(1)%level_butterfly 
 				! level_butterfly = 0 !!! only lowrank																			   
 				level_BP = Bplus%level
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				groupm_start=Bplus%LL(ll)%matrices_block(1)%row_group*2**levelm		
-				Nboundall = 2**(Bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
+				! Nboundall = 2**(Bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
+				Nboundall=size(Bplus%LL(ll+1)%boundary_map)
 				
+				allocate(Bplus_randomized%LL(ll+1)%boundary_map(Nboundall))
+				! write(*,*)shape(Bplus%LL(ll+1)%boundary_map),shape(Bplus_randomized%LL(ll+1)%boundary_map),'didi',ll
 				
-				allocate(Bplus_randomized(1)%LL(ll+1)%boundary_map(Nboundall))
-				! write(*,*)shape(Bplus%LL(ll+1)%boundary_map),shape(Bplus_randomized(1)%LL(ll+1)%boundary_map),'didi',ll
-				Bplus_randomized(1)%LL(ll+1)%boundary_map = Bplus%LL(ll+1)%boundary_map
+				! write(*,*)'gali',ll,Nboundall,shape(Bplus%LL(ll+1)%boundary_map)
+				Bplus_randomized%LL(ll+1)%boundary_map = Bplus%LL(ll+1)%boundary_map
 			end if
 		else 
 			exit

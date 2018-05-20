@@ -8,7 +8,7 @@ contains
 
 
 
-subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,Memory)
+subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats)
 
     use MODULE_FILE
 	! use lapack95
@@ -31,6 +31,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,Memory
 	real*8:: error_inout
 	real*8:: n1,n2,Memory
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	
 	Memory = 0
@@ -41,10 +42,10 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,Memory
 	
 		block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 												 
-		level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
+		level_butterfly=block_o%level_butterfly
 
 		if(level_butterfly==0)then
-			if(level_c>=maxlevel_for_blocks-1)then
+			if(level_c>=ho_bf1%Maxlevel-1)then
 				call OneL_Sblock_LowRank(ho_bf1,level_c,rowblock)
 			else 		
 				write(*,*)'unexpected level_c'
@@ -55,7 +56,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,Memory
 			ho_bf1%ind_bk=rowblock
 			rank0 = block_o%rankmax
 			rate = 1.2d0
-			call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_Sblock_dat,error_inout,'Sblock',option)
+			call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats)
 							
 #if PRNTlevel >= 1
 				write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
@@ -76,12 +77,12 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,Memory
 		
 		rank0_outter = block_o%rankmax
 		rankrate_outter=1.2d0	
-		
-		call Buplus_randomized(Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option)
+		level_butterfly = block_o%level_butterfly
+		call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option,stats)
 		
 		block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 	
 #if PRNTlevel >= 1
-		write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
+		write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'Mult No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif		
 		
 	end if
@@ -130,7 +131,7 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock)
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
 	block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 	  
-    level_butterfly=int((maxlevel_for_blocks-block_o%level)/2)*2
+    level_butterfly=block_o%level_butterfly
     call assert(level_butterfly==0,'Butterfly_Sblock_LowRank only works with LowRank blocks')
 	
 	
@@ -152,12 +153,12 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock)
 	allocate(vec_new(mm,num_vect_sub))
 	vec_old = block_o%ButterflyU(1)%matrix
 
-	do level = Maxlevel_for_blocks+1,level_c+1,-1
+	do level = ho_bf1%Maxlevel+1,level_c+1,-1
 		N_diag = 2**(level-level_c-1)
 		idx_start_diag = (rowblock-1)*N_diag+1
 		vec_new = 0
 		
-		if(level==Maxlevel_for_blocks+1)then
+		if(level==ho_bf1%Maxlevel+1)then
 			n1 = OMP_get_wtime() ! comment: will this omp cause segment fault?
 			! !$omp parallel do default(shared) private(ii,groupm_diag,idx_start_loc,idx_end_loc)
 			do ii = idx_start_diag,idx_start_diag+N_diag-1

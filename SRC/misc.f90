@@ -1148,7 +1148,7 @@ end subroutine ccurl
 	  
 	  sum=0.0d0
       do i=1,n
-	      sum=sum+vector(i)*conjg(vector(i))
+	      sum=sum+dble(vector(i)*conjg(vector(i)))
       enddo
       
       norm_vector=sum
@@ -1201,10 +1201,10 @@ subroutine matrix_real_inverse(a,n)
 65       c(j)=a(j,k)
 	       b(j)=-a(k,j)/h
 	       goto 75
-70       c(j)=(1.,0.)
+70       c(j)=1.
 	       b(j)=1./h
-75       a(k,j)=(0.,0.)
-	       a(j,k)=(0.,0.)
+75       a(k,j)=0.
+	       a(j,k)=0.
 80       continue
 
 	        do 90 i=1,n
@@ -1993,7 +1993,7 @@ end if
 end subroutine KernelUpdate	
 
 
-subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
+subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
 
     use MODULE_FILE
     implicit none
@@ -2005,12 +2005,12 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
     integer rank, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min
-    complex(kind=8) value_Z,value_UV,maxvalue
+    complex(kind=8) value_Z,value_UV,maxvalue,MatrixSubselection(:,:)
     complex(kind=8) inner_U,inner_V,ctemp
     real*8 inner_UV
     integer select_column(rankmax_c), select_row(rankmax_r)
 
-    complex(kind=8),allocatable:: row_R(:),column_R(:)
+    complex(kind=8),allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:)
     real*8,allocatable:: norm_row_R(:),norm_column_R(:)
 	rankmax_min = min(rankmax_r,rankmax_c)
     norm_Z=0
@@ -2026,7 +2026,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
     do j=1, rankmax_c
         value_Z=MatrixSubselection(select_row(1),j)
         row_R(j)=value_Z
-        norm_row_R(j)=value_Z*conjg(value_Z)
+        norm_row_R(j)=dble(value_Z*conjg(value_Z))
     enddo
     ! !$omp end parallel do
 
@@ -2048,7 +2048,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
     do i=1,rankmax_r
         value_Z=MatrixSubselection(i,select_column(1))
         column_R(i)=value_Z
-        norm_column_R(i)=value_Z*conjg(value_Z)
+        norm_column_R(i)=dble(value_Z*conjg(value_Z))
     enddo
     ! !$omp end parallel do
 
@@ -2079,7 +2079,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
                 value_UV=value_UV+matrixtemp_U(select_row(rank+1),i)*matrixtemp_V(j,i)
             enddo
             row_R(j)=value_Z-value_UV
-            norm_row_R(j)=row_R(j)*conjg(row_R(j))
+            norm_row_R(j)=dble(row_R(j)*conjg(row_R(j)))
         enddo
         ! !$omp end parallel do
 
@@ -2109,7 +2109,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
                 value_UV=value_UV+matrixtemp_U(i,j)*matrixtemp_V(select_column(rank+1),j)
             enddo
             column_R(i)=value_Z-value_UV
-            norm_column_R(i)=column_R(i)*conjg(column_R(i))
+            norm_column_R(i)=dble(column_R(i)*conjg(column_R(i)))
         enddo
         ! !$omp end parallel do
 
@@ -2141,7 +2141,7 @@ subroutine ACA_SubsetSelection(select_column,select_row,rankmax_r,rankmax_c,rank
                 inner_V=inner_V+ctemp*conjg(ctemp)
             enddo
             ! !$omp end parallel do
-            inner_UV=inner_UV+2*sqrt(inner_U*inner_V)
+            inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
         enddo
         norm_Z=norm_Z+inner_UV+norm_U*norm_V
 
@@ -2205,7 +2205,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     do j=1, rankmax_c
         value_Z=mat(select_row(1),j)
         row_R(j)=value_Z
-        norm_row_R(j)=value_Z*conjg(value_Z)
+        norm_row_R(j)=dble(value_Z*conjg(value_Z))
     enddo
     ! !$omp end parallel do
 
@@ -2227,7 +2227,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     do i=1,rankmax_r
         value_Z=mat(i,select_column(1))
         column_R(i)=value_Z
-        norm_column_R(i)=value_Z*conjg(value_Z)
+        norm_column_R(i)=dble(value_Z*conjg(value_Z))
     enddo
     ! !$omp end parallel do
 
@@ -2259,7 +2259,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
                 value_UV=value_UV+matU(select_row(rank+1),i)*matV(i,j)
             enddo
             row_R(j)=value_Z-value_UV
-            norm_row_R(j)=row_R(j)*conjg(row_R(j))
+            norm_row_R(j)=dble(row_R(j)*conjg(row_R(j)))
         enddo
         ! !$omp end parallel do
 
@@ -2289,7 +2289,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
                 value_UV=value_UV+matU(i,j)*matV(j,select_column(rank+1))
             enddo
             column_R(i)=value_Z-value_UV
-            norm_column_R(i)=column_R(i)*conjg(column_R(i))
+            norm_column_R(i)=dble(column_R(i)*conjg(column_R(i)))
         enddo
         ! !$omp end parallel do
 
@@ -2321,7 +2321,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
                 inner_V=inner_V+ctemp*conjg(ctemp)
             enddo
             ! !$omp end parallel do
-            inner_UV=inner_UV+2*sqrt(inner_U*inner_V)
+            inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
         enddo
         norm_Z=norm_Z+inner_UV+norm_U*norm_V
 
@@ -2682,7 +2682,7 @@ RWORK=0
 LWORK=-1
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
 
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK))     
 WORK=0
 
@@ -2721,7 +2721,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -2763,7 +2763,7 @@ allocate(RWORK(2*m))
 RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK)) 
 WORK=0    
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
@@ -2813,7 +2813,7 @@ end if
 
 LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK))
 WORK=0     
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
@@ -2854,7 +2854,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZUNGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZUNGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -2960,7 +2960,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
-LWORK=TEMP(1)*1.001
+LWORK=NINT(dble(TEMP(1)*1.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)

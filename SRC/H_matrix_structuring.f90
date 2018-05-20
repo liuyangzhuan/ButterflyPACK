@@ -9,10 +9,13 @@ real*8 function group_dist(group_m,group_n)
     
     integer group_m, group_n,farblock, level
     integer i, j, ii, jj
-    real*8 a(MaxDim), b(MaxDim), dis, rad1, rad2, para
+    real*8 dis, rad1, rad2, para
+	real*8,allocatable::a(:), b(:)
     integer Dimn
-	Dimn = size(xyz,1)
-    
+	Dimn = size(basis_group(group_m)%center,1)
+    allocate(a(Dimn))
+    allocate(b(Dimn))
+	
     do i=1,Dimn
         a(i)=basis_group(group_m)%center(i)
         b(i)=basis_group(group_n)%center(i)
@@ -23,7 +26,8 @@ real*8 function group_dist(group_m,group_n)
         dis=dis+(a(i)-b(i))**2
     enddo
     group_dist=sqrt(dis)
-      
+    
+	deallocate(a,b)
 
 end function group_dist
 
@@ -35,10 +39,13 @@ logical function near_or_far(group_m,group_n,para)
     
     integer group_m, group_n,farblock, level
     integer i, j, ii, jj
-    real*8 a(MaxDim), b(MaxDim), dis, rad1, rad2, para
+    real*8 dis, rad1, rad2, para
+    real*8,allocatable:: a(:), b(:)
     integer Dimn
-	Dimn = size(xyz,1)   
-    
+	
+	Dimn = size(basis_group(group_m)%center,1)
+    allocate(a(Dimn))
+    allocate(b(Dimn))
     do i=1,Dimn
         a(i)=basis_group(group_m)%center(i)
         b(i)=basis_group(group_n)%center(i)
@@ -61,10 +68,11 @@ logical function near_or_far(group_m,group_n,para)
     else
         near_or_far=.false.
     endif
-    
+    deallocate(a,b)
+	
 end function
 
-real*8 function func_distance(node1,node2)
+real*8 function func_distance(node1,node2,msh)
     
     use MODULE_FILE
     implicit none
@@ -73,11 +81,13 @@ real*8 function func_distance(node1,node2)
     real*8 dis
     integer i, j
     integer Dimn
-	Dimn = size(xyz,1)
+	type(mesh)::msh
+	
+	Dimn = size(msh%xyz,1)
 	
     dis=0d0
     do i=1,Dimn
-        dis=dis+(xyz(i,node1)-xyz(i,node2))**2
+        dis=dis+(msh%xyz(i,node1)-msh%xyz(i,node2))**2
     enddo
     
     func_distance=dis
@@ -86,14 +96,15 @@ real*8 function func_distance(node1,node2)
     
 end function
 
-integer function rank_approximate_func(group_m, group_n, flag)
+integer function rank_approximate_func(group_m, group_n, flag,ker)
 
     use MODULE_FILE
     implicit none
 
     integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
     real*8 a, b, c, aa(2), bb(2), cc(2), angle, distance
-
+	type(kernelquant)::ker
+	
 	if(group_m/=group_n)then
 		
 		distance=group_dist(group_m,group_n)
@@ -101,14 +112,14 @@ integer function rank_approximate_func(group_m, group_n, flag)
 		! distance=(basis_group(group_m)%center(1)-basis_group(group_n)%center(1))**2+(basis_group(group_m)%center(2)-basis_group(group_n)%center(2))**2+(basis_group(group_m)%center(3)-basis_group(group_n)%center(3))**2
 		! ! distance=sqrt(distance)
 		angle=4*pi*(basis_group(group_m)%radius)**2/distance
-		rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/wavelength**2)+1
-		! if(group_m==4 .and. group_n==24)write(*,*)int(rank*rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
+		rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
+		! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
 		if (flag==1) then
-			rank_approximate_func=int(rank*rank_approximate_para1**2)
+			rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
 		elseif (flag==2) then
-			rank_approximate_func=int(rank*rank_approximate_para2**2)
+			rank_approximate_func=int(rank*ker%rank_approximate_para2**2)
 		elseif (flag==3) then
-			rank_approximate_func=int(rank*rank_approximate_para3**2)
+			rank_approximate_func=int(rank*ker%rank_approximate_para3**2)
 		endif
 	else 
 		rank_approximate_func = 100000
@@ -126,7 +137,7 @@ end function rank_approximate_func
 
 
 
-subroutine H_matrix_structuring(para,option)
+subroutine H_matrix_structuring(ho_bf1,para,option,msh)
     
     use MODULE_FILE
 	use misc
@@ -141,137 +152,135 @@ subroutine H_matrix_structuring(para,option)
     integer index_temp
     
     real*8 a, b, c, d, para, xmax,xmin,ymax,ymin,zmax,zmin,seperator,r,theta,phi,phi_tmp
-    real*8 groupcenter(MaxDim), radius, radiusmax,auxpoint(MaxDim)
-    real*8:: xyzrange(MaxDim),xyzmin(MaxDim),xyzmax(MaxDim)
+    real*8 radius, radiusmax
+    real*8,allocatable:: xyzrange(:),xyzmin(:),xyzmax(:),auxpoint(:),groupcenter(:)
     real*8, allocatable :: distance(:),array(:,:)
 	integer level_c,sortdirec,mm,phi_end,Ninfo_edge
 	real*8 t1,t2
-
+	integer Maxgroup
+	character(len=1024)  :: strings	
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
 	integer dimn
 	type(Hoption)::option
-  
+	type(hobf)::ho_bf1
+	integer Maxlevel
+	type(mesh)::msh
     !**********************Maxlevel*******************
     level=0; i=1
-    do while (int(Maxedge/i)>option%Nmin_leaf)
+    do while (int(msh%Nunk/i)>option%Nmin_leaf)
         level=level+1
         i=2**level
     enddo
     
     Maxlevel=level
-    Maxlevel_for_blocks=Maxlevel
+    ho_bf1%Maxlevel=Maxlevel
     !***************************************************
     
     Maxgroup=2**(Maxlevel+1)-1
     allocate (basis_group(Maxgroup))
     
-	dimn=size(xyz,1) 
-	if(dimn>MaxDim)then
-	! if(MyID==Main_ID)then
-		write(*,*)'increase MaxDim to: ', dimn
-		stop
-	! endif
-	endif    
+	dimn=size(msh%xyz,1) 
 	
-	
+	allocate(xyzrange(dimn))
+	allocate(xyzmin(dimn))
+	allocate(xyzmax(dimn))
+	allocate(auxpoint(dimn))
+	allocate(groupcenter(dimn))
+		
     write (*,*) ''
-    write (*,*) 'Maxlevel_for_blocks:',Maxlevel_for_blocks
-    write (*,*) 'N_leaf:',int(Maxedge/i)
+    write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+    write (*,*) 'N_leaf:',int(msh%Nunk/i)
  	write (*,*) ''
     write (*,*) 'Constructing basis groups...'
-    open (256,file='Info.txt',position='append')
-    write (256,*) 'Maxlevel_for_blocks:',Maxlevel_for_blocks
-    close (256) 
+
        
  
     !***************************************************************************************	   
     
-    Maxblock=(4**Maxlevel_for_blocks-1)*4/3+1
 	
-	ho_bf%Maxlevel=Maxlevel_for_blocks
-	ho_bf%N=Maxedge
-	allocate(ho_bf%levels(Maxlevel_for_blocks+1))
+	ho_bf1%N=msh%Nunk
+	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
 
-	do level_c = 1,Maxlevel_for_blocks
-		ho_bf%levels(level_c)%level = level_c
-		ho_bf%levels(level_c)%N_block_forward = 2**level_c
-		ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)
+	do level_c = 1,ho_bf1%Maxlevel
+		ho_bf1%levels(level_c)%level = level_c
+		ho_bf1%levels(level_c)%N_block_forward = 2**level_c
+		ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)
 
-		allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))		
-		allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
-		allocate(ho_bf%levels(level_c)%BP_inverse_schur(ho_bf%levels(level_c)%N_block_inverse))
+		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))		
+		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
+		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
 		
 		
 	end do
-	level_c = Maxlevel_for_blocks+1
-	ho_bf%levels(level_c)%level = level_c
-	ho_bf%levels(level_c)%N_block_forward = 2**(level_c-1)
-	ho_bf%levels(level_c)%N_block_inverse = 2**(level_c-1)	
+	level_c = ho_bf1%Maxlevel+1
+	ho_bf1%levels(level_c)%level = level_c
+	ho_bf1%levels(level_c)%N_block_forward = 2**(level_c-1)
+	ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)	
 
-	allocate(ho_bf%levels(level_c)%BP(ho_bf%levels(level_c)%N_block_forward))	
-	allocate(ho_bf%levels(level_c)%BP_inverse(ho_bf%levels(level_c)%N_block_inverse))
+	allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))	
+	allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
 	
-	ho_bf%levels(1)%BP_inverse(1)%level = 0
-	ho_bf%levels(1)%BP_inverse(1)%col_group = 1
-	ho_bf%levels(1)%BP_inverse(1)%row_group = 1
-	! ho_bf%levels(1)%BP_inverse(1)%style = 2
+	ho_bf1%levels(1)%BP_inverse(1)%level = 0
+	ho_bf1%levels(1)%BP_inverse(1)%col_group = 1
+	ho_bf1%levels(1)%BP_inverse(1)%row_group = 1
+	! ho_bf1%levels(1)%BP_inverse(1)%style = 2
 	
-	do level_c = 1,Maxlevel_for_blocks
-		do ii = 1, ho_bf%levels(level_c)%N_block_inverse
-			col_group = ho_bf%levels(level_c)%BP_inverse(ii)%col_group
-			row_group = ho_bf%levels(level_c)%BP_inverse(ii)%row_group
+	do level_c = 1,ho_bf1%Maxlevel
+		do ii = 1, ho_bf1%levels(level_c)%N_block_inverse
+			col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
+			row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
 	
 			! off-diagonal blocks and their updates
-			ho_bf%levels(level_c)%BP(ii*2-1)%level = level_c
-			ho_bf%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
-			ho_bf%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
-			ho_bf%levels(level_c)%BP(ii*2)%level = level_c
-			ho_bf%levels(level_c)%BP(ii*2)%col_group = col_group*2
-			ho_bf%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
+			ho_bf1%levels(level_c)%BP(ii*2-1)%level = level_c
+			ho_bf1%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
+			ho_bf1%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
+			ho_bf1%levels(level_c)%BP(ii*2)%level = level_c
+			ho_bf1%levels(level_c)%BP(ii*2)%col_group = col_group*2
+			ho_bf1%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
 			
 			! schur complement of every two off-diagonal blocks
-			ho_bf%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
-			ho_bf%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
-			ho_bf%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
 	
 			! diagonal blocks and their inverses at bottom level
-			if(level_c==Maxlevel_for_blocks)then
-				ho_bf%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
-				ho_bf%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
-				ho_bf%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
-				ho_bf%levels(level_c+1)%BP(ii*2)%level = level_c+1
-				ho_bf%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
-				ho_bf%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
+			if(level_c==ho_bf1%Maxlevel)then
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
+				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
 			end if
 	
 			
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-			ho_bf%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1				
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1				
 		end do
 	end do
 
-	do level_c = 1,Maxlevel_for_blocks+1
-	deallocate(ho_bf%levels(level_c)%BP_inverse)
+	do level_c = 1,ho_bf1%Maxlevel+1
+	deallocate(ho_bf1%levels(level_c)%BP_inverse)
 	enddo
   
-	allocate(new2old(Maxedge))    
+	allocate(new2old(msh%Nunk))    
 
-	do ii=1,Maxedge
+	do ii=1,msh%Nunk
 		new2old(ii) = ii
 	end do
 	
-	! write(*,*)'gan', node_patch_of_edge(0,100)   
+	! write(*,*)'gan', msh%info_unk(0,100)   
 	
 	   
-    ! allocate (distance(Maxedge))     
+    ! allocate (distance(msh%Nunk))     
     
     !********************************index_of_group**************************************
     
-    basis_group(1)%head=1 ; basis_group(1)%tail=Maxedge
+    basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk
     do level=0, Maxlevel
         do group=2**level, 2**(level+1)-1
             basis_group(group)%level=level
@@ -280,23 +289,25 @@ subroutine H_matrix_structuring(para,option)
             ! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
             do edge=basis_group(group)%head, basis_group(group)%tail
                 do ii=1,dimn
-                    groupcenter(ii)=groupcenter(ii)+xyz(ii,node_patch_of_edge(0,edge))
+					! write(*,*)edge,msh%info_unk(0,edge)
+                    groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%info_unk(0,edge))
                 enddo
-				! if(group==24)write(*,*)edge,groupcenter(:),xyz(1,node_patch_of_edge(0,edge))
+				! if(group==24)write(*,*)edge,groupcenter(:),msh%xyz(1,msh%info_unk(0,edge))
 			enddo
             ! !$omp end parallel do
             do ii=1,dimn
                 groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
             enddo
-            basis_group(group)%center(1:dimn)=groupcenter(1:dimn)
+            allocate(basis_group(group)%center(dimn))
+			basis_group(group)%center(1:dimn)=groupcenter(1:dimn)
 
 			radiusmax=0.
 			do edge=basis_group(group)%head, basis_group(group)%tail
 				radius=0
 				do ii=1,dimn
-					radius=radius+(xyz(ii,node_patch_of_edge(0,edge))-groupcenter(ii))**2
+					radius=radius+(msh%xyz(ii,msh%info_unk(0,edge))-groupcenter(ii))**2
 				enddo
-				! write(*,*)'really',edge, node_patch_of_edge(0,edge)
+				! write(*,*)'really',edge, msh%info_unk(0,edge)
 				radius=sqrt(radius)
 				if (radius>radiusmax) then
 					radiusmax=radius
@@ -306,13 +317,13 @@ subroutine H_matrix_structuring(para,option)
 			basis_group(group)%radius=radiusmax		
 				
 			if(size(basis_group_pre,1)<2*group+1)then ! if groups not predefined, need to order the points
-				if(option%xyzsort==1)then !xyz sort		 
+				if(option%xyzsort==1)then !msh%xyz sort		 
 					xyzmin= 1d300
 					xyzmax= -1d300
 					do edge=basis_group(group)%head, basis_group(group)%tail
 						do ii=1,Dimn
-							xyzmax(ii) = max(xyzmax(ii),xyz(ii,node_patch_of_edge(0,edge)))
-							xyzmin(ii) = min(xyzmin(ii),xyz(ii,node_patch_of_edge(0,edge)))
+							xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%info_unk(0,edge)))
+							xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%info_unk(0,edge)))
 						enddo
 					enddo
 					xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
@@ -322,7 +333,7 @@ subroutine H_matrix_structuring(para,option)
 					sortdirec = maxloc(xyzrange(1:Dimn),1)
 					! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
 					
-					! if(Kernel==EMSURF)then
+					! if(ker%Kernel==EMSURF)then
 					! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
 						! sortdirec=2
 					! else 
@@ -333,15 +344,15 @@ subroutine H_matrix_structuring(para,option)
 					
 					!$omp parallel do default(shared) private(i)
 					do i=basis_group(group)%head, basis_group(group)%tail
-						distance(i-basis_group(group)%head+1)=xyz(sortdirec,node_patch_of_edge(0,i))
+						distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%info_unk(0,i))
 					enddo
 					!$omp end parallel do
 
 				else if(option%xyzsort==2)then ! spherical sort
 					phi_end = 0
 					do edge=basis_group(group)%head, basis_group(group)%tail
-						call Cart2Sph(xyz(1,node_patch_of_edge(0,edge)),xyz(2,node_patch_of_edge(0,edge)),xyz(3,node_patch_of_edge(0,edge)),Origins,r,theta,phi)					
-						if(abs(phi-2*pi)< option%touch_para*minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
+						call Cart2Sph(msh%xyz(1,msh%info_unk(0,edge)),msh%xyz(2,msh%info_unk(0,edge)),msh%xyz(3,msh%info_unk(0,edge)),msh%Origins,r,theta,phi)					
+						if(abs(phi-2*pi)< option%touch_para*msh%minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
 					enddo
 					mm = basis_group(group)%tail - basis_group(group)%head + 1
 					allocate (distance(mm))	
@@ -354,7 +365,7 @@ subroutine H_matrix_structuring(para,option)
 					
 					!$omp parallel do default(shared) private(i,theta,phi,r,phi_tmp)
 					do i=basis_group(group)%head, basis_group(group)%tail
-						call Cart2Sph(xyz(1,node_patch_of_edge(0,i)),xyz(2,node_patch_of_edge(0,i)),xyz(3,node_patch_of_edge(0,i)),Origins,r,theta,phi)
+						call Cart2Sph(msh%xyz(1,msh%info_unk(0,i)),msh%xyz(2,msh%info_unk(0,i)),msh%xyz(3,msh%info_unk(0,i)),msh%Origins,r,theta,phi)
 						if(sortdirec==1)distance(i-basis_group(group)%head+1)=theta
 						if(sortdirec==2)then
 							distance(i-basis_group(group)%head+1)=phi
@@ -375,27 +386,27 @@ subroutine H_matrix_structuring(para,option)
 					distance(1:mm)=Bigvalue
 					!$omp parallel do default(shared) private(i)
 					do i=basis_group(group)%head, basis_group(group)%tail
-						distance(i-basis_group(group)%head+1)=func_distance(node_patch_of_edge(0,i),node_patch_of_edge(0,center_edge))
+						distance(i-basis_group(group)%head+1)=func_distance(msh%info_unk(0,i),msh%info_unk(0,center_edge),msh)
 					enddo
 					!$omp end parallel do					
 
 				end if
 				
-				Ninfo_edge=size(node_patch_of_edge,1)-1
+				Ninfo_edge=size(msh%info_unk,1)-1
 				allocate (order(mm),edge_temp(0:Ninfo_edge,mm)) 
 				allocate(map_temp(mm))
 
 				call quick_sort(distance,order,mm)       
 				!$omp parallel do default(shared) private(ii)     
 				do ii=1, mm
-					edge_temp(:,ii)=node_patch_of_edge(:,order(ii)+basis_group(group)%head-1)
+					edge_temp(:,ii)=msh%info_unk(:,order(ii)+basis_group(group)%head-1)
 					map_temp(ii) = new2old(order(ii)+basis_group(group)%head-1)
 				enddo
 				!$omp end parallel do
 
 				!$omp parallel do default(shared) private(ii)     
 				do ii=1, mm
-					node_patch_of_edge(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
+					msh%info_unk(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
 					new2old(ii+basis_group(group)%head-1) = map_temp(ii)
 				enddo
 				!$omp end parallel do			
@@ -416,10 +427,10 @@ subroutine H_matrix_structuring(para,option)
 					
 					
 					if(option%xyzsort==1)then 
-						seperator = xyz(sortdirec,node_patch_of_edge(0,basis_group(2*group)%tail))
+						seperator = msh%xyz(sortdirec,msh%info_unk(0,basis_group(2*group)%tail))
 						
 					else if(option%xyzsort==2)then  
-						call Cart2Sph(xyz(1,node_patch_of_edge(0,basis_group(2*group)%tail)),xyz(2,node_patch_of_edge(0,basis_group(2*group)%tail)),xyz(3,node_patch_of_edge(0,basis_group(2*group)%tail)),Origins,r,theta,phi)
+						call Cart2Sph(msh%xyz(1,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(2,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(3,msh%info_unk(0,basis_group(2*group)%tail)),msh%Origins,r,theta,phi)
 						if(sortdirec==1)seperator = theta
 						if(sortdirec==2)then
 							seperator = phi
@@ -429,12 +440,12 @@ subroutine H_matrix_structuring(para,option)
 					
 					
 					fidx = (2*group)- 2**(level+1)+1
-					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = seperator
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
 					
 					fidx = (2*group+1)- 2**(level+1)+1
-					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
 				endif	
 
 			else 
@@ -445,31 +456,37 @@ subroutine H_matrix_structuring(para,option)
 					basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
 					
 					fidx = (2*group)- 2**(level+1)+1
-					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
-					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = 0
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
 					
 					fidx = (2*group+1)- 2**(level+1)+1
-					ho_bf%levels(level+1)%BP(fidx)%boundary(1) = 0
-					ho_bf%levels(level+1)%BP(fidx)%boundary(2) = 0				 
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
+					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
 				endif					
 			end if
         enddo
     enddo
 	
 	
-	! do level=0, Maxlevel
-        ! do group=2**level, 2**(level+1)-1
-            ! do edge=basis_group(group)%head, basis_group(group)%tail
-				! ! write(*,*)edge,node_patch_of_edge(0,edge)
-				! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
-				! write(113,'(I5,I8,Es16.8,Es16.8)')level,group,xyz(1:Dimn,node_patch_of_edge(0,edge))
-			! enddo
-        ! enddo
-    ! enddo	   
+	
+	write(strings , *) Dimn
+	do level=0, Maxlevel
+        do group=2**level, 2**(level+1)-1
+            do edge=basis_group(group)%head, basis_group(group)%tail
+				! write(*,*)edge,msh%info_unk(0,edge)
+				! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+				write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+			enddo
+        enddo
+    enddo	   
     !*************************************************************************************
    
 	
-	
+	deallocate(xyzrange)
+	deallocate(xyzmin)
+	deallocate(xyzmax)
+	deallocate(auxpoint)
+	deallocate(groupcenter)	
     
 !     write (*,*) basis_group(matrices_block(9,0)%col_group)%center(1:2),basis_group(matrices_block(9,0)%row_group)%center(1:2)
 !     write (*,*) basis_group(matrices_block(10,0)%col_group)%center(1:2),basis_group(matrices_block(10,0)%row_group)%center(1:2)
@@ -481,7 +498,7 @@ subroutine H_matrix_structuring(para,option)
 end subroutine H_matrix_structuring
 
 
-subroutine BPlus_structuring(option)
+subroutine BPlus_structuring(ho_bf1,option,msh)
 	use MODULE_FILE
 	use misc
 	implicit none 
@@ -501,69 +518,81 @@ subroutine BPlus_structuring(option)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
 	integer Dimn
 	type(Hoption)::option
+	type(mesh)::msh
+	type(hobf)::ho_bf1
+	character(len=1024)  :: strings
 	
-	Dimn = size(xyz,1)
+	Dimn = size(msh%xyz,1)
 	
-	do level_c = 1,Maxlevel_for_blocks+1
-		do ii =1,ho_bf%levels(level_c)%N_block_forward
+	do level_c = 1,ho_bf1%Maxlevel+1
+		do ii =1,ho_bf1%levels(level_c)%N_block_forward
            
-			if(level_c==Maxlevel_for_blocks+1)then
+			if(level_c==ho_bf1%Maxlevel+1)then
 
 
-				ho_bf%levels(level_c)%BP(ii)%Lplus=1				
-				allocate(ho_bf%levels(level_c)%BP(ii)%LL(LplusMax))
+				ho_bf1%levels(level_c)%BP(ii)%Lplus=1				
+				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
-					ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
+					ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
 				end do
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
-				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%col_group
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
 				
-						
-				
-			
 			else 
-				allocate(ho_bf%levels(level_c)%BP(ii)%LL(LplusMax))
+				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
-					ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
+					ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound=0
 				end do
 				
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
-				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%col_group
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group			
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 2
-				allocate(ho_bf%levels(level_c)%BP(ii)%LL(1)%boundary_map(1))
-				ho_bf%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
-				ho_bf%levels(level_c)%BP(ii)%Lplus=0
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
 				
-				sortdirec = NINT(ho_bf%levels(level_c)%BP(ii)%boundary(1))
-				seperator = ho_bf%levels(level_c)%BP(ii)%boundary(2)
+				if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level<option%LnoBP)then				
+					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level
+				else
+					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2				
+				endif
+				
+				
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+				
+				
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 2
+				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1))
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
+				ho_bf1%levels(level_c)%BP(ii)%Lplus=0
+				
+				sortdirec = NINT(ho_bf1%levels(level_c)%BP(ii)%boundary(1))
+				seperator = ho_bf1%levels(level_c)%BP(ii)%boundary(2)
 				
 				do ll=1,LplusMax-1
-					if(ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
-						ho_bf%levels(level_c)%BP(ii)%Lplus = ho_bf%levels(level_c)%BP(ii)%Lplus + 1
-						call assert(ho_bf%levels(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
-						
-						level_butterfly = int((Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
-						! write(*,*)'nini',Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,LnoBP
-						if(Maxlevel_for_blocks - ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<option%LnoBP)then
-							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
-						else 
-							level_BP = ho_bf%levels(level_c)%BP(ii)%level
+					if(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
+						ho_bf1%levels(level_c)%BP(ii)%Lplus = ho_bf1%levels(level_c)%BP(ii)%Lplus + 1
+						call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
+						! write(*,*)'nini',level_c,ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,option%LnoBP,ll
+
+						if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<option%LnoBP .or. ll==LplusMax-1 .or. ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level_butterfly==0)then
+							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
+						else
+							! write(*,*)'gggggg'
+							! level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
+							level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level_butterfly
+							level_BP = ho_bf1%levels(level_c)%BP(ii)%level
 							levelm = ceiling_safe(dble(level_butterfly)/2d0)						
-							groupm_start=ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%row_group*2**levelm						
-							Nboundall = 2**(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level+levelm-level_BP)
-							allocate(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(Nboundall))
-							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map = -1
-							ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
+							groupm_start=ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%row_group*2**levelm						
+							Nboundall = 2**(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level+levelm-level_BP)
+							allocate(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(Nboundall))
+							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map = -1
+							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 							
-							do bb = 1,ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
-								blocks => ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
+							do bb = 1,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
+								blocks => ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
 								
 								allocate(Centroid_M(2**levelm,Dimn))
 								allocate(Isboundary_M(2**levelm))
@@ -577,11 +606,11 @@ subroutine BPlus_structuring(option)
 									CNT = 0
 									if(option%xyzsort==1)then	
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
-											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<option%touch_para*minedgelength)then
+											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
+											if(measure<option%touch_para*msh%minedgelength)then
 												Isboundary_M(index_i_m) = 1 
 												CNT = CNT + 1
-												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ xyz(1:Dimn,node_patch_of_edge(0,nn))
+												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ msh%xyz(1:Dimn,msh%info_unk(0,nn))
 											end if
 										end do
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
@@ -593,15 +622,15 @@ subroutine BPlus_structuring(option)
 										
 									else if(option%xyzsort==2)then
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
-											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
+											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< option%touch_para*minedgelength/r)then
+												if(measure< option%touch_para*msh%minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
-													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
-													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + xyz(2,node_patch_of_edge(0,nn))
-													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + xyz(3,node_patch_of_edge(0,nn))													
+													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + msh%xyz(1,msh%info_unk(0,nn))
+													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + msh%xyz(2,msh%info_unk(0,nn))
+													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
 												end if
 											end if
 											if(sortdirec==2)then
@@ -612,13 +641,13 @@ subroutine BPlus_structuring(option)
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< option%touch_para*minedgelength/r)then
+												if(measure< option%touch_para*msh%minedgelength/r)then
 													Isboundary_M(index_i_m) = 1 
 													CNT = CNT + 1
-													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + xyz(1,node_patch_of_edge(0,nn))
-													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + xyz(2,node_patch_of_edge(0,nn))
-													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + xyz(3,node_patch_of_edge(0,nn))	
-													! if(level_c==1 .and. index_i_m==1)write(*,*)CNT, xyz(:,node_patch_of_edge(0,nn))												
+													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + msh%xyz(1,msh%info_unk(0,nn))
+													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + msh%xyz(2,msh%info_unk(0,nn))
+													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + msh%xyz(3,msh%info_unk(0,nn))	
+													! if(level_c==1 .and. index_i_m==1)write(*,*)CNT, msh%xyz(:,msh%info_unk(0,nn))												
 												end if												
 											end if
 										end do										
@@ -646,28 +675,28 @@ subroutine BPlus_structuring(option)
 									CNT = 0
 									if(option%xyzsort==1)then	
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
-											measure = abs(xyz(sortdirec,node_patch_of_edge(0,nn))-seperator)
-											if(measure<option%touch_para*minedgelength)then
+											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
+											if(measure<option%touch_para*msh%minedgelength)then
 												Isboundary_N(index_j_m) = 1 
 												CNT = CNT + 1
 												! write(*,*)nn,index_j_m,'ok'
-												! write(*,*)Centroid_N(index_j_m,1),xyz(1,node_patch_of_edge(0,nn))
-												Centroid_N(index_j_m,1:Dimn) = Centroid_N(index_j_m,1:Dimn) + xyz(1:Dimn,node_patch_of_edge(0,nn))
+												! write(*,*)Centroid_N(index_j_m,1),msh%xyz(1,msh%info_unk(0,nn))
+												Centroid_N(index_j_m,1:Dimn) = Centroid_N(index_j_m,1:Dimn) + msh%xyz(1:Dimn,msh%info_unk(0,nn))
 											end if
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
 										
 									else if(option%xyzsort==2)then
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
-											call Cart2Sph(xyz(1,node_patch_of_edge(0,nn)),xyz(2,node_patch_of_edge(0,nn)),xyz(3,node_patch_of_edge(0,nn)),Origins,r,theta,phi)
+											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
 											if(sortdirec==1)then
 												measure = abs(theta-seperator)
-												if(measure< option%touch_para*minedgelength/r)then
+												if(measure< option%touch_para*msh%minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
-													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
-													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + xyz(2,node_patch_of_edge(0,nn))
-													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + xyz(3,node_patch_of_edge(0,nn))													
+													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + msh%xyz(1,msh%info_unk(0,nn))
+													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + msh%xyz(2,msh%info_unk(0,nn))
+													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
 												end if
 											end if
 											if(sortdirec==2)then
@@ -678,12 +707,12 @@ subroutine BPlus_structuring(option)
 													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
 													! minbound = min(minbound, abs(phi-2*pi))  
 												end if
-												if(measure< option%touch_para*minedgelength/r)then
+												if(measure< option%touch_para*msh%minedgelength/r)then
 													Isboundary_N(index_j_m) = 1 
 													CNT = CNT + 1
-													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + xyz(1,node_patch_of_edge(0,nn))
-													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + xyz(2,node_patch_of_edge(0,nn))
-													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + xyz(3,node_patch_of_edge(0,nn))													
+													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + msh%xyz(1,msh%info_unk(0,nn))
+													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + msh%xyz(2,msh%info_unk(0,nn))
+													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
 												end if												
 											end if
 										end do										
@@ -716,7 +745,7 @@ subroutine BPlus_structuring(option)
 									group_m=group_m*2**levelm-1+index_i_m  								
 
 									if(Isboundary_M(index_i_m)==1)then
-										ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound + 1									
+										ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound = ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound + 1									
 										dist = 100000000d0
 										do index_j_m=1, 2**(level_butterfly-levelm)	
 											group_n=blocks%col_group  
@@ -730,7 +759,7 @@ subroutine BPlus_structuring(option)
 												if(dist > sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0)))then
 													! if(level_c==1)write(*,*)index_i_m,index_j_m
 													dist = sqrt(sum((Centroid_N(index_j_m,:)-Centroid_M(index_i_m,:))**2d0))
-													ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(group_m - groupm_start + 1) = group_n
+													ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(group_m - groupm_start + 1) = group_n
 												end if
 											end if
 										end do
@@ -743,25 +772,30 @@ subroutine BPlus_structuring(option)
 								
 							end do	
 							
-							if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
-								! write(*,*)level_c,ii,ll,ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,ho_bf%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
+							if(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>1)then
+								! write(*,*)level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group,ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound,'niamaa'
 							endif
 							
-							call assert(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
+							
+							call assert(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound>0,'why is no boundary group detected')	
 								
-							allocate(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound))
+							allocate(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound))
 							
 							cnt = 0
 							do bb = 1,	Nboundall
-								if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)/=-1)then
+								if(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)/=-1)then
 									cnt = cnt + 1
 									group_m = bb+groupm_start-1
-									group_n = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)
+									group_n = ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)
 									
-									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%row_group = group_m
-									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%col_group = group_n
-									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level = basis_group(group_m)%level
-									ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%style = 2
+									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%row_group = group_m
+									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%col_group = group_n
+									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level = basis_group(group_m)%level
+									
+									! ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level)/2)*2
+									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level_butterfly = 0 ! only two layer butterfly plus here
+									
+									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%style = 2
 									
 								end if
 							end do
@@ -770,78 +804,80 @@ subroutine BPlus_structuring(option)
 						exit
 					end if
 				end do
-
 				
-				! write(*,*)level_c,ii,ho_bf%levels(level_c)%BP(ii)%Lplus,'gaogao '
+				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%BP(ii)%Lplus,'gaogao '
 				
 				if(mod(ii,2)==1)then
 					ii_sch = ceiling_safe(ii/2d0)
 					
-					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(LplusMax))
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%Lplus=ho_bf%levels(level_c)%BP(ii)%Lplus
+					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(LplusMax))
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%Lplus=ho_bf1%levels(level_c)%BP(ii)%Lplus
 					do ll=1,LplusMax
-						ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound=0
+						ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound=0
 					end do	
 									
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%rankmax = 0
-					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1))
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level = ho_bf%levels(level_c)%BP(ii)%level
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%col_group = ho_bf%levels(level_c)%BP(ii)%row_group
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%row_group = ho_bf%levels(level_c)%BP(ii)%row_group			
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%style = 2
-					allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
-					ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = ho_bf%levels(level_c)%BP(ii)%row_group		
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%rankmax = 0
+					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1))
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group			
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%style = 2
+					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
+					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%row_group		
 					
 								
 					do ll=1,LplusMax-1
-						if(ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
+						if(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
 
-							ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%rankmax = 0
-							ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound = ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
+							ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%rankmax = 0
+							ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
 							
-							allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound))
+							allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound))
 							
-							do bb =1,ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%row_group = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%col_group = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%style = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%style
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level = ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level
+							do bb =1,ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%row_group = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%col_group = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%style = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%style
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level_butterfly
 							end do
 							
 							
-							if(ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%Nbound==0)then		
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%Nbound=0
+							if(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound==0)then		
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%Nbound=0
 							else 
-								level_butterfly = int((Maxlevel_for_blocks - ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level)/2)*2 
-								level_BP = ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%level
+								level_butterfly = ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level_butterfly
+								level_BP = ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%level
 								levelm = ceiling_safe(dble(level_butterfly)/2d0)						
-								groupm_start=ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%row_group*2**levelm		
-								Nboundall = 2**(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
+								groupm_start=ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%row_group*2**levelm		
+								Nboundall = 2**(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level+levelm-level_BP)				
 								
-								allocate(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(Nboundall))
-								! write(*,*)shape(Bplus%LL(ll+1)%boundary_map),shape(Bplus_randomized(1)%LL(ll+1)%boundary_map),'didi',ll
+								allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(Nboundall))
 								
-								ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map = ho_bf%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map
+								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map = ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map
 								do bb=1,Nboundall
-									if(ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb)/=-1)then
-										ho_bf%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb) = bb + groupm_start - 1
+									if(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb)/=-1)then
+										ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll+1)%boundary_map(bb) = bb + groupm_start - 1
 									end if
 								end do
 							end if
 						else 
 							exit
 						end if
-					end do				
+					end do
+					
 				end if			
 								
 				! if(level_c==1 .and. ii==1)then
 				 
+				write(strings , *) 2*dimn
 				! write(177,*)'Bplus:', level_c,ii
-				do ll=1,ho_bf%levels(level_c)%BP(ii)%Lplus
-				! write(*,*)ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
-					do bb = 1,ho_bf%levels(level_c)%BP(ii)%LL(ll)%Nbound
-						write(177,'(I3,I7,I3,I3,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7,Es16.7)')level_c,ii,ll,ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
+				do ll=1,ho_bf1%levels(level_c)%BP(ii)%Lplus
+				! write(*,*)ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
+					do bb = 1,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
+						write(177,'(I3,I7,I3,I3,'//TRIM(strings)//'Es16.7)')level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
 					end do
 				end do
 				! end if

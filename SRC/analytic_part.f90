@@ -8,7 +8,7 @@ contains
 !	mm:commom edge
 !	jj:face number(3 or 4)
 !**********************************	
-function ianalytic(mm,jj,xi,yi,zi)
+function ianalytic(mm,jj,xi,yi,zi,msh)
 
 use     MODULE_FILE
 integer mm,jj,j,i
@@ -21,27 +21,27 @@ real*8    s(2,3),t(-1:1,3)
 real*8    f2(3),beta(3)
 real*8    r(-1:1,3)
 real*8    area
+type(mesh)::msh
 
-
-ii=node_patch_of_edge(jj,mm)  !ii 表示面
-node1=node_of_patch(1,ii)
-node2=node_of_patch(2,ii)
-node3=node_of_patch(3,ii)
+ii=msh%info_unk(jj,mm)  !ii 表示面
+node1=msh%node_of_patch(1,ii)
+node2=msh%node_of_patch(2,ii)
+node3=msh%node_of_patch(3,ii)
 do i=1,3
-   a(i)=xyz(i,node2)-xyz(i,node1)
-   b(i)=xyz(i,node3)-xyz(i,node1)
+   a(i)=msh%xyz(i,node2)-msh%xyz(i,node1)
+   b(i)=msh%xyz(i,node3)-msh%xyz(i,node1)
 enddo
  call curl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
 enddo
-l(1)=sqrt((xyz(1,node3)-xyz(1,node2))**2+(xyz(2,node3)&
-     	-xyz(2,node2))**2+(xyz(3,node3)-xyz(3,node2))**2)
-l(2)=sqrt((xyz(1,node3)-xyz(1,node1))**2+(xyz(2,node3)&
-     	-xyz(2,node1))**2+(xyz(3,node3)-xyz(3,node1))**2) 
-l(3)=sqrt((xyz(1,node1)-xyz(1,node2))**2+(xyz(2,node1)&
-     	-xyz(2,node2))**2+(xyz(3,node1)-xyz(3,node2))**2) 
+l(1)=sqrt((msh%xyz(1,node3)-msh%xyz(1,node2))**2+(msh%xyz(2,node3)&
+     	-msh%xyz(2,node2))**2+(msh%xyz(3,node3)-msh%xyz(3,node2))**2)
+l(2)=sqrt((msh%xyz(1,node3)-msh%xyz(1,node1))**2+(msh%xyz(2,node3)&
+     	-msh%xyz(2,node1))**2+(msh%xyz(3,node3)-msh%xyz(3,node1))**2) 
+l(3)=sqrt((msh%xyz(1,node1)-msh%xyz(1,node2))**2+(msh%xyz(2,node1)&
+     	-msh%xyz(2,node2))**2+(msh%xyz(3,node1)-msh%xyz(3,node2))**2) 
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
@@ -49,9 +49,9 @@ enddo
  call scalar(u,b,u3)
 v3=2.*area/l(3)
 	
-b(1)=xi-xyz(1,node1)
-b(2)=yi-xyz(2,node1)
-b(3)=zi-xyz(3,node1)
+b(1)=xi-msh%xyz(1,node1)
+b(2)=yi-msh%xyz(2,node1)
+b(3)=zi-msh%xyz(3,node1)
  call scalar(u,b,u0)
  call scalar(v,b,v0)
  call scalar(w,b,w0)
@@ -82,7 +82,7 @@ if((r(1,i)+s(2,i))/(r(-1,i)+s(1,i)).le.1.e-6)then
    print*,(r(1,i)+s(2,i))/(r(-1,i)+s(1,i))
    print*,"log value error!"
    print*,"ianalytic:",mm
-   pause
+   stop
 endif
 
 do i=1,3
@@ -108,7 +108,7 @@ end function ianalytic
 !	jj:face number(3 or 4)
 !	have the ni part(iii)
 !**********************************	
-function ianalytic2(mm,jj,xi,yi,zi,iii)
+function ianalytic2(mm,jj,xi,yi,zi,iii,msh)
 
 use MODULE_FILE
 integer mm,jj,j,i
@@ -126,26 +126,27 @@ real*8 temp,temp1,temp2,temp3
 real*8 iua,iva
 real*8 n0(3)
 real*8    area
+type(mesh)::msh
 
-ii=node_patch_of_edge(jj,mm)
-node1=node_of_patch(1,ii)
-node2=node_of_patch(2,ii)
-node3=node_of_patch(3,ii)
+ii=msh%info_unk(jj,mm)
+node1=msh%node_of_patch(1,ii)
+node2=msh%node_of_patch(2,ii)
+node3=msh%node_of_patch(3,ii)
 do i=1,3
-   a(i)=xyz(i,node2)-xyz(i,node1)
-   b(i)=xyz(i,node3)-xyz(i,node1)
+   a(i)=msh%xyz(i,node2)-msh%xyz(i,node1)
+   b(i)=msh%xyz(i,node3)-msh%xyz(i,node1)
 enddo
 call curl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
 enddo
-l(1)=sqrt((xyz(1,node3)-xyz(1,node2))**2+(xyz(2,node3)&
-     	-xyz(2,node2))**2+(xyz(3,node3)-xyz(3,node2))**2)
-l(2)=sqrt((xyz(1,node3)-xyz(1,node1))**2+(xyz(2,node3)&
-     	-xyz(2,node1))**2+(xyz(3,node3)-xyz(3,node1))**2) 
-l(3)=sqrt((xyz(1,node1)-xyz(1,node2))**2+(xyz(2,node1)&
-     	-xyz(2,node2))**2+(xyz(3,node1)-xyz(3,node2))**2) 
+l(1)=sqrt((msh%xyz(1,node3)-msh%xyz(1,node2))**2+(msh%xyz(2,node3)&
+     	-msh%xyz(2,node2))**2+(msh%xyz(3,node3)-msh%xyz(3,node2))**2)
+l(2)=sqrt((msh%xyz(1,node3)-msh%xyz(1,node1))**2+(msh%xyz(2,node3)&
+     	-msh%xyz(2,node1))**2+(msh%xyz(3,node3)-msh%xyz(3,node1))**2) 
+l(3)=sqrt((msh%xyz(1,node1)-msh%xyz(1,node2))**2+(msh%xyz(2,node1)&
+     	-msh%xyz(2,node2))**2+(msh%xyz(3,node1)-msh%xyz(3,node2))**2) 
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
@@ -153,9 +154,9 @@ enddo
  call scalar(u,b,u3)
 v3=2.*area/l(3)
 	
-b(1)=xi-xyz(1,node1)
-b(2)=yi-xyz(2,node1)
-b(3)=zi-xyz(3,node1)
+b(1)=xi-msh%xyz(1,node1)
+b(2)=yi-msh%xyz(2,node1)
+b(3)=zi-msh%xyz(3,node1)
  call scalar(u,b,u0)
  call scalar(v,b,v0)
  call scalar(w,b,w0)
@@ -187,7 +188,7 @@ if((r(1,i)+s(2,i))/(r(-1,i)+s(1,i)).le.1.e-6)then
 	print*,(r(1,i)+s(2,i))/(r(-1,i)+s(1,i))
 	print*,"log value error!"
 	print*,"ianalytic2:",mm
-	pause
+	stop
 endif
 	
 do i=1,3
@@ -205,9 +206,9 @@ do i=1,3
    f3(i)=s(2,i)*r(1,i)-s(1,i)*r(-1,i)+r(0,i)**2*f2(i)
 enddo
 do i=1,3
-   s1(i)=(xyz(i,node3)-xyz(i,node2))/l(1)
-   s2(i)=(xyz(i,node1)-xyz(i,node3))/l(2)
-   s3(i)=(xyz(i,node2)-xyz(i,node1))/l(3)
+   s1(i)=(msh%xyz(i,node3)-msh%xyz(i,node2))/l(1)
+   s2(i)=(msh%xyz(i,node1)-msh%xyz(i,node3))/l(2)
+   s3(i)=(msh%xyz(i,node2)-msh%xyz(i,node1))/l(3)
 enddo
 call curl(s1,w,m1)
 call curl(s2,w,m2)

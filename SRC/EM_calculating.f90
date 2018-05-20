@@ -5,25 +5,8 @@ use element_vinc
 use HODLR_Solve
 contains 
 
-subroutine EM_calculating(option)
-    
-    use MODULE_FILE
-    implicit none
-	type(Hoption)::option
-	
-	if(Kernel==EMCURV)then
-		call EM_calculating_CURV(option)
-	elseif(Kernel==EMSURF)then
-		call EM_calculating_SURF(option)
-	else
-		write(*,*)'unknown Kernel for EM_calculating'
-		stop
-	endif	
-	
-end subroutine EM_calculating  
 
-
-subroutine EM_calculating_SURF(option)
+subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,ker)
     
     use MODULE_FILE
     ! use blas95
@@ -31,58 +14,49 @@ subroutine EM_calculating_SURF(option)
     
     integer i, j, ii, jj, iii, jjj
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter 
+    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter ,N_unk
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
 	type(Hoption)::option
+	type(hobf)::ho_bf_for,ho_bf_inv
+	type(mesh)::msh
+	type(kernelquant)::ker
 	
-    if (Static==2) then
+	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
+	N_unk=msh%Nunk
+	
+    if (ker%RCS_static==2) then
     
         theta=90
         phi=0
         
-        allocate (current(Maxedge))
-        allocate (voltage(Maxedge))
+        allocate (current(N_unk,2))
+        allocate (voltage(N_unk,2))
 
-		allocate(current2com(Maxedge,2))
 		
         !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=1, Maxedge
-            call element_Vinc_VV_SURF(theta,phi,edge,value_Z)
-            voltage(edge)=value_Z
+        do edge=1, N_unk
+            call element_Vinc_VV_SURF(theta,phi,edge,value_Z,msh,ker)
+			voltage(edge,1)=value_Z
+			call element_Vinc_HH_SURF(theta,phi,edge,value_Z,msh,ker)
+            voltage(edge,2)=value_Z
         enddo    
         !$omp end parallel do
         
         T0=secnds(0.0)
         		
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)
-
-		current2com(:,1) = Current
-		
-		
-        !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=1, Maxedge
-            call element_Vinc_HH_SURF(theta,phi,edge,value_Z)
-            voltage(edge)=value_Z
-        enddo    
-        !$omp end parallel do
-        
-        T0=secnds(0.0)
-        
-
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)		
-		
-		current2com(:,2) = Current		
+		call HODLR_Solution(ho_bf_for,ho_bf_inv,Current,Voltage,N_unk,2,option)
+					
 		
         write (*,*) ''
         write (*,*) 'Solving:',secnds(T0),'Seconds'
         write (*,*) ''
 
 		T0=secnds(0.0)
-        call RCS_bistatic_SURF()
+        call RCS_bistatic_SURF(Current,msh,ker)
         
 
         write (*,*) ''
@@ -91,16 +65,16 @@ subroutine EM_calculating_SURF(option)
 		deallocate(Current)
 		deallocate(Voltage)
 	
-    elseif (Static==1) then
+    elseif (ker%RCS_static==1) then
     
-        allocate (current(Maxedge))
+        allocate (current(N_unk,1))
 
         
-        num_sample=RCS_sample
+        num_sample=ker%RCS_Nsample
 		theta=90.
         dphi=180./num_sample
-		allocate (b(Maxedge,num_sample+1))
-		allocate (x(Maxedge,num_sample+1))        
+		allocate (b(N_unk,num_sample+1))
+		allocate (x(N_unk,num_sample+1))        
 		
 		
 		
@@ -110,23 +84,23 @@ subroutine EM_calculating_SURF(option)
         do j=0, num_sample 
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
-			do edge=1, Maxedge
-				call element_Vinc_HH_SURF(theta,phi,edge,value_Z)
+			do edge=1, N_unk
+				call element_Vinc_HH_SURF(theta,phi,edge,value_Z,msh,ker)
 				b(edge,j+1)=value_Z
 			enddo    
 			!$omp end parallel do
         enddo
 		
-		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1,option)
+		call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk,num_sample+1,option)
 			
 		do j=0, num_sample 			
 			phi=j*dphi
 			
-			Current=x(:,j+1)
+			Current(:,1)=x(:,j+1)
 			
-            call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
+            call RCS_monostatic_HH_SURF(theta,phi,rcs_H,Current(:,1),msh,ker)
 !             !$omp parallel do default(shared) private(i)
-!             do i=1, Maxedge
+!             do i=1, N_unk
 !                 current(i)=vectors_block(0)%vector(i,2)
 !             enddo
 !             !$omp end parallel do
@@ -148,11 +122,11 @@ subroutine EM_calculating_SURF(option)
         
     return
     
-end subroutine EM_calculating_SURF
+end subroutine EM_solve_SURF
 
 
 
-subroutine EM_calculating_CURV(option)
+subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker)
     
     use MODULE_FILE
     ! use blas95
@@ -160,41 +134,44 @@ subroutine EM_calculating_CURV(option)
     
     integer i, j, ii, jj, iii, jjj
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter 
+    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter, N_unk
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real*8:: rel_error
 	type(Hoption)::option
+	type(mesh)::msh
+	type(kernelquant)::ker
 	
-    if (Static==2) then
+	type(hobf)::ho_bf_for,ho_bf_inv
+	complex(kind=8),allocatable:: current(:),voltage(:)
+	N_unk=msh%Nunk
+
+    if (ker%RCS_static==2) then
     
         phi=180d0
         
-        allocate (current(Maxedge))
-        allocate (voltage(Maxedge))
-
-		allocate(current2com(Maxedge,1))								  
+        allocate (current(N_unk))
+        allocate (voltage(N_unk))
+								  
         !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=1, Maxedge
-            call element_Vinc_VV_CURV(phi,edge,value_Z)
+        do edge=1, N_unk
+            call element_Vinc_VV_CURV(phi,edge,value_Z,msh,ker)
             voltage(edge)=value_Z
         enddo    
         !$omp end parallel do
         
         T0=secnds(0.0)
         
-		call HODLR_Solution(ho_bf_copy,ho_bf,Current,Voltage,Maxedge,1,option)
-		
-		current2com(:,1) = Current		
+		call HODLR_Solution(ho_bf_for,ho_bf_inv,Current,Voltage,N_unk,1,option)
 		
         write (*,*) ''
         write (*,*) 'Solving:',secnds(T0),'Seconds'
         write (*,*) ''
 
 		T0=secnds(0.0)
-        call RCS_bistatic_CURV()
+        call RCS_bistatic_CURV(Current,msh,ker)
 
         write (*,*) ''
         write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
@@ -203,14 +180,14 @@ subroutine EM_calculating_CURV(option)
 		deallocate(current)
 		deallocate(voltage)
 	
-    elseif (Static==1) then
+    elseif (ker%RCS_static==1) then
     
-        allocate (current(Maxedge))
-        num_sample=RCS_sample
+        allocate (current(N_unk))
+        num_sample=ker%RCS_Nsample
         dphi=180./num_sample
         
-		allocate (b(Maxedge,num_sample+1))
-		allocate (x(Maxedge,num_sample+1))
+		allocate (b(N_unk,num_sample+1))
+		allocate (x(N_unk,num_sample+1))
 		
         open (100, file='RCS_monostatic.txt')
 
@@ -218,22 +195,22 @@ subroutine EM_calculating_CURV(option)
         do j=0, num_sample 
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
-			do edge=1, Maxedge
-				call element_Vinc_VV_CURV(phi,edge,value_Z)
+			do edge=1, N_unk
+				call element_Vinc_VV_CURV(phi,edge,value_Z,msh,ker)
 				b(edge,j+1)=value_Z
 			enddo    
 			!$omp end parallel do
 		enddo
 		
-		call HODLR_Solution(ho_bf_copy,ho_bf,x,b,Maxedge,num_sample+1,option)
+		call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk,num_sample+1,option)
 			
 			
 		do j=0, num_sample 	
 			phi=j*dphi
 			Current=x(:,j+1)
-            call RCS_monostatic_VV_CURV(phi,rcs_V)
+            call RCS_monostatic_VV_CURV(phi,rcs_V,Current,msh,ker)
 !             !$omp parallel do default(shared) private(i)
-!             do i=1, Maxedge
+!             do i=1, N_unk
 !                 current(i)=vectors_block(0)%vector(i,2)
 !             enddo
 !             !$omp end parallel do
@@ -258,6 +235,6 @@ subroutine EM_calculating_CURV(option)
         
     return
     
-end subroutine EM_calculating_CURV
+end subroutine EM_solve_CURV
 
 end module EM_calculation

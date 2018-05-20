@@ -1,13 +1,34 @@
 module MODULE_FILE
+	integer,parameter:: LplusMax=3
+	real*8,parameter :: pi = 4d0*atan(1d0)
+	real*8,parameter :: cd = 299792458d0
+	complex(kind=8),parameter :: junit=(0d0,1d0)
+	real*8,parameter :: Bigvalue=1d300
+	real(kind=8),parameter:: SafeUnderflow=1D-150
+	real(kind=8),parameter:: SafeAbsoulte=1D-14
 	
-	integer,parameter :: MaxDim = 100
+	real*8,parameter :: eps0=1d7/(4d0*pi*cd**2)
+    real*8,parameter :: mu0=pi*4d-7
+    real*8,parameter :: gamma=1.781072418d0
+    real*8,parameter :: impedence0=sqrt(mu0/eps0)
+	
+	 integer,parameter:: EMCURV=1
+	 integer,parameter:: EMSURF=2
+	 integer,parameter:: RBF=3
+	 integer,parameter:: FULL=4	
+	
+	 integer,parameter:: NOPRECON=2
+	 integer,parameter:: SAIPRECON=3	
+	
+	 integer,parameter:: DIRECT=1
+	
 	
      type basisgroup
          integer head
          integer tail
          integer level
          real*8 radius
-         real*8 center(MaxDim)
+         real*8,allocatable:: center(:)
      end type basisgroup
 
      type vectorsblock
@@ -159,103 +180,95 @@ module MODULE_FILE
 		integer::Nmin_leaf
 		integer::schulzorder
 		integer::schulzlevel
-	 end type
+	 end type Hoption
 	 
-	 
-     real*8, allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:)
-     integer,allocatable:: node_of_patch(:,:),node_patch_of_edge(:,:)
-     real*8,allocatable:: normal_of_patch(:,:)
-     real*8,allocatable:: xyz(:,:)
-     complex(kind=8),allocatable:: current2com(:,:),current(:),current_pre(:),vector_Vinc(:,:),voltage(:)
-	 
-     real*8 wa,wb,wc
-     real*8 pi,impedence
-     real*8 wavenum,wavelength
-     real*8 mu0,eps0,omiga
-     real*8 alpha, Delta_ll, gamma
-     real*8 Scale
-     complex(kind=8) junit
-     integer maxpatch,maxnode,maxedge, geo_model, RCS_sample
-	 real*8 maxedgelength,minedgelength
-     integer Maxlevel, Maxlevel_for_blocks, mesh_normal
-     integer RCS_static, Recompress_method, Forward_recompress
-     integer integral_points, SAI_level, Diag_level
-     integer maxvector_near, maxvector_SAI, Maxvector_Diagblock
-     integer Forward_compress_elem,reducelevel_flag,directschur  
-     complex(kind=8) Test_value
-     integer Test_blocks, Test_i, Test_j
-	 real*8 Bigvalue,SVD_tolerance_forward,SVD_tolerance_factor, ACA_tolerance_split, SVD_tolerance_split
-	 real*8 SVD_tolerance_add, ACA_tolerance_add, Discret, ACA_tolerance_aggregate, SVD_tolerance_aggregate
-	 real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3
-     integer Maxgroup,Maxblock, Split_method, Forward_method, Add_method, Aggregate_method
-     integer Static, rank_control_forward, rank_control_add, rank_control_split, rank_control_aggregate
-     real*8 Time_Direct_LLD, Time_Add_Multiply_Baselevel, Time_Multiply_Butterfly, Time_Solve_XLM
-     real*8 Time_Split_Blocks, Time_Aggregate_Blocks, Time_Aggregate_blocks_OPT, Time_Add_Butterfly,Time_Rightmultiply_inverse_randomized,Time_Inversion_diagnal_randomized
-	 real*8 Time_Init_forward,Time_Vector_forward,Time_Reconstruct_forward,Time_Oneblock_forward,Time_Init_inverse,Time_Vector_inverse,Time_Reconstruct_inverse,Time_Oneblock_inverse,Time_InvertBlock,Time_Init_HODLR_MVP
-     real*8::mem_target,mem_recons,time_indexarray,time_leastsquare,time_kernelupdate,time_buttermul,time_buttermulinv
-	 real*8::time_getvec,time_halfbuttermul,time_resolve,time_memcopy,time_gemm,time_tmp,time_gemm1
-	 
-     ! type(RandomBlock),pointer :: Random_Block(:)
-     type(basisgroup),allocatable:: basis_group(:)
-     type(matrixblock),allocatable:: matrices_block(:,:)
-	 type(matrixblock),allocatable:: agent_block(:)
-	 type(blockplus),allocatable:: agent_bplus(:)
-     ! type(matrixblock),pointer :: butterfly_block_randomized(:)
-     type(blockplus),pointer :: Bplus_randomized(:)
-	 ! type(cascadingfactors),allocatable::cascading_factors(:),cascading_factors_copy(:)
-	 type(hobf)::ho_bf,ho_bf_copy
-	 ! type(partitionedblocks),allocatable::partitioned_blocks(:)
-     type(vectorsblock),allocatable:: vectors_block(:)
-	 type(vectorsblock),pointer:: RandomVectors_InOutput(:)
-	 ! type(vectorsblock),pointer:: RandomVectors_InOutput_tmp(:)
-     type(butterfly_Kerl),allocatable:: ButterflyKerl(:), Kerlmat_Global(:), Kerlmat_Global_Shrink(:)
-     type(butterfly_Kerl),allocatable:: Kerlmat_Global_Shrink1(:), Kerlmat_Global_Shrink2(:), Kerlmat_Global_Shrink3(:), Kerlmat_Global_Shrink4(:)
-     type(butterflymatrix),allocatable:: ButterflyU_Global(:), ButterflyV_Global(:)
-     type(matrixblock),allocatable:: matricesblocktemp(:)
-     integer, allocatable:: leafs_of_level(:), leafindex_of_level(:),rankmax_of_level(:),rankmin_of_level(:)
-     integer, allocatable:: index_of_Diagblock(:,:), index_of_SAIblock(:,:)
-     complex(kind=8),allocatable:: matrixtemp_U(:,:),matrixtemp_V(:,:),fullmatrix(:,:)
-     complex(kind=8),allocatable:: matrixtemp_UU(:,:),matrixtemp_VV(:,:), MatrixSubselection(:,:)
-     complex(kind=8),allocatable:: UU_1(:,:),UU_2(:,:),UU_3(:,:),UU_4(:,:),VV_1(:,:),VV_2(:,:),VV_3(:,:),VV_4(:,:)
-     real*8,allocatable:: Single_1(:),Single_2(:),Single_3(:),Single_4(:)
-     integer(kind=8),allocatable:: CPU_clocks(:)
-     integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
-	 integer:: schurinv,rank_tmp,ForwardSymmetricFlag,SblockSymmetricFlag
-	 real*8:: Memory_int_vec,Memory_tfqmr_vec
-	 complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
-	 complex(kind=8), allocatable :: Basis_split(:,:)
-	 integer::Ncorner, ranktmp_glo
-	 real*8,allocatable::corner_points(:,:),edge_cen(:,:)
-	 real*8::corner_radius
+	type Hstat
+		real*8 Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
+		real*8 Time_Sblock,Time_SMW
+		real*8 Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct,Mem_int_vec
+		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:)
+	 end type Hstat	
 
-	 integer,parameter:: LplusMax=5
+	type Mesh
+		integer integral_points
+		integer maxpatch
+		integer maxnode
+		integer maxedge
+		integer model2d
+		integer Nunk
+		integer mesh_normal	 !
+		real*8 Delta_ll		
+		real*8 scaling
+		real*8, allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:)
+		real*8,allocatable:: normal_of_patch(:,:) ! normal vector of each patch
+		integer,allocatable:: node_of_patch(:,:) ! vertices of each patch
+		real*8,allocatable:: xyz(:,:)   ! coordinates of the points
+		real*8:: Origins(3) ! only used for spherical coordinate transform
+		real*8 maxedgelength,minedgelength
+		integer::Ncorner
+		real*8,allocatable::corner_points(:,:)
+		real*8::corner_radius		
+		
+		
+					! for 2D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice  
+					! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
+					! for general: 0 point to coordinates of each unknown x
+		integer,allocatable:: info_unk(:,:)  
+	end type Mesh
 	 
 	 
-	 real*8:: CFIE_alpha
-		 
-	 real*8:: Origins(3)
-	 complex(kind=8), allocatable :: matU_glo(:,:), matV_glo(:,:),matSub_glo(:,:),matZ_glo(:,:)
-	 integer fullmatflag, Nin1,Nout1,Nin2,Nout2, vecCNT
+	 
+	type kernelquant
+		integer Kernel
+		real*8 wavenum
+		real*8 wavelength
+		real*8 omiga 
+		real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! rank estimation parameter
+		integer RCS_static  ! monostatic or bistatic RCS
+		integer RCS_Nsample ! number of RCS samples
+		real*8:: CFIE_alpha ! combination parameter in CFIE
+		real*8 sigma, lambda ! parameters in ker%Kernel matrices		
+		
+		complex(kind=8), allocatable :: matZ_glo(:,:)
+	end type kernelquant
+	
+	
+	abstract interface
+		subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,operand)
+			implicit none
+			character trans
+			integer M, N, num_vect_sub
+			complex(kind=8) :: Vin(:,:), Vout(:,:)
+			class(*)::operand
+		end subroutine HOBF_MVP_blk
+
+		subroutine BF_MVP_blk(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,operand1)
+			import :: matrixblock
+			implicit none
+			class(*)::operand	
+			class(*),optional::operand1	
+			type(matrixblock)::block_o
+			character trans
+			integer M, N, num_vect_sub
+			complex(kind=8) :: Vin(:,:), Vout(:,:),a,b
+		end subroutine BF_MVP_blk
+
+		subroutine Z_elem(edge_m,edge_n,value,msh,ker)
+			import::mesh,kernelquant
+			implicit none
+			integer edge_m, edge_n
+			complex(kind=8) value
+			type(mesh)::msh
+			type(kernelquant)::ker
+		end subroutine Z_elem		
+	end interface
+	
+
+	 real*8::time_tmp
+     type(basisgroup),allocatable:: basis_group(:)
+	 integer vecCNT
 	 integer,allocatable:: new2old(:)
 	 integer,allocatable:: basis_group_pre(:,:)
-	 
-	 real(kind=8),parameter:: SafeUnderflow=1D-150
-	 real(kind=8),parameter:: SafeAbsoulte=1D-14
-	 
-	 real*8 sigma, lambda ! parameters in Kernel matrices
-	 
-	 integer,parameter:: EMCURV=1
-	 integer,parameter:: EMSURF=2
-	 integer,parameter:: RBF=3
-	 integer,parameter:: FULL=4
-	 integer Kernel
-	 
-	 
-	 integer,parameter:: DIRECT=1
-	 integer,parameter:: NOPRECON=2
-	 integer,parameter:: SAIPRECON=3
-	 
-	 
 	 CHARACTER (LEN=1000) DATA_DIR	 
 	 
 end module

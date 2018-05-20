@@ -3,11 +3,12 @@ use Utilites_randomized
 use H_structure
 use element_Z 
 contains 
-! subroutine Butterfly_compress(blocks,Memory)
+! subroutine Butterfly_compress(blocks,Memory,msh,element_Zmn,ker)
 
    ! use MODULE_FILE
    ! implicit none
-
+	! type(mesh)::msh
+	! type(kernelquant)::ker
     ! integer i, j, level_butterfly, num_blocks, k, attempt
     ! integer group_m, group_n, mm, nn, index_i, index_j, ii, jj
     ! integer level, length_1, length_2, level_blocks, index_ij
@@ -16,7 +17,9 @@ contains
     ! real*8 Memory
     ! complex(kind=8) ctemp
 	! type(matrixblock)::blocks
+	! procedure(Z_elem)::element_Zmn
 	
+	! integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
     ! Memory=0.
 	
 	! blocks%rankmax = -100000
@@ -54,7 +57,7 @@ contains
         ! endif
         ! do index_i=1, 2**level
             ! do index_j=1, 2**(level_butterfly-level)
-                ! call decomposition_UkerlV(index_i,index_j,level,blocks,tolerance)
+                ! call decomposition_UkerlV(index_i,index_j,level,blocks,tolerance,msh,element_Zmn)
                 ! index_ij=index_ij+1
                 ! if (level==0) then
                     ! memory_butterfly=memory_butterfly+SIZEOF(blocks%ButterflyV(index_ij)%matrix)/1024.0d3
@@ -96,7 +99,7 @@ contains
 
 ! end subroutine butterfly_compress
 
-! subroutine decomposition_UkerlV(index_i,index_j,level,blocks,tolerance)
+! subroutine decomposition_UkerlV(index_i,index_j,level,blocks,tolerance,msh,element_Zmn,ker)
 
     ! use MODULE_FILE
     ! implicit none
@@ -105,18 +108,21 @@ contains
     ! integer i, j, ii, jj, index_i, index_j
     ! real*8 tolerance
 	! type(matrixblock)::blocks
+	! type(mesh)::msh
+	! type(kernelquant)::ker
+	! procedure(Z_elem)::element_Zmn
 	
     ! if (level==0) then
-        ! call butterfly_recomposition_FastSampling_initial(index_j,blocks)
+        ! call butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn)
     ! else
-        ! call butterfly_recomposition_FastSampling(index_i,index_j,level,blocks)
+        ! call butterfly_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn)
     ! endif
 
     ! return
 
 ! end subroutine decomposition_UkerlV
 
-! subroutine butterfly_recomposition_FastSampling_initial(index_j,blocks)
+! subroutine butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn,ker)
 
     ! use MODULE_FILE
     ! ! use lapack95
@@ -135,8 +141,11 @@ contains
     ! real*8,allocatable:: Singular(:)
 	! integer Nlayer
 	! type(matrixblock)::blocks
+	! type(mesh)::msh
+	! type(kernelquant)::ker
+    ! procedure(Z_elem)::element_Zmn
 	
-    ! group_m=blocks%row_group  ! Note: row_group and col_group interchanged here    
+	! group_m=blocks%row_group  ! Note: row_group and col_group interchanged here    
     ! group_n=blocks%col_group
     ! level_blocks=blocks%level
     ! level_butterfly=blocks%level_butterfly
@@ -148,7 +157,7 @@ contains
     ! header_m=basis_group(group_m)%head
     ! header_n=basis_group(group_n)%head
 
-    ! rankmax=rank_approximate_func(group_m, group_n, 1)
+    ! rankmax=rank_approximate_func(group_m, group_n, 1,ker)
 
     ! if (rankmax>nn) then
         ! rankmax=nn
@@ -157,11 +166,11 @@ contains
 	! ! modified by Yang, this may improve accuracy as one dimension is constant
 	! rankmax=min(mm,nn)	
 
-	! rankmax_r = min(rank_approximate_func(group_m, group_n, 1)*2,mm)
+	! rankmax_r = min(rank_approximate_func(group_m, group_n, 1)*2,mm,ker)
 	! rankmax_c = nn
 	! rankmax_min = min(rankmax_r,rankmax_c)
 	
-	! ! write(*,*)rankmax,rank_approximate_func(group_m, group_n, 1),'i'
+	! ! write(*,*)rankmax,rank_approximate_func(group_m, group_n, 1,ker),'i'
 		
     ! allocate(select_row(rankmax_r),select_column(rankmax_c))
 
@@ -197,7 +206,7 @@ contains
         ! do i=1, rankmax_r
             ! edge_m=header_m+select_row(i)-1
             ! edge_n=header_n+select_column(j)-1
-            ! call element_Zmn(edge_m,edge_n,ctemp)
+            ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
             ! MatrixSubselection(i,j)=ctemp
         ! enddo
     ! enddo
@@ -217,7 +226,7 @@ contains
                 ! else
                     ! edge_m=header_m+i-1
                     ! edge_n=header_n+select_column(j)-1
-                    ! call element_Zmn(edge_m,edge_n,ctemp)
+                    ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
                     ! matrix_U(i,j)=ctemp
                 ! endif
             ! enddo
@@ -235,7 +244,7 @@ contains
                 ! else
                     ! edge_m=header_m+select_row(i)-1
                     ! edge_n=header_n+j-1
-                    ! call element_Zmn(edge_m,edge_n,ctemp)
+                    ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
                     ! matrix_V(j,i)=ctemp
                 ! endif
             ! enddo
@@ -303,7 +312,7 @@ contains
         ! allocate (matrixtemp_U(rankmax_r,rankmax_c),matrixtemp_V(rankmax_c,rankmax_r))
         ! allocate (select_column_rr(rankmax_c),select_row_rr(rankmax_r))
         ! ! write(*,*)rankmax_r,rankmax_c
-		! call ACA_SubsetSelection(select_column_rr,select_row_rr,rankmax_r,rankmax_c,rank_new,option%tol_SVD)
+		! call ACA_SubsetSelection(MatrixSubselection,select_column_rr,select_row_rr,rankmax_r,rankmax_c,rank_new,option%tol_SVD)
          ! ! write(*,*)rankmax_r,rankmax_c,'dddd'
 		! ! write(*,*)rank_new
 		
@@ -371,7 +380,7 @@ contains
                 ! else
                     ! edge_m=header_m+select_row(select_row_rr(i))-1
                     ! edge_n=header_n+j-1
-                    ! call element_Zmn(edge_m,edge_n,ctemp)
+                    ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
                     ! matrix_V(i,j)=ctemp
                 ! endif
             ! enddo
@@ -414,7 +423,7 @@ contains
 
 ! end subroutine butterfly_recomposition_FastSampling_initial
  
-! subroutine butterfly_recomposition_FastSampling(index_i,index_j,level,blocks)
+! subroutine butterfly_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn,ker)
 
     ! use MODULE_FILE
     ! ! use lapack95
@@ -432,7 +441,10 @@ contains
     ! complex(kind=8),allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
     ! real*8,allocatable:: Singular(:)
 	! type(matrixblock)::blocks
-		
+	! type(mesh)::msh
+	! type(kernelquant)::ker
+	! procedure(Z_elem)::element_Zmn
+	
     ! level_butterfly=blocks%level_butterfly
     ! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here   
     ! group_n=blocks%col_group    
@@ -456,7 +468,7 @@ contains
     ! num_groupn=2**(level_butterfly-level)
     ! index_ij=(index_i-1)*num_groupn+index_j
 
-    ! rankmax=rank_approximate_func(group_m, group_n, 1)
+    ! rankmax=rank_approximate_func(group_m, group_n, 1,ker)
 
     ! if (rankmax>nn) then
         ! rankmax=nn
@@ -465,7 +477,7 @@ contains
 	! ! modified by Yang, this may improve accuracy as one dimension is constant
 	! rankmax=min(mm,nn)	
 
-	! rankmax_r = min(rank_approximate_func(group_m, group_n, 1)*2,mm)
+	! rankmax_r = min(rank_approximate_func(group_m, group_n, 1)*2,mm,ker)
 	! rankmax_c = nn
 	! rankmax_min = min(rankmax_r,rankmax_c)
 	
@@ -475,7 +487,7 @@ contains
         ! ! endif
     ! ! endif
 
-	! if(rankmax==1)write(*,*)group_m,group_n,rank_approximate_func(group_m, group_n, 1),mm,nn
+	! if(rankmax==1)write(*,*)group_m,group_n,rank_approximate_func(group_m, group_n, 1,ker),mm,nn
     ! allocate(select_row(rankmax_r),select_column(rankmax_c))
 
     ! !$omp parallel do default(shared) private(i)
@@ -514,12 +526,12 @@ contains
             ! if (select_column(j)<=nn1) then
                 ! edge_m=select_row(i)+header_m-1
                 ! edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(j))+header_n1-1
-                ! call element_Zmn(edge_m,edge_n,ctemp)
+                ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
                 ! MatrixSubselection(i,j)=ctemp
             ! else
                 ! edge_m=select_row(i)+header_m-1
                 ! edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(j)-nn1)+header_n2-1
-                ! call element_Zmn(edge_m,edge_n,ctemp)
+                ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
                 ! MatrixSubselection(i,j)=ctemp
             ! endif
 			! ! if(level==1)then
@@ -531,7 +543,7 @@ contains
     
     ! allocate (matrixtemp_U(rankmax_r,rankmax_c),matrixtemp_V(rankmax_c,rankmax_r))
     ! allocate (select_column_rr(rankmax_c),select_row_rr(rankmax_r))
-    ! call ACA_SubsetSelection(select_column_rr,select_row_rr,rankmax_r,rankmax_c,rank_new,option%tol_SVD)
+    ! call ACA_SubsetSelection(MatrixSubselection,select_column_rr,select_row_rr,rankmax_r,rankmax_c,rank_new,option%tol_SVD)
     
     ! ! ! if(level==1)then
 		! ! ! write(*,*)rank_new,rankmax
@@ -608,7 +620,7 @@ contains
                 ! else
                     ! edge_m=i+header_m-1
                     ! edge_n=blocks%ButterflyColSelect(index_ij,level)%select_columns(j)+header_n1-1 
-                    ! call element_Zmn(edge_m,edge_n,ctemp)                    
+                    ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)                    
                     ! blocks%ButterflyU(index_ij)%matrix(i,j)=ctemp
                 ! endif
             ! enddo
@@ -634,7 +646,7 @@ contains
                     ! edge_m=select_row(select_row_rr(i))+header_m-1
                     ! edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(j-nn1)+header_n2-1
                 ! endif
-                ! call element_Zmn(edge_m,edge_n,ctemp)                    
+                ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)                    
                 ! matrix_V(i,j)=ctemp
             ! endif
         ! enddo
@@ -684,7 +696,7 @@ contains
 
 
 
-subroutine Bplus_compress_N15(bplus,option,Memory)
+subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn)
 
    use MODULE_FILE
    ! use lapack95
@@ -697,32 +709,32 @@ subroutine Bplus_compress_N15(bplus,option,Memory)
     real*8 Memory,rtemp	
 	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall
 	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
 	Memory = 0
 	
 	do ll=1,bplus%Lplus
 		bplus%LL(ll)%rankmax=0
-																						  
-						
-														
-																   
-																	   
+															   
 		do bb = 1,bplus%LL(ll)%Nbound
 			! write(*,*)bplus%level,ll,bb
 			if(bplus%LL(ll+1)%Nbound==0)then
 				
-				bplus%LL(ll)%matrices_block(bb)%level_butterfly = int((Maxlevel_for_blocks-bplus%LL(ll)%matrices_block(bb)%level)/2)*2
-				if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
-				call Butterfly_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp)
+				! bplus%LL(ll)%matrices_block(bb)%level_butterfly = int((Maxlevel_for_blocks-bplus%LL(ll)%matrices_block(bb)%level)/2)*2
+				! if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
+				call Butterfly_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn)
 				call Butterfly_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				Memory = Memory + rtemp
 			else 		
-				level_butterfly = int((Maxlevel_for_blocks - bplus%LL(ll)%matrices_block(1)%level)/2)*2 
+				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
 				level_BP = bplus%level			
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm		
 				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)			
-				call Butterfly_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp)
+				call Butterfly_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn)
 				call Butterfly_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				Memory = Memory + rtemp
 			end if	
@@ -737,7 +749,7 @@ end subroutine Bplus_compress_N15
 
 
 
-subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory)
+subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn)
 
    use MODULE_FILE
    ! use lapack95
@@ -766,21 +778,26 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 	real*8:: maxvalue(1:20)
 	real*8:: minvalue(1:20)
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
 	integer cnt_tmp,rankFar,rankNear
 	type(Hoption)::option
+	type(Hstat)::stats
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
 	
 	cnt_tmp	= 0
 	rankFar = 0
 	rankNear = 0
-	ForwardSymmetricFlag = 1	
+	! ForwardSymmetricFlag = 1	
 	maxvalue = 0
 	minvalue = 10000
     Memory=0
 
     level_blocks=blocks%level
     !level_butterfly=Maxlevel-level_blocks
-    level_butterfly=int((Maxlevel_for_blocks-level_blocks)/2)*2
+    level_butterfly=blocks%level_butterfly
 																  
 	
 	call assert(level_butterfly>=2,'level_butterfly should be at least 2')
@@ -792,7 +809,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 	blocks%rankmax = -100000
 	blocks%rankmin = 100000
 	
-    blocks%level_butterfly=level_butterfly
+    ! blocks%level_butterfly=level_butterfly
 
 
     num_blocks=2**level_butterfly
@@ -847,7 +864,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			allocate(matU(mm,rmax))
 			allocate(matV(rmax,nn))
 			allocate(Singular(rmax))
-			! call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)					
+			! call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh)					
 			! rank = min(rank,37)
 			
 			
@@ -879,7 +896,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 					blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(ii,ii) = 0d0
 				end do	
 			else 
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)	
+				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh,ker,element_Zmn)	
 				! if(rank==53)then
 					! write(*,*)group_m,group_n,boundary_map(group_m-groupm_start+1)
 					! stop
@@ -991,7 +1008,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 	enddo
 
 	
-	! write(*,*)'stat:',2**levelm,2**(level_butterfly-levelm), cnt_tmp,rankFar,rankNear	
+	! write(*,*)'stats:',2**levelm,2**(level_butterfly-levelm), cnt_tmp,rankFar,rankNear	
 
 
 	! construct the the right half
@@ -1025,7 +1042,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 				matV(1:rank,1:nn)=0
 				! if(blocks==342)write(111,*)Singular(1:rank)
 			else 
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)	
+				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh,ker,element_Zmn)	
 			end if
 			
 			
@@ -1122,7 +1139,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 	enddo		
 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
-	rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),rankmax_of_level(level_blocks))
+	stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
 	! if(blocks==342)then
 	! write(*,*)rankmax_for_butterfly
 	! write(*,*)rankmin_for_butterfly
@@ -1144,7 +1161,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 end subroutine Butterfly_compress_N15_withoutBoundary
 
 
-subroutine Butterfly_compress_N15(blocks,option,Memory)
+subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn)
 
    use MODULE_FILE
    ! use lapack95
@@ -1171,11 +1188,16 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 	type(matrixblock)::blocks
 	integer cnt_tmp,rankFar,rankNear
 	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
 	cnt_tmp	= 0
 	rankFar = 0
 	rankNear = 0
-	ForwardSymmetricFlag = 1	
+	! ForwardSymmetricFlag = 1	
 	maxvalue = 0
 	minvalue = 10000
     Memory=0
@@ -1228,7 +1250,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 			! do jj =1,nn
 				! edge_m = basis_group(group_m)%head + ii - 1
 				! edge_n = basis_group(group_n)%head + jj - 1
-				! call element_Zmn(edge_m,edge_n,ctemp)
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
 				! QQ(ii,jj) = ctemp
 			! end do
 		! end do
@@ -1244,7 +1266,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 		allocate(UU(mm,rmax))
 		allocate(VV(rmax,nn))
 		allocate(Singular(rmax))
-		call ACA_CompressionForward(UU,VV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)		
+		call ACA_CompressionForward(UU,VV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh,ker,element_Zmn)		
 		
 		
 		
@@ -1315,7 +1337,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 							do jj =1,nn
 								edge_m = basis_group(group_m)%head + ii - 1
 								edge_n = basis_group(group_n)%head + jj - 1
-								call element_Zmn(edge_m,edge_n,ctemp)
+								call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
 								QQ(ii,jj) = ctemp
 							end do
 						end do
@@ -1553,7 +1575,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 				allocate(Singular(rmax))
 				
 				
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)					
+				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh,ker,element_Zmn)					
 				! rank = min(rank,37)
 				
 				
@@ -1712,7 +1734,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 		enddo
 
 		
-		! write(*,*)'stat:',2**levelm,2**(level_butterfly-levelm), cnt_tmp,rankFar,rankNear	
+		! write(*,*)'stats:',2**levelm,2**(level_butterfly-levelm), cnt_tmp,rankFar,rankNear	
 
 
 		! construct the the right half
@@ -1736,7 +1758,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 				allocate(matU(mm,rmax))
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD)	
+				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,rmax,rank,option%tol_SVD*0.1,option%tol_SVD,msh,ker,element_Zmn)	
 				! rank = min(rank,37)
 				
 
@@ -1960,9 +1982,9 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 	end if	
 	 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
-	rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),rankmax_of_level(level_blocks))
+	stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
 	
-	! write(*,*)rankmax_of_level,'nitaima',rankmax_for_butterfly
+	! write(*,*)stats%rankmax_of_level,'nitaima',rankmax_for_butterfly
 	! stop
 	
 	! if(blocks==342)then
@@ -1986,7 +2008,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory)
 end subroutine Butterfly_compress_N15
 
 
-subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
+subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,msh,ker,element_Zmn)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -2007,6 +2029,9 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	real*8::Singular(rmax)
     complex(kind=8),allocatable:: row_R(:),column_R(:)
     real*8,allocatable:: norm_row_R(:),norm_column_R(:)
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
 	
 	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:),QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
 	real*8, allocatable :: Singularsml(:)
@@ -2031,9 +2056,9 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
         ! value_Z=mat(select_row(1),j)
 		edge_m = header_m + select_row(1) - 1
 		edge_n = header_n + j - 1
-		call element_Zmn(edge_m,edge_n,value_Z)							 
+		call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
         row_R(j)=value_Z
-        norm_row_R(j)=value_Z*conjg(value_Z)
+        norm_row_R(j)=dble(value_Z*conjg(value_Z))
     enddo
     !$omp end parallel do
 
@@ -2055,10 +2080,10 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
     do i=1,rankmax_r
 		edge_m = header_m + i - 1
 		edge_n = header_n + select_column(1) - 1
-		call element_Zmn(edge_m,edge_n,value_Z)
+		call element_Zmn(edge_m,edge_n,value_Z,msh,ker)
         ! value_Z=mat(i,select_column(1))
         column_R(i)=value_Z
-        norm_column_R(i)=value_Z*conjg(value_Z)
+        norm_column_R(i)=dble(value_Z*conjg(value_Z))
     enddo
     !$omp end parallel do
 
@@ -2086,14 +2111,14 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
         do j=1,rankmax_c		
 			edge_m = header_m + select_row(rank+1) - 1
 			edge_n = header_n + j - 1
-			call element_Zmn(edge_m,edge_n,value_Z)	
+			call element_Zmn(edge_m,edge_n,value_Z,msh,ker)	
             ! value_Z=mat(select_row(rank+1),j)
             value_UV=0
             do i=1,rank
                 value_UV=value_UV+matU(select_row(rank+1),i)*matV(i,j)
             enddo
             row_R(j)=value_Z-value_UV
-            norm_row_R(j)=row_R(j)*conjg(row_R(j))
+            norm_row_R(j)=dble(row_R(j)*conjg(row_R(j)))
         enddo
         !$omp end parallel do
 
@@ -2119,14 +2144,14 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
         do i=1,rankmax_r
 			edge_m = header_m + i - 1
 			edge_n = header_n + select_column(rank+1) - 1
-			call element_Zmn(edge_m,edge_n,value_Z)		
+			call element_Zmn(edge_m,edge_n,value_Z,msh,ker)		
             ! value_Z=mat(i,select_column(rank+1))
             value_UV=0
             do j=1,rank
                 value_UV=value_UV+matU(i,j)*matV(j,select_column(rank+1))
             enddo
             column_R(i)=value_Z-value_UV
-            norm_column_R(i)=column_R(i)*conjg(column_R(i))
+            norm_column_R(i)=dble(column_R(i)*conjg(column_R(i)))
         enddo
         !$omp end parallel do
 
@@ -2158,7 +2183,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
                 inner_V=inner_V+ctemp*conjg(ctemp)
             enddo
             ! !$omp end parallel do
-            inner_UV=inner_UV+2*sqrt(inner_U*inner_V)
+            inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
         enddo
         norm_Z=norm_Z+inner_UV+norm_U*norm_V
 
@@ -2302,7 +2327,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 
 
 	if(trans=='N')then
-		do level = level_start,level_end !Maxlevel_for_blocks+1
+		do level = level_start,level_end !ho_bf1%Maxlevel+1
 			do ii =1, ho_bf1%levels(level)%N_block_forward
 				bplus_o =>  ho_bf1%levels(level)%BP(ii)
 				groupm = bplus_o%row_group
@@ -2312,7 +2337,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 				idx_start_n = basis_group(groupn)%head
 				idx_end_n = basis_group(groupn)%tail
 				
-				if(level==Maxlevel_for_blocks+1)then
+				if(level==ho_bf1%Maxlevel+1)then
 					call fullmat_block_MVP_randomized_dat(bplus_o%LL(1)%matrices_block(1),'N',idx_end_m-idx_start_m+1,num_vectors,&
 					&vec_old(idx_start_n:idx_end_n,1:num_vectors),vec_new(idx_start_m:idx_end_m,1:num_vectors),ctemp1,ctemp2)
 				else 
@@ -2322,7 +2347,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 			end do				
 		end do
 	else if(trans=='T')then
-		do level = level_start,level_end !Maxlevel_for_blocks+1
+		do level = level_start,level_end !ho_bf1%Maxlevel+1
 			do ii =1, ho_bf1%levels(level)%N_block_forward
 				bplus_o =>  ho_bf1%levels(level)%BP(ii)
 				groupm = bplus_o%row_group
@@ -2332,7 +2357,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 				idx_start_n = basis_group(groupn)%head
 				idx_end_n = basis_group(groupn)%tail
 				
-				if(level==Maxlevel_for_blocks+1)then
+				if(level==ho_bf1%Maxlevel+1)then
 					call fullmat_block_MVP_randomized_dat(bplus_o%LL(1)%matrices_block(1),'T',idx_end_m-idx_start_m+1,num_vectors,&
 					&vec_old(idx_start_m:idx_end_m,1:num_vectors),vec_new(idx_start_n:idx_end_n,1:num_vectors),ctemp1,ctemp2)
 				else 

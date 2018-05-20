@@ -9,27 +9,27 @@ contains
 
 
 
-subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
+subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR,agent_block)
 	use misc
     use MODULE_FILE
     implicit none
 	
-	type(matrixblock)::block_o
+	type(matrixblock)::block_o,agent_block
 	integer level_butterfly,level_butterfly_loc, ij_loc,index_i,index_i_start,index_j_start,index_j,level,ii,nn,mm,num_blocks,rank
 	character LR
 	
-	allocate(agent_block(1))
+	! allocate(agent_block)
 	
 
 	call assert(level_butterfly_loc>=1,'level_butterfly_loc cannot be zero')
 
-	agent_block(1)%row_group=-1
-	agent_block(1)%col_group=-1
+	agent_block%row_group=-1
+	agent_block%col_group=-1
 	
-	agent_block(1)%style = block_o%style
-	agent_block(1)%level_butterfly = level_butterfly_loc
-	agent_block(1)%rankmax = block_o%rankmax
-	agent_block(1)%rankmin = block_o%rankmin
+	agent_block%style = block_o%style
+	agent_block%level_butterfly = level_butterfly_loc
+	agent_block%rankmax = block_o%rankmax
+	agent_block%rankmin = block_o%rankmin
 	level_butterfly = block_o%level_butterfly
 	
 	
@@ -39,37 +39,37 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
 
 
 
-	allocate(agent_block(1)%ButterflyU(num_blocks))
-	allocate(agent_block(1)%ButterflyV(num_blocks))
+	allocate(agent_block%ButterflyU(num_blocks))
+	allocate(agent_block%ButterflyV(num_blocks))
 	
-	allocate(agent_block(1)%ButterflyKerl(level_butterfly_loc))
+	allocate(agent_block%ButterflyKerl(level_butterfly_loc))
 
 	
 	if(LR=='L')then
 		do level=1, level_butterfly_loc
-			agent_block(1)%ButterflyKerl(level)%num_row=2**level
-			agent_block(1)%ButterflyKerl(level)%num_col=2**(level_butterfly_loc-level+1)
-			allocate(agent_block(1)%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly_loc-level+1)))
+			agent_block%ButterflyKerl(level)%num_row=2**level
+			agent_block%ButterflyKerl(level)%num_col=2**(level_butterfly_loc-level+1)
+			allocate(agent_block%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly_loc-level+1)))
 			do index_i=1, 2**level
 				do index_j=1, 2**(level_butterfly_loc-level)
 
 					index_i_start = (ij_loc-1)*2**level	
 					nn=size(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,2)
 					rank=size(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,1)
-					allocate(agent_block(1)%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank,nn))
-					agent_block(1)%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix = block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix
+					allocate(agent_block%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank,nn))
+					agent_block%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix = block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix
 
 					nn=size(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,2)
-					allocate(agent_block(1)%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank,nn))
-					agent_block(1)%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix = block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix
+					allocate(agent_block%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank,nn))
+					agent_block%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix = block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix
 
 					if (level==level_butterfly_loc) then
 						index_i_start = (ij_loc-1)*2**level	
 						
 						mm=size(block_o%ButterflyU(index_i+index_i_start)%matrix,1)
 						rank=size(block_o%ButterflyU(index_i+index_i_start)%matrix,2)
-						allocate(agent_block(1)%ButterflyU(index_i)%matrix(mm,rank))
-						agent_block(1)%ButterflyU(index_i)%matrix = block_o%ButterflyU(index_i+index_i_start)%matrix					
+						allocate(agent_block%ButterflyU(index_i)%matrix(mm,rank))
+						agent_block%ButterflyU(index_i)%matrix = block_o%ButterflyU(index_i+index_i_start)%matrix					
 					endif
 				enddo
 			enddo
@@ -79,16 +79,16 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
 					do index_j=1, 2**(level_butterfly_loc-level)
 						index_i_start = (ij_loc-1)*2**level	
 						nn=size(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,2)
-						allocate(agent_block(1)%ButterflyV(2*index_j-1)%matrix(nn,nn))
-						agent_block(1)%ButterflyV(2*index_j-1)%matrix = 0
+						allocate(agent_block%ButterflyV(2*index_j-1)%matrix(nn,nn))
+						agent_block%ButterflyV(2*index_j-1)%matrix = 0
 						do ii=1,nn
-							agent_block(1)%ButterflyV(2*index_j-1)%matrix(ii,ii)=1
+							agent_block%ButterflyV(2*index_j-1)%matrix(ii,ii)=1
 						end do
 						nn=size(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,2)
-						allocate(agent_block(1)%ButterflyV(2*index_j)%matrix(nn,nn))
-						agent_block(1)%ButterflyV(2*index_j)%matrix = 0
+						allocate(agent_block%ButterflyV(2*index_j)%matrix(nn,nn))
+						agent_block%ButterflyV(2*index_j)%matrix = 0
 						do ii=1,nn
-							agent_block(1)%ButterflyV(2*index_j)%matrix(ii,ii)=1
+							agent_block%ButterflyV(2*index_j)%matrix(ii,ii)=1
 						end do					
 					end do
 				end do
@@ -97,9 +97,9 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
 		enddo
 	else if(LR=='R')then
 		do level=1, level_butterfly_loc
-			agent_block(1)%ButterflyKerl(level)%num_row=2**level
-			agent_block(1)%ButterflyKerl(level)%num_col=2**(level_butterfly_loc-level+1)
-			allocate(agent_block(1)%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly_loc-level+1)))
+			agent_block%ButterflyKerl(level)%num_row=2**level
+			agent_block%ButterflyKerl(level)%num_col=2**(level_butterfly_loc-level+1)
+			allocate(agent_block%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly_loc-level+1)))
 			do index_i=1, 2**(level-1)
 				do index_j=1, 2**(level_butterfly_loc-level+1)
 
@@ -107,20 +107,20 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
 					
 					mm=size(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,1)
 					rank=size(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,2)
-					allocate(agent_block(1)%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix(mm,rank))
-					agent_block(1)%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix = block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix
+					allocate(agent_block%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix(mm,rank))
+					agent_block%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix = block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix
 
 					mm=size(block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,1)
-					allocate(agent_block(1)%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix(mm,rank))
-					agent_block(1)%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix = block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix
+					allocate(agent_block%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix(mm,rank))
+					agent_block%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix = block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix
 
 					if (level==1) then
 						index_j_start = (ij_loc-1)*2**(level_butterfly_loc-level+1)	
 						
 						nn=size(block_o%ButterflyV(index_j+index_j_start)%matrix,1)
 						rank=size(block_o%ButterflyV(index_j+index_j_start)%matrix,2)
-						allocate(agent_block(1)%ButterflyV(index_j)%matrix(nn,rank))
-						agent_block(1)%ButterflyV(index_j)%matrix = block_o%ButterflyV(index_j+index_j_start)%matrix					
+						allocate(agent_block%ButterflyV(index_j)%matrix(nn,rank))
+						agent_block%ButterflyV(index_j)%matrix = block_o%ButterflyV(index_j+index_j_start)%matrix					
 					endif
 				enddo
 			enddo
@@ -130,16 +130,16 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR)
 					do index_j=1, 1
 						index_j_start = (ij_loc-1)*2**(level_butterfly_loc-level+1)	
 						mm=size(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,1)
-						allocate(agent_block(1)%ButterflyU(2*index_i-1)%matrix(mm,mm))
-						agent_block(1)%ButterflyU(2*index_i-1)%matrix = 0
+						allocate(agent_block%ButterflyU(2*index_i-1)%matrix(mm,mm))
+						agent_block%ButterflyU(2*index_i-1)%matrix = 0
 						do ii=1,mm
-							agent_block(1)%ButterflyU(2*index_i-1)%matrix(ii,ii)=1
+							agent_block%ButterflyU(2*index_i-1)%matrix(ii,ii)=1
 						end do
 						mm=size(block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,1)
-						allocate(agent_block(1)%ButterflyU(2*index_i)%matrix(mm,mm))
-						agent_block(1)%ButterflyU(2*index_i)%matrix = 0
+						allocate(agent_block%ButterflyU(2*index_i)%matrix(mm,mm))
+						agent_block%ButterflyU(2*index_i)%matrix = 0
 						do ii=1,mm
-							agent_block(1)%ButterflyU(2*index_i)%matrix(ii,ii)=1
+							agent_block%ButterflyU(2*index_i)%matrix(ii,ii)=1
 						end do				
 					end do
 				end do
@@ -526,7 +526,7 @@ end subroutine Copy_butterfly_partial
 
 
 
-subroutine Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option)
+subroutine Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
    use MODULE_FILE
    ! use lapack95
@@ -540,6 +540,7 @@ subroutine Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blo
    complex(kind=8) ctemp
    integer kmax
    type(Hoption)::option
+   type(Hstat)::stats
    ! type(RandomBlock), pointer :: random
    type(RandomBlock) :: vec_rand
    
@@ -765,7 +766,7 @@ end subroutine OneKernel_LL
 
 
 
-subroutine Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option)
+subroutine Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
    use MODULE_FILE
    ! use lapack95
@@ -789,6 +790,7 @@ subroutine Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blo
    real*8::n1,n2
    integer::kmax,unique_nth
    type(Hoption)::option
+   type(Hstat)::stats
    
    call assert(nth_e==nth_e,'Nbind/=1')
    
@@ -809,7 +811,7 @@ subroutine Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blo
 			n1 = OMP_get_wtime()
 			call Butterfly_partial_MVP_Half(blocks,'N',0,level_left_start-1,vec_rand,num_vect_sub,nth_s,nth_e,Ng)
 			n2 = OMP_get_wtime()
-			time_halfbuttermul = time_halfbuttermul + n2-n1		 
+			! time_halfbuttermul = time_halfbuttermul + n2-n1		 
 		endif 
 	   
 	   

@@ -6,7 +6,7 @@ integer rankthusfarBC
 contains 
 
 
-subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,Memory)
+subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
 
     use MODULE_FILE
 	use misc
@@ -20,14 +20,15 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 	type(blockplus),pointer::bplus
 	real*8:: n1,n2,Memory,error_inout
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	
     bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)	
 	
 	if(bplus%Lplus==1)then
-		call OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,Memory)
+		call OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats)
 	else 
-		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,Memory)
+		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
 	end if	
 
 end subroutine Bplus_inverse_schur_partitionedinverse
@@ -35,7 +36,7 @@ end subroutine Bplus_inverse_schur_partitionedinverse
 
 
 
-subroutine OneL_inverse_schur_partitionedinverse(ho_bf,level_c,rowblock,error_inout,option,Memory)
+subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats)
 
     use MODULE_FILE
 	use misc
@@ -58,6 +59,8 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf,level_c,rowblock,error_in
 	integer itermax,ntry
 	real*8:: n1,n2,Memory
 	type(Hoption)::option
+	type(Hstat)::stats
+	type(hobf)::ho_bf1
 
 	error_inout=0
 	
@@ -77,24 +80,25 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf,level_c,rowblock,error_in
 	
 	rank0 = max(block_off1%rankmax,block_off2%rankmax)
 	rate=1.2d0
-	call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option) 	
+	call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats) 	
 	error_inout = max(error_inout, error)
 	
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
-		call Butterfly_inverse_schulziteration_IplusButter(block_o,error,option,Memory)
+		call Butterfly_inverse_schulziteration_IplusButter(block_o,error,option,stats)
 	else
-		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,option,error)
+		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats)
 	endif
 
 	error_inout = max(error_inout, error)
+	! call ComputeMemory_butterfly(block_o,Memory)
 
 	n2 = OMP_get_wtime()
 	write(*,*)'I+B Inversion Time:',n2-n1	
 	
 #if PRNTlevel >= 1
-	write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',blocks_minusBC%rankmax,' L_butt:',blocks_minusBC%level_butterfly,' error:',error_inout	
+	write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif
 
 	
@@ -105,7 +109,7 @@ end subroutine OneL_inverse_schur_partitionedinverse
 
 
 
-subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,option,Memory)
+subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats)
 
     use MODULE_FILE
 	use misc
@@ -128,6 +132,8 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	integer itermax,ntry,converged
 	real*8:: n1,n2,Memory,memory_temp
 	type(Hoption)::option
+	type(Hstat)::stats
+	
 	type(schulz_operand)::schulz_op
 	complex(kind=8),allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
 	complex(kind=8)::ctemp1,ctemp2
@@ -163,7 +169,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		rank0 = block_Xn%rankmax
 		
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,butterfly_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,ii) 	
+		call Butterfly_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,butterfly_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ii) 	
 		
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
 		if(schulz_op%order==3)schulz_op%scale=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
@@ -339,7 +345,7 @@ end subroutine compute_schulz_init
 
 
 
-subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,Memory)
+subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
 
     use MODULE_FILE
 	use misc
@@ -370,8 +376,11 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	complex(kind=8):: ctemp1,ctemp2 
 	integer, allocatable :: ipiv(:)
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(hobf)::ho_bf1
-	
+	type(matrixblock):: agent_block
+	type(blockplus):: agent_bplus
+	 
 	ctemp1 = 1d0
 	ctemp2 = 0d0
 	
@@ -398,10 +407,10 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	rank0_outter = max(block_off1%rankmax,block_off2%rankmax)
 	rankrate_outter=1.2d0	
 	
-	call Buplus_randomized(Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option)
+	level_butterfly = block_o%level_butterfly
+	
+	call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats)
 	error_inout = max(error_inout, error)
-
-
 	
 	
 	! write(*,*)'good!!!!'
@@ -414,6 +423,8 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			block_o => Bplus%LL(llplus)%matrices_block(bb)
 		
 			err_max=0
+			
+			
 			!!!!! partial update butterflies at level llplus from left B1 = D^-1xB
 			if(llplus/=Lplus)then
 			
@@ -422,7 +433,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				n2 = OMP_get_wtime()
 				! time_tmp = time_tmp + n2 - n1
 				
-				level_butterfly = int((Maxlevel_for_blocks - Bplus%LL(llplus)%matrices_block(1)%level)/2)*2 
+				level_butterfly = Bplus%LL(llplus)%matrices_block(1)%level_butterfly
 				level_BP = Bplus%level
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				level_butterfly_loc = levelm
@@ -431,10 +442,11 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				edge_e =basis_group(block_o%row_group)%tail 
 
 				
-				
+				! write(*,*)'nidiao',llplus,Lplus,Bplus%LL(llplus+1)%Nbound,Bplus%LL(llplus)%matrices_block(1)%row_group,Bplus%LL(llplus)%matrices_block(1)%col_group
 				
 				do ii=1,Bplus%LL(llplus+1)%Nbound
 					edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					
 					if(edge_first>=edge_s .and. edge_first<=edge_e)then
 						ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1					
 						if(level_butterfly_loc==0)then
@@ -442,25 +454,24 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							stop
 						else 
 
-							! allocate(agent_block(1))
-
-							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'L')
-							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group)							
+							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'L',agent_block)
+							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus)							
 															
 
 															
-							rank0 = agent_block(1)%rankmax
+							rank0 = agent_block%rankmax
 							rate=1.2d0
-							level_butterfly = agent_block(1)%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block(1),agent_bplus(1),Bplus_block_MVP_BplusB_dat,error,'L small',option,agent_block(1)) 	
-							call Copy_butterfly_partial(agent_block(1),block_o,level_butterfly_loc,ij_loc,'L',Memory)						
+							level_butterfly = agent_block%level_butterfly
+							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,agent_block) 
+							! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade' 
+							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)						
 								
 							err_max = max(err_max, error)						
 								
-							call delete_blocks(agent_block(1))
-							deallocate(agent_block)	
-							call delete_bplus(agent_bplus(1))
-							deallocate(agent_bplus)	
+							call delete_blocks(agent_block)
+							! deallocate(agent_block)	
+							call delete_bplus(agent_bplus)
+							! deallocate(agent_bplus)	
 
 						end if
 					end if
@@ -477,8 +488,8 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			! write(*,*)block_o%level_butterfly,'ahaha'
 			
 			!!!!! invert I+B1 to be I+B2		
-				
-			call Butterfly_inverse_partitionedinverse_IplusButter(block_o,option,error)		
+			level_butterfly=block_o%level_butterfly	
+			call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats)		
 			error_inout = max(error_inout, error)		
 	
 			
@@ -491,7 +502,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				n2 = OMP_get_wtime()
 				! time_tmp = time_tmp + n2 - n1		
 				! write(*,*)'hhe1'
-				level_butterfly = int((Maxlevel_for_blocks - Bplus%LL(llplus)%matrices_block(1)%level)/2)*2 
+				level_butterfly = Bplus%LL(llplus)%matrices_block(1)%level_butterfly
 				level_BP = Bplus%level
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				level_butterfly_loc = levelm
@@ -511,25 +522,28 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 ! write(*,*)'hhe2',level_butterfly_loc,ij_loc,block_o%level_butterfly
 							cnt_partial = cnt_partial + 1
 							! allocate(agent_block(1))
-						   
-							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'R')
-							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group)							
+
+							! allocate(agent_block(1))
+							! allocate(agent_bplus)
+							
+							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'R',agent_block)
+							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus)							
 							
 							
 							
 							
-							rank0 = agent_block(1)%rankmax
+							rank0 = agent_block%rankmax
 							rate=1.2d0
-							level_butterfly = agent_block(1)%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block(1),agent_bplus(1),Bplus_block_MVP_BBplus_dat,error,'R small',option,agent_block(1)) 	
-							call Copy_butterfly_partial(agent_block(1),block_o,level_butterfly_loc,ij_loc,'R',Memory)						
+							level_butterfly = agent_block%level_butterfly
+							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,agent_block) 	
+							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)						
 								
 							err_max = max(err_max, error)															
 								
-							call delete_blocks(agent_block(1))
-							deallocate(agent_block)	
-							call delete_bplus(agent_bplus(1))
-							deallocate(agent_bplus)								
+							call delete_blocks(agent_block)
+							! deallocate(agent_block)	
+							call delete_bplus(agent_bplus)
+							! deallocate(agent_bplus)								
 
 						end if
 					end if
@@ -547,9 +561,6 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	end do
 	
 	
-					
-	call ComputeMemory_Bplus(Bplus,Memory)	
-	
 	rank_new_max = 0
 	do ll=1,Lplus
 		rank_new_max = max(rank_new_max,Bplus%LL(ll)%rankmax)
@@ -564,12 +575,12 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 end subroutine MultiL_inverse_schur_partitionedinverse
 
 
-subroutine Extract_partial_Bplus(bplus_i,ll_s,row_group)
+subroutine Extract_partial_Bplus(bplus_i,ll_s,row_group,agent_bplus)
 use MODULE_FILE
 use misc
 implicit none 
 type(matrixblock),pointer::block_i,block_o
-type(blockplus)::bplus_i
+type(blockplus)::bplus_i,agent_bplus
 
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb,bb_o
 integer level, blocks, edge, patch, node, group,level_c
@@ -582,37 +593,37 @@ call assert(bplus_i%row_group==bplus_i%col_group,'only works for square matrix')
 idx_s = basis_group(row_group)%head
 idx_e = basis_group(row_group)%tail
 
-allocate(agent_bplus(1))
-allocate(agent_bplus(1)%LL(LplusMax))
+! allocate(agent_bplus)
+allocate(agent_bplus%LL(LplusMax))
 do ll=1,LplusMax
-agent_bplus(1)%LL(ll)%Nbound = 0
+agent_bplus%LL(ll)%Nbound = 0
 end do
 
-agent_bplus(1)%Lplus = bplus_i%Lplus - ll_s + 1
-agent_bplus(1)%row_group = 	row_group
-agent_bplus(1)%col_group = 	row_group
-agent_bplus(1)%level = basis_group(row_group)%level
+agent_bplus%Lplus = bplus_i%Lplus - ll_s + 1
+agent_bplus%row_group = 	row_group
+agent_bplus%col_group = 	row_group
+agent_bplus%level = basis_group(row_group)%level
 
-do ll=1,agent_bplus(1)%Lplus
-	agent_bplus(1)%LL(ll)%Nbound = 0
-	agent_bplus(1)%LL(ll)%rankmax=bplus_i%LL(ll+ll_s-1)%rankmax
+do ll=1,agent_bplus%Lplus
+	agent_bplus%LL(ll)%Nbound = 0
+	agent_bplus%LL(ll)%rankmax=bplus_i%LL(ll+ll_s-1)%rankmax
 	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
 		if(basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
-			agent_bplus(1)%LL(ll)%Nbound = agent_bplus(1)%LL(ll)%Nbound + 1
+			agent_bplus%LL(ll)%Nbound = agent_bplus%LL(ll)%Nbound + 1
 		end if
 	end do
-	if(agent_bplus(1)%LL(ll)%Nbound>0)then
-		allocate(agent_bplus(1)%LL(ll)%matrices_block(agent_bplus(1)%LL(ll)%Nbound))
+	if(agent_bplus%LL(ll)%Nbound>0)then
+		allocate(agent_bplus%LL(ll)%matrices_block(agent_bplus%LL(ll)%Nbound))
 	end if
 end do
 
 
-do ll=1,agent_bplus(1)%Lplus
+do ll=1,agent_bplus%Lplus
 	bb_o = 0
 	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
 		if(basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
 			bb_o = bb_o + 1
-			call copy_butterfly(bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus(1)%LL(ll)%matrices_block(bb_o))
+			call copy_butterfly(bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus%LL(ll)%matrices_block(bb_o))
 		end if
 	end do
 end do

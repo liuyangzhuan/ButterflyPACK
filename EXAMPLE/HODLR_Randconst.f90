@@ -15,7 +15,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     real*8 tolerance
     integer Primary_block, nn, mm
     integer i,j,k, threads_num,ii,jj
-	real*8,parameter :: cd = 299792458d0
 	integer seed_myid(12)
 	integer times(8)	
 	real*8 t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
@@ -25,8 +24,13 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
 	type(Hoption):: option
+	type(Hstat)::stats	
+	type(mesh)::msh	
+	type(kernelquant)::ker
 	integer:: explicitflag
-	
+	type(hobf)::ho_bf,ho_bf_copy
+	integer Nin1,Nout1,Nin2,Nout2	
+		
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
@@ -50,38 +54,27 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     write(*,*) "FOR X64 COMPILER"
     write(*,*) "   "
 
-	time_indexarray = 0
-	time_leastsquare = 0
-	time_buttermul = 0
-	time_buttermulinv = 0
-	time_kernelupdate = 0
-	time_memcopy = 0
-	time_gemm = 0
-	time_gemm1 = 0
-    time_getvec = 0
-	time_resolve = 0
-	time_halfbuttermul = 0
-
-	Origins=(/0d0,0d0,0d0/)
-    Bigvalue=10000000.0d0
-    junit=(0d0,1d0)
-    pi=4d0*atan(1d0)
-    eps0=1d7/(4d0*pi*cd**2)
-    mu0=pi*4d-7
-    gamma=1.781072418d0
-    impedence=sqrt(mu0/eps0)
-    integral_points=6
-    allocate (ng1(integral_points), ng2(integral_points), ng3(integral_points), gauss_w(integral_points))
-    call gauss_points()
-
+	call InitStat(stats)
 	
-	! x = 1d0
-	! y = 1d0
-	! z = 0d0
-	! call Cart2Sph(x,y,z,Origins,r,theta,phi)
-	! write(*,*)r,theta,phi,sin(theta)
-	! stop
-	
+	! time_indexarray = 0
+	! time_leastsquare = 0
+	! time_buttermul = 0
+	! time_buttermulinv = 0
+	! time_kernelupdate = 0
+	! time_memcopy = 0
+	! time_gemm = 0
+	! time_gemm1 = 0
+    ! time_getvec = 0
+	! time_resolve = 0
+	! time_halfbuttermul = 0
+
+	msh%Origins=(/0d0,0d0,0d0/)
+    
+    msh%integral_points=6
+    allocate (msh%ng1(msh%integral_points), msh%ng2(msh%integral_points), msh%ng3(msh%integral_points), msh%gauss_w(msh%integral_points))
+    call gauss_points(msh)
+
+
      !*************************input******************************
 
     !tol=0.000001
@@ -90,10 +83,9 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	CALL getarg(1, DATA_DIR)
 	
 	
-	Kernel = FULL
+	ker%Kernel = FULL
 
 	option%Nmin_leaf=100
-	mesh_normal=1
 	! Refined_level=0
 	para=0.001
 	! levelpara_control=0
@@ -102,17 +94,17 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! SVD_tolerance_factor=1d-4
 	option%tol_Rdetect=1d-4 !3d-5
     ! Preset_level_butterfly=0
-	Scale=1d0
-	wavelength=0.25
-	Discret=0.05
-	Static=2
-    RCS_sample=1000
+	msh%scaling=1d0
+	ker%wavelength=0.25
+	! Discret=0.05
+	ker%RCS_static=2
+    ker%RCS_Nsample=1000
     ! Optimizing_forward=0
     ! Fast_inverse=0
     ! Add_method_of_base_level=2
-    rank_approximate_para1=6.0
-    rank_approximate_para2=6.0
-    rank_approximate_para3=6.0
+    ker%rank_approximate_para1=6.0
+    ker%rank_approximate_para2=6.0
+    ker%rank_approximate_para3=6.0
 	option%tol_LS=1d-10
 	! tfqmr_tolerance=1d-6
 	option%tol_itersol=3d-3
@@ -131,97 +123,44 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%xyzsort=1
 	option%LnoBP=600
 	option%TwoLayerOnly=1
-	CFIE_alpha=1
+	ker%CFIE_alpha=1
 	explicitflag=0
-	fullmatflag=1
+	! fullmatflag=1
 
-	
-	
-	
-	
-	! open (90,file=trim(DATA_DIR)//'/input.txt')
-	! read (90,*)
 
-	! read (90,*) Nmin_leaf
-	! read (90,*) mesh_normal
-	! read (90,*) Refined_level
-	! read (90,*) para
-	! read (90,*) levelpara_control
-	! read (90,*) ACA_tolerance_forward
-	! read (90,*) SVD_tolerance_forward
-	! read (90,*) SVD_tolerance_factor
-	! read (90,*) Rank_detection_factor
-    ! read (90,*) Preset_level_butterfly
-	! read (90,*) Scale
-	! read (90,*) wavelength
-	! read (90,*) Discret
-	! read (90,*) Static
-    ! read (90,*) RCS_sample
-    ! read (90,*) Optimizing_forward
-    ! read (90,*) Fast_inverse
-    ! read (90,*) Add_method_of_base_level
-    ! read (90,*) rank_approximate_para1
-    ! read (90,*) rank_approximate_para2
-    ! read (90,*) rank_approximate_para3
-	! read (90,*) threads_num
-	! read (90,*) LS_tolerance
-	! read (90,*) tfqmr_tolerance
-	! read (90,*) tfqmr_tolerance_solving
-	! read (90,*) iter_tolerance
-	! read (90,*) up_tolerance
-	! read (90,*) relax_lamda
-	! read (90,*) SolvingMethod
-	! read (90,*) level_tmp
-	! read (90,*) rank_tmp
-	! read (90,*) schurinv
-	! read (90,*) reducelevel_flag
-	! read (90,*) directschur
-	! read (90,*) option%precon
-	! read (90,*) verboselevel
-	! read (90,*) xyzsort
-	! read (90,*) LnoBP
-	! read (90,*) TwoLayerOnly
-	! read (90,*) CFIE_alpha
-	! read (90,*) explicitflag
-	! read (90,*) fullmatflag
-	
-	! close (90)
-	
-	
-	
 	
 	
 	!Nmin_leaf=250
 	!para=0.01
 	!tolerance=0.001
-	!Scale=1.
+	!msh%scaling=1.
 	!alpha=0.5
-    !wavelength=2.
-    tolerance=ACA_tolerance_forward
+    !ker%wavelength=2.
+    ! tolerance=ACA_tolerance_forward
     ! call OMP_set_dynamic(.true.)
     !call OMP_set_nested(.true.)
 
     !*********************************************************
 
-    omiga=2*pi/wavelength/sqrt(mu0*eps0)
-    wavenum=2*pi/wavelength
+    ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
+    ker%wavenum=2*pi/ker%wavelength
 
 	Ntunnel = 15600
-	Maxedge = 3720
+	msh%Nunk = 3720
 	Nin1 = 320*2 
 	Nout1 = 610*2
 	Nin2 = 320*2 
 	Nout2 = 610*2	
-	call assert(Nin1+Nout1+Nin2+Nout2==Maxedge,'The two surfaces have mismatched number of unknowns')
+	call assert(Nin1+Nout1+Nin2+Nout2==msh%Nunk,'The two surfaces have mismatched number of unknowns')
 	
 	! predefine the first three levels of tree due to the physical meanings
 	allocate(basis_group_pre(7,2))
 	basis_group_pre(1,1) = 1
-	basis_group_pre(1,2) = Maxedge
+	basis_group_pre(1,2) = msh%Nunk
 	basis_group_pre(2,1) = 1
 	basis_group_pre(2,2) = Nin1+Nout1	
 	basis_group_pre(3,1) = Nin1+Nout1+1
-	basis_group_pre(3,2) = Maxedge	
+	basis_group_pre(3,2) = msh%Nunk	
 	basis_group_pre(4,1) = 1
 	basis_group_pre(4,2) = Nin1	
 	basis_group_pre(5,1) = 1+Nin1
@@ -235,12 +174,12 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	write(*,*)'Blackbox HODLR for scattering matrix compression'
 	
-	write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',Maxedge
+	write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',msh%Nunk
 	
-	allocate(xyz(3,Maxedge))
-	allocate(node_patch_of_edge(0:0,Maxedge))
-	do kk=1,Maxedge
-		node_patch_of_edge(0,kk)=kk
+	allocate(msh%xyz(3,msh%Nunk))
+	allocate(msh%info_unk(0:0,msh%Nunk))
+	do kk=1,msh%Nunk
+		msh%info_unk(0,kk)=kk
 	enddo
 	!!!!!! for simplicity, I'm duplicating locations of each point
 
@@ -248,22 +187,18 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	do kk=1,Ntunnel/2
 		read(521,*) tmp(1),tmp(2),tmp(3)
 	end do          
-	do kk=1,Maxedge/2
-		read(521,*) xyz(1,2*kk-1),xyz(2,2*kk-1),xyz(3,2*kk-1)
-		xyz(:,2*kk) = xyz(:,2*kk-1)
+	do kk=1,msh%Nunk/2
+		read(521,*) msh%xyz(1,2*kk-1),msh%xyz(2,2*kk-1),msh%xyz(3,2*kk-1)
+		msh%xyz(:,2*kk) = msh%xyz(:,2*kk-1)
 	end do
 	close(521)
 	
 	
 	
    ! !***********************************************************************
-   ! open (256,file='Info.txt')
-   ! write (256,*) 'CFIE computing'
-   ! write (256,*) 'wavelength:',wavelength
-   ! close (256)
    ! write (*,*) ''
    ! write (*,*) 'CFIE computing'
-   ! write (*,*) 'wavelength:',wavelength
+   ! write (*,*) 'ker%wavelength:',ker%wavelength
    ! write (*,*) ''
    ! !***********************************************************************
 	
@@ -278,8 +213,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(para,option)
-	call BPlus_structuring(option)
+    call H_matrix_structuring(ho_bf,para,option,msh)
+	call BPlus_structuring(ho_bf,option,msh)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -288,34 +223,35 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
     !pause
     
+
+
+	t1 = OMP_get_wtime()
+	write(*,*) "Generating fullmat ......"
+	allocate(ker%matZ_glo(msh%Nunk,msh%Nunk))
+	ker%matZ_glo = 0
 	
+	open(unit=888,file=trim(DATA_DIR)//'/fullmat.out',status='old')
+	do ii=1,msh%Nunk
+	do kk=1,msh%Nunk
+		read(888,*)tmp(1),tmp(2)
+		ker%matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp) 
+	end do
+	end do
+	close(unit=888)
+	
+	write(*,*) "Generating fullmat finished"
+	t2 = OMP_get_wtime()   
+	write(*,*)t2-t1, 'secnds'	
+
 	
 	if(explicitflag ==1)then
-		if(fullmatflag==1)then ! read the fullmat if it's already stored 
-			t1 = OMP_get_wtime()
-			write(*,*) "Generating fullmat ......"
-			allocate(matZ_glo(Maxedge,Maxedge))
-			matZ_glo = 0
-			
-			open(unit=888,file=trim(DATA_DIR)//'/fullmat.out',status='old')
-			do ii=1,Maxedge
-			do kk=1,Maxedge
-				read(888,*)tmp(1),tmp(2)
-				matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp) 
-			end do
-			end do
-			close(unit=888)
-			
-			write(*,*) "Generating fullmat finished"
-			t2 = OMP_get_wtime()   
-			write(*,*)t2-t1, 'secnds'			
-		else 			      ! generate the fullmat on-the-fly and store it in a file 
-			write(*,*)'removed from previous versions'
-		end if
-	
+
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
-		call matrices_filling(option)
+		call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL)
+		if(option%precon/=DIRECT)then
+			call copy_HOBF(ho_bf,ho_bf_copy)	
+		end if		
 		write(*,*) "H_matrices filling finished"
 		write(*,*) "    "
 		t2 = OMP_get_wtime()   
@@ -323,106 +259,50 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 
 
-		allocate(Vin(Maxedge,1))
-		allocate(Vout1(Maxedge,1))
-		allocate(Vout2(Maxedge,1))
-		do ii=1,Maxedge
+		allocate(Vin(msh%Nunk,1))
+		allocate(Vout1(msh%Nunk,1))
+		allocate(Vout2(msh%Nunk,1))
+		do ii=1,msh%Nunk
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward('N',Maxedge,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf)
+		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf)
 		
-		do ii=1,Maxedge
+		do ii=1,msh%Nunk
 			ctemp = 0d0
-			do jj=1,Maxedge
-				ctemp = ctemp + matZ_glo(new2old(ii),new2old(jj))*Vin(jj,1)
+			do jj=1,msh%Nunk
+				ctemp = ctemp + ker%matZ_glo(new2old(ii),new2old(jj))*Vin(jj,1)
 			end do
 			Vout2(ii,1) = ctemp
 		end do
-		error = fnorm(Vout2-Vout1,Maxedge,1)/fnorm(Vout2,Maxedge,1)
+		error = fnorm(Vout2-Vout1,msh%Nunk,1)/fnorm(Vout2,msh%Nunk,1)
 		deallocate(Vin,Vout1,Vout2)
 		
 		write(*,*)error,'accuracy of construction'
 
-
-		deallocate(matZ_glo)
 		
 	else if(explicitflag ==0)then
-	
-	
-		if(fullmatflag==1)then ! read the fullmat and use it only for MVP
-			t1 = OMP_get_wtime()
-			write(*,*) "Reading fullmat ......"
-			allocate(matZ_glo(Maxedge,Maxedge))
-			matZ_glo = 0
-			
-			open(unit=888,file=trim(DATA_DIR)//'/fullmat.out',status='old')
-			do ii=1,Maxedge
-			do kk=1,Maxedge
-				read(888,*)tmp(1),tmp(2)
-				matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp) 
-			end do
-			end do
-			close(unit=888)
-			
-			t2 = OMP_get_wtime()   
-			write(*,*) "Reading fullmat finished ",t2-t1, 'secnds'
 
-		! else if(fullmatflag==-1)then ! read the fullmat, explicitly contruct HODLR and use it only for MVP
-
-			! t1 = OMP_get_wtime()
-			! write(*,*) "Reading fullmat ......"
-			! allocate(matZ_glo(Maxedge,Maxedge))
-			! matZ_glo = 0
-			
-			! open(unit=888,file='fullmat.out',status='old')
-			! do ii=1,Maxedge
-			! do kk=1,Maxedge
-				! read(888,*)tmp(1),tmp(2)
-				! matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp) 
-			! end do
-			! end do
-			! close(unit=888)
-			
-			! t2 = OMP_get_wtime()   
-			! write(*,*) "Reading fullmat finished ",t2-t1, 'secnds'
-			
-			! t1 = OMP_get_wtime()	
-			! write(*,*) "H_matrices filling......"
-			! call matrices_filling(tolerance)
-			! t2 = OMP_get_wtime()  
-			! write(*,*) "H_matrices filling finished",t2-t1, 'secnds'
-
-		else if(fullmatflag==0)then  ! true black-box MVP based HODLR construction
-			write(*,*)'true black-box construction'
-			! stop
-		end if
-		
 		t1 = OMP_get_wtime()	
 		write(*,*) "MVP-based HODLR construction......"		
 		rankmax = 300
-		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,Maxedge,rankmax,Memory,error,option)
+		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker)
 		t2 = OMP_get_wtime()  
 		write(*,*) "MVP-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
-		
-		if(fullmatflag==1)then	
-			deallocate(matZ_glo)		
-		end if	
-	
 
 	end if	
 	
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call cascading_factorizing(ho_bf,option)
+    ! call cascading_factorizing(ho_bf,option,stats)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 
 
-    ! write(*,*) "EM_calculating......"
-    ! call EM_calculating()
-    ! write(*,*) "EM_calculating finished"
+    ! write(*,*) "EM_solve......"
+    ! call EM_solve()
+    ! write(*,*) "EM_solve finished"
     ! write(*,*) "    "	
 	
 	

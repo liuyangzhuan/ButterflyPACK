@@ -1,7 +1,7 @@
 module current_mapping
 contains 
 
-subroutine current_node_patch_mapping(chara)
+subroutine current_node_patch_mapping(chara,curr,msh)
     
     use MODULE_FILE
     implicit none
@@ -11,20 +11,22 @@ subroutine current_node_patch_mapping(chara)
     real*8 center(3), current_patch(3,0:3),  current_abs, r, a
     character chara
     character(20) string 
-    
+    complex(kind=8)::curr(:)
+	type(mesh)::msh
+	
     real*8,allocatable :: current_at_patch(:), current_at_node(:)
     integer,allocatable :: edge_of_patch(:,:)
     
-    allocate (edge_of_patch(3,Maxpatch))
+    allocate (edge_of_patch(3,msh%maxpatch))
     edge_of_patch = -1
-	allocate (current_at_node(Maxnode),current_at_patch(Maxpatch))
+	allocate (current_at_node(msh%maxnode),current_at_patch(msh%maxpatch))
     
     !$omp parallel do default(shared) private(patch,i,edge)
-    do patch=1,Maxpatch
+    do patch=1,msh%maxpatch
         i=0
         ! do while (i<3)     !!! Modified by Yang Liu, commented out, this doesn't make sense
-            do edge=1, Maxedge            
-                if (node_patch_of_edge(3,edge)==patch .or. node_patch_of_edge(4,edge)==patch) then
+            do edge=1, msh%Nunk            
+                if (msh%info_unk(3,edge)==patch .or. msh%info_unk(4,edge)==patch) then
                     i=i+1
                     edge_of_patch(i,patch)=edge
                 endif
@@ -34,19 +36,19 @@ subroutine current_node_patch_mapping(chara)
     !$omp end parallel do
     
     !$omp parallel do default(shared) private(patch,i,j,edge,current_abs,current_patch,a,r)
-    do patch=1, Maxpatch
+    do patch=1, msh%maxpatch
         do i=1,3
-            center(i)=1./3.*(xyz(i,node_of_patch(1,patch))+xyz(i,node_of_patch(2,patch))+xyz(i,node_of_patch(3,patch)))
+            center(i)=1./3.*(msh%xyz(i,msh%node_of_patch(1,patch))+msh%xyz(i,msh%node_of_patch(2,patch))+msh%xyz(i,msh%node_of_patch(3,patch)))
         enddo
         do edge=1,3
 			if(edge_of_patch(edge,patch)==-1)then
 				current_patch(:,edge)=0
 			else 
-				current_abs=dble(current(edge_of_patch(edge,patch)))
-				if (node_patch_of_edge(3,edge_of_patch(edge,patch))==patch) then
+				current_abs=dble(curr(edge_of_patch(edge,patch)))
+				if (msh%info_unk(3,edge_of_patch(edge,patch))==patch) then
 					r=0.                
 					do j=1,3
-						a=xyz(j,node_patch_of_edge(5,edge_of_patch(edge,patch)))-center(j)
+						a=msh%xyz(j,msh%info_unk(5,edge_of_patch(edge,patch)))-center(j)
 						r=r+a**2
 						current_patch(j,edge)=current_abs*a
 					enddo
@@ -54,10 +56,10 @@ subroutine current_node_patch_mapping(chara)
 					do j=1,3
 						current_patch(j,edge)=current_patch(j,edge)/r
 					enddo
-				elseif (node_patch_of_edge(4,edge_of_patch(edge,patch))==patch) then
+				elseif (msh%info_unk(4,edge_of_patch(edge,patch))==patch) then
 					r=0.                
 					do j=1,3
-						a=xyz(j,node_patch_of_edge(6,edge_of_patch(edge,patch)))-center(j)
+						a=msh%xyz(j,msh%info_unk(6,edge_of_patch(edge,patch)))-center(j)
 						r=r+a**2
 						current_patch(j,edge)=-current_abs*a
 					enddo
@@ -79,11 +81,11 @@ subroutine current_node_patch_mapping(chara)
     !$omp end parallel do
     
     !$omp parallel do default(shared) private(patch,i,ii,node,a)
-    do node=1, Maxnode
+    do node=1, msh%maxnode
         ii=0; a=0.
-        do patch=1, Maxpatch
+        do patch=1, msh%maxpatch
             do i=1,3
-                if (node_of_patch(i,patch)==node) then
+                if (msh%node_of_patch(i,patch)==node) then
                     a=a+current_at_patch(patch)
                     ii=ii+1
                 endif
@@ -95,7 +97,7 @@ subroutine current_node_patch_mapping(chara)
     
     string='current'//chara//'.out'
     open(30,file=string)
-    do node=1, Maxnode
+    do node=1, msh%maxnode
         write (30,*) node,current_at_node(node)
     enddo
     close(30)
