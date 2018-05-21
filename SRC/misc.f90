@@ -3048,4 +3048,103 @@ call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc
 
 end subroutine gemmf90
 
+
+
+subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
+	implicit none 
+	integer nmpi,MPI_Comm_base,MPI_Group_base,MPI_Group_H,groupmembers(nmpi)
+	type(proctree)::ptree
+	integer :: ierr,Maxgrp,MyID_old,level,group,icontxt,ii,jj,kk
+	integer :: nprow,npcol,myrow,mycol
+	integer,allocatable::pmap(:,:)
+	
+	
+	call MPI_Comm_rank(MPI_Comm_base,MyID_old,ierr)	
+	
+	ptree%nlevel = ceiling_safe(log(dble(nmpi)) / log(2d0))+1
+	Maxgrp=2**(ptree%nlevel)-1
+	allocate (ptree%pgrp(Maxgrp))
+	
+	
+	call MPI_Comm_group(MPI_Comm_base,MPI_Group_base,ierr)
+	call MPI_Group_incl(MPI_Group_base, nmpi, groupmembers, MPI_Group_H, ierr)
+	call MPI_Comm_Create(MPI_Comm_base,MPI_Group_H,ptree%Comm,ierr)
+	
+	if(ptree%Comm/=MPI_COMM_NULL)then
+		call MPI_Comm_size(ptree%Comm,ptree%nproc,ierr)
+		call MPI_Comm_rank(ptree%Comm,ptree%MyID,ierr)
+		
+		call assert(groupmembers(ptree%MyID+1)==MyID_old,'it is assumed the new ID of the Ith proc in groupmembers is I-1')
+		
+		ptree%pgrp(1)%head=0 ; ptree%pgrp(1)%tail=ptree%nproc-1; ptree%pgrp(1)%nproc=ptree%nproc
+		do level=0, ptree%nlevel-1
+			do group=2**level, 2**(level+1)-1		
+				if (level<ptree%nlevel-1) then
+					if(ptree%pgrp(group)%nproc>1)then
+						ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
+						ptree%pgrp(2*group)%tail=int((ptree%pgrp(group)%head+ptree%pgrp(group)%tail)/2)
+						ptree%pgrp(2*group)%nproc=ptree%pgrp(2*group)%tail-ptree%pgrp(2*group)%head+1
+						
+						ptree%pgrp(2*group+1)%head=ptree%pgrp(2*group)%tail+1
+						ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
+						ptree%pgrp(2*group+1)%nproc=ptree%pgrp(2*group+1)%tail-ptree%pgrp(2*group+1)%head+1		
+					else
+						ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
+						ptree%pgrp(2*group)%tail=ptree%pgrp(group)%tail
+						ptree%pgrp(2*group)%nproc=ptree%pgrp(group)%nproc
+						ptree%pgrp(2*group+1)%head=ptree%pgrp(group)%head
+						ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
+						ptree%pgrp(2*group+1)%nproc=ptree%pgrp(group)%nproc						
+					endif
+				end if
+			end do
+		end do
+		
+		do group=1,Maxgrp
+				
+			nprow=ptree%pgrp(group)%nproc
+			npcol=1
+			
+			ptree%pgrp(group)%nprow=nprow
+			ptree%pgrp(group)%npcol=npcol
+			ptree%pgrp(group)%ctxt=-1
+			if(ptree%MyID>=ptree%pgrp(group)%head .and. ptree%MyID<=ptree%pgrp(group)%tail)then
+				allocate(pmap(nprow,npcol))
+				do ii=1,nprow   ! 'row major here'
+				do jj=1,npcol
+					kk=npcol*(ii-1)+jj
+					pmap(ii,jj)=groupmembers(kk)
+				enddo
+				enddo
+				
+				call blacs_get(0, 0, ptree%pgrp(group)%ctxt)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
+				
+				! call blacs_gridinit(icontxt, 'R', nprow, npcol)
+				! call blacs_gridinfo(icontxt, nprow, npcol, myrow, mycol)
+				deallocate(pmap)
+			endif
+		enddo
+		
+		call MPI_barrier(ptree%Comm,ierr)
+		
+		if(ptree%MyID==Main_ID)then
+		do group=1,Maxgrp
+		write(*,*)'myid',ptree%MyID,'group no',group,'nproc',ptree%pgrp(group)%nproc
+		enddo
+		endif
+		
+	end if
+	
+	call MPI_barrier(ptree%Comm,ierr)
+	
+	call MPI_Group_Free(MPI_Group_base,ierr)
+	call MPI_Group_Free(MPI_Group_H,ierr)	
+	
+	! stop
+end subroutine CreatePtree
+
+
+
+
 end module misc

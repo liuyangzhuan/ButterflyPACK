@@ -528,9 +528,9 @@ subroutine geo_modeling_SURF(msh,ker)
     
     read(11,*)msh%maxnode
     read(111,*)msh%maxpatch
-    msh%Nunk=msh%maxpatch*3/2
+    Maxedge=msh%maxpatch*3/2
 	
-    Maxedge = msh%Nunk
+    
 	
     allocate(msh%xyz(3,msh%maxnode+Maxedge))
     allocate(msh%node_of_patch(0:3,msh%maxpatch),msh%info_unk(0:6,maxedge+1000))
@@ -651,13 +651,14 @@ subroutine geo_modeling_SURF(msh,ker)
 	
 	! write(*,*)	msh%xyz(1,1:100),sum(msh%xyz(1,:))
 	! stop
+	msh%Nunk = Maxedge
 
     write (*,*) ''
     write (*,*) 'Maxedge:',Maxedge
-	write (*,*) 'msh%minedgelength:',msh%minedgelength
-	write (*,*) 'ker%wavelength/msh%minedgelength:',ker%wavelength/msh%minedgelength
-	write (*,*) 'msh%maxedgelength:',msh%maxedgelength
-	write (*,*) 'ker%wavelength/msh%maxedgelength:',ker%wavelength/msh%maxedgelength
+	write (*,*) 'minedgelength:',msh%minedgelength
+	write (*,*) 'wavelength/minedgelength:',ker%wavelength/msh%minedgelength
+	write (*,*) 'maxedgelength:',msh%maxedgelength
+	write (*,*) 'wavelength/maxedgelength:',ker%wavelength/msh%maxedgelength
 
     write (*,*) '' 
     

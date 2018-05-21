@@ -31,7 +31,23 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(hobf)::ho_bf,ho_bf_copy
-
+	integer,allocatable:: groupmembers(:)
+	integer nmpi
+	type(proctree)::ptree
+	
+	
+	
+	
+	! nmpi and groupmembers should be provided by the user 
+	call MPI_Init(ierr)
+	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
+	allocate(groupmembers(nmpi))
+	do ii=1,nmpi
+		groupmembers(ii)=(ii-1)
+	enddo	
+	
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
@@ -123,6 +139,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
+	option%LRlevel=100
 
 	
 

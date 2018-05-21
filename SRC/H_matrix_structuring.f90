@@ -196,77 +196,6 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
        
  
     !***************************************************************************************	   
-    
-	
-	ho_bf1%N=msh%Nunk
-	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
-
-	do level_c = 1,ho_bf1%Maxlevel
-		ho_bf1%levels(level_c)%level = level_c
-		ho_bf1%levels(level_c)%N_block_forward = 2**level_c
-		ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)
-
-		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))		
-		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
-		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
-		
-		
-	end do
-	level_c = ho_bf1%Maxlevel+1
-	ho_bf1%levels(level_c)%level = level_c
-	ho_bf1%levels(level_c)%N_block_forward = 2**(level_c-1)
-	ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)	
-
-	allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))	
-	allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
-	
-	ho_bf1%levels(1)%BP_inverse(1)%level = 0
-	ho_bf1%levels(1)%BP_inverse(1)%col_group = 1
-	ho_bf1%levels(1)%BP_inverse(1)%row_group = 1
-	! ho_bf1%levels(1)%BP_inverse(1)%style = 2
-	
-	do level_c = 1,ho_bf1%Maxlevel
-		do ii = 1, ho_bf1%levels(level_c)%N_block_inverse
-			col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
-			row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
-	
-			! off-diagonal blocks and their updates
-			ho_bf1%levels(level_c)%BP(ii*2-1)%level = level_c
-			ho_bf1%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
-			ho_bf1%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
-			ho_bf1%levels(level_c)%BP(ii*2)%level = level_c
-			ho_bf1%levels(level_c)%BP(ii*2)%col_group = col_group*2
-			ho_bf1%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
-			
-			! schur complement of every two off-diagonal blocks
-			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
-			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
-			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
-	
-			! diagonal blocks and their inverses at bottom level
-			if(level_c==ho_bf1%Maxlevel)then
-				ho_bf1%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
-				ho_bf1%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
-				ho_bf1%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
-				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
-				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
-				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
-			end if
-	
-			
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
-			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1				
-		end do
-	end do
-
-	do level_c = 1,ho_bf1%Maxlevel+1
-	deallocate(ho_bf1%levels(level_c)%BP_inverse)
-	enddo
-  
 	allocate(new2old(msh%Nunk))    
 
 	do ii=1,msh%Nunk
@@ -439,13 +368,16 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 					end if
 					
 					
-					fidx = (2*group)- 2**(level+1)+1
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
+					basis_group(group)%boundary(1) = sortdirec
+					basis_group(group)%boundary(2) = seperator
 					
-					fidx = (2*group+1)- 2**(level+1)+1
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
+					! fidx = (2*group)- 2**(level+1)+1
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
+					
+					! fidx = (2*group+1)- 2**(level+1)+1
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
 				endif	
 
 			else 
@@ -455,13 +387,16 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 					basis_group(2*group+1)%head=basis_group_pre(2*group+1,1)
 					basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
 					
-					fidx = (2*group)- 2**(level+1)+1
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
+					basis_group(group)%boundary(1) = 0
+					basis_group(group)%boundary(2) = 0
 					
-					fidx = (2*group+1)- 2**(level+1)+1
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
-					ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
+					! fidx = (2*group)- 2**(level+1)+1
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
+					
+					! fidx = (2*group+1)- 2**(level+1)+1
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
+					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
 				endif					
 			end if
         enddo
@@ -516,11 +451,80 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 	real*8::minbound,theta,phi,r,rmax,phi_tmp,measure
 	real*8,allocatable::Centroid_M(:,:),Centroid_N(:,:)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
-	integer Dimn
+	integer Dimn,col_group,row_group
 	type(Hoption)::option
 	type(mesh)::msh
 	type(hobf)::ho_bf1
 	character(len=1024)  :: strings
+	
+
+	ho_bf1%N=msh%Nunk
+	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
+
+	do level_c = 1,ho_bf1%Maxlevel
+		ho_bf1%levels(level_c)%level = level_c
+		ho_bf1%levels(level_c)%N_block_forward = 2**level_c
+		ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)
+
+		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))		
+		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
+		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
+	end do
+	level_c = ho_bf1%Maxlevel+1
+	ho_bf1%levels(level_c)%level = level_c
+	ho_bf1%levels(level_c)%N_block_forward = 2**(level_c-1)
+	ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)	
+
+	allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))	
+	allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
+	
+	ho_bf1%levels(1)%BP_inverse(1)%level = 0
+	ho_bf1%levels(1)%BP_inverse(1)%col_group = 1
+	ho_bf1%levels(1)%BP_inverse(1)%row_group = 1
+	! ho_bf1%levels(1)%BP_inverse(1)%style = 2
+	
+	do level_c = 1,ho_bf1%Maxlevel
+		do ii = 1, ho_bf1%levels(level_c)%N_block_inverse
+			col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
+			row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
+	
+			! off-diagonal blocks and their updates
+			ho_bf1%levels(level_c)%BP(ii*2-1)%level = level_c
+			ho_bf1%levels(level_c)%BP(ii*2-1)%col_group = col_group*2+1
+			ho_bf1%levels(level_c)%BP(ii*2-1)%row_group = row_group*2
+			ho_bf1%levels(level_c)%BP(ii*2)%level = level_c
+			ho_bf1%levels(level_c)%BP(ii*2)%col_group = col_group*2
+			ho_bf1%levels(level_c)%BP(ii*2)%row_group = row_group*2+1
+			
+			! schur complement of every two off-diagonal blocks
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
+	
+			! diagonal blocks and their inverses at bottom level
+			if(level_c==ho_bf1%Maxlevel)then
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
+				ho_bf1%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
+				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
+			end if
+	
+			
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%level = level_c
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%col_group = col_group*2
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%row_group = row_group*2
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%level = level_c
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%col_group = col_group*2+1
+			ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%row_group = row_group*2+1				
+		end do
+	end do
+
+	do level_c = 1,ho_bf1%Maxlevel+1
+	deallocate(ho_bf1%levels(level_c)%BP_inverse)
+	enddo	
+	
 	
 	Dimn = size(msh%xyz,1)
 	
@@ -552,12 +556,15 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
 				
-				if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level<option%LnoBP)then				
-					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level
-				else
-					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2				
+				if(level_c>option%LRlevel)then
+					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = 0 ! low rank below LRlevel
+				else 
+					if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level<option%LnoBP)then				
+						ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly 
+					else
+						ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels				
+					endif
 				endif
-				
 				
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
@@ -568,8 +575,10 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
 				ho_bf1%levels(level_c)%BP(ii)%Lplus=0
 				
-				sortdirec = NINT(ho_bf1%levels(level_c)%BP(ii)%boundary(1))
-				seperator = ho_bf1%levels(level_c)%BP(ii)%boundary(2)
+				
+				group = floor((ii-1+2**level_c)/2d0)
+				sortdirec = NINT(basis_group(group)%boundary(1))
+				seperator = basis_group(group)%boundary(2)
 				
 				do ll=1,LplusMax-1
 					if(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then

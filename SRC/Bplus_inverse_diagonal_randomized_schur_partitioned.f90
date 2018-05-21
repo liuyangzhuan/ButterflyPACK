@@ -74,15 +74,17 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	
 	Memory = 0
 	
-	
-	ho_bf1%ind_lv=level_c
-	ho_bf1%ind_bk=rowblock
-	
-	rank0 = max(block_off1%rankmax,block_off2%rankmax)
-	rate=1.2d0
-	call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats) 	
-	error_inout = max(error_inout, error)
-	
+	if(block_off1%level_butterfly==0 .or. block_off2%level_butterfly==0)then
+		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
+	else
+		ho_bf1%ind_lv=level_c
+		ho_bf1%ind_bk=rowblock
+		rank0 = max(block_off1%rankmax,block_off2%rankmax)
+		rate=1.2d0
+		call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats) 	
+		error_inout = max(error_inout, error)	
+	endif
+
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
@@ -91,20 +93,94 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats)
 	endif
 
-	error_inout = max(error_inout, error)
-	! call ComputeMemory_butterfly(block_o,Memory)
+	error_inout = max(error_inout, error)	
 
 	n2 = OMP_get_wtime()
 	write(*,*)'I+B Inversion Time:',n2-n1	
-	
 #if PRNTlevel >= 1
 	write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
-#endif
+#endif		
+
 
 	
     return
 
 end subroutine OneL_inverse_schur_partitionedinverse
+
+
+subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
+
+    use MODULE_FILE
+    ! use lapack95
+	use misc
+    implicit none
+    
+	integer level_c,rowblock
+    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real*8 a,b,c,d
+    complex(kind=8) ctemp, ctemp1, ctemp2
+	type(matrixblock),pointer::block_o
+	
+    type(vectorsblock), pointer :: random1, random2
+    
+    real*8,allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
+	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	
+	integer Nsub,Ng,unique_nth,level_left_start
+	integer*8 idx_start   
+    integer level_blocks
+    integer groupm_start, groupn_start,dimension_rank,rank
+    integer header_mm, header_nn
+	integer header_m, header_n, tailer_m, tailer_n
+	
+	type(RandomBlock), pointer :: random
+	real*8::n2,n1
+	type(hobf)::ho_bf1
+	type(matrixblock),pointer::block_off1,block_off2
+
+	ctemp1=1.0d0 ; ctemp2=0.0d0
+	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)	
+	block_o =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
+	call delete_blocks(block_o)	
+	block_o%level_butterfly = 0
+	
+	
+	groupm=block_off1%row_group  ! Note: row_group and col_group interchanged here   
+	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+	groupn=block_off1%col_group  ! Note: row_group and col_group interchanged here   
+	kk=basis_group(groupn)%tail-basis_group(groupn)%head+1 	
+	groupn=block_off2%col_group  ! Note: row_group and col_group interchanged here   
+	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		
+	allocate(block_o%ButterflyU(1))
+	allocate(block_o%ButterflyV(1))
+	
+	if(block_off1%level_butterfly==0)then
+		rank=size(block_off1%ButterflyU(1)%matrix,2)
+		allocate(block_o%ButterflyU(1)%matrix(mm,rank))
+		block_o%ButterflyU(1)%matrix=-block_off1%ButterflyU(1)%matrix
+		allocate(block_o%ButterflyV(1)%matrix(nn,rank))
+		block_o%ButterflyV(1)%matrix=0
+		call butterfly_block_MVP_randomized_dat(block_off2,'T',kk,nn,rank,block_off1%ButterflyV(1)%matrix,block_o%ButterflyV(1)%matrix,ctemp1,ctemp2)
+		
+	else if(block_off2%level_butterfly==0)then
+		rank=size(block_off2%ButterflyU(1)%matrix,2)
+		allocate(block_o%ButterflyU(1)%matrix(mm,rank))
+		block_o%ButterflyU(1)%matrix=0
+		allocate(block_o%ButterflyV(1)%matrix(nn,rank))
+		block_o%ButterflyV(1)%matrix=-block_off2%ButterflyV(1)%matrix
+		call butterfly_block_MVP_randomized_dat(block_off1,'N',mm,kk,rank,block_off2%ButterflyU(1)%matrix,block_o%ButterflyU(1)%matrix,ctemp1,ctemp2)		
+	endif
+	
+	block_o%rankmax=rank
+	
+    return                
+
+end subroutine OneL_minusBC_LowRank
 
 
 

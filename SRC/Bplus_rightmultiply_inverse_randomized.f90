@@ -45,12 +45,12 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats)
 		level_butterfly=block_o%level_butterfly
 
 		if(level_butterfly==0)then
-			if(level_c>=ho_bf1%Maxlevel-1)then
+			! if(level_c>=ho_bf1%Maxlevel-1)then
 				call OneL_Sblock_LowRank(ho_bf1,level_c,rowblock)
-			else 		
-				write(*,*)'unexpected level_c'
-				stop
-			end if	
+			! else 		
+				! write(*,*)'unexpected level_c'
+				! stop
+			! end if	
 		else 
 			ho_bf1%ind_lv=level_c
 			ho_bf1%ind_bk=rowblock

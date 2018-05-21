@@ -30,11 +30,12 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	do level_c = 1,ho_bf1%Maxlevel+1
 		if(level_c==ho_bf1%Maxlevel+1)then
 			call HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memtmp,operand)
-		else 
-			level_butterfly=int((ho_bf1%Maxlevel-level_c)/2)*2
-		
-			level_butterfly = 0   !!! uncomment out this to enable low-rank only reconstruction
-		
+		else
+			if(level_c>option%LRlevel)then
+				level_butterfly = 0   !!! uncomment out this to enable low-rank only reconstruction
+			else 
+				level_butterfly=int((ho_bf1%Maxlevel-level_c)/2)*2
+			endif
 
 			! write(*,*)'before init'
 			n1 = OMP_get_wtime()

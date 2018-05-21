@@ -1,4 +1,7 @@
 module MODULE_FILE
+	implicit none
+    INCLUDE 'mpif.h'   
+	
 	integer,parameter:: LplusMax=3
 	real*8,parameter :: pi = 4d0*atan(1d0)
 	real*8,parameter :: cd = 299792458d0
@@ -21,13 +24,31 @@ module MODULE_FILE
 	 integer,parameter:: SAIPRECON=3	
 	
 	 integer,parameter:: DIRECT=1
+	 integer,parameter :: Main_ID = 0
 	
 	
+	type procgroup
+		!****Define MPI variables
+		integer :: nprow,npcol,nproc ! number of processors
+		integer :: head,tail
+		integer :: ctxt
+	end type procgroup
+	
+	type proctree
+		integer nlevel
+		integer Comm
+		integer nproc
+		integer :: MyID
+		type(procgroup),allocatable::pgrp(:)
+	end type proctree
+	
+
      type basisgroup
          integer head
          integer tail
          integer level
          real*8 radius
+		 real*8:: boundary(2)
          real*8,allocatable:: center(:)
      end type basisgroup
 
@@ -180,6 +201,7 @@ module MODULE_FILE
 		integer::Nmin_leaf
 		integer::schulzorder
 		integer::schulzlevel
+		integer::LRlevel
 	 end type Hoption
 	 
 	type Hstat
@@ -269,7 +291,12 @@ module MODULE_FILE
 	 integer vecCNT
 	 integer,allocatable:: new2old(:)
 	 integer,allocatable:: basis_group_pre(:,:)
-	 CHARACTER (LEN=1000) DATA_DIR	 
+	 CHARACTER (LEN=1000) DATA_DIR	
+	 
+
+
+
+	
 	 
 end module
 

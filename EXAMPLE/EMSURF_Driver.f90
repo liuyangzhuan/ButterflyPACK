@@ -126,7 +126,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	option%TwoLayerOnly=0
 	ker%CFIE_alpha=1
 	option%touch_para=3
-    
+    option%schulzorder=3
+    option%schulzlevel=3000
+	option%LRlevel=100
+	
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)

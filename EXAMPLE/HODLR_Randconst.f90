@@ -123,6 +123,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%xyzsort=1
 	option%LnoBP=600
 	option%TwoLayerOnly=1
+	option%LRlevel=100
 	ker%CFIE_alpha=1
 	explicitflag=0
 	! fullmatflag=1

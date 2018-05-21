@@ -4,7 +4,7 @@
 Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =NERSC#Laptop#CAC#NERSC#Laptop
+Platform =NERSC#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -16,7 +16,7 @@ MODFLAGS = -module $(TargetDir)
 ifeq ($(Platform),NERSC)
 
 LIB_MKL = -L/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64 \
-        -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core
+        -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -lmkl_blacs_intelmpi_lp64 -lmkl_scalapack_lp64
 INCLUDE_MKL = -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include/intel64/lp64 -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include 
 F90 = ftn 
 CPPC = CC 
@@ -26,10 +26,10 @@ endif
 
 ifeq ($(Platform),Laptop)
 LIB_MKL = -L/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64 \
-	-lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core
+	-lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -lmkl_blacs_intelmpi_lp64 -lmkl_scalapack_lp64
 INCLUDE_MKL = -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include/intel64/lp64 \
 
-F90 = ifort
+F90 = mpiifort
 CPPC = icpc 
 LinkFlagC = -Bdynamic -cxxlib -lifcore $(LIB_MKL) 
 LinkFlagF = -Bdynamic 
@@ -46,8 +46,8 @@ LinkFlagF = -Bdynamic
 endif
 
 					  
-#F90FLAGS = -nologo -fpe0 -traceback -cpp -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
-F90FLAGS = -O3 -cpp -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
+F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=1 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
+#F90FLAGS = -O3 -cpp -DPRNTlevel=2 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
 #CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
 CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
 endif
@@ -78,9 +78,9 @@ CPPC = mpicxx
 LinkFlagC = -Bdynamic -L/usr/lib/gcc/x86_64-linux-gnu/5 -lgfortran $(LIB_MKL) 
 LinkFlagF = -Bdynamic
 endif
-
-F90FLAGS = -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
-#F90FLAGS = -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+ 
+F90FLAGS = -DPRNTlevel=2 -O0 -g -pg -cpp -fbacktrace -ffpe-trap=zero,overflow,underflow -fimplicit-none -fbounds-check -ffree-line-length-none  -ffixed-line-length-none -fopenmp -Wconversion -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL)  
+#F90FLAGS = -DPRNTlevel=2 -O3 -cpp -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp -lpthread -lmkl_blas95_lp64 -lmkl_lapack95_lp64 $(INCLUDE_MKL) -D$(Compiler) 
 CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
 #CFLAGS=-std=c++11 -O3 -fopenmp 
 
