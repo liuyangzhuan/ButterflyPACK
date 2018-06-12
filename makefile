@@ -4,7 +4,7 @@
 Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
-Platform =NERSC#CAC#NERSC#Laptop
+Platform =Laptop#CAC#NERSC#Laptop
 GCC=gcc
 CFLAGS=-O3 -m64 -openmp
 
@@ -46,7 +46,7 @@ LinkFlagF = -Bdynamic
 endif
 
 					  
-F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=1 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
+F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=0 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
 #F90FLAGS = -O3 -cpp -DPRNTlevel=2 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
 #CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
 CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
@@ -58,9 +58,14 @@ MODFLAGS = -J$(TargetDir) -I$(TargetDir)
 
 
 ifeq ($(Platform),Laptop)
-LIB_MKL = -L/home/administrator/Desktop/software/MKL_INSTALL/lib/intel64 \
-       -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
-INCLUDE_MKL = -I/home/administrator/Desktop/software/MKL_INSTALL/include/intel64/lp64 \
+LIB_MKL = -L/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64 \
+        -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lmkl_blacs_intelmpi_lp64 -lmkl_scalapack_lp64
+INCLUDE_MKL = -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include/intel64/lp64 \
+
+
+#LIB_MKL = -L/home/administrator/Desktop/software/MKL_INSTALL/lib/intel64 \
+       # -lmkl_gf_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread
+#INCLUDE_MKL = -I/home/administrator/Desktop/software/MKL_INSTALL/include/intel64/lp64 \
 
 F90 = mpif90
 CPPC = mpicxx

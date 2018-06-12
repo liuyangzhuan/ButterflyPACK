@@ -45,12 +45,12 @@ enddo
 end subroutine linspaceI
 
 
-subroutine check_NAN(A,M,N,nan)
+logical function check_NAN(A,M,N)
 ! ! use lapack95
 ! ! use blas95
 implicit none 
 	
-	logical::nan
+	! logical::nan
 	integer::M,N
 	complex(kind=8)::A(M,N),ctemp
 	integer ii,jj
@@ -61,9 +61,9 @@ implicit none
 		ctemp = ctemp + A(ii,jj)
 	end do
 	end do
-	nan = isnan(abs(ctemp))
+	check_NAN = isnan(abs(ctemp))
 
- end subroutine check_NAN
+ end function check_NAN
 
 
  subroutine gemm_omp(A,B,C,m,n,k)
@@ -1154,7 +1154,7 @@ end subroutine ccurl
       norm_vector=sum
       
       return 
-end function
+end function norm_vector
 
 subroutine matrix_real_inverse(a,n)
            implicit none
@@ -3026,21 +3026,28 @@ ldc=m
 if(transa=='N' .or. transa=='n')then
 k=size(MatA,2)
 lda=m
+! write(*,*)fnorm(MatA,m,k),'A'
+
 endif
 
 if(transa=='T' .or. transa=='t')then
 k=size(MatA,1)
 lda=k
+! write(*,*)fnorm(MatA,k,m),'A'
 endif
 
 
 if(transb=='N' .or. transb=='n')then
 ldb=k
+! write(*,*)fnorm(MatB,k,n),'B'
+
 endif
 
 if(transb=='T' .or. transb=='t')then
 ldb=n
+! write(*,*)fnorm(MatB,n,k),'B'
 endif
+
 
 call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
@@ -3049,23 +3056,48 @@ call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc
 end subroutine gemmf90
 
 
+subroutine NumberingPtree(ptree)
+	implicit none 
+	type(proctree)::ptree
+	integer :: level,group
+
+	ptree%pgrp(1)%head=0 ; ptree%pgrp(1)%tail=ptree%nproc-1; ptree%pgrp(1)%nproc=ptree%nproc
+	do level=0, ptree%nlevel-1
+		do group=2**level, 2**(level+1)-1		
+			if (level<ptree%nlevel-1) then
+				if (ptree%pgrp(group)%nproc==1) then
+					ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
+					ptree%pgrp(2*group)%tail=ptree%pgrp(group)%tail
+					ptree%pgrp(2*group)%nproc=ptree%pgrp(group)%nproc
+					ptree%pgrp(2*group+1)%head=ptree%pgrp(group)%head
+					ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
+					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(group)%nproc						
+				else
+					ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
+					ptree%pgrp(2*group)%tail=int((ptree%pgrp(group)%head+ptree%pgrp(group)%tail)/2)
+					ptree%pgrp(2*group)%nproc=ptree%pgrp(2*group)%tail-ptree%pgrp(2*group)%head+1
+					
+					ptree%pgrp(2*group+1)%head=ptree%pgrp(2*group)%tail+1
+					ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
+					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(2*group+1)%tail-ptree%pgrp(2*group+1)%head+1								
+				endif
+			end if
+		end do
+	end do
+end subroutine NumberingPtree	
+
+
 
 subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 	implicit none 
-	integer nmpi,MPI_Comm_base,MPI_Group_base,MPI_Group_H,groupmembers(nmpi)
-	type(proctree)::ptree
-	integer :: ierr,Maxgrp,MyID_old,level,group,icontxt,ii,jj,kk
-	integer :: nprow,npcol,myrow,mycol
-	integer,allocatable::pmap(:,:)
+	integer nmpi,MPI_Comm_base,MPI_Group_base,MPI_Group_H,MPI_Group_H_sml,groupmembers(nmpi)
+	type(proctree)::ptree,ptreecol,ptreerow
+	integer :: ierr,Maxgrp,Maxgrpcol,Maxgrprow,MyID_old,level,group,icontxt,ii,jj,kk
+	integer :: nprow,npcol,myrow,mycol,nproc,nproc_tmp,nsprow,nspcol,nlevelrow,nlevelcol
+	integer,allocatable::pmap(:,:),groupmembers_sml(:)
 	
 	
 	call MPI_Comm_rank(MPI_Comm_base,MyID_old,ierr)	
-	
-	ptree%nlevel = ceiling_safe(log(dble(nmpi)) / log(2d0))+1
-	Maxgrp=2**(ptree%nlevel)-1
-	allocate (ptree%pgrp(Maxgrp))
-	
-	
 	call MPI_Comm_group(MPI_Comm_base,MPI_Group_base,ierr)
 	call MPI_Group_incl(MPI_Group_base, nmpi, groupmembers, MPI_Group_H, ierr)
 	call MPI_Comm_Create(MPI_Comm_base,MPI_Group_H,ptree%Comm,ierr)
@@ -3075,64 +3107,135 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 		call MPI_Comm_rank(ptree%Comm,ptree%MyID,ierr)
 		
 		call assert(groupmembers(ptree%MyID+1)==MyID_old,'it is assumed the new ID of the Ith proc in groupmembers is I-1')
-		
-		ptree%pgrp(1)%head=0 ; ptree%pgrp(1)%tail=ptree%nproc-1; ptree%pgrp(1)%nproc=ptree%nproc
-		do level=0, ptree%nlevel-1
-			do group=2**level, 2**(level+1)-1		
-				if (level<ptree%nlevel-1) then
-					if(ptree%pgrp(group)%nproc>1)then
-						ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
-						ptree%pgrp(2*group)%tail=int((ptree%pgrp(group)%head+ptree%pgrp(group)%tail)/2)
-						ptree%pgrp(2*group)%nproc=ptree%pgrp(2*group)%tail-ptree%pgrp(2*group)%head+1
-						
-						ptree%pgrp(2*group+1)%head=ptree%pgrp(2*group)%tail+1
-						ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
-						ptree%pgrp(2*group+1)%nproc=ptree%pgrp(2*group+1)%tail-ptree%pgrp(2*group+1)%head+1		
-					else
-						ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
-						ptree%pgrp(2*group)%tail=ptree%pgrp(group)%tail
-						ptree%pgrp(2*group)%nproc=ptree%pgrp(group)%nproc
-						ptree%pgrp(2*group+1)%head=ptree%pgrp(group)%head
-						ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
-						ptree%pgrp(2*group+1)%nproc=ptree%pgrp(group)%nproc						
-					endif
-				end if
-			end do
-		end do
+	
+		ptree%nlevel = ceiling_safe(log(dble(ptree%nproc)) / log(2d0))+1
+		Maxgrp=2**(ptree%nlevel)-1		
+		allocate (ptree%pgrp(Maxgrp))
+		call NumberingPtree(ptree)
 		
 		do group=1,Maxgrp
-				
-			nprow=ptree%pgrp(group)%nproc
-			npcol=1
+			nproc=ptree%pgrp(group)%nproc	
+			
+			! ! the following needs to be changed to 2D
+			! nprow=ptree%pgrp(group)%nproc
+			! npcol=1
+
+			! create the 2D grids as square as possible
+			nprow = INT(sqrt(dble(nproc)))
+			npcol = INT(nproc/dble(nprow))
+			
 			
 			ptree%pgrp(group)%nprow=nprow
 			ptree%pgrp(group)%npcol=npcol
 			ptree%pgrp(group)%ctxt=-1
-			if(ptree%MyID>=ptree%pgrp(group)%head .and. ptree%MyID<=ptree%pgrp(group)%tail)then
+			ptree%pgrp(group)%ctxt1D=-1
+			ptree%pgrp(group)%ctxt_head=-1
+			ptree%pgrp(group)%Comm=MPI_COMM_NULL
+
+			
+			! if(ptree%MyID>=ptree%pgrp(group)%head .and. ptree%MyID<=ptree%pgrp(group)%tail)then
+				! create the blacs grid for this tree node
+				
 				allocate(pmap(nprow,npcol))
+				do jj=1,npcol				
 				do ii=1,nprow   ! 'row major here'
-				do jj=1,npcol
 					kk=npcol*(ii-1)+jj
-					pmap(ii,jj)=groupmembers(kk)
+					pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
 				enddo
 				enddo
 				
+				
+				! the context involving 2D grids
 				call blacs_get(0, 0, ptree%pgrp(group)%ctxt)
 				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
-				
-				! call blacs_gridinit(icontxt, 'R', nprow, npcol)
-				! call blacs_gridinfo(icontxt, nprow, npcol, myrow, mycol)
 				deallocate(pmap)
-			endif
+				
+				allocate(pmap(nproc,1))
+				do kk=1,nproc
+					pmap(kk,1)=groupmembers(kk+ptree%pgrp(group)%head)
+				enddo
+				
+				! the context involving 1D grids non-cyclic
+				call blacs_get(0, 0, ptree%pgrp(group)%ctxt1D)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )				
+				
+				! the context involving head proc only
+				call blacs_get(0, 0, ptree%pgrp(group)%ctxt_head)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, groupmembers(1+ptree%pgrp(group)%head), 1, 1, 1 )				
+				deallocate(pmap)
+				
+				
+				! create the local communicator for this tree node
+				allocate(groupmembers_sml(ptree%pgrp(group)%nproc))
+				do ii=1,ptree%pgrp(group)%nproc
+					groupmembers_sml(ii)=ii-1+ptree%pgrp(group)%head
+				enddo
+				
+				call MPI_Group_incl(MPI_Group_H, ptree%pgrp(group)%nproc, groupmembers_sml, MPI_Group_H_sml, ierr)
+				call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,ptree%pgrp(group)%Comm,ierr)
+				deallocate(groupmembers_sml)
+				call MPI_Group_Free(MPI_Group_H_sml,ierr)			
+				
+				! create the hierarchical process grids used for parallel ACA
+				
+				nproc_tmp = nproc
+				nsprow = INT(sqrt(dble(nproc_tmp)))
+				
+				
+				! nproc_tmp = 2**INT(log10(dble(nproc))/log10(2d0))
+				! nsprow  = 2**INT(log10(sqrt(dble(nproc_tmp)))/log10(2d0))
+				
+				
+				nspcol = INT(nproc_tmp/dble(nsprow))
+
+				! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
+				nlevelrow = ceiling_safe(log(dble(nsprow)) / log(2d0))+1
+				nlevelcol = ceiling_safe(log(dble(nspcol)) / log(2d0))+1
+				if(nlevelcol>nlevelrow+1)then
+					nspcol = 2**nlevelrow
+				endif
+				
+				
+				
+				
+				call MPI_barrier(ptree%Comm,ierr)
+				
+				ptreecol%nproc = nspcol
+				ptreecol%nlevel = ceiling_safe(log(dble(ptreecol%nproc)) / log(2d0))+1
+				Maxgrpcol=2**(ptreecol%nlevel)-1		
+				allocate (ptreecol%pgrp(Maxgrpcol))
+				call NumberingPtree(ptreecol)
+				ptreerow%nproc = nsprow
+				ptreerow%nlevel = ceiling_safe(log(dble(ptreerow%nproc)) / log(2d0))+1
+				Maxgrprow=2**(ptreerow%nlevel)-1		
+				allocate (ptreerow%pgrp(Maxgrprow))
+				call NumberingPtree(ptreerow)
+				
+				allocate(ptree%pgrp(group)%gd)
+				ptree%pgrp(group)%gd%nsprow=nsprow
+				ptree%pgrp(group)%gd%nspcol=nspcol
+				ptree%pgrp(group)%gd%hprow=0
+				ptree%pgrp(group)%gd%hpcol=0
+				ptree%pgrp(group)%gd%gprow=1
+				ptree%pgrp(group)%gd%gpcol=1
+				call CreateNewGrid(ptree%pgrp(group)%gd,0,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+
+				deallocate(ptreecol%pgrp)
+				deallocate(ptreerow%pgrp)
+				
+				call MPI_barrier(ptree%Comm,ierr)
+				
+				! write(*,*)'ddd',ptree%MyID,group,ptree%pgrp(group)%Comm==MPI_COMM_NULL				
+			! endif
 		enddo
 		
 		call MPI_barrier(ptree%Comm,ierr)
 		
-		if(ptree%MyID==Main_ID)then
-		do group=1,Maxgrp
-		write(*,*)'myid',ptree%MyID,'group no',group,'nproc',ptree%pgrp(group)%nproc
-		enddo
-		endif
+		! if(ptree%MyID==Main_ID)then
+		! do group=1,Maxgrp
+		! write(*,'(A5,I5,A9,I5,A6,I5,A6,I5,A6,I5,A13,I5,A13,I5)')'myid',ptree%MyID,'group no',group,'nproc',ptree%pgrp(group)%nproc,'nprow',ptree%pgrp(group)%nprow,'npcol',ptree%pgrp(group)%npcol,'grid%nsprow',ptree%pgrp(group)%gd%nsprow,'grid%nspcol',ptree%pgrp(group)%gd%nspcol
+		! enddo
+		! endif
 		
 	end if
 	
@@ -3145,6 +3248,299 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 end subroutine CreatePtree
 
 
+
+! create a new square grid gd  
+recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+	implicit none 
+	integer::groupmembers(:)
+	type(grid)::gd
+	integer cridx,Iown
+	type(proctree)::ptree,ptreerow,ptreecol
+	integer group,ii,jj,kk,nsproc
+	integer MPI_Group_H,MPI_Group_H_sml,ierr
+	integer,allocatable::pmap(:,:),groupmembers_sml(:)	
+	
+	allocate(pmap(gd%nsprow,gd%nspcol))
+	do jj=1,gd%nspcol				
+	do ii=1,gd%nsprow   ! 'row major here'
+		kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
+		pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
+	enddo
+	enddo
+	
+	nsproc = gd%nsprow*gd%nspcol
+	! the context involving 2D grids
+	gd%ctxt=-1
+	call blacs_get(0, 0, gd%ctxt)
+	call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
+	deallocate(pmap)
+
+
+	! create the local communicator for this grid
+	Iown=0
+	allocate(groupmembers_sml(nsproc))
+	do jj=1,gd%nspcol				
+	do ii=1,gd%nsprow   ! 'row major here'
+		kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
+		groupmembers_sml(jj+(ii-1)*gd%nspcol)=kk+ptree%pgrp(group)%head-1
+		! if(kk+ptree%pgrp(group)%head-1==31)Iown=1
+	enddo
+	enddo
+	! if(ptree%MyID==0 )write(*,*)'size',nsproc,'cridx',cridx
+	call MPI_Group_incl(MPI_Group_H, nsproc, groupmembers_sml, MPI_Group_H_sml, ierr)
+	call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,gd%Comm,ierr)
+	deallocate(groupmembers_sml)
+	call MPI_Group_Free(MPI_Group_H_sml,ierr)		
+
+	
+	if(cridx<ptreerow%nlevel+ptreecol%nlevel-2)then
+		allocate(gd%gdc(2))
+		if(mod(cridx+1,2)==1)then
+			do ii=1,2
+				gd%gdc(ii)%gprow=gd%gprow
+				gd%gdc(ii)%hprow=gd%hprow
+				gd%gdc(ii)%nsprow=gd%nsprow
+				gd%gdc(ii)%gpcol=gd%gpcol*2+ii-1
+				gd%gdc(ii)%hpcol= ptreecol%pgrp(gd%gdc(ii)%gpcol)%head
+				gd%gdc(ii)%nspcol=ptreecol%pgrp(gd%gdc(ii)%gpcol)%nproc 
+			enddo
+		else
+			do ii=1,2
+				gd%gdc(ii)%gpcol=gd%gpcol
+				gd%gdc(ii)%hpcol=gd%hpcol
+				gd%gdc(ii)%nspcol=gd%nspcol
+				gd%gdc(ii)%gprow=gd%gprow*2+ii-1
+				gd%gdc(ii)%hprow= ptreerow%pgrp(gd%gdc(ii)%gprow)%head
+				gd%gdc(ii)%nsprow=ptreerow%pgrp(gd%gdc(ii)%gprow)%nproc 
+			enddo				
+		endif
+		
+		do ii=1,2
+			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+		enddo	
+	else
+		return
+	endif
+
+end subroutine CreateNewGrid
+
+		
+! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o 
+subroutine Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
+implicit none
+complex(kind=8)::dat_i(:,:),dat_o(:,:)
+integer pgno_i,pgno_o,N
+integer M_p_i(:,:),M_p_o(:,:)
+integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
+type(proctree)::ptree
+type(commquant1D),allocatable::sendquant(:),recvquant(:)
+integer,allocatable::S_req(:),R_req(:)
+integer,allocatable:: statuss(:,:),statusr(:,:)
+integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
+
+
+if(pgno_i==pgno_o .and. ptree%pgrp(pgno_i)%nproc==1)then
+	idxs_i=M_p_i(1,1)+head_i
+	idxe_i=M_p_i(1,2)+head_i
+	idxs_o=M_p_o(1,1) + head_o
+	idxe_o=M_p_o(1,2) + head_o	
+	if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
+		offs=max(idxs_i,idxs_o) - idxs_i
+		sizes = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1	
+		offr=max(idxs_i,idxs_o) - idxs_o
+		sizer = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1	
+		dat_o(offr+1:offr+sizer,1:N) = dat_i(offs+1:offs+sizes,1:N)
+	endif
+else 
+
+	nproc_i = ptree%pgrp(pgno_i)%nproc
+	nproc_o = ptree%pgrp(pgno_o)%nproc
+	tag = pgno_o
+
+	allocate(statuss(MPI_status_size,nproc_o))
+	allocate(statusr(MPI_status_size,nproc_i))
+	allocate(S_req(nproc_o))
+	allocate(R_req(nproc_i))
+
+
+	allocate(sendquant(nproc_o))
+	do ii=1,nproc_o
+		sendquant(ii)%size=0
+	enddo
+
+	allocate(recvquant(nproc_i))
+	do ii=1,nproc_i
+		recvquant(ii)%size=0
+	enddo
+
+	if(ptree%MyID>=ptree%pgrp(pgno_i)%head .and. ptree%MyID<=ptree%pgrp(pgno_i)%tail)then
+		ii = ptree%myid-ptree%pgrp(pgno_i)%head+1
+		idxs_i=M_p_i(ii,1)+head_i
+		idxe_i=M_p_i(ii,2)+head_i
+		
+		do jj=1,nproc_o
+			idxs_o=M_p_o(jj,1) + head_o
+			idxe_o=M_p_o(jj,2) + head_o		
+			if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
+				sendquant(jj)%offset=max(idxs_i,idxs_o) - idxs_i
+				sendquant(jj)%size = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
+				allocate(sendquant(jj)%dat(sendquant(jj)%size,N))
+				sendquant(jj)%dat = dat_i(sendquant(jj)%offset+1:sendquant(jj)%offset+sendquant(jj)%size,1:N)
+			endif		
+		enddo
+	endif
+
+	if(ptree%MyID>=ptree%pgrp(pgno_o)%head .and. ptree%MyID<=ptree%pgrp(pgno_o)%tail)then
+		jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
+		idxs_o=M_p_o(jj,1) + head_o
+		idxe_o=M_p_o(jj,2) + head_o
+		
+		do ii=1,nproc_i
+			idxs_i=M_p_i(ii,1)+head_i
+			idxe_i=M_p_i(ii,2)+head_i		
+			if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
+				recvquant(ii)%offset=max(idxs_i,idxs_o) - idxs_o
+				recvquant(ii)%size = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
+				allocate(recvquant(ii)%dat(recvquant(ii)%size,N))
+				recvquant(ii)%dat = 0
+			endif		
+		enddo
+	endif
+
+
+	! post receive
+	Nreqr=0
+	do ii=1,nproc_i
+		if(recvquant(ii)%size>0)then
+			jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
+			sendid = ii+ptree%pgrp(pgno_i)%head-1
+			if(ptree%MyID/=sendid)then
+				Nreqr = Nreqr+1
+				call MPI_Irecv(recvquant(ii)%dat,recvquant(ii)%size*N,MPI_double_complex,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
+			endif
+		endif
+	enddo
+
+	! post send
+	Nreqs=0
+	do jj=1,nproc_o
+		if(sendquant(jj)%size>0)then
+			ii = ptree%myid-ptree%pgrp(pgno_i)%head+1
+			recvid = jj+ptree%pgrp(pgno_o)%head-1
+			if(ptree%MyID==recvid)then
+				recvquant(ii)%dat=sendquant(jj)%dat ! make the direct copy if I own both send and receive pieces
+			else
+				Nreqs = Nreqs+1
+				call MPI_Isend(sendquant(jj)%dat,sendquant(jj)%size*N,MPI_double_complex,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
+			endif
+		endif
+	enddo
+
+	if(Nreqs>0)then
+		call MPI_waitall(Nreqs,S_req,statuss,ierr)
+	endif
+	if(Nreqr>0)then
+		call MPI_waitall(Nreqr,R_req,statusr,ierr)
+	endif
+
+
+	! copy data from receive buffer
+	do ii=1,nproc_i
+		if(recvquant(ii)%size>0)then
+			dat_o(recvquant(ii)%offset+1:recvquant(ii)%offset+recvquant(ii)%size,1:N) = recvquant(ii)%dat 
+		endif
+	enddo
+
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do jj=1,nproc_o
+		if(sendquant(jj)%size>0)deallocate(sendquant(jj)%dat)
+	enddo	
+	deallocate(sendquant)
+	do ii=1,nproc_i
+		if(recvquant(ii)%size>0)deallocate(recvquant(ii)%dat)
+	enddo	
+	deallocate(recvquant)
+endif
+
+end subroutine Redistribute1Dto1D
+
+
+! get the level of a node in a tree. gno is the node number starting from root (1)
+integer function GetTreelevel(gno) 
+	implicit none 
+	integer gno,ii,level
+	ii=gno
+	level=0
+	do while(ii/=0)
+		ii = INT(ii/2d0)
+		level = level+1
+	enddo
+	GetTreelevel = level
+end function GetTreelevel
+
+! check if I share this process group
+logical function IOwnPgrp(ptree,pgno)
+	implicit none 
+	integer pgno
+	type(proctree)::ptree
+	IOwnPgrp = ptree%MyID>=ptree%pgrp(pgno)%head .and. ptree%MyID<=ptree%pgrp(pgno)%tail
+end function IOwnPgrp
+
+
+! convert global index to local index in block-cyclic distribution
+subroutine g2l(i,n,np,nb,p,il)
+   implicit none
+   integer :: i    ! global array index, input
+   integer :: n    ! global array dimension, input
+   integer :: np   ! processor array dimension, input
+   integer :: nb   ! block size, input
+   integer :: p    ! processor array index, output
+   integer :: il   ! local array index, output
+   integer :: im1  
+   im1 = i-1
+   p   = mod((im1/nb),np)
+   il  = (im1/(np*nb))*nb + mod(im1,nb) + 1
+   return
+end subroutine g2l
+
+
+
+! convert local index to global index in block-cyclic distribution
+subroutine l2g(il,p,n,np,nb,i)
+   implicit none
+   integer :: il   ! local array index, input
+   integer :: p    ! processor array index, input
+   integer :: n    ! global array dimension, input
+   integer :: np   ! processor array dimension, input
+   integer :: nb   ! block size, input
+   integer :: i    ! global array index, output
+   integer :: ilm1  
+   ilm1 = il-1
+   i    = (((ilm1/nb) * np) + p)*nb + mod(ilm1,nb) + 1
+   return
+end subroutine l2g
+
+
+integer function lcm(a,b)
+integer:: a,b
+	lcm = a*b / gcd(a,b)
+end function lcm
+
+integer function gcd(a,b)
+integer :: a,b,t,as,bs
+	as=a
+	bs=b
+	do while (bs/=0)
+		t = bs
+		bs = mod(as,bs)
+		as = t
+	end do
+	gcd = abs(as)
+end function gcd
 
 
 end module misc

@@ -1,5 +1,5 @@
 module H_structure 
-
+use Utilities
 contains 
 
 real*8 function group_dist(group_m,group_n)
@@ -137,7 +137,7 @@ end function rank_approximate_func
 
 
 
-subroutine H_matrix_structuring(ho_bf1,para,option,msh)
+subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
     
     use MODULE_FILE
 	use misc
@@ -163,8 +163,9 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 	integer dimn
 	type(Hoption)::option
 	type(hobf)::ho_bf1
-	integer Maxlevel
+	integer Maxlevel,Maxgrp
 	type(mesh)::msh
+	type(proctree)::ptree
     !**********************Maxlevel*******************
     level=0; i=1
     do while (int(msh%Nunk/i)>option%Nmin_leaf)
@@ -187,11 +188,11 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 	allocate(auxpoint(dimn))
 	allocate(groupcenter(dimn))
 		
-    write (*,*) ''
-    write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
-    write (*,*) 'N_leaf:',int(msh%Nunk/i)
- 	write (*,*) ''
-    write (*,*) 'Constructing basis groups...'
+    if(ptree%MyID==Main_ID)write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+    if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/i)
+ 	if(ptree%MyID==Main_ID)write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
 
        
  
@@ -209,7 +210,8 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
     
     !********************************index_of_group**************************************
     
-    basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk
+	Maxgrp=2**(ptree%nlevel)-1
+    basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
     do level=0, Maxlevel
         do group=2**level, 2**(level+1)-1
             basis_group(group)%level=level
@@ -354,6 +356,16 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 					basis_group(2*group+1)%head=basis_group(2*group)%tail+1
 					basis_group(2*group+1)%tail=basis_group(group)%tail
 					
+					if(basis_group(group)%pgno*2<=Maxgrp)then
+						basis_group(2*group)%pgno=basis_group(group)%pgno*2
+					else
+						basis_group(2*group)%pgno=basis_group(group)%pgno
+					endif
+					if(basis_group(group)%pgno*2+1<=Maxgrp)then
+						basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
+					else
+						basis_group(2*group+1)%pgno=basis_group(group)%pgno
+					endif					
 					
 					if(option%xyzsort==1)then 
 						seperator = msh%xyz(sortdirec,msh%info_unk(0,basis_group(2*group)%tail))
@@ -404,16 +416,16 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 	
 	
 	
-	write(strings , *) Dimn
-	do level=0, Maxlevel
-        do group=2**level, 2**(level+1)-1
-            do edge=basis_group(group)%head, basis_group(group)%tail
-				! write(*,*)edge,msh%info_unk(0,edge)
-				! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
-				write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
-			enddo
-        enddo
-    enddo	   
+	! write(strings , *) Dimn
+	! do level=0, Maxlevel
+        ! do group=2**level, 2**(level+1)-1
+            ! do edge=basis_group(group)%head, basis_group(group)%tail
+				! ! write(*,*)edge,msh%info_unk(0,edge)
+				! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+				! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+			! enddo
+        ! enddo
+    ! enddo	   
     !*************************************************************************************
    
 	
@@ -423,17 +435,12 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh)
 	deallocate(auxpoint)
 	deallocate(groupcenter)	
     
-!     write (*,*) basis_group(matrices_block(9,0)%col_group)%center(1:2),basis_group(matrices_block(9,0)%row_group)%center(1:2)
-!     write (*,*) basis_group(matrices_block(10,0)%col_group)%center(1:2),basis_group(matrices_block(10,0)%row_group)%center(1:2)
-!     write (*,*) basis_group(matrices_block(11,0)%col_group)%center(1:2),basis_group(matrices_block(11,0)%row_group)%center(1:2)
-!     pause
-    
     return
     
 end subroutine H_matrix_structuring
 
 
-subroutine BPlus_structuring(ho_bf1,option,msh)
+subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 	use MODULE_FILE
 	use misc
 	implicit none 
@@ -447,46 +454,95 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2,levelm,groupm_start,index_i_m,index_j_m
 	complex(kind=8)::ctemp,ctemp1,ctemp2
 	integer level_c,iter,level_cc,level_BP,Nboundall,level_butterfly	
-	type(matrixblock),pointer::blocks
+	type(matrixblock),pointer::blocks,block_f,block_sch,block_inv
 	real*8::minbound,theta,phi,r,rmax,phi_tmp,measure
 	real*8,allocatable::Centroid_M(:,:),Centroid_N(:,:)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
-	integer Dimn,col_group,row_group
+	integer Dimn,col_group,row_group,Maxgrp
 	type(Hoption)::option
 	type(mesh)::msh
 	type(hobf)::ho_bf1
 	character(len=1024)  :: strings
-	
+	type(proctree)::ptree
 
+	Maxgrp=2**(ptree%nlevel)-1
+	
 	ho_bf1%N=msh%Nunk
 	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
 
-	do level_c = 1,ho_bf1%Maxlevel
+	
+	if(2**ho_bf1%Maxlevel<2**(ptree%nlevel-1))then
+		write(*,*)'too many processes for paralleling leaf boxes!'
+		stop
+	endif	
+	
+	do level_c = 1,ho_bf1%Maxlevel+1
 		ho_bf1%levels(level_c)%level = level_c
-		ho_bf1%levels(level_c)%N_block_forward = 2**level_c
+		if(level_c == ho_bf1%Maxlevel+1)then
+			ho_bf1%levels(level_c)%N_block_forward = 2**(level_c-1)
+		else
+			ho_bf1%levels(level_c)%N_block_forward = 2**level_c			
+		endif
 		ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)
+		ho_bf1%levels(level_c)%Bidxs = 2**(ho_bf1%Maxlevel+1)
+		ho_bf1%levels(level_c)%Bidxe = -2**(ho_bf1%Maxlevel+1)
 
 		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))		
 		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
 		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
 	end do
-	level_c = ho_bf1%Maxlevel+1
-	ho_bf1%levels(level_c)%level = level_c
-	ho_bf1%levels(level_c)%N_block_forward = 2**(level_c-1)
-	ho_bf1%levels(level_c)%N_block_inverse = 2**(level_c-1)	
 
-	allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))	
-	allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
 	
 	ho_bf1%levels(1)%BP_inverse(1)%level = 0
 	ho_bf1%levels(1)%BP_inverse(1)%col_group = 1
 	ho_bf1%levels(1)%BP_inverse(1)%row_group = 1
+	ho_bf1%levels(1)%BP_inverse(1)%pgno = 1
 	! ho_bf1%levels(1)%BP_inverse(1)%style = 2
 	
 	do level_c = 1,ho_bf1%Maxlevel
 		do ii = 1, ho_bf1%levels(level_c)%N_block_inverse
 			col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
 			row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
+	
+			allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(LplusMax))
+			do ll=1,LplusMax
+			ho_bf1%levels(level_c)%BP_inverse(ii)%LL(ll)%Nbound = 0
+			end do			
+			ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%Nbound=1
+			
+			allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1))
+			block_inv =>ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)
+			block_inv%col_group=col_group
+			block_inv%row_group=row_group
+			block_inv%level=ho_bf1%levels(level_c)%BP_inverse(ii)%level
+			block_inv%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+			block_inv%headm=basis_group(row_group)%head
+			block_inv%headn=basis_group(col_group)%head
+			block_inv%M=basis_group(row_group)%tail-basis_group(row_group)%head+1
+			block_inv%N=basis_group(col_group)%tail-basis_group(col_group)%head+1
+			
+			block_inv%level_butterfly = ho_bf1%Maxlevel - block_inv%level
+			
+			call ComputeParallelIndices(ho_bf1%Maxlevel,block_inv,block_inv%pgno,ptree,0)
+
+			if(IOwnPgrp(ptree,block_inv%pgno))then
+				ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
+				ho_bf1%levels(level_c)%Bidxe = max(ho_bf1%levels(level_c)%Bidxe,ii)
+			endif
+			
+			if(GetTreelevel(ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)==ptree%nlevel)then
+				ho_bf1%levels(level_c)%BP(ii*2-1)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+				ho_bf1%levels(level_c)%BP(ii*2)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno				
+				ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+				ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+				ho_bf1%levels(level_c)%BP_inverse_schur(ii)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+			else
+				ho_bf1%levels(level_c)%BP(ii*2-1)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2
+				ho_bf1%levels(level_c)%BP(ii*2)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2+1
+				ho_bf1%levels(level_c+1)%BP_inverse(ii*2-1)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2
+				ho_bf1%levels(level_c+1)%BP_inverse(ii*2)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2+1				
+				ho_bf1%levels(level_c)%BP_inverse_schur(ii)%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno					
+			endif
 	
 			! off-diagonal blocks and their updates
 			ho_bf1%levels(level_c)%BP(ii*2-1)%level = level_c
@@ -500,12 +556,20 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%level = level_c+1
 			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%col_group = col_group * 2
 			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%row_group = row_group * 2			
+			ho_bf1%levels(level_c)%BP_inverse_schur(ii)%Lplus = 1
 	
 			! diagonal blocks and their inverses at bottom level
 			if(level_c==ho_bf1%Maxlevel)then
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
+				if(GetTreelevel(ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)==ptree%nlevel)then
+					ho_bf1%levels(level_c+1)%BP(ii*2-1)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+					ho_bf1%levels(level_c+1)%BP(ii*2)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
+				else
+					ho_bf1%levels(level_c+1)%BP(ii*2-1)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2
+					ho_bf1%levels(level_c+1)%BP(ii*2)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2+1					
+				endif
 				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
 				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
 				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
@@ -521,19 +585,20 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 		end do
 	end do
 
-	do level_c = 1,ho_bf1%Maxlevel+1
-	deallocate(ho_bf1%levels(level_c)%BP_inverse)
-	enddo	
+	! do level_c = 1,ho_bf1%Maxlevel+1
+	! deallocate(ho_bf1%levels(level_c)%BP_inverse)
+	! enddo	
 	
 	
 	Dimn = size(msh%xyz,1)
 	
 	do level_c = 1,ho_bf1%Maxlevel+1
 		do ii =1,ho_bf1%levels(level_c)%N_block_forward
-           
+            ! if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%tail)then
+			
 			if(level_c==ho_bf1%Maxlevel+1)then
-
-
+			
+				! bottom level dense blocks 
 				ho_bf1%levels(level_c)%BP(ii)%Lplus=1				
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
@@ -541,11 +606,45 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 				end do
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 1  !!!!! be careful here
+				block_f => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
+				block_f%level = ho_bf1%levels(level_c)%BP(ii)%level
+				block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
+				block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+				block_f%style = 1  !!!!! be careful here
+				block_f%pgno = basis_group(block_f%row_group)%pgno
 				
+				block_f%M = basis_group(block_f%row_group)%tail - basis_group(block_f%row_group)%head + 1
+				block_f%N = basis_group(block_f%col_group)%tail - basis_group(block_f%col_group)%head + 1
+				block_f%headm = basis_group(block_f%row_group)%head
+				block_f%headn = basis_group(block_f%col_group)%head
+				block_f%level_butterfly=0
+				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_f,block_f%pgno,ptree,0)
+				
+				! bottom level dense blocks' inverse 
+				ho_bf1%levels(level_c)%BP_inverse(ii)%Lplus=1				
+				allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(LplusMax))
+				do ll=1,LplusMax
+					ho_bf1%levels(level_c)%BP_inverse(ii)%LL(ll)%Nbound=0
+				end do
+				ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%Nbound = 1
+				allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1))
+				block_inv => ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)
+				block_inv%level = ho_bf1%levels(level_c)%BP_inverse(ii)%level
+				block_inv%col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
+				block_inv%row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
+				block_inv%style = 1  !!!!! be careful here
+				block_inv%pgno = basis_group(block_inv%row_group)%pgno
+				
+				block_inv%M = basis_group(block_inv%row_group)%tail - basis_group(block_inv%row_group)%head + 1
+				block_inv%N = basis_group(block_inv%col_group)%tail - basis_group(block_inv%col_group)%head + 1
+				block_inv%headm = basis_group(block_inv%row_group)%head
+				block_inv%headn = basis_group(block_inv%col_group)%head
+				block_inv%level_butterfly=0
+				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_inv,block_inv%pgno,ptree,0)			
+				if(IOwnPgrp(ptree,block_inv%pgno))then
+					ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
+					ho_bf1%levels(level_c)%Bidxe = max(ho_bf1%levels(level_c)%Bidxe,ii)
+				endif					
 			else 
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(LplusMax))
 				do ll=1,LplusMax
@@ -554,25 +653,45 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 				
 				ho_bf1%levels(level_c)%BP(ii)%LL(1)%Nbound = 1
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
+				block_f => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
+				block_f%level = ho_bf1%levels(level_c)%BP(ii)%level
 				
 				if(level_c>option%LRlevel)then
-					ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = 0 ! low rank below LRlevel
+					block_f%level_butterfly = 0 ! low rank below LRlevel
 				else 
-					if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level<option%LnoBP)then				
-						ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly 
+					if(ho_bf1%Maxlevel - block_f%level<option%LnoBP)then				
+						block_f%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly 
 					else
-						ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels				
+						block_f%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels				
 					endif
 				endif
 				
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+				block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
+				block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
+				block_f%pgno=basis_group(block_f%row_group)%pgno
+
 				
 				
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%style = 2
+				! compute the partial indices when BP is shared by double number of processes
+				ii_sch = ceiling_safe(ii/2d0)
+				block_inv => ho_bf1%levels(level_c)%BP_inverse(ii_sch)%LL(1)%matrices_block(1)
+				block_f%pgno_db = block_inv%pgno	 	
+	
+						
+		
+				
+				block_f%M = basis_group(block_f%row_group)%tail - basis_group(block_f%row_group)%head + 1
+				block_f%N = basis_group(block_f%col_group)%tail - basis_group(block_f%col_group)%head + 1
+				block_f%headm = basis_group(block_f%row_group)%head
+				block_f%headn = basis_group(block_f%col_group)%head				
+				
+				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno,ptree,0)
+				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno_db,ptree,1)
+				! if(block_f%M==2500)write(*,*)ptree%myID,block_f%pgno,block_f%pgno_db,block_f%N_loc,block_f%N_loc_db,'eref'
+				
+				block_f%style = 2
 				allocate(ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1))
-				ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%col_group
+				ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = block_f%col_group
 				ho_bf1%levels(level_c)%BP(ii)%Lplus=0
 				
 				
@@ -586,16 +705,18 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 						call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
 						! write(*,*)'nini',level_c,ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,option%LnoBP,ll
 
-						if(ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level<option%LnoBP .or. ll==LplusMax-1 .or. ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level_butterfly==0)then
+						block_f => ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)
+						
+						if(ho_bf1%Maxlevel - block_f%level<option%LnoBP .or. ll==LplusMax-1 .or. block_f%level_butterfly==0)then
 							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 						else
 							! write(*,*)'gggggg'
 							! level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level)/2)*2 
-							level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level_butterfly
+							level_butterfly = block_f%level_butterfly
 							level_BP = ho_bf1%levels(level_c)%BP(ii)%level
 							levelm = ceiling_safe(dble(level_butterfly)/2d0)						
-							groupm_start=ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%row_group*2**levelm						
-							Nboundall = 2**(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level+levelm-level_BP)
+							groupm_start=block_f%row_group*2**levelm						
+							Nboundall = 2**(block_f%level+levelm-level_BP)
 							allocate(ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(Nboundall))
 							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map = -1
 							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
@@ -796,16 +917,23 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 									cnt = cnt + 1
 									group_m = bb+groupm_start-1
 									group_n = ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%boundary_map(bb)
+									blocks => ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)
+									blocks%row_group = group_m
+									blocks%col_group = group_n
+									blocks%level = basis_group(group_m)%level
+
+									blocks%pgno = basis_group(group_m)%pgno										
+									blocks%M = basis_group(group_m)%tail - basis_group(group_m)%head + 1
+									blocks%N = basis_group(group_n)%tail - basis_group(group_n)%head + 1
+									blocks%headm = basis_group(group_m)%head
+									blocks%headn = basis_group(group_n)%head						
 									
-									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%row_group = group_m
-									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%col_group = group_n
-									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level = basis_group(group_m)%level
 									
-									! ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level)/2)*2
-									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%level_butterfly = 0 ! only two layer butterfly plus here
+									! blocks%level_butterfly = int((ho_bf1%Maxlevel - blocks%level)/2)*2
+									blocks%level_butterfly = 0 ! only two layer butterfly plus here
 									
-									ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)%style = 2
-									
+									blocks%style = 2
+									call ComputeParallelIndices(ho_bf1%Maxlevel,blocks,blocks%pgno,ptree,0)
 								end if
 							end do
 						end if		
@@ -816,7 +944,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 				
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%BP(ii)%Lplus,'gaogao '
 				
-				if(mod(ii,2)==1)then
+				if(mod(ii,2)==1)then  ! in the beginning only even block hold information about the schur complement
 					ii_sch = ceiling_safe(ii/2d0)
 					
 					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(LplusMax))
@@ -826,13 +954,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 					end do	
 									
 					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%rankmax = 0
-					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1))
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level = ho_bf1%levels(level_c)%BP(ii)%level
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%col_group = ho_bf1%levels(level_c)%BP(ii)%row_group
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group			
-					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%matrices_block(1)%style = 2
+			
 					allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
 					ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%row_group		
 					
@@ -846,11 +968,30 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 							allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound))
 							
 							do bb =1,ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%Nbound
-								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%row_group = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%col_group = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group
-								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%style = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%style
-								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level
-								ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)%level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level_butterfly
+								block_f => ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)
+								block_sch => ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(bb)
+								
+								row_group = block_f%row_group
+								
+								block_sch%row_group = row_group
+								block_sch%col_group = row_group
+								
+								if(basis_group(row_group)%pgno/=basis_group(INT(row_group/2d0))%pgno)then
+									block_sch%pgno = basis_group(INT(row_group/2d0))%pgno								
+								else 
+									block_sch%pgno = basis_group(row_group)%pgno
+								end if
+								
+								
+								block_sch%style = block_f%style
+								block_sch%level = block_f%level
+								block_sch%level_butterfly = block_f%level_butterfly
+								
+								block_sch%M = basis_group(row_group)%tail - basis_group(row_group)%head + 1
+								block_sch%N = basis_group(row_group)%tail - basis_group(row_group)%head + 1
+								block_sch%headm = basis_group(row_group)%head 
+								block_sch%headn = basis_group(row_group)%head
+								call ComputeParallelIndices(ho_bf1%Maxlevel,block_sch,block_sch%pgno,ptree,0)
 							end do
 							
 							
@@ -879,22 +1020,24 @@ subroutine BPlus_structuring(ho_bf1,option,msh)
 					
 				end if			
 								
-				! if(level_c==1 .and. ii==1)then
+				! ! if(level_c==1 .and. ii==1)then
 				 
-				write(strings , *) 2*dimn
-				! write(177,*)'Bplus:', level_c,ii
-				do ll=1,ho_bf1%levels(level_c)%BP(ii)%Lplus
-				! write(*,*)ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
-					do bb = 1,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
-						write(177,'(I3,I7,I3,I3,'//TRIM(strings)//'Es16.7)')level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
-					end do
-				end do
-				! end if
+				! write(strings , *) 2*dimn
+				! ! write(177,*)'Bplus:', level_c,ii
+				! do ll=1,ho_bf1%levels(level_c)%BP(ii)%Lplus
+				! ! write(*,*)ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
+					! do bb = 1,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
+						! write(177,'(I3,I7,I3,I3,'//TRIM(strings)//'Es16.7)')level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
+					! end do
+				! end do
+				! ! end if
 			end if
-			
+			! end if
 		end do
 	end do	
 
+	
+	
 	
 	
 	

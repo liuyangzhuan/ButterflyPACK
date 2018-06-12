@@ -11,6 +11,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	type(matrixblock),pointer::block
 	complex(kind=8) ctemp, ctemp1, ctemp2
 	complex(kind=8),allocatable:: vec_in(:,:),vec_out(:,:)
+	type(proctree)::ptree
 	
 	! time_indexarray = 0
 	! time_leastsquare = 0
@@ -58,7 +59,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	
 	vec_in=1d0
 	
-	call butterfly_block_MVP_randomized_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2)
+	call butterfly_block_MVP_randomized_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2,ptree)
 	
 	write(*,*)'output fnorm: ',fnorm(vec_out,mm,1)
 	
@@ -111,28 +112,28 @@ subroutine create_butterfly_simple(block,level_butterfly,dimension_m,dimension_n
 	mm = num_blocks*dimension_m
 	nn = num_blocks*dimension_n	
 	
-    allocate (block%ButterflyU(2**level_butterfly))
-    allocate (block%ButterflyV(2**level_butterfly))
+    allocate (block%ButterflyU%blocks(2**level_butterfly))
+    allocate (block%ButterflyV%blocks(2**level_butterfly))
 
     do blocks=1, num_blocks
-        allocate (block%ButterflyU(blocks)%matrix(dimension_m,dimension_rank))
+        allocate (block%ButterflyU%blocks(blocks)%matrix(dimension_m,dimension_rank))
 		allocate(matrixtemp1(dimension_rank,dimension_m))
 		call RandomMat(dimension_rank,dimension_m,inner_rank,matrixtemp1,1)
         do j=1, dimension_rank
             do i=1, dimension_m
-				block%ButterflyU(blocks)%matrix(i,j) = matrixtemp1(j,i)
+				block%ButterflyU%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
 			end do
 		end do	
 		deallocate(matrixtemp1)
 
 		
-        allocate (block%ButterflyV(blocks)%matrix(dimension_n,dimension_rank))
+        allocate (block%ButterflyV%blocks(blocks)%matrix(dimension_n,dimension_rank))
 		
 		allocate(matrixtemp1(dimension_rank,dimension_n))
 		call RandomMat(dimension_rank,dimension_n,inner_rank,matrixtemp1,1)
         do j=1, dimension_rank
             do i=1, dimension_n
-				block%ButterflyV(blocks)%matrix(i,j) = matrixtemp1(j,i)
+				block%ButterflyV%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
 			end do
 		end do	
 		deallocate(matrixtemp1)

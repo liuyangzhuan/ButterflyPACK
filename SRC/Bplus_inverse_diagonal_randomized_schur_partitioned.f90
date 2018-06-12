@@ -6,7 +6,7 @@ integer rankthusfarBC
 contains 
 
 
-subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
+subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -22,13 +22,14 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
+	type(proctree)::ptree
 	
     bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)	
 	
 	if(bplus%Lplus==1)then
-		call OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats)
+		call OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
 	else 
-		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
+		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 	end if	
 
 end subroutine Bplus_inverse_schur_partitionedinverse
@@ -36,7 +37,7 @@ end subroutine Bplus_inverse_schur_partitionedinverse
 
 
 
-subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats)
+subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -61,7 +62,9 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
-
+	type(proctree)::ptree
+	integer pgno
+	
 	error_inout=0
 	
 	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
@@ -71,32 +74,36 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	block_o => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)	
 	block_o%level_butterfly = block_off1%level_butterfly	
 	level_butterfly=block_o%level_butterfly
-	
+		
 	Memory = 0
 	
+	! write(*,*)ptree%myid,level_c,rowblock,'nima'
 	if(block_off1%level_butterfly==0 .or. block_off2%level_butterfly==0)then
-		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
+		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
 	else
 		ho_bf1%ind_lv=level_c
 		ho_bf1%ind_bk=rowblock
 		rank0 = max(block_off1%rankmax,block_off2%rankmax)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats) 	
+		call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree) 	
 		error_inout = max(error_inout, error)	
 	endif
-
+! write(*,*)ptree%myid,level_c,rowblock,'niddma'
+	pgno = block_o%pgno
+	! write(*,*)'wosss',pgno
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
-		call Butterfly_inverse_schulziteration_IplusButter(block_o,error,option,stats)
+		call Butterfly_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree)
 	else
-		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats)
+		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,pgno)
 	endif
-
+! write(*,*)ptree%myid,level_c,rowblock,'neeidddma'
 	error_inout = max(error_inout, error)	
 
-	n2 = OMP_get_wtime()
-	write(*,*)'I+B Inversion Time:',n2-n1	
+	n2 = OMP_get_wtime()		
+	stats%Time_SMW=stats%Time_SMW + n2-n1	
+	! write(*,*)'I+B Inversion Time:',n2-n1	
 #if PRNTlevel >= 1
 	write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif		
@@ -108,7 +115,7 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 end subroutine OneL_inverse_schur_partitionedinverse
 
 
-subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
+subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
 
     use MODULE_FILE
     ! use lapack95
@@ -117,7 +124,7 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
     
 	integer level_c,rowblock
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
-    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm_diag
     character chara
     real*8 a,b,c,d
     complex(kind=8) ctemp, ctemp1, ctemp2
@@ -127,12 +134,12 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
     
     real*8,allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
 	
-	integer Nsub,Ng,unique_nth,level_left_start
+	integer Nsub,Ng,unique_nth,level_left_start,ll
 	integer*8 idx_start   
     integer level_blocks
-    integer groupm_start, groupn_start,dimension_rank,rank
+    integer groupm_start, groupn_start,dimension_rank,rank1,rank
     integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	
@@ -140,43 +147,74 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock)
 	real*8::n2,n1
 	type(hobf)::ho_bf1
 	type(matrixblock),pointer::block_off1,block_off2
+	type(proctree)::ptree
+	integer pgno,pgno1,pgno2
+	integer descBUold(9),descBVold(9),descCUold(9),descCVold(9), descBU(9),descBV(9),descCU(9),descCV(9),descBVCU(9),descBUBVCU(9)
+	integer ctxt1,ctxt2,ctxt,ctxtall,info,myrow,mycol,myArows,myAcols 
+	integer :: numroc   ! blacs routine
 
+	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
 	block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)	
+	
+	
+	! ! allocate BP_inverse_schur on the second process grid 
+	! if(.not. associated(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL))then
+		! block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)	
+		! allocate(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(LplusMax))
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%Lplus=ho_bf1%levels(level_c)%BP(rowblock*2)%Lplus
+		! do ll=1,LplusMax
+			! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(ll)%Nbound=0
+		! end do				
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%Nbound = 1
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%rankmax = 0
+		! allocate(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1))
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%level = block_off2%level
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%level_butterfly = block_off2%level_butterfly
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%col_group = block_off2%col_group
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%row_group = block_off2%col_group			
+		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%style = 2		
+	! endif
+	
 	block_o =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
 	call delete_blocks(block_o)	
+	
 	block_o%level_butterfly = 0
+	allocate(block_o%ButterflyU%blocks(1))
+	allocate(block_o%ButterflyV%blocks(1))
 	
+	pgno = block_o%pgno
+	pgno1 = block_off1%pgno
+	pgno2 = block_off2%pgno
+	! if(ptree%MyID==2)write(*,*)pgno,pgno1,pgno2,'nana'
+	call assert(pgno==pgno1,'block_o and block_off1 should be on the same process group')
+	call assert(pgno==pgno2,'block_o and block_off2 should be on the same process group')
 	
-	groupm=block_off1%row_group  ! Note: row_group and col_group interchanged here   
-	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
-	groupn=block_off1%col_group  ! Note: row_group and col_group interchanged here   
-	kk=basis_group(groupn)%tail-basis_group(groupn)%head+1 	
-	groupn=block_off2%col_group  ! Note: row_group and col_group interchanged here   
-	nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		
-	allocate(block_o%ButterflyU(1))
-	allocate(block_o%ButterflyV(1))
+	mm = block_off1%M
+	nn = block_off1%N
 	
-	if(block_off1%level_butterfly==0)then
-		rank=size(block_off1%ButterflyU(1)%matrix,2)
-		allocate(block_o%ButterflyU(1)%matrix(mm,rank))
-		block_o%ButterflyU(1)%matrix=-block_off1%ButterflyU(1)%matrix
-		allocate(block_o%ButterflyV(1)%matrix(nn,rank))
-		block_o%ButterflyV(1)%matrix=0
-		call butterfly_block_MVP_randomized_dat(block_off2,'T',kk,nn,rank,block_off1%ButterflyV(1)%matrix,block_o%ButterflyV(1)%matrix,ctemp1,ctemp2)
-		
-	else if(block_off2%level_butterfly==0)then
-		rank=size(block_off2%ButterflyU(1)%matrix,2)
-		allocate(block_o%ButterflyU(1)%matrix(mm,rank))
-		block_o%ButterflyU(1)%matrix=0
-		allocate(block_o%ButterflyV(1)%matrix(nn,rank))
-		block_o%ButterflyV(1)%matrix=-block_off2%ButterflyV(1)%matrix
-		call butterfly_block_MVP_randomized_dat(block_off1,'N',mm,kk,rank,block_off2%ButterflyU(1)%matrix,block_o%ButterflyU(1)%matrix,ctemp1,ctemp2)		
-	endif
-	
+	rank = block_off2%rankmax
+	block_o%ButterflyV%blocks(1)%mdim=mm
+	block_o%ButterflyV%blocks(1)%ndim=rank
+	block_o%ButterflyU%blocks(1)%mdim=mm
+	block_o%ButterflyU%blocks(1)%ndim=rank	
 	block_o%rankmax=rank
+	block_o%M_loc = block_off1%M_loc
+	block_o%N_loc = block_o%M_loc
+	allocate(block_o%M_p(size(block_off1%M_p,1),2))
+	block_o%M_p = block_off1%M_p
+	allocate(block_o%N_p(size(block_off1%M_p,1),2))
+	block_o%N_p = block_off1%M_p	
+	
+	allocate(block_o%ButterflyU%blocks(1)%matrix(block_o%M_loc,rank))
+	block_o%ButterflyU%blocks(1)%matrix =0
+	allocate(block_o%ButterflyV%blocks(1)%matrix(block_o%M_loc,rank))
+	block_o%ButterflyV%blocks(1)%matrix =block_off2%ButterflyV%blocks(1)%matrix
+	
+	call butterfly_block_MVP_randomized_dat(block_off1,'N',block_off1%M_loc,block_off1%N_loc,rank,block_off2%ButterflyU%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,ctemp1,ctemp2,ptree)
+	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
+	! if(ptree%MyID==2)write(*,*)pgno,pgno1,pgno2,'neeeeana'
 	
     return                
 
@@ -185,7 +223,7 @@ end subroutine OneL_minusBC_LowRank
 
 
 
-subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats)
+subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -209,7 +247,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	real*8:: n1,n2,Memory,memory_temp
 	type(Hoption)::option
 	type(Hstat)::stats
-	
+	type(proctree)::ptree
 	type(schulz_operand)::schulz_op
 	complex(kind=8),allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
 	complex(kind=8)::ctemp1,ctemp2
@@ -220,11 +258,11 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	
 	Memory = 0
 
-	groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
-	
+	mm = block_o%M
+
 	num_vect=1
 	allocate(VecIn(mm,num_vect))
+	VecIn=0
 	allocate(VecOut(mm,num_vect))
 	VecOut=0
 	allocate(VecBuff(mm,num_vect))
@@ -233,7 +271,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	call copy_butterfly(block_o,schulz_op%matrices_block,memory_temp)
 	call copy_butterfly(block_o,block_Xn,memory_temp)
 	
-	call compute_schulz_init(schulz_op,option)
+	call compute_schulz_init(schulz_op,option,ptree)
 	
 	itermax=100
 	converged=0
@@ -245,7 +283,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		rank0 = block_Xn%rankmax
 		
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,butterfly_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ii) 	
+		call Butterfly_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,butterfly_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,ii) 	
 		
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
 		if(schulz_op%order==3)schulz_op%scale=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
@@ -255,11 +293,11 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		ctemp1=1.0d0 ; ctemp2=0.0d0
 		call RandomMat(mm,num_vect,min(mm,num_vect),VecIn,1)
 		! XnR
-		call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,'N',mm,mm,num_vect,VecIn,VecBuff,ctemp1,ctemp2,ii+1)
+		call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,'N',mm,mm,num_vect,VecIn,VecBuff,ctemp1,ctemp2,ptree,stats,ii+1)
 		
 		
 		! AXnR
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2)
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree)
 		VecOut = 	VecBuff+VecOut			
 		error_inout = fnorm(VecOut-VecIn,mm,num_vect)/fnorm(VecIn,mm,num_vect)
 		
@@ -291,7 +329,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		call delete_blocks(block_o)
 		call get_butterfly_minmaxrank(block_Xn)
 		rank_new_max = block_Xn%rankmax
-		call copy_delete_randomizedbutterfly(block_Xn,block_o,Memory) 
+		call copy_delete_butterfly(block_Xn,block_o,Memory) 
 		call delete_blocks(schulz_op%matrices_block)	
 		if(allocated(schulz_op%diags))deallocate(schulz_op%diags)
 	endif
@@ -311,7 +349,7 @@ end subroutine Butterfly_inverse_schulziteration_IplusButter
 
 
 
-subroutine compute_schulz_init(schulz_op,option)
+subroutine compute_schulz_init(schulz_op,option,ptree)
 
     use MODULE_FILE
 	use misc
@@ -334,15 +372,15 @@ subroutine compute_schulz_init(schulz_op,option)
 	type(schulz_operand)::schulz_op
 	real*8, allocatable:: Singular(:)
 	complex (kind=8), allocatable::UU(:,:),VV(:,:),RandVectIn(:,:),RandVectOut(:,:),matrixtmp(:,:),matrixtmp1(:,:)
+	type(proctree)::ptree
 	
 	schulz_op%order=option%schulzorder
 	
 	error_inout=0
 	
 	level_butterfly=schulz_op%matrices_block%level_butterfly
-	
-	groupm=schulz_op%matrices_block%row_group  ! Note: row_group and col_group interchanged here   
-	mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 	
+	  
+	mm = schulz_op%matrices_block%M
 	nn=mm
 	num_vect=min(10,nn)
 
@@ -352,7 +390,7 @@ subroutine compute_schulz_init(schulz_op,option)
 	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectIn,1)
 	
 	! computation of AR
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
+	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree)
 	RandVectOut = RandVectIn+RandVectOut
 	
 	
@@ -361,12 +399,12 @@ subroutine compute_schulz_init(schulz_op,option)
 	do qq=1,q
 		RandVectOut=conjg(RandVectOut)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree)
 		RandVectIn = RandVectOut+RandVectIn		
 		
 		RandVectIn=conjg(RandVectIn)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree)
 		RandVectOut = RandVectIn+RandVectOut		
 		
 	enddo	
@@ -379,7 +417,7 @@ subroutine compute_schulz_init(schulz_op,option)
 	
 	! computation of B = Q^c*A
 	RandVectOut=conjg(RandVectOut)
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
+	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree)
 	RandVectIn =RandVectOut+RandVectIn 
 	RandVectOut=conjg(RandVectOut)	
 	
@@ -405,7 +443,7 @@ subroutine compute_schulz_init(schulz_op,option)
 	! enddo	
 	! allocate(matrixtmp(nn,nn))
 	! matrixtmp=0
-	! call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,CMPLX(1d0,0d0,kind=8),CMPLX(0d0,0d0,kind=8))
+	! call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,cone,czero)
 	! matrixtmp = matrixtmp+matrixtmp1
 	! allocate (UU(nn,nn),VV(nn,nn),Singular(nn))
 	! call SVD_Truncate(matrixtmp,nn,nn,nn,UU,VV,Singular,option%tol_SVD,rank)	
@@ -421,7 +459,7 @@ end subroutine compute_schulz_init
 
 
 
-subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
+subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -456,6 +494,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	type(hobf)::ho_bf1
 	type(matrixblock):: agent_block
 	type(blockplus):: agent_bplus
+	type(proctree) :: ptree 
 	 
 	ctemp1 = 1d0
 	ctemp2 = 0d0
@@ -485,13 +524,13 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	
 	level_butterfly = block_o%level_butterfly
 	
-	call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats)
+	call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats,ptree)
 	error_inout = max(error_inout, error)
 	
 	
 	! write(*,*)'good!!!!'
 	! stop
-
+	n1 = OMP_get_wtime()
 	Bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)
 	Lplus = ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%Lplus
 	do llplus =Lplus,1,-1
@@ -514,16 +553,18 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				level_butterfly_loc = levelm
 				groupm_start=block_o%row_group*2**levelm
-				edge_s =basis_group(block_o%row_group)%head 
-				edge_e =basis_group(block_o%row_group)%tail 
+				
+				! edge_s =basis_group(block_o%row_group)%head 
+				! edge_e =basis_group(block_o%row_group)%tail 
 
 				
 				! write(*,*)'nidiao',llplus,Lplus,Bplus%LL(llplus+1)%Nbound,Bplus%LL(llplus)%matrices_block(1)%row_group,Bplus%LL(llplus)%matrices_block(1)%col_group
 				
 				do ii=1,Bplus%LL(llplus+1)%Nbound
-					edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					! edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
 					
-					if(edge_first>=edge_s .and. edge_first<=edge_e)then
+					if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
 						ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1					
 						if(level_butterfly_loc==0)then
 							write(*,*)'level_butterfly_loc==0 not done'
@@ -538,7 +579,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,agent_block) 
+							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,agent_block) 
 							! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade' 
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)						
 								
@@ -565,7 +606,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			
 			!!!!! invert I+B1 to be I+B2		
 			level_butterfly=block_o%level_butterfly	
-			call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats)		
+			call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,Bplus%LL(1)%matrices_block(1)%pgno)		
 			error_inout = max(error_inout, error)		
 	
 			
@@ -583,13 +624,14 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				level_butterfly_loc = levelm
 				groupm_start=block_o%row_group*2**levelm
-				edge_s =basis_group(block_o%row_group)%head 
-				edge_e =basis_group(block_o%row_group)%tail 
+				! edge_s =basis_group(block_o%row_group)%head 
+				! edge_e =basis_group(block_o%row_group)%tail 
 
 				
 				do ii=1,Bplus%LL(llplus+1)%Nbound
-					edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
-					if(edge_first>=edge_s .and. edge_first<=edge_e)then
+					! edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
+					if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
 						ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1					
 						if(level_butterfly_loc==0)then
 							write(*,*)'level_butterfly_loc==0 not done'
@@ -611,7 +653,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,agent_block) 	
+							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,agent_block) 	
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)						
 								
 							err_max = max(err_max, error)															
@@ -635,7 +677,8 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			end if
 		end do
 	end do
-	
+	n2 = OMP_get_wtime()
+	stats%Time_SMW=stats%Time_SMW + n2-n1	
 	
 	rank_new_max = 0
 	do ll=1,Lplus

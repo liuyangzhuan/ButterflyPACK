@@ -48,13 +48,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	
+	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
+	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	
 	call OMP_set_num_threads(threads_num)		
 		
 		
@@ -66,12 +69,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
 	! call vmlsetmode(VML_FTZDAZ_ON)
-	
+	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "HODLR_BUTTERFLY_SOLVER_2D"
     write(*,*) "FOR X64 COMPILER"
     write(*,*) "   "
-
+	endif
+	
 	call InitStat(stats)
 	
 	! time_indexarray = 0
@@ -101,21 +105,29 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	ker%Kernel = EMCURV	
 	
-	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
-	msh%Nunk=5000
-	
+	msh%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	! msh%Nunk=1280000
+	! msh%Nunk=320000
+	! msh%Nunk=80000
+	msh%Nunk=20000
+	 ! msh%Nunk=5000
+    ! msh%Nunk=160000	
 	! Refined_level=0
 	
 
 
 
 	
-	
+	 
 	msh%scaling=1d0
-	ker%wavelength=0.08
-	! Discret=0.05
+	! ker%wavelength=0.0006
+	!ker%wavelength=0.0003
+	ker%wavelength=0.01
+
+! ker%wavelength=0.06
+! Discret=0.05
 	ker%RCS_static=1
-    ker%RCS_Nsample=2000
+    ker%RCS_Nsample=100
 
 	
 	
@@ -139,7 +151,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
-	option%LRlevel=100
+	option%LRlevel=0
 
 	
 
@@ -155,58 +167,60 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     ker%wavenum=2*pi/ker%wavelength
 
    !***********************************************************************
+   if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
-   write (*,*) 'ker%wavelength:',ker%wavelength
+   write (*,*) 'wavelength:',ker%wavelength
    write (*,*) ''
+   endif
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
-    write(*,*) "geometry modeling......"
-    call geo_modeling_CURV(msh,ker)
-    write(*,*) "modeling finished"
-    write(*,*) "    "
+    if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
+    call geo_modeling_CURV(msh,ker,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
-    write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh)
-	call BPlus_structuring(ho_bf,option,msh)
-    write(*,*) "H_matrices formatting finished"
-    write(*,*) "    "
+    if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
+    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+	call BPlus_structuring(ho_bf,option,msh,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	write(*,*)t2-t1
+	! write(*,*)t2-t1
 	! stop 
 	
     !pause
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMCURV)
+    if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMCURV,ptree)
 	if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	end if
-    write(*,*) "H_matrices filling finished"
-    write(*,*) "    "
+    if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
-	write(*,*)t2-t1
+	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then
-    write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats)
-    write(*,*) "Cascading factorizing finished"
-    write(*,*) "    "	
+    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
+    call cascading_factorizing(ho_bf,option,stats,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
 
-    write(*,*) "EM_solve......"
-    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,ker)
-    write(*,*) "EM_solve finished"
-    write(*,*) "    "	
+    if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
+    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,ker,ptree,stats)
+    if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
 	
-    write(*,*) "-------------------------------program end-------------------------------------"
+    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
 
     ! ! ! ! pause
 

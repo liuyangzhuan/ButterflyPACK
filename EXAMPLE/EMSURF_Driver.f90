@@ -31,6 +31,22 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	type(mesh)::msh	
 	type(hobf)::ho_bf,ho_bf_copy
 	type(kernelquant)::ker
+	type(proctree)::ptree
+	integer,allocatable:: groupmembers(:)	
+	integer nmpi
+	
+	
+	! nmpi and groupmembers should be provided by the user 
+	call MPI_Init(ierr)
+	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
+	allocate(groupmembers(nmpi))
+	do ii=1,nmpi
+		groupmembers(ii)=(ii-1)
+	enddo	
+	
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)	
+	
+	
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -150,7 +166,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	
 	t1 = OMP_get_wtime()
     write(*,*) "geometry modeling......"
-    call geo_modeling_SURF(msh,ker)
+    call geo_modeling_SURF(msh,ker,ptree)
     write(*,*) "modeling finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -158,8 +174,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh)
-	call BPlus_structuring(ho_bf,option,msh)
+    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+	call BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -171,7 +187,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMSURF)
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMSURF,ptree)
 	if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	end if    
@@ -181,13 +197,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	write(*,*)t2-t1
 	
     write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats)
+    call cascading_factorizing(ho_bf,option,stats,ptree)
     write(*,*) "Cascading factorizing finished"
     write(*,*) "    "	
 
 
     write(*,*) "EM_solve......"
-    call EM_solve_SURF(ho_bf_copy,ho_bf,option,msh,ker)
+    call EM_solve_SURF(ho_bf_copy,ho_bf,option,msh,ker,ptree,stats)
     write(*,*) "EM_solve finished"
     write(*,*) "    "	
 	

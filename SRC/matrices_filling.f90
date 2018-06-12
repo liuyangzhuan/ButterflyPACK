@@ -6,19 +6,17 @@ use Randomized_reconstruction
 contains 
 
 
-
-subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn)
+subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
     implicit none
-
-    integer i, j, ii, jj, kk, iii, jjj,ll
+	real*8 n1,n2
+    integer i, j, ii, ii_inv, jj, kk, iii, jjj,ll
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter
+    integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter,ierr
     real T0
 	real*8:: rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
-    real*8 Memory_direct_forward,Memory_butterfly_forward
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2
 	complex(kind=8)::ctemp,ctemp1,ctemp2
 	type(matrixblock)::block_tmp,block_tmp1
@@ -26,26 +24,28 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn)
 	integer, allocatable :: ipiv(:)
 	complex(kind=8), allocatable :: UU(:,:), VV(:,:),testin(:,:),testout(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:)
 	real*8,allocatable :: Singular(:)
-	integer level_c,iter,level_cc,level_butterfly
+	integer level_c,iter,level_cc,level_butterfly,Bidxs,Bidxe
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	type(mesh)::msh
 	type(kernelquant)::ker
+	type(proctree)::ptree
 	procedure(Z_elem)::element_Zmn
 	
-    Memory_direct_forward=0
-    Memory_butterfly_forward=0
+	
+    ! Memory_direct_forward=0
+    ! Memory_butterfly_forward=0
 	tim_tmp = 0	
     !tolerance=0.001
-    write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) ''
     ! write (*,*) 'ACA error threshold',tolerance
-    write (*,*) 'SVD error threshold',option%tol_SVD
-    write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) 'SVD error threshold',option%tol_SVD
+    if(ptree%MyID==Main_ID)write (*,*) ''
 
-    write(*,*) "Filling Leaf-blocks......"
+    if(ptree%MyID==Main_ID)write(*,*) "Filling Leaf-blocks......"
 
-    T0=secnds(0.0)
+    n1 = OMP_get_wtime()
     level=0
     flag=0
 	! ForwardSymmetricFlag = 0
@@ -54,63 +54,79 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn)
 	
 	
 	do level_c = 1,ho_bf1%Maxlevel+1
-		do ii =1,ho_bf1%levels(level_c)%N_block_forward
-            if (level_c/=ho_bf1%Maxlevel+1) then
-                if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
-                    write (*,*) 'level',level,'is filling...'
-                endif
-				if(level_c>=ho_bf1%Maxlevel)t1=OMP_GET_WTIME()	
-				call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn)				
-                
-				if(level_c>=ho_bf1%Maxlevel)then
-					t2=OMP_GET_WTIME()
-					tim_tmp = tim_tmp + t2 - t1
-				end if
-				
-				if(level==option%level_check)then
-					! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
-					
-					rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
-					rankrate_inner=1.2d0
-					rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
-					rankrate_outter=1.2d0
-					level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
-					call Buplus_randomized(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats)
-					
-					
-					stop
-				end if
-				
-				
-				Memory_butterfly_forward=Memory_butterfly_forward+rtemp
-            else
-
-                if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
-                    level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
-                    write (*,*) 'level',level,'is filling...'
-                endif
-                call full_filling(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn)
-                Memory_direct_forward=Memory_direct_forward+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
-            endif
-			! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
-			
-			! if(level==option%level_check)then
-				! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn)
-			! end if
-			
-		end do
-		write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level
-	end do	
+		if(level_c/=ho_bf1%Maxlevel+1)then
+			Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
+			Bidxe = ho_bf1%levels(level_c)%Bidxe*2
+		else
+			Bidxs = ho_bf1%levels(level_c)%Bidxs
+			Bidxe = ho_bf1%levels(level_c)%Bidxe		
+		endif
 		
-	write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
-	write (*,*) ''
-	write (*,*) 'Total filling time:',secnds(T0),'Seconds'
+		do ii =Bidxs,Bidxe
 
-	write(*,*)''
-	write(*,*)Memory_butterfly_forward,'MB costed for butterfly forward blocks'
-	write(*,*)Memory_direct_forward,'MB costed for direct forward blocks'
-	write(*,*)''
+			if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%tail)then
+				if (level_c/=ho_bf1%Maxlevel+1) then
+					if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+						if(ptree%MyID==Main_ID)write (*,*) 'level',level,'is filling...'
+					endif
+					if(level_c>=ho_bf1%Maxlevel)t1=OMP_GET_WTIME()	
+					call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn,ptree)				
+					
+					if(level_c>=ho_bf1%Maxlevel)then
+						t2=OMP_GET_WTIME()
+						tim_tmp = tim_tmp + t2 - t1
+					end if
+					
+					if(level==option%level_check)then
+						! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
+						
+						rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
+						rankrate_inner=1.2d0
+						rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
+						rankrate_outter=1.2d0
+						level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
+						call Buplus_randomized(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree)
+						
+						
+						stop
+					end if
+					
+					
+					stats%Mem_For=stats%Mem_For+rtemp
+				else
+
+					if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
+						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
+						if(ptree%MyID==Main_ID)write (*,*) 'level',level,'is filling...'
+					endif
+					call full_filling(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn)
+					stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+				endif
+				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
+				
+				! if(level==option%level_check)then
+					! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn,ptree)
+				! end if
+			endif
+		end do	
+		if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level
+	end do	
+	n2 = OMP_get_wtime()
+	stats%Time_Fill = stats%Time_Fill + n2-n1 	
+	
+	
+	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
+	if(ptree%MyID==Main_ID)write (*,*) ''
+	if(ptree%MyID==Main_ID)write (*,*) 'Total filling time:',rtemp,'Seconds'
+
+	if(ptree%MyID==Main_ID)write(*,*)''
+	call MPI_ALLREDUCE(stats%Mem_For,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly forward blocks'
+	call MPI_ALLREDUCE(stats%Mem_Direct,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct forward blocks'
+	if(ptree%MyID==Main_ID)write(*,*)''
 
     return
 
@@ -131,14 +147,13 @@ subroutine full_filling(blocks,msh,ker,element_Zmn)
 	type(kernelquant)::ker
 	procedure(Z_elem)::element_Zmn
 	
-    group_m=blocks%row_group ! Note: row_group and col_group interchanged here   
-    group_n=blocks%col_group
-    head_m=basis_group(group_m)%head
-    tail_m=basis_group(group_m)%tail
-    head_n=basis_group(group_n)%head
-    tail_n=basis_group(group_n)%tail
-    mm=tail_m-head_m+1
-    nn=tail_n-head_n+1
+    mm=blocks%M 
+	head_m=blocks%headm
+	tail_m=mm+head_m-1
+    nn=blocks%N 
+	head_n=blocks%headn
+	tail_n=nn+head_n-1
+	
 
     allocate (blocks%fullmat(mm,nn))
 
@@ -157,7 +172,7 @@ end subroutine full_filling
 
 
 
-subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn)
+subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree)
 
     use MODULE_FILE
 	use Utilities	
@@ -165,21 +180,23 @@ subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn)
     
     type(matrixblock) :: matrices_block1
     real*8 a, b, error
-    integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj
+    integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n
     complex(kind=8) value1, value2, ctemp1, ctemp2
 	complex(kind=8),allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
     type(kernelquant)::ker
 	procedure(Z_elem)::element_Zmn
-	
+	type(proctree)::ptree
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	
 	! write(*,*)'h1'
 
-    group_m=matrices_block1%row_group
-    group_n=matrices_block1%col_group
-    mm=(basis_group(group_m)%tail-basis_group(group_m)%head+1)
-    nn=(basis_group(group_n)%tail-basis_group(group_n)%head+1)
-    
+	head_m = matrices_block1%headm
+	mm = matrices_block1%M
+	
+	head_n = matrices_block1%headn
+	nn = matrices_block1%N	
+	
+
 
 	allocate(Vin(nn,1))
 	allocate(Vout1(mm,1))
@@ -198,13 +215,13 @@ subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn)
 		call fullmat_block_MVP_randomized_dat(matrices_block1,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
 		! write(*,*)'h4'
 	else 
-		call butterfly_block_MVP_randomized_dat(matrices_block1,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2)
+		call butterfly_block_MVP_randomized_dat(matrices_block1,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree)
 	end if	
 	
 	do ii=1,mm
 		ctemp1 = 0d0
 		do jj=1,nn
-			ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+basis_group(group_m)%head-1),new2old(jj+basis_group(group_n)%head-1))*Vin(jj,1)
+			ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+head_m-1),new2old(jj+head_n-1))*Vin(jj,1)
 		end do
 		Vout2(ii,1) = ctemp1
 	end do

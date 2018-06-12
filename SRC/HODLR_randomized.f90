@@ -5,7 +5,7 @@ use Butterfly_inversion
 use Butterfly_compress_forward
 contains
 
-subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option,stats,operand)
+subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option,stats,operand,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -21,7 +21,7 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	real*8:: time_gemm1
 	class(*)::operand
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
-
+	type(proctree)::ptree
 	
 	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(ho_bf1%Maxlevel))
 	stats%rankmax_of_level = 0
@@ -29,7 +29,7 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	Memory = 0
 	do level_c = 1,ho_bf1%Maxlevel+1
 		if(level_c==ho_bf1%Maxlevel+1)then
-			call HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memtmp,operand)
+			call HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memtmp,operand,ptree)
 		else
 			if(level_c>option%LRlevel)then
 				level_butterfly = 0   !!! uncomment out this to enable low-rank only reconstruction
@@ -49,29 +49,29 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 			stats%Time_random(1) = stats%Time_random(1) + n2-n1
 			
 			! if(level_butterfly==0)then
-				! call HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rankmax,option,operand)
+				! call HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rankmax,option,operand,ptree)
 			! else 
 
 				n1 = OMP_get_wtime()
-				call Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand)
+				call Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructLL: ', n2-n1, 'vecCNT',vecCNT
 
 				n1 = OMP_get_wtime()
-				call Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand)
+				call Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructRR: ', n2-n1, 'vecCNT',vecCNT
 			! end if
 			
 			
-			call Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error_inout,operand)
+			call Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error_inout,operand,ptree)
 			
 			rank_new_max = 0
 			do bb = 1, ho_bf1%levels(level_c)%N_block_forward
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				call get_butterfly_minmaxrank(block_rand(bb))
 				rank_new_max = max(rank_new_max,block_rand(bb)%rankmax)
-				call copy_randomizedbutterfly(block_rand(bb),block_o,Memtmp)
+				call copy_butterfly(block_rand(bb),block_o,Memtmp)
 				Memory = Memory + Memtmp
 				call delete_blocks(block_rand(bb))
 			end do
@@ -95,7 +95,7 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	end do
 
 	call blackbox_HODLR_MVP_dat('N',N,1,Vin,Vout1,operand)
-	call MVM_Z_forward('N',N,1,1,ho_bf1%Maxlevel+1,Vin,Vout2,ho_bf1)
+	call MVM_Z_forward('N',N,1,1,ho_bf1%Maxlevel+1,Vin,Vout2,ho_bf1,ptree)
 	
 	error = fnorm(Vout2-Vout1,N,1)/fnorm(Vout1,N,1)
 	deallocate(Vin,Vout1,Vout2)
@@ -104,7 +104,7 @@ end subroutine HODLR_MVP
 
 
 
-subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rmax,option,operand)
+subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rmax,option,operand,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -124,6 +124,7 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 	type(Hoption)::option
 	complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	class(*)::operand
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
@@ -145,14 +146,13 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		header_n=basis_group(groupn)%head
-		tailer_n=basis_group(groupn)%tail
-		nn=tailer_n-header_n+1
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
 		k=header_n-1	
 		
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		mm=block_o%M
 		
 		ranks(bb)=min(min(mm,nn),num_vect)
 		
@@ -162,15 +162,15 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 		deallocate(matrixtemp)
 	end do	
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree)
 	
 	! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
 	q=0
 	do qq=1,q
 		RandVectOutR=conjg(RandVectOutR)
-		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand)
+		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree)
 		RandVectInR=conjg(RandVectInR)
-		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand)
+		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree)
 	enddo
 	
 	
@@ -178,9 +178,10 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		header_m=basis_group(groupm)%head
-		tailer_m=basis_group(groupm)%tail
-		mm=tailer_m-header_m+1 
+		mm=block_o%M
+		header_m=block_o%headm
+		tailer_m=mm+header_m-1
+		
 		k=header_m-1
 		
 		allocate(matrixtemp(mm,ranks(bb)))
@@ -194,21 +195,22 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 
 	! computation of B = Q^c*A
 	RandVectOutR=conjg(RandVectOutR)
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree)
 	RandVectOutR=conjg(RandVectOutR)
 	
 	! computation of SVD of B and LR of A
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		header_m=basis_group(groupm)%head
-		tailer_m=basis_group(groupm)%tail
-		mm=tailer_m-header_m+1 
+		mm=block_o%M
+		header_m=block_o%headm
+		tailer_m=mm+header_m-1
+		
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		header_n=basis_group(groupn)%head
-		tailer_n=basis_group(groupn)%tail			
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1		
 		
 		allocate(matrixtemp(ranks(bb),nn))
 		call copymatT_omp(RandVectInR(header_n:header_n+nn-1,1:ranks(bb)),matrixtemp,nn,ranks(bb))
@@ -234,16 +236,16 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 		block_rand(bb)%col_group=-1		
 		
 		
-		allocate(block_rand(bb)%ButterflyU(1))
-		allocate(block_rand(bb)%ButterflyV(1))		
+		allocate(block_rand(bb)%ButterflyU%blocks(1))
+		allocate(block_rand(bb)%ButterflyV%blocks(1))		
 		
-		allocate(block_rand(bb)%ButterflyV(1)%matrix(nn,rank))
-		call copymatT_omp(VV(1:rank,1:nn),block_rand(bb)%ButterflyV(1)%matrix,rank,nn)
-		allocate(block_rand(bb)%ButterflyU(1)%matrix(mm,rank))
+		allocate(block_rand(bb)%ButterflyV%blocks(1)%matrix(nn,rank))
+		call copymatT_omp(VV(1:rank,1:nn),block_rand(bb)%ButterflyV%blocks(1)%matrix,rank,nn)
+		allocate(block_rand(bb)%ButterflyU%blocks(1)%matrix(mm,rank))
 		allocate(matrixtempQ(mm,ranks(bb)))
 		matrixtempQ = RandVectOutR(header_m:header_m+mm-1,1:ranks(bb))
 		
-		call gemm_omp(matrixtempQ,UU(1:ranks(bb),1:rank),block_rand(bb)%ButterflyU(1)%matrix,mm,ranks(bb),rank)
+		call gemm_omp(matrixtempQ,UU(1:ranks(bb),1:rank),block_rand(bb)%ButterflyU%blocks(1)%matrix,mm,ranks(bb),rank)
 		
 		deallocate(matrixtemp,matrixtempQ,UU,VV,Singular)
 
@@ -255,7 +257,7 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 end subroutine HODLR_MVP_OneL_Lowrank
 
 
-subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand)
+subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -274,6 +276,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 	complex(kind=8),allocatable:: RandVectIn(:,:),RandVectOut(:,:)
 	type(hobf)::ho_bf1
 	class(*)::operand
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 
@@ -302,24 +305,25 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward-1,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-				header_n=basis_group(groupn)%head
-				tailer_n=basis_group(groupn)%tail
-				nn=tailer_n-header_n+1
+				nn=block_o%N
+				header_n=block_o%headn
+				tailer_n=nn+header_n-1
+				! nn=tailer_n-header_n+1
 				k=header_n-1	
 				RandVectIn(1+k:nn+k,1:num_vect) = VectIn(1+k:nn+k,1:num_vect)
 			end do	
 			
 			call blackbox_HODLR_MVP_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
-			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1)
+			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree)
 			RandVectOut = RandVectTmp-RandVectOut			
 				
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward-1,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-				header_m=basis_group(groupm)%head
-				tailer_m=basis_group(groupm)%tail
+
+				mm=block_o%M
+				header_m=block_o%headm
+				tailer_m = mm + header_m-1
 				VectOut(header_m:header_m+mm-1,1:num_vect) = RandVectOut(header_m:header_m+mm-1,1:num_vect)
 			end do	
 
@@ -328,25 +332,24 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 			do bb=2,ho_bf1%levels(level_c)%N_block_forward,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-				header_n=basis_group(groupn)%head
-				tailer_n=basis_group(groupn)%tail
-				nn=tailer_n-header_n+1
+				nn=block_o%N
+				header_n=block_o%headn
+				tailer_n=nn+header_n-1
 				k=header_n-1	
 				RandVectIn(1+k:nn+k,1:num_vect) = VectIn(1+k:nn+k,1:num_vect)
 			end do	
 			
 			call blackbox_HODLR_MVP_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
 			
-			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1)
+			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree)
 			RandVectOut = RandVectTmp-RandVectOut			
 				
 			do bb=2,ho_bf1%levels(level_c)%N_block_forward,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-				header_m=basis_group(groupm)%head
-				tailer_m=basis_group(groupm)%tail
+				mm=block_o%M
+				header_m=block_o%headm
+				tailer_m = mm + header_m-1
 				VectOut(header_m:header_m+mm-1,1:num_vect) = RandVectOut(header_m:header_m+mm-1,1:num_vect)
 			end do
 				
@@ -367,25 +370,24 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward-1,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-				header_m=basis_group(groupm)%head
-				tailer_m=basis_group(groupm)%tail
-				mm=tailer_m-header_m+1
+				mm=block_o%M
+				header_m=block_o%headm
+				tailer_m = mm + header_m-1
 				k=header_m-1
 				RandVectIn(1+k:mm+k,1:num_vect) = VectIn(1+k:mm+k,1:num_vect)
 			end do	
 		
 			call blackbox_HODLR_MVP_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
 			
-			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1)
+			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree)
 			RandVectOut = RandVectTmp-RandVectOut		
 		
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward-1,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-				header_n=basis_group(groupn)%head
-				tailer_n=basis_group(groupn)%tail	
+				nn=block_o%N
+				header_n=block_o%headn
+				tailer_n=nn+header_n-1
 				VectOut(header_n:header_n+nn-1,1:num_vect)=RandVectOut(header_n:header_n+nn-1,1:num_vect)
 			end do			
 
@@ -394,24 +396,23 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 			do bb=2,ho_bf1%levels(level_c)%N_block_forward,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-				mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-				header_m=basis_group(groupm)%head
-				tailer_m=basis_group(groupm)%tail
-				mm=tailer_m-header_m+1
+				mm=block_o%M
+				header_m=block_o%headm
+				tailer_m = mm + header_m-1
 				k=header_m-1
 				RandVectIn(1+k:mm+k,1:num_vect) = VectIn(1+k:mm+k,1:num_vect)
 			end do	
 		
 			call blackbox_HODLR_MVP_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
-			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1)
+			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree)
 			RandVectOut = RandVectTmp-RandVectOut		
 		
 			do bb=2,ho_bf1%levels(level_c)%N_block_forward,2
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-				nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-				header_n=basis_group(groupn)%head
-				tailer_n=basis_group(groupn)%tail	
+				nn=block_o%N
+				header_n=block_o%headn
+				tailer_n=nn+header_n-1
 				VectOut(header_n:header_n+nn-1,1:num_vect)=RandVectOut(header_n:header_n+nn-1,1:num_vect)
 			end do
 			
@@ -425,7 +426,7 @@ end subroutine HODLR_MVP_OneL
 
 
 
-subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory,operand)
+subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory,operand,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -440,6 +441,7 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 	type(hobf)::ho_bf1
 	complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	class(*)::operand
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
@@ -453,8 +455,9 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 	num_vect = 0
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
 		num_vect = max(num_vect,nn)
 	end do	
 	
@@ -466,27 +469,30 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		header_n=basis_group(groupn)%head
-		tailer_n=basis_group(groupn)%tail
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
 		k=header_n-1	
 		do ii=1, nn
 			RandVectInR(ii+k,ii)=1d0
 		enddo
 	end do		
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-		header_m=basis_group(groupm)%head
-		tailer_m=basis_group(groupm)%tail
+		mm=block_o%M
+		header_m=block_o%headm
+		tailer_m = mm + header_m-1
 		k=header_m-1
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
 		
 		block_o%style = 1
 		allocate(block_o%fullmat(mm,nn))
@@ -505,7 +511,7 @@ end subroutine HODLR_MVP_OneL_Fullmat
 	
 
 
-subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand)
+subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
     
     use MODULE_FILE
     implicit none
@@ -544,7 +550,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	type(Hoption)::option
 	type(Hstat)::stats
 	class(*)::operand
-	
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
@@ -577,7 +583,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			nth_e = ii*Nbind
 			
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand)
+			call Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree)
 			vecCNT = vecCNT + num_vect_sub*2
 			
 			n2 = OMP_get_wtime()
@@ -608,7 +614,7 @@ end subroutine Reconstruction_LL_HODLR_MVP
 
 
 
-subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand)
+subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
     
     use MODULE_FILE
     implicit none
@@ -645,6 +651,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	type(Hoption)::option
 	type(Hstat)::stats
 	class(*)::operand
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
@@ -681,7 +688,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			
 			n1 = OMP_get_wtime()
 
-			call Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand)
+			call Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree)
 
 			vecCNT = vecCNT + num_vect_sub*2
 			
@@ -717,7 +724,7 @@ end subroutine Reconstruction_RR_HODLR_MVP
 
 
 
-subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error,operand)
+subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error,operand,ptree)
 
     use MODULE_FILE
     implicit none
@@ -741,7 +748,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 	type(matrixblock)::block_rand(:)
 	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	class(*)::operand
-	
+	type(proctree)::ptree
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
 	
@@ -757,10 +764,10 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		header_n=basis_group(groupn)%head
-		tailer_n=basis_group(groupn)%tail
-		nn=tailer_n-header_n+1
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
+
 		k=header_n-1	
 		do jj=1,num_vect
 			do ii=1, nn
@@ -770,7 +777,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 	end do	
 	
 
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect,operand,ptree)
 		
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
@@ -780,14 +787,16 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
-		header_m=basis_group(groupm)%head
+		mm=block_o%M
+		header_m=block_o%headm
+		tailer_m = mm + header_m-1
 		
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
-		header_n=basis_group(groupn)%head
+		nn=block_o%N
+		header_n=block_o%headn
+		tailer_n=nn+header_n-1
 	
-		call butterfly_block_MVP_randomized_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2)	
+		call butterfly_block_MVP_randomized_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree)	
 		
 	end do		
 
@@ -844,7 +853,7 @@ end subroutine HODLR_MVP_Fullmat
 
 
 
-subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand)
+subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree)
 
     use MODULE_FILE
     ! use lapack95
@@ -881,6 +890,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	type(RandomBlock):: vec_rand(:)
 	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	class(*)::operand
+	type(proctree)::ptree
 	
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
 	
@@ -911,7 +921,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 	
 		groupm_start=groupm*2**(level_butterfly)
 		
@@ -942,20 +952,20 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	end do
 	
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		groupm_start=groupm*2**(level_butterfly)
 		! random=>random_Block(bb)
 		do i=1, num_blocks
 			header_m=basis_group(groupm_start+i-1)%head
 			k = header_m - 1
-			mm=size(block_rand(bb)%butterflyU(i)%matrix,1)
+			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
 			do ii=1, mm
 				do jj=1, num_vect_sub
@@ -968,12 +978,12 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 		
 		
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		groupn_start=groupn*2**(level_butterfly)
 		do i=1, num_blocks
 			header_n=basis_group(groupn_start+i-1)%head
 			k = header_n - 1
-			nn=size(block_rand(bb)%butterflyV(i)%matrix,1)
+			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
 			do ii=1, nn
 				do jj=1, num_vect_sub
@@ -1002,7 +1012,7 @@ end subroutine Get_Randomized_Vectors_LL_HODLR_MVP
 
 
 
-subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand)
+subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree)
 
     use MODULE_FILE
     ! use lapack95
@@ -1040,7 +1050,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	class(*)::operand
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
-		
+	type(proctree)::ptree	
 	
 	
     ! ctemp1=1.0d0 ; ctemp2=0.0d0	
@@ -1070,7 +1080,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 	
 		groupn_start=groupn*2**(level_butterfly)
 		
@@ -1102,20 +1112,20 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	
 	
 
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand)
+	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
 		groupn_start=groupn*2**(level_butterfly)
 		! random=>random_Block(bb)
 		do i=1, num_blocks
 			header_n=basis_group(groupn_start+i-1)%head
 			k = header_n - 1		
-			nn=size(block_rand(bb)%butterflyV(i)%matrix,1)
+			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
 			do ii=1, nn
 				do jj=1, num_vect_sub
@@ -1128,12 +1138,12 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 		
 		
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
 		groupm_start=groupm*2**(level_butterfly)
 		do i=1, num_blocks
 			header_m=basis_group(groupm_start+i-1)%head
 			k = header_m - 1		
-			mm=size(block_rand(bb)%butterflyU(i)%matrix,1)
+			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
 			do ii=1, mm
 				do jj=1, num_vect_sub

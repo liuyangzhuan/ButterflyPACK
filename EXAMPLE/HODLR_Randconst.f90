@@ -30,7 +30,21 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer:: explicitflag
 	type(hobf)::ho_bf,ho_bf_copy
 	integer Nin1,Nout1,Nin2,Nout2	
-		
+	type(proctree)::ptree
+	integer,allocatable:: groupmembers(:)	
+	
+	
+	
+	! nmpi and groupmembers should be provided by the user 
+	call MPI_Init(ierr)
+	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
+	allocate(groupmembers(nmpi))
+	do ii=1,nmpi
+		groupmembers(ii)=(ii-1)
+	enddo	
+	
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
@@ -215,7 +229,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
     call H_matrix_structuring(ho_bf,para,option,msh)
-	call BPlus_structuring(ho_bf,option,msh)
+	call BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -249,7 +263,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
-		call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL)
+		call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
 		if(option%precon/=DIRECT)then
 			call copy_HOBF(ho_bf,ho_bf_copy)	
 		end if		
@@ -267,7 +281,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf)
+		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree)
 		
 		do ii=1,msh%Nunk
 			ctemp = 0d0
@@ -287,7 +301,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		t1 = OMP_get_wtime()	
 		write(*,*) "MVP-based HODLR construction......"		
 		rankmax = 300
-		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker)
+		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker,ptree)
 		t2 = OMP_get_wtime()  
 		write(*,*) "MVP-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
 
@@ -296,7 +310,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call cascading_factorizing(ho_bf,option,stats)
+    ! call cascading_factorizing(ho_bf,option,stats,ptree)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 

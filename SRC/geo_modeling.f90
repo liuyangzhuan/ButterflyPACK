@@ -2,7 +2,7 @@ module geometry_model
 contains 
 
 
-subroutine geo_modeling_CURV(msh,ker)
+subroutine geo_modeling_CURV(msh,ker,ptree)
 
     use MODULE_FILE
     implicit none
@@ -19,6 +19,7 @@ subroutine geo_modeling_CURV(msh,ker)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
+	type(proctree)::ptree
 	
 	Maxedge	= msh%Nunk
 
@@ -492,10 +493,10 @@ subroutine geo_modeling_CURV(msh,ker)
 
 	
 		
-    write (*,*) ''
-    write (*,*) 'Maxedge:',Maxedge
-	write (*,*) 'dx:',msh%Delta_ll/2
-	write (*,*) 'ker%wavelength/msh%maxedgelength:',ker%wavelength/msh%maxedgelength
+    if(ptree%MyID==Main_ID)write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
+	if(ptree%MyID==Main_ID)write (*,*) 'dx:',msh%Delta_ll/2
+	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',ker%wavelength/msh%maxedgelength
 
     
     return
@@ -503,7 +504,7 @@ subroutine geo_modeling_CURV(msh,ker)
 end subroutine geo_modeling_CURV
 
 
-subroutine geo_modeling_SURF(msh,ker)
+subroutine geo_modeling_SURF(msh,ker,ptree)
 
     use MODULE_FILE
 	use misc
@@ -518,6 +519,7 @@ subroutine geo_modeling_SURF(msh,ker)
     real*8 a(3),b(3),c(3),r0
 	type(mesh)::msh
 	type(kernelquant)::ker
+	type(proctree)::ptree
 	
 	integer Maxedge
 	

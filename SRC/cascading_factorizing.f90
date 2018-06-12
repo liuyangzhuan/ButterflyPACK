@@ -5,7 +5,7 @@ use Bplus_rightmultiply
 use Bplus_inversion_schur_partition
 contains 
 
-subroutine cascading_factorizing(ho_bf1,option,stats)
+subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 
     use MODULE_FILE
     ! use lapack95
@@ -24,7 +24,7 @@ subroutine cascading_factorizing(ho_bf1,option,stats)
 	integer::block_num,block_num_new,num_blocks,level_butterfly	
 	complex(kind=8), allocatable :: matrixtemp1(:,:)
 	integer, allocatable :: ipiv(:)
-	integer rowblock
+	integer rowblock,pgno1,pgno2,pgno,ierr,rowblock_inv
 	type(matrixblock),pointer::block_o,block_off,block_off1,block_off2
 	type(matrixblock)::block_tmp
 	real*8 n1,n2
@@ -32,16 +32,15 @@ subroutine cascading_factorizing(ho_bf1,option,stats)
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
-	
+	type(proctree)::ptree
 	! Memory_int_vec = 0
 	! Memory_tfqmr_vec = 0
 
     level_c=0
     flag=0
 
-    write (*,*) ''
+    if(ptree%MyID==Main_ID)write (*,*) ''
 	
-	call InitStat(stats)
 	
 	! Time_Init_forward=0
 	! Time_Vector_forward=0
@@ -56,42 +55,53 @@ subroutine cascading_factorizing(ho_bf1,option,stats)
 	
 	! ! call Butterfly_forward_acc_check
 	! ! stop
-	
-    write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
+	call MPI_barrier(ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
 	level_c = ho_bf1%Maxlevel+1
 	! allocate(ho_bf1%levels(level_c)%matrices_block_inverse(ho_bf1%levels(level_c)%N_block_inverse))
-	do ii = 1, 2**(level_c-1)
+	do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+		! if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)%tail)then
+			
+			ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
+			nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,1)
+			allocate(ipiv(nn))
+			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)
+			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)		
 
-		nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,1)
+			! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
 
-		allocate(ipiv(nn))
-	    call getrff90(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)
-        call getrif90(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)		
-
-		stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
-
-		deallocate(ipiv)
+			deallocate(ipiv)
+		! endif	
 	end do		
 
 
-	
-	write (*,*) 'Computing block inverse at higher levels...'
+	call MPI_barrier(ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) 'Computing block inverse at higher levels...'
 	do level_c = ho_bf1%Maxlevel,1,-1
 
 		! update the forward butterfly after left multiplication of inverse 
-		write(*,*)'update forward blocks at level:',level_c
+		call MPI_barrier(ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)'update forward blocks at level:',level_c
 					
 		n1 = OMP_get_wtime()
-		do rowblock = 1,2**level_c
+		do rowblock_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
+		do rowblock=rowblock_inv*2-1,rowblock_inv*2
+		
+		if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%tail)then			
 			
 			! if(level_c/=0)then	
 			! if(level_c<ho_bf1%Maxlevel-8)then
 				
 				! call Butterfly_Sblock_randomized_memfree(level_c,rowblock,rtemp)
 				! call Butterfly_Sblock_randomized_partialupdate_memfree(level_c,rowblock,rtemp)
-				
-				call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats) 
 
+				call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree) 
+				
+				
+					! if(ptree%MyID==2)write(*,*)fnorm(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyU%blocks(1)%matrix,size(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyU%blocks(1)%matrix,1),size(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyU%blocks(1)%matrix,2)),fnorm(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyV%blocks(1)%matrix,size(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyV%blocks(1)%matrix,1),size(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)%ButterflyV%blocks(1)%matrix,2)),'nddanaerfeffe',ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe,rowblock				
+				
+				
+				
 				! call Bplus_Sblock_randomized_symmetric(level_c,rowblock) 
 				
 				! call Butterfly_Sblock_randomized_symmetric(level_c,rowblock) 
@@ -125,7 +135,8 @@ subroutine cascading_factorizing(ho_bf1,option,stats)
 			! if(level_c==ho_bf1%Maxlevel-2)stop
 			
 			
-			
+		end if	
+		end do
 		end do
 		n2 = OMP_get_wtime()
 		stats%Time_Sblock=stats%Time_Sblock+n2-n1 
@@ -133,40 +144,69 @@ subroutine cascading_factorizing(ho_bf1,option,stats)
 		! write(*,*)'aha'
 		! stop
 		
-		write(*,*)'compute block inverse at level:',level_c
+		call MPI_barrier(ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)'compute block inverse at level:',level_c
 		! compute the inverse butterfly
 		n1 = OMP_get_wtime()
 		! allocate(ho_bf1%levels(level_c)%matrices_block_inverse(ho_bf1%levels(level_c)%N_block_inverse))
-		do rowblock = 1,2**(level_c-1)
-			
-			call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats)
-			call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock),rtemp)
-			stats%Mem_SMW=stats%Mem_SMW+rtemp
+		do rowblock = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
+		
+			pgno =  ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno			
+			if((ptree%MyID >=ptree%pgrp(pgno)%head .and. ptree%MyID <=ptree%pgrp(pgno)%tail))then	
+				
+				
 
+				
+				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP(rowblock*2-1),stats,ptree)
+				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP(rowblock*2),stats,ptree)
+				
+				! write(*,*)level_c,rowblock,ptree%MyID,'aha'
+				call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
+				! write(*,*)level_c,rowblock,ptree%MyID,'ahadone'
+				call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock),rtemp)
+				stats%Mem_SMW=stats%Mem_SMW+rtemp
+
+			endif
 		end do
 		n2 = OMP_get_wtime()		
-		stats%Time_SMW=stats%Time_SMW + n2-n1	
+		stats%Time_Inv=stats%Time_Inv + n2-n1	
 	end do
 	
-	
-    write (*,*) 'computing updated forward block time:',stats%Time_Sblock,'Seconds'	
-    write (*,*) 'computing inverse block time:',stats%Time_SMW,'Seconds'	
-	write (*,*) '     Time_Init:', stats%Time_random(1)
-	write (*,*) '     Time_MVP:', stats%Time_random(2)
-	write (*,*) '     Time_Reconstruct:', stats%Time_random(3)
-	write (*,*) '     Time_Onesub:', stats%Time_random(4)															 
-	! write (*,*) '     Time_InvertBlock:', Time_InvertBlock
-	write (*,*)'time_tmp',time_tmp
+	call MPI_ALLREDUCE(stats%Time_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,*) 'computing updated forward block time:',rtemp,'Seconds'	
+	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,*) 'computing inverse block time:',rtemp,'Seconds'	
+	call MPI_ALLREDUCE(stats%Time_random(1),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_Init:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(2),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_MVP:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(3),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_Reconstruct:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(4),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_Onesub:', rtemp
+	call MPI_ALLREDUCE(stats%Time_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_SMW:', rtemp
+	call MPI_ALLREDUCE(stats%Time_RedistB,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	! write (*,*) '     Time_Sblock_local:', stats%Time_Sblock	
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistB:', rtemp	
+	call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistV:', rtemp		
+	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,*)'time_tmp',time_tmp
 	! write (*,*)'time_resolve',time_resolve
 	! write (*,*)'time_halfbuttermul',time_halfbuttermul
 	
-    write(*,*)''
-    write(*,*)stats%Mem_SMW,'MB costed for butterfly inverse blocks'
-    write(*,*)stats%Mem_Sblock,'MB costed for butterfly Sblocks'
-    write(*,*)stats%Mem_Direct,'MB costed for direct inverse blocks'
-    write(*,*)stats%Mem_int_vec,'MB costed for storing intermidiate vectors'
+    if(ptree%MyID==Main_ID)write(*,*)''
+	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly inverse blocks'
+	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly Sblocks'
+	call MPI_ALLREDUCE(stats%Mem_Direct,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct inverse blocks'
+	call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for storing intermidiate vectors'
     ! write(*,*)Memory_tfqmr_vec,'MB costed for storing intermidiate vectors in tfqmr'	
-    write(*,*)''	
+    if(ptree%MyID==Main_ID)write(*,*)''	
 
 	
     return
