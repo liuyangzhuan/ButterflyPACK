@@ -2157,6 +2157,138 @@ end subroutine Bplus_block_MVP_inverse_dat
 
 
 
+
+
+
+
+
+subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,a,b,ptree,stats)
+   use MODULE_FILE
+   ! use lapack95
+   ! use blas95
+   implicit none
+   integer level, ii, N, num_vect_sub
+   character trans
+   complex(kind=8) :: Vin(:,:), Vout(:,:)
+   complex(kind=8),allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
+   complex(kind=8) :: ctemp1,ctemp2, a, b
+   type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2
+   type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
+   integer groupn,groupm,mm1,nn1,mm2,nn2,ierr,nin1,nout1,nin2,nout2,offin1,offout1,offin2,offout2
+   type(hobf)::ho_bf1
+   type(proctree)::ptree
+   type(Hstat)::stats
+   real*8::n1,n2
+   integer,pointer::Nin_p1(:,:),Nin_p2(:,:),Nout_p1(:,:),Nout_p2(:,:)
+   ! ctemp1=1.0d0
+   ! ctemp2=0.0d0
+   
+	block_off1 => ho_bf1%levels(level)%BP(ii*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
+	block_inv => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)	
+	bplus_off1 => ho_bf1%levels(level)%BP(ii*2-1)	
+	bplus_off2 => ho_bf1%levels(level)%BP(ii*2)
+	
+	mm1=block_off1%M_loc  
+	nn1=block_off1%N_loc
+	
+	mm2=block_off2%M_loc	
+	nn2=block_off2%N_loc	
+	
+
+		
+	if(trans=='N')then
+		nin1 = nn1
+		nout1 = mm1
+		nin2 = nn2
+		nout2 = mm2
+		Nin_p1 => block_off1%N_p
+		Nin_p2 => block_off2%N_p
+		Nout_p1 => block_off1%M_p
+		Nout_p2 => block_off2%M_p
+		offin1 = block_off1%M
+		offout1 = 0
+		offin2 = 0
+		offout2 = block_off1%M
+	else
+		nin1 = mm1
+		nout1 = nn1
+		nin2 = mm2
+		nout2 = nn2	
+		Nin_p1 => block_off1%M_p
+		Nin_p2 => block_off2%M_p
+		Nout_p1 => block_off1%N_p
+		Nout_p2 => block_off2%N_p	
+		offin1 = block_off1%M
+		offout1 = 0
+		offin2 = block_off1%M
+		offout2 = 0		
+	endif
+	
+	! allocate(Vin_tmp(N,num_vect_sub))
+	! Vin_tmp = Vin
+   
+
+	if(mm1>0)then
+		allocate(Vin1(nin1,num_vect_sub))
+		allocate(Vout1(nout1,num_vect_sub))
+	endif
+	if(mm2>0)then
+		allocate(Vin2(nin2,num_vect_sub))
+		allocate(Vout2(nout2,num_vect_sub))
+	endif		
+	
+	
+	n1 = OMP_get_wtime()
+	call Redistribute1Dto1D(Vin,block_inv%N_p,0,block_inv%pgno,Vin1,Nin_p1,offin1,block_off1%pgno,num_vect_sub,ptree)		
+	call Redistribute1Dto1D(Vin,block_inv%N_p,0,block_inv%pgno,Vin2,Nin_p2,offin2,block_off2%pgno,num_vect_sub,ptree)	
+	call Redistribute1Dto1D(Vout,block_inv%N_p,0,block_inv%pgno,Vout1,Nout_p1,offout1,block_off1%pgno,num_vect_sub,ptree)
+	call Redistribute1Dto1D(Vout,block_inv%N_p,0,block_inv%pgno,Vout2,Nout_p2,offout2,block_off2%pgno,num_vect_sub,ptree)
+	
+    n2 = OMP_get_wtime()
+    stats%Time_RedistV = stats%Time_RedistV + n2-n1	
+   
+	if(mm1>0)then
+		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm1,nn1,num_vect_sub,Vin1,Vout1,a,b,ptree)
+	endif
+	if(mm2>0)then
+		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,mm2,nn2,num_vect_sub,Vin2,Vout2,a,b,ptree)
+	endif
+	
+	n1 = OMP_get_wtime()
+	call Redistribute1Dto1D(Vout1,Nout_p1,offout1,block_off1%pgno,Vout,block_inv%N_p,0,block_inv%pgno,num_vect_sub,ptree)
+	call Redistribute1Dto1D(Vout2,Nout_p2,offout2,block_off2%pgno,Vout,block_inv%N_p,0,block_inv%pgno,num_vect_sub,ptree)	
+    n2 = OMP_get_wtime()
+    stats%Time_RedistV = stats%Time_RedistV + n2-n1	
+	
+
+	if(mm1>0)then
+		deallocate(Vin1)
+		deallocate(Vout1)
+	endif
+	if(mm2>0)then
+		deallocate(Vin2)
+		deallocate(Vout2)
+	endif		
+  
+   
+   ! Vin = Vin_tmp
+   ! deallocate(Vin_tmp)
+    
+end subroutine Bplus_block_MVP_twoforward_dat
+
+
+
+
+
+
+
+
+
+
+
+
+
 subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use MODULE_FILE
 	! use lapack95

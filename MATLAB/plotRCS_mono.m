@@ -17,7 +17,7 @@ hold on
 
 rcs_new = load('RCS_monostatic_svd35.txt');
 plot(rcs_new(:,2),rcs_new(:,3),'b');
-hold on
+hold on 
 
 
 rcs_new = load('RCS_monostatic.txt'); 

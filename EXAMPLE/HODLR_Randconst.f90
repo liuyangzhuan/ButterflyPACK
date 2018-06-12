@@ -281,7 +281,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 			Vin(ii,1) = random_complex_number()
 		end do
 		
-		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree)
+		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,stats)
 		
 		do ii=1,msh%Nunk
 			ctemp = 0d0

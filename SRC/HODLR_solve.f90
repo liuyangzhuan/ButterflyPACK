@@ -94,7 +94,7 @@ end subroutine HODLR_Solution
     d=cmplx(0.0_dp,0.0_dp,dp)
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
     r=bb-r !residual from the initial guess
@@ -106,7 +106,7 @@ end subroutine HODLR_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
     v=ayo
@@ -133,7 +133,7 @@ end subroutine HODLR_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
-	   call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,ye,ytmp,hobf_forward,ptree)
+	   call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,ye,ytmp,hobf_forward,ptree,stats)
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,hobf_inverse,stats)	
 	
        !  start odd (2n-1) m loop
@@ -167,7 +167,7 @@ end subroutine HODLR_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-		  call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree)
+		  call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
 		  call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
           r=bb-r
@@ -176,10 +176,10 @@ end subroutine HODLR_Solution
                ptree%Comm,ierr)
           rerr=sqrt(abs(rerr_sum))/bmag
           
-          ! ! if (myid==main_id) then
+          if (ptree%MyID==Main_ID) then
              print*,'# ofiter,error:',it,rerr
              ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
-          ! ! end if
+          end if
           
           if (err > rerr) then
              err=rerr
@@ -201,7 +201,7 @@ end subroutine HODLR_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
-		call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree)
+		call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree,stats)
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
        !MAGIC
@@ -209,7 +209,7 @@ end subroutine HODLR_Solution
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
 	
@@ -247,4 +247,142 @@ end subroutine HODLR_Solution
 	endif
 	end subroutine HODLR_ApplyPrecon
 
+	
+	
+
+subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
+
+    use MODULE_FILE
+    ! use lapack95
+    implicit none
+    
+	integer Ns
+	integer level_c,rowblock,head,tail
+    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors,pp
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real*8 a,b,c,d
+    complex(kind=8) ctemp, ctemp1, ctemp2
+	type(matrixblock),pointer::block_o
+	
+    type(vectorsblock), pointer :: random1, random2
+    
+    real*8,allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
+	
+	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
+	! complex(kind=8)::Vin(:),Vout(:)
+	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(hobf)::ho_bf1
+    type(proctree)::ptree
+	type(Hstat)::stats
+		
+	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)	 
+	   		
+	! get the right multiplied vectors
+	ctemp1=1.0d0 ; ctemp2=0.0d0
+	! allocate(vec_old(Ns,num_vectors))
+	allocate(vec_new(Ns,num_vectors))
+	Vout = Vin
+	! write(*,*)'ddddd',Ns,num_vectors
+	! write(*,*)'begin'
+	
+	do level = ho_bf1%Maxlevel+1,1,-1
+		vec_new = 0
+		do ii = ho_bf1%levels(level)%Bidxs,ho_bf1%levels(level)%Bidxe
+			pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level)%BP_inverse(ii)%pgno)%head + 1
+			head = ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%headn -1
+			tail = head + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_loc -1
+			idx_start_loc = head-idx_start_glo+1
+			idx_end_loc = tail-idx_start_glo+1					
+		
+			if(level==ho_bf1%Maxlevel+1)then	
+				call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+				&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)							
+			else 
+				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
+				
+				! call OneL_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
+				
+			endif
+		end do
+		Vout = vec_new
+	end do
+	! Vout = vec_new(1:Ns,1)
+	! deallocate(vec_old)
+	deallocate(vec_new)	
+	 
+    return                
+
+end subroutine MVM_Z_factorized
+ 
+
+
+subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
+
+    use MODULE_FILE
+    ! use lapack95
+    implicit none
+    
+	character trans
+	integer Ns, level_start, level_end
+	integer level_c,rowblock
+    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real*8 a,b,c,d
+    complex(kind=8) ctemp, ctemp1, ctemp2
+	! type(matrixblock),pointer::block_o
+	type(blockplus),pointer::bplus_o
+	type(proctree)::ptree
+    type(vectorsblock), pointer :: random1, random2
+    type(Hstat)::stats
+	
+    real*8,allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
+	
+	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
+	! complex(kind=8)::Vin(:,:),Vout(:,:)
+	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(hobf)::ho_bf1
+ 
+	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1) 
+		
+	! get the right multiplied vectors
+	ctemp1=1.0d0 ; ctemp2=1.0d0
+	! allocate(vec_old(Ns,num_vectors))
+	allocate(vec_new(Ns,num_vectors))
+	! vec_old(1:Ns,1:num_vectors) = Vin
+	vec_new = 0
+
+	
+	do level = level_start,level_end !ho_bf1%Maxlevel+1
+		do ii =ho_bf1%levels(level)%Bidxs,ho_bf1%levels(level)%Bidxe
+			
+			pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level)%BP_inverse(ii)%pgno)%head + 1
+			head = ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%headn -1
+			tail = head + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_loc -1
+			idx_start_loc = head-idx_start_glo+1
+			idx_end_loc = tail-idx_start_glo+1					
+			
+			if(level==ho_bf1%Maxlevel+1)then	
+				call fullmat_block_MVP_randomized_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans,idx_end_loc-idx_start_loc+1,num_vectors,&
+				&Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)	
+			else
+				call Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,idx_end_loc-idx_start_loc+1,num_vectors,Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2,ptree,stats)
+
+			endif
+		
+		end do				
+	end do
+	
+	Vout = vec_new(1:Ns,1:num_vectors)
+	! deallocate(vec_old)
+	deallocate(vec_new)	
+	 
+    return                
+
+end subroutine MVM_Z_forward  	
+	
+	
 end module HODLR_Solve
