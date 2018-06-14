@@ -139,6 +139,10 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 			write (*,*) ''   
 		endif
 		
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
+	
+		
 		deallocate(Current)
 		
     endif
@@ -212,6 +216,8 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 			write (*,*) 'Solving:',rtemp,'Seconds'
 			write (*,*) ''
 		endif
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
 		
 		T0=secnds(0.0)
         call RCS_bistatic_CURV(Current,msh,ker,ptree)
@@ -278,7 +284,8 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 			write (*,*) 'Solving:',rtemp,'Seconds'
 			write (*,*) ''     
 		endif
-
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
 		
 	! call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	! if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistV:', rtemp			

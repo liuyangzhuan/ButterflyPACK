@@ -79,7 +79,7 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	
 	! write(*,*)ptree%myid,level_c,rowblock,'nima'
 	if(block_off1%level_butterfly==0 .or. block_off2%level_butterfly==0)then
-		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
+		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	else
 		ho_bf1%ind_lv=level_c
 		ho_bf1%ind_bk=rowblock
@@ -115,7 +115,7 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 end subroutine OneL_inverse_schur_partitionedinverse
 
 
-subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
+subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 
     use MODULE_FILE
     ! use lapack95
@@ -152,7 +152,7 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
 	integer descBUold(9),descBVold(9),descCUold(9),descCVold(9), descBU(9),descBV(9),descCU(9),descCV(9),descBVCU(9),descBUBVCU(9)
 	integer ctxt1,ctxt2,ctxt,ctxtall,info,myrow,mycol,myArows,myAcols 
 	integer :: numroc   ! blacs routine
-
+	type(Hstat)::stats
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
@@ -212,9 +212,11 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree)
 	allocate(block_o%ButterflyV%blocks(1)%matrix(block_o%M_loc,rank))
 	block_o%ButterflyV%blocks(1)%matrix =block_off2%ButterflyV%blocks(1)%matrix
 	
-	call butterfly_block_MVP_randomized_dat(block_off1,'N',block_off1%M_loc,block_off1%N_loc,rank,block_off2%ButterflyU%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,ctemp1,ctemp2,ptree)
+	stats%Flop_Tmp=0
+	call butterfly_block_MVP_randomized_dat(block_off1,'N',block_off1%M_loc,block_off1%N_loc,rank,block_off2%ButterflyU%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,ctemp1,ctemp2,ptree,stats)
 	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
 	! if(ptree%MyID==2)write(*,*)pgno,pgno1,pgno2,'neeeeana'
+	stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 	
     return                
 
@@ -271,7 +273,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	call copy_butterfly(block_o,schulz_op%matrices_block,memory_temp)
 	call copy_butterfly(block_o,block_Xn,memory_temp)
 	
-	call compute_schulz_init(schulz_op,option,ptree)
+	call compute_schulz_init(schulz_op,option,ptree,stats)
 	
 	itermax=100
 	converged=0
@@ -297,7 +299,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		
 		
 		! AXnR
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree)
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree,stats)
 		VecOut = 	VecBuff+VecOut			
 		error_inout = fnorm(VecOut-VecIn,mm,num_vect)/fnorm(VecIn,mm,num_vect)
 		
@@ -349,7 +351,7 @@ end subroutine Butterfly_inverse_schulziteration_IplusButter
 
 
 
-subroutine compute_schulz_init(schulz_op,option,ptree)
+subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 
     use MODULE_FILE
 	use misc
@@ -373,6 +375,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree)
 	real*8, allocatable:: Singular(:)
 	complex (kind=8), allocatable::UU(:,:),VV(:,:),RandVectIn(:,:),RandVectOut(:,:),matrixtmp(:,:),matrixtmp1(:,:)
 	type(proctree)::ptree
+	type(Hstat)::stats
 	
 	schulz_op%order=option%schulzorder
 	
@@ -390,7 +393,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree)
 	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectIn,1)
 	
 	! computation of AR
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree)
+	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
 	RandVectOut = RandVectIn+RandVectOut
 	
 	
@@ -399,12 +402,12 @@ subroutine compute_schulz_init(schulz_op,option,ptree)
 	do qq=1,q
 		RandVectOut=conjg(RandVectOut)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree)
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 		RandVectIn = RandVectOut+RandVectIn		
 		
 		RandVectIn=conjg(RandVectIn)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree)
+		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
 		RandVectOut = RandVectIn+RandVectOut		
 		
 	enddo	
@@ -417,7 +420,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree)
 	
 	! computation of B = Q^c*A
 	RandVectOut=conjg(RandVectOut)
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree)
+	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 	RandVectIn =RandVectOut+RandVectIn 
 	RandVectOut=conjg(RandVectOut)	
 	

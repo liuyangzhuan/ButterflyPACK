@@ -354,7 +354,7 @@ subroutine Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_dat
 
 	call blackbox_MVP_dat(operand,block_o,'N',mm,nn,num_vect,Id,Vdref,cone,czero,ptree,stats,operand1)
 
-	call butterfly_block_MVP_randomized_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,cone,czero,ptree)
+	call butterfly_block_MVP_randomized_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,cone,czero,ptree,stats)
 
 	error = fnorm(Vd-Vdref,mm,num_vect)/fnorm(Vdref,mm,num_vect)
 	
@@ -743,10 +743,10 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 	   
 		if(trans=='N')then
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree)
+			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
 			call butterfly_block_MVP_randomized_dat(blocks_B,trans,mm,nn,num_vect_sub,&
-			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
 			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
 
@@ -758,9 +758,9 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 			! write(2111,*)abs(Vout)
 			
 			call butterfly_block_MVP_randomized_dat(blocks_A,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vin = Vout + Vin
 
 			if(isnan(fnorm(Vin,N,num_vect_sub)))then
@@ -770,9 +770,9 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 			! write(2112,*)abs(Vin)			
 			
 			call butterfly_block_MVP_randomized_dat(blocks_C,trans,nn,mm,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree)
+			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vbuff, Vout(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vbuff, Vout(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1+mm:mm+nn,1:num_vect_sub) = Vout(1+mm:mm+nn,1:num_vect_sub) + Vbuff
 			
 			if(isnan(fnorm(Vout,N,num_vect_sub)))then
@@ -788,10 +788,10 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 		else if(trans=='T')then
 		
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree)
+			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
 			call butterfly_block_MVP_randomized_dat(blocks_C,trans,nn,mm,num_vect_sub,&
-			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
 			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
 
@@ -801,9 +801,9 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 			end if		
 			
 			call butterfly_block_MVP_randomized_dat(blocks_A,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree)				
+			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)				
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vin = Vout + Vin
 
 			if(isnan(fnorm(Vin,N,num_vect_sub)))then
@@ -812,9 +812,9 @@ subroutine butterfly_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,
 			end if		
 			
 			call butterfly_block_MVP_randomized_dat(blocks_B,trans,mm,nn,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree)
+			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			call butterfly_block_MVP_randomized_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vbuff,Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2,ptree)
+			&Vbuff,Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub)+Vbuff
 			
 			if(isnan(fnorm(Vout,N,num_vect_sub)))then
@@ -908,27 +908,27 @@ subroutine butterfly_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block
 	   
 		if(trans=='N')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_C,'N',nn,mm,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(blocks_C,'N',nn,mm,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_D,'N',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree)		
+			call butterfly_block_MVP_randomized_dat(blocks_D,'N',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)		
 			V_tmp2 = V_tmp2 + V_tmp1
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_B,'N',mm,nn,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(blocks_B,'N',mm,nn,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=-1.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_A,'N',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree)
+			call butterfly_block_MVP_randomized_dat(blocks_A,'N',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)
 	
 			
 		else if(trans=='T')then
 		
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_B,'T',mm,nn,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree)
+			call butterfly_block_MVP_randomized_dat(blocks_B,'T',mm,nn,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_D,'T',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree)
+			call butterfly_block_MVP_randomized_dat(blocks_D,'T',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)
 			V_tmp2 = V_tmp2 + V_tmp1
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_C,'T',nn,mm,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(blocks_C,'T',nn,mm,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=-1.0d0
-			call butterfly_block_MVP_randomized_dat(blocks_A,'T',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree)		
+			call butterfly_block_MVP_randomized_dat(blocks_A,'T',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)		
 		end if
 
 
@@ -998,14 +998,14 @@ subroutine butterfly_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_
 	   
 		if(trans=='N')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(block_off2,'N',nn,mm,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree)	
-			call butterfly_block_MVP_randomized_dat(block_off1,'N',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(block_off2,'N',nn,mm,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
+			call butterfly_block_MVP_randomized_dat(block_off1,'N',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			Vout = -Vout		
 			
 		else if(trans=='T')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_randomized_dat(block_off1,'T',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree)	
-			call butterfly_block_MVP_randomized_dat(block_off2,'T',nn,mm,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(block_off1,'T',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
+			call butterfly_block_MVP_randomized_dat(block_off2,'T',nn,mm,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			Vout = -Vout			
 		end if
 
@@ -1079,7 +1079,7 @@ subroutine butterfly_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
 					
 					! AXnR
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
 					Vout = 	Vbuff+Vout	
 					
 					! (2-AXn)R
@@ -1094,7 +1094,7 @@ subroutine butterfly_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats,operand1)				
 					
 					! RXnA
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vout,Vbuff,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vout,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vout+Vbuff
 					
 					! RXnAXn
@@ -1137,13 +1137,13 @@ subroutine butterfly_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_
 					
 					! AXnR
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree,stats)
 					Vbuff1 = 	Vbuff+Vbuff1	
 					
 					
 					! (AXn)^2R
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
 					Vout = 	Vout+Vbuff
 					
 					! (3-3AXn+(AXn)^2)R
@@ -1159,12 +1159,12 @@ subroutine butterfly_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vout,Vin,ctemp1,ctemp2,ptree,stats,operand1)				
 					
 					! RXn*AXn
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vin+Vbuff
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree,stats,operand1)
 
 					! RXn*(AXn)^2
-					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree)
+					call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vbuff1+Vbuff
 					call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats,operand1)
 
@@ -1233,7 +1233,7 @@ subroutine butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_ve
 				Vin=conjg(Vin)
 				if(trans=='N')trans_new='T'
 				if(trans=='T')trans_new='N'				
-				call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + Vin
 				Vin=conjg(Vin)
 				Vout=conjg(Vout)
@@ -1257,7 +1257,7 @@ subroutine butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_ve
 	
 				
 			else ! Xn
-				call butterfly_block_MVP_randomized_dat(block_Xn,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(block_Xn,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout=	Vout+Vin*schulz_op%scale					
 			endif
 			
@@ -1341,7 +1341,7 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 			idx_start_glo = basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 		n1 = OMP_get_wtime()  
-		  call butterfly_block_MVP_randomized_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree)
+		  call butterfly_block_MVP_randomized_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
 		n2 = OMP_get_wtime()
 		! time_tmp = time_tmp + n2 - n1	
 			mm=block_o%M	
@@ -1434,7 +1434,7 @@ subroutine butterfly_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,
 			mm=block_o%M
 			nn=block_o%N
 			n1 = OMP_get_wtime()
-			call butterfly_block_MVP_randomized_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree)	
+			call butterfly_block_MVP_randomized_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			n2 = OMP_get_wtime()
 			! time_tmp = time_tmp + n2 - n1		
 
@@ -1509,7 +1509,7 @@ subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vo
 		mm=bplus%LL(1)%matrices_block(1)%M
 		
 		
-		call Bplus_block_MVP_randomized_dat(bplus,trans,mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree)			
+		call Bplus_block_MVP_randomized_dat(bplus,trans,mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)			
 		
 	   
 	   Vout = a*Vout + b*Vout_tmp	
@@ -1563,7 +1563,7 @@ subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub
 		type is (blockplus)
 			call Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,cone,czero,ptree,stats,operand1)
 			
-			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,2,operand1%Lplus)					
+			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,stats,2,operand1%Lplus)					
 		end select
 	
 	   Vout = a*Vout + b*Vout_tmp	
@@ -1638,8 +1638,8 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 
 			! get the right multiplied vectors
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call Bplus_block_MVP_randomized_dat(bplus_off2,'N',nn,mm,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)
-			call Bplus_block_MVP_randomized_dat(bplus_off1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+			call Bplus_block_MVP_randomized_dat(bplus_off2,'N',nn,mm,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
+			call Bplus_block_MVP_randomized_dat(bplus_off1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 			Vout = -Vout
 			deallocate(vec_new)
 
@@ -1654,8 +1654,8 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 
 			! get the right multiplied vectors
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call Bplus_block_MVP_randomized_dat(bplus_off1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)		
-			call Bplus_block_MVP_randomized_dat(bplus_off2,'T',nn,mm,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+			call Bplus_block_MVP_randomized_dat(bplus_off1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)		
+			call Bplus_block_MVP_randomized_dat(bplus_off2,'T',nn,mm,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 			Vout = -Vout
 			deallocate(vec_new)
 			
@@ -1711,7 +1711,7 @@ subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_
 		select TYPE(operand1)
 		type is (blockplus)
 			call Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,cone,czero,ptree,stats,operand1)
-			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,2,operand1%Lplus)					
+			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,stats,2,operand1%Lplus)					
 		end select
 	
 	   Vout = a*Vout + b*Vout_tmp	
@@ -1784,7 +1784,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 			! get the right multiplied vectors
 			idx_start_glo = basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call Bplus_block_MVP_randomized_dat(bplus_o,'N',mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree)
+			call Bplus_block_MVP_randomized_dat(bplus_o,'N',mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 			mm=bplus_o%LL(1)%matrices_block(1)%M
 			allocate(vec_new(mm,num_vect_sub))
 
@@ -1858,7 +1858,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 			end do	
 			deallocate(vec_new)
 			n1 = OMP_get_wtime()
-			call Bplus_block_MVP_randomized_dat(bplus_o,'T',mm,nn,num_vect_sub,vec_old,Vout,ctemp1,ctemp2,ptree)	
+			call Bplus_block_MVP_randomized_dat(bplus_o,'T',mm,nn,num_vect_sub,vec_old,Vout,ctemp1,ctemp2,ptree,stats)	
 			n2 = OMP_get_wtime()
 			deallocate(vec_old)	
 	   end if
@@ -1912,7 +1912,7 @@ subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_s
 		select TYPE(operand1)
 		type is (blockplus)
 			call Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,cone,czero,ptree,stats,operand1)
-			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,2,operand1%Lplus)					
+			call Bplus_block_MVP_randomized_dat(operand1,trans,M,N,num_vect_sub,Vin,Vout,ctemp3,ctemp4,ptree,stats,2,operand1%Lplus)					
 		end select
 	
 	   Vout = a*Vout + b*Vout_tmp	
@@ -1982,21 +1982,21 @@ subroutine OneL_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,V
 	
 	if(trans=='N')then
 		call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
-		&Vin2,Vout1,ctemp1,ctemp2,ptree)
+		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1- Vout1
 		Vout2 = Vin2
 		
 		! write(2111,*)abs(Vout)
 		
 		call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
-		&Vout1,Vin1,ctemp1,ctemp2,ptree)			
+		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)			
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 
 		! write(2112,*)abs(Vin)			
 		
 		call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
-		&Vin1,Vout2,ctemp1,ctemp2,ptree)			
+		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)			
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
 		
@@ -2005,17 +2005,17 @@ subroutine OneL_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,V
 		
 	else if(trans=='T')then
 		call butterfly_block_MVP_randomized_dat(block_off2,trans,nn,mm,num_vect_sub,&
-		&Vin2,Vout1,ctemp1,ctemp2,ptree)
+		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1 - Vout1
 		Vout2 = Vin2
 		
 		call butterfly_block_MVP_randomized_dat(block_schur,trans,mm,mm,num_vect_sub,&
-		&Vout1,Vin1,ctemp1,ctemp2,ptree)				
+		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)				
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 		
 		call butterfly_block_MVP_randomized_dat(block_off1,trans,mm,nn,num_vect_sub,&
-		&Vin1,Vout2,ctemp1,ctemp2,ptree)
+		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
 		
@@ -2096,21 +2096,21 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
 	bplus_o => ho_bf1%levels(level)%BP_inverse_schur(ii)
 	if(trans=='N')then
 		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
-		&Vin2,Vout1,ctemp1,ctemp2,ptree)
+		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1- Vout1
 		Vout2 = Vin2
 		
 		! write(2111,*)abs(Vout)
 
 		call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
-		&Vout1,Vin1,ctemp1,ctemp2,ptree)			
+		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)			
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 
 		! write(2112,*)abs(Vin)			
 		
 		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
-		&Vin1,Vout2,ctemp1,ctemp2,ptree)			
+		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)			
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
 		
@@ -2120,18 +2120,18 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
 	else if(trans=='T')then
 	! write(*,*)'good1'
 		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,nn,mm,num_vect_sub,&
-		&Vin2,Vout1,ctemp1,ctemp2,ptree)
+		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1 - Vout1
 		Vout2 = Vin2
 	! write(*,*)'good2'	
 		call Bplus_block_MVP_randomized_dat(bplus_o,trans,mm,mm,num_vect_sub,&
-		&Vout1,Vin1,ctemp1,ctemp2,ptree)				
+		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)				
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 		
 	! write(*,*)'good3'	
 		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
-		&Vin1,Vout2,ctemp1,ctemp2,ptree)
+		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
 	! write(*,*)'good4'	
@@ -2249,10 +2249,10 @@ subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,V
     stats%Time_RedistV = stats%Time_RedistV + n2-n1	
    
 	if(mm1>0)then
-		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm1,nn1,num_vect_sub,Vin1,Vout1,a,b,ptree)
+		call Bplus_block_MVP_randomized_dat(bplus_off1,trans,mm1,nn1,num_vect_sub,Vin1,Vout1,a,b,ptree,stats)
 	endif
 	if(mm2>0)then
-		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,mm2,nn2,num_vect_sub,Vin2,Vout2,a,b,ptree)
+		call Bplus_block_MVP_randomized_dat(bplus_off2,trans,mm2,nn2,num_vect_sub,Vin2,Vout2,a,b,ptree,stats)
 	endif
 	
 	n1 = OMP_get_wtime()
@@ -2351,9 +2351,9 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 			if(trans=='N')then
 				! get the right multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				call butterfly_block_MVP_randomized_dat(operand1,'N',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(operand1,'N',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				
-				call Bplus_block_MVP_randomized_dat(bplus,'N',mm,mm,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+				call Bplus_block_MVP_randomized_dat(bplus,'N',mm,mm,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + vec_new
 				
 				deallocate(vec_new)
@@ -2362,10 +2362,10 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 
 				! get the left multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				call Bplus_block_MVP_randomized_dat(bplus,'T',mm,mm,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)
+				call Bplus_block_MVP_randomized_dat(bplus,'T',mm,mm,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				vec_new = vec_new + Vin
 				
-				call butterfly_block_MVP_randomized_dat(operand1,'T',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(operand1,'T',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				deallocate(vec_new)
 				
 		   end if
@@ -2450,19 +2450,19 @@ subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 				! get the right multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
 				
-				call Bplus_block_MVP_randomized_dat(bplus,'N',nn,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)
+				call Bplus_block_MVP_randomized_dat(bplus,'N',nn,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				vec_new = vec_new + Vin
 				
-				call butterfly_block_MVP_randomized_dat(operand1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(operand1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				deallocate(vec_new)
 
 		   else if(trans=='T')then
 
 				! get the left multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				call butterfly_block_MVP_randomized_dat(operand1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree)
+				call butterfly_block_MVP_randomized_dat(operand1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				
-				call Bplus_block_MVP_randomized_dat(bplus,'T',nn,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree)
+				call Bplus_block_MVP_randomized_dat(bplus,'T',nn,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + vec_new
 				
 				deallocate(vec_new)
@@ -2881,7 +2881,7 @@ end subroutine Buplus_randomized
 
 
 
-subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
+subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,stats,pgno)
 
     use MODULE_FILE
     ! use lapack95
@@ -2904,7 +2904,8 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 	integer lwork,liwork,lcmrc,ierr
 	complex(kind=8),allocatable:: work(:)	
 	integer :: numroc   ! blacs routine
-	
+	type(Hstat)::stats
+
 	ctxt = ptree%pgrp(pgno)%ctxt
 	ctxt_head = ptree%pgrp(pgno)%ctxt_head
 	
@@ -2920,6 +2921,7 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp)
 	
 	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,matrixtemp,'T','N',cone,czero)	
+	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(rank,rank,block_o%M_loc)
 	
 	! write(*,*)'goog1'
 	call assert(MPI_COMM_NULL/=ptree%pgrp(pgno)%Comm,'communicator should not be null 1')
@@ -2934,7 +2936,9 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 		allocate(ipiv(rank))
 		ipiv=0
 		call getrff90(matrixtemp1,ipiv)
+		stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)
 		call getrif90(matrixtemp1,ipiv)	
+		stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)
 		deallocate(ipiv)
 	else 
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
@@ -2965,6 +2969,7 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
 			call pzgetrf(rank,rank,matrix_small,1,1,descsmall,ipiv,info)
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)/dble(nprow*npcol)
 			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,TEMP,-1,TEMPI,-1,info)
 			LWORK=NINT(dble(TEMP(1)*1.001))
 			allocate(work(lwork))
@@ -2973,6 +2978,7 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 			allocate(iwork(liwork))
 			iwork=0	
 			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,work,lwork,iwork,liwork,info)
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)/dble(nprow*npcol)
 			deallocate(ipiv)		
 			deallocate(iwork)
 			deallocate(work)
@@ -2988,6 +2994,7 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,pgno)
 	
 	call gemmf90(matU,matrixtemp1,block_o%ButterflyU%blocks(1)%matrix,'N','N',cone,czero)	
 	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
+	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(block_o%M_loc,rank,rank)
 	
 	deallocate(matrixtemp,matrixtemp1,matU)
 	

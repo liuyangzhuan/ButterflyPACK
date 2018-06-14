@@ -51,7 +51,7 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 	! Time_Reconstruct_inverse=0
 	! Time_Oneblock_forward=0					
 	! Time_InvertBlock = 0
-	time_tmp = 0
+	! time_tmp = 0
 	
 	! ! call Butterfly_forward_acc_check
 	! ! stop
@@ -66,8 +66,9 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 			nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,1)
 			allocate(ipiv(nn))
 			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(nn,nn)
 			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)		
-
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(nn)
 			! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
 
 			deallocate(ipiv)
@@ -173,7 +174,7 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 	end do
 	
 	call MPI_ALLREDUCE(stats%Time_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,*) 'computing updated forward block time:',rtemp,'Seconds'	
+    if(ptree%MyID==Main_ID)write (*,*) 'computing updated forward block time:',rtemp,'Seconds'		
 	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write (*,*) 'computing inverse block time:',rtemp,'Seconds'	
 	call MPI_ALLREDUCE(stats%Time_random(1),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
@@ -195,6 +196,8 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 	if(ptree%MyID==Main_ID)write (*,*)'time_tmp',time_tmp
 	! write (*,*)'time_resolve',time_resolve
 	! write (*,*)'time_halfbuttermul',time_halfbuttermul
+	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,'(A21Es14.2)') 'Factorization flops:',rtemp	
 	
     if(ptree%MyID==Main_ID)write(*,*)''
 	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)

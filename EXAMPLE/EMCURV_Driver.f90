@@ -105,12 +105,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	ker%Kernel = EMCURV	
 	
-	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	msh%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
-	! msh%Nunk=20000
-	 msh%Nunk=5000
+	msh%Nunk=20000
+	 ! msh%Nunk=5000
     ! msh%Nunk=160000	
 	! Refined_level=0
 	
@@ -124,7 +124,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	!ker%wavelength=0.0003
 	! ker%wavelength=0.01
 
-ker%wavelength=0.08
+! ker%wavelength=0.08
+ker%wavelength=0.01
 ! Discret=0.05
 	ker%RCS_static=1
     ker%RCS_Nsample=100

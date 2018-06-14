@@ -128,6 +128,8 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	type(proctree)::ptree
 	type(Hstat)::stats
 
+	
+	
 	block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 
 	  
     level_butterfly=block_o%level_butterfly
@@ -156,7 +158,7 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	allocate(vec_old(mm,num_vect_sub))
 	allocate(vec_new(mm,num_vect_sub))
 	vec_old = block_o%ButterflyU%blocks(1)%matrix
-
+	stats%Flop_Tmp=0
 	do level = ho_bf1%Maxlevel+1,level_c+1,-1
 		N_diag = 2**(level-level_c-1)
 		idx_start_diag = max((rowblock-1)*N_diag+1,ho_bf1%levels(level)%Bidxs)
@@ -195,6 +197,7 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	deallocate(vec_old)
 	deallocate(vec_new)
 
+	stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 	
     return                
 

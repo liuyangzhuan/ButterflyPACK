@@ -106,7 +106,7 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
 				
 				! if(level==option%level_check)then
-					! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn,ptree)
+					! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn,ptree,stats)
 				! end if
 			endif
 		end do	
@@ -120,6 +120,8 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
 	if(ptree%MyID==Main_ID)write (*,*) ''
 	if(ptree%MyID==Main_ID)write (*,*) 'Total filling time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21Es14.2)') 'Total filling flops:',rtemp
 
 	if(ptree%MyID==Main_ID)write(*,*)''
 	call MPI_ALLREDUCE(stats%Mem_For,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
@@ -172,7 +174,7 @@ end subroutine full_filling
 
 
 
-subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree)
+subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree,stats)
 
     use MODULE_FILE
 	use Utilities	
@@ -186,6 +188,8 @@ subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree)
     type(kernelquant)::ker
 	procedure(Z_elem)::element_Zmn
 	type(proctree)::ptree
+	type(Hstat)::stats
+	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	
 	! write(*,*)'h1'
@@ -215,7 +219,7 @@ subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree)
 		call fullmat_block_MVP_randomized_dat(matrices_block1,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
 		! write(*,*)'h4'
 	else 
-		call butterfly_block_MVP_randomized_dat(matrices_block1,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree)
+		call butterfly_block_MVP_randomized_dat(matrices_block1,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree,stats)
 	end if	
 	
 	do ii=1,mm

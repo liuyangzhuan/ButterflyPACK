@@ -781,7 +781,7 @@ end subroutine print_butterfly_size_rank
 
 
 
-subroutine butterfly_block_MVP_randomized_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree)
+subroutine butterfly_block_MVP_randomized_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats)
     
     use MODULE_FILE
 	use misc
@@ -798,6 +798,7 @@ subroutine butterfly_block_MVP_randomized_dat(blocks,chara,M,N,Nrnd,random1,rand
     integer:: middleflag
 	type(proctree)::ptree
 	integer pgno,comm,ierr
+	type(Hstat)::stats
 
 	
     type(butterfly_Kerl),allocatable :: ButterflyVector(:)
@@ -828,15 +829,19 @@ subroutine butterfly_block_MVP_randomized_dat(blocks,chara,M,N,Nrnd,random1,rand
 		! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1 
 		if (chara=='N') then !Vout=U*V^T*Vin
 			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,random1,matrixtemp,'T','N',cone,czero)	
+			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(rank,Nrnd,size(blocks%ButterflyV%blocks(1)%matrix,1))
 			call assert(MPI_COMM_NULL/=comm,'communicator should not be null 2')
 			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DOUBLE_COMPLEX,MPI_SUM,comm,ierr)
-			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)	
+			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(size(blocks%ButterflyU%blocks(1)%matrix,1),rank,Nrnd)			
 			random2 = b*random2+a*Vout_tmp
 		else if(chara=='T')then !Vout=V*U^T*Vin
-			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,random1,matrixtemp,'T','N',cone,czero)	
+			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,random1,matrixtemp,'T','N',cone,czero)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(rank,Nrnd,size(blocks%ButterflyU%blocks(1)%matrix,1))			
 			call assert(MPI_COMM_NULL/=comm,'communicator should not be null 3')
 			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DOUBLE_COMPLEX,MPI_SUM,comm,ierr)
-			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)	
+			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(size(blocks%ButterflyV%blocks(1)%matrix,1),rank,Nrnd)				
 			random2 = b*random2+a*Vout_tmp		
 		endif		
 		
@@ -1285,7 +1290,7 @@ subroutine butterfly_block_MVP_randomized_dat(blocks,chara,M,N,Nrnd,random1,rand
 end subroutine butterfly_block_MVP_randomized_dat
 
 
-subroutine Bplus_block_MVP_randomized_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,level_start,level_end)
+subroutine Bplus_block_MVP_randomized_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats,level_start,level_end)
     
     use MODULE_FILE
 	use misc
@@ -1305,6 +1310,7 @@ subroutine Bplus_block_MVP_randomized_dat(bplus,chara,M,N,Nrnd,random1,random2,a
 	integer,optional:: level_start,level_end
 	integer:: level_s,level_e
 	type(proctree)::ptree
+	type(Hstat)::stats
 	
     type(butterfly_Kerl),allocatable :: ButterflyVector(:)
     !  complex(kind=8) :: random1(N,Nrnd), random2(M,Nrnd)
@@ -1359,7 +1365,7 @@ subroutine Bplus_block_MVP_randomized_dat(bplus,chara,M,N,Nrnd,random1,random2,a
 				else 
 					! write(*,*)'ddd1',ll,bb
 					call butterfly_block_MVP_randomized_dat(blocks,chara,blocks%M_loc,blocks%N_loc,Nrnd,&
-					&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree)					
+					&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree,stats)					
 					! write(*,*)'ddd2'
 				end if
 			endif
@@ -2403,7 +2409,9 @@ subroutine InitStat(stats)
 	stats%Mem_Direct=0
 	stats%Mem_int_vec=0
 	stats%Mem_For=0
-	
+	stats%Flop_Fill=0
+	stats%Flop_Factor=0
+	stats%Flop_Sol=0
 end subroutine InitStat
 
 

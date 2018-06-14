@@ -235,6 +235,7 @@ module MODULE_FILE
 		real*8 Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
 		real*8 Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol
 		real*8 Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct,Mem_int_vec,Mem_For
+		real*8 Flop_Fill, Flop_Factor, Flop_Sol, Flop_Tmp
 		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:)
 	 end type Hstat	
 

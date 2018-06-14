@@ -40,7 +40,7 @@ recursive subroutine Butterfly_inverse_partitionedinverse_IplusButter(blocks_io,
 	! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
 	
 	if(blocks_io%level_butterfly==0)then
-		call Butterfly_inverse_IplusButter_woodbury(blocks_io,Memory,ptree,pgno)
+		call Butterfly_inverse_IplusButter_woodbury(blocks_io,Memory,ptree,stats,pgno)
 		return
     else
 		allocate(partitioned_block%blocks_A)

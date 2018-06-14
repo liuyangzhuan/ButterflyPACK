@@ -799,7 +799,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 		header_n=block_o%headn
 		tailer_n=nn+header_n-1
 	
-		call butterfly_block_MVP_randomized_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree)	
+		call butterfly_block_MVP_randomized_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree,stats)	
 		
 	end do		
 

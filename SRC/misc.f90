@@ -3543,4 +3543,203 @@ integer :: a,b,t,as,bs
 end function gcd
 
 
+real*8 function flops_zgesvd(m, n)
+	implicit none 
+	integer m,n
+	flops_zgesvd = 8.*(2.*m*n*n + 11.*n*n*n)
+end function flops_zgesvd
+real*8 function flops_dgesvd(m, n)
+	implicit none 
+	integer m,n
+	flops_dgesvd = 2.*m*n*n + 11.*n*n*n
+end function flops_dgesvd
+
+
+
+real*8 function fmuls_geqrf(m, n)
+	implicit none 
+	integer m,n
+	if(m>n)then	
+		fmuls_geqrf = m*n*n - 1./3.*n*n*n +   m*n + 0.5*n*n + 23./6.*n
+	else
+		fmuls_geqrf = n*m*m - 1./3.*m*m*m + 2*n*m - 0.5*m*m + 23./6.*m
+	endif
+end function fmuls_geqrf
+real*8 function fadds_geqrf(m, n)
+	implicit none 
+	integer m,n
+	if(m>n)then	
+		fadds_geqrf = m*n*n - 1./3.*n*n*n + 0.5*n*n       + 5./6.*n
+	else
+		fadds_geqrf = n*m*m - 1./3.*m*m*m + n*m - 0.5*m*m + 5./6.*m
+	endif
+end function fadds_geqrf
+real*8 function flops_zgeqrf(m, n)
+	implicit none 
+	integer m,n
+	flops_zgeqrf = 6.*fmuls_geqrf(m, n) + 2.*fadds_geqrf(m, n)
+end function flops_zgeqrf
+real*8 function flops_dgeqrf(m, n)
+	implicit none 
+	integer m,n
+	flops_dgeqrf = fmuls_geqrf(m, n) + fadds_geqrf(m, n)
+end function flops_dgeqrf
+
+
+
+real*8 function fmuls_ungqr(m, n, k)
+	implicit none 
+	integer m,n,k
+    fmuls_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + 2.*n*k - k*k - 5./3.*k
+end function fmuls_ungqr
+real*8 function fadds_ungqr(m, n, k)
+	implicit none 
+	integer m,n,k
+    fadds_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + n*k - m*k + 1./3.*k
+end function fadds_ungqr
+real*8 function flops_zungqr(m, n,k)
+	implicit none 
+	integer m,n,k
+	flops_zungqr = 6.*fmuls_ungqr(m, n,k) + 2.*fadds_ungqr(m, n,k)
+end function flops_zungqr
+real*8 function flops_dungqr(m, n,k)
+	implicit none 
+	integer m,n,k
+	flops_dungqr = fmuls_ungqr(m, n,k) + fadds_ungqr(m, n,k)
+end function flops_dungqr
+
+
+
+
+real*8 function fmuls_getrf(m, n)
+	implicit none 
+	integer m,n
+	
+	if(m>n)then	
+		fmuls_getrf = 0.5*m*n*n - 1./6.*n*n*n + 0.5*m*n - 0.5*n*n + 2./3.*n
+	else
+		fmuls_getrf = 0.5*n*m*m - 1./6.*m*m*m + 0.5*n*m - 0.5*m*m + 2./3.*m
+	endif	
+end function fmuls_getrf
+real*8 function fadds_getrf(m, n)
+	implicit none 
+	integer m,n
+	
+	if(m>n)then	
+		fadds_getrf = 0.5*m*n*n - 1./6.*n*n*n - 0.5*m*n + 1./6.*n
+	else
+		fadds_getrf = 0.5*n*m*m - 1./6.*m*m*m - 0.5*n*m + 1./6.*m
+	endif	
+end function fadds_getrf
+real*8 function flops_zgetrf(m, n)
+	implicit none 
+	integer m,n
+	flops_zgetrf = 6.*fmuls_getrf(m, n) + 2.*fadds_getrf(m, n)
+end function flops_zgetrf
+real*8 function flops_dgetrf(m, n)
+	implicit none 
+	integer m,n
+	flops_dgetrf = fmuls_getrf(m, n) + fadds_getrf(m, n)
+end function flops_dgetrf
+
+
+
+
+real*8 function fmuls_getrs(n, nrhs)
+	implicit none
+	integer n,nrhs
+    fmuls_getrs =  nrhs*n*n
+end function fmuls_getrs	
+real*8 function fadds_getrs(n, nrhs)
+	implicit none
+	integer n,nrhs
+    fadds_getrs =  nrhs*n*(n - 1)
+end function fadds_getrs	
+real*8 function flops_zgetrs(n, nrhs)
+	implicit none 
+	integer n,nrhs
+	flops_zgetrs = 6.*fmuls_getrs(n,nrhs) + 2.*fadds_getrs(n,nrhs)
+end function flops_zgetrs
+real*8 function flops_dgetrs(n, nrhs)
+	implicit none 
+	integer n,nrhs
+	flops_dgetrs = fmuls_getrs(n,nrhs) + fadds_getrs(n,nrhs)
+end function flops_dgetrs
+
+
+
+real*8 function fmuls_getri(n)
+	implicit none 
+	integer n
+    fmuls_getri = 2./3.*n*n*n + 0.5*n*n + 5./6.*n
+end function fmuls_getri	
+real*8 function fadds_getri(n)
+	implicit none 
+	integer n
+    fadds_getri = 2./3.*n*n*n - 1.5*n*n + 5./6.*n
+end function fadds_getri	
+real*8 function flops_zgetri(n)
+	implicit none 
+	integer n
+	flops_zgetri = 6.*fmuls_getri(n) + 2.*fadds_getri(n)
+end function flops_zgetri
+real*8 function flops_dgetri(n)
+	implicit none 
+	integer n
+	flops_dgetri = fmuls_getri(n) + fadds_getri(n)
+end function flops_dgetri
+
+
+real*8 function fmuls_trsm(side, m, n)
+	integer m,n
+	character side
+	if(side=='L')then
+		fmuls_trsm = 0.5*n*m*(m + 1)
+	elseif(side=='R')then
+		fmuls_trsm = 0.5*m*n*(n + 1)
+	endif
+end function fmuls_trsm	
+real*8 function fadds_trsm(side, m, n)
+	integer m,n
+	character side
+	if(side=='L')then
+		fadds_trsm = 0.5*n*m*(m - 1)
+	elseif(side=='R')then
+		fadds_trsm = 0.5*m*n*(n - 1)
+	endif
+end function fadds_trsm	
+real*8 function flops_ztrsm(side, m, n)
+	integer m,n
+	character side
+	flops_ztrsm = 6.*fmuls_trsm(side, m, n) + 2.*fadds_trsm(side, m, n)
+end function flops_ztrsm
+real*8 function flops_dtrsm(side, m, n)
+	integer m,n
+	character side
+	flops_dtrsm = fmuls_trsm(side, m, n) + fadds_trsm(side, m, n)
+end function flops_dtrsm
+
+
+real*8 function fmuls_gemm(m, n, k)
+	implicit none 
+	integer m,n,k
+    fmuls_gemm = m*n*k
+end function fmuls_gemm
+real*8 function fadds_gemm(m, n, k)
+	implicit none 
+	integer m,n,k
+    fadds_gemm = m*n*k
+end function fadds_gemm
+real*8 function flops_zgemm(m, n,k)
+	implicit none 
+	integer m,n,k
+	flops_zgemm = 6.*fmuls_gemm(m, n,k) + 2.*fadds_gemm(m, n,k)
+end function flops_zgemm
+real*8 function flops_dgemm(m, n,k)
+	implicit none 
+	integer m,n,k
+	flops_dgemm = fmuls_gemm(m, n,k) + fadds_gemm(m, n,k)
+end function flops_dgemm
+
+
 end module misc
