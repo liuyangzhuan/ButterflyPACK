@@ -1,5 +1,5 @@
 # Rules:
-.PHONY: all checkdirs clean mvp randh em3d em2d ctest
+.PHONY: all checkdirs clean mvp randh em3d em2d kerreg ctest
 
 Compiler=Intel#GNU#
 MPI=T
@@ -46,8 +46,8 @@ LinkFlagF = -Bdynamic
 endif
 
 					  
-F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=0 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
-#F90FLAGS = -O3 -cpp -DPRNTlevel=2 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
+#F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=0 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
+F90FLAGS = -O3 -cpp -DPRNTlevel=0 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
 #CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
 CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
 endif
@@ -92,7 +92,7 @@ CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
 endif
 
 
-SOURCES = Module_file.o misc.o Utilites.o Utilites_randomized.o analytic_part.o gaussian_point.o element_Vinc_cfie.o element_Zmn_cfie.o \
+SOURCES = Module_file.o misc.o pdgeqpfmod.o pzgeqpfmod.o Utilites.o Utilites_randomized.o analytic_part.o gaussian_point.o element_Vinc_cfie.o element_Zmn_cfie.o \
 	 	H_matrix_structuring.o Butterfly_compress_forward.o Butterfly_rightmultiply_inverse_randomized.o Randomized_reconstruction.o Bplus_rightmultiply_inverse_randomized.o \
 		Butterfly_exact_randomized.o Butterfly_inverse_diagonal_randomized.o Butterfly_inverse_diagonal_randomized_schur_partitioned.o Bplus_inverse_diagonal_randomized_schur_partitioned.o geo_modeling.o current_node_patch_mapping.o RCS_bistatic.o RCS_monostatic.o HODLR_solve.o EM_calculating.o matrices_filling.o HODLR_randomized.o cascading_factorizing.o 
 		
@@ -104,13 +104,15 @@ OBJECTS_fmvpmain = $(TargetDir)/ButterflyMVP.o
 OBJECTS_frandhmain = $(TargetDir)/HODLR_Randconst.o
 OBJECTS_fem2dmain = $(TargetDir)/EMCURV_Driver.o
 OBJECTS_fem3dmain = $(TargetDir)/EMSURF_Driver.o
+OBJECTS_fkerregmain = $(TargetDir)/KERREG_Driver.o
 OBJECTS_cmain = $(TargetDir)/testH.o
 
-all: mvp randh em3d em2d ctest
+all: mvp randh em3d em2d kerreg ctest
 
 mvp: EXECUTABLE = fmvpexe
 randh: EXECUTABLE = frandhexe
 em2d: EXECUTABLE = em2dexe
+kerreg: EXECUTABLE = kerregexe
 em3d: EXECUTABLE = em3dexe
 ctest: EXECUTABLE = ctestexe
 
@@ -129,7 +131,9 @@ em2d: checkdirs $(OBJECTS) $(OBJECTS_fem2dmain)
 em3d: checkdirs $(OBJECTS) $(OBJECTS_fem3dmain)
 	@echo Linking $@ version...
 	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_fem3dmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
-
+kerreg: checkdirs $(OBJECTS) $(OBJECTS_fkerregmain)
+	@echo Linking $@ version...
+	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_fkerregmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
 	
 	
 $(TargetDir)/%.o: ./SRC/%.f90 
@@ -158,6 +162,7 @@ clean:
 	rm -rf frandhexe
 	rm -rf em2dexe
 	rm -rf em3dexe
+	rm -rf kerregexe
 checkdirs: $(TargetDir)
 
 $(TargetDir):

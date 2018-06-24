@@ -3,11 +3,12 @@ module MODULE_FILE
     INCLUDE 'mpif.h'   
 	
 	integer,parameter:: LplusMax=3
+	integer,parameter:: Nminsvd=32   ! when box size is smaller than Nminsvd, svd is used instead of aca
 	real*8,parameter :: pi = 4d0*atan(1d0)
 	real*8,parameter :: cd = 299792458d0
 	complex(kind=8),parameter :: junit=(0d0,1d0)
 	real*8,parameter :: Bigvalue=1d300
-	real(kind=8),parameter:: SafeUnderflow=1D-150
+	real(kind=8),parameter:: SafeUnderflow=1D-30
 	real(kind=8),parameter:: SafeAbsoulte=1D-14
 	complex(kind=8),parameter :: cone=CMPLX(1d0,0d0,kind=8)
 	complex(kind=8),parameter :: czero=CMPLX(0d0,0d0,kind=8)
@@ -277,7 +278,7 @@ module MODULE_FILE
 		integer RCS_Nsample ! number of RCS samples
 		real*8:: CFIE_alpha ! combination parameter in CFIE
 		real*8 sigma, lambda ! parameters in ker%Kernel matrices		
-		
+		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l
 		complex(kind=8), allocatable :: matZ_glo(:,:)
 	end type kernelquant
 	

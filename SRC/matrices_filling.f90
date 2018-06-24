@@ -78,19 +78,19 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						tim_tmp = tim_tmp + t2 - t1
 					end if
 					
-					if(level==option%level_check)then
-						! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
+					! if(level==option%level_check)then
+						! ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 						
-						rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
-						rankrate_inner=1.2d0
-						rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
-						rankrate_outter=1.2d0
-						level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
-						call Buplus_randomized(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree)
+						! rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
+						! rankrate_inner=1.2d0
+						! rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
+						! rankrate_outter=1.2d0
+						! level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
+						! call Buplus_randomized(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree)
 						
 						
-						stop
-					end if
+						! stop
+					! end if
 					
 					
 					stats%Mem_For=stats%Mem_For+rtemp
@@ -104,10 +104,10 @@ subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 					stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 				endif
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
-				
-				! if(level==option%level_check)then
-					! call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ker,element_Zmn,ptree,stats)
-				! end if
+				if(level==option%level_check)then
+					call Butterfly_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn,ptree,stats)
+					stop
+				end if
 			endif
 		end do	
 		if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level
@@ -174,82 +174,158 @@ end subroutine full_filling
 
 
 
-subroutine Butterfly_compress_test(matrices_block1,ker,element_Zmn,ptree,stats)
+subroutine Butterfly_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 
     use MODULE_FILE
 	use Utilities	
     implicit none
     
-    type(matrixblock) :: matrices_block1
-    real*8 a, b, error
-    integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n
+    type(matrixblock) :: blocks
+    real*8 a, b, error,v1,v2
+    integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n,Dimn,edge_m,edge_n
     complex(kind=8) value1, value2, ctemp1, ctemp2
 	complex(kind=8),allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
     type(kernelquant)::ker
+    type(mesh)::msh
 	procedure(Z_elem)::element_Zmn
 	type(proctree)::ptree
 	type(Hstat)::stats
+	integer,allocatable::order_m(:),order_n(:)
+	real*8,allocatable::distance_m(:),distance_n(:),center(:)
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	
 	! write(*,*)'h1'
 
-	head_m = matrices_block1%headm
-	mm = matrices_block1%M
+	head_m = blocks%headm
+	mm = blocks%M
 	
-	head_n = matrices_block1%headn
-	nn = matrices_block1%N	
+	head_n = blocks%headn
+	nn = blocks%N	
 	
 
 
-	allocate(Vin(nn,1))
-	allocate(Vout1(mm,1))
-	allocate(Vout2(mm,1))
-	do ii=1,nn
-		Vin(ii,1) = random_complex_number()
-	end do
+	! allocate(Vin(nn,1))
+	! allocate(Vout1(mm,1))
+	! allocate(Vout2(mm,1))
+	! do ii=1,nn
+		! Vin(ii,1) = random_complex_number()
+	! end do
 	
 	
-	! write(*,*)'h2'
-	! write(*,*)matrices_block1%level,Maxlevel_for_blocks
-	! write(*,*)'h22'
+	! ! write(*,*)'h2'
+	! ! write(*,*)blocks%level,Maxlevel_for_blocks
+	! ! write(*,*)'h22'
 	
-	if(allocated(matrices_block1%fullmat))then
-		! write(*,*)'h3'
-		call fullmat_block_MVP_randomized_dat(matrices_block1,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
-		! write(*,*)'h4'
-	else 
-		call butterfly_block_MVP_randomized_dat(matrices_block1,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree,stats)
-	end if	
+	! if(allocated(blocks%fullmat))then
+		! ! write(*,*)'h3'
+		! call fullmat_block_MVP_randomized_dat(blocks,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
+		! ! write(*,*)'h4'
+	! else 
+		! call butterfly_block_MVP_randomized_dat(blocks,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree,stats)
+	! end if	
 	
-	do ii=1,mm
-		ctemp1 = 0d0
-		do jj=1,nn
-			ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+head_m-1),new2old(jj+head_n-1))*Vin(jj,1)
-		end do
-		Vout2(ii,1) = ctemp1
-	end do
+	! do ii=1,mm
+		! ctemp1 = 0d0
+		! do jj=1,nn
+			! ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+head_m-1),new2old(jj+head_n-1))*Vin(jj,1)
+		! end do
+		! Vout2(ii,1) = ctemp1
+	! end do
 	
-	write(*,*)fnorm(Vout2,mm,1), fnorm(Vout2-Vout1,mm,1)/fnorm(Vout2,mm,1)
+	! write(*,*)fnorm(Vout2,mm,1), fnorm(Vout2-Vout1,mm,1)/fnorm(Vout2,mm,1)
 	
 	
-    ! do i=1,3
-        ! call random_number(a)
-        ! call random_number(b)
-        ! mi=int(a*mm)+1
-        ! nj=int(b*nn)+1
+	
+	allocate(order_m(blocks%M))
+	allocate(order_n(blocks%N))
+	do ii=1,min(blocks%M,blocks%N)
+		call random_number(a)
+        call random_number(b)
+        order_m(ii)=floor_safe(a*(mm-1))+1
+        order_n(ii)=floor_safe(b*(nn-1))+1
 		
-        ! ! iii=int((mi+1)/2)+basis_group(group_m)%head-1
-        ! ! jjj=int((nj+1)/2)+basis_group(group_n)%head-1
-        ! ! ii=2-mod(mi,2)
-        ! ! jj=2-mod(nj,2)
-		! ! call element_Zmn(iii,jjj,ii,jj,value1)
+		! order_m(ii)=ii
+		! order_n(ii)=ii		
+	enddo
+	
+	
+	!!!!! The following picks the close points first, can be commented out if geometry info is not available
+			allocate(distance_m(blocks%M))
+			distance_m=Bigvalue
+			allocate(distance_n(blocks%N))
+			distance_n=Bigvalue
 
-		! call element_Zmn(mi+basis_group(group_m)%head-1,nj+basis_group(group_n)%head-1,value1)
+			Dimn = size(msh%xyz,1)
+			allocate(center(Dimn))
+			center = 0
+			head_n = blocks%headn
+			do j=1,blocks%N
+			  edge_n = head_n-1+j
+			  center = center + msh%xyz(1:Dimn,msh%info_unk(0,edge_n))
+			enddo
+			center = center/blocks%N
+			head_m = blocks%headm
+			do i=1,blocks%M
+				edge_m=head_m-1+i
+				distance_m(i) = sum((msh%xyz(1:Dimn,msh%info_unk(0,edge_m))-center(1:Dimn))**2d0)
+			enddo		
+			deallocate(center)
+			call quick_sort(distance_m,order_m,blocks%M)     
+			deallocate(distance_m)
+
+			Dimn = size(msh%xyz,1)
+			allocate(center(Dimn))
+			center = 0
+			head_m = blocks%headm
+			do i=1,blocks%M
+			  edge_m = head_m-1+i
+			  center = center + msh%xyz(1:Dimn,msh%info_unk(0,edge_m))
+			enddo
+			center = center/blocks%M
+			head_n = blocks%headn
+			do j=1,blocks%N
+				edge_n=head_n-1+j
+				distance_n(j) = sum((msh%xyz(1:Dimn,msh%info_unk(0,edge_n))-center(1:Dimn))**2d0)
+			enddo		
+			deallocate(center)
+			call quick_sort(distance_n,order_n,blocks%N)     
+			deallocate(distance_n)	
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	
+	
+	
+	
+	v1=0
+	v2=0
+    ! do i=1,min(mm,nn)
+    do i=1,100
+		do j=1,100
 		
-        ! call Butterfly_value(mi,nj,matrices_block1,value2)
-        ! write (*,*) abs(value1), abs(value2), abs(value1-value2)/abs(value1)
-    ! enddo
+		mi = order_m(i)
+		nj = order_n(j)
+		
+		
+        ! iii=int((mi+1)/2)+basis_group(group_m)%head-1
+        ! jjj=int((nj+1)/2)+basis_group(group_n)%head-1
+        ! ii=2-mod(mi,2)
+        ! jj=2-mod(nj,2)
+		! call element_Zmn(iii,jjj,ii,jj,value1)
+
+		call element_Zmn(mi+head_m-1,nj+head_n-1,value1,msh,ker)
+		
+        call Butterfly_value(mi,nj,blocks,value2)
+        v1 =v1+abs(value1)**2d0
+        v2 =v2+abs(value2)**2d0
+		! if(abs(value1)>SafeUnderflow)write (*,*) abs(value1), abs(value2) !, abs(value1-value2)/abs(value1)
+		enddo
+    enddo
+	
+	deallocate(order_m)
+	deallocate(order_n)
+	
+	write(*,*)'partial fnorm:',v1,v2,blocks%rankmax
     
     return
 

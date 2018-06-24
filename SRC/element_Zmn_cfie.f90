@@ -21,8 +21,10 @@ subroutine element_Zmn_RBF(edge_m,edge_n,value_e,msh,ker)
 	value_e=0
 	
 	r_mn=sum((msh%xyz(1:dimn,msh%info_unk(0,edge_m))-msh%xyz(1:dimn,msh%info_unk(0,edge_n)))**2)
+	if(r_mn<arg_thresh_Zmn(ker))then
+		value_e = exp(-r_mn/2.0/ker%sigma**2)
+	endif
 	
-	value_e = exp(-r_mn/2.0/ker%sigma**2)
 	if(r_mn==0)value_e = value_e + ker%lambda
 
 	return

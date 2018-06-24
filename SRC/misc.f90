@@ -3093,7 +3093,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 	integer nmpi,MPI_Comm_base,MPI_Group_base,MPI_Group_H,MPI_Group_H_sml,groupmembers(nmpi)
 	type(proctree)::ptree,ptreecol,ptreerow
 	integer :: ierr,Maxgrp,Maxgrpcol,Maxgrprow,MyID_old,level,group,icontxt,ii,jj,kk
-	integer :: nprow,npcol,myrow,mycol,nproc,nproc_tmp,nsprow,nspcol,nlevelrow,nlevelcol
+	integer :: nprow,npcol,myrow,mycol,nproc,nproc_tmp,nproc_tmp1,nsprow,nsprow1,nspcol,nlevelrow,nlevelcol
 	integer,allocatable::pmap(:,:),groupmembers_sml(:)
 	
 	
@@ -3179,14 +3179,15 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				! create the hierarchical process grids used for parallel ACA
 				
 				nproc_tmp = nproc
-				nsprow = INT(sqrt(dble(nproc_tmp)))
+				nsprow = floor_safe(sqrt(dble(nproc_tmp)))
+				
+				! trail to power of 2 grids, the following two lines can be removed  
+				nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))
+				nsprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))
 				
 				
-				! nproc_tmp = 2**INT(log10(dble(nproc))/log10(2d0))
-				! nsprow  = 2**INT(log10(sqrt(dble(nproc_tmp)))/log10(2d0))
 				
-				
-				nspcol = INT(nproc_tmp/dble(nsprow))
+				nspcol = floor_safe(nproc_tmp/dble(nsprow))
 
 				! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
 				nlevelrow = ceiling_safe(log(dble(nsprow)) / log(2d0))+1
@@ -3546,13 +3547,44 @@ end function gcd
 real*8 function flops_zgesvd(m, n)
 	implicit none 
 	integer m,n
-	flops_zgesvd = 8.*(2.*m*n*n + 11.*n*n*n)
+	if(m>n)then	
+		flops_zgesvd = 4.*(12.*m*n*n + 16./3.*n*n*n)
+	else
+		flops_zgesvd = 4.*(12.*n*m*m + 16./3.*m*m*m)
+	endif
 end function flops_zgesvd
+
+
 real*8 function flops_dgesvd(m, n)
 	implicit none 
 	integer m,n
-	flops_dgesvd = 2.*m*n*n + 11.*n*n*n
+	if(m>n)then	
+		flops_dgesvd = 12.*m*n*n + 16./3.*n*n*n
+	else
+		flops_dgesvd = 12.*n*m*m + 16./3.*m*m*m
+	endif
 end function flops_dgesvd
+
+
+real*8 function flops_dgeqpfmod(m, n, k)
+	implicit none 
+	integer m,n,k
+	if(m>n)then	
+		flops_dgeqpfmod = 2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k))
+	else
+		flops_dgeqpfmod = 2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k))
+	endif
+end function flops_dgeqpfmod
+
+real*8 function flops_zgeqpfmod(m, n, k)
+	implicit none 
+	integer m,n,k
+	if(m>n)then	
+		flops_zgeqpfmod = 4.*(2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k)))
+	else
+		flops_zgeqpfmod = 4.*(2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k)))
+	endif
+end function flops_zgeqpfmod
 
 
 
@@ -3609,6 +3641,39 @@ real*8 function flops_dungqr(m, n,k)
 end function flops_dungqr
 
 
+
+real*8 function fmuls_unmqr(side, m, n, k)
+	integer m,n,k
+	character side
+	if(side=='L')then
+		fmuls_unmqr = 2.*n*m*k - n*k*k + 2.*n*k
+	else
+		fmuls_unmqr = 2.*n*m*k - m*k*k + m*k + n*k - 0.5*k*k + 0.5*k
+	endif
+end function fmuls_unmqr
+
+real*8 function fadds_unmqr(side, m, n, k)
+	integer m,n,k
+	character side
+	if(side=='L')then
+		fadds_unmqr = 2.*n*m*k - n*k*k + n*k
+	else
+		fadds_unmqr = 2.*n*m*k - m*k*k + m*k
+	endif
+end function fadds_unmqr
+
+real*8 function flops_zunmqr(side, m, n, k)
+	integer m,n,k
+	character side
+	flops_zunmqr = 6.*fmuls_unmqr(side, m, n, k) + 2.*fadds_unmqr(side, m, n, k)
+end function flops_zunmqr
+
+
+real*8 function flops_dunmqr(side, m, n, k)
+	integer m,n,k
+	character side
+	flops_dunmqr = fmuls_unmqr(side, m, n, k) + fadds_unmqr(side, m, n, k)
+end function flops_dunmqr
 
 
 real*8 function fmuls_getrf(m, n)

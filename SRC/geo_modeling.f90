@@ -668,4 +668,46 @@ subroutine geo_modeling_SURF(msh,ker,ptree)
     
 end subroutine geo_modeling_SURF
 
+
+
+subroutine geo_modeling_RBF(msh,ker,ptree)
+
+    use MODULE_FILE
+    implicit none
+    type(mesh)::msh
+	type(kernelquant)::ker
+    integer i,j,ii,jj,iii,jjj
+    integer intemp
+    integer node, patch, edge, flag
+    integer node1, node2, num_node,Maxedge,Dimn
+    integer node_temp(2)
+    real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
+    
+    real(kind=8),allocatable :: node_xy_original(:,:)
+    integer,allocatable :: num_edge_of_node(:)
+    
+    real(kind=8) a(3),b(3),c(3),r0, phi_start
+	type(proctree)::ptree
+	
+	! Maxedge	= msh%Nunk
+	msh%Ncorner = 0
+	
+	open (90,file=ker%trainfile_p)
+	read (90,*) Maxedge, Dimn
+	
+	msh%Nunk = Maxedge
+	
+	allocate (msh%xyz(Dimn,0:Maxedge), msh%info_unk(0:0,Maxedge))
+	! write(*,*)Maxedge, Dimn,shape(msh%info_unk)
+	do edge=1,Maxedge
+		msh%info_unk(0,edge)=edge
+		read (90,*) msh%xyz(1:Dimn,edge)
+	enddo  			
+
+    return
+    
+end subroutine geo_modeling_RBF
+
+
+
 end module geometry_model
