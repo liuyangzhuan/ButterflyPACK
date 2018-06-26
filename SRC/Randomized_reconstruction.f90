@@ -2971,7 +2971,7 @@ subroutine Butterfly_inverse_IplusButter_woodbury(block_o,Memory,ptree,stats,pgn
 			call pzgetrf(rank,rank,matrix_small,1,1,descsmall,ipiv,info)
 			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)/dble(nprow*npcol)
 			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,TEMP,-1,TEMPI,-1,info)
-			LWORK=NINT(dble(TEMP(1)*1.001))
+			LWORK=NINT(dble(TEMP(1)*2.001))
 			allocate(work(lwork))
 			work=0
 			liwork=TEMPI(1)

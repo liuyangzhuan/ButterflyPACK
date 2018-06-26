@@ -105,7 +105,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	ker%Kernel = EMCURV	
 	
-	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	
+	msh%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
@@ -114,17 +115,24 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     ! msh%Nunk=160000	
 	! Refined_level=0
 	
-
-
-
+	
+	
+	
+	! ker%Kernel = FULL	
+	! allocate(ker%matZ_glo(msh%Nunk,msh%Nunk))
+	! call RandomMat(msh%Nunk,msh%Nunk,msh%Nunk,ker%matZ_glo,0)
+	! call MPI_Bcast(ker%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_COMPLEX,0,MPI_Comm_World,ierr)
+	
+	
+	
 	
 	 
 	msh%scaling=1d0
 	! ker%wavelength=0.0006
 	!ker%wavelength=0.0003
-	! ker%wavelength=0.01
+	ker%wavelength=0.01
 
-ker%wavelength=0.08
+! ker%wavelength=0.08
 ! Discret=0.05
 	ker%RCS_static=1
     ker%RCS_Nsample=100
@@ -198,6 +206,7 @@ ker%wavelength=0.08
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
+    ! call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
     call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMCURV,ptree)
 	if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	

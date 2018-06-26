@@ -2443,6 +2443,8 @@ Singular=0
 allocate(mat0(mm,nn))
 mat0 = mat
 call gesvd_robust(mat0,Singular,UU,VV,mm,nn,mn)
+rank=mn
+
 if(Singular(1)<SafeUnderflow)then
 	rank = 1
 	UU=0
@@ -2648,8 +2650,13 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
 			Singular=0
 			UU=0
 			VV=0
-			call gesvdf90(Matrix,Singular,UU,VV)
-			! write(*,*)'gani'
+			
+			
+			call gesddf90(Matrix,Singular,UU,VV)
+			
+			!!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC) 
+			! call gesvdf90(Matrix,Singular,UU,VV)  
+			
 		endif
 	endif
 	
@@ -2682,7 +2689,7 @@ RWORK=0
 LWORK=-1
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
 allocate(WORK(LWORK))     
 WORK=0
 
@@ -2698,6 +2705,54 @@ endif
 deallocate(WORK,RWORK)
 
 end subroutine gesvdf90	
+
+
+
+subroutine gesddf90(Matrix,Singular,UU,VV)	
+
+! ! use lapack95
+
+implicit none
+complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
+real*8 Singular(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+complex(kind=8):: TEMP(1)
+real*8,allocatable::RWORK(:)
+integer,allocatable::IWORK(:)
+
+complex(kind=8),allocatable:: WORK(:)
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+
+allocate(RWORK(max(1,min(m,n)*max(5*min(m,n)+7,2*max(m,n)+2*min(m,n)+1))))
+allocate(IWORK(8*mn_min))
+RWORK=0
+LWORK=-1
+call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, IWORK, INFO)
+
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, IWORK, INFO)
+
+if(INFO/=0)then
+	write(*,*)'SDD failed!!',INFO
+	stop
+endif
+
+deallocate(WORK,RWORK,IWORK)
+
+end subroutine gesddf90	
+
+
 
 
 subroutine geqrff90(Matrix,tau)	
@@ -2721,7 +2776,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -2763,7 +2818,7 @@ allocate(RWORK(2*m))
 RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK)) 
 WORK=0    
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
@@ -2813,7 +2868,7 @@ end if
 
 LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))
 WORK=0     
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
@@ -2854,7 +2909,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZUNGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZUNGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -2960,7 +3015,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*1.001))
+LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))     
 WORK=0
 call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
@@ -3542,6 +3597,28 @@ integer :: a,b,t,as,bs
 	end do
 	gcd = abs(as)
 end function gcd
+
+
+
+real*8 function flops_zgesdd(m, n)
+	implicit none 
+	integer m,n
+	if(m>n)then	
+		flops_zgesdd = 4.*(8.*m*n*n + 4./3.*n*n*n)
+	else
+		flops_zgesdd = 4.*(8.*n*m*m + 4./3.*m*m*m)
+	endif
+end function flops_zgesdd
+
+real*8 function flops_dgesdd(m, n)
+	implicit none 
+	integer m,n
+	if(m>n)then	
+		flops_dgesdd = 8.*m*n*n + 4./3.*n*n*n
+	else
+		flops_dgesdd = 8.*n*m*m + 4./3.*m*m*m
+	endif
+end function flops_dgesdd
 
 
 real*8 function flops_zgesvd(m, n)
