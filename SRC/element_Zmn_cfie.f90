@@ -26,7 +26,8 @@ subroutine element_Zmn_RBF(edge_m,edge_n,value_e,msh,ker)
 	endif
 	
 	if(r_mn==0)value_e = value_e + ker%lambda
-
+	
+	! value_e = value_e + ker%lambda*000.1
 	return
     
 end subroutine element_Zmn_RBF

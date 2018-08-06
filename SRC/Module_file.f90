@@ -8,7 +8,7 @@ module MODULE_FILE
 	real*8,parameter :: cd = 299792458d0
 	complex(kind=8),parameter :: junit=(0d0,1d0)
 	real*8,parameter :: Bigvalue=1d300
-	real(kind=8),parameter:: SafeUnderflow=1D-30
+	real(kind=8),parameter:: SafeUnderflow=1D-80
 	real(kind=8),parameter:: SafeAbsoulte=1D-14
 	complex(kind=8),parameter :: cone=CMPLX(1d0,0d0,kind=8)
 	complex(kind=8),parameter :: czero=CMPLX(0d0,0d0,kind=8)
@@ -230,6 +230,7 @@ module MODULE_FILE
 		integer::schulzorder
 		integer::schulzlevel
 		integer::LRlevel
+		integer::ErrFillFull
 	 end type Hoption
 	 
 	type Hstat

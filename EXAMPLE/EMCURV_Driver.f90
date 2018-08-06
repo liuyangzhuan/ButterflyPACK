@@ -145,7 +145,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	option%Nmin_leaf=50
-	option%tol_SVD=1d-4
+	option%tol_SVD=1d-2
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
@@ -160,7 +160,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-
+	option%ErrFillFull=1
 	
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 

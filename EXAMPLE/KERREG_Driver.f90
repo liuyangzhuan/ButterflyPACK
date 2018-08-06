@@ -128,7 +128,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	option%tol_itersol=1d-6
 	option%N_iter=1000
 	option%tol_rand=1d-3
-	option%level_check=100
+	option%level_check=10000
 	option%precon=DIRECT
 	option%xyzsort=3
 	option%LnoBP=40000
@@ -137,7 +137,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-
+	option%ErrFillFull=1
 	
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
