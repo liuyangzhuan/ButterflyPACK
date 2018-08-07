@@ -1,13 +1,12 @@
 PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
     use MODULE_FILE
-	use geometry_model
+	! use geometry_model
 	use H_structure
 	use cascading_factorization
-	use EM_calculation
 	use matrices_fill
 	use omp_lib
-	use Butterfly_compress_forward
+	use Bplus_compress_forward
 	use HODLR_randomMVP
     implicit none
 
@@ -301,7 +300,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		t1 = OMP_get_wtime()	
 		write(*,*) "MVP-based HODLR construction......"		
 		rankmax = 300
-		call HODLR_MVP(ho_bf,HODLR_MVP_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker,ptree)
+		call HODLR_randomized(ho_bf,HODLR_MVP_randomized_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker,ptree)
 		t2 = OMP_get_wtime()  
 		write(*,*) "MVP-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
 

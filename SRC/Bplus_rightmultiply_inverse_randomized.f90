@@ -1,6 +1,6 @@
 module Bplus_rightmultiply
-use Butterfly_rightmultiply
-use Randomized_reconstruction
+! use Butterfly_rightmultiply
+use Bplus_randomized
 integer rankthusfarS					
 contains
 
@@ -46,7 +46,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 
 		if(level_butterfly==0)then
 			! if(level_c>=ho_bf1%Maxlevel-1)then
-				call OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
+				call LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 			! else 		
 				! write(*,*)'unexpected level_c'
 				! stop
@@ -56,7 +56,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			ho_bf1%ind_bk=rowblock
 			rank0 = block_o%rankmax
 			rate = 1.2d0
-			call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree)			
+			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree)			
 #if PRNTlevel >= 1
 				write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif
@@ -77,7 +77,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 		rank0_outter = block_o%rankmax
 		rankrate_outter=1.2d0	
 		level_butterfly = block_o%level_butterfly
-		call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option,stats,ptree)
+		call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option,stats,ptree)
 		
 		block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1) 	
 #if PRNTlevel >= 1
@@ -93,7 +93,7 @@ end subroutine Bplus_Sblock_randomized_memfree
 
 
 
-subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
+subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 
     use MODULE_FILE
     ! use lapack95
@@ -178,10 +178,10 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 			idx_start_loc = head-idx_start_glo+1
 			idx_end_loc = tail-idx_start_glo+1
 			if(level==ho_bf1%Maxlevel+1)then
-				call fullmat_block_MVP_randomized_dat(blocks,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+				call fullmat_block_MVP_dat(blocks,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
 			else 
-				call OneL_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
+				call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
 			endif	
 			endif
 			endif
@@ -201,7 +201,7 @@ subroutine OneL_Sblock_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	
     return                
 
-end subroutine OneL_Sblock_LowRank
+end subroutine LR_Sblock
 
 
 

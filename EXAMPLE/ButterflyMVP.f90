@@ -59,7 +59,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	
 	vec_in=1d0
 	
-	call butterfly_block_MVP_randomized_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2,ptree,stats)
+	call butterfly_block_MVP_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2,ptree,stats)
 	
 	write(*,*)'output fnorm: ',fnorm(vec_out,mm,1)
 	

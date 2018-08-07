@@ -1,6 +1,6 @@
 module Bplus_inversion_schur_partition
-use Butterfly_inversion_schur_partition
-use Randomized_reconstruction
+! use Butterfly_inversion_schur_partition
+use Bplus_randomized
 
 integer rankthusfarBC
 contains 
@@ -27,7 +27,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
     bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)	
 	
 	if(bplus%Lplus==1)then
-		call OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
+		call BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
 	else 
 		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 	end if	
@@ -37,7 +37,7 @@ end subroutine Bplus_inverse_schur_partitionedinverse
 
 
 
-subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
+subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -79,13 +79,13 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	
 	! write(*,*)ptree%myid,level_c,rowblock,'nima'
 	if(block_off1%level_butterfly==0 .or. block_off2%level_butterfly==0)then
-		call OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
+		call LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	else
 		ho_bf1%ind_lv=level_c
 		ho_bf1%ind_bk=rowblock
 		rank0 = max(block_off1%rankmax,block_off2%rankmax)
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,butterfly_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree) 	
+		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree) 	
 		error_inout = max(error_inout, error)	
 	endif
 ! write(*,*)ptree%myid,level_c,rowblock,'niddma'
@@ -94,9 +94,9 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
-		call Butterfly_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree)
+		call BF_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree)
 	else
-		call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,pgno)
+		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,pgno)
 	endif
 ! write(*,*)ptree%myid,level_c,rowblock,'neeidddma'
 	error_inout = max(error_inout, error)	
@@ -112,10 +112,10 @@ subroutine OneL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_i
 	
     return
 
-end subroutine OneL_inverse_schur_partitionedinverse
+end subroutine BF_inverse_schur_partitionedinverse
 
 
-subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
+subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 
     use MODULE_FILE
     ! use lapack95
@@ -213,19 +213,19 @@ subroutine OneL_minusBC_LowRank(ho_bf1,level_c,rowblock,ptree,stats)
 	block_o%ButterflyV%blocks(1)%matrix =block_off2%ButterflyV%blocks(1)%matrix
 	
 	stats%Flop_Tmp=0
-	call butterfly_block_MVP_randomized_dat(block_off1,'N',block_off1%M_loc,block_off1%N_loc,rank,block_off2%ButterflyU%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,ctemp1,ctemp2,ptree,stats)
+	call butterfly_block_MVP_dat(block_off1,'N',block_off1%M_loc,block_off1%N_loc,rank,block_off2%ButterflyU%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,ctemp1,ctemp2,ptree,stats)
 	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
 	! if(ptree%MyID==2)write(*,*)pgno,pgno1,pgno2,'neeeeana'
 	stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 	
     return                
 
-end subroutine OneL_minusBC_LowRank
+end subroutine LR_minusBC
 
 
 
 
-subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree)
+subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree)
 
     use MODULE_FILE
 	use misc
@@ -285,7 +285,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		rank0 = block_Xn%rankmax
 		
 		rate=1.2d0
-		call Butterfly_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,butterfly_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,ii) 	
+		call BF_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,ii) 	
 		
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
 		if(schulz_op%order==3)schulz_op%scale=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
@@ -295,11 +295,11 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 		ctemp1=1.0d0 ; ctemp2=0.0d0
 		call RandomMat(mm,num_vect,min(mm,num_vect),VecIn,1)
 		! XnR
-		call butterfly_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,'N',mm,mm,num_vect,VecIn,VecBuff,ctemp1,ctemp2,ptree,stats,ii+1)
+		call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,'N',mm,mm,num_vect,VecIn,VecBuff,ctemp1,ctemp2,ptree,stats,ii+1)
 		
 		
 		! AXnR
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree,stats)
+		call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree,stats)
 		VecOut = 	VecBuff+VecOut			
 		error_inout = fnorm(VecOut-VecIn,mm,num_vect)/fnorm(VecIn,mm,num_vect)
 		
@@ -343,7 +343,7 @@ subroutine Butterfly_inverse_schulziteration_IplusButter(block_o,error_inout,opt
 	
     return
 
-end subroutine Butterfly_inverse_schulziteration_IplusButter
+end subroutine BF_inverse_schulziteration_IplusButter
 
 
 
@@ -393,7 +393,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectIn,1)
 	
 	! computation of AR
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
+	call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
 	RandVectOut = RandVectIn+RandVectOut
 	
 	
@@ -402,12 +402,12 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	do qq=1,q
 		RandVectOut=conjg(RandVectOut)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
+		call butterfly_block_MVP_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 		RandVectIn = RandVectOut+RandVectIn		
 		
 		RandVectIn=conjg(RandVectIn)
 		
-		call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
+		call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
 		RandVectOut = RandVectIn+RandVectOut		
 		
 	enddo	
@@ -420,7 +420,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	
 	! computation of B = Q^c*A
 	RandVectOut=conjg(RandVectOut)
-	call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
+	call butterfly_block_MVP_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 	RandVectIn =RandVectOut+RandVectIn 
 	RandVectOut=conjg(RandVectOut)	
 	
@@ -446,7 +446,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	! enddo	
 	! allocate(matrixtmp(nn,nn))
 	! matrixtmp=0
-	! call butterfly_block_MVP_randomized_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,cone,czero)
+	! call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,cone,czero)
 	! matrixtmp = matrixtmp+matrixtmp1
 	! allocate (UU(nn,nn),VV(nn,nn),Singular(nn))
 	! call SVD_Truncate(matrixtmp,nn,nn,nn,UU,VV,Singular,option%tol_SVD,rank)	
@@ -469,7 +469,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	! use lapack95
 	! use blas95
     use omp_lib
-    use Butterfly_compress_forward
+    use Bplus_compress_forward
 	
     implicit none
     
@@ -512,9 +512,6 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	
 	error_inout=0
 
-	! call MultiL_diagonal_minusBC(level_c,rowblock) 
-	
-	
 	ho_bf1%ind_lv=level_c
 	ho_bf1%ind_bk=rowblock
 	Bplus =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)
@@ -527,7 +524,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	
 	level_butterfly = block_o%level_butterfly
 	
-	call Buplus_randomized(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats,ptree)
+	call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats,ptree)
 	error_inout = max(error_inout, error)
 	
 	
@@ -582,7 +579,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,agent_block) 
+							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,agent_block) 
 							! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade' 
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)						
 								
@@ -609,7 +606,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			
 			!!!!! invert I+B1 to be I+B2		
 			level_butterfly=block_o%level_butterfly	
-			call Butterfly_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,Bplus%LL(1)%matrices_block(1)%pgno)		
+			call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,Bplus%LL(1)%matrices_block(1)%pgno)		
 			error_inout = max(error_inout, error)		
 	
 			
@@ -656,7 +653,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call Butterfly_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,agent_block) 	
+							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,agent_block) 	
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)						
 								
 							err_max = max(err_max, error)															
@@ -753,6 +750,767 @@ end do
 
 
 end subroutine Extract_partial_Bplus
+
+
+
+
+
+recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats,ptree,pgno)
+
+    use MODULE_FILE
+	use misc
+	! use lapack95
+	! use blas95
+    use omp_lib
+	
+    implicit none
+    
+	integer level_c,rowblock
+    integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
+    integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,rank,err_cnt
+    character chara
+    real*8 T0,err_avr
+    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
+    type(matrixblock)::blocks_io
+    type(matrixblock)::blocks_schur
+    integer rank_new_max,rank0
+	real*8:: rank_new_avr,error,rate
+	integer niter
+	real*8:: error_inout
+	integer itermax,ntry
+	real*8:: n1,n2,Memory
+	complex (kind=8), allocatable::matrix_small(:,:)
+	type(Hoption)::option
+	type(Hstat)::stats
+	integer level_butterfly_target,pgno,pgno1
+	type(proctree)::ptree
+	
+	type(partitionedblocks)::partitioned_block
+	
+	error_inout=0
+	
+	! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly		
+	
+	if(blocks_io%level_butterfly==0)then
+		call LR_SMW(blocks_io,Memory,ptree,stats,pgno)
+		return
+    else
+		allocate(partitioned_block%blocks_A)
+		allocate(partitioned_block%blocks_B)
+		allocate(partitioned_block%blocks_C)
+		allocate(partitioned_block%blocks_D)
+	
+		blocks_A => partitioned_block%blocks_A
+		blocks_B => partitioned_block%blocks_B
+		blocks_C => partitioned_block%blocks_C
+		blocks_D => partitioned_block%blocks_D	
+		
+		! split into four smaller butterflies
+		call BF_split(blocks_io, blocks_A, blocks_B, blocks_C, blocks_D)
+		
+		! partitioned inverse of D
+		! level_butterfly=level_butterfly_target-1
+		level_butterfly=blocks_D%level_butterfly
+		if(GetTreelevel(pgno)==ptree%nlevel)then  
+			pgno1=pgno
+		else
+			pgno1=pgno*2
+		endif
+		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,option,error,stats,ptree,pgno1)
+		error_inout = max(error_inout, error)
+		
+		! construct the schur complement A-BD^-1C
+
+		! level_butterfly = level_butterfly_target-1
+		level_butterfly = blocks_A%level_butterfly
+
+		! write(*,*)'A-BDC',level_butterfly,level
+		
+
+		call get_minmaxrank_ABCD(partitioned_block,rank0)
+		rate=1.2d0
+		call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree) 
+		error_inout = max(error_inout, error)
+		
+		! write(*,*)'ddd1'
+		! partitioned inverse of the schur complement 
+		! level_butterfly=level_butterfly_target-1
+		level_butterfly=blocks_A%level_butterfly
+		if(GetTreelevel(pgno)==ptree%nlevel)then
+			pgno1=pgno
+		else
+			pgno1=pgno*2+1
+		endif		
+		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,option,error,stats,ptree,pgno1)
+		error_inout = max(error_inout, error)		
+
+		level_butterfly = level_butterfly_target
+		call get_minmaxrank_ABCD(partitioned_block,rank0)
+		rate=1.2d0
+		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree) 
+		error_inout = max(error_inout, error)		
+		
+		
+		
+		! stop
+#if PRNTlevel >= 2		
+		if(level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' SchurI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
+#endif			
+		call delete_blocks(blocks_A)
+		call delete_blocks(blocks_B)
+		call delete_blocks(blocks_C)
+		call delete_blocks(blocks_D)
+		
+		return
+	
+	end if	
+end subroutine BF_inverse_partitionedinverse_IplusButter
+
+
+subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
+    use MODULE_FILE
+	use misc
+	! use lapack95
+	! use blas95
+    use omp_lib
+	
+    implicit none
+	integer level_p,ADflag
+	integer mm1,mm2,nn1,nn2,M1,M2,N1,N2,ii,jj,kk,j,i,mm,nn
+	integer level_butterfly, num_blocks, level_butterfly_c, num_blocks_c,level,num_col,num_row,num_rowson,num_colson
+	
+    type(matrixblock)::blocks_i,blocks_A,blocks_B,blocks_C,blocks_D
+	complex(kind=8),allocatable:: matrixtemp1(:,:),matrixtemp2(:,:),vin(:,:),vout1(:,:),vout2(:,:)
+	complex(kind=8)::ctemp1,ctemp2
+
+	blocks_A%level = blocks_i%level+1
+	blocks_A%row_group = blocks_i%row_group*2	
+	blocks_A%col_group = blocks_i%col_group*2
+	blocks_A%style = blocks_i%style
+
+	blocks_B%level = blocks_i%level+1
+	blocks_B%row_group = blocks_i%row_group*2	
+	blocks_B%col_group = blocks_i%col_group*2+1
+	blocks_B%style = blocks_i%style
+	
+	blocks_C%level = blocks_i%level+1
+	blocks_C%row_group = blocks_i%row_group*2+1	
+	blocks_C%col_group = blocks_i%col_group*2
+	blocks_C%style = blocks_i%style
+	
+	blocks_D%level = blocks_i%level+1
+	blocks_D%row_group = blocks_i%row_group*2+1	
+	blocks_D%col_group = blocks_i%col_group*2+1
+	blocks_D%style = blocks_i%style	
+	
+	
+	if(blocks_i%level_butterfly==0)then
+	
+		write(*,*)'the following is very unlikely to be used'
+		stop
+		
+		! blocks_A%level_butterfly = 0
+		! blocks_B%level_butterfly = 0
+		! blocks_C%level_butterfly = 0
+		! blocks_D%level_butterfly = 0
+		
+		! allocate(blocks_A%ButterflyU%blocks(1))
+		! allocate(blocks_B%ButterflyU%blocks(1))
+		! allocate(blocks_C%ButterflyU%blocks(1))
+		! allocate(blocks_D%ButterflyU%blocks(1))
+		
+		! allocate(blocks_A%ButterflyV%blocks(1))
+		! allocate(blocks_B%ButterflyV%blocks(1))
+		! allocate(blocks_C%ButterflyV%blocks(1))
+		! allocate(blocks_D%ButterflyV%blocks(1))	
+
+		! mm1=basis_group(blocks_A%row_group)%tail-basis_group(blocks_A%row_group)%head+1
+		! nn1=basis_group(blocks_A%col_group)%tail-basis_group(blocks_A%col_group)%head+1
+		! mm2=basis_group(blocks_D%row_group)%tail-basis_group(blocks_D%row_group)%head+1
+		! nn2=basis_group(blocks_D%col_group)%tail-basis_group(blocks_D%col_group)%head+1
+		! kk = size(blocks_i%ButterflyU%blocks(1)%matrix,2)
+		
+		
+		
+		! allocate(blocks_A%ButterflyU%blocks(1)%matrix(mm1,kk))
+		! allocate(blocks_A%ButterflyV%blocks(1)%matrix(nn1,kk))		
+		! blocks_A%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1:mm1,1:kk)
+		! blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1:nn1,1:kk)
+		! blocks_A%rankmax = kk
+		! blocks_A%rankmin = kk		
+		
+		! allocate(blocks_B%ButterflyU%blocks(1)%matrix(mm1,kk))
+		! allocate(blocks_B%ButterflyV%blocks(1)%matrix(nn2,kk))		
+		! blocks_B%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1:mm1,1:kk)
+		! blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1+nn1:nn1+nn2,1:kk)
+		! blocks_B%rankmax = kk
+		! blocks_B%rankmin = kk	
+		
+		! allocate(blocks_C%ButterflyU%blocks(1)%matrix(mm2,kk))
+		! allocate(blocks_C%ButterflyV%blocks(1)%matrix(nn1,kk))		
+		! blocks_C%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1+mm1:mm1+mm2,1:kk)
+		! blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1:nn1,1:kk)
+		! blocks_C%rankmax = kk
+		! blocks_C%rankmin = kk
+		
+		! allocate(blocks_D%ButterflyU%blocks(1)%matrix(mm2,kk))
+		! allocate(blocks_D%ButterflyV%blocks(1)%matrix(nn2,kk))		
+		! blocks_D%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1+mm1:mm1+mm2,1:kk)
+		! blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1+nn1:nn1+nn2,1:kk)
+		! blocks_D%rankmax = kk
+		! blocks_D%rankmin = kk		
+		
+	
+	else if(blocks_i%level_butterfly==1)then
+		blocks_A%level_butterfly = 0
+		blocks_B%level_butterfly = 0
+		blocks_C%level_butterfly = 0
+		blocks_D%level_butterfly = 0
+		
+		allocate(blocks_A%ButterflyU%blocks(1))
+		allocate(blocks_B%ButterflyU%blocks(1))
+		allocate(blocks_C%ButterflyU%blocks(1))
+		allocate(blocks_D%ButterflyU%blocks(1))
+		
+		allocate(blocks_A%ButterflyV%blocks(1))
+		allocate(blocks_B%ButterflyV%blocks(1))
+		allocate(blocks_C%ButterflyV%blocks(1))
+		allocate(blocks_D%ButterflyV%blocks(1))
+		
+		mm1 = size(blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,1)
+		nn1 = size(blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,2)
+		mm2 = size(blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,1)
+		nn2 = size(blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,2)
+		
+		M1 = size(blocks_i%ButterflyU%blocks(1)%matrix,1)
+		M2 = size(blocks_i%ButterflyU%blocks(2)%matrix,1)
+		N1 = size(blocks_i%ButterflyV%blocks(1)%matrix,1)
+		N2 = size(blocks_i%ButterflyV%blocks(2)%matrix,1)
+		
+		
+		
+		blocks_A%ButterflyU%blocks(1)%mdim=M1
+		blocks_A%ButterflyU%blocks(1)%ndim=nn1
+		blocks_A%ButterflyV%blocks(1)%mdim=N1
+		blocks_A%ButterflyV%blocks(1)%ndim=nn1		
+		allocate(blocks_A%ButterflyU%blocks(1)%matrix(M1,nn1))
+		allocate(blocks_A%ButterflyV%blocks(1)%matrix(N1,nn1))		
+		call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,blocks_A%ButterflyU%blocks(1)%matrix, M1, mm1, nn1)
+		blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
+		blocks_A%rankmax = nn1
+		blocks_A%rankmin = nn1
+		
+			
+		blocks_B%ButterflyU%blocks(1)%mdim=M1
+		blocks_B%ButterflyU%blocks(1)%ndim=nn2
+		blocks_B%ButterflyV%blocks(1)%mdim=N2
+		blocks_B%ButterflyV%blocks(1)%ndim=nn2		
+		allocate(blocks_B%ButterflyU%blocks(1)%matrix(M1,nn2))
+		allocate(blocks_B%ButterflyV%blocks(1)%matrix(N2,nn2))
+		call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,blocks_B%ButterflyU%blocks(1)%matrix, M1, mm1, nn2)
+		blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix		
+		blocks_B%rankmax = nn2
+		blocks_B%rankmin = nn2
+		
+		
+		blocks_C%ButterflyU%blocks(1)%mdim=M2
+		blocks_C%ButterflyU%blocks(1)%ndim=nn1
+		blocks_C%ButterflyV%blocks(1)%mdim=N1
+		blocks_C%ButterflyV%blocks(1)%ndim=nn1			
+		allocate(blocks_C%ButterflyU%blocks(1)%matrix(M2,nn1))
+		allocate(blocks_C%ButterflyV%blocks(1)%matrix(N1,nn1))
+		call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,blocks_C%ButterflyU%blocks(1)%matrix, M2, mm2, nn1)
+		blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
+		blocks_C%rankmax = nn1
+		blocks_C%rankmin = nn1				
+		
+				
+		blocks_D%ButterflyU%blocks(1)%mdim=M2
+		blocks_D%ButterflyU%blocks(1)%ndim=nn2
+		blocks_D%ButterflyV%blocks(1)%mdim=N2
+		blocks_D%ButterflyV%blocks(1)%ndim=nn2			
+		allocate(blocks_D%ButterflyU%blocks(1)%matrix(M2,nn2))
+		allocate(blocks_D%ButterflyV%blocks(1)%matrix(N2,nn2))
+		call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,blocks_D%ButterflyU%blocks(1)%matrix, M2, mm2, nn2)
+		blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix			
+		blocks_D%rankmax = nn2
+		blocks_D%rankmin = nn2
+		
+		
+		blocks_A%headm=blocks_i%headm
+		blocks_A%M=M1
+		blocks_A%headn=blocks_i%headn
+		blocks_A%N=N1	
+		blocks_B%headm=blocks_i%headm
+		blocks_B%M=M1	
+		blocks_B%headn=blocks_i%headn+N1
+		blocks_B%N=N2
+		blocks_C%headm=blocks_i%headm+M1
+		blocks_C%M=M2			
+		blocks_C%headn=blocks_i%headn
+		blocks_C%N=N1			
+		blocks_D%headm=blocks_i%headm+M1
+		blocks_D%M=M2			
+		blocks_D%headn=blocks_i%headn+N1
+		blocks_D%N=N2
+		
+		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+		! stop		
+		
+		
+	else 
+		blocks_A%level_butterfly = blocks_i%level_butterfly-2
+		blocks_B%level_butterfly = blocks_i%level_butterfly-2
+		blocks_C%level_butterfly = blocks_i%level_butterfly-2
+		blocks_D%level_butterfly = blocks_i%level_butterfly-2
+		
+		level_butterfly_c = blocks_i%level_butterfly-2
+		num_blocks_c = 2**level_butterfly_c
+		
+		allocate(blocks_A%ButterflyU%blocks(num_blocks_c))
+		allocate(blocks_A%ButterflyV%blocks(num_blocks_c))
+		M1=0
+		N1=0
+		do ii =1,num_blocks_c
+			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,1)
+			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,2)
+			mm2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,1)
+			nn2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,2)
+			allocate(blocks_A%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_A%ButterflyU%blocks(ii)%mdim=mm1+mm2
+			blocks_A%ButterflyU%blocks(ii)%ndim=kk
+			M1=M1+blocks_A%ButterflyU%blocks(ii)%mdim
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,matrixtemp1,mm1,nn1,kk)
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,matrixtemp2,mm2,nn2,kk)
+			blocks_A%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_A%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)
+		
+			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,1)
+			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,2)
+			mm2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,1)
+			nn2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,1)
+			allocate(blocks_A%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_A%ButterflyV%blocks(ii)%mdim=mm1+mm2
+			N1=N1+blocks_A%ButterflyV%blocks(ii)%mdim
+			blocks_A%ButterflyV%blocks(ii)%ndim=kk
+			
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,matrixtemp1, mm1,nn1,kk)
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,matrixtemp2, mm2,nn2,kk)
+			blocks_A%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_A%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)
+			
+		end do
+		
+		allocate(blocks_B%ButterflyU%blocks(num_blocks_c))
+		allocate(blocks_B%ButterflyV%blocks(num_blocks_c))
+		do ii =1,num_blocks_c
+			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,1)
+			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,2)
+			mm2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,1)
+			nn2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,2)
+			allocate(blocks_B%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_B%ButterflyU%blocks(ii)%mdim=mm1+mm2
+			blocks_B%ButterflyU%blocks(ii)%ndim=kk
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))			
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,matrixtemp1,mm1,nn1,kk)
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,matrixtemp2,mm2,nn2,kk)
+			blocks_B%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_B%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)
+			
+			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
+			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
+			mm2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,1)
+			nn2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,1)
+			allocate(blocks_B%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_B%ButterflyV%blocks(ii)%mdim=mm1+mm2
+			blocks_B%ButterflyV%blocks(ii)%ndim=kk
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))	
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,nn1,kk)
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,nn2,kk)
+			blocks_B%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_B%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)			
+		end do
+
+		allocate(blocks_C%ButterflyU%blocks(num_blocks_c))
+		allocate(blocks_C%ButterflyV%blocks(num_blocks_c))
+		do ii =1,num_blocks_c
+			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
+			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
+			mm2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,1)
+			nn2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,2)
+			allocate(blocks_C%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_C%ButterflyU%blocks(ii)%mdim=mm1+mm2
+			blocks_C%ButterflyU%blocks(ii)%ndim=kk
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))			
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,matrixtemp1,mm1,nn1,kk)
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,matrixtemp2,mm2,nn2,kk)
+			blocks_C%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_C%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)
+			
+			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,1)
+			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,2)
+			mm2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,1)
+			nn2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,1)
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))			
+			allocate(blocks_C%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_C%ButterflyV%blocks(ii)%mdim=mm1+mm2
+			blocks_C%ButterflyV%blocks(ii)%ndim=kk			
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,matrixtemp1, mm1,nn1,kk)
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,matrixtemp2, mm2,nn2,kk)
+			blocks_C%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_C%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)				
+		end do
+		
+		allocate(blocks_D%ButterflyU%blocks(num_blocks_c))
+		allocate(blocks_D%ButterflyV%blocks(num_blocks_c))
+		M2=0
+		N2=0		
+		do ii =1,num_blocks_c
+			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
+			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
+			mm2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,1)
+			nn2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,2)
+			allocate(blocks_D%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_D%ButterflyU%blocks(ii)%mdim=mm1+mm2
+			M2=M2+blocks_D%ButterflyU%blocks(ii)%mdim
+			blocks_D%ButterflyU%blocks(ii)%ndim=kk			
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,matrixtemp1,mm1,nn1,kk)
+			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,matrixtemp2,mm2,nn2,kk)
+			blocks_D%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_D%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
+			deallocate(matrixtemp1)
+			deallocate(matrixtemp2)
+			
+			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
+			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
+			mm2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,1)
+			nn2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,2)
+			kk = size(blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,1)
+			allocate(blocks_D%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
+			blocks_D%ButterflyV%blocks(ii)%mdim=mm1+mm2
+			N2=N2+blocks_D%ButterflyV%blocks(ii)%mdim
+			blocks_D%ButterflyV%blocks(ii)%ndim=kk					
+			allocate(matrixtemp1(mm1,kk))
+			allocate(matrixtemp2(mm2,kk))
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,nn1,kk)
+			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,nn2,kk)
+			blocks_D%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
+			blocks_D%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
+			deallocate(matrixtemp1) 
+			deallocate(matrixtemp2)		
+		end do		
+
+		blocks_A%headm=blocks_i%headm
+		blocks_A%M=M1
+		blocks_A%headn=blocks_i%headn
+		blocks_A%N=N1	
+		blocks_B%headm=blocks_i%headm
+		blocks_B%M=M1	
+		blocks_B%headn=blocks_i%headn+N1
+		blocks_B%N=N2
+		blocks_C%headm=blocks_i%headm+M1
+		blocks_C%M=M2			
+		blocks_C%headn=blocks_i%headn
+		blocks_C%N=N1			
+		blocks_D%headm=blocks_i%headm+M1
+		blocks_D%M=M2			
+		blocks_D%headn=blocks_i%headn+N1
+		blocks_D%N=N2
+		
+		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+		! stop
+	
+		if(level_butterfly_c/=0)then
+			allocate(blocks_A%ButterflyKerl(level_butterfly_c))	
+			allocate(blocks_B%ButterflyKerl(level_butterfly_c))	
+			allocate(blocks_C%ButterflyKerl(level_butterfly_c))	
+			allocate(blocks_D%ButterflyKerl(level_butterfly_c))	
+		end if  
+		do level=1, level_butterfly_c
+             num_col=blocks_i%ButterflyKerl(level+1)%num_col
+             num_row=blocks_i%ButterflyKerl(level+1)%num_row
+             num_colson=num_col/2
+             num_rowson=num_row/2
+			 blocks_A%ButterflyKerl(level)%num_row=num_rowson
+			 blocks_A%ButterflyKerl(level)%num_col=num_colson
+			 allocate (blocks_A%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+			 blocks_B%ButterflyKerl(level)%num_row=num_rowson
+			 blocks_B%ButterflyKerl(level)%num_col=num_colson
+			 allocate (blocks_B%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+			 blocks_C%ButterflyKerl(level)%num_row=num_rowson
+			 blocks_C%ButterflyKerl(level)%num_col=num_colson
+			 allocate (blocks_C%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+			 blocks_D%ButterflyKerl(level)%num_row=num_rowson
+			 blocks_D%ButterflyKerl(level)%num_col=num_colson
+			 allocate (blocks_D%ButterflyKerl(level)%blocks(num_rowson,num_colson))			 
+
+			do j=1, num_col
+				 do i=1, num_row
+					 mm=size(blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix,1)
+					 nn=size(blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix,2)
+					 if (i<=num_rowson .and. j<=num_colson) then
+						 allocate (blocks_A%ButterflyKerl(level)%blocks(i,j)%matrix(mm,nn))
+						 blocks_A%ButterflyKerl(level)%blocks(i,j)%mdim=mm
+						 blocks_A%ButterflyKerl(level)%blocks(i,j)%ndim=nn
+						 !$omp parallel do default(shared) private(ii,jj)
+						 do jj=1, nn
+							 do ii=1, mm
+								 blocks_A%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
+							 enddo
+						 enddo
+						 !$omp end parallel do
+					 elseif (i>num_rowson .and. j<=num_colson) then
+						 allocate (blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%matrix(mm,nn))
+						 blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%mdim=mm
+						 blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%ndim=nn
+						 !$omp parallel do default(shared) private(ii,jj)
+						 do jj=1, nn
+							 do ii=1, mm
+								 blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)                      
+							 enddo
+						 enddo
+						 !$omp end parallel do
+					 elseif (i<=num_rowson .and. j>num_colson) then
+						 allocate (blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%matrix(mm,nn))
+						 blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%mdim=mm
+						 blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%ndim=nn						 
+						 !$omp parallel do default(shared) private(ii,jj)
+						 do jj=1, nn
+							 do ii=1, mm
+								 blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
+							 enddo
+						 enddo
+						 !$omp end parallel do
+					 elseif (i>num_rowson .and. j>num_colson) then
+						 allocate (blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%matrix(mm,nn))
+						 blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%mdim=mm
+						 blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%ndim=nn	 
+						 !$omp parallel do default(shared) private(ii,jj)
+						 do jj=1, nn
+							 do ii=1, mm
+								 blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
+							 enddo
+						 enddo
+						 !$omp end parallel do
+					 endif
+				 enddo
+			 enddo
+		enddo
+		
+		call get_butterfly_minmaxrank(blocks_A)
+		call get_butterfly_minmaxrank(blocks_B)
+		call get_butterfly_minmaxrank(blocks_C)
+		call get_butterfly_minmaxrank(blocks_D)
+		
+	end if
+	
+	
+	! mm1=basis_group(blocks_A%row_group)%tail-basis_group(blocks_A%row_group)%head+1
+	! nn1=basis_group(blocks_A%col_group)%tail-basis_group(blocks_A%col_group)%head+1
+	! mm2=basis_group(blocks_D%row_group)%tail-basis_group(blocks_D%row_group)%head+1
+	! nn2=basis_group(blocks_D%col_group)%tail-basis_group(blocks_D%col_group)%head+1
+
+	
+	! allocate(vin(nn1+nn2,1))
+	! vin = 1
+	! allocate(vout1(mm1+mm2,1))
+	! vout1 = 0
+	! allocate(vout2(mm1+mm2,1))
+	! vout2 = 0
+	
+	! ctemp1 = 1d0; ctemp2 = 0d0
+	! call butterfly_block_MVP_dat(blocks_i,'N',mm1+mm2,nn1+nn2,1,vin,vout1,ctemp1,ctemp2)
+	
+	! ctemp1 = 1d0; ctemp2 = 0d0
+	! call butterfly_block_MVP_dat(blocks_A,'N',mm1,nn1,1,vin(1:nn1,:),vout2(1:mm1,:),ctemp1,ctemp2)
+	! ctemp1 = 1d0; ctemp2 = 1d0
+	! call butterfly_block_MVP_dat(blocks_B,'N',mm1,nn2,1,vin(1+nn1:nn1+nn2,:),vout2(1:mm1,:),ctemp1,ctemp2)
+
+	! ctemp1 = 1d0; ctemp2 = 0d0
+	! call butterfly_block_MVP_dat(blocks_C,'N',mm2,nn1,1,vin(1:nn1,:),vout2(1+mm1:mm1+mm2,:),ctemp1,ctemp2)
+	! ctemp1 = 1d0; ctemp2 = 1d0
+	! call butterfly_block_MVP_dat(blocks_D,'N',mm2,nn2,1,vin(1+nn1:nn1+nn2,:),vout2(1+mm1:mm1+mm2,:),ctemp1,ctemp2)
+	
+	! write(*,*)'spliting error:',fnorm(vout1-vout2,mm1+mm2,1)/fnorm(vout1,mm1+mm2,1)
+	! deallocate(vin,vout1,vout2)
+	
+	
+end subroutine BF_split
+
+
+subroutine get_minmaxrank_ABCD(partitioned_block,rankmax)
+
+    use MODULE_FILE
+    implicit none
+    
+	integer rankmax
+    type(partitionedblocks)::partitioned_block
+	
+	rankmax = -1000
+	rankmax = max(rankmax,partitioned_block%blocks_A%rankmax)
+	rankmax = max(rankmax,partitioned_block%blocks_B%rankmax)
+	rankmax = max(rankmax,partitioned_block%blocks_C%rankmax)
+	rankmax = max(rankmax,partitioned_block%blocks_D%rankmax)
+	
+end subroutine get_minmaxrank_ABCD
+
+
+
+subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
+
+    use MODULE_FILE
+    ! use lapack95
+	! use blas95
+    implicit none
+    
+    integer level_c,rowblock,kover,rank,kk1,kk2,nprow,npcol
+	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
+    integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,index_j,index_i
+    real*8 a,b,c,d,Memory
+    complex (kind=8) ctemp,TEMP(1)
+	type(matrixblock)::block_o
+	complex (kind=8), allocatable::matrixtemp(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:),matU(:,:)
+	real*8, allocatable:: Singular(:)
+    integer, allocatable :: ipiv(:),iwork(:)
+	type(proctree)::ptree
+	integer pgno,ctxt,ctxt_head,myrow,mycol,myArows,myAcols,iproc,myi,jproc,myj,info
+	integer descUV(9),descsmall(9),desctemp(9),TEMPI(1)
+
+	integer lwork,liwork,lcmrc,ierr
+	complex(kind=8),allocatable:: work(:)	
+	integer :: numroc   ! blacs routine
+	type(Hstat)::stats
+
+	ctxt = ptree%pgrp(pgno)%ctxt
+	ctxt_head = ptree%pgrp(pgno)%ctxt_head
+	
+	nn = block_o%ButterflyV%blocks(1)%mdim
+	rank = block_o%ButterflyV%blocks(1)%ndim
+	allocate(matrixtemp(rank,rank))
+	matrixtemp=0
+	allocate(matrixtemp1(rank,rank))
+	matrixtemp1=0
+	allocate(matU(block_o%M_loc,rank))
+	matU = block_o%ButterflyU%blocks(1)%matrix
+	
+	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp)
+	
+	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,matrixtemp,'T','N',cone,czero)	
+	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(rank,rank,block_o%M_loc)
+	
+	! write(*,*)'goog1'
+	call assert(MPI_COMM_NULL/=ptree%pgrp(pgno)%Comm,'communicator should not be null 1')
+	call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*rank,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
+	! write(*,*)'goog2' 
+	do ii=1,rank
+		matrixtemp1(ii,ii) = matrixtemp1(ii,ii)+1
+	enddo
+	
+	
+	if(rank<=nbslpk)then
+		allocate(ipiv(rank))
+		ipiv=0
+		call getrff90(matrixtemp1,ipiv)
+		stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)
+		call getrif90(matrixtemp1,ipiv)	
+		stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)
+		deallocate(ipiv)
+	else 
+		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		if(myrow/=-1 .and. mycol/=-1)then
+			if(ptree%MyID==ptree%pgrp(pgno)%head)then
+				call blacs_gridinfo(ctxt_head, nprow, npcol, myrow, mycol)
+				myArows = numroc(rank, nbslpk, myrow, 0, nprow)
+				call descinit( desctemp, rank, rank, nbslpk, nbslpk, 0, 0, ctxt_head, max(myArows,1), info )
+				call assert(info==0,'descinit fail for desctemp')
+			else
+				desctemp(2)=-1
+			endif
+			
+			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+			myArows = numroc(rank, nbslpk, myrow, 0, nprow)
+			myAcols = numroc(rank, nbslpk, mycol, 0, npcol)	
+			allocate(matrix_small(myArows,myAcols))
+			matrix_small=0
+			
+			call descinit( descsmall, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
+			! if(info/=0)then
+				! write(*,*)'nneref',rank,nbslpk,myArows,myAcols,max(myArows,1),ptree%pgrp(pgno)%nproc,ptree%MyID,ptree%pgrp(pgno)%head,pgno,ptree%pgrp(pgno)%nprow,ptree%pgrp(pgno)%npcol,info
+			! endif
+			call assert(info==0,'descinit fail for descsmall')
+			
+			call pzgemr2d(rank, rank, matrixtemp1, 1, 1, desctemp, matrix_small, 1, 1, descsmall, ctxt)
+			
+			allocate(ipiv(myArows+nbslpk))
+			ipiv=0
+			call pzgetrf(rank,rank,matrix_small,1,1,descsmall,ipiv,info)
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)/dble(nprow*npcol)
+			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,TEMP,-1,TEMPI,-1,info)
+			LWORK=NINT(dble(TEMP(1)*2.001))
+			allocate(work(lwork))
+			work=0
+			liwork=TEMPI(1)
+			allocate(iwork(liwork))
+			iwork=0	
+			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,work,lwork,iwork,liwork,info)
+			stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)/dble(nprow*npcol)
+			deallocate(ipiv)		
+			deallocate(iwork)
+			deallocate(work)
+			
+			call pzgemr2d(rank, rank, matrix_small, 1, 1, descsmall,matrixtemp1, 1, 1, desctemp, ctxt)
+			deallocate(matrix_small)
+		endif	
+			
+		call MPI_Bcast(matrixtemp1,rank*rank,MPI_DOUBLE_COMPLEX,0,ptree%pgrp(pgno)%Comm,ierr)
+		
+	endif
+	
+	
+	call gemmf90(matU,matrixtemp1,block_o%ButterflyU%blocks(1)%matrix,'N','N',cone,czero)	
+	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
+	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(block_o%M_loc,rank,rank)
+	
+	deallocate(matrixtemp,matrixtemp1,matU)
+	
+	
+	
+	Memory = 0	
+	Memory = Memory + SIZEOF(block_o%ButterflyV%blocks(1)%matrix)/1024.0d3
+	Memory = Memory + SIZEOF(block_o%ButterflyU%blocks(1)%matrix)/1024.0d3
+
+    return
+
+end subroutine LR_SMW
 
 
 

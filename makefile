@@ -93,9 +93,9 @@ CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
 endif
 
 
-SOURCES = Module_file.o misc.o pdgeqpfmod.o pzgeqpfmod.o Utilites.o Utilites_randomized.o analytic_part.o gaussian_point.o element_Vinc_cfie.o element_Zmn_cfie.o \
-	 	H_matrix_structuring.o Butterfly_compress_forward.o Butterfly_rightmultiply_inverse_randomized.o Randomized_reconstruction.o Bplus_rightmultiply_inverse_randomized.o \
-		Butterfly_exact_randomized.o Butterfly_inverse_diagonal_randomized.o Butterfly_inverse_diagonal_randomized_schur_partitioned.o Bplus_inverse_diagonal_randomized_schur_partitioned.o geo_modeling.o current_node_patch_mapping.o RCS_bistatic.o RCS_monostatic.o HODLR_solve.o EM_calculating.o matrices_filling.o HODLR_randomized.o cascading_factorizing.o 
+SOURCES = Module_file.o misc.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o Utilities.o CEM_analytic_part.o CEM_gaussian_point.o CEM_element_Vinc_cfie.o element_Zmn.o \
+	 	HODLR_structure.o Bplus_randomized.o Bplus_compress_forward.o Bplus_rightmultiply_inverse_randomized.o \
+		Bplus_inverse_diagonal_randomized_schur_partitioned.o CEM_current_node_patch_mapping.o CEM_RCS_bistatic.o CEM_RCS_monostatic.o HODLR_solve_mul.o HODLR_fill.o HODLR_randomized.o HODLR_factor.o 
 		
 obj_Files = $(filter %.o, $(SOURCES))
 

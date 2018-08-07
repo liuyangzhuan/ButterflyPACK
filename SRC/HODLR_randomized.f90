@@ -1,11 +1,10 @@
 module HODLR_randomMVP
-use Utilites_randomized 
+use Bplus_randomized 
 use HODLR_Solve
-use Butterfly_inversion
-use Butterfly_compress_forward
+use Bplus_compress_forward
 contains
 
-subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option,stats,operand,ptree)
+subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,Memory,error,option,stats,operand,ptree)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -20,7 +19,7 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	type(Hstat)::stats
 	real*8:: time_gemm1
 	class(*)::operand
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	type(proctree)::ptree
 	
 	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(ho_bf1%Maxlevel))
@@ -29,7 +28,7 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 	Memory = 0
 	do level_c = 1,ho_bf1%Maxlevel+1
 		if(level_c==ho_bf1%Maxlevel+1)then
-			call HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memtmp,operand,ptree,stats)
+			call HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,level_c,Memtmp,operand,ptree,stats)
 		else
 			if(level_c>option%LRlevel)then
 				level_butterfly = 0   !!! uncomment out this to enable low-rank only reconstruction
@@ -43,28 +42,28 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 			do bb = 1, ho_bf1%levels(level_c)%N_block_forward
 				groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
 				groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here   
-				call Initialize_Butterfly_randomized(level_butterfly,rankmax,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb))						
+				call BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb))						
 			enddo
 			n2 = OMP_get_wtime()
 			stats%Time_random(1) = stats%Time_random(1) + n2-n1
 			
 			! if(level_butterfly==0)then
-				! call HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rankmax,option,operand,ptree,stats)
+				! call HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,rankmax,option,operand,ptree,stats)
 			! else 
 
 				n1 = OMP_get_wtime()
-				call Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
+				call HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructLL: ', n2-n1, 'vecCNT',vecCNT
 
 				n1 = OMP_get_wtime()
-				call Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
+				call HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
 				n2 = OMP_get_wtime()
 				write(*,*)'reconstructRR: ', n2-n1, 'vecCNT',vecCNT
 			! end if
 			
 			
-			call Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error_inout,operand,ptree,stats)
+			call HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,error_inout,operand,ptree,stats)
 			
 			rank_new_max = 0
 			do bb = 1, ho_bf1%levels(level_c)%N_block_forward
@@ -94,17 +93,17 @@ subroutine HODLR_MVP(ho_bf1,blackbox_HODLR_MVP_dat,N,rankmax,Memory,error,option
 		Vin(ii,1) = random_complex_number()
 	end do
 
-	call blackbox_HODLR_MVP_dat('N',N,1,Vin,Vout1,operand)
+	call blackbox_HODLR_MVP_randomized_dat('N',N,1,Vin,Vout1,operand)
 	call MVM_Z_forward('N',N,1,1,ho_bf1%Maxlevel+1,Vin,Vout2,ho_bf1,ptree,stats)
 	
 	error = fnorm(Vout2-Vout1,N,1)/fnorm(Vout1,N,1)
 	deallocate(Vin,Vout1,Vout2)
 	
-end subroutine HODLR_MVP
+end subroutine HODLR_randomized
 
 
 
-subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,rmax,option,operand,ptree,stats)
+subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,rmax,option,operand,ptree,stats)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -127,7 +126,7 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	
 	
 	level_butterfly = 0
@@ -163,15 +162,15 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 		deallocate(matrixtemp)
 	end do	
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
 	
 	! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
 	q=0
 	do qq=1,q
 		RandVectOutR=conjg(RandVectOutR)
-		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats)
+		call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats)
 		RandVectInR=conjg(RandVectInR)
-		call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
+		call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
 	enddo
 	
 	
@@ -196,7 +195,7 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 
 	! computation of B = Q^c*A
 	RandVectOutR=conjg(RandVectOutR)
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats)
 	RandVectOutR=conjg(RandVectOutR)
 	
 	! computation of SVD of B and LR of A
@@ -255,10 +254,10 @@ subroutine HODLR_MVP_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,lev
 	deallocate(RandVectOutR,RandVectInR,ranks)
 
 
-end subroutine HODLR_MVP_OneL_Lowrank
+end subroutine HODLR_MVP_randomized_OneL_Lowrank
 
 
-subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand,ptree,stats)
+subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand,ptree,stats)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -280,7 +279,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 
 	
 	level_butterfly = 0
@@ -315,7 +314,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 				RandVectIn(1+k:nn+k,1:num_vect) = VectIn(1+k:nn+k,1:num_vect)
 			end do	
 			
-			call blackbox_HODLR_MVP_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
+			call blackbox_HODLR_MVP_randomized_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
 			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 			RandVectOut = RandVectTmp-RandVectOut			
 				
@@ -341,7 +340,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 				RandVectIn(1+k:nn+k,1:num_vect) = VectIn(1+k:nn+k,1:num_vect)
 			end do	
 			
-			call blackbox_HODLR_MVP_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
+			call blackbox_HODLR_MVP_randomized_dat('N',N,num_vect,RandVectIn,RandVectTmp,operand)
 			
 			call MVM_Z_forward('N',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 			RandVectOut = RandVectTmp-RandVectOut			
@@ -379,7 +378,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 				RandVectIn(1+k:mm+k,1:num_vect) = VectIn(1+k:mm+k,1:num_vect)
 			end do	
 		
-			call blackbox_HODLR_MVP_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
+			call blackbox_HODLR_MVP_randomized_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
 			
 			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 			RandVectOut = RandVectTmp-RandVectOut		
@@ -405,7 +404,7 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 				RandVectIn(1+k:mm+k,1:num_vect) = VectIn(1+k:mm+k,1:num_vect)
 			end do	
 		
-			call blackbox_HODLR_MVP_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
+			call blackbox_HODLR_MVP_randomized_dat('T',N,num_vect,RandVectIn,RandVectTmp,operand)
 			call MVM_Z_forward('T',N,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 			RandVectOut = RandVectTmp-RandVectOut		
 		
@@ -424,11 +423,11 @@ subroutine HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,trans, VectIn, VectOut, 
 			
 		endif
 		
-end subroutine HODLR_MVP_OneL
+end subroutine HODLR_MVP_randomized_OneL
 
 
 
-subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory,operand,ptree,stats)
+subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,level_c,Memory,operand,ptree,stats)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -446,7 +445,7 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
@@ -481,7 +480,7 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 		enddo
 	end do		
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
@@ -509,12 +508,12 @@ subroutine HODLR_MVP_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_dat,N,level_c,Memory
 	write(*,'(A10,I5,A13)')' Level ',level_c,' fullmat done'
 	
 	
-end subroutine HODLR_MVP_OneL_Fullmat
+end subroutine HODLR_randomized_OneL_Fullmat
 		
 	
 
 
-subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
+subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
     
     use MODULE_FILE
     implicit none
@@ -555,7 +554,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	class(*)::operand
 	type(proctree)::ptree
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	
 	
 	
@@ -574,7 +573,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		allocate(vec_rand(bb)%RandomVectorLL(0:level_butterfly+2)) 
-		call Init_RandVect_Empty('T',vec_rand(bb),num_vect_sub,block_rand(bb),stats)	
+		call BF_Init_RandVect_Empty('T',vec_rand(bb),num_vect_sub,block_rand(bb),stats)	
 	end do	
 	
 	do unique_nth = 0,level_right_start
@@ -586,7 +585,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			nth_e = ii*Nbind
 			
 			n1 = OMP_get_wtime()
-			call Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
+			call HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
 			vecCNT = vecCNT + num_vect_sub*2
 			
 			n2 = OMP_get_wtime()
@@ -595,7 +594,7 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			
 			n1 = OMP_get_wtime()
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward
-				call Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
+				call BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
 			end do
 			n2 = OMP_get_wtime()
 			stats%Time_Random(3) = stats%Time_Random(3) + n2-n1
@@ -603,13 +602,13 @@ subroutine Reconstruction_LL_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	end do
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		call Delete_RandVect('T',vec_rand(bb),level_butterfly)
+		call BF_Delete_RandVect('T',vec_rand(bb),level_butterfly)
 	end do
 	deallocate(vec_rand)
 
     return
     
-end subroutine Reconstruction_LL_HODLR_MVP
+end subroutine HODLR_Reconstruction_LL
 
 
 
@@ -617,7 +616,7 @@ end subroutine Reconstruction_LL_HODLR_MVP
 
 
 
-subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
+subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree)
     
     use MODULE_FILE
     implicit none
@@ -656,7 +655,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	class(*)::operand
 	type(proctree)::ptree
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	
 	
 	vecCNT = 0
@@ -674,7 +673,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
 		allocate (vec_rand(bb)%RandomVectorRR(0:level_butterfly+2)) 
-		call Init_RandVect_Empty('N',vec_rand(bb),num_vect_sub,block_rand(bb),stats)
+		call BF_Init_RandVect_Empty('N',vec_rand(bb),num_vect_sub,block_rand(bb),stats)
 	end do
 		
 	do unique_nth=level_butterfly+1,level_left_start,-1
@@ -691,7 +690,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			
 			n1 = OMP_get_wtime()
 
-			call Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
+			call HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
 
 			vecCNT = vecCNT + num_vect_sub*2
 			
@@ -701,7 +700,7 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 			
 			n1 = OMP_get_wtime()
 			do bb=1,ho_bf1%levels(level_c)%N_block_forward				
-				call Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
+				call BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
 			end do
 			n2 = OMP_get_wtime()
 			stats%Time_Random(3) = stats%Time_Random(3) + n2-n1	
@@ -710,14 +709,14 @@ subroutine Reconstruction_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,
 	
 
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		call Delete_RandVect('N',vec_rand(bb),level_butterfly)
+		call BF_Delete_RandVect('N',vec_rand(bb),level_butterfly)
 	end do
 	deallocate(vec_rand)
 	
 	! write(*,*)'more cool'	
     return
     
-end subroutine Reconstruction_RR_HODLR_MVP
+end subroutine HODLR_Reconstruction_RR
 
 
 
@@ -727,7 +726,7 @@ end subroutine Reconstruction_RR_HODLR_MVP
 
 
 
-subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,level_c,error,operand,ptree,stats)
+subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,error,operand,ptree,stats)
 
     use MODULE_FILE
     implicit none
@@ -752,7 +751,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	class(*)::operand
 	type(proctree)::ptree
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	type(Hstat)::stats
 	
 	
@@ -780,7 +779,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 	end do	
 	
 
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect,operand,ptree,stats)
 		
 		
 	ctemp1=1.0d0 ; ctemp2=0.0d0	
@@ -799,7 +798,7 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 		header_n=block_o%headn
 		tailer_n=nn+header_n-1
 	
-		call butterfly_block_MVP_randomized_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree,stats)	
+		call butterfly_block_MVP_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree,stats)	
 		
 	end do		
 
@@ -814,10 +813,10 @@ subroutine Test_Error_RR_HODLR_MVP(ho_bf1,block_rand,blackbox_HODLR_MVP_dat,N,le
 
     return                
 
-end subroutine Test_Error_RR_HODLR_MVP
+end subroutine HODLR_Test_Error_RR
 
 
-subroutine HODLR_MVP_Fullmat(trans,N,num_vect,Vin,Vout,operand)
+subroutine HODLR_MVP_randomized_Fullmat(trans,N,num_vect,Vin,Vout,operand)
 	implicit none 
 	character trans
 	complex(kind=8) Vin(:,:),Vout(:,:)
@@ -852,11 +851,11 @@ subroutine HODLR_MVP_Fullmat(trans,N,num_vect,Vin,Vout,operand)
 		! time_gemm1 = time_gemm1 + n2 - n1
 	end select
 	
-end subroutine HODLR_MVP_Fullmat
+end subroutine HODLR_MVP_randomized_Fullmat
 
 
 
-subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
+subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
 
     use MODULE_FILE
     ! use lapack95
@@ -896,7 +895,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	
 	
 	
@@ -956,7 +955,7 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	end do
 	
 	
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'T', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'T', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree,stats)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
@@ -1010,13 +1009,13 @@ subroutine Get_Randomized_Vectors_LL_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	
     return                
 
-end subroutine Get_Randomized_Vectors_LL_HODLR_MVP
+end subroutine HODLR_Randomized_Vectors_LL
 
 
 
 
 
-subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
+subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats)
 
     use MODULE_FILE
     ! use lapack95
@@ -1053,7 +1052,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	type(RandomBlock):: vec_rand(:)
 	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
 	class(*)::operand
-	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_dat
+	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	type(proctree)::ptree	
 	type(Hstat)::stats
 	
@@ -1116,7 +1115,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	
 	
 
-	call HODLR_MVP_OneL(ho_bf1,blackbox_HODLR_MVP_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree,stats)
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,operand,ptree,stats)
 	
 	
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
@@ -1170,7 +1169,7 @@ subroutine Get_Randomized_Vectors_RR_HODLR_MVP(ho_bf1,block_rand,vec_rand,blackb
 	
     return                
 
-end subroutine Get_Randomized_Vectors_RR_HODLR_MVP
+end subroutine HODLR_Randomized_Vectors_RR
 
 
 end module HODLR_randomMVP
