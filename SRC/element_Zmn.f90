@@ -3,8 +3,6 @@ use gauss_rule
 use analytic_part
 contains 
 
-
-
 subroutine element_Zmn_RBF(edge_m,edge_n,value_e,msh,ker)
     
     use MODULE_FILE
@@ -238,12 +236,12 @@ real*8 function arg_thresh_Zmn(ker)
 use MODULE_FILE
 implicit none 
 type(kernelquant)::ker
-	if(ker%Kernel==RBF)then
+	! if(ker%Kernel==RBF)then
 		! write(*,*)-log(SafeUnderflow)*2.0*ker%sigma**2 ,'ri'
 		arg_thresh_Zmn=-log(SafeUnderflow)*2.0*ker%sigma**2 
-	else 
-		arg_thresh_Zmn=1D300
-	endif
+	! else 
+		! arg_thresh_Zmn=1D300
+	! endif
 end function arg_thresh_Zmn
 
 

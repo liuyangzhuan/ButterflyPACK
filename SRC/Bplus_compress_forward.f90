@@ -2071,7 +2071,6 @@ implicit none
 	real*8,allocatable::Singular(:)
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr
 	integer::descsmatU(9),descsmatV(9),descsmatU1(9),descsmatV1(9),descsmatU2(9),descsmatV2(9),descUU(9),descVV(9),descsmatU1c(9),descsmatU2c(9),descsmatV1c(9),descsmatV2c(9),descButterflyV(9),descButterflyU(9),descButterU1D(9),descButterV1D(9),descVin(9),descVout(9),descVinter(9),descFull(9)
-	! type(parACAblock):: Ablock
 	integer dims(6),dims_tmp(6) ! M1,N1,rank1,M2,N2,rank2
 	complex(kind=8):: TEMP(1)
 	integer LWORK,mnmax,mnmin,rank_new
@@ -4368,6 +4367,47 @@ implicit none
 	endif
 	
 end subroutine CheckLRError
+
+
+
+
+integer function rank_approximate_func(group_m, group_n, flag,ker)
+
+    use MODULE_FILE
+    implicit none
+
+    integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
+    real*8 a, b, c, aa(2), bb(2), cc(2), angle, distance
+	type(kernelquant)::ker
+	
+	if(group_m/=group_n)then
+		
+		distance=group_dist(group_m,group_n)
+		distance=distance**2d0
+		! distance=(basis_group(group_m)%center(1)-basis_group(group_n)%center(1))**2+(basis_group(group_m)%center(2)-basis_group(group_n)%center(2))**2+(basis_group(group_m)%center(3)-basis_group(group_n)%center(3))**2
+		! ! distance=sqrt(distance)
+		angle=4*pi*(basis_group(group_m)%radius)**2/distance
+		rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
+		! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
+		if (flag==1) then
+			rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
+		elseif (flag==2) then
+			rank_approximate_func=int(rank*ker%rank_approximate_para2**2)
+		elseif (flag==3) then
+			rank_approximate_func=int(rank*ker%rank_approximate_para3**2)
+		endif
+	else 
+		rank_approximate_func = 100000
+	end if
+    !if (rank==0) then
+    !    pause
+    !    continue
+    !endif
+
+    return
+
+end function rank_approximate_func
+
 
 
 

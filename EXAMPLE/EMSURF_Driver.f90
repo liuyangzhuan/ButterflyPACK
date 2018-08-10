@@ -97,7 +97,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	!itmax=10000
 	
 	CALL getarg(1, DATA_DIR)
-	ker%Kernel = EMSURF	
+	! ker%Kernel = EMSURF	
 	
 	option%Nmin_leaf=40
 	msh%mesh_normal=1
@@ -417,19 +417,19 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
 	endif
 	
 	
-	if(option%PRECON==DIRECT)then
-		msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	else 
-		msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	endif
+	! if(option%PRECON==DIRECT)then
+		! msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		! msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+	! else 
+		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
+	! endif
 	
-	N_unk=msh%Nunk
+	! N_unk=msh%Nunk
 	N_unk_loc = msh%idxe-msh%idxs+1
 	
     if (ker%RCS_static==2) then

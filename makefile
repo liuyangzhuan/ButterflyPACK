@@ -30,7 +30,7 @@ LIB_MKL = -L/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64 
 INCLUDE_MKL = -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include/intel64/lp64 \
 
 F90 = mpiifort
-CPPC = icpc 
+CPPC = mpiicpc 
 LinkFlagC = -Bdynamic -cxxlib -lifcore $(LIB_MKL) 
 LinkFlagF = -Bdynamic 
 endif
@@ -95,7 +95,7 @@ endif
 
 SOURCES = Module_file.o misc.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o Utilities.o CEM_analytic_part.o CEM_gaussian_point.o CEM_element_Vinc_cfie.o element_Zmn.o \
 	 	HODLR_structure.o Bplus_randomized.o Bplus_compress_forward.o Bplus_rightmultiply_inverse_randomized.o \
-		Bplus_inverse_diagonal_randomized_schur_partitioned.o CEM_current_node_patch_mapping.o CEM_RCS_bistatic.o CEM_RCS_monostatic.o HODLR_solve_mul.o HODLR_fill.o HODLR_randomized.o HODLR_factor.o 
+		Bplus_inverse_diagonal_randomized_schur_partitioned.o CEM_current_node_patch_mapping.o CEM_RCS_bistatic.o CEM_RCS_monostatic.o HODLR_solve_mul.o HODLR_fill.o HODLR_randomized.o HODLR_factor.o HODLR_C_Interface.o
 		
 obj_Files = $(filter %.o, $(SOURCES))
 
@@ -106,7 +106,7 @@ OBJECTS_frandhmain = $(TargetDir)/HODLR_Randconst.o
 OBJECTS_fem2dmain = $(TargetDir)/EMCURV_Driver.o
 OBJECTS_fem3dmain = $(TargetDir)/EMSURF_Driver.o
 OBJECTS_fkerregmain = $(TargetDir)/KERREG_Driver.o
-OBJECTS_cmain = $(TargetDir)/testH.o
+OBJECTS_cmain = $(TargetDir)/InterfaceTest.o
 
 all: mvp randh em3d em2d kerreg ctest
 

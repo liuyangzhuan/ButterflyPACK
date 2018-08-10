@@ -1030,7 +1030,7 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     ! complex(kind=8) ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
-    type(vectorsblock), pointer :: random1, random2
+    ! type(vectorsblock), pointer :: random1, random2
     
     real*8,allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc

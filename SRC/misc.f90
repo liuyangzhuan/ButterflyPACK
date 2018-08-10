@@ -760,7 +760,10 @@ end subroutine DirectCopy
 		   + dt(6) * 60 * 1000 + dt(7) * 1000 &
 		   + dt(8)
    end if
-   pid = getpid()
+   
+   ! pid = getpid()
+   pid = 0
+   
    t = ieor(t, int(pid, kind(t)))
    do i = 1, n
 	  seed(i) = lcg(t)
@@ -1851,146 +1854,6 @@ end subroutine RandomMat
 	
 
 
-subroutine KernelUpdate(matA,matB,matC,null,m,n,k,nulldim,up_tol,eps_r,error,rankmax)
-! ! use lapack95
-! ! use blas95
-implicit none 
-integer m,n,i,j,k,nulldim,nulldim_new,rank,ii,jj,kk
-real*8::up_tol,eps_r
-complex(kind=8)::matA(m,n),matC(n,k),matB(m,k),matB0(m,k),matBtmp(m,k),null(n,n),matC_old(n,k)
-complex(kind=8),allocatable::matD(:,:),matDtmp(:,:),matE(:,:),UU(:,:),VV(:,:),nulltmp(:,:),nullnew(:,:),matrixtemp(:,:)
-real*8,allocatable::Singular(:)
-complex(kind=8)::ctemp
-real*8::n1,n2
-real*8 error
-integer,optional:: rankmax
-
-! n1 = OMP_get_wtime()
-matB0 = matB
-
-call gemm_omp(matA,matC,matBtmp,m,n,k)
-error = fnorm(matB0-matBtmp,m,k)
-! error = 0
-
-if(nulldim>0)then				   
-   call gemm_omp(matA,matC,matBtmp,m,n,k)  
-   if(fnorm(matB0,m,k)*up_tol<fnorm(matB0-matBtmp,m,k))then
-		call copymatN_omp(matC,matC_old,n,k)
-		allocate(matD(m,nulldim))
-		allocate(matDtmp(m,nulldim))
-		allocate(matE(nulldim,k))
-		call gemm_omp(matA,null(1:n,1:nulldim),matD,m,n,nulldim)		
-		matB0 = matB0 - matBtmp
-		matDtmp = matD
-		! stop
-		
-		allocate(Singular(nulldim))
-		allocate(UU(m,nulldim))
-		allocate(VV(nulldim,nulldim))
-
-		
-		! write(*,*)fnorm(null,n,nulldim),fnorm(matD,m,nulldim)
-		
-		call gesvd_robust(matD,Singular,UU,VV,m,nulldim,nulldim)
-		
-		rank = nulldim
-		do i=1,nulldim
-			if (Singular(i)/Singular(1)<=eps_r) then
-				rank=i
-				if(Singular(i)<Singular(1)*eps_r/10)rank = i -1
-				exit
-			end if
-		end do	
-		
-		if(present(rankmax))rank = min(rank,rankmax)
-		
-		allocate(matrixtemp(rank,k))
-
-		
-		! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-		do ii =1,rank
-		do jj =1,k
-		ctemp = 0
-		do kk=1,m
-			ctemp = ctemp + conjg(UU(kk,ii))*matB0(kk,jj)	
-		end do
-		matrixtemp(ii,jj) = ctemp
-		end do
-		end do
-		! !$omp end parallel do	
-
-		! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-		do ii =1,nulldim
-		do jj =1,k
-		ctemp = 0
-		do kk=1,rank
-			ctemp = ctemp + conjg(VV(kk,ii))*matrixtemp(kk,jj)/Singular(kk)		
-		end do
-		matE(ii,jj) = ctemp
-		end do
-		end do
-		! !$omp end parallel do	
-		
-		
-		
-		
-		call gemm_omp(null(1:n,1:nulldim),matE,matC,n,nulldim,k) 
-		matC = matC + matC_old
-		
-		
-		! write(*,*)fnorm(matC,n,k),fnorm(matE,nulldim,k),fnorm(matDtmp,m,nulldim),fnorm(matB,m,k),'ker'
-		
-		if(rank==nulldim)then
-			null(1:n,1:nulldim) = 0
-			nulldim = 0
-		else 
-			nulldim_new = nulldim-rank
-			allocate(nulltmp(nulldim,nulldim_new))
-			allocate(nullnew(n,nulldim_new))
-
-			! !$omp parallel do default(shared) private(ii,kk)	
-			do ii =1,nulldim
-			do kk=1,nulldim_new
-				nulltmp(ii,kk) =  conjg(VV(kk+rank,ii))		
-			end do
-			end do
-			! !$omp end parallel do	
-			call gemm_omp(null(1:n,1:nulldim),nulltmp,nullnew,n,nulldim,nulldim_new)
-			null(1:n,1:nulldim) = 0
-			nulldim = nulldim_new
-			call copymatN_omp(nullnew,null(1:n,1:nulldim),n,nulldim_new)
-			deallocate(nulltmp)
-			deallocate(nullnew)
-		end if
-	
-	
-		
-	
-		! write(*,*)fnorm(null,n,nulldim),'hah',rank,nulldim
-	
-		deallocate(matrixtemp)
-		deallocate(matD,matE,matDtmp)
-		deallocate(Singular,UU,VV)
-		
-		call gemm_omp(matA,matC,matBtmp,m,n,k)  
-		error = -fnorm(matB-matBtmp,m,k)
-		! error = 0
-		
-		! if(error>1d-4)then
-			! call GetRank(m,n,matA,rank,1d-4)
-			! write(*,*)m,n,k,rank,error
-			! call GetRank(m,k,matB,rank,1d-4)	
-			! write(*,*)m,n,k,rank
-			! stop
-		! end if
-   end if
-   
-end if
-
-! n2 = OMP_get_wtime()
-! time_kernelupdate = time_kernelupdate + n2-n1	
-
-end subroutine KernelUpdate	
 
 
 subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)

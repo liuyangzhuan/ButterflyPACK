@@ -96,7 +96,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	CALL getarg(1, DATA_DIR)
 	
 	
-	ker%Kernel = FULL
+	! ker%Kernel = FULL
 
 	option%Nmin_leaf=100
 	! Refined_level=0

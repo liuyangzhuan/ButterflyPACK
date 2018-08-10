@@ -136,9 +136,6 @@ subroutine BF_Delete_RandVect(chara,random,level_butterfly)
 			do j=1, num_col
 				do i=1, num_row
 					if(allocated(random%RandomVectorLL(level)%blocks(i,j)%matrix))deallocate (random%RandomVectorLL(level)%blocks(i,j)%matrix)
-					if(level/=0 .and. level/=level_butterfly+2)then
-						if(allocated(random%RandomVectorLL(level)%blocks(i,j)%null))deallocate (random%RandomVectorLL(level)%blocks(i,j)%null)
-					end if
 				enddo
 			enddo
 			deallocate (random%RandomVectorLL(level)%blocks)
@@ -151,9 +148,6 @@ subroutine BF_Delete_RandVect(chara,random,level_butterfly)
 			do j=1, num_col
 				do i=1, num_row
 					if(allocated(random%RandomVectorRR(level)%blocks(i,j)%matrix))deallocate (random%RandomVectorRR(level)%blocks(i,j)%matrix)
-					if(level/=0 .and. level/=level_butterfly+2)then
-						if(allocated(random%RandomVectorRR(level)%blocks(i,j)%null))deallocate (random%RandomVectorRR(level)%blocks(i,j)%null)
-					end if
 				enddo
 			enddo
 			deallocate (random%RandomVectorRR(level)%blocks)
@@ -229,7 +223,6 @@ subroutine BF_Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
 			do j=1, num_col
 				do i=1, num_row
 					mem_vec =mem_vec + SIZEOF(random%RandomVectorRR(level)%blocks(i,j)%matrix)/1024.0d3
-					if(level/=0 .and. level/=level_butterfly+2)mem_vec =mem_vec + SIZEOF(random%RandomVectorRR(level)%blocks(i,j)%null)/1024.0d3
 				enddo
 			enddo
 		enddo
@@ -280,7 +273,6 @@ subroutine BF_Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
 			do j=1, num_col
 				do i=1, num_row
 					mem_vec =mem_vec + SIZEOF(random%RandomVectorLL(level)%blocks(i,j)%matrix)/1024.0d3
-					if(level/=0 .and. level/=level_butterfly+2)mem_vec =mem_vec + SIZEOF(random%RandomVectorLL(level)%blocks(i,j)%null)/1024.0d3
 				enddo
 			enddo
 		enddo
@@ -2258,7 +2250,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
     complex(kind=8) ctemp, ctemp1, ctemp2,a,b
 	
 	
-    type(vectorsblock), pointer :: random1, random2
+    ! type(vectorsblock), pointer :: random1, random2
     
     real*8,allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
@@ -3176,7 +3168,7 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 	integer groupm_start, groupn_start,dimension_rank
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
-	type(vectorsblock), pointer :: random1, random2
+	! type(vectorsblock), pointer :: random1, random2
 	
 	class(*):: bplus
 	type(matrixblock)::block_o

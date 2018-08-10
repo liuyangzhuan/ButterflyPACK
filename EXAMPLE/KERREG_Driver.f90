@@ -104,12 +104,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	para=0.001
 	
-	ker%Kernel = RBF	
+	! ker%Kernel = RBF	
 	! msh%Nunk=100000
 
 	msh%scaling=1d0
-	ker%sigma=0.1
-	ker%lambda=10.0
+	ker%sigma=0.1d0
+	ker%lambda=10.0d0
 
 	ker%rank_approximate_para1=6.0
     ker%rank_approximate_para2=6.0
@@ -132,7 +132,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=1
+	option%ErrFillFull=0
 	option%RecLR_leaf='Q'
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
@@ -208,6 +208,44 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 
 
+subroutine geo_modeling_RBF(msh,ker,ptree)
+
+    use MODULE_FILE
+    implicit none
+    type(mesh)::msh
+	type(kernelquant)::ker
+    integer i,j,ii,jj,iii,jjj
+    integer intemp
+    integer node, patch, edge, flag
+    integer node1, node2, num_node,Maxedge,Dimn
+    integer node_temp(2)
+    real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
+    
+    real(kind=8),allocatable :: node_xy_original(:,:)
+    integer,allocatable :: num_edge_of_node(:)
+    
+    real(kind=8) a(3),b(3),c(3),r0, phi_start
+	type(proctree)::ptree
+	
+	! Maxedge	= msh%Nunk
+	msh%Ncorner = 0
+	
+	open (90,file=ker%trainfile_p)
+	read (90,*) Maxedge, Dimn
+	
+	msh%Nunk = Maxedge
+	
+	allocate (msh%xyz(Dimn,0:Maxedge), msh%info_unk(0:0,Maxedge))
+	! write(*,*)Maxedge, Dimn,shape(msh%info_unk)
+	do edge=1,Maxedge
+		msh%info_unk(0,edge)=edge
+		read (90,*) msh%xyz(1:Dimn,edge)
+	enddo  			
+
+    return
+    
+end subroutine geo_modeling_RBF
+
 
 subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
     
@@ -236,20 +274,21 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	complex(kind=8), allocatable:: labels(:)
 	real*8,allocatable:: xyz_test(:,:)
 	real(kind=8) r_mn
+	integer label
 
 
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
 	endif	
 	
-	if(option%PRECON==DIRECT)then
-		msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	else 
-		! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
-		msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	endif
+	! if(option%PRECON==DIRECT)then
+		! msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		! msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+	! else 
+		! ! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
+		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
+	! endif
 	
 	N_unk=msh%Nunk
 	N_unk_loc = msh%idxe-msh%idxs+1
@@ -261,7 +300,8 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	open (91,file=ker%trainfile_l)
 	read(91,*)N_unk,Dimn
 	do ii=1,N_unk
-		read(91,*)labels(ii)
+		read(91,*)label
+		labels(ii)=label
 	enddo
 	do ii=1,N_unk_loc
 		b(ii,1) = labels(msh%info_unk(0,ii-1+msh%idxs))
@@ -317,7 +357,8 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 		open (93,file=ker%testfile_l)
 		read (93,*) ntest, Dimn
 		do edge=1,ntest
-			read (93,*) vout_tmp(edge,1)
+			read (93,*) label
+			vout_tmp(edge,1)=label
 		enddo  		
 		close(93)		
 		

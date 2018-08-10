@@ -241,14 +241,14 @@ end subroutine HODLR_Solution
 	
 	if(precond==NOPRECON)then
 		y=x
-	else if (precond==SAIPRECON)then 
+	else if (precond==HODLRPRECON)then 
 		call MVM_Z_factorized(nn_loc,1,x,y,hobf_inverse,ptree,stats)	 
 	endif
 	end subroutine HODLR_ApplyPrecon
 
 	
 	
-subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
+subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
     
     use MODULE_FILE
     ! use blas95
@@ -264,25 +264,25 @@ subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),xtrue(:,:),b(:,:)
 	real*8:: rel_error,rtemp1,rtemp2,norm1,norm2
 	type(Hoption)::option
-	type(mesh)::msh
-	type(kernelquant)::ker
+	! type(mesh)::msh
+	! type(kernelquant)::ker
 	type(proctree)::ptree
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(Hstat)::stats	
 	complex(kind=8),allocatable:: current(:),voltage(:)
-	
+	integer idxs,idxe
 
-	if(option%PRECON==DIRECT)then
-		msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	else 
-		! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
-		msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	endif
+	! if(option%PRECON==DIRECT)then
+		idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+	! else 
+		! ! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
+		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
+	! endif
 	
-	N_unk=msh%Nunk
-	N_unk_loc = msh%idxe-msh%idxs+1	
+	! N_unk=msh%Nunk
+	N_unk_loc = idxe-idxs+1	
 	
 	allocate (x(N_unk_loc,1))
 	x=0		
@@ -325,7 +325,7 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
     complex(kind=8) ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
-    type(vectorsblock), pointer :: random1, random2
+    ! type(vectorsblock), pointer :: random1, random2
     
     real*8,allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
@@ -397,7 +397,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 	! type(matrixblock),pointer::block_o
 	type(blockplus),pointer::bplus_o
 	type(proctree)::ptree
-    type(vectorsblock), pointer :: random1, random2
+    ! type(vectorsblock), pointer :: random1, random2
     type(Hstat)::stats
 	
     real*8,allocatable :: Singular(:)
