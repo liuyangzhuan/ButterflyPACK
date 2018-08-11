@@ -2974,6 +2974,78 @@ call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc
 end subroutine gemmf90
 
 
+
+
+
+complex(kind=8) function Hankel02_Func(x)
+
+use MODULE_FILE    
+implicit none
+    
+    real*8 x
+    complex(kind=8) y
+    
+    Hankel02_Func=BesselJ0_func(x)-junit*BesselY0_func(x)
+    
+    return
+    
+end function Hankel02_Func
+
+real*8 function BesselJ0_func(x)
+
+    implicit none
+    
+    real*8 x, z, ax
+    real*8 y, rtemp1, rtemp2, xx
+    
+    ax=abs(x)
+    if (ax<8d0) then
+        y=x*x
+        rtemp1=57568490574.0d0+y*(-13362690354.0d0+y*(651619640.7d0+y*(-11214424.18d0+y*(77392.33017d0+y*(-184.9052456d0)))))
+        rtemp2=57568490411.0d0+y*(1029532985.0d0+y*(9494680.718d0+y*(59272.64853d0+y*(267.8532712d0+y*1.0d0))))
+        BesselJ0_func=rtemp1/rtemp2
+    else
+        z=8.0d0/ax
+        y=z*z
+
+        xx=ax-0.785398164d0
+        rtemp1=1.0d0+y*(-0.1098628627d-2+y*(0.2734510407d-4+y*(-0.2073370639d-5+y*0.2093887211d-6)))
+        rtemp2=-0.1562499995d-1+y*(0.1430488765d-3+y*(-0.6911147651d-5+y*(0.7621095161d-6-y*0.934935152d-7)))
+        BesselJ0_func=sqrt(0.636619772d0/ax)*(cos(xx)*rtemp1-z*sin(xx)*rtemp2)
+    endif
+    
+    return
+    
+end function BesselJ0_func
+
+real*8 function BesselY0_func(x)
+
+    implicit none
+    
+    real*8 x, z, ax
+    real*8 y, rtemp1, rtemp2, xx
+    
+    if (x<8.0d0) then
+        y=x*x
+        rtemp1=-2957821389.0d0+y*(7062834065.0d0+y*(-512359803.6d0+y*(10879881.29d0+y*(-86327.92757d0+y*228.4622733d0))))
+        rtemp2=40076544269.0d0+y*(745249964.8d0+y*(7189466.438d0+y*(47447.26470d0+y*(226.1030244d0+y*1.0d0))))
+        BesselY0_func=(rtemp1/rtemp2)+0.636619772d0*BesselJ0_func(x)*LOG(x)
+    else
+        z=8.0d0/x
+        y=z*z
+
+        xx=x-0.785398164d0
+        rtemp1=1.0d0+y*(-0.1098628627d-2+y*(0.2734510407d-4+y*(-0.2073370639d-5+y*0.2093887211d-6)))
+        rtemp2=-0.1562499995d-1+y*(0.1430488765d-3+y*(-0.6911147651d-5+y*(0.7621095161d-6-y*0.934935152d-7)))
+        BesselY0_func=sqrt(0.636619772d0/x)*(sin(xx)*rtemp1+z*cos(xx)*rtemp2)
+    endif
+    
+    return
+    
+end function BesselY0_func
+
+
+
 subroutine NumberingPtree(ptree)
 	implicit none 
 	type(proctree)::ptree

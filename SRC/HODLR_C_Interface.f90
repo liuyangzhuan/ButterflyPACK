@@ -9,20 +9,11 @@ module HODLR_C_Interface
 	use HODLR_Solve
     use iso_c_binding    
 	
-	abstract interface
-		subroutine C_Z_elem (m,n,val,quant)
-		  USE, INTRINSIC :: ISO_C_BINDING
-		  type(c_ptr) :: quant
-		  integer(kind=C_INT), INTENT(IN):: m,n
-		  complex(kind=C_DOUBLE_COMPLEX)::val 
-		end subroutine C_Z_elem
-	end interface	
-	
 contains 
 
 
 
-subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
+subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
     
     use MODULE_FILE
     implicit none
@@ -35,19 +26,19 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	procedure(C_Z_elem), POINTER :: proc
 	
 	value_e=0
-	call c_f_procpointer(ker%FuncZmn, proc)
+	call c_f_procpointer(ker%C_FuncZmn, proc)
 	! write(*,*)'ddd'
-	call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e,ker%QuantZmn)
+	call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e,ker%C_QuantZmn)
 	! call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e)
 	return
     
-end subroutine element_Zmn_user
+end subroutine element_Zmn_user_C
 
 
 
 
 
-subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,FuncZmn,QuantZmn,MPIcomm) bind(c, name="c_hodlr_fill_")	
+subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_fill_")	
 	implicit none 
 	integer Npo,Ndim,Nmin
 	real*8 Locations(Npo*Ndim)
@@ -69,8 +60,8 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
 	type(c_ptr), intent(out) :: msh_Cptr
 	type(c_ptr), intent(out) :: ker_Cptr
 	type(c_ptr), intent(out) :: ptree_Cptr
-	type(c_ptr), intent(in),target :: QuantZmn
-	type(c_funptr), intent(in),value,target :: FuncZmn
+	type(c_ptr), intent(in),target :: C_QuantZmn
+	type(c_funptr), intent(in),value,target :: C_FuncZmn
 	
 	type(Hoption),pointer::option	
 	type(Hstat),pointer::stats
@@ -129,14 +120,14 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
 	!itmax=10000
 	
 	
-	ker%QuantZmn => QuantZmn
-	ker%FuncZmn => FuncZmn
+	ker%C_QuantZmn => C_QuantZmn
+	ker%C_FuncZmn => C_FuncZmn
 		
 	para=0.001
 	
-	ker%rank_approximate_para1=6.0
-    ker%rank_approximate_para2=6.0
-    ker%rank_approximate_para3=6.0
+	! ker%rank_approximate_para1=6.0
+    ! ker%rank_approximate_para2=6.0
+    ! ker%rank_approximate_para3=6.0
 	
 	
 	option%Nmin_leaf=Nmin
@@ -204,14 +195,14 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
 	
 	
 
-	! call c_f_procpointer(FuncZmn, proc)
+	! call c_f_procpointer(C_FuncZmn, proc)
 	! ! write(*,*)'ddd'
-	! call proc(0,0,Ctmp,QuantZmn)	
+	! call proc(0,0,Ctmp,C_QuantZmn)	
 	! write(*,*)'1 1 element is: ', Ctmp
 	
-	! call element_Zmn_user(1,1,Ctmp,msh,ker)
+	! call element_Zmn_user_C(1,1,Ctmp,msh,ker)
 	! write(*,*)'1 1 element is: ', Ctmp
-	! call element_Zmn_user(3,5,Ctmp,msh,ker)
+	! call element_Zmn_user_C(3,5,Ctmp,msh,ker)
 	! write(*,*)'3 5 element is: ', Ctmp
 	! stop
 	
@@ -220,7 +211,7 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user_C,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if

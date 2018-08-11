@@ -50,7 +50,7 @@ inline double Gauss_kernel(double *x, double *y, int d, double h) {
 
 
 
-class QuantZmn {
+class C_QuantZmn {
 
 public:
   vector<double> _data;
@@ -62,9 +62,9 @@ public:
   std::vector<int> _iHperm;
   int _nloc = 0;
 
-  QuantZmn() = default;
+  C_QuantZmn() = default;
   
-  QuantZmn(vector<double> data, int d, double h, double l)
+  C_QuantZmn(vector<double> data, int d, double h, double l)
     : _data(move(data)), _d(d), _n(_data.size() / _d),
       _h(h), _l(l){
 	  // std::cout<<"_h "<<_h<<"_n "<<_n<<" _d "<<_d<<"size "<<_data.size()<<std::endl;
@@ -82,9 +82,9 @@ public:
   } 	
 };
 
-inline void FuncZmn(int *m, int *n, doublecomplex *val, C2Fptr quant) {
+inline void C_FuncZmn(int *m, int *n, doublecomplex *val, C2Fptr quant) {
 	
-  QuantZmn* Q = (QuantZmn*) quant;	
+  C_QuantZmn* Q = (C_QuantZmn*) quant;	
   // val->r=1;
   // val->i=2;
   // std::cout<<"good"<<std::endl;
@@ -143,7 +143,7 @@ int main(int argc, char* argv[])
   
 	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
 	
-	QuantZmn quant(data_train, Ndim, h, lambda);	
+	C_QuantZmn quant(data_train, Ndim, h, lambda);	
 	
 	
    starttime = MPI_Wtime();
@@ -179,7 +179,7 @@ int main(int argc, char* argv[])
 	Fcomm = MPI_Comm_c2f(MPI_COMM_WORLD);  
 	
     // construct hodlr with geometrical points	
-	FC_GLOBAL_(c_hodlr_fill,C_HODLR_FILL)(&Npo, &Ndim, data_train.data(), &Nmin, &tol, &nth, &nmpi, &ninc, &preorder, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &ker, &ptree, &FuncZmn, &quant, &Fcomm);	
+	FC_GLOBAL_(c_hodlr_fill,C_HODLR_FILL)(&Npo, &Ndim, data_train.data(), &Nmin, &tol, &nth, &nmpi, &ninc, &preorder, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &ker, &ptree, &C_FuncZmn, &quant, &Fcomm);	
 	
 	// factor hodlr
 	FC_GLOBAL_(c_hodlr_factor,C_HODLR_FACTOR)(&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);

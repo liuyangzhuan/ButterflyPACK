@@ -6,6 +6,28 @@ use Bplus_randomized
 contains 
 
 
+subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
+	
+	use MODULE_FILE
+	implicit none
+	
+	integer edge_m, edge_n
+	complex(kind=8) value_e
+	type(mesh)::msh
+	type(kernelquant)::ker	
+	
+	procedure(F_Z_elem), POINTER :: proc
+	value_e=0
+	
+	proc => ker%FuncZmn
+	call proc(ker,msh%new2old(edge_m),msh%new2old(edge_n),value_e,msh,ker%QuantZmn)
+
+	return
+	
+end subroutine element_Zmn_user	
+	
+
+
 subroutine matrices_filling(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	! use lapack95
 	! use blas95
@@ -230,7 +252,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 	! do ii=1,mm
 		! ctemp1 = 0d0
 		! do jj=1,nn
-			! ctemp1 = ctemp1 + ker%matZ_glo(new2old(ii+head_m-1),new2old(jj+head_n-1))*Vin(jj,1)
+			! ctemp1 = ctemp1 + ker%matZ_glo(msh%new2old(ii+head_m-1),msh%new2old(jj+head_n-1))*Vin(jj,1)
 		! end do
 		! Vout2(ii,1) = ctemp1
 	! end do

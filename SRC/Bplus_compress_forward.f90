@@ -4371,42 +4371,42 @@ end subroutine CheckLRError
 
 
 
-integer function rank_approximate_func(group_m, group_n, flag,ker)
+! integer function rank_approximate_func(group_m, group_n, flag,ker)
 
-    use MODULE_FILE
-    implicit none
+    ! use MODULE_FILE
+    ! implicit none
 
-    integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
-    real*8 a, b, c, aa(2), bb(2), cc(2), angle, distance
-	type(kernelquant)::ker
+    ! integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
+    ! real*8 a, b, c, aa(2), bb(2), cc(2), angle, distance
+	! type(kernelquant)::ker
 	
-	if(group_m/=group_n)then
+	! if(group_m/=group_n)then
 		
-		distance=group_dist(group_m,group_n)
-		distance=distance**2d0
-		! distance=(basis_group(group_m)%center(1)-basis_group(group_n)%center(1))**2+(basis_group(group_m)%center(2)-basis_group(group_n)%center(2))**2+(basis_group(group_m)%center(3)-basis_group(group_n)%center(3))**2
-		! ! distance=sqrt(distance)
-		angle=4*pi*(basis_group(group_m)%radius)**2/distance
-		rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
-		! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
-		if (flag==1) then
-			rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
-		elseif (flag==2) then
-			rank_approximate_func=int(rank*ker%rank_approximate_para2**2)
-		elseif (flag==3) then
-			rank_approximate_func=int(rank*ker%rank_approximate_para3**2)
-		endif
-	else 
-		rank_approximate_func = 100000
-	end if
-    !if (rank==0) then
-    !    pause
-    !    continue
-    !endif
+		! distance=group_dist(group_m,group_n)
+		! distance=distance**2d0
+		! ! distance=(basis_group(group_m)%center(1)-basis_group(group_n)%center(1))**2+(basis_group(group_m)%center(2)-basis_group(group_n)%center(2))**2+(basis_group(group_m)%center(3)-basis_group(group_n)%center(3))**2
+		! ! ! distance=sqrt(distance)
+		! angle=4*pi*(basis_group(group_m)%radius)**2/distance
+		! rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
+		! ! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
+		! if (flag==1) then
+			! rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
+		! elseif (flag==2) then
+			! rank_approximate_func=int(rank*ker%rank_approximate_para2**2)
+		! elseif (flag==3) then
+			! rank_approximate_func=int(rank*ker%rank_approximate_para3**2)
+		! endif
+	! else 
+		! rank_approximate_func = 100000
+	! end if
+    ! !if (rank==0) then
+    ! !    pause
+    ! !    continue
+    ! !endif
 
-    return
+    ! return
 
-end function rank_approximate_func
+! end function rank_approximate_func
 
 
 

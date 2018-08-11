@@ -157,10 +157,10 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
        
  
     !***************************************************************************************	   
-	allocate(new2old(msh%Nunk))    
+	allocate(msh%new2old(msh%Nunk))    
 
 	do ii=1,msh%Nunk
-		new2old(ii) = ii
+		msh%new2old(ii) = ii
 	end do
 	
 	! write(*,*)'gan', msh%info_unk(0,100)   
@@ -291,14 +291,14 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
 				!$omp parallel do default(shared) private(ii)     
 				do ii=1, mm
 					edge_temp(:,ii)=msh%info_unk(:,order(ii)+basis_group(group)%head-1)
-					map_temp(ii) = new2old(order(ii)+basis_group(group)%head-1)
+					map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
 				enddo
 				!$omp end parallel do
 
 				!$omp parallel do default(shared) private(ii)     
 				do ii=1, mm
 					msh%info_unk(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
-					new2old(ii+basis_group(group)%head-1) = map_temp(ii)
+					msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
 				enddo
 				!$omp end parallel do			
 				
@@ -395,6 +395,12 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
 	deallocate(auxpoint)
 	deallocate(groupcenter)	
     
+	
+	allocate(msh%old2new(msh%Nunk))
+	do ii=1,msh%Nunk
+		msh%old2new(msh%new2old(ii)) = ii
+	end do	
+	
     return
     
 end subroutine H_matrix_structuring

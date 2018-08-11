@@ -287,7 +287,8 @@ module MODULE_FILE
 		! for 2D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice  
 		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
 		! for general: 0 point to coordinates of each unknown x
-		
+		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering 
+		integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering 
 		
 		! 2D/3D mesh
 		integer maxnode ! # of vertices in a mesh
@@ -313,33 +314,37 @@ module MODULE_FILE
 		
 	end type Mesh
 	 
-	 
 	!**** quantities related to specific matrix kernels  
 	type kernelquant
-		real*8 wavenum    ! CEM: wave number  
-		real*8 wavelength  ! CEM: wave length
-		real*8 omiga       ! CEM: angular frequency
-		real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
-		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
-		integer RCS_Nsample ! CEM: number of RCS samples
-		real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
+		! real*8 wavenum    ! CEM: wave number  
+		! real*8 wavelength  ! CEM: wave length
+		! real*8 omiga       ! CEM: angular frequency
+		! real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
+		! integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
+		! integer RCS_Nsample ! CEM: number of RCS samples
+		! real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
 		
-		real*8 sigma, lambda ! Kernel Regression: RBF parameters 		
-		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
+		! real*8 sigma, lambda ! Kernel Regression: RBF parameters 		
+		! character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
 		
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
-		type(c_ptr),pointer :: QuantZmn ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
-		type(c_funptr),pointer :: FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
+		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_Z_elem),pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		
+		type(c_ptr),pointer :: C_QuantZmn ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
+		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
 	end type kernelquant
 	
 	
 	abstract interface
-		subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,operand)
+		subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,msh,operand)
+			import::mesh
 			implicit none
 			character trans
 			integer M, N, num_vect_sub
 			complex(kind=8) :: Vin(:,:), Vout(:,:)
+			type(mesh)::msh
 			class(*)::operand
 		end subroutine HOBF_MVP_blk
 
@@ -365,15 +370,31 @@ module MODULE_FILE
 			type(kernelquant)::ker
 		end subroutine Z_elem
 		
+		subroutine F_Z_elem(ker,m,n,val,msh,quant) ! m,n represents old indices
+		  import::mesh,kernelquant
+		  class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		  class(*),pointer :: quant
+		  type(mesh)::msh
+		  integer, INTENT(IN):: m,n
+		  complex(kind=8)::val 
+		end subroutine F_Z_elem
+
+		subroutine C_Z_elem (m,n,val,quant) ! m,n represents old indices
+		  USE, INTRINSIC :: ISO_C_BINDING
+		  type(c_ptr) :: quant
+		  integer(kind=C_INT), INTENT(IN):: m,n
+		  complex(kind=C_DOUBLE_COMPLEX)::val 
+		end subroutine C_Z_elem		
+		
+		
 	end interface
 	
-
 	
 	!*** need to further work on the following: 
 	 real*8::time_tmp
      type(basisgroup),allocatable:: basis_group(:)
 	 integer vecCNT
-	 integer,allocatable:: new2old(:)
+	 
 	 integer,allocatable:: basis_group_pre(:,:)
 	 CHARACTER (LEN=1000) DATA_DIR	
 

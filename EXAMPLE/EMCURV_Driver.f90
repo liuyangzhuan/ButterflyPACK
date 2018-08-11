@@ -1,5 +1,206 @@
+module APPLICATION_MODULE
+use MODULE_FILE
+use MISC
+implicit none
+
+	!**** define your application-related variables here   
+	type quant_app
+		real*8 wavenum    ! CEM: wave number  
+		real*8 wavelength  ! CEM: wave length
+		real*8 omiga       ! CEM: angular frequency
+		real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
+		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
+		integer RCS_Nsample ! CEM: number of RCS samples
+		real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
+	end type quant_app
+
+contains
+
+	!**** user-defined subroutine to sample Z_mn
+	subroutine Z_elem_EMCURV(ker,m,n,value_e,msh,quant)
+		
+		use MODULE_FILE
+		implicit none
+		
+		integer edge_m, edge_n, i, j, flag
+		integer, INTENT(IN):: m,n
+		real*8 r_mn, rtemp1, rtemp2
+		complex(kind=8) value_e
+		type(mesh)::msh
+		class(kernelquant)::ker
+		class(*),pointer :: quant
+		
+		select TYPE(quant)
+			type is (quant_app)
+				! convert to new indices because msh%info_unk has been reordered
+				edge_m = msh%old2new(m)
+				edge_n = msh%old2new(n)
+				
+				if (edge_m/=edge_n) then
+				
+					flag=0
+					do j=1,2
+						do i=1,2
+							if (msh%info_unk(i,edge_m)==msh%info_unk(j,edge_n)) then
+								flag=1
+							endif
+						enddo
+					enddo
+					
+					if (flag==1) then
+						! write(*,*)msh%Delta_ll,quant%wavenum,impedence0,junit,gamma,'ddd' 
+						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*(1-junit/pi*(3*LOG(3*gamma*quant%wavenum*msh%Delta_ll/4.0)-LOG(gamma*quant%wavenum*msh%Delta_ll/4.0)-2))
+					
+					else
+				
+						r_mn=(msh%xyz(1,msh%info_unk(0,edge_m))-msh%xyz(1,msh%info_unk(0,edge_n)))**2+(msh%xyz(2,msh%info_unk(0,edge_m))-msh%xyz(2,msh%info_unk(0,edge_n)))**2
+						r_mn=sqrt(r_mn)
+						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*Hankel02_Func(quant%wavenum*r_mn)
+					endif
+				else
+					value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*(1.0-junit*2.0/pi*(LOG(gamma*quant%wavenum*msh%Delta_ll/4.0)-1.0))
+				endif
+
+			class default
+				write(*,*)"unexpected type"
+				stop
+			end select			
+			
+		return
+		
+	end subroutine Z_elem_EMCURV	
+	
+	
+	
+
+	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
+		
+		use MODULE_FILE
+		! use APPLICATION_MODULE
+		implicit none
+		complex(kind=8)::curr
+		complex(kind=8) ctemp,phase,ctemp_1
+		real*8 dsita,dphi    
+		integer edge
+		type(mesh)::msh
+		type(quant_app)::quant
+		
+		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(dphi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(dphi*pi/180.))
+		ctemp_1=curr*msh%Delta_ll*exp(phase)
+
+		return
+		
+	end subroutine VV_polar_CURV
+
+	subroutine RCS_bistatic_CURV(curr,msh,quant,ptree)
+		!integer flag
+		use MODULE_FILE
+		! use APPLICATION_MODULE
+		implicit none
+		complex(kind=8)::curr(:)
+		real*8 rcs
+		complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1,ctemp_loc
+		real*8 ddphi,dphi
+		
+		integer i,j,ii,jj,iii,jjj,patch,flag
+		real*8 l_edge,l_edgefine
+		type(mesh)::msh
+		integer edge,edge_m,edge_n,ierr
+		type(quant_app)::quant 
+		type(proctree)::ptree
+		
+		if(ptree%MyID==Main_ID)open (100, file='VV_bistatic.txt')
+	  
+		ddphi=180./quant%RCS_Nsample
+		
+		do i=0, quant%RCS_Nsample   !phi=0
+			dphi=i*ddphi
+			ctemp_loc=0
+			rcs=0
+			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)   
+			do edge=msh%idxs,msh%idxe
+				call VV_polar_CURV(dphi,edge,ctemp_1,curr(edge-msh%idxs+1),msh,quant)
+				ctemp_loc=ctemp_loc+ctemp_1    
+			enddo
+			!$omp end parallel do
+			
+			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+			
+			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
+			!rcs=rcs/quant%wavelength
+			rcs=10*log10(rcs)
+			if(ptree%MyID==Main_ID)write(100,*)dphi,rcs
+		enddo
+		if(ptree%MyID==Main_ID) close(100)
+		
+		return
+		
+	end subroutine RCS_bistatic_CURV
+
+
+
+	subroutine RCS_monostatic_VV_CURV(dphi,rcs,curr,msh,quant,ptree)
+
+		use MODULE_FILE
+		! use APPLICATION_MODULE
+		implicit none
+		
+		real*8 rcs
+		complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
+		real*8 dsita,dphi
+		integer edge,edge_m,edge_n,ierr
+		complex(kind=8):: curr(:)
+		type(mesh)::msh
+		type(quant_app)::quant
+		type(proctree)::ptree
+		
+		ctemp_loc=0
+			rcs=0
+			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
+			do edge=msh%idxs,msh%idxe
+				call VV_polar_CURV(dphi,edge,ctemp_1,curr(edge-msh%idxs+1),msh,quant)
+				ctemp_loc=ctemp_loc+ctemp_1
+			enddo
+			!$omp end parallel do
+			
+			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+			
+			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
+			!rcs=rcs/quant%wavelength
+			rcs=10*log10(rcs)
+			
+		return
+		
+	end subroutine RCS_monostatic_VV_CURV
+
+	subroutine element_Vinc_VV_CURV(phi,edge,value,msh,quant)
+
+		use MODULE_FILE
+		! use APPLICATION_MODULE
+		implicit none
+		
+		integer edge
+		complex(kind=8) value
+		real*8 theta, phi
+		complex(kind=8)  phase
+		type(mesh)::msh
+		type(quant_app)::quant
+		
+		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(phi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(phi*pi/180.))
+		value=exp(phase)
+		
+		return
+		
+	end subroutine element_Vinc_VV_CURV	
+		
+
+end module APPLICATION_MODULE	
+
+
+
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     use MODULE_FILE
+    use APPLICATION_MODULE
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
@@ -33,7 +234,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	type(proctree)::ptree
-	
+	type(quant_app),target::quant
 	
 	
 	
@@ -76,21 +277,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	call InitStat(stats)
 	
-	! time_indexarray = 0
-	! time_leastsquare = 0
-	! time_buttermul = 0
-	! time_buttermulinv = 0
-	! time_kernelupdate = 0
-	! time_memcopy = 0
-	! time_gemm = 0
-	! time_gemm1 = 0		   
-    ! time_getvec = 0
-	! time_resolve = 0
-	! time_halfbuttermul = 0
+	
 	time_tmp = 0
 	
 	msh%Origins=(/0d0,0d0,0d0/)
- 
+	
+ 	! register the user-defined function and type in ker 
+	ker%FuncZmn=>Z_elem_EMCURV
+	ker%QuantZmn=>quant
 
      !*************************input******************************
 
@@ -100,8 +294,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	CALL getarg(1, DATA_DIR)
 	
 	para=0.001
-	
-	! ker%Kernel = EMCURV	
 	
 	
 	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
@@ -126,20 +318,20 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	 
 	msh%scaling=1d0
-	! ker%wavelength=0.0006
-	!ker%wavelength=0.0003
-	ker%wavelength=0.08
+	! quant%wavelength=0.0006
+	!quant%wavelength=0.0003
+	quant%wavelength=0.08
 
-! ker%wavelength=0.08
+! quant%wavelength=0.08
 ! Discret=0.05
-	ker%RCS_static=1
-    ker%RCS_Nsample=2000
+	quant%RCS_static=1
+    quant%RCS_Nsample=2000
 
 	
 	
-	ker%rank_approximate_para1=6.0
-    ker%rank_approximate_para2=6.0
-    ker%rank_approximate_para3=6.0
+	quant%rank_approximate_para1=6.0
+    quant%rank_approximate_para2=6.0
+    quant%rank_approximate_para3=6.0
 	
 	
 	option%Nmin_leaf=50
@@ -170,21 +362,21 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
     !*********************************************************
 
-    ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
-    ker%wavenum=2*pi/ker%wavelength
+    quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
+    quant%wavenum=2*pi/quant%wavelength
 
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
-   write (*,*) 'wavelength:',ker%wavelength
+   write (*,*) 'wavelength:',quant%wavelength
    write (*,*) ''
    endif
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_CURV(msh,ker,ptree)
+    call geo_modeling_CURV(msh,quant,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -206,7 +398,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
     ! call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_EMCURV,ptree)
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
@@ -223,7 +415,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	end if
 
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
-    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,ker,ptree,stats)
+    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
@@ -238,12 +430,13 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 
 
-subroutine geo_modeling_CURV(msh,ker,ptree)
+subroutine geo_modeling_CURV(msh,quant,ptree)
 
     use MODULE_FILE
+	use APPLICATION_MODULE
     implicit none
     type(mesh)::msh
-	type(kernelquant)::ker
+	type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
     integer node, patch, edge, flag
@@ -482,8 +675,8 @@ subroutine geo_modeling_CURV(msh,ker,ptree)
         enddo           
 
     elseif (msh%model2d==8) then   !************corrugated open cylinder*****************
-		M = 0.2d0*ker%wavelength
-		L = 1.5d0*ker%wavelength
+		M = 0.2d0*quant%wavelength
+		L = 1.5d0*quant%wavelength
         phi_start = 3d0/2d0*pi
 		
 		msh%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
@@ -517,8 +710,8 @@ subroutine geo_modeling_CURV(msh,ker,ptree)
 
 		
     elseif (msh%model2d==9) then  !*****corrugated corner reflector*****
-		M = 0.2d0*ker%wavelength
-		L = 1.5d0*ker%wavelength
+		M = 0.2d0*quant%wavelength
+		L = 1.5d0*quant%wavelength
 		
         msh%Delta_ll=2d0/Maxedge
         msh%maxnode=2*Maxedge+1
@@ -732,7 +925,7 @@ subroutine geo_modeling_CURV(msh,ker,ptree)
     if(ptree%MyID==Main_ID)write (*,*) ''
     if(ptree%MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
 	if(ptree%MyID==Main_ID)write (*,*) 'dx:',msh%Delta_ll/2
-	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',ker%wavelength/msh%maxedgelength
+	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',quant%wavelength/msh%maxedgelength
 
     
     return
@@ -742,12 +935,13 @@ end subroutine geo_modeling_CURV
 
 
 
-subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
+subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     
     use MODULE_FILE
-	use RCS_Bi
-	use RCS_Mono
-	use element_vinc
+	use APPLICATION_MODULE
+	! use RCS_Bi
+	! use RCS_Mono
+	! use element_vinc
 	use HODLR_Solve	
     ! use blas95
     implicit none
@@ -763,7 +957,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	real*8:: rel_error
 	type(Hoption)::option
 	type(mesh)::msh
-	type(kernelquant)::ker
+	type(quant_app)::quant
 	type(proctree)::ptree
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(Hstat)::stats	
@@ -786,7 +980,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	! N_unk=msh%Nunk
 	N_unk_loc = msh%idxe-msh%idxs+1
 	
-    if (ker%RCS_static==2) then
+    if (quant%RCS_static==2) then
     
         phi=180d0
         
@@ -796,7 +990,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 								  
         !$omp parallel do default(shared) private(edge,value_Z)
         do edge=msh%idxs, msh%idxe
-            call element_Vinc_VV_CURV(phi,edge,value_Z,msh,ker)
+            call element_Vinc_VV_CURV(phi,edge,value_Z,msh,quant)
             voltage(edge-msh%idxs+1)=value_Z
         enddo    
         !$omp end parallel do
@@ -817,7 +1011,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
 		
 		T0=secnds(0.0)
-        call RCS_bistatic_CURV(Current,msh,ker,ptree)
+        call RCS_bistatic_CURV(Current,msh,quant,ptree)
 
 		if(ptree%MyID==Main_ID)then
 			write (*,*) ''
@@ -828,10 +1022,10 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 		deallocate(current)
 		deallocate(voltage)
 	
-    elseif (ker%RCS_static==1) then
+    elseif (quant%RCS_static==1) then
     
         allocate (current(N_unk_loc))
-        num_sample=ker%RCS_Nsample
+        num_sample=quant%RCS_Nsample
         dphi=180./num_sample
         
 		allocate (b(N_unk_loc,num_sample+1))
@@ -845,7 +1039,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
 			do edge=msh%idxs, msh%idxe
-				call element_Vinc_VV_CURV(phi,edge,value_Z,msh,ker)
+				call element_Vinc_VV_CURV(phi,edge,value_Z,msh,quant)
 				b(edge-msh%idxs+1,j+1)=value_Z
 			enddo    
 			!$omp end parallel do
@@ -857,7 +1051,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 		do j=0, num_sample 	
 			phi=j*dphi
 			Current=x(:,j+1)
-            call RCS_monostatic_VV_CURV(phi,rcs_V,Current,msh,ker,ptree)
+            call RCS_monostatic_VV_CURV(phi,rcs_V,Current,msh,quant,ptree)
 !             !$omp parallel do default(shared) private(i)
 !             do i=1, N_unk
 !                 current(i)=vectors_block(0)%vector(i,2)
@@ -896,4 +1090,9 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
     return
     
 end subroutine EM_solve_CURV
+
+
+
+
+
 

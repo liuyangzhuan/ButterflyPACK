@@ -28,7 +28,7 @@ typedef void* C2Fptr;  // pointer passing c objects to fortran
 extern "C" {
 	
 
-    void FC_GLOBAL_(c_hodlr_fill,C_HODLR_FILL)(int* Npo, int* Ndim, double* Locations, int* Nmin, double* tol, int* nth, int* nmpi, int* ninc, int* preorder, int* tree, int* perms, int* Npo_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*FuncZmn)(int*, int*, doublecomplex*,C2Fptr), C2Fptr QuantZmn, MPI_Fint* MPIcomm);	
+    void FC_GLOBAL_(c_hodlr_fill,C_HODLR_FILL)(int* Npo, int* Ndim, double* Locations, int* Nmin, double* tol, int* nth, int* nmpi, int* ninc, int* preorder, int* tree, int* perms, int* Npo_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, doublecomplex*,C2Fptr), C2Fptr C_QuantZmn, MPI_Fint* MPIcomm);	
  
 	void FC_GLOBAL_(c_hodlr_factor,C_HODLR_FACTOR)(F2Cptr* ho_bf_for,F2Cptr* ho_bf_inv,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 

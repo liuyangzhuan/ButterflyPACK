@@ -31,7 +31,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Nin1,Nout1,Nin2,Nout2	
 	type(proctree)::ptree
 	integer,allocatable:: groupmembers(:)	
-	
+	integer :: ierr
+	integer :: nmpi
 	
 	
 	! nmpi and groupmembers should be provided by the user 
@@ -85,7 +86,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     
     msh%integral_points=6
     allocate (msh%ng1(msh%integral_points), msh%ng2(msh%integral_points), msh%ng3(msh%integral_points), msh%gauss_w(msh%integral_points))
-    call gauss_points(msh)
+    ! call gauss_points(msh)
 
 
      !*************************input******************************
@@ -108,16 +109,16 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%tol_Rdetect=1d-4 !3d-5
     ! Preset_level_butterfly=0
 	msh%scaling=1d0
-	ker%wavelength=0.25
+	! ker%wavelength=0.25
 	! Discret=0.05
-	ker%RCS_static=2
-    ker%RCS_Nsample=1000
+	! ker%RCS_static=2
+    ! ker%RCS_Nsample=1000
     ! Optimizing_forward=0
     ! Fast_inverse=0
     ! Add_method_of_base_level=2
-    ker%rank_approximate_para1=6.0
-    ker%rank_approximate_para2=6.0
-    ker%rank_approximate_para3=6.0
+    ! ker%rank_approximate_para1=6.0
+    ! ker%rank_approximate_para2=6.0
+    ! ker%rank_approximate_para3=6.0
 	option%tol_LS=1d-10
 	! tfqmr_tolerance=1d-6
 	option%tol_itersol=3d-3
@@ -137,7 +138,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%LnoBP=600
 	option%TwoLayerOnly=1
 	option%LRlevel=100
-	ker%CFIE_alpha=1
+	! ker%CFIE_alpha=1
 	explicitflag=0
 	! fullmatflag=1
 
@@ -156,8 +157,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
     !*********************************************************
 
-    ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
-    ker%wavenum=2*pi/ker%wavelength
+    ! ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
+    ! ker%wavenum=2*pi/ker%wavelength
 
 	Ntunnel = 15600
 	msh%Nunk = 3720
@@ -227,7 +228,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh)
+    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
@@ -285,7 +286,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		do ii=1,msh%Nunk
 			ctemp = 0d0
 			do jj=1,msh%Nunk
-				ctemp = ctemp + ker%matZ_glo(new2old(ii),new2old(jj))*Vin(jj,1)
+				ctemp = ctemp + ker%matZ_glo(msh%new2old(ii),msh%new2old(jj))*Vin(jj,1)
 			end do
 			Vout2(ii,1) = ctemp
 		end do
@@ -300,7 +301,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		t1 = OMP_get_wtime()	
 		write(*,*) "MVP-based HODLR construction......"		
 		rankmax = 300
-		call HODLR_randomized(ho_bf,HODLR_MVP_randomized_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker,ptree)
+		call HODLR_randomized(ho_bf,HODLR_MVP_randomized_Fullmat,msh%Nunk,rankmax,Memory,error,option,stats,ker,ptree,msh)
 		t2 = OMP_get_wtime()  
 		write(*,*) "MVP-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
 

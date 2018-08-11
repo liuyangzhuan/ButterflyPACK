@@ -1,11 +1,73 @@
+module APPLICATION_MODULE
+use MODULE_FILE
+implicit none
+
+	!**** define your application-related variables here   
+	type quant_app
+		real*8 sigma, lambda ! Kernel Regression: RBF parameters 		
+		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
+	end type quant_app
+
+contains
+
+
+	!**** cutoff distance for gaussian kernel 
+	real*8 function arg_thresh_Zmn(quant)
+		use MODULE_FILE
+		implicit none 
+		
+		type(quant_app)::quant
+		arg_thresh_Zmn=-log(SafeUnderflow)*2.0*quant%sigma**2 
+	end function arg_thresh_Zmn
+
+
+	
+	!**** user-defined subroutine to sample Z_mn
+	subroutine Z_elem_RBF(ker,m,n,value_e,msh,quant)
+		use MODULE_FILE
+		implicit none 
+		
+		class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		class(*),pointer :: quant
+		type(mesh)::msh
+		integer, INTENT(IN):: m,n
+		complex(kind=8)::value_e 
+
+		real(kind=8) r_mn
+		integer dimn
+		
+		select TYPE(quant)
+		type is (quant_app)
+			dimn = size(msh%xyz,1)
+			value_e=0
+			r_mn=sum((msh%xyz(1:dimn,m)-msh%xyz(1:dimn,n))**2)
+			if(r_mn<arg_thresh_Zmn(quant))then
+				value_e = exp(-r_mn/2.0/quant%sigma**2)
+			endif
+			if(r_mn==0)value_e = value_e + quant%lambda		
+		class default
+			write(*,*)"unexpected type"
+			stop
+		end select	
+	end subroutine Z_elem_RBF
+
+end module APPLICATION_MODULE	
+
+
+
+
+
 PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     use MODULE_FILE
+    use APPLICATION_MODULE
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
 	use matrices_fill
 	use omp_lib
 	use MISC
+	use matrices_fill
+	
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -29,6 +91,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
+	type(quant_app),target::quant
 	type(hobf)::ho_bf,ho_bf_copy
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
@@ -88,33 +151,36 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	msh%Origins=(/0d0,0d0,0d0/)
  
+     
+	! register the user-defined function and type in ker 
+	ker%FuncZmn=>Z_elem_RBF
+	ker%QuantZmn=>quant
+ 
 
      !*************************input******************************
 
     !tol=0.000001
 	!itmax=10000
 	
-	CALL getarg(1, DATA_DIR)
 	
-	ker%trainfile_p=trim(DATA_DIR)//'_train.csv'			
-	ker%trainfile_l=trim(DATA_DIR)//'_train_label.csv'		
-	ker%testfile_p=trim(DATA_DIR)//'_test.csv'			
-	ker%testfile_l=trim(DATA_DIR)//'_test_label.csv'		
+	
+	
+	CALL getarg(1, DATA_DIR)
+	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'			
+	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'		
+	quant%testfile_p=trim(DATA_DIR)//'_test.csv'			
+	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'		
 	
 	
 	para=0.001
-	
-	! ker%Kernel = RBF	
+		
 	! msh%Nunk=100000
 
 	msh%scaling=1d0
-	ker%sigma=0.1d0
-	ker%lambda=10.0d0
+	quant%sigma=0.1d0
+	quant%lambda=10.0d0
 
-	ker%rank_approximate_para1=6.0
-    ker%rank_approximate_para2=6.0
-    ker%rank_approximate_para3=6.0
-	
+
 	
 	option%Nmin_leaf=200
 	option%tol_SVD=1d-4
@@ -143,21 +209,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
     !*********************************************************
 
-    ! ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
-    ! ker%wavenum=2*pi/ker%wavelength
-
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'RBF computing'
-   ! write (*,*) 'wavelength:',ker%wavelength
    write (*,*) ''
    endif
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_RBF(msh,ker,ptree)
+    call geo_modeling_RBF(msh,quant,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -178,7 +240,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_RBF,ptree)
+    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
@@ -195,7 +257,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	end if
 
     if(ptree%MyID==Main_ID)write(*,*) "Solve and Prediction......"
-    call RBF_solve(ho_bf_copy,ho_bf,option,msh,ker,ptree,stats)
+    call RBF_solve(ho_bf_copy,ho_bf,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
@@ -208,12 +270,13 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 
 
-subroutine geo_modeling_RBF(msh,ker,ptree)
+subroutine geo_modeling_RBF(msh,quant,ptree)
 
     use MODULE_FILE
+	use APPLICATION_MODULE
     implicit none
     type(mesh)::msh
-	type(kernelquant)::ker
+	type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
     integer node, patch, edge, flag
@@ -230,7 +293,7 @@ subroutine geo_modeling_RBF(msh,ker,ptree)
 	! Maxedge	= msh%Nunk
 	msh%Ncorner = 0
 	
-	open (90,file=ker%trainfile_p)
+	open (90,file=quant%trainfile_p)
 	read (90,*) Maxedge, Dimn
 	
 	msh%Nunk = Maxedge
@@ -247,9 +310,10 @@ subroutine geo_modeling_RBF(msh,ker,ptree)
 end subroutine geo_modeling_RBF
 
 
-subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
+subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     
     use MODULE_FILE
+	use APPLICATION_MODULE
 	use omp_lib
 	use HODLR_Solve
     ! use blas95
@@ -266,7 +330,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	real*8:: rel_error
 	type(Hoption)::option
 	type(mesh)::msh
-	type(kernelquant)::ker
+	type(quant_app)::quant
 	type(proctree)::ptree
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(Hstat)::stats	
@@ -297,7 +361,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	allocate (x(N_unk_loc,1))
 	x=0	
 	allocate (b(N_unk_loc,1))
-	open (91,file=ker%trainfile_l)
+	open (91,file=quant%trainfile_l)
 	read(91,*)N_unk,Dimn
 	do ii=1,N_unk
 		read(91,*)label
@@ -323,7 +387,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	
 	! prediction on the test sets
 	T1=secnds(0.0)
-	open (92,file=ker%testfile_p)
+	open (92,file=quant%testfile_p)
 	read (92,*) ntest, Dimn
 	allocate (xyz_test(Dimn,ntest))
 	do edge=1,ntest
@@ -337,7 +401,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 	do edge=1, N_unk_loc 
 		do edge_m=1,ntest
 			r_mn=sum((xyz_test(1:dimn,edge_m)-msh%xyz(1:dimn,msh%info_unk(0,edge+msh%idxs-1)))**2)
-			value_Z = exp(-r_mn/2.0/ker%sigma**2)
+			value_Z = exp(-r_mn/2.0/quant%sigma**2)
 			vout_tmp(edge_m,1) = vout_tmp(edge_m,1) + value_Z*x(edge,1)
 		enddo
 	enddo	
@@ -354,7 +418,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,ker,ptree,stats)
 		enddo
 
 		
-		open (93,file=ker%testfile_l)
+		open (93,file=quant%testfile_l)
 		read (93,*) ntest, Dimn
 		do edge=1,ntest
 			read (93,*) label
