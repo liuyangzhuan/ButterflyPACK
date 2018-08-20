@@ -94,7 +94,7 @@ real*8 function func_distance(node1,node2,msh)
     
     return
     
-end function
+end function func_distance
 
 
 subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
@@ -477,7 +477,6 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 	real*8:: tolerance, rtemp,rel_error,seperator,dist
     real*8 Memory_direct_forward,Memory_butterfly_forward
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2,levelm,groupm_start,index_i_m,index_j_m
-	complex(kind=8)::ctemp,ctemp1,ctemp2
 	integer level_c,iter,level_cc,level_BP,Nboundall,level_butterfly	
 	type(matrixblock),pointer::blocks,block_f,block_sch,block_inv
 	real*8::minbound,theta,phi,r,rmax,phi_tmp,measure

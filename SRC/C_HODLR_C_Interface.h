@@ -1,26 +1,13 @@
-#ifndef __COMPLX /* allow multiple inclusions */
-#define __COMPLX
+#ifndef HODLR_WRAP /* allow multiple inclusions */
+#define HODLR_WRAP
+
+#include "hodlrbf_config.h"
+
 typedef struct { double r, i; } doublecomplex;
-#endif
 
-#ifndef FC_HEADER_INCLUDED
-#define FC_HEADER_INCLUDED
-
-/* Mangling for Fortran global symbols without underscores. */
-#define FC_GLOBAL(name,NAME) name##_
-
-/* Mangling for Fortran global symbols with underscores. */
-#define FC_GLOBAL_(name,NAME) name##_
-
-/* Mangling for Fortran module symbols without underscores. */
-#define FC_MODULE(mod_name,name, mod_NAME,NAME) mod_name##_mp_##name##_
-
-/* Mangling for Fortran module symbols with underscores. */
-#define FC_MODULE_(mod_name,name, mod_NAME,NAME) mod_name##_mp_##name##_
 
 typedef void* F2Cptr;  // pointer passing fortran derived types to c
 typedef void* C2Fptr;  // pointer passing c objects to fortran
-
 
 
 //------------------------------------------------------------------------------

@@ -81,7 +81,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	integer seed_myid(12)
 	integer times(8)	
 	real*8 t1,t2,x,y,z,r,theta,phi
-	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings	

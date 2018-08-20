@@ -22,13 +22,11 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
     real*8 Memory, Memory_near
 	integer,allocatable:: index_old(:),index_new(:) 
 	integer::block_num,block_num_new,num_blocks,level_butterfly	
-	complex(kind=8), allocatable :: matrixtemp1(:,:)
 	integer, allocatable :: ipiv(:)
 	integer rowblock,pgno1,pgno2,pgno,ierr,rowblock_inv
 	type(matrixblock),pointer::block_o,block_off,block_off1,block_off2
 	type(matrixblock)::block_tmp
 	real*8 n1,n2
-	complex(kind=8),allocatable::Vin(:,:),Vout(:,:)
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1

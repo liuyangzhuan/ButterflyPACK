@@ -19,7 +19,7 @@
 #include <atomic>
 #include <mpi.h>
 
-#include "../SRC/CInterface_config.h"
+#include "C_HODLR_C_Interface.h"
 
 
 

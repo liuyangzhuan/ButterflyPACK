@@ -1243,7 +1243,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_SURF(msh,quant,ptree)
+    call geo_modeling_SURF(msh,quant,ptree,DATA_DIR)
     if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -1296,7 +1296,7 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 
 
-subroutine geo_modeling_SURF(msh,quant,ptree)
+subroutine geo_modeling_SURF(msh,quant,ptree,DATA_DIR)
 	use APPLICATION_MODULE
     use MODULE_FILE
 	use misc
@@ -1312,7 +1312,7 @@ subroutine geo_modeling_SURF(msh,quant,ptree)
 	type(mesh)::msh
 	type(quant_app)::quant
 	type(proctree)::ptree
-	
+	CHARACTER (*) DATA_DIR
 	integer Maxedge
 	
     Dimn=3
