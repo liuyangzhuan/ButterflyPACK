@@ -415,7 +415,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 
 	
 	! computation of range Q of AR
-	call ComputeRange(mm,num_vect,RandVectOut,ranktmp,0,option%tol_SVD)	
+	call ComputeRange(mm,num_vect,RandVectOut,ranktmp,0,option%tol_comp)	
 	
 	
 	! computation of B = Q^c*A
@@ -427,7 +427,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	! computation of SVD of B and LR of A
 	mn=min(nn,ranktmp)
 	allocate (UU(nn,mn),VV(mn,ranktmp),Singular(mn))
-	call SVD_Truncate(RandVectIn(1:nn,1:ranktmp),nn,ranktmp,mn,UU,VV,Singular,option%tol_SVD,rank)	
+	call SVD_Truncate(RandVectIn(1:nn,1:ranktmp),nn,ranktmp,mn,UU,VV,Singular,option%tol_comp,rank)	
 	schulz_op%A2norm=Singular(1)
 	
 	deallocate(UU,VV,Singular)
@@ -449,7 +449,7 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	! call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,cone,czero)
 	! matrixtmp = matrixtmp+matrixtmp1
 	! allocate (UU(nn,nn),VV(nn,nn),Singular(nn))
-	! call SVD_Truncate(matrixtmp,nn,nn,nn,UU,VV,Singular,option%tol_SVD,rank)	
+	! call SVD_Truncate(matrixtmp,nn,nn,nn,UU,VV,Singular,option%tol_comp,rank)	
 	! write(*,*)Singular(1),schulz_op%A2norm,'nimade'
 	! schulz_op%A2norm=Singular(1)
 	! deallocate(UU,VV,Singular)	

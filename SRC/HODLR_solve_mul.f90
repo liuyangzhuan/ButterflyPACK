@@ -11,7 +11,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
     
     integer i, j, ii, jj, iii, jjj
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter, Ns_loc, num_vectors 
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, Ns_loc, num_vectors 
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     complex(kind=8) value_Z
@@ -34,7 +34,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
 		do ii=1,num_vectors
 			iter = 0
 			rel_error = option%tol_itersol
-			call HODLR_Ztfqmr(option%precon,option%N_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse,ptree,stats)
+			call HODLR_Ztfqmr(option%precon,option%n_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse,ptree,stats)
 		end do
 		
 		deallocate(r0_initial)
@@ -256,7 +256,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
     
     integer i, j, ii, jj, iii, jjj, ierr
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter, N_unk, N_unk_loc
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     real*8 n1,n2,rtemp	

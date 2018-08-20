@@ -97,7 +97,7 @@ real*8 function func_distance(node1,node2,msh)
 end function
 
 
-subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
+subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
     
     use MODULE_FILE
 	use misc
@@ -120,287 +120,346 @@ subroutine H_matrix_structuring(ho_bf1,para,option,msh,ptree)
 	integer Maxgroup
 	character(len=1024)  :: strings	
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
-	integer dimn
+	integer dimn,groupsize,idxstart
 	type(Hoption)::option
 	type(hobf)::ho_bf1
 	integer Maxlevel,Maxgrp
 	type(mesh)::msh
 	type(proctree)::ptree
-    !**********************Maxlevel*******************
-    level=0; i=1
-    do while (int(msh%Nunk/i)>option%Nmin_leaf)
-        level=level+1
-        i=2**level
-    enddo
     
-    Maxlevel=level
-    ho_bf1%Maxlevel=Maxlevel
-    !***************************************************
-    
-    Maxgroup=2**(Maxlevel+1)-1
-    allocate (basis_group(Maxgroup))
-    
-	dimn=size(msh%xyz,1) 
+	! Reorder is needed
+	if(option%preorder==0)then
 	
-	allocate(xyzrange(dimn))
-	allocate(xyzmin(dimn))
-	allocate(xyzmax(dimn))
-	allocate(auxpoint(dimn))
-	allocate(groupcenter(dimn))
+	
+		!**********************Maxlevel*******************
+		level=0; i=1
+		do while (int(msh%Nunk/i)>option%Nmin_leaf)
+			level=level+1
+			i=2**level
+		enddo
+		Maxlevel=level
+		ho_bf1%Maxlevel=Maxlevel
+		!***************************************************
 		
-    if(ptree%MyID==Main_ID)write (*,*) ''
-    if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
-    if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/i)
- 	if(ptree%MyID==Main_ID)write (*,*) ''
-    if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
+		Maxgroup=2**(Maxlevel+1)-1
+		allocate (basis_group(Maxgroup))
+		! write(*,*)Maxlevel,Maxgroup,'dfd'
+		
+		dimn=size(msh%xyz,1) 
+		
+		allocate(xyzrange(dimn))
+		allocate(xyzmin(dimn))
+		allocate(xyzmax(dimn))
+		allocate(auxpoint(dimn))
+		allocate(groupcenter(dimn))
+			
+		if(ptree%MyID==Main_ID)write (*,*) ''
+		if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+		if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/i)
+		if(ptree%MyID==Main_ID)write (*,*) ''
+		if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
 
-       
- 
-    !***************************************************************************************	   
-	allocate(msh%new2old(msh%Nunk))    
+		   
+	 
+		!***************************************************************************************	   
+		allocate(msh%new2old(msh%Nunk))    
 
-	do ii=1,msh%Nunk
-		msh%new2old(ii) = ii
-	end do
-	
-	! write(*,*)'gan', msh%info_unk(0,100)   
-	
-	   
-    ! allocate (distance(msh%Nunk))     
-    
-    !********************************index_of_group**************************************
-    
-	Maxgrp=2**(ptree%nlevel)-1
-    basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
-    do level=0, Maxlevel
-        do group=2**level, 2**(level+1)-1
-            basis_group(group)%level=level
+		do ii=1,msh%Nunk
+			msh%new2old(ii) = ii
+		end do
+		
+		! write(*,*)'gan', msh%info_unk(0,100)   
+		
+		   
+		! allocate (distance(msh%Nunk))     
+		
+		!********************************index_of_group**************************************
+		
+		Maxgrp=2**(ptree%nlevel)-1
+		basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
+		do level=0, Maxlevel
+			do group=2**level, 2**(level+1)-1
+				basis_group(group)%level=level
 
-            groupcenter(1:dimn)=0.0d0
-            ! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
-            do edge=basis_group(group)%head, basis_group(group)%tail
-                do ii=1,dimn
-					! write(*,*)edge,msh%info_unk(0,edge)
-                    groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%info_unk(0,edge))
-                enddo
-				! if(group==24)write(*,*)edge,groupcenter(:),msh%xyz(1,msh%info_unk(0,edge))
-			enddo
-            ! !$omp end parallel do
-            do ii=1,dimn
-                groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
-            enddo
-            allocate(basis_group(group)%center(dimn))
-			basis_group(group)%center(1:dimn)=groupcenter(1:dimn)
-
-			radiusmax=0.
-			do edge=basis_group(group)%head, basis_group(group)%tail
-				radius=0
-				do ii=1,dimn
-					radius=radius+(msh%xyz(ii,msh%info_unk(0,edge))-groupcenter(ii))**2
-				enddo
-				! write(*,*)'really',edge, msh%info_unk(0,edge)
-				radius=sqrt(radius)
-				if (radius>radiusmax) then
-					radiusmax=radius
-					center_edge=edge
-				endif			
-			enddo
-			basis_group(group)%radius=radiusmax		
-				
-			if(size(basis_group_pre,1)<2*group+1)then ! if groups not predefined, need to order the points
-				if(option%xyzsort==1)then !msh%xyz sort		 
-					xyzmin= 1d300
-					xyzmax= -1d300
-					do edge=basis_group(group)%head, basis_group(group)%tail
-						do ii=1,Dimn
-							xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%info_unk(0,edge)))
-							xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%info_unk(0,edge)))
-						enddo
+				groupcenter(1:dimn)=0.0d0
+				! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
+				do edge=basis_group(group)%head, basis_group(group)%tail
+					do ii=1,dimn
+						! write(*,*)edge,msh%info_unk(0,edge)
+						groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%info_unk(0,edge))
 					enddo
-					xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
+					! if(group==24)write(*,*)edge,groupcenter(:),msh%xyz(1,msh%info_unk(0,edge))
+				enddo
+				! !$omp end parallel do
+				do ii=1,dimn
+					groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
+				enddo
+				allocate(basis_group(group)%center(dimn))
+				basis_group(group)%center(1:dimn)=groupcenter(1:dimn)
+
+				radiusmax=0.
+				do edge=basis_group(group)%head, basis_group(group)%tail
+					radius=0
+					do ii=1,dimn
+						radius=radius+(msh%xyz(ii,msh%info_unk(0,edge))-groupcenter(ii))**2
+					enddo
+					! write(*,*)'really',edge, msh%info_unk(0,edge)
+					radius=sqrt(radius)
+					if (radius>radiusmax) then
+						radiusmax=radius
+						center_edge=edge
+					endif			
+				enddo
+				basis_group(group)%radius=radiusmax		
 					
-					mm = basis_group(group)%tail - basis_group(group)%head + 1
-					allocate (distance(mm))	
-					sortdirec = maxloc(xyzrange(1:Dimn),1)
-					! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
+				if(size(basis_group_pre,1)<2*group+1)then ! if groups not predefined, need to order the points
+					if(option%xyzsort==CKD)then !msh%xyz sort		 
+						xyzmin= 1d300
+						xyzmax= -1d300
+						do edge=basis_group(group)%head, basis_group(group)%tail
+							do ii=1,Dimn
+								xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%info_unk(0,edge)))
+								xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%info_unk(0,edge)))
+							enddo
+						enddo
+						xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
+						
+						mm = basis_group(group)%tail - basis_group(group)%head + 1
+						allocate (distance(mm))	
+						sortdirec = maxloc(xyzrange(1:Dimn),1)
+						! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
+						
+						! if(ker%Kernel==EMSURF)then
+						! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
+							! sortdirec=2
+						! else 
+							! sortdirec=3
+						! end if
+						! endif
+						
+						
+						!$omp parallel do default(shared) private(i)
+						do i=basis_group(group)%head, basis_group(group)%tail
+							distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%info_unk(0,i))
+						enddo
+						!$omp end parallel do
+
+					else if(option%xyzsort==SKD)then ! spherical sort
+						phi_end = 0
+						do edge=basis_group(group)%head, basis_group(group)%tail
+							call Cart2Sph(msh%xyz(1,msh%info_unk(0,edge)),msh%xyz(2,msh%info_unk(0,edge)),msh%xyz(3,msh%info_unk(0,edge)),msh%Origins,r,theta,phi)					
+							if(abs(phi-2*pi)< option%touch_para*msh%minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
+						enddo
+						mm = basis_group(group)%tail - basis_group(group)%head + 1
+						allocate (distance(mm))	
 					
-					! if(ker%Kernel==EMSURF)then
-					! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
-						! sortdirec=2
-					! else 
-						! sortdirec=3
-					! end if
-					! endif
+						if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to spheres sort Phi first
+							sortdirec=1
+						else 
+							sortdirec=2
+						end if
+						
+						!$omp parallel do default(shared) private(i,theta,phi,r,phi_tmp)
+						do i=basis_group(group)%head, basis_group(group)%tail
+							call Cart2Sph(msh%xyz(1,msh%info_unk(0,i)),msh%xyz(2,msh%info_unk(0,i)),msh%xyz(3,msh%info_unk(0,i)),msh%Origins,r,theta,phi)
+							if(sortdirec==1)distance(i-basis_group(group)%head+1)=theta
+							if(sortdirec==2)then
+								distance(i-basis_group(group)%head+1)=phi
+								if(phi_end==1)then   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! if the group contains points near phi=2pi, substract phi by pi
+									phi_tmp = phi-pi
+									if(phi_tmp<=0) phi_tmp = phi_tmp + 2*pi
+									distance(i-basis_group(group)%head+1)=phi_tmp
+								end if
+							end if
+						enddo
+						!$omp end parallel do
+						
+					else if(option%xyzsort==TM)then !cobblestone sort
+						
+						mm = basis_group(group)%tail - basis_group(group)%head + 1
+						allocate (distance(mm))	
+						
+						distance(1:mm)=Bigvalue
+						!$omp parallel do default(shared) private(i)
+						do i=basis_group(group)%head, basis_group(group)%tail
+							distance(i-basis_group(group)%head+1)=func_distance(msh%info_unk(0,i),msh%info_unk(0,center_edge),msh)
+						enddo
+						!$omp end parallel do					
+
+					end if
 					
-					
-					!$omp parallel do default(shared) private(i)
-					do i=basis_group(group)%head, basis_group(group)%tail
-						distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%info_unk(0,i))
+					Ninfo_edge=size(msh%info_unk,1)-1
+					allocate (order(mm),edge_temp(0:Ninfo_edge,mm)) 
+					allocate(map_temp(mm))
+
+					call quick_sort(distance,order,mm)       
+					!$omp parallel do default(shared) private(ii)     
+					do ii=1, mm
+						edge_temp(:,ii)=msh%info_unk(:,order(ii)+basis_group(group)%head-1)
+						map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
 					enddo
 					!$omp end parallel do
 
-				else if(option%xyzsort==2)then ! spherical sort
-					phi_end = 0
-					do edge=basis_group(group)%head, basis_group(group)%tail
-						call Cart2Sph(msh%xyz(1,msh%info_unk(0,edge)),msh%xyz(2,msh%info_unk(0,edge)),msh%xyz(3,msh%info_unk(0,edge)),msh%Origins,r,theta,phi)					
-						if(abs(phi-2*pi)< option%touch_para*msh%minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
+					!$omp parallel do default(shared) private(ii)     
+					do ii=1, mm
+						msh%info_unk(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
+						msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
 					enddo
-					mm = basis_group(group)%tail - basis_group(group)%head + 1
-					allocate (distance(mm))	
-				
-					if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to spheres sort Phi first
-						sortdirec=1
-					else 
-						sortdirec=2
-					end if
+					!$omp end parallel do			
 					
-					!$omp parallel do default(shared) private(i,theta,phi,r,phi_tmp)
-					do i=basis_group(group)%head, basis_group(group)%tail
-						call Cart2Sph(msh%xyz(1,msh%info_unk(0,i)),msh%xyz(2,msh%info_unk(0,i)),msh%xyz(3,msh%info_unk(0,i)),msh%Origins,r,theta,phi)
-						if(sortdirec==1)distance(i-basis_group(group)%head+1)=theta
-						if(sortdirec==2)then
-							distance(i-basis_group(group)%head+1)=phi
-							if(phi_end==1)then   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! if the group contains points near phi=2pi, substract phi by pi
-								phi_tmp = phi-pi
-								if(phi_tmp<=0) phi_tmp = phi_tmp + 2*pi
-								distance(i-basis_group(group)%head+1)=phi_tmp
+
+					deallocate(edge_temp)
+					deallocate(map_temp)
+					deallocate(order)
+
+					deallocate(distance)
+					
+					
+					if (level<Maxlevel) then
+						basis_group(2*group)%head=basis_group(group)%head
+						basis_group(2*group)%tail=int((basis_group(group)%head+basis_group(group)%tail)/2)
+						basis_group(2*group+1)%head=basis_group(2*group)%tail+1
+						basis_group(2*group+1)%tail=basis_group(group)%tail
+						
+						! if(basis_group(group)%pgno*2<=Maxgrp)then
+							! basis_group(2*group)%pgno=basis_group(group)%pgno*2
+						! else
+							! basis_group(2*group)%pgno=basis_group(group)%pgno
+						! endif
+						! if(basis_group(group)%pgno*2+1<=Maxgrp)then
+							! basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
+						! else
+							! basis_group(2*group+1)%pgno=basis_group(group)%pgno
+						! endif					
+						
+						if(option%xyzsort==CKD)then 
+							seperator = msh%xyz(sortdirec,msh%info_unk(0,basis_group(2*group)%tail))
+							
+						else if(option%xyzsort==SKD)then  
+							call Cart2Sph(msh%xyz(1,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(2,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(3,msh%info_unk(0,basis_group(2*group)%tail)),msh%Origins,r,theta,phi)
+							if(sortdirec==1)seperator = theta
+							if(sortdirec==2)then
+								seperator = phi
+								! write(*,*)level,phi*180/pi,basis_group(2*group)%tail,'ganni',phi_end
 							end if
 						end if
-					enddo
-					!$omp end parallel do
-					
-				else if(option%xyzsort==3)then !cobblestone sort
-					
-					mm = basis_group(group)%tail - basis_group(group)%head + 1
-					allocate (distance(mm))	
-					
-					distance(1:mm)=Bigvalue
-					!$omp parallel do default(shared) private(i)
-					do i=basis_group(group)%head, basis_group(group)%tail
-						distance(i-basis_group(group)%head+1)=func_distance(msh%info_unk(0,i),msh%info_unk(0,center_edge),msh)
-					enddo
-					!$omp end parallel do					
-
-				end if
-				
-				Ninfo_edge=size(msh%info_unk,1)-1
-				allocate (order(mm),edge_temp(0:Ninfo_edge,mm)) 
-				allocate(map_temp(mm))
-
-				call quick_sort(distance,order,mm)       
-				!$omp parallel do default(shared) private(ii)     
-				do ii=1, mm
-					edge_temp(:,ii)=msh%info_unk(:,order(ii)+basis_group(group)%head-1)
-					map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
-				enddo
-				!$omp end parallel do
-
-				!$omp parallel do default(shared) private(ii)     
-				do ii=1, mm
-					msh%info_unk(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
-					msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
-				enddo
-				!$omp end parallel do			
-				
-
-				deallocate(edge_temp)
-				deallocate(map_temp)
-				deallocate(order)
-
-				deallocate(distance)
-				
-				
-				if (level<Maxlevel) then
-					basis_group(2*group)%head=basis_group(group)%head
-					basis_group(2*group)%tail=int((basis_group(group)%head+basis_group(group)%tail)/2)
-					basis_group(2*group+1)%head=basis_group(2*group)%tail+1
-					basis_group(2*group+1)%tail=basis_group(group)%tail
-					
-					if(basis_group(group)%pgno*2<=Maxgrp)then
-						basis_group(2*group)%pgno=basis_group(group)%pgno*2
-					else
-						basis_group(2*group)%pgno=basis_group(group)%pgno
-					endif
-					if(basis_group(group)%pgno*2+1<=Maxgrp)then
-						basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
-					else
-						basis_group(2*group+1)%pgno=basis_group(group)%pgno
-					endif					
-					
-					if(option%xyzsort==1)then 
-						seperator = msh%xyz(sortdirec,msh%info_unk(0,basis_group(2*group)%tail))
 						
-					else if(option%xyzsort==2)then  
-						call Cart2Sph(msh%xyz(1,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(2,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(3,msh%info_unk(0,basis_group(2*group)%tail)),msh%Origins,r,theta,phi)
-						if(sortdirec==1)seperator = theta
-						if(sortdirec==2)then
-							seperator = phi
-							! write(*,*)level,phi*180/pi,basis_group(2*group)%tail,'ganni',phi_end
-						end if
-					end if
-					
-					
-					basis_group(group)%boundary(1) = sortdirec
-					basis_group(group)%boundary(2) = seperator
-					
-					! fidx = (2*group)- 2**(level+1)+1
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
-					
-					! fidx = (2*group+1)- 2**(level+1)+1
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
-				endif	
+						
+						basis_group(group)%boundary(1) = sortdirec
+						basis_group(group)%boundary(2) = seperator
+						
+						! fidx = (2*group)- 2**(level+1)+1
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
+						
+						! fidx = (2*group+1)- 2**(level+1)+1
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
+					endif	
 
-			else 
-				if (level<Maxlevel) then
-					basis_group(2*group)%head=basis_group_pre(2*group,1)
-					basis_group(2*group)%tail=basis_group_pre(2*group,2)
-					basis_group(2*group+1)%head=basis_group_pre(2*group+1,1)
-					basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
-					
-					basis_group(group)%boundary(1) = 0
-					basis_group(group)%boundary(2) = 0
-					
-					! fidx = (2*group)- 2**(level+1)+1
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
-					
-					! fidx = (2*group+1)- 2**(level+1)+1
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
-					! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
-				endif					
-			end if
-        enddo
-    enddo
-	
-	
-	
-	! write(strings , *) Dimn
-	! do level=0, Maxlevel
-        ! do group=2**level, 2**(level+1)-1
-            ! do edge=basis_group(group)%head, basis_group(group)%tail
-				! ! write(*,*)edge,msh%info_unk(0,edge)
-				! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
-				! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+				else 
+					if (level<Maxlevel) then
+						basis_group(2*group)%head=basis_group_pre(2*group,1)
+						basis_group(2*group)%tail=basis_group_pre(2*group,2)
+						basis_group(2*group+1)%head=basis_group_pre(2*group+1,1)
+						basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
+						
+						basis_group(group)%boundary(1) = 0
+						basis_group(group)%boundary(2) = 0
+						
+						! fidx = (2*group)- 2**(level+1)+1
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
+						
+						! fidx = (2*group+1)- 2**(level+1)+1
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
+						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
+					endif					
+				end if
+			enddo
+		enddo
+		
+		
+		
+		! write(strings , *) Dimn
+		! do level=0, Maxlevel
+			! do group=2**level, 2**(level+1)-1
+				! do edge=basis_group(group)%head, basis_group(group)%tail
+					! ! write(*,*)edge,msh%info_unk(0,edge)
+					! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+					! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+				! enddo
 			! enddo
-        ! enddo
-    ! enddo	   
-    !*************************************************************************************
-   
-	
-	deallocate(xyzrange)
-	deallocate(xyzmin)
-	deallocate(xyzmax)
-	deallocate(auxpoint)
-	deallocate(groupcenter)	
-    
-	
-	allocate(msh%old2new(msh%Nunk))
-	do ii=1,msh%Nunk
-		msh%old2new(msh%new2old(ii)) = ii
-	end do	
-	
+		! enddo	   
+		!*************************************************************************************
+	   
+		
+		deallocate(xyzrange)
+		deallocate(xyzmin)
+		deallocate(xyzmax)
+		deallocate(auxpoint)
+		deallocate(groupcenter)	
+		
+		
+		allocate(msh%old2new(msh%Nunk))
+		do ii=1,msh%Nunk
+			msh%old2new(msh%new2old(ii)) = ii
+		end do	
+	else ! the matrix is preordered with msh%pretree
+	!**********************Maxlevel*******************
+		Maxlevel = ceiling_safe(log(dble(size(msh%pretree,1))) / log(2d0))
+		ho_bf1%Maxlevel=Maxlevel
+		!***************************************************
+		
+		Maxgroup=2**(Maxlevel+1)-1
+		allocate (basis_group(Maxgroup))
+		
+		dimn=1
+
+			
+		if(ptree%MyID==Main_ID)write (*,*) ''
+		if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+		if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
+		if(ptree%MyID==Main_ID)write (*,*) ''
+		if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
+
+		!***************************************************************************************	   
+		allocate(msh%new2old(msh%Nunk))    
+		do ii=1,msh%Nunk
+			msh%new2old(ii) = ii
+		end do
+		
+		allocate(msh%old2new(msh%Nunk))
+		do ii=1,msh%Nunk
+			msh%old2new(msh%new2old(ii)) = ii
+		end do	
+		!********************************index_of_group**************************************
+		
+		basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
+		do level=Maxlevel,0,-1
+			idxstart=1
+			do group=2**level, 2**(level+1)-1
+				basis_group(group)%level=level
+
+				if(level==Maxlevel)then
+					groupsize = msh%pretree(group-2**Maxlevel+1)
+					call assert(groupsize>0,'zero leafsize may not be handled')
+					basis_group(group)%head = idxstart
+					basis_group(group)%tail = idxstart + groupsize -1
+					idxstart = idxstart + groupsize
+				else
+					basis_group(group)%head = basis_group(2*group)%head
+					basis_group(group)%tail = basis_group(2*group+1)%tail
+				endif					
+				
+				allocate(basis_group(group)%center(dimn))
+				basis_group(group)%center(1:dimn)=0
+				basis_group(group)%radius=0
+			enddo
+		enddo
+	!*************************************************************************************
+
+	endif
     return
     
 end subroutine H_matrix_structuring
@@ -432,6 +491,25 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 	type(proctree)::ptree
 
 	Maxgrp=2**(ptree%nlevel)-1
+	
+	basis_group(1)%pgno=1
+	do level=0, ho_bf1%Maxlevel
+		do group=2**level, 2**(level+1)-1
+			if(level<ho_bf1%Maxlevel)then
+			if(basis_group(group)%pgno*2<=Maxgrp)then
+				basis_group(2*group)%pgno=basis_group(group)%pgno*2
+			else
+				basis_group(2*group)%pgno=basis_group(group)%pgno
+			endif
+			if(basis_group(group)%pgno*2+1<=Maxgrp)then
+				basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
+			else
+				basis_group(2*group+1)%pgno=basis_group(group)%pgno
+			endif
+			endif
+		enddo
+	enddo
+
 	
 	ho_bf1%N=msh%Nunk
 	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
@@ -625,7 +703,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				if(level_c>option%LRlevel)then
 					block_f%level_butterfly = 0 ! low rank below LRlevel
 				else 
-					if(ho_bf1%Maxlevel - block_f%level<option%LnoBP)then				
+					if(ho_bf1%Maxlevel - block_f%level<option%lnoBP)then				
 						block_f%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly 
 					else
 						block_f%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels				
@@ -669,11 +747,11 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 					if(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
 						ho_bf1%levels(level_c)%BP(ii)%Lplus = ho_bf1%levels(level_c)%BP(ii)%Lplus + 1
 						call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus<=LplusMax,'increase LplusMax')
-						! write(*,*)'nini',level_c,ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,option%LnoBP,ll
+						! write(*,*)'nini',level_c,ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)%level,option%lnoBP,ll
 
 						block_f => ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(1)
 						
-						if(ho_bf1%Maxlevel - block_f%level<option%LnoBP .or. ll==LplusMax-1 .or. block_f%level_butterfly==0)then
+						if(ho_bf1%Maxlevel - block_f%level<option%lnoBP .or. ll==LplusMax-1 .or. block_f%level_butterfly==0)then
 							ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%Nbound=0
 						else
 							! write(*,*)'gggggg'
@@ -700,7 +778,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									group_m=group_m*2**levelm-1+index_i_m  										
 
 									CNT = 0
-									if(option%xyzsort==1)then	
+									if(option%xyzsort==CKD)then	
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
 											if(measure<option%touch_para*msh%minedgelength)then
@@ -716,7 +794,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 										! endif
 										
 										
-									else if(option%xyzsort==2)then
+									else if(option%xyzsort==SKD)then
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
 											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
 											if(sortdirec==1)then
@@ -769,7 +847,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 								
 									CNT = 0
-									if(option%xyzsort==1)then	
+									if(option%xyzsort==CKD)then	
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
 											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
 											if(measure<option%touch_para*msh%minedgelength)then
@@ -782,7 +860,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
 										
-									else if(option%xyzsort==2)then
+									else if(option%xyzsort==SKD)then
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
 											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
 											if(sortdirec==1)then

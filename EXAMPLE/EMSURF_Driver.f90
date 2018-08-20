@@ -1084,7 +1084,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
-	use matrices_fill
+	use HODLR_construction
 	use omp_lib
 	use MISC
     implicit none
@@ -1115,7 +1115,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	type(proctree)::ptree
 	integer,allocatable:: groupmembers(:)	
 	integer nmpi
-	
+	CHARACTER (LEN=1000) DATA_DIR	
 	
 	! nmpi and groupmembers should be provided by the user 
 	call MPI_Init(ierr)
@@ -1153,7 +1153,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     write(*,*) "   "
 	endif
 	call InitStat(stats)
-
+	call SetDefaultOptions(option)
+	
 	time_tmp = 0
 	
  	! register the user-defined function and type in ker 
@@ -1176,13 +1177,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	option%Nmin_leaf=40
 	msh%mesh_normal=1
 	! Refined_level=0
-	para=0.001
+	
 	! levelpara_control=0
 	! ACA_tolerance_forward=1d-4
-	option%tol_SVD=1d-4
+	option%tol_comp=1d-4
 	! SVD_tolerance_factor=1d-4
 	option%tol_Rdetect=3d-5
     ! Preset_level_butterfly=0
+	option%preorder=0
 	msh%scaling=1d0
 	quant%wavelength=1.0
 	! Discret=0.05
@@ -1197,7 +1199,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	option%tol_LS=1d-12
 	! tfqmr_tolerance=1d-6
 	option%tol_itersol=3d-3
-	option%N_iter=1000
+	option%n_iter=1000
 	option%tol_rand=5d-3
 	! up_tolerance=1d-4
 	! relax_lamda=1d0
@@ -1209,8 +1211,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! directschur=1
 	option%precon=DIRECT
 	! verboselevel=2
-	option%xyzsort=3
-	option%LnoBP=4000
+	option%xyzsort=TM
+	option%lnoBP=4000
 	option%TwoLayerOnly=0
 	quant%CFIE_alpha=1
 	option%touch_para=3
@@ -1218,7 +1220,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     option%schulzlevel=3000
 	option%LRlevel=100
 	option%ErrFillFull=0
-	option%RecLR_leaf='A'	
+	option%RecLR_leaf=ACA
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
@@ -1249,7 +1251,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+    call H_matrix_structuring(ho_bf,option,msh,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -1262,7 +1264,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if    
@@ -1474,7 +1476,7 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     
     integer i, j, ii, jj, iii, jjj,ierr
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter ,N_unk, N_unk_loc
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     real*8 n1,n2,rtemp

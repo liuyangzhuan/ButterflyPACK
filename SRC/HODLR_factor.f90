@@ -125,7 +125,7 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 			
 			
 			! if(level_c==6)then			
-				! call print_butterfly_size_rank(ho_bf1%levels(level_c)%matrices_block(rowblock),option%tol_SVD)
+				! call print_butterfly_size_rank(ho_bf1%levels(level_c)%matrices_block(rowblock),option%tol_comp)
 				! stop
 			! end if	
 				

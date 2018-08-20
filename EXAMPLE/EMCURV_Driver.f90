@@ -204,7 +204,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
-	use matrices_fill
+	use HODLR_construction
 	use omp_lib
 	use MISC
     implicit none
@@ -235,7 +235,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer nmpi
 	type(proctree)::ptree
 	type(quant_app),target::quant
-	
+	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
 	! nmpi and groupmembers should be provided by the user 
@@ -276,7 +276,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	endif
 	
 	call InitStat(stats)
-	
+	call SetDefaultOptions(option)
 	
 	time_tmp = 0
 	
@@ -292,8 +292,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	!itmax=10000
 	
 	CALL getarg(1, DATA_DIR)
-	
-	para=0.001
 	
 	
 	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
@@ -316,7 +314,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	
-	 
+	option%preorder=0 
 	msh%scaling=1d0
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
@@ -335,23 +333,23 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	option%Nmin_leaf=50
-	option%tol_SVD=1d-4
+	option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
-	option%N_iter=1000
+	option%n_iter=1000
 	option%tol_rand=1d-3
 	option%level_check=100
 	option%precon=DIRECT
-	option%xyzsort=3
-	option%LnoBP=40000
+	option%xyzsort=TM
+	option%lnoBP=40000
 	option%TwoLayerOnly=1
 	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=0
-	option%RecLR_leaf='A'
+	option%ErrFillFull=1
+	option%RecLR_leaf=BACA
 	option%ErrSol=1
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
@@ -384,7 +382,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+    call H_matrix_structuring(ho_bf,option,msh,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -397,8 +395,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    ! call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    ! call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
+    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
@@ -948,7 +946,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     
     integer i, j, ii, jj, iii, jjj, ierr
     integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, N_iter_max, iter, N_unk, N_unk_loc
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
     real*8 theta, phi, dphi, rcs_V, rcs_H
     real T0
     real*8 n1,n2,rtemp	

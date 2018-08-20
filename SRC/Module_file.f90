@@ -30,7 +30,15 @@ module MODULE_FILE
 	integer,parameter:: HODLRPRECON=3	! use factored HODLR as preconditioner 
 	integer,parameter:: LplusMax=3
 
-
+	!**** construction parameters
+	integer,parameter:: SVD=1   
+	integer,parameter:: RRQR=2   
+	integer,parameter:: ACA=3   
+	integer,parameter:: BACA=4   
+	
+	integer,parameter:: CKD=1  ! cartesian kd tree 
+	integer,parameter:: SKD=2  ! spherical kd tree
+	integer,parameter:: TM=3   ! 2 mins (no recursive)
 	
 	!**** hierarchical process grid associated with one process node in the process tree (used for parallel recursive LR compression) 
 	type grid
@@ -237,15 +245,17 @@ module MODULE_FILE
 		
 		! options for Bplus, Butterfly or LR
 		integer::LRlevel  ! The top LRlevel level blocks are butterfly or Bplus		
-		integer:: LnoBP ! the bottom LnoBP levels are either Butterfly or LR, but not Bplus  		
+		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus  		
 		integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
 		real*8 touch_para   ! parameters used to determine whether one patch is closer to seperator		
 		
-		! options for matrix fill
-		real*8 tol_SVD      ! matrix fill tolerance
-		integer::Nmin_leaf ! leaf sizes of HODLR tree		
-		integer xyzsort ! clustering methods given geometrical points: 1: cartesian kd tree 2: spherical kd tree (only for 3D points) 3: 2 means (no recursive)
-		character::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression 'Q': RRQR 'S':SVD 'A': ACA
+		! options for matrix construction
+		real*8 tol_comp      ! matrix construction tolerance
+		integer::Nmin_leaf ! leaf sizes of HODLR tree	
+		integer preorder ! 1: the matrix is preordered, no reordering will be performed, clustering is defined in pretree. 2: the matrix needs reordering		
+		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
+		integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
+		
 		
 		! options for inversion
 		real*8 tol_LS       ! tolerance in pseudo inverse
@@ -256,7 +266,7 @@ module MODULE_FILE
 		
 		! options for solve 
 		real*8 tol_itersol  ! tolerance for iterative solvers 
-		integer N_iter  ! maximum number of iterations for iterative solver
+		integer n_iter  ! maximum number of iterations for iterative solver
 		integer precon  ! DIRECT: use factored HODLR as direct solver, HODLRPRECON: use factored HODLR as preconditioner, NOPRECON: use forward HODLR as fast matvec,  
 		
 		
@@ -289,7 +299,8 @@ module MODULE_FILE
 		! for general: 0 point to coordinates of each unknown x
 		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering 
 		integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering 
-		
+		integer,allocatable::pretree(:) ! dimension 2**Maxlevel containing box size of each leaf node 
+ 		
 		! 2D/3D mesh
 		integer maxnode ! # of vertices in a mesh
 		integer maxedge ! # of edges in a mesh 
@@ -316,17 +327,7 @@ module MODULE_FILE
 	 
 	!**** quantities related to specific matrix kernels  
 	type kernelquant
-		! real*8 wavenum    ! CEM: wave number  
-		! real*8 wavelength  ! CEM: wave length
-		! real*8 omiga       ! CEM: angular frequency
-		! real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
-		! integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
-		! integer RCS_Nsample ! CEM: number of RCS samples
-		! real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
-		
-		! real*8 sigma, lambda ! Kernel Regression: RBF parameters 		
-		! character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
-		
+
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
 		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
@@ -396,7 +397,7 @@ module MODULE_FILE
 	 integer vecCNT
 	 
 	 integer,allocatable:: basis_group_pre(:,:)
-	 CHARACTER (LEN=1000) DATA_DIR	
+	 
 
 end module
 

@@ -341,6 +341,395 @@ function fnorm(A,m,n)
 	fnorm = sqrt(fnorm)
  end function fnorm
  
+ 
+
+
+! subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
+	! ! use lapack95
+	! ! use blas95
+    ! use MODULE_FILE
+    ! implicit none
+	
+	! integer N,M,rmax
+	! real*8 Flops
+	! real*8 SVD_tolerance
+	! integer i, j, ii, jj, indx, rank_1, rank_2
+	! integer rank, ranknew,ldaU,ldaV
+	
+	! complex(kind=8)::matU(:,:),matV(:,:)	
+	! complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	! real*8, allocatable :: Singularsml(:)
+	! integer,allocatable :: jpvt1(:),jpvt2(:)
+
+	! ldaU = size(matU,1)
+	! ldaV = size(matV,1)
+    ! Flops=0
+
+	! allocate(QQ1(M,rmax))
+	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt1(rmax))
+	! jpvt1=0
+	! call geqp3f90(QQ1,jpvt1,tau_Q)
+	! Flops = Flops + flops_zgeqrf(M, rmax)
+	
+	! allocate (RR1(rmax,rmax))
+	! RR1=(0,0)
+	! ! !$omp parallel do default(shared) private(i,j)
+	! do j=1, rmax
+		! do i=1, j
+			! RR1(i,jpvt1(j))=QQ1(i,j)
+		! enddo
+	! enddo
+	! ! !$omp end parallel do	
+	! call ungqrf90(QQ1,tau_Q)
+	! deallocate(tau_Q)
+	! deallocate(jpvt1)
+	! Flops = Flops + flops_zungqr(M, rmax, rmax)
+
+	! allocate(QQ2(N,rmax))
+	! call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	! allocate (tau_Q(rmax))
+	! ! call geqrff90(QQ2,tau_Q)
+	! allocate (jpvt2(rmax))
+	! jpvt2=0
+	! call geqp3f90(QQ2,jpvt2,tau_Q)
+
+	! Flops = Flops + flops_zgeqrf(N, rmax)
+	
+	! allocate (RR2(rmax,rmax))
+	! RR2=(0,0)
+	! ! !$omp parallel do default(shared) private(i,j)
+	! do j=1, rmax
+		! do i=1, j
+			! RR2(i,jpvt2(j))=QQ2(i,j)
+		! enddo
+	! enddo
+	! ! !$omp end parallel do	
+
+	! call ungqrf90(QQ2,tau_Q)
+	! deallocate(jpvt2)
+	! deallocate(tau_Q)
+	! Flops = Flops + flops_zungqr(N, rmax, rmax)
+	
+	! allocate(mattemp(rmax,rmax))
+	! mattemp=0
+	! ! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
+	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
+	! Flops = Flops + flops_zgemm(rmax, rmax, rmax)
+	! allocate(UUsml(rmax,rmax),VVsml(rmax,rmax),Singularsml(rmax))
+	! call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
+	! Flops = Flops + flops_zgesdd(rmax, rmax)
+	! do i=1,ranknew
+		! UUsml(1:rmax,i) = UUsml(1:rmax,i) * Singularsml(i)
+	! enddo
+	! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
+	! Flops = Flops + flops_zgemm(M,ranknew,rmax)	
+	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
+	! Flops = Flops + flops_zgemm(ranknew,N,rmax)		
+	
+	! rank = ranknew
+	
+	
+	! deallocate(mattemp,RR1,QQ1,UUsml,VVsml,Singularsml)
+	! deallocate(QQ2,RR2)
+
+
+! end subroutine LR_ReCompression	
+	
+
+
+subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
+	! use lapack95
+	! use blas95
+    use MODULE_FILE
+    implicit none
+	
+	integer N,M,rmax
+	real*8 Flops
+	real*8 SVD_tolerance
+	integer i, j, ii, jj, indx, rank_1, rank_2
+	integer rank, ranknew,ldaU,ldaV
+	
+	complex(kind=8)::matU(:,:),matV(:,:)	
+	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	real*8, allocatable :: Singularsml(:)
+	integer,allocatable :: jpvt1(:),jpvt2(:)
+
+	ldaU = size(matU,1)
+	ldaV = size(matV,1)
+    Flops=0
+
+	allocate(QQ1(M,rmax))
+	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	allocate (tau_Q(rmax))
+	! allocate (jpvt1(rmax))
+	! jpvt1=0
+	! call geqp3f90(QQ1,jpvt1,tau_Q)
+	call geqrff90(QQ1,tau_Q)
+	Flops = Flops + flops_zgeqrf(M, rmax)
+	
+	allocate (RR1(rmax,rmax))
+	RR1=(0,0)
+	! !$omp parallel do default(shared) private(i,j)
+	do j=1, rmax
+		do i=1, j
+			RR1(i,j)=QQ1(i,j)
+		enddo
+	enddo
+	! !$omp end parallel do	
+	call ungqrf90(QQ1,tau_Q)
+	deallocate(tau_Q)
+	! deallocate(jpvt1)
+	Flops = Flops + flops_zungqr(M, rmax, rmax)
+
+	allocate(QQ2(N,rmax))
+	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	allocate (tau_Q(rmax))
+	! call geqrff90(QQ2,tau_Q)
+	! allocate (jpvt2(rmax))
+	! jpvt2=0
+	call geqrff90(QQ2,tau_Q)
+
+	Flops = Flops + flops_zgeqrf(N, rmax)
+	
+	allocate (RR2(rmax,rmax))
+	RR2=(0,0)
+	! !$omp parallel do default(shared) private(i,j)
+	do j=1, rmax
+		do i=1, j
+			RR2(i,j)=QQ2(i,j)
+		enddo
+	enddo
+	! !$omp end parallel do	
+
+	call ungqrf90(QQ2,tau_Q)
+	! deallocate(jpvt2)
+	deallocate(tau_Q)
+	Flops = Flops + flops_zungqr(N, rmax, rmax)
+	
+	allocate(mattemp(rmax,rmax))
+	mattemp=0
+	! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
+	call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
+	Flops = Flops + flops_zgemm(rmax, rmax, rmax)
+	allocate(UUsml(rmax,rmax),VVsml(rmax,rmax),Singularsml(rmax))
+	call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
+	Flops = Flops + flops_zgesdd(rmax, rmax)
+	do i=1,ranknew
+		UUsml(1:rmax,i) = UUsml(1:rmax,i) * Singularsml(i)
+	enddo
+	call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
+	Flops = Flops + flops_zgemm(M,ranknew,rmax)	
+	call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
+	Flops = Flops + flops_zgemm(ranknew,N,rmax)		
+	
+	rank = ranknew
+	
+	
+	deallocate(mattemp,RR1,QQ1,UUsml,VVsml,Singularsml)
+	deallocate(QQ2,RR2)
+
+
+end subroutine LR_ReCompression		
+	
+	
+
+subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
+	! use lapack95
+	! use blas95
+    use MODULE_FILE
+    implicit none
+	
+	integer N,M,rmax
+	real*8 norm
+	real*8 tolerance
+	integer i, j, ii, jj, indx, rank_1, rank_2
+	integer rank, ranknew,mn, ranknew1, ranknew2
+	
+	complex(kind=8)::matU(:,:),matV(:,:)	
+	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
+	real*8, allocatable :: Singularsml(:),Singular(:)
+	integer,allocatable :: jpvt(:),jpvt1(:),jpvt2(:)
+
+	
+	! mn= min(M,rmax)
+
+	
+	! allocate(QQ1(M,rmax))
+	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+
+	! allocate(UU(M,mn))
+	! allocate(VV(mn,rmax))
+	! allocate(Singular(mn))
+	! call gesvd_robust(QQ1,Singular,UU,VV,M,rmax,mn)
+	! do ii=1,mn
+		! VV(ii,:) = VV(ii,:)*Singular(ii)
+	! enddo
+	! ! allocate(QQ2(rmax,N))
+	! ! call copymatN_omp(matV(1:rmax,1:N),QQ2,rmax,N)	
+	
+	! allocate(mattemp(mn,N))
+	! mattemp=0
+	! call zgemm('N','N',mn,N,rmax, cone, VV, mn,matV,size(matV,1),czero,mattemp,mn)
+
+	! norm = fnorm(mattemp,mn,N)
+	
+	! deallocate(QQ1)
+	! deallocate(UU)
+	! deallocate(VV)
+	! deallocate(Singular)
+	! deallocate(mattemp)
+	
+	
+	
+	
+	allocate(QQ1(M,rmax))
+	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	allocate (tau_Q(rmax))
+	call geqrff90(QQ1,tau_Q)
+	deallocate(tau_Q)
+
+	allocate (RR1(rmax,rmax))
+	RR1=(0,0)
+	! !$omp parallel do default(shared) private(i,j)
+	do j=1, rmax
+		do i=1, j
+			RR1(i,j)=QQ1(i,j)
+		enddo
+	enddo
+	! !$omp end parallel do	
+
+	allocate(QQ2(N,rmax))
+	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	allocate (tau_Q(rmax))
+	call geqrff90(QQ2,tau_Q)
+	deallocate(tau_Q)
+	
+	allocate (RR2(rmax,rmax))
+	RR2=(0,0)
+	! !$omp parallel do default(shared) private(i,j)
+	do j=1, rmax
+		do i=1, j
+			RR2(i,j)=QQ2(i,j)
+		enddo
+	enddo
+	! !$omp end parallel do	
+
+	allocate(mattemp(rmax,rmax))
+	mattemp=0
+	call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
+	
+	norm = fnorm(mattemp,rmax,rmax)
+	
+	deallocate(mattemp,RR1,QQ1)
+	deallocate(QQ2,RR2)
+	
+
+	
+	
+	! allocate(QQ1(M,rmax))
+	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt1(rmax))
+	! jpvt1=0
+	! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,SafeUnderflow,ranknew1)	
+	! deallocate(tau_Q)
+	
+
+	! allocate(QQ2(N,rmax))
+	! call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt2(rmax))
+	! jpvt2=0
+	! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,SafeUnderflow,ranknew2)	
+	! deallocate(tau_Q)
+	
+	! if(ranknew1>0 .and. ranknew2>0)then
+		! allocate (RR1(ranknew1,rmax))
+		! RR1=(0,0)
+		! ! !$omp parallel do default(shared) private(i,j)
+		! do j=1, ranknew1
+			! do i=1, j
+				! RR1(i,jpvt1(j))=QQ1(i,j)
+			! enddo
+		! enddo
+		! ! !$omp end parallel do		
+		
+		! allocate (RR2(ranknew2,rmax))
+		! RR2=(0,0)
+		! ! !$omp parallel do default(shared) private(i,j)
+		! do j=1, ranknew2
+			! do i=1, j
+				! RR2(i,jpvt2(j))=QQ2(i,j)
+			! enddo
+		! enddo
+		! ! !$omp end parallel do	
+		
+		! allocate(mattemp(ranknew1,ranknew2))
+		! mattemp=0
+		! call zgemm('N','T',ranknew1,ranknew2,rmax, cone, RR1, ranknew1,RR2,ranknew2,czero,mattemp,ranknew1)
+		
+		! norm = fnorm(mattemp,rmax,rmax)
+		
+		! deallocate(mattemp,RR1,QQ1)
+		! deallocate(QQ2,RR2)		
+		! deallocate(jpvt1,jpvt2)		
+		
+	! else
+		! norm=0
+		! deallocate(QQ2,QQ1)		
+		! deallocate(jpvt1,jpvt2)				
+	! endif
+
+	
+
+	! allocate(QQ1(M,rmax))
+	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt(rmax))
+	! jpvt=0
+	! call geqp3modf90(QQ1,jpvt,tau_Q,tolerance,SafeUnderflow,ranknew)
+	! ! call geqp3f90(QQ1,jpvt,tau_Q)
+	! ranknew=rmax
+
+	
+	! if(ranknew>0)then
+		! allocate (RR1(ranknew,rmax))
+		! RR1=(0,0)
+		! ! !$omp parallel do default(shared) private(i,j)
+		! do j=1, ranknew
+			! do i=1, j
+				! RR1(i,j)=QQ1(i,j)
+			! enddo
+		! enddo
+		! ! !$omp end parallel do	
+
+		! call ungqrf90(QQ1,tau_Q)
+
+		! allocate(QQ2(rmax,N))
+		! do ii=1,rmax
+			! QQ2(ii,:) = matV(jpvt(ii),:)
+		! enddo
+		! allocate(mattemp(ranknew,N))
+		! mattemp=0
+		! call zgemm('N','N',ranknew,N,rmax, cone, RR1, ranknew,QQ2,rmax,czero,mattemp,ranknew)
+		! norm = fnorm(mattemp,ranknew,rmax)
+		
+		! deallocate(mattemp,RR1)
+		! deallocate(QQ2)	
+	! else 
+		! norm=0
+	! endif	
+	
+	! deallocate(tau_Q)	
+	! deallocate(jpvt)
+	! deallocate(QQ1)		
+	
+
+end subroutine LR_Fnorm		
+	
+	 
 
 
 subroutine GetRank(M,N,mat,rank,eps)
@@ -2677,7 +3066,7 @@ m=size(Matrix,1)
 n=size(Matrix,2)
 mn_min = min(m,n)
 
-allocate(RWORK(2*m))
+allocate(RWORK(2*max(m,n)))
 RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
@@ -2699,7 +3088,56 @@ deallocate(RWORK)
 end subroutine geqp3f90
 	
 
-subroutine unmqrf90(a,tau,c,side,trans)	
+
+subroutine geqp3modf90(Matrix,jpvt,tau,rtol,atol,rank)	
+
+! ! use lapack95
+
+implicit none
+complex(kind=8)Matrix(:,:),tau(:)
+integer jpvt(:)
+integer m,n,mn_min
+
+real*8::rtol,atol
+integer LWORK,INFO,rank
+complex(kind=8):: TEMP(1)
+real*8,allocatable::RWORK(:)
+
+complex(kind=8),allocatable:: WORK(:)
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+rank=0
+
+allocate(RWORK(2*max(m,n)))
+RWORK=0
+LWORK=-1
+! call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
+call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
+
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK)) 
+WORK=0    
+! call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
+call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
+
+
+if(INFO/=0)then
+	write(*,*)'geqp3modf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+deallocate(RWORK)
+
+! call geqp3(Matrix,jpvt,tau)
+
+end subroutine geqp3modf90	
+	
+	
+subroutine unmqrf90(a,tau,c,side,trans,m,n,k)	
 
 ! ! use lapack95
 
@@ -2713,21 +3151,9 @@ integer LWORK,INFO
 complex(kind=8):: TEMP(1)
 complex(kind=8),allocatable:: WORK(:)
 
-m=size(c,1)
-n=size(c,2)
-mn_min = min(m,n)
-ldc=m
 
-if(side == 'L')then
-	k=m
-	lda=m
-end if
-
-if(side == 'R')then
-	k=n
-	lda=n
-end if
-
+ldc=size(c,1)
+lda=size(a,1)
 
 LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
@@ -2898,7 +3324,7 @@ end subroutine getrif90
 	
 
 
-subroutine trsmf90(Matrix,B,side,uplo,transa,diag)	
+subroutine trsmf90(Matrix,B,side,uplo,transa,diag,m,n)	
 
 ! ! use blas95
 
@@ -2911,13 +3337,8 @@ integer INFO
 
 alpha=1d0
 
-m=size(B,1)
-n=size(B,2)
-
-ldb=m
-
-if(side=='L' .or. side=='l')lda=m
-if(side=='R' .or. side=='r')lda=n
+ldb=size(B,1)
+lda=size(Matrix,1)
 
 call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
@@ -3044,6 +3465,19 @@ real*8 function BesselY0_func(x)
     
 end function BesselY0_func
 
+!**** create a array treeleaf holding size of each leaf box of a tree with nlevel levels (0<=level<=nlevel)
+recursive subroutine CreateLeaf_Natural(nlevel,level,group,idxs,idxe,treeleaf)
+implicit none 
+integer nlevel,level,group,idxs,idxe
+integer treeleaf(2**nlevel)
+
+	if(level==nlevel)then
+		treeleaf(group-2**nlevel+1)=idxe-idxs+1
+	else
+		call CreateLeaf_Natural(nlevel,level+1,2*group,idxs,int((idxs+idxe)/2d0),treeleaf)
+		call CreateLeaf_Natural(nlevel,level+1,2*group+1,int((idxs+idxe)/2d0)+1,idxe,treeleaf)
+	endif
+end subroutine CreateLeaf_Natural
 
 
 subroutine NumberingPtree(ptree)

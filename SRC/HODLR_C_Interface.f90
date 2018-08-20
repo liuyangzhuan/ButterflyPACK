@@ -3,63 +3,264 @@ module HODLR_C_Interface
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
-	use matrices_fill
+	use HODLR_construction
 	use omp_lib
 	use MISC
 	use HODLR_Solve
     use iso_c_binding    
+	
 	
 contains 
 
 
 
 subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
-    
     use MODULE_FILE
     implicit none
-    
     integer edge_m, edge_n
     complex(kind=8) value_e
 	type(mesh)::msh
 	type(kernelquant)::ker	
-	
 	procedure(C_Z_elem), POINTER :: proc
 	
 	value_e=0
 	call c_f_procpointer(ker%C_FuncZmn, proc)
-	! write(*,*)'ddd'
 	call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e,ker%C_QuantZmn)
-	! call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e)
 	return
     
 end subroutine element_Zmn_user_C
 
 
-
-
-
-subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_fill_")	
+!**** C interface of process tree construction
+	!nmpi: number of MPIs for one hodlr
+	!MPIcomm: MPI communicator from C caller
+	!groupmembers: MPI ranks in MPIcomm for one hodlr
+	!ptree_Cptr: the structure containing process tree
+subroutine C_CreatePtree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_createptree_")	
 	implicit none 
-	integer Npo,Ndim,Nmin
-	real*8 Locations(Npo*Ndim)
+	integer nmpi
+	integer MPIcomm
+	integer:: groupmembers(*)
+	type(c_ptr):: ptree_Cptr	
+	type(proctree),pointer::ptree	
+
+	allocate(ptree)
+	call CreatePtree(nmpi,groupmembers,MPIcomm,ptree)
+	ptree_Cptr=c_loc(ptree)
+end subroutine C_CreatePtree
+
+
+!**** C interface of initializing statistics
+	!nmpi: number of MPIs for one hodlr
+	!MPIcomm: MPI communicator from C caller
+	!groupmembers: MPI ranks in MPIcomm for one hodlr
+	!stats_Cptr: the structure containing statistics
+subroutine C_CreateStats(stats_Cptr) bind(c, name="c_createstats_")	
+	implicit none 
+	type(c_ptr), intent(out) :: stats_Cptr
+	type(Hstat),pointer::stats
+
+	allocate(stats)
+	!**** initialize statistics variables  	
+	call InitStat(stats)	
+	stats_Cptr=c_loc(stats)
+	
+end subroutine C_CreateStats
+
+
+!**** C interface of initializing option
+	!option_Cptr: the structure containing option       
+subroutine C_CreateOption(option_Cptr) bind(c, name="c_createoption_")	
+	implicit none 
+	type(c_ptr) :: option_Cptr
+	type(Hoption),pointer::option	
+	
+	allocate(option)
+	!**** set default hodlr options 	
+	call SetDefaultOptions(option)
+	
+	option_Cptr=c_loc(option)
+	
+end subroutine C_CreateOption
+
+
+
+!**** C interface of set one entry in option
+	!option_Cptr: the structure containing option       
+subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")	
+	implicit none 
+	type(c_ptr) :: option_Cptr
+	character(kind=c_char,len=1) :: nam(*)
+	type(Hoption),pointer::option	
+	! character::nam(:)	
+	type(c_ptr),value :: val_Cptr
+	integer,pointer::val_i
+	real*8,pointer::val_d
+	integer strlen
+	character(len=:),allocatable :: str
+	integer valid_opt
+
+	valid_opt = 0
+	strlen=1
+	do while(nam(strlen) /= c_null_char)
+		strlen = strlen + 1
+	enddo
+	strlen = strlen -1
+	allocate(character(len=strlen) :: str)
+	str = transfer(nam(1:strlen), str)
+	
+	call c_f_pointer(option_Cptr, option)
+           
+	
+!**** integer parameters 	
+	if(trim(str)=='n_iter')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%n_iter=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='precon')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%precon=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='xyzsort')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%xyzsort=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='lnoBP')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%lnoBP=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='TwoLayerOnly')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%TwoLayerOnly=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='touch_para')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%touch_para=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='schulzorder')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%schulzorder=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='schulzlevel')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%schulzlevel=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='LRlevel')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%LRlevel=val_i
+	valid_opt=1	
+	endif
+	if(trim(str)=='ErrFillFull')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%ErrFillFull=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='ErrSol')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%ErrSol=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='preorder')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%preorder=val_i
+	valid_opt=1
+	endif
+	if(trim(str)=='RecLR_leaf')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%RecLR_leaf=val_i
+	valid_opt=1
+	endif
+	
+!**** double parameters 
+	if(trim(str)=='tol_comp')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%tol_comp=val_d
+	valid_opt=1
+	endif
+	if(trim(str)=='tol_Rdetect')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%tol_Rdetect=val_d
+	valid_opt=1
+	endif
+	if(trim(str)=='tol_LS')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%tol_LS=val_d
+	valid_opt=1
+	endif
+	if(trim(str)=='tol_itersol')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%tol_itersol=val_d
+	valid_opt=1
+	endif
+	if(trim(str)=='tol_rand')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%tol_rand=val_d
+	valid_opt=1
+	endif
+    
+	if(valid_opt==0)write(*,*)'invalid HODLR option: '//trim(str)
+	
+	deallocate(str)
+	option_Cptr=c_loc(option)
+	
+end subroutine C_SetOption
+
+
+
+!**** C interface of HODLR construction
+	!Npo: matrix size
+	!Ndim: data set dimensionality (not used if preorder=1)
+	!Locations: coordinates used for clustering (not used if preorder=1) 
+	!Nmin: leafsize in HODLR tree (not used if preorder=1 and nlevel>0)
+	!tol: compression tolerance
+	!nth: number of threads
+	!nmpi: number of processes calling this subroutine 
+	!ninc: pick 1 out of ninc processes to create a new communicator for HODLR
+	!preorder: 0: matrix not pre-ordered,requiring a clustering step 1: matrix pre-ordered 
+	!nlevel: if preorder=1: nlevel=0: require a natural order tree; nlevel=1: an order tree is also provided
+	!tree: the order tree provided by the caller
+	!Permutation: return new2old if preorder=0; return a natural order if preorder=1
+	!Npo_loc: number of local row/column indices    
+	!ho_bf_Cptr: the structure containing HODLR         
+	!option_Cptr: the structure containing option         
+	!stats_Cptr: the structure containing statistics         
+	!msh_Cptr: the structure containing points and ordering information         
+	!ker_Cptr: the structure containing kernel quantities
+	!ptree_Cptr: the structure containing process tree
+	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
+	!C_QuantZmn: the C_pointer to user-defined quantities required to sample mn^th entry of the matrix
+	!MPIcomm: user-provided MPI communicator
+subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_construct_")	
+	implicit none 
+	integer Npo,Ndim
+	real*8 Locations(*)
 	
     real*8 para
-    real*8 tolerance,tol,h,lam
-    integer Primary_block, nn, mm, MyID_old
+    real*8 tolerance,h,lam
+    integer Primary_block, nn, mm, MyID_old,Maxlevel
     integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
 	real(kind=8),parameter :: cd = 299792458d0
 	integer,allocatable:: groupmembers(:)
+	integer nlevel,level
 	integer Permutation(*),tree(*)
 	integer Npo_loc
 	! type(matricesblock), pointer :: blocks_i
-	integer groupm,preorder
+	integer groupm
 	integer MPIcomm
-	type(c_ptr), intent(out) :: ho_bf_Cptr
-	type(c_ptr), intent(out) :: option_Cptr
-	type(c_ptr), intent(out) :: stats_Cptr
-	type(c_ptr), intent(out) :: msh_Cptr
-	type(c_ptr), intent(out) :: ker_Cptr
-	type(c_ptr), intent(out) :: ptree_Cptr
+	type(c_ptr) :: ho_bf_Cptr
+	type(c_ptr) :: option_Cptr
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: msh_Cptr
+	type(c_ptr) :: ker_Cptr
+	type(c_ptr) :: ptree_Cptr
 	type(c_ptr), intent(in),target :: C_QuantZmn
 	type(c_funptr), intent(in),value,target :: C_FuncZmn
 	
@@ -73,166 +274,130 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
 	integer times(8)	
 	real*8 t1,t2,x,y,z,r,theta,phi
 	complex(kind=8):: Ctmp
-
+	character(len=1024)  :: strings
+	
+	!**** allocate HODLR solver structures 
 	allocate(ho_bf)
-	allocate(option)
-	allocate(stats)
+	! allocate(option)
+	! allocate(stats)
 	allocate(msh)
 	allocate(ker)
-	allocate(ptree)
+
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
 	
 
-	allocate(groupmembers(nmpi))
-	do ii=1,nmpi
-		groupmembers(ii)=(ii-1)*ninc
-	enddo
 
-	call CreatePtree(nmpi,groupmembers,MPIcomm,ptree)
-	deallocate(groupmembers)
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
- 	threads_num=nth
+	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',ptree%nproc
+ 	
+ 	threads_num=1
+    CALL getenv("OMP_NUM_THREADS", strings)
+	strings = TRIM(strings)	
+	if(LEN_TRIM(strings)>0)then
+		read(strings , *) threads_num
+	endif
 	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)		
-		
-		
+	call OMP_set_num_threads(threads_num)
+	
+	!**** create a random seed		
 	call DATE_AND_TIME(values=times)     ! Get the current time 
 	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
 	! seed_myid(1) = myid*1000
 	call RANDOM_SEED(PUT=seed_myid)
 	
 	if(ptree%MyID==Main_ID)then
-    write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "HODLR_BUTTERFLY_SOLVER"
     write(*,*) "   "
 	endif
 	
-	call InitStat(stats)
-
-	time_tmp = 0
-	
-	msh%Origins=(/0d0,0d0,0d0/)
- 
-
-     !*************************input******************************
-
-    !tol=0.000001
-	!itmax=10000
-	
-	
+	!**** register the user-defined function and type in ker 
 	ker%C_QuantZmn => C_QuantZmn
-	ker%C_FuncZmn => C_FuncZmn
-		
-	para=0.001
+	ker%C_FuncZmn => C_FuncZmn	
 	
-	! ker%rank_approximate_para1=6.0
-    ! ker%rank_approximate_para2=6.0
-    ! ker%rank_approximate_para3=6.0
-	
-	
-	option%Nmin_leaf=Nmin
-	option%tol_SVD=tol
-	option%tol_Rdetect=3d-5	
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
-	option%N_iter=1000
-	option%tol_rand=1d-3
-	option%level_check=10000
-	option%precon=DIRECT
-	option%xyzsort=3
-	option%LnoBP=40000
-	option%TwoLayerOnly=1
-	option%touch_para=3
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=0
-	option%ErrFillFull=0
-	option%RecLR_leaf='Q'
 
-   !***********************************************************************
-   if(ptree%MyID==Main_ID)then
-   write (*,*) ''
-   write (*,*) 'User-supplied kernel with geometry:'
-   ! write (*,*) 'wavelength:',ker%wavelength
-   write (*,*) ''
-   endif
-   !***********************************************************************
-	
-	
-	
-	
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-	
-	Dimn = Ndim 
+	msh%Origins=(/0d0,0d0,0d0/)
+	msh%scaling=1d0
 	msh%Ncorner = 0
 	msh%Nunk = Npo
+		
+		
+	t1 = OMP_get_wtime()
 
-	allocate (msh%xyz(Dimn,0:msh%Nunk), msh%info_unk(0:0,msh%Nunk))
-	! write(*,*)msh%Nunk, Dimn,shape(msh%info_unk)
-	ii=0
-	do edge=1,msh%Nunk
-		msh%info_unk(0,edge)=edge
-		msh%xyz(1:Dimn,edge)= Locations(ii+1:ii+Dimn)
-		ii = ii + Dimn
-	enddo  	
-    if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
+	!**** the geometry points are provided by user and require reordering 
+	if(option%preorder==0)then 
+		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with geometrical points:"
+		Dimn = Ndim 
+		allocate (msh%xyz(Dimn,0:msh%Nunk))
+		ii=0
+		do edge=1,msh%Nunk
+			msh%xyz(1:Dimn,edge)= Locations(ii+1:ii+Dimn)
+			ii = ii + Dimn
+		enddo  	
+	else 
+		if(nlevel==0)then  !**** the geometry points are not provided, the preorder tree is not provided, create a natural order tree 
+			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel without tree:"
+			level=0; i=1
+			do while (int(msh%Nunk/i)>option%Nmin_leaf)
+				level=level+1
+				i=2**level
+			enddo
+			Maxlevel=level
+			allocate(msh%pretree(2**Maxlevel))
+			call CreateLeaf_Natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree) 
+			
+		else   !**** the geometry points are not provided, but the preorder tree is provided 			
+			
+			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel with tree:"
+			Maxlevel=nlevel
+			allocate(msh%pretree(2**Maxlevel))
+			msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
+		endif
+	end if	
+	
+	!**** initialize the permutation vector (msh%info_unk(0,:) and old2new(:) coincide for user-supplied kernels)  
+	allocate (msh%info_unk(0:0,msh%Nunk))
+	do ii=1,msh%Nunk
+		msh%info_unk(0,ii)=ii
+	enddo 	
+	
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
+	
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+    call H_matrix_structuring(ho_bf,option,msh,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
-	! stop 
 	
 	
-	
-	
-
-	! call c_f_procpointer(C_FuncZmn, proc)
-	! ! write(*,*)'ddd'
-	! call proc(0,0,Ctmp,C_QuantZmn)	
-	! write(*,*)'1 1 element is: ', Ctmp
-	
-	! call element_Zmn_user_C(1,1,Ctmp,msh,ker)
-	! write(*,*)'1 1 element is: ', Ctmp
-	! call element_Zmn_user_C(3,5,Ctmp,msh,ker)
-	! write(*,*)'3 5 element is: ', Ctmp
-	! stop
-	
-    !pause
-    
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_user_C,ptree)
-	! if(option%precon/=DIRECT)then
-		! call copy_HOBF(ho_bf,ho_bf_copy)	
-	! end if
+    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user_C,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 
-	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-		
-	Npo_loc = msh%idxe-msh%idxs+1		
 	
-
+	!**** return the permutation vector if preorder==0
+	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
+	Npo_loc = msh%idxe-msh%idxs+1		
+	if(option%preorder==0)then 
 	if (ptree%MyID==Main_ID) then	
 		do edge=1,Npo
 			Permutation(edge) = msh%info_unk(0,edge)
 		enddo
 	endif	
+	endif
 	
-	! return the C address of hodlr structures to C caller
+	!**** return the C address of hodlr structures to C caller
 	ho_bf_Cptr=c_loc(ho_bf)
 	option_Cptr=c_loc(option)
 	stats_Cptr=c_loc(stats)
@@ -242,11 +407,16 @@ subroutine C_HODLR_Fill(Npo,Ndim,Locations,Nmin,tol,nth,nmpi,ninc,preorder,tree,
 
 
 	
-end subroutine C_HODLR_Fill
+end subroutine C_HODLR_Construct
 
 
 
-
+!**** C interface of HODLR factorization
+	!ho_bf_for_Cptr: the structure containing forward HODLR         
+	!ho_bf_inv_Cptr: the structure containing factored HODLR         
+	!option_Cptr: the structure containing option         
+	!stats_Cptr: the structure containing statistics         
+	!ptree_Cptr: the structure containing process tree
 subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor_")	
 	implicit none 
 
@@ -290,7 +460,16 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,p
 end subroutine C_HODLR_Factor
 
 
-
+!**** C interface of HODLR solve
+	!x: local solution vector         
+	!b: local RHS        
+	!Nloc: size of local RHS     
+	!Nrhs: number of RHSs     
+	!ho_bf_for_Cptr: the structure containing forward HODLR         
+	!ho_bf_inv_Cptr: the structure containing factored HODLR         
+	!option_Cptr: the structure containing option         
+	!stats_Cptr: the structure containing statistics         
+	!ptree_Cptr: the structure containing process tree
 subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve_")	
 	implicit none 
 
@@ -334,11 +513,6 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr
 	! ho_bf_for_Cptr=c_loc(ho_bf_for)	
 
 end subroutine C_HODLR_Solve
-
-
-
-
-
 
 
 ! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply_")	

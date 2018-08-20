@@ -189,7 +189,7 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 		allocate(matrixtemp(mm,ranks(bb)))
 		matrixtemp = RandVectOutR(header_m:header_m+mm-1,1:ranks(bb))
 		
-		call ComputeRange(mm,ranks(bb),matrixtemp,rank,0,option%tol_SVD)			
+		call ComputeRange(mm,ranks(bb),matrixtemp,rank,0,option%tol_comp)			
 		ranks(bb) = rank
 		RandVectOutR(header_m:header_m+mm-1,1:ranks(bb)) = matrixtemp(1:mm,1:ranks(bb))
 		deallocate(matrixtemp)
@@ -220,7 +220,7 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 				
 		mn=min(ranks(bb),nn)
 		allocate (UU(ranks(bb),mn),VV(mn,nn),Singular(mn))
-		call SVD_Truncate(matrixtemp,ranks(bb),nn,mn,UU,VV,Singular,option%tol_SVD,rank)				
+		call SVD_Truncate(matrixtemp,ranks(bb),nn,mn,UU,VV,Singular,option%tol_comp,rank)				
 		do ii=1,rank
 			UU(:,ii) = UU(:,ii)* Singular(ii)
 		end do	

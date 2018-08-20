@@ -3512,7 +3512,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				
 				! write(*,*)mm,nn,rmax,'didi'
 				
-				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_SVD)				
+				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_comp)				
 				rankthusfar = max(rankthusfar,rank)
 				! write(*,*)'yani 4'
 				do ii=1,rank

@@ -2968,7 +2968,37 @@ subroutine InitStat(stats)
 	stats%Flop_Fill=0
 	stats%Flop_Factor=0
 	stats%Flop_Sol=0
+	time_tmp = 0
 end subroutine InitStat
+
+
+
+subroutine SetDefaultOptions(option)
+	implicit none 
+	type(Hoption)::option	
+
+	option%Nmin_leaf=200
+	option%tol_comp=1d-4
+	option%tol_Rdetect=3d-5	
+	option%tol_LS=1d-12
+	option%tol_itersol=1d-6
+	option%n_iter=1000
+	option%tol_rand=1d-3
+	option%level_check=10000
+	option%precon=DIRECT
+	option%xyzsort=TM
+	option%lnoBP=40000
+	option%TwoLayerOnly=1
+	option%touch_para=3
+    option%schulzorder=3
+    option%schulzlevel=3000
+	option%LRlevel=0
+	option%ErrFillFull=1
+	option%RecLR_leaf=BACA
+	option%preorder=0
+	option%ErrSol=0
+
+end subroutine SetDefaultOptions	
 
 
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the end column/row of each process sharing this block

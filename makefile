@@ -1,7 +1,7 @@
 # Rules:
-.PHONY: all checkdirs clean mvp randh em3d em2d kerreg ctest
+.PHONY: all checkdirs clean mvp randh em3d em2d kerreg full ctest
 
-Compiler=GNU#Intel#GNU#
+Compiler=Intel#GNU#
 MPI=T
 TargetDir = obj
 Platform =Laptop#CAC#NERSC#Laptop
@@ -46,10 +46,10 @@ LinkFlagF = -Bdynamic
 endif
 
 					  
-#F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=0 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
-F90FLAGS = -O3 -cpp -DPRNTlevel=0 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
-#CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
-CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
+F90FLAGS = -nologo -fpe0 -traceback -cpp -DPRNTlevel=0 -debug full -O0 -g -check bounds -qopenmp -parallel -lpthread $(INCLUDE_MKL) -D$(Compiler)
+#F90FLAGS = -O3 -cpp -DPRNTlevel=0 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -qopenmp -lpthread $(INCLUDE_MKL) -D$(Compiler)  
+CFLAGS= -O0 -g -std=c++11 -qopenmp -debug parallel -traceback 
+#CFLAGS=-std=c++11 -O3 -qopenmp -qopt-matmul
 endif
 
 
@@ -93,9 +93,9 @@ CFLAGS=-O0 -g -std=c++11 -fbounds-check -fopenmp -Wconversion -lpthread
 endif
 
 
-SOURCES = Module_file.o misc.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o Utilities.o element_Zmn.o \
+SOURCES = Module_file.o misc.o dgeqp3mod.o zgeqp3mod.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o Utilities.o \
 	 	HODLR_structure.o Bplus_randomized.o Bplus_compress_forward.o Bplus_rightmultiply_inverse_randomized.o \
-		Bplus_inverse_diagonal_randomized_schur_partitioned.o HODLR_solve_mul.o HODLR_fill.o HODLR_randomized.o HODLR_factor.o HODLR_C_Interface.o
+		Bplus_inverse_diagonal_randomized_schur_partitioned.o HODLR_solve_mul.o HODLR_construction.o HODLR_randomized.o HODLR_factor.o HODLR_C_Interface.o
 		
 obj_Files = $(filter %.o, $(SOURCES))
 
@@ -106,14 +106,16 @@ OBJECTS_frandhmain = $(TargetDir)/HODLR_Randconst.o
 OBJECTS_fem2dmain = $(TargetDir)/EMCURV_Driver.o
 OBJECTS_fem3dmain = $(TargetDir)/EMSURF_Driver.o
 OBJECTS_fkerregmain = $(TargetDir)/KERREG_Driver.o
+OBJECTS_ffullmain = $(TargetDir)/FULLMAT_Driver.o
 OBJECTS_cmain = $(TargetDir)/InterfaceTest.o
 
-all: mvp randh em3d em2d kerreg ctest
+all: mvp randh em3d em2d kerreg full ctest
 
 mvp: EXECUTABLE = fmvpexe
 randh: EXECUTABLE = frandhexe
 em2d: EXECUTABLE = em2dexe
 kerreg: EXECUTABLE = kerregexe
+full: EXECUTABLE = fullmatexe
 em3d: EXECUTABLE = em3dexe
 ctest: EXECUTABLE = ctestexe
 
@@ -135,7 +137,10 @@ em3d: checkdirs $(OBJECTS) $(OBJECTS_fem3dmain)
 kerreg: checkdirs $(OBJECTS) $(OBJECTS_fkerregmain)
 	@echo Linking $@ version...
 	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_fkerregmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
-	
+full: checkdirs $(OBJECTS) $(OBJECTS_ffullmain)
+	@echo Linking $@ version...
+	$(F90) $(F90FLAGS) $(OBJECTS) $(OBJECTS_ffullmain) $(LIB_MKL) $(LIB_MPI) -o $(EXECUTABLE) $(LinkFlagF)
+		
 	
 $(TargetDir)/%.o: ./SRC/%.f90 
 	$(F90) $(F90FLAGS) $(MODFLAGS) -c $< -o $@
@@ -164,6 +169,7 @@ clean:
 	rm -rf em2dexe
 	rm -rf em3dexe
 	rm -rf kerregexe
+	rm -rf fullmatexe
 checkdirs: $(TargetDir)
 
 $(TargetDir):

@@ -4,7 +4,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
-	use matrices_fill
+	use HODLR_construction
 	use omp_lib
 	use Bplus_compress_forward
 	use HODLR_randomMVP
@@ -33,7 +33,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer,allocatable:: groupmembers(:)	
 	integer :: ierr
 	integer :: nmpi
-	
+	CHARACTER (LEN=1000) DATA_DIR	
 	
 	! nmpi and groupmembers should be provided by the user 
 	call MPI_Init(ierr)
@@ -69,6 +69,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     write(*,*) "   "
 
 	call InitStat(stats)
+	call SetDefaultOptions(option)
 	
 	! time_indexarray = 0
 	! time_leastsquare = 0
@@ -101,13 +102,13 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 	option%Nmin_leaf=100
 	! Refined_level=0
-	para=0.001
 	! levelpara_control=0
 	! ACA_tolerance_forward=1d-4
-	option%tol_SVD=1d-4
+	option%tol_comp=1d-4
 	! SVD_tolerance_factor=1d-4
 	option%tol_Rdetect=1d-4 !3d-5
     ! Preset_level_butterfly=0
+	option%preorder=0
 	msh%scaling=1d0
 	! ker%wavelength=0.25
 	! Discret=0.05
@@ -122,7 +123,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%tol_LS=1d-10
 	! tfqmr_tolerance=1d-6
 	option%tol_itersol=3d-3
-	option%N_iter=1000
+	option%n_iter=1000
 	option%tol_rand=1d0
 	! up_tolerance=1
 	! relax_lamda=1d0
@@ -134,8 +135,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! directschur=1
 	option%precon=DIRECT
 	! verboselevel=2
-	option%xyzsort=1
-	option%LnoBP=600
+	option%xyzsort=CKD
+	option%lnoBP=600
 	option%TwoLayerOnly=1
 	option%LRlevel=100
 	! ker%CFIE_alpha=1
@@ -228,7 +229,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,para,option,msh,ptree)
+    call H_matrix_structuring(ho_bf,option,msh,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
@@ -263,7 +264,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
-		call matrices_filling(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
+		call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
 		if(option%precon/=DIRECT)then
 			call copy_HOBF(ho_bf,ho_bf_copy)	
 		end if		
