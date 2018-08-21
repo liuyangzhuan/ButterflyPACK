@@ -9,6 +9,16 @@ module HODLR_C_Interface
 	use HODLR_Solve
     use iso_c_binding    
 	
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 	
 contains 
 
@@ -18,7 +28,7 @@ subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
     use MODULE_FILE
     implicit none
     integer edge_m, edge_n
-    complex(kind=8) value_e
+    DT value_e
 	type(mesh)::msh
 	type(kernelquant)::ker	
 	procedure(C_Z_elem), POINTER :: proc
@@ -95,7 +105,7 @@ subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")
 	! character::nam(:)	
 	type(c_ptr),value :: val_Cptr
 	integer,pointer::val_i
-	real*8,pointer::val_d
+	real(kind=8),pointer::val_d
 	integer strlen
 	character(len=:),allocatable :: str
 	integer valid_opt
@@ -178,6 +188,11 @@ subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")
 	option%RecLR_leaf=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='Nmin_leaf')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%Nmin_leaf=val_i
+	valid_opt=1
+	endif
 	
 !**** double parameters 
 	if(trim(str)=='tol_comp')then
@@ -241,10 +256,10 @@ end subroutine C_SetOption
 subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_construct_")	
 	implicit none 
 	integer Npo,Ndim
-	real*8 Locations(*)
+	real(kind=8) Locations(*)
 	
-    real*8 para
-    real*8 tolerance,h,lam
+    real(kind=8) para
+    real(kind=8) tolerance,h,lam
     integer Primary_block, nn, mm, MyID_old,Maxlevel
     integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
 	real(kind=8),parameter :: cd = 299792458d0
@@ -272,8 +287,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	type(proctree),pointer::ptree	
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,x,y,z,r,theta,phi
-	complex(kind=8):: Ctmp
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	character(len=1024)  :: strings
 	
 	!**** allocate HODLR solver structures 
@@ -433,7 +447,7 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,p
 	type(hobf),pointer::ho_bf_inv,ho_bf_tmp
 	type(proctree),pointer::ptree	
 
-	! real*8:: tol_fact
+	! real(kind=8):: tol_fact
 	
 	call c_f_pointer(ho_bf_for_Cptr, ho_bf_for)
 	call c_f_pointer(option_Cptr, option)
@@ -474,7 +488,7 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr
 	implicit none 
 
 	integer Nloc,Nrhs
-	complex(kind=8)::x(Nloc,Nrhs),b(Nloc,Nrhs)
+	DT::x(Nloc,Nrhs),b(Nloc,Nrhs)
 	
 	type(c_ptr), intent(in) :: ho_bf_for_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
@@ -518,14 +532,14 @@ end subroutine C_HODLR_Solve
 ! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply_")	
 	! implicit none 
 	! integer Npo,Ncol,Nmin, Ntot
-	! real*8 Xin(*),Xout(*)
-	! ! real*8 Xin(Npo*Ncol),Xout(Npo*Ncol)
-	! real*8 n1,n2
+	! real(kind=8) Xin(*),Xout(*)
+	! ! real(kind=8) Xin(Npo*Ncol),Xout(Npo*Ncol)
+	! real(kind=8) n1,n2
 	
     ! integer i, j, ii, jj, iii, jjj, num_blocks, mm, nn
     ! integer level, blocks, edge, patch, node, group, groupm,Maxgroup_loc,g_start_glo,g_start_loc
     ! integer rank, index_near, m, n, length, flag, num_sample,vectors_x,vectors_y,vectors_start, Dimn
-    ! real*8 theta, phi, dphi, rcs_V, rcs_H, T0, T1, vecnorm, rtemp
+    ! real(kind=8) theta, phi, dphi, rcs_V, rcs_H, T0, T1, vecnorm, rtemp
     ! double complex value_Z, ctemp
     
     ! double complex, allocatable :: ctemp_vector(:), ctemp_vector1(:), ctemp_vector2(:), output(:,:)

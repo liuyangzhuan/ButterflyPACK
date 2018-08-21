@@ -1,6 +1,18 @@
 module HODLR_Solve
 ! use Butterfly_rightmultiply
 use Bplus_compress_forward
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
+
 contains 
 
 
@@ -12,23 +24,21 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
     integer i, j, ii, jj, iii, jjj
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, Ns_loc, num_vectors 
-    real*8 theta, phi, dphi, rcs_V, rcs_H
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
-    complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:)
-	real*8:: rel_error
+	real(kind=8):: rel_error
 	type(Hoption)::option
 	type(proctree)::ptree
 	type(Hstat)::stats
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
 	type(hobf)::hobf_forward,hobf_inverse
-	complex(kind=8)::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
-	complex(kind=8),allocatable::r0_initial(:)
+	DT::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
+	DT,allocatable::r0_initial(:)
 
 	if(option%precon/=DIRECT)then
         allocate(r0_initial(1:Ns_loc))	
 		do ii=1,Ns_loc
-		   r0_initial(ii)= random_complex_number()
+		   call random_dp_number(r0_initial(ii))
 		end do			
 		
 		do ii=1,num_vectors
@@ -52,26 +62,26 @@ end subroutine HODLR_Solution
 	integer level_c,rowblock,ierr
     integer,intent(in)::ntotal
     integer::iter,itmax,it,nn_loc	
-    complex(kind=dp),dimension(1:nn_loc)::x,bb,b,ytmp
+    DT,dimension(1:nn_loc)::x,bb,b,ytmp
     real(kind=dp)::err,rerr
-    complex(kind=dp),dimension(1:nn_loc)::w,yo,ayo,ye,aye,r,d,v
+    DT,dimension(1:nn_loc)::w,yo,ayo,ye,aye,r,d,v
     real(kind=dp)::ta,we,cm
-    complex(kind=dp)::we_local,we_sum,rerr_local,rerr_sum,err_local,err_sum
-    complex(kind=dp)::ta_local,ta_sum,bmag_local,bmag_sum1,dumb_ali(6)
-    complex(kind=dp)::etha,rho,rho_local,amgis,amgis_local,ahpla,dum,dum_local,beta
+    DT::we_local,we_sum,rerr_local,rerr_sum,err_local,err_sum
+    DT::ta_local,ta_sum,bmag_local,bmag_sum1,dumb_ali(6)
+    DT::etha,rho,rho_local,amgis,amgis_local,ahpla,dum,dum_local,beta
     real(kind=dp)::bmag
     real(kind=dp)::tim1,tim2
     integer::kk,ll
     ! Variables for storing current
     integer::count_unk,srcbox_id
-    complex(kind=dp),dimension(:),allocatable::curr_coefs_dum_local,curr_coefs_dum_global
+    DT,dimension(:),allocatable::curr_coefs_dum_local,curr_coefs_dum_global
     real(kind=dp)::mem_est
 	character:: trans
 	type(Hstat)::stats
 		
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
 	type(hobf)::hobf_forward,hobf_inverse
-	complex(kind=8)::r0_initial(:)
+	DT::r0_initial(:)
 	integer precond
 	type(proctree)::ptree
 	
@@ -90,7 +100,7 @@ end subroutine HODLR_Solution
     
     !  set initial values
     !
-    d=cmplx(0.0_dp,0.0_dp,dp)
+    d=0d0
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
     call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
@@ -110,14 +120,14 @@ end subroutine HODLR_Solution
 	
     v=ayo
     we=0.0_dp
-    etha=cmplx(0.0_dp,0.0_dp,dp)
+    etha=0d0
     
     ta_local=dot_product(r,r)
     rho_local=dot_product(r0_initial,r)
     bmag_local=dot_product(bb,bb)
     
     dumb_ali(1:3)=(/ta_local,rho_local,bmag_local/)
-    call MPI_ALLREDUCE(dumb_ali(1:3),dumb_ali(4:6),3,MPI_DOUBLE_COMPLEX,&
+    call MPI_ALLREDUCE(dumb_ali(1:3),dumb_ali(4:6),3,MPI_DT,&
          MPI_SUM,ptree%Comm,ierr)
     ta_sum=dumb_ali(4);rho=dumb_ali(5);bmag_sum1=dumb_ali(6)
     ta=sqrt(abs(ta_sum))
@@ -126,7 +136,7 @@ end subroutine HODLR_Solution
     
     iters: do it=1,itmax
        amgis_local=dot_product(r0_initial,v)
-       call MPI_ALLREDUCE(amgis_local,amgis,1,MPI_DOUBLE_COMPLEX,MPI_SUM,&
+       call MPI_ALLREDUCE(amgis_local,amgis,1,MPI_DT,MPI_SUM,&
             ptree%Comm,ierr)
        ahpla=rho/amgis
        ye=yo-ahpla*v
@@ -139,7 +149,7 @@ end subroutine HODLR_Solution
        d=yo+(we*we*etha/ahpla)*d
        w=w-ahpla*ayo
        we_local=dot_product(w,w)
-       call MPI_ALLREDUCE(we_local,we_sum,1,MPI_DOUBLE_COMPLEX,MPI_SUM,&
+       call MPI_ALLREDUCE(we_local,we_sum,1,MPI_DT,MPI_SUM,&
             ptree%Comm,ierr)	
        we=sqrt(abs(we_sum))/ta
        cm=1.0d0/sqrt(1.0d0+we*we)
@@ -153,7 +163,7 @@ end subroutine HODLR_Solution
        d=ye+(we*we*etha/ahpla)*d
        w=w-ahpla*aye
        we_local=dot_product(w,w)
-       call MPI_ALLREDUCE(we_local,we_sum,1,MPI_DOUBLE_COMPLEX,MPI_SUM,&
+       call MPI_ALLREDUCE(we_local,we_sum,1,MPI_DT,MPI_SUM,&
             ptree%Comm,ierr)	
        we=sqrt(abs(we_sum))/ta
        cm=1.0d0/sqrt(1.0d0+we*we)
@@ -171,7 +181,7 @@ end subroutine HODLR_Solution
 	
           r=bb-r
           rerr_local=dot_product(r,r)
-          call MPI_ALLREDUCE(rerr_local,rerr_sum,1,MPI_DOUBLE_COMPLEX,MPI_SUM,&
+          call MPI_ALLREDUCE(rerr_local,rerr_sum,1,MPI_DT,MPI_SUM,&
                ptree%Comm,ierr)
           rerr=sqrt(abs(rerr_sum))/bmag
           
@@ -193,7 +203,7 @@ end subroutine HODLR_Solution
        end if
        !  make preparations for next iteration
        dum_local=dot_product( r0_initial,w)
-       call MPI_ALLREDUCE(dum_local,dum,1,MPI_DOUBLE_COMPLEX,MPI_SUM,&
+       call MPI_ALLREDUCE(dum_local,dum,1,MPI_DT,MPI_SUM,&
             ptree%Comm,ierr)
        beta=dum/rho
        rho=dum
@@ -215,7 +225,7 @@ end subroutine HODLR_Solution
     !MAGIC
     r=bb-r
     err_local=dot_product(r,r)
-    call MPI_ALLREDUCE(err_local,err_sum,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,&
+    call MPI_ALLREDUCE(err_local,err_sum,1,MPI_DT,MPI_SUM,ptree%Comm,&
          ierr)
     err=sqrt(abs(err_sum))/bmag
     iter=itmax
@@ -233,7 +243,7 @@ end subroutine HODLR_Solution
   subroutine HODLR_ApplyPrecon(precond,nn_loc,x,y,ptree,hobf_inverse,stats)
     implicit none
 	integer nn_loc
-	complex(kind=dp),dimension(1:nn_loc)::x,y
+	DT,dimension(1:nn_loc)::x,y
 	integer precond
 	type(hobf)::hobf_inverse
 	type(proctree)::ptree
@@ -257,19 +267,19 @@ subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
     integer i, j, ii, jj, iii, jjj, ierr
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
-    real*8 theta, phi, dphi, rcs_V, rcs_H
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
-    real*8 n1,n2,rtemp	
-    complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),xtrue(:,:),b(:,:)
-	real*8:: rel_error,rtemp1,rtemp2,norm1,norm2
+    real(kind=8) n1,n2,rtemp	
+    DT value_Z
+    DT,allocatable:: Voltage_pre(:),x(:,:),xtrue(:,:),b(:,:)
+	real(kind=8):: rel_error,rtemp1,rtemp2,norm1,norm2
 	type(Hoption)::option
 	! type(mesh)::msh
 	! type(kernelquant)::ker
 	type(proctree)::ptree
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(Hstat)::stats	
-	complex(kind=8),allocatable:: current(:),voltage(:)
+	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
 
 	! if(option%PRECON==DIRECT)then
@@ -321,18 +331,18 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors,pp
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
-    real*8 a,b,c,d
-    complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
     ! type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
 	
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:)
 	! complex(kind=8)::Vin(:),Vout(:)
-	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
 	type(hobf)::ho_bf1
     type(proctree)::ptree
 	type(Hstat)::stats
@@ -392,20 +402,20 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
-    real*8 a,b,c,d
-    complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
 	! type(matrixblock),pointer::block_o
 	type(blockplus),pointer::bplus_o
 	type(proctree)::ptree
     ! type(vectorsblock), pointer :: random1, random2
     type(Hstat)::stats
 	
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
 	
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:)
 	! complex(kind=8)::Vin(:,:),Vout(:,:)
-	complex(kind=8)::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
 	type(hobf)::ho_bf1
  
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1) 

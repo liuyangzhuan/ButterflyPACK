@@ -3,6 +3,18 @@ module Bplus_inversion_schur_partition
 use Bplus_randomized
 
 integer rankthusfarBC
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
+
 contains 
 
 
@@ -18,7 +30,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
     
 	integer level_c,rowblock
 	type(blockplus),pointer::bplus
-	real*8:: n1,n2,Memory,error_inout
+	real(kind=8):: n1,n2,Memory,error_inout
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
@@ -51,14 +63,14 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
     integer num_col, num_row, level, mm, nn, ii, jj,tt,ll
     character chara
-    real*8 T0
+    real(kind=8) T0
     type(matrixblock),pointer::block_o,block_off1,block_off2
     integer rank_new_max,rank0
-	real*8:: rank_new_avr,error
+	real(kind=8):: rank_new_avr,error
 	integer niter
-	real*8:: error_inout,rate,err_avr
+	real(kind=8):: error_inout,rate,err_avr
 	integer itermax,ntry
-	real*8:: n1,n2,Memory
+	real(kind=8):: n1,n2,Memory
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
@@ -126,15 +138,15 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm_diag
     character chara
-    real*8 a,b,c,d
-    complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
     ! type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
 	
 	integer Nsub,Ng,unique_nth,level_left_start,ll
 	integer*8 idx_start   
@@ -144,7 +156,7 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	integer header_m, header_n, tailer_m, tailer_n
 	
 	type(RandomBlock), pointer :: random
-	real*8::n2,n1
+	real(kind=8)::n2,n1
 	type(hobf)::ho_bf1
 	type(matrixblock),pointer::block_off1,block_off2
 	type(proctree)::ptree
@@ -239,20 +251,20 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
     integer groupm,blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
     integer num_col, num_row, level, mm, nn, ii, jj,tt,ll
     character chara
-    real*8 T0
+    real(kind=8) T0
     type(matrixblock)::block_o,block_Xn
     integer rank_new_max,rank0,num_vect
-	real*8:: rank_new_avr,error
+	real(kind=8):: rank_new_avr,error
 	integer niter
-	real*8:: error_inout,rate,err_avr
+	real(kind=8):: error_inout,rate,err_avr
 	integer itermax,ntry,converged
-	real*8:: n1,n2,Memory,memory_temp
+	real(kind=8):: n1,n2,Memory,memory_temp
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
 	type(schulz_operand)::schulz_op
-	complex(kind=8),allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
-	complex(kind=8)::ctemp1,ctemp2
+	DT,allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
+	DT::ctemp1,ctemp2
 	character(len=10)::iternumber 
 
 	error_inout=0
@@ -363,17 +375,17 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
     
     integer level_butterfly
     integer mm, nn, mn,ii
-    real*8 T0
+    real(kind=8) T0
 
-	real*8:: error
+	real(kind=8):: error
 	integer niter,groupm,groupn
-	real*8:: error_inout
+	real(kind=8):: error_inout
 	integer num_vect,rank,ranktmp,q,qq
-	real*8:: n1,n2,memory_temp
+	real(kind=8):: n1,n2,memory_temp
 	type(Hoption)::option
 	type(schulz_operand)::schulz_op
-	real*8, allocatable:: Singular(:)
-	complex (kind=8), allocatable::UU(:,:),VV(:,:),RandVectIn(:,:),RandVectOut(:,:),matrixtmp(:,:),matrixtmp1(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	DT, allocatable::UU(:,:),VV(:,:),RandVectIn(:,:),RandVectOut(:,:),matrixtmp(:,:),matrixtmp1(:,:)
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
@@ -400,12 +412,12 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
 	q=6
 	do qq=1,q
-		RandVectOut=conjg(RandVectOut)
+		RandVectOut=conjg(cmplx(RandVectOut,kind=8))
 		
 		call butterfly_block_MVP_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 		RandVectIn = RandVectOut+RandVectIn		
 		
-		RandVectIn=conjg(RandVectIn)
+		RandVectIn=conjg(cmplx(RandVectIn,kind=8))
 		
 		call butterfly_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,num_vect,RandVectIn,RandVectOut,cone,czero,ptree,stats)
 		RandVectOut = RandVectIn+RandVectOut		
@@ -419,10 +431,10 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 	
 	
 	! computation of B = Q^c*A
-	RandVectOut=conjg(RandVectOut)
+	RandVectOut=conjg(cmplx(RandVectOut,kind=8))
 	call butterfly_block_MVP_dat(schulz_op%matrices_block,'T',mm,nn,num_vect,RandVectOut,RandVectIn,cone,czero,ptree,stats)
 	RandVectIn =RandVectOut+RandVectIn 
-	RandVectOut=conjg(RandVectOut)	
+	RandVectOut=conjg(cmplx(RandVectOut,kind=8))	
 	
 	! computation of SVD of B and LR of A
 	mn=min(nn,ranktmp)
@@ -477,20 +489,20 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks,level_butterfly_loc
     integer num_col, num_row, level, mm, nn, ii, jj,tt,ll,llplus,bb,mmb
     character chara
-    real*8 T0
+    real(kind=8) T0
     type(matrixblock),pointer::block_o,block_off1,block_off2
     type(matrixblock),pointer::blocks_o_D
     type(matrixblock)::block_tmp
 	type(blockplus),pointer::Bplus,Bplus_schur
     integer rank_new_max
-	real*8:: rank_new_avr,error,err_avr,err_max
+	real(kind=8):: rank_new_avr,error,err_avr,err_max
 	integer niter
-	real*8:: error_inout,rate,rankrate_inner,rankrate_outter
+	real(kind=8):: error_inout,rate,rankrate_inner,rankrate_outter
 	integer itermax,ntry,cnt,cnt_partial
-	real*8:: n1,n2,Memory
+	real(kind=8):: n1,n2,Memory
 	integer rank0,rank0_inner,rank0_outter,Lplus,level_BP,levelm,groupm_start,ij_loc,edge_s,edge_e,edge_first,idx_end_m_ref,idx_start_m_ref,idx_start_b,idx_end_b
-	complex(kind=8),allocatable:: matin(:,:),matout(:,:),matin_tmp(:,:),matout_tmp(:,:)
-	complex(kind=8):: ctemp1,ctemp2 
+	DT,allocatable:: matin(:,:),matout(:,:),matin_tmp(:,:),matout_tmp(:,:)
+	DT:: ctemp1,ctemp2 
 	integer, allocatable :: ipiv(:)
 	type(Hoption)::option
 	type(Hstat)::stats
@@ -704,7 +716,7 @@ type(blockplus)::bplus_i,agent_bplus
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb,bb_o
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8::rtemp
+real(kind=8)::rtemp
 integer row_group,ll_s,idx_s,idx_e
 
 call assert(bplus_i%row_group==bplus_i%col_group,'only works for square matrix')
@@ -769,17 +781,17 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
     integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,rank,err_cnt
     character chara
-    real*8 T0,err_avr
+    real(kind=8) T0,err_avr
     type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     type(matrixblock)::blocks_io
     type(matrixblock)::blocks_schur
     integer rank_new_max,rank0
-	real*8:: rank_new_avr,error,rate
+	real(kind=8):: rank_new_avr,error,rate
 	integer niter
-	real*8:: error_inout
+	real(kind=8):: error_inout
 	integer itermax,ntry
-	real*8:: n1,n2,Memory
-	complex (kind=8), allocatable::matrix_small(:,:)
+	real(kind=8):: n1,n2,Memory
+	DT, allocatable::matrix_small(:,:)
 	type(Hoption)::option
 	type(Hstat)::stats
 	integer level_butterfly_target,pgno,pgno1
@@ -880,8 +892,8 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 	integer level_butterfly, num_blocks, level_butterfly_c, num_blocks_c,level,num_col,num_row,num_rowson,num_colson
 	
     type(matrixblock)::blocks_i,blocks_A,blocks_B,blocks_C,blocks_D
-	complex(kind=8),allocatable:: matrixtemp1(:,:),matrixtemp2(:,:),vin(:,:),vout1(:,:),vout2(:,:)
-	complex(kind=8)::ctemp1,ctemp2
+	DT,allocatable:: matrixtemp1(:,:),matrixtemp2(:,:),vin(:,:),vout1(:,:),vout2(:,:)
+	DT::ctemp1,ctemp2
 
 	blocks_A%level = blocks_i%level+1
 	blocks_A%row_group = blocks_i%row_group*2	
@@ -1395,18 +1407,18 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
     integer level_c,rowblock,kover,rank,kk1,kk2,nprow,npcol
 	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
     integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,index_j,index_i
-    real*8 a,b,c,d,Memory
-    complex (kind=8) ctemp,TEMP(1)
+    real(kind=8) a,b,c,d,Memory,flop
+    DT ctemp,TEMP(1)
 	type(matrixblock)::block_o
-	complex (kind=8), allocatable::matrixtemp(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:),matU(:,:)
-	real*8, allocatable:: Singular(:)
+	DT, allocatable::matrixtemp(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:),matU(:,:)
+	real(kind=8), allocatable:: Singular(:)
     integer, allocatable :: ipiv(:),iwork(:)
 	type(proctree)::ptree
 	integer pgno,ctxt,ctxt_head,myrow,mycol,myArows,myAcols,iproc,myi,jproc,myj,info
 	integer descUV(9),descsmall(9),desctemp(9),TEMPI(1)
 
 	integer lwork,liwork,lcmrc,ierr
-	complex(kind=8),allocatable:: work(:)	
+	DT,allocatable:: work(:)	
 	integer :: numroc   ! blacs routine
 	type(Hstat)::stats
 
@@ -1424,12 +1436,12 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	
 	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp)
 	
-	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%ButterflyU%blocks(1)%matrix,matrixtemp,'T','N',cone,czero)	
-	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(rank,rank,block_o%M_loc)
+	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop)	
+	stats%Flop_Factor = stats%Flop_Factor + flop
 	
 	! write(*,*)'goog1'
 	call assert(MPI_COMM_NULL/=ptree%pgrp(pgno)%Comm,'communicator should not be null 1')
-	call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*rank,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*rank,MPI_DT,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 	! write(*,*)'goog2' 
 	do ii=1,rank
 		matrixtemp1(ii,ii) = matrixtemp1(ii,ii)+1
@@ -1439,10 +1451,10 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	if(rank<=nbslpk)then
 		allocate(ipiv(rank))
 		ipiv=0
-		call getrff90(matrixtemp1,ipiv)
-		stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)
-		call getrif90(matrixtemp1,ipiv)	
-		stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)
+		call getrff90(matrixtemp1,ipiv,flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		call getrif90(matrixtemp1,ipiv,flop)	
+		stats%Flop_Factor = stats%Flop_Factor + flop
 		deallocate(ipiv)
 	else 
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
@@ -1468,37 +1480,31 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			! endif
 			call assert(info==0,'descinit fail for descsmall')
 			
-			call pzgemr2d(rank, rank, matrixtemp1, 1, 1, desctemp, matrix_small, 1, 1, descsmall, ctxt)
+			call pgemr2df90(rank, rank, matrixtemp1, 1, 1, desctemp, matrix_small, 1, 1, descsmall, ctxt)
 			
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
-			call pzgetrf(rank,rank,matrix_small,1,1,descsmall,ipiv,info)
-			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(rank,rank)/dble(nprow*npcol)
-			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,TEMP,-1,TEMPI,-1,info)
-			LWORK=NINT(dble(TEMP(1)*2.001))
-			allocate(work(lwork))
-			work=0
-			liwork=TEMPI(1)
-			allocate(iwork(liwork))
-			iwork=0	
-			call pzgetri(rank,matrix_small,1,1,descsmall,ipiv,work,lwork,iwork,liwork,info)
-			stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(rank)/dble(nprow*npcol)
-			deallocate(ipiv)		
-			deallocate(iwork)
-			deallocate(work)
+			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop)
+			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 			
-			call pzgemr2d(rank, rank, matrix_small, 1, 1, descsmall,matrixtemp1, 1, 1, desctemp, ctxt)
+			call pgetrif90(rank,matrix_small,1,1,descsmall,ipiv,flop)
+			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
+			
+			deallocate(ipiv)
+			
+			
+			call pgemr2df90(rank, rank, matrix_small, 1, 1, descsmall,matrixtemp1, 1, 1, desctemp, ctxt)
 			deallocate(matrix_small)
 		endif	
 			
-		call MPI_Bcast(matrixtemp1,rank*rank,MPI_DOUBLE_COMPLEX,0,ptree%pgrp(pgno)%Comm,ierr)
+		call MPI_Bcast(matrixtemp1,rank*rank,MPI_DT,0,ptree%pgrp(pgno)%Comm,ierr)
 		
 	endif
 	
 	
-	call gemmf90(matU,matrixtemp1,block_o%ButterflyU%blocks(1)%matrix,'N','N',cone,czero)	
+	call gemmf90(matU,block_o%M_loc,matrixtemp1,rank,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,'N','N',block_o%M_loc,rank,rank,cone,czero,flop)	
 	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
-	stats%Flop_Factor = stats%Flop_Factor + flops_zgemm(block_o%M_loc,rank,rank)
+	stats%Flop_Factor = stats%Flop_Factor + flop
 	
 	deallocate(matrixtemp,matrixtemp1,matU)
 	

@@ -1,7 +1,18 @@
 module Bplus_rightmultiply
 ! use Butterfly_rightmultiply
 use Bplus_randomized
-integer rankthusfarS					
+integer rankthusfarS
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+					
 contains
 
 
@@ -20,16 +31,15 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
     integer num_col, num_row, level, mm, nn, ii, jj,tt
     character chara
-    real*8 T0
+    real(kind=8) T0
     type(blockplus),pointer::bplus
 	type(matrixblock)::block_old
 	type(matrixblock),pointer::block_o
     integer::rank_new_max
-	real*8::rank_new_avr,error,rate,rankrate_inner,rankrate_outter 
-	complex(kind=8),allocatable::matrixtmp(:,:)
+	real(kind=8)::rank_new_avr,error,rate,rankrate_inner,rankrate_outter 
 	integer niter,rank,ntry,rank0,rank0_inner,rank0_outter
-	real*8:: error_inout
-	real*8:: n1,n2,Memory
+	real(kind=8):: error_inout
+	real(kind=8):: n1,n2,Memory
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
@@ -104,15 +114,15 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,pp,qq
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
-    real*8 a,b,c,d
-    complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o,blocks
 	
     type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_end_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
 	
 	integer Nsub,Ng,unique_nth,level_left_start
 	integer*8 idx_start   
@@ -123,7 +133,7 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 	
 	integer nth_s,nth_e,num_vect_sub,nth
 	type(RandomBlock), pointer :: random
-	real*8::n2,n1
+	real(kind=8)::n2,n1
 	type(hobf)::ho_bf1
 	type(proctree)::ptree
 	type(Hstat)::stats

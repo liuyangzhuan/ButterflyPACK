@@ -4,7 +4,7 @@ implicit none
 
 	!**** define your application-related variables here   
 	type quant_app
-		real*8 sigma, lambda ! Kernel Regression: RBF parameters 
+		real(kind=8) sigma, lambda ! Kernel Regression: RBF parameters 
 		integer dimn  ! dimension of the data sets
 		integer ntrain,ntest ! size of training points and test points
 		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
@@ -14,7 +14,7 @@ contains
 
 
 	!**** cutoff distance for gaussian kernel 
-	real*8 function arg_thresh_Zmn(quant)
+	real(kind=8) function arg_thresh_Zmn(quant)
 		use MODULE_FILE
 		implicit none 
 		
@@ -33,7 +33,7 @@ contains
 		class(*),pointer :: quant
 		type(mesh)::msh
 		integer, INTENT(IN):: m,n
-		complex(kind=8)::value_e 
+		real(kind=8)::value_e 
 
 		real(kind=8) r_mn
 		integer dimn
@@ -74,13 +74,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 	! include "mkl_vml.fi"	 
 	
-    real*8 para
-    real*8 tolerance
+    real(kind=8) para
+    real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,x,y,z,r,theta,phi
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings	
@@ -294,21 +294,21 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     integer i, j, ii, jj, iii, jjj, ierr, ntest,Dimn,edge_m,edge_n,ncorrect
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
-    real*8 theta, phi, dphi, rcs_V, rcs_H,rate
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H,rate
     real T0,T1
-    real*8 n1,n2,rtemp	
-    complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
-	real*8:: rel_error
+    real(kind=8) n1,n2,rtemp	
+    real(kind=8) value_Z
+    real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
+	real(kind=8):: rel_error
 	type(Hoption)::option
 	type(mesh)::msh
 	type(quant_app)::quant
 	type(proctree)::ptree
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(Hstat)::stats	
-	complex(kind=8),allocatable:: current(:),voltage(:)
-	complex(kind=8), allocatable:: labels(:)
-	real*8,allocatable:: xyz_test(:,:)
+	real(kind=8),allocatable:: current(:),voltage(:)
+	real(kind=8), allocatable:: labels(:)
+	real(kind=8),allocatable:: xyz_test(:,:)
 	real(kind=8) r_mn
 	integer label
 
@@ -373,7 +373,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 		enddo
 	enddo	
 	
-	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_complex, MPI_SUM, Main_ID, ptree%Comm,ierr)
+	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_precision, MPI_SUM, Main_ID, ptree%Comm,ierr)
 			
 	if (ptree%MyID==Main_ID) then
 		do ii=1,ntest

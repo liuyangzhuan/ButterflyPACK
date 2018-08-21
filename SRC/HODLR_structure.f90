@@ -2,15 +2,15 @@ module H_structure
 use Utilities
 contains 
 
-real*8 function group_dist(group_m,group_n)
+real(kind=8) function group_dist(group_m,group_n)
 
     use MODULE_FILE
     implicit none
     
     integer group_m, group_n,farblock, level
     integer i, j, ii, jj
-    real*8 dis, rad1, rad2, para
-	real*8,allocatable::a(:), b(:)
+    real(kind=8) dis, rad1, rad2, para
+	real(kind=8),allocatable::a(:), b(:)
     integer Dimn
 	Dimn = size(basis_group(group_m)%center,1)
     allocate(a(Dimn))
@@ -39,8 +39,8 @@ logical function near_or_far(group_m,group_n,para)
     
     integer group_m, group_n,farblock, level
     integer i, j, ii, jj
-    real*8 dis, rad1, rad2, para
-    real*8,allocatable:: a(:), b(:)
+    real(kind=8) dis, rad1, rad2, para
+    real(kind=8),allocatable:: a(:), b(:)
     integer Dimn
 	
 	Dimn = size(basis_group(group_m)%center,1)
@@ -72,13 +72,13 @@ logical function near_or_far(group_m,group_n,para)
 	
 end function
 
-real*8 function func_distance(node1,node2,msh)
+real(kind=8) function func_distance(node1,node2,msh)
     
     use MODULE_FILE
     implicit none
 
     integer node1, node2
-    real*8 dis
+    real(kind=8) dis
     integer i, j
     integer Dimn
 	type(mesh)::msh
@@ -111,12 +111,12 @@ subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
     
     integer index_temp
     
-    real*8 a, b, c, d, para, xmax,xmin,ymax,ymin,zmax,zmin,seperator,r,theta,phi,phi_tmp
-    real*8 radius, radiusmax
-    real*8,allocatable:: xyzrange(:),xyzmin(:),xyzmax(:),auxpoint(:),groupcenter(:)
-    real*8, allocatable :: distance(:),array(:,:)
+    real(kind=8) a, b, c, d, para, xmax,xmin,ymax,ymin,zmax,zmin,seperator,r,theta,phi,phi_tmp
+    real(kind=8) radius, radiusmax
+    real(kind=8),allocatable:: xyzrange(:),xyzmin(:),xyzmax(:),auxpoint(:),groupcenter(:)
+    real(kind=8), allocatable :: distance(:),array(:,:)
 	integer level_c,sortdirec,mm,phi_end,Ninfo_edge
-	real*8 t1,t2
+	real(kind=8) t1,t2
 	integer Maxgroup
 	character(len=1024)  :: strings	
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
@@ -474,13 +474,13 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
     integer level, edge, patch, node, group, group_touch
     integer rank, index_near, m, n, length, flag, itemp,cnt,detection
     real T0
-	real*8:: tolerance, rtemp,rel_error,seperator,dist
-    real*8 Memory_direct_forward,Memory_butterfly_forward
+	real(kind=8):: tolerance, rtemp,rel_error,seperator,dist
+    real(kind=8) Memory_direct_forward,Memory_butterfly_forward
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2,levelm,groupm_start,index_i_m,index_j_m
 	integer level_c,iter,level_cc,level_BP,Nboundall,level_butterfly	
 	type(matrixblock),pointer::blocks,block_f,block_sch,block_inv
-	real*8::minbound,theta,phi,r,rmax,phi_tmp,measure
-	real*8,allocatable::Centroid_M(:,:),Centroid_N(:,:)
+	real(kind=8)::minbound,theta,phi,r,rmax,phi_tmp,measure
+	real(kind=8),allocatable::Centroid_M(:,:),Centroid_N(:,:)
 	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
 	integer Dimn,col_group,row_group,Maxgrp
 	type(Hoption)::option

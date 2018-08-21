@@ -3,6 +3,17 @@ module cascading_factorization
 ! use Butterfly_inversion_schur_partition
 use Bplus_rightmultiply
 use Bplus_inversion_schur_partition
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 contains 
 
 subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
@@ -18,15 +29,15 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
     integer level, blocks, edge, patch, node, group,level_c,groupm_diag
     integer rank, index_near, m, n, length, flag, itemp
     real T0
-	real*8 rtemp,tmpfact
-    real*8 Memory, Memory_near
+	real(kind=8) rtemp,tmpfact
+    real(kind=8) Memory, Memory_near
 	integer,allocatable:: index_old(:),index_new(:) 
 	integer::block_num,block_num_new,num_blocks,level_butterfly	
 	integer, allocatable :: ipiv(:)
 	integer rowblock,pgno1,pgno2,pgno,ierr,rowblock_inv
 	type(matrixblock),pointer::block_o,block_off,block_off1,block_off2
 	type(matrixblock)::block_tmp
-	real*8 n1,n2
+	real(kind=8) n1,n2,flop
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
@@ -63,10 +74,10 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 			ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 			nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,1)
 			allocate(ipiv(nn))
-			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)
-			stats%Flop_Factor = stats%Flop_Factor + flops_zgetrf(nn,nn)
-			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv)		
-			stats%Flop_Factor = stats%Flop_Factor + flops_zgetri(nn)
+			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop)
+			stats%Flop_Factor = stats%Flop_Factor + flop
+			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop)		
+			stats%Flop_Factor = stats%Flop_Factor + flop
 			! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
 
 			deallocate(ipiv)

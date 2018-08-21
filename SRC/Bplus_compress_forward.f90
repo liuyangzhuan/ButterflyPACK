@@ -2,6 +2,17 @@ module Bplus_compress_forward
 use Bplus_randomized 
 use H_structure
 ! use element_Z 
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif
+
 contains 
 ! subroutine Butterfly_compress(blocks,Memory,msh,element_Zmn,ker)
 
@@ -13,9 +24,9 @@ contains
     ! integer group_m, group_n, mm, nn, index_i, index_j, ii, jj
     ! integer level, length_1, length_2, level_blocks, index_ij
     ! integer rank, rankmax, butterflyB_inuse, rank1, rank2
-    ! real*8 rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
-    ! real*8 Memory
-    ! complex(kind=8) ctemp
+    ! real(kind=8) rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
+    ! real(kind=8) Memory
+    ! DT ctemp
 	! type(matrixblock)::blocks
 	! procedure(Z_elem)::element_Zmn
 	
@@ -106,7 +117,7 @@ contains
 
     ! integer mm, nn, level, level_butterfly
     ! integer i, j, ii, jj, index_i, index_j
-    ! real*8 tolerance
+    ! real(kind=8) tolerance
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
 	! type(kernelquant)::ker
@@ -132,13 +143,13 @@ contains
     ! integer group_m, group_n, mm, nn, nn_start, edge_m, edge_n
     ! integer level, length_1, length_2, flag
     ! integer rank, rankmax,rankmax_c,rankmax_r, rankmax_min,index_i, index_j, flag0, rank_new, header_m, header_n
-    ! real*8 rate, tolerance, rtemp1, rtemp2, rtemp
-    ! complex(kind=8) ctemp
+    ! real(kind=8) rate, tolerance, rtemp1, rtemp2, rtemp
+    ! DT ctemp
 
     ! integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     ! integer,allocatable:: select_row_rr(:), select_column_rr(:)
-    ! complex(kind=8),allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
-    ! real*8,allocatable:: Singular(:)
+    ! DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
+    ! real(kind=8),allocatable:: Singular(:)
 	! integer Nlayer
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
@@ -433,13 +444,13 @@ contains
     ! integer group_m, group_n, mm, nn, index_m, index_n, option, mm_start, nn1, nn2, header_m, header_n
     ! integer level, length_1, length_2, butterflyB_inuse, index_ii, index_jj, header_n1, header_n2
     ! integer rank, rankmax,rankmax_c,rankmax_r,rankmax_min,index_i, index_j, index_ij, index_iijj, flag, flag0, rank_new, edge_m, edge_n
-    ! real*8 rate, tolerance, rtemp1, rtemp2, rtemp
-    ! complex(kind=8) ctemp
+    ! real(kind=8) rate, tolerance, rtemp1, rtemp2, rtemp
+    ! DT ctemp
 
     ! integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     ! integer,allocatable:: select_row_rr(:), select_column_rr(:)
-    ! complex(kind=8),allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
-    ! real*8,allocatable:: Singular(:)
+    ! DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
+    ! real(kind=8),allocatable:: Singular(:)
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
 	! type(kernelquant)::ker
@@ -706,7 +717,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 
     type(blockplus)::bplus
 	integer:: ii,ll,bb
-    real*8 Memory,rtemp	
+    real(kind=8) Memory,rtemp	
 	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall
 	type(Hoption)::option
 	type(Hstat)::stats
@@ -767,17 +778,17 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
     integer group_m, group_n, mm, nn,mn, index_i, index_j,index_i_m, index_j_m,index_i_loc, index_j_loc, index_ij_loc,ii, jj,nn1,nn2,mm1,mm2,idxs_m,idxs_n
     integer level,levelm,level_loc, length_1, length_2, level_blocks, index_ij,edge_m,edge_n
     integer rank, rankmax, butterflyB_inuse, rank1, rank2,rmax
-    real*8 rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
-    real*8 Memory
-    complex(kind=8) ctemp
+    real(kind=8) rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
+    real(kind=8) Memory
+    DT ctemp
 	type(butterfly_Kerl)ButterflyP_old,ButterflyP
-	complex(kind=8), allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
-	complex(kind=8), allocatable :: tau_Q(:)
-	real*8,allocatable :: Singular(:)
+	DT, allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
+	DT, allocatable :: tau_Q(:)
+	real(kind=8),allocatable :: Singular(:)
 	integer flag,tmpi,tmpj
-	real*8:: a,b,n1,n2,error
-	real*8:: maxvalue(1:20)
-	real*8:: minvalue(1:20)
+	real(kind=8):: a,b,n1,n2,error
+	real(kind=8):: maxvalue(1:20)
+	real(kind=8):: minvalue(1:20)
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row,frow
 	type(mesh)::msh
 	type(kernelquant)::ker
@@ -1178,17 +1189,17 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
     integer group_m, group_n, mm, nn,mn, index_i, index_j,index_ij_loc,index_i_m, index_j_m,index_i_loc, index_j_loc, ii, jj,nn1,nn2,mm1,mm2,idxs_m,idxs_n
     integer level,levelm,level_loc, length_1, length_2, level_blocks, index_ij,edge_m,edge_n
     integer rank, rankmax, butterflyB_inuse, rank1, rank2,rmax
-    real*8 rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
-    real*8 Memory,n1,n2
-    complex(kind=8) ctemp
+    real(kind=8) rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
+    real(kind=8) Memory,n1,n2
+    DT ctemp
 	type(butterfly_Kerl)ButterflyP_old,ButterflyP
-	complex(kind=8), allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
-	complex(kind=8), allocatable :: tau_Q(:)
-	real*8,allocatable :: Singular(:)
+	DT, allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
+	DT, allocatable :: tau_Q(:)
+	real(kind=8),allocatable :: Singular(:)
 	integer flag,tmpi,tmpj
-	real*8:: a,b,error
-	real*8:: maxvalue(1:20)
-	real*8:: minvalue(1:20)
+	real(kind=8):: a,b,error
+	real(kind=8):: maxvalue(1:20)
+	real(kind=8):: minvalue(1:20)
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row
 	type(matrixblock)::blocks
 	integer cnt_tmp,rankFar,rankNear,leafsize,frow
@@ -1294,7 +1305,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		! do j=1, rank
 			! do i=1, nn
 				! blocks%ButterflyV%blocks(1)%matrix(i,j)=VV(j,i)
-				! ! blocks%ButterflyV%blocks(1)%matrix(i,j)=random_complex_number()
+				! ! blocks%ButterflyV%blocks(1)%matrix(i,j)=random_dp_number()
 			! enddo
 		! enddo
 		! !$omp end parallel do	
@@ -1306,7 +1317,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		! do j=1, rank
 			! do i=1, mm
 				! blocks%ButterflyU%blocks(1)%matrix(i,j)=UU(i,j)*Singular(j)
-				! ! blocks%ButterflyU%blocks(1)%matrix(i,j)=random_complex_number()
+				! ! blocks%ButterflyU%blocks(1)%matrix(i,j)=random_dp_number()
 			! enddo
 		! enddo
 		! !$omp end parallel do							
@@ -1416,7 +1427,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						do j=1, rank
 							do i=1, nn
 								blocks%ButterflyV%blocks(index_j)%matrix(i,j)=VV(j,i)
-								! blocks%ButterflyV%blocks(index_j)%matrix(i,j)=random_complex_number()
+								! blocks%ButterflyV%blocks(index_j)%matrix(i,j)=random_dp_number()
 							enddo
 						enddo
 						!$omp end parallel do					
@@ -1494,7 +1505,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 							do j=1, rank
 								do i=1, mm
 									blocks%ButterflyU%blocks(index_i)%matrix(i,j)=mat_tmp(i,j)
-									! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_complex_number()
+									! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_dp_number()
 								enddo
 							enddo
 							!$omp end parallel do
@@ -1508,7 +1519,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						do i=1, rank
 							do j=1, nn1
 								blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=VV(i,j)
-								! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_complex_number()
+								! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_dp_number()
 							enddo
 						enddo
 						!$omp end parallel do						
@@ -1516,7 +1527,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						do i=1, rank
 							do j=1, nn2
 								blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=VV(i,j+nn1)
-								! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_complex_number()
+								! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_dp_number()
 							enddo
 						enddo
 						!$omp end parallel do						
@@ -1944,7 +1955,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 							! do j=1, rank
 								! do i=1, nn
 									! blocks%ButterflyV%blocks(index_j)%matrix(i,j)=mat_tmp(j,i)
-									! ! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_complex_number()
+									! ! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_dp_number()
 								! enddo
 							! enddo
 							! !$omp end parallel do
@@ -1958,7 +1969,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						! do i=1, mm1
 							! do j=1, rank
 								! blocks%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix(i,j)=UU(i,j)
-								! ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_complex_number()
+								! ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_dp_number()
 							! enddo
 						! enddo
 						! !$omp end parallel do						
@@ -1966,7 +1977,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						! do i=1, mm2
 							! do j=1, rank
 								! blocks%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix(i,j)=UU(i+mm1,j)
-								! ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_complex_number()
+								! ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_dp_number()
 							! enddo
 						! enddo
 						! !$omp end parallel do						
@@ -2067,16 +2078,16 @@ implicit none
 	type(grid),pointer::gd
 	type(grid),pointer::gdc1,gdc2
 	integer:: cridx,info
-	complex(kind=8),allocatable:: UU(:,:), VV(:,:),matU(:,:),matV(:,:),matU1(:,:),matV1(:,:),matU2(:,:),matV2(:,:),tmp(:,:),matU1D(:,:),matV1D(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:),QQ1(:,:)
-	real*8,allocatable::Singular(:)
+	DT,allocatable:: UU(:,:), VV(:,:),matU(:,:),matV(:,:),matU1(:,:),matV1(:,:),matU2(:,:),matV2(:,:),tmp(:,:),matU1D(:,:),matV1D(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:),QQ1(:,:)
+	real(kind=8),allocatable::Singular(:)
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr
 	integer::descsmatU(9),descsmatV(9),descsmatU1(9),descsmatV1(9),descsmatU2(9),descsmatV2(9),descUU(9),descVV(9),descsmatU1c(9),descsmatU2c(9),descsmatV1c(9),descsmatV2c(9),descButterflyV(9),descButterflyU(9),descButterU1D(9),descButterV1D(9),descVin(9),descVout(9),descVinter(9),descFull(9)
 	integer dims(6),dims_tmp(6) ! M1,N1,rank1,M2,N2,rank2
-	complex(kind=8):: TEMP(1)
+	DT:: TEMP(1)
 	integer LWORK,mnmax,mnmin,rank_new
-	complex(kind=8),allocatable:: WORK(:)	
-	real*8,allocatable::RWORK(:),center(:)
-	real*8:: rtemp,dist,error,rtemp1,rtemp0,fnorm1,fnorm0
+	DT,allocatable:: WORK(:)	
+	real(kind=8),allocatable::RWORK(:),center(:)
+	real(kind=8):: rtemp,dist,error,rtemp1,rtemp0,fnorm1,fnorm0,flop
 	integer :: numroc   ! blacs routine
 	integer :: nb1Dc, nb1Dr, ctxt1D,frow,Dimn,edge_n,edge_m,MyID,Ntest,rmaxc,rmaxr
 	integer,allocatable::M_p(:,:),N_p(:,:)
@@ -2204,8 +2215,8 @@ implicit none
 					call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,ker)
 				end do
 			end do
-			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank)		
-			stats%Flop_Fill = stats%Flop_Fill + flops_zgesdd(blocks%M, blocks%N)
+			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank,flop)		
+			stats%Flop_Fill = stats%Flop_Fill + flop
 			blocks%rankmax = rank
 			blocks%rankmin = rank
 			
@@ -2351,19 +2362,19 @@ implicit none
 					call descinit( descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, gdc1%ctxt, max(myArows,1), info )	
 					call assert(info==0,'descinit fail for descsmatU1c')
 
-					call pzgemr2d(M1, rank1, blockc(1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, gd%ctxt)
+					call pgemr2df90(M1, rank1, blockc(1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, gd%ctxt)
 					
 					! redistribute V1
 					myArows = numroc(N1, nbslpk, myrow1, 0, nprow1)
 					myAcols = numroc(rank1, nbslpk, mycol1, 0, npcol1)	
 					call descinit( descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, gdc1%ctxt, max(myArows,1), info )
 					call assert(info==0,'descinit fail for descsmatV1c')					
-					call pzgemr2d(N1, rank1, blockc(1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, gd%ctxt)				
+					call pgemr2df90(N1, rank1, blockc(1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, gd%ctxt)				
 				else
 					descsmatU1c(2)=-1					
-					call pzgemr2d(M1, rank1, tmp, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, gd%ctxt)
+					call pgemr2df90(M1, rank1, tmp, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, gd%ctxt)
 					descsmatV1c(2)=-1					
-					call pzgemr2d(N1, rank1, tmp, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, gd%ctxt)
+					call pgemr2df90(N1, rank1, tmp, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, gd%ctxt)
 				endif
 				
 				if(nprow2/=-1 .and. npcol2/=-1)then
@@ -2372,19 +2383,19 @@ implicit none
 					myAcols = numroc(rank2, nbslpk, mycol2, 0, npcol2)	
 					call descinit( descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, gdc2%ctxt, max(myArows,1), info )	
 					call assert(info==0,'descinit fail for descsmatU2c')					
-					call pzgemr2d(M2, rank2, blockc(2)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, gd%ctxt)
+					call pgemr2df90(M2, rank2, blockc(2)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, gd%ctxt)
 					
 					! redistribute V2
 					myArows = numroc(N2, nbslpk, myrow2, 0, nprow2)
 					myAcols = numroc(rank2, nbslpk, mycol2, 0, npcol2)	
 					call descinit( descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, gdc2%ctxt, max(myArows,1), info )
 					call assert(info==0,'descinit fail for descsmatV2c')					
-					call pzgemr2d(N2, rank2, blockc(2)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, gd%ctxt)				
+					call pgemr2df90(N2, rank2, blockc(2)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, gd%ctxt)				
 				else
 					descsmatU2c(2)=-1
-					call pzgemr2d(M2, rank2, tmp, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, gd%ctxt)
+					call pgemr2df90(M2, rank2, tmp, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, gd%ctxt)
 					descsmatV2c(2)=-1
-					call pzgemr2d(N2, rank2, tmp, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, gd%ctxt)
+					call pgemr2df90(N2, rank2, tmp, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, gd%ctxt)
 				endif			
 				
 				! compute truncated SVD on matU
@@ -2405,19 +2416,12 @@ implicit none
 				VV=0				
 				
 				allocate(Singular(mnmin))
-				Singular=0			
-				allocate(rwork(1+4*mnmax))
-				rwork=0
-				lwork=-1
-				call pzgesvd('V', 'V', M1, rank1+rank2, matU, 1, 1, descsmatU, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, TEMP, lwork, rwork, info)
+				Singular=0
+
+				call pgesvdf90('V', 'V', M1, rank1+rank2, matU, 1, 1, descsmatU, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+			
 				
-				lwork=NINT(dble(TEMP(1)*2.001))
-				allocate(WORK(lwork))     
-				WORK=0
-				call pzgesvd('V', 'V', M1, rank1+rank2, matU, 1, 1, descsmatU, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, WORK, lwork, rwork, info)			
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgesvd(M1, rank1+rank2)/dble(nprow*npcol)
-				
-				deallocate(WORK,rwork)	
 				deallocate (matU)
 				
 				rank_new = mnmin
@@ -2468,10 +2472,10 @@ implicit none
 				
 				blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank		
 
-				call pzgemm('N','T',N1,rank,rank1,cone, matV1,1,1,descsmatV1,VV,1,1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV)
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(N1,rank,rank1)/dble(nprow*npcol)
-				call pzgemm('N','T',N2,rank,rank2,cone, matV2,1,1,descsmatV2,VV,1,1+rank1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1+N1,1,descButterflyV)
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(N2,rank,rank2)/dble(nprow*npcol)			
+				call pgemmf90('N','T',N1,rank,rank1,cone, matV1,1,1,descsmatV1,VV,1,1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+				call pgemmf90('N','T',N2,rank,rank2,cone, matV2,1,1,descsmatV2,VV,1,1+rank1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1+N1,1,descButterflyV,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)			
 				deallocate(UU,VV,Singular,matV1,matV2)
 		
 			else
@@ -2503,19 +2507,19 @@ implicit none
 					call descinit( descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, gdc1%ctxt, max(myArows,1), info )	
 					call assert(info==0,'descinit fail for descsmatU1c')				
 					! write(*,*)shape(blockc(1)%ButterflyU%blocks(1)%matrix),shape(matU1),rank1,M1,blockc(1)%rankmax
-					call pzgemr2d(M1, rank1, blockc(1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, gd%ctxt)
+					call pgemr2df90(M1, rank1, blockc(1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, gd%ctxt)
 					
 					! redistribute V1
 					myArows = numroc(N1, nbslpk, myrow1, 0, nprow1)
 					myAcols = numroc(rank1, nbslpk, mycol1, 0, npcol1)	
 					call descinit( descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, gdc1%ctxt, max(myArows,1), info )
 					call assert(info==0,'descinit fail for descsmatV1c')						
-					call pzgemr2d(N1, rank1, blockc(1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, gd%ctxt)				
+					call pgemr2df90(N1, rank1, blockc(1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, gd%ctxt)				
 				else
 					descsmatU1c(2)=-1
-					call pzgemr2d(M1, rank1, tmp, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, gd%ctxt)
+					call pgemr2df90(M1, rank1, tmp, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, gd%ctxt)
 					descsmatV1c(2)=-1
-					call pzgemr2d(N1, rank1, tmp, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, gd%ctxt)
+					call pgemr2df90(N1, rank1, tmp, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, gd%ctxt)
 				endif
 				
 				if(nprow2/=-1 .and. npcol2/=-1)then
@@ -2524,19 +2528,19 @@ implicit none
 					myAcols = numroc(rank2, nbslpk, mycol2, 0, npcol2)	
 					call descinit( descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, gdc2%ctxt, max(myArows,1), info )	
 					call assert(info==0,'descinit fail for descsmatU2c')				
-					call pzgemr2d(M2, rank2, blockc(2)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, gd%ctxt)
+					call pgemr2df90(M2, rank2, blockc(2)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, gd%ctxt)
 					
 					! redistribute V2
 					myArows = numroc(N2, nbslpk, myrow2, 0, nprow2)
 					myAcols = numroc(rank2, nbslpk, mycol2, 0, npcol2)	
 					call descinit( descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, gdc2%ctxt, max(myArows,1), info )
 					call assert(info==0,'descinit fail for descsmatV2c')		
-					call pzgemr2d(N2, rank2, blockc(2)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, gd%ctxt)				
+					call pgemr2df90(N2, rank2, blockc(2)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, gd%ctxt)				
 				else
 					descsmatU2c(2)=-1
-					call pzgemr2d(M2, rank2, tmp, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, gd%ctxt)
+					call pgemr2df90(M2, rank2, tmp, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, gd%ctxt)
 					descsmatV2c(2)=-1
-					call pzgemr2d(N2, rank2, tmp, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, gd%ctxt)
+					call pgemr2df90(N2, rank2, tmp, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, gd%ctxt)
 				endif			
 				
 				! compute truncated SVD on matV
@@ -2557,19 +2561,10 @@ implicit none
 				VV=0				
 				
 				allocate(Singular(mnmin))
-				Singular=0			
-				allocate(rwork(1+4*mnmax))
-				rwork=0
-				lwork=-1
-				call pzgesvd('V', 'V', N1, rank1+rank2, matV, 1, 1, descsmatV, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, TEMP, lwork, rwork, info)
-				
-				lwork=NINT(dble(TEMP(1)*2.001))
-				allocate(WORK(lwork))     
-				WORK=0
-				call pzgesvd('V', 'V', N1, rank1+rank2, matV, 1, 1, descsmatV, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, WORK, lwork, rwork, info)			
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgesvd(N1, rank1+rank2)/dble(nprow*npcol)
-				
-				deallocate(WORK,rwork)	
+				Singular=0	
+				call pgesvdf90('V', 'V', N1, rank1+rank2, matV, 1, 1, descsmatV, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop)			
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+
 				deallocate (matV)
 					
 				rank_new = mnmin
@@ -2623,11 +2618,11 @@ implicit none
 				
 				blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank		
 
-				call pzgemm('N','T',M1,rank,rank1,cone, matU1,1,1,descsmatU1,VV,1,1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU)
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M1,rank,rank1)/dble(nprow*npcol)
+				call pgemmf90('N','T',M1,rank,rank1,cone, matU1,1,1,descsmatU1,VV,1,1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 			
-				call pzgemm('N','T',M2,rank,rank2,cone, matU2,1,1,descsmatU2,VV,1,1+rank1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1+M1,1,descButterflyU)
-				stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M2,rank,rank2)/dble(nprow*npcol)
+				call pgemmf90('N','T',M2,rank,rank2,cone, matU2,1,1,descsmatU2,VV,1,1+rank1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1+M1,1,descButterflyU,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 			
 			
 				deallocate(UU,VV,Singular,matU1,matU2)		
@@ -2666,10 +2661,10 @@ implicit none
 			M_p(nprow,2) = blocks%M
 			call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
 			if(myrow/=-1 .and. mycol/=-1)then
-				call pzgemr2d(blocks%M, rank, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descButterflyU, matU1D, 1, 1, descButterU1D, ctxt1D)
+				call pgemr2df90(blocks%M, rank, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descButterflyU, matU1D, 1, 1, descButterU1D, ctxt1D)
 			else 
 				descButterflyU(2)=-1
-				call pzgemr2d(blocks%M, rank, tmp, 1, 1, descButterflyU, matU1D, 1, 1, descButterU1D, ctxt1D)
+				call pgemr2df90(blocks%M, rank, tmp, 1, 1, descButterflyU, matU1D, 1, 1, descButterU1D, ctxt1D)
 			endif
 			
 
@@ -2690,10 +2685,10 @@ implicit none
 			N_p(nprow,2) = blocks%N			
 			call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
 			if(myrow/=-1 .and. mycol/=-1)then			
-				call pzgemr2d(blocks%N, rank, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descButterflyV, matV1D, 1, 1, descButterV1D, ctxt1D)	
+				call pgemr2df90(blocks%N, rank, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descButterflyV, matV1D, 1, 1, descButterV1D, ctxt1D)	
 			else
 				descButterflyV(2)=-1
-				call pzgemr2d(blocks%N, rank, tmp, 1, 1, descButterflyV, matV1D, 1, 1, descButterV1D, ctxt1D)				
+				call pgemr2df90(blocks%N, rank, tmp, 1, 1, descButterflyV, matV1D, 1, 1, descButterV1D, ctxt1D)				
 			endif
 
 
@@ -2735,24 +2730,24 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
     integer i, j, ii, jj, indx, rank_1, rank_2
     integer blocks, index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real*8 norm_Z,norm_U,norm_V,tolerance,SVD_tolerance,dist
+    real(kind=8) norm_Z,norm_U,norm_V,tolerance,SVD_tolerance,dist
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n,Dimn,mn,Navr,itr
     integer rank, ranknew, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min,rmax,idxs_r,idxs_c,frow
-    complex(kind=8) value_Z,maxvalue
-    complex(kind=8) inner_U,inner_V,ctemp,value_UVs
-    real*8 inner_UV,n1,n2,a,error
+    DT value_Z,maxvalue
+    DT inner_U,inner_V,ctemp,value_UVs
+    real(kind=8) inner_UV,n1,n2,a,error,flop
     integer,allocatable:: select_column(:), select_row(:)
-	complex(kind=8)::matU(rankmax_r,rmax),matV(rmax,rankmax_c)
-	real*8::Singular(rmax)
-    complex(kind=8),allocatable:: row_R(:),column_R(:),value_UV(:)
-    real*8,allocatable:: norm_row_R(:),norm_column_R(:),norm_UVavrbynorm_Z(:)
+	DT::matU(rankmax_r,rmax),matV(rmax,rankmax_c)
+	real(kind=8)::Singular(rmax)
+    DT,allocatable:: row_R(:),column_R(:),value_UV(:)
+    real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:),norm_UVavrbynorm_Z(:)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	procedure(Z_elem)::element_Zmn
 	type(proctree)::ptree
-	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	real*8, allocatable :: Singularsml(:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	real(kind=8), allocatable :: Singularsml(:)
 	type(Hstat)::stats
 	
 
@@ -2786,7 +2781,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		edge_n = header_n + j - 1
 		call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
 		row_R(j)=value_Z
-		norm_row_R(j)=dble(value_Z*conjg(value_Z))
+		norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind = 8)))
 	enddo
 	!$omp end parallel do
 	
@@ -2807,7 +2802,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 				edge_n = header_n + j - 1
 				call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
 				row_R(j)=value_Z
-				norm_row_R(j)=dble(value_Z*conjg(value_Z))
+				norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
 			enddo
 			!$omp end parallel do
 			
@@ -2850,7 +2845,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		call element_Zmn(edge_m,edge_n,value_Z,msh,ker)
 		! value_Z=mat(i,select_column(1))
 		column_R(i)=value_Z
-		norm_column_R(i)=dble(value_Z*conjg(value_Z))
+		norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
 	enddo
 	!$omp end parallel do
 
@@ -2888,9 +2883,17 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 			call element_Zmn(edge_m,edge_n,row_R(j),msh,ker)	
 		enddo
 		!$omp end parallel do
-		call zgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
+#ifdef DAT_CMPLX
+	call zgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
+#else
+	call dgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
+#endif		
+
+		! call gemmf90(matU(select_row(rank+1),1), rankmax_r,matV,rmax,value_UV,1,'N','N',1,rankmax_c,rank,cone,czero)	
+
+		
 		row_R=row_R-value_UV(1:rankmax_c)
-		norm_row_R=dble(row_R*conjg(row_R))
+		norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
 		stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c
 		
 		! write(*,*)'aha',rank
@@ -2929,9 +2932,19 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 			call element_Zmn(edge_m,edge_n,column_R(i),msh,ker)		
 		enddo
 		!$omp end parallel do		
+
+
+#ifdef DAT_CMPLX
 		call zgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
+#else
+		call dgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
+#endif		
+
+	! call gemmf90(matU, rankmax_r,matV(1,select_column(rank+1)),rmax,value_UV,rankmax_r,'N','N',rankmax_r,1,rank,cone,czero)			
+		
+		
 		column_R=column_R-value_UV(1:rankmax_r)
-		norm_column_R=dble(column_R*conjg(column_R))		
+		norm_column_R=dble(column_R*conjg(cmplx(column_R,kind=8)))		
 		stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_r
 		
 		do i=1,rank+1
@@ -2957,13 +2970,13 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 			inner_V=0
 			! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
 			do i=1,rankmax_r
-				ctemp=matU(i,rank+1)*conjg(matU(i,j))
+				ctemp=matU(i,rank+1)*conjg(cmplx(matU(i,j),kind=8))
 				inner_U=inner_U+ctemp
 			enddo
 			! !$omp end parallel do
 			! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
 			do i=1,rankmax_c
-				ctemp=matV(rank+1,i)*conjg(matV(j,i))
+				ctemp=matV(rank+1,i)*conjg(cmplx(matV(j,i),kind=8))
 				inner_V=inner_V+ctemp
 			enddo
 			! !$omp end parallel do
@@ -3021,12 +3034,12 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	allocate(QQ1(rankmax_r,rank))
 	call copymatN_omp(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
 	allocate (tau_Q(rank))
-	call geqrff90(QQ1,tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgeqrf(rankmax_r, rank)
+	call geqrff90(QQ1,tau_Q,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	
 	allocate (RR1(rank,rank))
-	RR1=(0,0)
+	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rank
 		do i=1, j
@@ -3034,18 +3047,18 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ1,tau_Q)
+	call un_or_gqrf90(QQ1,tau_Q,flop)
 	deallocate(tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zungqr(rankmax_r, rank, rank)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 
 	allocate(QQ2(rankmax_c,rank))
 	call copymatT_omp(matV(1:rank,1:rankmax_c),QQ2,rank,rankmax_c)
 	allocate (tau_Q(rank))
-	call geqrff90(QQ2,tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgeqrf(rankmax_c, rank)
+	call geqrff90(QQ2,tau_Q,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	allocate (RR2(rank,rank))
-	RR2=(0,0)
+	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rank
 		do i=1, j
@@ -3053,22 +3066,24 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ2,tau_Q)
+	call un_or_gqrf90(QQ2,tau_Q,flop)
 	deallocate(tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zungqr(rankmax_c, rank, rank)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	allocate(mattemp(rank,rank))
 	mattemp=0
-	! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
-	call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(rank, rank, rank)
+	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','T',rank,rank,rank,cone,czero,flop)
+	! call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
-	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgesdd(rank, rank)
-	call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(rankmax_r,ranknew,rank)	
-	call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax) 
-	stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(ranknew,rankmax_c,rank)		
+	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
+	! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
+	call gemmf90(QQ1,rankmax_r,UUsml,rank,matU,rankmax_r,'N','N',rankmax_r,ranknew,rank,cone,czero,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
+	! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax) 
+	call gemmf90(VVsml,rank,QQ2,rankmax_c,matV,rmax,'N','T',ranknew,rankmax_c,rank,cone,czero,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	rank = ranknew
 	Singular(1:ranknew) = Singularsml(1:ranknew)
@@ -3095,18 +3110,18 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
     implicit none
 
 	integer rank, rankup, ranknew, row, column, rankmax,N,M,rmax
-	complex(kind=8),allocatable:: row_R(:,:),row_Rtmp(:,:),column_R(:,:),column_RT(:,:),fullmat(:,:),fullmat1(:,:)
-	complex(kind=8)::matU(M,rmax),matV(rmax,N)
-	complex(kind=8), allocatable :: core(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
-	real*8:: normA,normUV,flops
+	DT,allocatable:: row_R(:,:),row_Rtmp(:,:),column_R(:,:),column_RT(:,:),fullmat(:,:),fullmat1(:,:)
+	DT::matU(M,rmax),matV(rmax,N)
+	DT, allocatable :: core(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
+	real(kind=8):: normA,normUV,flop
 	integer itr,itrmax,r_est,Nqr
 	integer,allocatable:: select_column(:), select_row(:), perms(:)
 	integer,allocatable :: jpvt(:)
 	
     integer i, j, ii, jj, indx, rank_1, rank_2
-    real*8 tolerance,SVD_tolerance
+    real(kind=8) tolerance,SVD_tolerance
     integer edge_m, edge_n, header_m, header_n,mn
-    real*8 inner_UV,n1,n2,a,error
+    real(kind=8) inner_UV,n1,n2,a,error
 
 	type(mesh)::msh
 	type(kernelquant)::ker
@@ -3181,8 +3196,17 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		!$omp end parallel do	
 		if(rank>0)then
 			do j=1,r_est
+			
+#ifdef DAT_CMPLX
 			call zgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M, 1,rank)
+#else
+			call dgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
+			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(M, 1,rank)
+#endif				
+			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)	
+		
+			
 			enddo
 		endif
 		
@@ -3191,9 +3215,8 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		call copymatT_omp(column_R,column_RT,M,r_est)
 		jpvt=0	
 		! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		! stats%Flop_Fill = stats%Flop_Fill + flops_dgeqpfmod(r_est, M, r_est)
-		call geqp3f90(column_RT,jpvt,tau)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(r_est, M)		
+		call geqp3f90(column_RT,jpvt,tau,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop		
 		select_row(1:r_est) = jpvt(1:r_est)
 		
 	
@@ -3210,8 +3233,17 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		!$omp end parallel do		
 		if(rank>0)then
 			do i=1,r_est
+
+
+#ifdef DAT_CMPLX
 			call zgemm('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(1, N,rank)
+#else
+			call dgemm('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
+			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(1, N,rank)
+#endif			
+			! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)			
+			
 			enddo
 		endif
 		
@@ -3219,9 +3251,8 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		jpvt=0
 		row_Rtmp = row_R		
 		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		! stats%Flop_Fill = stats%Flop_Fill + flops_dgeqpfmod(r_est, N, r_est)
-		call geqp3f90(row_Rtmp,jpvt,tau)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(r_est, N)		
+		call geqp3f90(row_Rtmp,jpvt,tau,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop	
 		select_column(1:r_est) = jpvt(1:r_est)
 		! write(*,*)sum(jpvt)
 		!**** Compute columns column_R in CUR
@@ -3236,8 +3267,17 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		!$omp end parallel do	
 		if(rank>0)then
 			do j=1,r_est
+			
+#ifdef DAT_CMPLX
 			call zgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M, 1,rank)
+#else
+			call dgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
+			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(M, 1,rank)
+#endif	
+			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
+
+			
 			enddo
 		endif		
 		
@@ -3261,8 +3301,9 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 			do j=1,r_est
 			matVtmp(1:rank,j) = matV(1:rank,select_column(j))
 			enddo		
-			call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
-			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(r_est, r_est,rank)
+			! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
+			call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
 			deallocate(matUtmp)
 			deallocate(matVtmp)
 		endif	
@@ -3277,9 +3318,8 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		jpvt=0	
 		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		! stats%Flop_Fill = stats%Flop_Fill + flops_dgeqpfmod(r_est, M, r_est)
-		call geqp3f90(row_Rtmp,jpvt,tau)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(r_est, M)		
+		call geqp3f90(row_Rtmp,jpvt,tau,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_column(1:r_est) = jpvt(1:r_est)	
 		
 		
@@ -3308,16 +3348,16 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		
 		jpvt=0	
-		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgeqpfmod(r_est, M, ranknew)	
+		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
 		rankup = ranknew
 		
 		if(rankup>0)then		
 		row_Rtmp = row_R
-		call unmqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup)	
-		stats%Flop_Fill = stats%Flop_Fill + flops_zunmqr('L', r_est,N,rankup)	
-		call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N)
-		stats%Flop_Fill = stats%Flop_Fill + flops_ztrsm('L', rankup,N)	
+		call un_or_mqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup,flop)	
+		stats%Flop_Fill = stats%Flop_Fill + flop
+		call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
 		
 		if(rank+rankup>min(M,N))rankup=min(M,N)-rank
 		
@@ -3331,10 +3371,10 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		if(rank==min(M,N))exit
 		
 		!**** update fnorm of UV and matUmatV 
-		call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2)	
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(M, rankup) + flops_dgetrf(N, rankup) + flops_zgemm(rankup, rankup,rankup)			
-		call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(M, rank) + flops_dgetrf(N, rank) + flops_zgemm(rank, rank,rank)		
+		call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,flop)	
+		stats%Flop_Fill = stats%Flop_Fill + flop		
+		call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
 		
 		endif
 		
@@ -3347,8 +3387,8 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 	! write(*,*)normUV,normA
 	error = normUV/normA
 	
-	call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance)
-	stats%Flop_Fill = stats%Flop_Fill + flops_dgetrf(M, rank) + flops_dgetrf(N, rank) + flops_zgemm(rank, rank,rank) + flops_zgesdd(rank, rank)	
+	call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,flop)
+	stats%Flop_Fill = stats%Flop_Fill + flop
 	rank = ranknew
 	
 
@@ -3376,663 +3416,6 @@ end subroutine BatchACA_CompressionForward
 
 
 
-! subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,error)
-	! ! use lapack95
-	! ! use blas95
-    ! use MODULE_FILE
-    ! implicit none
-
-    ! integer i, j, p, ii, jj, indx, rank_1, rank_2
-    ! integer blocks, index_j, group_nn, rank_blocks
-    ! integer group_m,group_n,size_of_groupm,size_of_groupn
-    ! real*8 norm_Z,norm_U,norm_V,norm_UV,tolerance,SVD_tolerance,dist
-    ! integer edgefine_m,edgefine_n, level_butterfly, level_blocks
-    ! integer edge_m, edge_n, header_m, header_n,Dimn,mn,Navr,itr
-    ! integer rank, ranknew, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min,rmax,idxs_r,idxs_c,frow
-    ! complex(kind=8) value_Z,maxvalue
-    ! complex(kind=8) inner_U,inner_V,ctemp,value_UVs
-    ! real*8 inner_UV,n1,n2,a,error
-    ! integer,allocatable:: select_column(:), select_row(:)
-	! complex(kind=8)::matU(rankmax_r,rmax),matV(rmax,rankmax_c)
-	! real*8::Singular(rmax)
-    ! complex(kind=8),allocatable:: row_R(:),column_R(:),value_UV(:)
-    ! real*8,allocatable:: norm_row_R(:),norm_column_R(:),norm_UVavrbynorm_Z(:)
-	! type(mesh)::msh
-	! type(kernelquant)::ker
-	! procedure(Z_elem)::element_Zmn
-	! type(proctree)::ptree
-	! complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	! real*8, allocatable :: Singularsml(:)
-	! type(Hstat)::stats
-	
-	! Navr=10
-	! ! itr=1
-	! ! allocate(norm_UVavrbynorm_Z(Navr))
-	! ! norm_UVavrbynorm_Z=0
-
-	
-	! n1 = OMP_get_wtime()
-	
-	! allocate(select_column(rankmax_c))
-	! allocate(select_row(rankmax_r))
-	! allocate(value_UV(max(rankmax_c,rankmax_r)))
-	! value_UV=0
-	
-	! rankmax_min = min(rankmax_r,rankmax_c)
-    ! norm_Z=0
-	! select_column = 0
-	! select_row = 0
-	
-    ! allocate(row_R(rankmax_c),column_R(rankmax_r))
-    ! allocate(norm_row_R(rankmax_c),norm_column_R(rankmax_r))
-
-    ! select_row(1)=frow	
-
-	! !$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
-	! do j=1, rankmax_c
-		! ! value_Z=mat(select_row(1),j)
-		! edge_m = header_m + select_row(1) - 1
-		! edge_n = header_n + j - 1
-		! call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
-		! row_R(j)=value_Z
-		! norm_row_R(j)=dble(value_Z*conjg(value_Z))
-	! enddo
-	! !$omp end parallel do
-	
-	! select_column(1)=maxloc(norm_row_R,1)
-	! maxvalue=row_R(select_column(1))	
-	
-	
-	
-	! if(abs(maxvalue)<SafeUnderflow)then
-	
-		! do ii=1,1000
-			! call random_number(a)
-			! select_row(1)=floor_safe(a*(rankmax_r-1))+1
-			! !$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
-			! do j=1, rankmax_c
-				! ! value_Z=mat(select_row(1),j)
-				! edge_m = header_m + select_row(1) - 1
-				! edge_n = header_n + j - 1
-				! call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
-				! row_R(j)=value_Z
-				! norm_row_R(j)=dble(value_Z*conjg(value_Z))
-			! enddo
-			! !$omp end parallel do
-			
-			! select_column(1)=maxloc(norm_row_R,1)
-			! maxvalue=row_R(select_column(1))
-			! if(abs(maxvalue)>SafeUnderflow)exit
-		! end do
-		! if(abs(maxvalue)<SafeUnderflow)then
-			! rank = 1
-			! matU(:,1)=0
-			! matV(1,:)=0
-			! Singular(1)=0
-			! error = 0
-			
-			! deallocate(select_column)
-			! deallocate(select_row)
-			! deallocate(value_UV)
-			! deallocate(row_R,column_R)
-			! deallocate(norm_row_R,norm_column_R)	
-			
-			! return	
-		! endif
-	! end if
-	
-
-    ! ! !$omp parallel do default(shared) private(j)
-    ! do j=1, rankmax_c
-        ! row_R(j)=row_R(j)/maxvalue
-    ! enddo
-    ! ! !$omp end parallel do
-    ! ! !$omp parallel do default(shared) private(j)
-    ! do j=1, rankmax_c
-        ! matV(1,j)=row_R(j)
-    ! enddo
-    ! ! !$omp end parallel do
-
-    ! !$omp parallel do default(shared) private(i,value_Z,edge_m,edge_n)
-    ! do i=1,rankmax_r
-		! edge_m = header_m + i - 1
-		! edge_n = header_n + select_column(1) - 1
-		! call element_Zmn(edge_m,edge_n,value_Z,msh,ker)
-        ! ! value_Z=mat(i,select_column(1))
-        ! column_R(i)=value_Z
-        ! norm_column_R(i)=dble(value_Z*conjg(value_Z))
-    ! enddo
-    ! !$omp end parallel do
-
-    ! norm_column_R(select_row(1))=0
-
-    ! ! !$omp parallel do default(shared) private(i)
-    ! do i=1,rankmax_r
-        ! matU(i,1)=column_R(i)
-    ! enddo
-    ! ! !$omp end parallel do
-
-    ! norm_U=norm_vector(column_R,rankmax_r)
-    ! norm_V=norm_vector(row_R,rankmax_c)
-    ! norm_Z=norm_Z+norm_U*norm_V
-	! norm_UV = norm_U*norm_V
-	! ! itr=mod(itr,Navr)+1
-	
-	! ! if(rankmax<2)write(*,*)'rankmax'
-    ! select_row(2)=maxloc(norm_column_R,1)
-
-    ! rank=1
-	! ! write(*,*)column_R,row_R
-	! ! write(*,*)norm_Z*ACA_tolerance_forward**2,norm_U*norm_V,'hehe',ACA_tolerance_forward
-    ! do while (norm_Z*tolerance**2<norm_UV .and. rank<rankmax_min)
-
-	
-        ! !$omp parallel do default(shared) private(j,i,value_Z,edge_m,edge_n)
-        ! do j=1,rankmax_c
-			! edge_m = header_m + select_row(rank+1) - 1
-			! edge_n = header_n + j - 1
-			! call element_Zmn(edge_m,edge_n,row_R(j),msh,ker)	
-        ! enddo
-        ! !$omp end parallel do
-		! call zgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
-		! row_R=row_R-value_UV(1:rankmax_c)
-		! norm_row_R=dble(row_R*conjg(row_R))
-		! stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c
-		
-		! ! write(*,*)'aha',rank
-        ! do i=1,rank
-        	! norm_row_R(select_column(i))=0
-        ! enddo
-
-        ! select_column(rank+1)=maxloc(norm_row_R,1)
-        ! maxvalue=row_R(select_column(rank+1))
-		
-		! if(abs(maxvalue)<SafeUnderflow)then
-			! write(*,*)'warning: zero pivot in ACA, exiting with residual', sqrt((sum(norm_UVavrbynorm_Z)/Navr))
-			! exit
-		! endif
-        ! ! !$omp parallel do default(shared) private(j)
-        ! do j=1,rankmax_c
-    	! row_R(j)=row_R(j)/maxvalue
-        ! enddo
-        ! ! !$omp end parallel do
-        ! ! !$omp parallel do default(shared) private(j)
-        ! do j=1,rankmax_c
-            ! matV(rank+1,j)=row_R(j)
-        ! enddo
-        ! ! !$omp end parallel do
-
-		
-		! !$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
-        ! do i=1,rankmax_r
-			! edge_m = header_m + i - 1
-			! edge_n = header_n + select_column(rank+1) - 1
-			! call element_Zmn(edge_m,edge_n,column_R(i),msh,ker)		
-        ! enddo
-        ! !$omp end parallel do		
-		! call zgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
-		! column_R=column_R-value_UV(1:rankmax_r)
-		! norm_column_R=dble(column_R*conjg(column_R))		
-		! stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_r
-		
-        ! do i=1,rank+1
-            ! norm_column_R(select_row(i))=0
-        ! enddo
-
-        ! ! !$omp parallel do default(shared) private(i)
-        ! do i=1,rankmax_r
-            ! matU(i,rank+1)=column_R(i)
-        ! enddo
-        ! ! !$omp end parallel do
-
-		
-		
-        ! norm_U=norm_vector(column_R,rankmax_r)
-        ! norm_V=norm_vector(row_R,rankmax_c)
-			
-	
-        ! inner_UV=0
-		! !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
-        ! do j=1,rank
-            ! inner_U=0
-            ! inner_V=0
-	        ! ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
-            ! do i=1,rankmax_r
-                ! ctemp=matU(i,rank+1)*conjg(matU(i,j))
-				! inner_U=inner_U+ctemp
-			! enddo
-            ! ! !$omp end parallel do
-            ! ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
-            ! do i=1,rankmax_c
-                ! ctemp=matV(rank+1,i)*conjg(matV(j,i))
-                ! inner_V=inner_V+ctemp
-            ! enddo
-            ! ! !$omp end parallel do
-            ! inner_UV=inner_UV+2*dble(inner_U*inner_V)
-        ! enddo
-		! !$omp end parallel do
-		
-        ! norm_Z=norm_Z+inner_UV+norm_U*norm_V
-		
-		! norm_UV = norm_U*norm_V
-		
-		
-		! norm_UV = 0
-		! do j=max(1,rank+1-Navr+1),rank+1
-			! norm_U=norm_vector(matU(:,j),rankmax_r)
-			! norm_V=norm_vector(matV(j,:),rankmax_c)
-			! norm_UV = norm_UV + norm_U*norm_V
-		! end do
-		! do j=max(1,rank+1-Navr+2),rank+1
-			! do p=max(1,j-Navr+1),j-1
-				! inner_U=0
-				! inner_V=0
-				! ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
-				! do i=1,rankmax_r
-					! ctemp=matU(i,j)*conjg(matU(i,p))
-					! inner_U=inner_U+ctemp
-				! enddo
-				! ! !$omp end parallel do
-				! ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
-				! do i=1,rankmax_c
-					! ctemp=matV(j,i)*conjg(matV(p,i))
-					! inner_V=inner_V+ctemp
-				! enddo
-				! ! !$omp end parallel do
-				! norm_UV=norm_UV+2*dble(inner_U*inner_V)
-			! enddo
-		! end do		
-		
-		
-		
-		
-		! stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c + rank*rankmax_r
-
-        ! rank=rank+1
-		! if(rank>rmax)then
-			! write(*,*)'increase rmax',rank,rmax
-			! stop
-		! end if
-        ! if (rank<rankmax_min) then
-            ! select_row(rank+1)=maxloc(norm_column_R,1)
-        ! endif
-
-		! write(*,*)sqrt((norm_UV/norm_Z)),sqrt(norm_U*norm_V),sqrt(norm_Z),rank,rankmax_min,norm_Z*tolerance**2<norm_UV	
-		
-    ! enddo
-
-	! ! write(*,*)select_row(1:rank),select_column(1:rank)
-	! error = sqrt((norm_UV/norm_Z))
-	
-    ! deallocate(row_R,column_R)
-    ! deallocate(norm_row_R,norm_column_R)
-
-	! n2 = OMP_get_wtime()	
-	! time_tmp = time_tmp + n2 - n1	
-	
-! ! ACA followed by SVD	
-	
-	! allocate(QQ1(rankmax_r,rank))
-	! call copymatN_omp(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
-	! allocate (tau_Q(rank))
-	! call geqrff90(QQ1,tau_Q)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgeqrf(rankmax_r, rank)
-	
-	
-	! allocate (RR1(rank,rank))
-	! RR1=(0,0)
-	! ! !$omp parallel do default(shared) private(i,j)
-	! do j=1, rank
-		! do i=1, j
-			! RR1(i,j)=QQ1(i,j)
-		! enddo
-	! enddo
-	! ! !$omp end parallel do	
-	! call ungqrf90(QQ1,tau_Q)
-	! deallocate(tau_Q)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zungqr(rankmax_r, rank, rank)
-
-	! allocate(QQ2(rankmax_c,rank))
-	! call copymatT_omp(matV(1:rank,1:rankmax_c),QQ2,rank,rankmax_c)
-	! allocate (tau_Q(rank))
-	! call geqrff90(QQ2,tau_Q)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgeqrf(rankmax_c, rank)
-	
-	! allocate (RR2(rank,rank))
-	! RR2=(0,0)
-	! ! !$omp parallel do default(shared) private(i,j)
-	! do j=1, rank
-		! do i=1, j
-			! RR2(i,j)=QQ2(i,j)
-		! enddo
-	! enddo
-	! ! !$omp end parallel do	
-	! call ungqrf90(QQ2,tau_Q)
-	! deallocate(tau_Q)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zungqr(rankmax_c, rank, rank)
-	
-	! allocate(mattemp(rank,rank))
-	! mattemp=0
-	! ! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
-	! call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(rank, rank, rank)
-	! allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
-	! call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgesdd(rank, rank)
-	! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(rankmax_r,ranknew,rank)	
-	! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax) 
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(ranknew,rankmax_c,rank)		
-	
-	! rank = ranknew
-	! Singular(1:ranknew) = Singularsml(1:ranknew)
-	
-	! deallocate(mattemp,RR1,QQ1,UUsml,VVsml,Singularsml)
-	! deallocate(QQ2,RR2)
-
-	! deallocate(select_column)
-	! deallocate(select_row)
-	! deallocate(value_UV)
-	
-	
-	
-	
-	
-	
-		! ! !!!!! SVD
-		! ! mn=min(rankmax_r,rankmax_c)
-		! ! allocate (UUsml(rankmax_r,mn),VVsml(mn,rankmax_c),Singularsml(mn))		
-		! ! allocate(QQ1(rankmax_r,rankmax_c))
-		! ! do ii=1,rankmax_r
-			! ! do jj =1,rankmax_c
-				! ! edge_m = header_m +ii - 1
-				! ! edge_n = header_n +jj - 1
-				! ! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
-				! ! QQ1(ii,jj) = ctemp
-			! ! end do
-		! ! end do
-		! ! call SVD_Truncate(QQ1,rankmax_r,rankmax_c,mn,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)			
-		! ! rank = ranknew
-		! ! Singular(1:ranknew) = Singularsml(1:ranknew)
-		! ! matU(1:rankmax_r,1:ranknew)=UUsml(1:rankmax_r,1:ranknew)
-		! ! matV(1:ranknew,1:rankmax_c)=VVsml(1:ranknew,1:rankmax_c)
-		! ! deallocate(QQ1,UUsml,VVsml,Singularsml)
-	
-	
-
-	
-    ! return
-
-! end subroutine ACA_CompressionForward
-
-
-
-
-! subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree)
-	! ! use lapack95
-	! ! use blas95
-    ! use MODULE_FILE
-    ! implicit none
-
-    ! integer i, j, ii, jj, indx, rank_1, rank_2
-    ! integer blocks, index_j, group_nn, rank_blocks
-    ! integer group_m,group_n,size_of_groupm,size_of_groupn
-    ! real*8 norm_Z,norm_Z_new,norm_U,norm_V,tolerance,SVD_tolerance
-    ! integer edgefine_m,edgefine_n, level_butterfly, level_blocks
-    ! integer edge_m, edge_n, header_m, header_n
-    ! integer rank, ranknew, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min,rmax,idxs_r,idxs_c
-    ! complex(kind=8) value_Z,maxvalue
-    ! complex(kind=8) inner_U,inner_V,ctemp,value_UVs
-    ! real*8 inner_UV,n1,n2
-    ! integer,allocatable:: select_column(:), select_row(:)
-	! complex(kind=8)::matU(rankmax_r,rmax),matV(rmax,rankmax_c)
-	! real*8::Singular(rmax)
-    ! complex(kind=8),allocatable:: row_R(:),column_R(:),value_UV(:),wu(:),wv(:),matUV(:,:)
-    ! real*8,allocatable:: norm_row_R(:),norm_column_R(:)
-	! type(mesh)::msh
-	! type(kernelquant)::ker
-	! procedure(Z_elem)::element_Zmn
-	! type(proctree)::ptree
-	! complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),RR1RR2(:,:)	
-	! real*8, allocatable :: Singularsml(:)
-	! type(Hstat)::stats
-	
-	! n1 = OMP_get_wtime()
-	
-	! allocate(select_column(rankmax_c))
-	! allocate(select_row(rankmax_r))
-	! allocate(value_UV(max(rankmax_c,rankmax_r)))
-	! value_UV=0
-	
-	! allocate(RR1(rmax,rmax))
-	! allocate(RR2(rmax,rmax))
-	! allocate(RR1RR2(rmax,rmax))
-	! allocate(QQ1(rankmax_r,rmax))
-	! allocate(QQ2(rmax,rankmax_c))
-	! allocate(wu(rankmax_r))
-	! allocate(wv(rankmax_c))
-	! ! allocate(matUV(rankmax_r,rankmax_c))
-	! QQ1=0
-	! QQ2=0
-	! RR1=0
-	! RR2=0
-	! RR1RR2=0
-	! ! matUV=0
-	
-	! rankmax_min = min(rankmax_r,rankmax_c)
-    ! norm_Z=0
-	! select_column = 0
-	! select_row = 0
-	
-    ! allocate(row_R(rankmax_c),column_R(rankmax_r))
-    
-    ! allocate(norm_row_R(rankmax_c),norm_column_R(rankmax_r))
-
-    ! select_row(1)=1
-
-    ! !$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
-    ! do j=1, rankmax_c
-        ! ! value_Z=mat(select_row(1),j)
-		! edge_m = header_m + select_row(1) - 1
-		! edge_n = header_n + j - 1
-		! call element_Zmn(edge_m,edge_n,value_Z,msh,ker)							 
-        ! row_R(j)=value_Z
-        ! norm_row_R(j)=dble(value_Z*conjg(value_Z))
-    ! enddo
-    ! !$omp end parallel do
-
-    ! select_column(1)=maxloc(norm_row_R,1)
-    ! maxvalue=row_R(select_column(1))
-
-    ! ! !$omp parallel do default(shared) private(j)
-    ! do j=1, rankmax_c
-        ! row_R(j)=row_R(j)/maxvalue
-    ! enddo
-    ! ! !$omp end parallel do
-    ! ! !$omp parallel do default(shared) private(j)
-    ! do j=1, rankmax_c
-        ! matV(1,j)=row_R(j)
-    ! enddo
-    ! ! !$omp end parallel do
-
-	! RR2(1,1) = sqrt(norm_vector(row_R,rankmax_c))
-	! QQ2(1,:) = matV(1,:)/RR2(1,1)
-	
-    ! !$omp parallel do default(shared) private(i,value_Z,edge_m,edge_n)
-    ! do i=1,rankmax_r
-		! edge_m = header_m + i - 1
-		! edge_n = header_n + select_column(1) - 1
-		! call element_Zmn(edge_m,edge_n,value_Z,msh,ker)
-        ! ! value_Z=mat(i,select_column(1))
-        ! column_R(i)=value_Z
-        ! norm_column_R(i)=dble(value_Z*conjg(value_Z))
-    ! enddo
-    ! !$omp end parallel do
-
-    ! norm_column_R(select_row(1))=0
-
-    ! ! !$omp parallel do default(shared) private(i)
-    ! do i=1,rankmax_r
-        ! matU(i,1)=column_R(i)
-    ! enddo
-    ! ! !$omp end parallel do
-
-	! RR1(1,1) = sqrt(norm_vector(column_R,rankmax_r))
-	! QQ1(:,1) = matU(:,1)/RR1(1,1)	
-	
-	! RR1RR2(1,1) = RR1(1,1)*RR2(1,1)
-	! norm_Z_new = abs(RR1RR2(1,1))**2d0
-	
-    ! norm_U=norm_vector(column_R,rankmax_r)
-    ! norm_V=norm_vector(row_R,rankmax_c)
-    ! ! norm_Z=norm_Z+norm_U*norm_V
-
-	! ! if(rankmax<2)write(*,*)'rankmax'
-    ! select_row(2)=maxloc(norm_column_R,1)
-
-    ! rank=1
-	! ! write(*,*)column_R,row_R
-	! ! write(*,*)norm_Z*ACA_tolerance_forward**2,norm_U*norm_V,'hehe',ACA_tolerance_forward
-    ! do while (norm_Z_new*tolerance**2<norm_U*norm_V .and. rank<rankmax_min)
-	
-        ! !$omp parallel do default(shared) private(j,i,value_Z,edge_m,edge_n)
-        ! do j=1,rankmax_c
-			! edge_m = header_m + select_row(rank+1) - 1
-			! edge_n = header_n + j - 1
-			! call element_Zmn(edge_m,edge_n,row_R(j),msh,ker)	
-        ! enddo
-        ! !$omp end parallel do
-		! call zgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
-		! row_R=row_R-value_UV(1:rankmax_c)
-		! norm_row_R=dble(row_R*conjg(row_R))
-		! stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c
-		
-		! ! write(*,*)'aha',rank
-        ! do i=1,rank
-        	! norm_row_R(select_column(i))=0
-        ! enddo
-
-        ! select_column(rank+1)=maxloc(norm_row_R,1)
-        ! maxvalue=row_R(select_column(rank+1))
-
-        ! ! !$omp parallel do default(shared) private(j)
-        ! do j=1,rankmax_c
-    	! row_R(j)=row_R(j)/maxvalue
-        ! enddo
-        ! ! !$omp end parallel do
-        ! ! !$omp parallel do default(shared) private(j)
-        ! do j=1,rankmax_c
-            ! matV(rank+1,j)=row_R(j)
-        ! enddo
-        ! ! !$omp end parallel do
-
-		
-		! !$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
-        ! do i=1,rankmax_r
-			! edge_m = header_m + i - 1
-			! edge_n = header_n + select_column(rank+1) - 1
-			! call element_Zmn(edge_m,edge_n,column_R(i),msh,ker)		
-        ! enddo
-        ! !$omp end parallel do		
-		! call zgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
-		! column_R=column_R-value_UV(1:rankmax_r)
-		! norm_column_R=dble(column_R*conjg(column_R))		
-		! stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_r
-		
-        ! do i=1,rank+1
-            ! norm_column_R(select_row(i))=0
-        ! enddo
-
-        ! ! !$omp parallel do default(shared) private(i)
-        ! do i=1,rankmax_r
-            ! matU(i,rank+1)=column_R(i)
-        ! enddo
-        ! ! !$omp end parallel do
-
-		
-		! ! update QR of matU and matV (note that the plain GS may lost orthogonality of Q)
-		! call zgemm('C','N',rank,1,rankmax_r, cone, QQ1, rankmax_r,column_R,rankmax_r,czero,RR1(1,1+rank),rmax)
-		! wu = matU(:,rank+1)
-		! call zgemm('N','N',rankmax_r,1,rank, -cone, QQ1, rankmax_r,RR1(1,1+rank),rmax,cone,wu,rankmax_r)
-		! RR1(1+rank,1+rank) = sqrt(norm_vector(wu,rankmax_r))
-		! QQ1(:,1+rank) = wu/RR1(1+rank,1+rank) 
-		
-		! call zgemm('N','C',1,rank,rankmax_c, cone, row_R, 1,QQ2,rmax,czero,RR2(1+rank,1),rmax)
-		! wv = matV(rank+1,:)
-		! call zgemm('N','N',1,rankmax_c,rank, -cone, RR2(1+rank,1),rmax, QQ2, rmax,cone,wv,1)
-		! RR2(1+rank,1+rank) = sqrt(norm_vector(wv,rankmax_c))
-		! QQ2(1+rank,:) = wv/RR2(1+rank,1+rank) 
-		 
-		! ! update RR1RR2
-		! call zgemm('N','N',1+rank,1+rank,1, cone, RR1(1,1+rank), rmax,RR2(1+rank,1),rmax,cone,RR1RR2,rmax)
-		! stats%Flop_Fill = stats%Flop_Fill + 2*rank*rankmax_r + 2*rank*rankmax_c + (1+rank)*(1+rank) 
-		
-		
-        ! norm_U=norm_vector(column_R,rankmax_r)
-        ! norm_V=norm_vector(row_R,rankmax_c)
-        
-		! norm_Z_new = 0
-		! !$omp parallel do default(shared) private(j,i) reduction(+:norm_Z_new)
-		! do i=1,1+rank
-		! do j=1,1+rank
-			! norm_Z_new = norm_Z_new  +	abs(RR1RR2(i,j))**2d0
-		! enddo
-		! enddo
-		! !$omp end parallel do
-		
-		! ! norm_Z_new = sqrt(norm_Z_new)
-
-	
-        ! rank=rank+1
-		! if(rank>rmax)then
-			! write(*,*)'increase rmax',rank,rmax
-			! stop
-		! end if
-        ! if (rank<rankmax_min) then
-            ! select_row(rank+1)=maxloc(norm_column_R,1)
-        ! endif
-
-    ! enddo
-
-	! ! write(*,*)select_row(1:rank),select_column(1:rank)
-	
-    ! deallocate(row_R,column_R)
-    ! deallocate(wu,wv)
-    
-    ! deallocate(norm_row_R,norm_column_R)
-! ! stop
-	
-! ! ACA followed by SVD	
-
-	! allocate(mattemp(rank,rank))
-	! mattemp=RR1RR2(1:rank,1:rank)
-	! allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
-	! call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgesdd(rank, rank)
-	! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(rankmax_r,ranknew,rank)	
-	! call zgemm('N','N',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rmax,czero,matV,rmax) 
-	! stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(ranknew,rankmax_c,rank)		
-	
-	! rank = ranknew
-	! Singular(1:ranknew) = Singularsml(1:ranknew)
-	
-	! deallocate(mattemp,RR1RR2,RR1,QQ1,UUsml,VVsml,Singularsml)
-	! deallocate(QQ2,RR2)
-
-	! deallocate(select_column)
-	! deallocate(select_row)
-	! deallocate(value_UV)
-
-	! n2 = OMP_get_wtime()	
-	! time_tmp = time_tmp + n2 - n1	
-	
-    ! return
-
-! end subroutine ACA_CompressionForward
-
-
-
 
 
 subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,ctxt,pgno)
@@ -4044,40 +3427,40 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
     integer i, j, ii, jj, indx, rank_1, rank_2, rank
     integer index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real*8 norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
+    real(kind=8) norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
     integer ranknew, row, column, rankmax,N,M,rankmax_min,rmax,rmaxc,rmaxr,idxs_r,idxs_c,flag0,myAcols,myArows,npcol,nprow,rank_new,nproc
-    complex(kind=8) value_Z,value_UV,maxvalue
-    complex(kind=8) inner_U,inner_V,ctemp
-    real*8 inner_UV
-	complex(kind=8),allocatable::matU(:,:),matV(:,:),UU(:,:),VV(:,:),MatrixSubselection(:,:)
-	real*8,allocatable::Singular(:)
-    complex(kind=8),allocatable:: row_R(:),column_R(:)
-    real*8,allocatable:: norm_row_R(:),norm_column_R(:)
+    DT value_Z,value_UV,maxvalue
+    DT inner_U,inner_V,ctemp
+    real(kind=8) inner_UV,flop
+	DT,allocatable::matU(:,:),matV(:,:),UU(:,:),VV(:,:),MatrixSubselection(:,:)
+	real(kind=8),allocatable::Singular(:)
+    DT,allocatable:: row_R(:),column_R(:)
+    real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(matrixblock)::blocks
 	procedure(Z_elem)::element_Zmn
 	type(Hstat)::stats
 	
-	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),matU2D(:,:),matV2D(:,:),matU1D(:,:),matV1D(:,:)
-	real*8, allocatable :: Singularsml(:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),matU2D(:,:),matV2D(:,:),matU1D(:,:),matV1D(:,:)
+	real(kind=8), allocatable :: Singularsml(:)
 	type(proctree)::ptree
 	integer ctxt,ctxt1D,myrow,mycol,iproc,jproc,myi,myj,mnmax
 	integer,optional::pgno
 	integer LWORK,LRWORK,INFO,ierr
-	complex(kind=8):: TEMP(1)
-	real*8,allocatable::RWORK(:)
+	DT:: TEMP(1)
+	real(kind=8),allocatable::RWORK(:)
 	integer::descsmatU(9),descsmatV(9),descsmatVQ(9),descsub(9),descUU(9),descVV(9),descButterU2D(9),descButterV2D(9),descButterU1D(9),descButterV1D(9),descQ(9),descR(9)
 	integer :: numroc   ! blacs routine
 	
 	integer nb1Dr,nb1Dc
 	integer,allocatable::select_col(:),select_row(:),N_p(:,:),M_p(:,:)
-	complex(kind=8),allocatable:: WORK(:)
+	DT,allocatable:: WORK(:)
 	integer, allocatable :: ipiv(:),jpiv(:),JPERM(:)
-	complex(kind=8), allocatable :: tau(:)
-	real*8:: RTEMP(1)
+	DT, allocatable :: tau(:)
+	real(kind=8):: RTEMP(1)
 	
 	rank_new=0
 	! ctxt = ptree%pgrp(pgno)%ctxt
@@ -4116,16 +3499,16 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 		jpiv=0
 		allocate(tau(min(rmaxr,rmaxc)))
 		tau=0
-		call geqp3modf90(MatrixSubselection,jpiv,tau,tolerance,SafeUnderflow,rank_new)
-		stats%Flop_Fill = stats%Flop_Fill + flops_dgeqpfmod(rmaxr, rmaxc, rank_new)
+		call geqp3modf90(MatrixSubselection,jpiv,tau,tolerance,SafeUnderflow,rank_new,flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
 		rank = rank_new
 		if(rank>0)then
-			matV = conjg(matV)
-			call unmqrf90(MatrixSubselection,tau,matV,'R','N',N, rmaxr, rank_new)
-			stats%Flop_Fill = stats%Flop_Fill + flops_zunmqr('R', N, rmaxr, rank_new)				
-			matV = conjg(matV)
-			call trsmf90(MatrixSubselection,matV,'R', 'U', 'T', 'N', N, rank_new)
-			stats%Flop_Fill = stats%Flop_Fill + flops_ztrsm('R', N, rank_new)			
+			matV = conjg(cmplx(matV,kind=8))
+			call un_or_mqrf90(MatrixSubselection,tau,matV,'R','N',N, rmaxr, rank_new,flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop				
+			matV = conjg(cmplx(matV,kind=8))
+			call trsmf90(MatrixSubselection,matV,'R', 'U', 'T', 'N', N, rank_new,flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop	
 		else 
 			rank=1
 			rank_new=1	
@@ -4211,42 +3594,23 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 			jpiv=0
 			allocate(JPERM(rmaxc))
 			JPERM=0
-			LWORK=-1
-			LRWORK=-1
-			! call assert(rmaxr>=rmaxc,'LQ is not implemented')
-			call pzgeqpfmod(rmaxr, rmaxc, MatrixSubselection, 1, 1, descsub, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank_new,tolerance, SafeUnderflow)
-			lwork=NINT(dble(TEMP(1)*2.001))
-			allocate(WORK(lwork))     
-			WORK=0
-			lrwork=NINT(dble(RTEMP(1)*2.001))
-			allocate(RWORK(lrwork))     
-			RWORK=0		
-			call pzgeqpfmod(rmaxr, rmaxc, MatrixSubselection, 1, 1, descsub, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank_new,tolerance, SafeUnderflow)
-			stats%Flop_Fill = stats%Flop_Fill + flops_zgeqpfmod(rmaxr, rmaxc, rank_new)/dble(nprow*npcol)
-			deallocate(WORK)
-			deallocate(RWORK)
-			
+			call pgeqpfmodf90(rmaxr, rmaxc, MatrixSubselection, 1, 1, descsub, ipiv, tau, JPERM, jpiv, rank_new,tolerance, SafeUnderflow,flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+
 			
 			rank = rank_new
 			
 			if(rank>0)then
 			
 				! Compute matV*conjg(Q)
-				matV = conjg(matV)
-				LWORK=-1
-				call pzunmqr('R', 'N', N, rmaxr, rank_new, MatrixSubselection, 1, 1, descsub, tau, matV, 1, 1, descsmatV, TEMP, lwork, info)
-				lwork=NINT(dble(TEMP(1)*2.001))
-				allocate(WORK(lwork))     
-				WORK=0		
-				call pzunmqr('R', 'N', N, rmaxr, rank_new, MatrixSubselection, 1, 1, descsub, tau, matV, 1, 1, descsmatV, WORK, lwork, info)
-				stats%Flop_Fill = stats%Flop_Fill + flops_zunmqr('R',N, rmaxr, rank_new)/dble(nprow*npcol)
-				deallocate(WORK)
-				matV = conjg(matV)
+				matV = conjg(cmplx(matV,kind=8))
+				call pun_or_mqrf90('R', 'N', N, rmaxr, rank_new, MatrixSubselection, 1, 1, descsub, tau, matV, 1, 1, descsmatV)
+				matV = conjg(cmplx(matV,kind=8))
 				
 				
 				! Compute matV*conjg(Q)*(R^T)^-1
-				call pztrsm('R', 'U', 'T', 'N', N, rank_new, cone, MatrixSubselection, 1, 1, descsub, matV, 1, 1, descsmatV)
-				stats%Flop_Fill = stats%Flop_Fill + flops_ztrsm('R',N, rank_new)/dble(nprow*npcol)
+				call ptrsmf90('R', 'U', 'T', 'N', N, rank_new, cone, MatrixSubselection, 1, 1, descsub, matV, 1, 1, descsmatV,flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
 				call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 				myArows = numroc(N, nbslpk, myrow, 0, nprow)
@@ -4359,16 +3723,16 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)			
 
 			if(myrow/=-1 .and. mycol/=-1)then
-				call pzgemr2d(M, rank, matU2D, 1, 1, descButterU2D, matU1D, 1, 1, descButterU1D, ctxt1D)		
-				call pzgemr2d(N, rank, matV2D, 1, 1, descButterV2D, matV1D, 1, 1, descButterV1D, ctxt1D)	
+				call pgemr2df90(M, rank, matU2D, 1, 1, descButterU2D, matU1D, 1, 1, descButterU1D, ctxt1D)		
+				call pgemr2df90(N, rank, matV2D, 1, 1, descButterV2D, matV1D, 1, 1, descButterV1D, ctxt1D)	
 				deallocate(matU2D)
 				deallocate(matV2D)
 			else 
 				! write(*,*)rank,'nima',ptree%MyID
 				descButterU2D(2)=-1
-				call pzgemr2d(M, rank, matU2D, 1, 1, descButterU2D, matU1D, 1, 1, descButterU1D, ctxt1D)
+				call pgemr2df90(M, rank, matU2D, 1, 1, descButterU2D, matU1D, 1, 1, descButterU1D, ctxt1D)
 				descButterV2D(2)=-1
-				call pzgemr2d(N, rank, matV2D, 1, 1, descButterV2D, matV1D, 1, 1, descButterV1D, ctxt1D)		
+				call pgemr2df90(N, rank, matV2D, 1, 1, descButterV2D, matV1D, 1, 1, descButterV1D, ctxt1D)		
 			endif	
 
 			! redistribute from blacs 1D grid to 1D grid conformal to leaf sizes 
@@ -4408,11 +3772,11 @@ use MISC
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyL,index_i_m,index_i,index_j,level,group_m,mm,nn,nn1,nn2,j,i,mn,rank,mm1
 type(butterfly_Kerl)ButterflyP_old,ButterflyP
-complex(kind=8), allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
-complex(kind=8), allocatable :: tau_Q(:)
-real*8,allocatable :: Singular(:)
+DT, allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
+DT, allocatable :: tau_Q(:)
+real(kind=8),allocatable :: Singular(:)
 type(matrixblock)::blocks
-real*8:: SVD_tolerance
+real(kind=8):: SVD_tolerance
 type(Hoption)::option
 
 	index_j = index_j_loc
@@ -4487,7 +3851,7 @@ type(Hoption)::option
 		do j=1, rank
 			do i=1, mm
 				blocks%ButterflyU%blocks(index_i)%matrix(i,j)=mat_tmp(i,j)
-				! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_complex_number()
+				! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_dp_number()
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -4501,7 +3865,7 @@ type(Hoption)::option
 	do i=1, rank
 		do j=1, nn1
 			blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=VV(i,j)
-			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_complex_number()
+			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_dp_number()
 		enddo
 	enddo
 	! !$omp end parallel do						
@@ -4509,7 +3873,7 @@ type(Hoption)::option
 	do i=1, rank
 		do j=1, nn2
 			blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=VV(i,j+nn1)
-			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_complex_number()
+			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_dp_number()
 		enddo
 	enddo
 	! !$omp end parallel do						
@@ -4536,11 +3900,11 @@ use MISC
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyR,level_butterfly,index_j_m,index_i,index_j,level,group_n,mm,nn,nn1,mm1,mm2,j,i,mn,rank
 type(butterfly_Kerl)ButterflyP_old,ButterflyP
-complex(kind=8), allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
-complex(kind=8), allocatable :: tau_Q(:)
-real*8,allocatable :: Singular(:)
+DT, allocatable :: QQ(:,:), RR(:,:), UU(:,:), VV(:,:),mat_tmp(:,:),matU(:,:),matV(:,:)
+DT, allocatable :: tau_Q(:)
+real(kind=8),allocatable :: Singular(:)
 type(matrixblock)::blocks
-real*8:: SVD_tolerance
+real(kind=8):: SVD_tolerance
 type(Hoption)::option
 
 	index_i = index_i_loc
@@ -4616,7 +3980,7 @@ type(Hoption)::option
 		do j=1, rank
 			do i=1, nn
 				blocks%ButterflyV%blocks(index_j)%matrix(i,j)=mat_tmp(j,i)
-				! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_complex_number()
+				! blocks%ButterflyU%blocks(index_i)%matrix(i,j)=random_dp_number()
 			enddo
 		enddo
 		! !$omp end parallel do
@@ -4630,7 +3994,7 @@ type(Hoption)::option
 	do i=1, mm1
 		do j=1, rank
 			blocks%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix(i,j)=UU(i,j)
-			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_complex_number()
+			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=random_dp_number()
 		enddo
 	enddo
 	! !$omp end parallel do						
@@ -4638,7 +4002,7 @@ type(Hoption)::option
 	do i=1, mm2
 		do j=1, rank
 			blocks%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix(i,j)=UU(i+mm1,j)
-			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_complex_number()
+			! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=random_dp_number()
 		enddo
 	enddo
 	! !$omp end parallel do						
@@ -4671,12 +4035,12 @@ implicit none
 	integer Ntest
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr,MyID	
 	integer:: cridx,info
-	complex(kind=8),allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:)
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:)
 	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)	
 	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
 	integer :: numroc   ! blacs routine	
 	integer edge_n,edge_m, rank
-	real*8:: fnorm1,fnorm0,rtemp1,rtemp0
+	real(kind=8):: fnorm1,fnorm0,rtemp1,rtemp0
 	
 	
 	if(option%ErrFillFull==1)then
@@ -4703,7 +4067,7 @@ implicit none
 		allocate(Vin(myArows,myAcols))
 		do ii=1,myArows
 		do jj=1,myAcols
-			Vin(ii,jj) = random_complex_number()
+			call random_dp_number(Vin(ii,jj))
 		end do
 		end do
 		
@@ -4729,7 +4093,7 @@ implicit none
 		allocate(Vout2(myArows,myAcols))
 		Vout1=0
 		Vout2=0
-		call pzgemm('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
+		call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
 		
 		! compute the approximate results
 		myArows = numroc(rank, nbslpk, myrow, 0, nprow)
@@ -4737,8 +4101,8 @@ implicit none
 		call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
 		allocate(Vinter(myArows,myAcols))			
 		Vinter=0
-		call pzgemm('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
-		call pzgemm('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
+		call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
+		call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
 		
 		myArows = numroc(blocks%M, nbslpk, myrow, 0, nprow)
 		myAcols = numroc(Ntest, nbslpk, mycol, 0, npcol)			
@@ -4770,7 +4134,7 @@ end subroutine CheckLRError
     ! implicit none
 
     ! integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
-    ! real*8 a, b, c, aa(2), bb(2), cc(2), angle, distance
+    ! real(kind=8) a, b, c, aa(2), bb(2), cc(2), angle, distance
 	! type(kernelquant)::ker
 	
 	! if(group_m/=group_n)then

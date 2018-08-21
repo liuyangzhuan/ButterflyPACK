@@ -3,6 +3,17 @@ module HODLR_construction
 ! use Butterfly_exact
 use Bplus_compress_forward
 use Bplus_randomized
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 contains 
 
 
@@ -12,7 +23,7 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	implicit none
 	
 	integer edge_m, edge_n
-	complex(kind=8) value_e
+	DT:: value_e
 	type(mesh)::msh
 	type(kernelquant)::ker	
 	
@@ -32,19 +43,15 @@ subroutine matrices_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	! use blas95
     use MODULE_FILE
     implicit none
-	real*8 n1,n2
+	real(kind=8) n1,n2
     integer i, j, ii, ii_inv, jj, kk, iii, jjj,ll
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter,ierr
     real T0
-	real*8:: rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
+	real(kind=8):: rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
 	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2
-	complex(kind=8)::ctemp,ctemp1,ctemp2
 	type(matrixblock)::block_tmp,block_tmp1
-	complex(kind=8),allocatable::matrixtmp1(:,:),matrixtmp2(:,:),fullmat(:,:),fullmat_eye(:,:),fullmat1(:,:),fullmat2(:,:),fullmat3(:,:),fullmat4(:,:),fullmat5(:,:),fullmat6(:,:)
-	integer, allocatable :: ipiv(:)
-	complex(kind=8), allocatable :: UU(:,:), VV(:,:),testin(:,:),testout(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:)
-	real*8,allocatable :: Singular(:)
+	DT,allocatable::fullmat(:,:)
 	integer level_c,iter,level_cc,level_butterfly,Bidxs,Bidxe
 	type(Hoption)::option
 	type(Hstat)::stats
@@ -74,8 +81,8 @@ subroutine matrices_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	stats%rankmax_of_level = 0
 	
 	
-	! do level_c = 1,ho_bf1%Maxlevel+1
-	do level_c = 1,1
+	do level_c = 1,ho_bf1%Maxlevel+1
+	! do level_c = 1,1
 		if(level_c/=ho_bf1%Maxlevel+1)then
 			Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 			Bidxe = ho_bf1%levels(level_c)%Bidxe*2
@@ -84,8 +91,8 @@ subroutine matrices_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 			Bidxe = ho_bf1%levels(level_c)%Bidxe		
 		endif
 		
-		! do ii =Bidxs,Bidxe
-		do ii =Bidxs,Bidxs
+		do ii =Bidxs,Bidxe
+		! do ii =Bidxs,Bidxs
 
 			if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%tail)then
 				if (level_c/=ho_bf1%Maxlevel+1) then
@@ -152,7 +159,7 @@ subroutine matrices_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	call MPI_ALLREDUCE(stats%Mem_Direct,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct forward blocks'
 	if(ptree%MyID==Main_ID)write(*,*)''
-	stop
+	! stop
 	
     return
 
@@ -167,7 +174,7 @@ subroutine full_filling(blocks,msh,ker,element_Zmn)
     integer group_m, group_n, i, j
     integer mm, nn
     integer head_m, head_n, tail_m, tail_n
-    complex(kind=8) value_Z
+    DT value_Z
 	type(matrixblock)::blocks
 	type(mesh)::msh
 	type(kernelquant)::ker
@@ -205,17 +212,17 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
     implicit none
     
     type(matrixblock) :: blocks
-    real*8 a, b, error,v1,v2
+    real(kind=8) a, b, error,v1,v2
     integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n,Dimn,edge_m,edge_n
-    complex(kind=8) value1, value2, ctemp1, ctemp2
-	complex(kind=8),allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
+    DT value1, value2, ctemp1, ctemp2
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
     type(kernelquant)::ker
     type(mesh)::msh
 	procedure(Z_elem)::element_Zmn
 	type(proctree)::ptree
 	type(Hstat)::stats
 	integer,allocatable::order_m(:),order_n(:)
-	real*8,allocatable::distance_m(:),distance_n(:),center(:)
+	real(kind=8),allocatable::distance_m(:),distance_n(:),center(:)
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	

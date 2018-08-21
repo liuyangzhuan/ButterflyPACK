@@ -5,13 +5,13 @@ implicit none
 
 	!**** define your application-related variables here   
 	type quant_app
-		real*8 wavenum    ! CEM: wave number  
-		real*8 wavelength  ! CEM: wave length
-		real*8 omiga       ! CEM: angular frequency
-		real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
+		real(kind=8) wavenum    ! CEM: wave number  
+		real(kind=8) wavelength  ! CEM: wave length
+		real(kind=8) omiga       ! CEM: angular frequency
+		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
-		real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
+		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
 	end type quant_app
 
 contains
@@ -27,20 +27,20 @@ subroutine Z_elem_EMSURF(ker,m,n,value_e,msh,quant)
     integer flag,edge_m,edge_n,nodetemp_n,patch
     complex(kind=8) value_e,value_m,value
     integer i,j,ii,jj,iii,jjj
-    real*8 ln,lm,am(3),an(3),nr_m(3)
-    real*8 nr_n(3)
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3)
+    real(kind=8) nr_n(3)
     complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
     complex(kind=8) imp,imp1,imp2,imp3
-    real*8 temp
-    real*8 distance
-    real*8 ianl,ianl1,ianl2
-    real*8 area
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+    real(kind=8) area
 	type(mesh)::msh
 	class(kernelquant)::ker
 	class(*),pointer :: quant
 	
 	
-    real*8,allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
 	
 	
 	select TYPE(quant)
@@ -165,7 +165,7 @@ end subroutine Z_elem_EMSURF
   implicit none
   type(mesh)::msh
   integer nn ,flag
-  real*8 x(:),y(:),z(:),w(:)
+  real(kind=8) x(:),y(:),z(:),w(:)
   integer i,j,ii
 !	wa=area*9./40
 !	wb=area*(155.-sqrt(15.))/1200.
@@ -213,8 +213,8 @@ end subroutine Z_elem_EMSURF
       use MODULE_FILE
       implicit none
       
-      real*8 v1,v2,v3,v4,v5
-      real*8 wa,wb,wc
+      real(kind=8) v1,v2,v3,v4,v5
+      real(kind=8) wa,wb,wc
 	  type(mesh)::msh
 	  
     !	wa=area*9./40
@@ -345,15 +345,15 @@ function ianalytic(mm,jj,xi,yi,zi,msh)
 
 use     MODULE_FILE
 integer mm,jj,j,i
-real*8 xi,yi,zi
-real*8    temp,ianalytic
+real(kind=8) xi,yi,zi
+real(kind=8)    temp,ianalytic
 integer ii,node1,node2,node3
-real*8    u3,v3,u0,v0,w0,l(3)
-real*8    u(3),w(3),v(3),a(3),b(3)
-real*8    s(2,3),t(-1:1,3)
-real*8    f2(3),beta(3)
-real*8    r(-1:1,3)
-real*8    area
+real(kind=8)    u3,v3,u0,v0,w0,l(3)
+real(kind=8)    u(3),w(3),v(3),a(3),b(3)
+real(kind=8)    s(2,3),t(-1:1,3)
+real(kind=8)    f2(3),beta(3)
+real(kind=8)    r(-1:1,3)
+real(kind=8)    area
 type(mesh)::msh
 
 ii=msh%info_unk(jj,mm)  
@@ -445,20 +445,20 @@ function ianalytic2(mm,jj,xi,yi,zi,iii,msh)
 
 use MODULE_FILE
 integer mm,jj,j,i
-real*8 ianalytic2
+real(kind=8) ianalytic2
 integer ii,node1,node2,node3,iii
-real*8 xi,yi,zi
-real*8 u3,v3,u0,v0,w0,l(3)
-real*8 u(3),w(3),v(3),a(3),b(3)
-real*8 m1(3),m2(3),m3(3)
-real*8 s1(3),s2(3),s3(3)
-real*8 s(2,3),t(-1:1,3)
-real*8 f2(3),beta(3),f3(3)
-real*8 r(-1:1,3)
-real*8 temp,temp1,temp2,temp3
-real*8 iua,iva
-real*8 n0(3)
-real*8    area
+real(kind=8) xi,yi,zi
+real(kind=8) u3,v3,u0,v0,w0,l(3)
+real(kind=8) u(3),w(3),v(3),a(3),b(3)
+real(kind=8) m1(3),m2(3),m3(3)
+real(kind=8) s1(3),s2(3),s3(3)
+real(kind=8) s(2,3),t(-1:1,3)
+real(kind=8) f2(3),beta(3),f3(3)
+real(kind=8) r(-1:1,3)
+real(kind=8) temp,temp1,temp2,temp3
+real(kind=8) iua,iva
+real(kind=8) n0(3)
+real(kind=8)    area
 type(mesh)::msh
 
 ii=msh%info_unk(jj,mm)
@@ -589,13 +589,13 @@ subroutine current_node_patch_mapping(chara,curr,msh)
     
     integer patch, edge, node_patch(3), node_edge, node
     integer i,j,k,ii,jj,kk,flag
-    real*8 center(3), current_patch(3,0:3),  current_abs, r, a
+    real(kind=8) center(3), current_patch(3,0:3),  current_abs, r, a
     character chara
     character(20) string 
     complex(kind=8)::curr(:)
 	type(mesh)::msh
 	
-    real*8,allocatable :: current_at_patch(:), current_at_node(:)
+    real(kind=8),allocatable :: current_at_patch(:), current_at_node(:)
     integer,allocatable :: edge_of_patch(:,:)
     
     allocate (edge_of_patch(3,msh%maxpatch))
@@ -689,13 +689,13 @@ subroutine current_node_patch_mapping(chara,curr,msh)
 end subroutine current_node_patch_mapping
 
 
-real*8 function triangle_area(patch,msh)
+real(kind=8) function triangle_area(patch,msh)
     
     use MODULE_FILE
     implicit none
     
     integer patch,i
-    real*8 a(3),b(3),c(3)
+    real(kind=8) a(3),b(3),c(3)
 	type(mesh)::msh
     
     do i=1,3
@@ -717,11 +717,11 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,msh,quant)
     
     integer edge
     complex(kind=8) value
-    real*8 theta, phi
+    real(kind=8) theta, phi
     integer i,ii,jj,node1,node2,node3
     type(mesh)::msh
-	real*8 lm,einc(3),a(3),nr(3),k(3)
-	real*8, allocatable::x(:),y(:),z(:),w(:)
+	real(kind=8) lm,einc(3),a(3),nr(3),k(3)
+	real(kind=8), allocatable::x(:),y(:),z(:),w(:)
     complex(kind=8)  phase,ctemp_e,ctemp_h,value_e,value_h,ee(3),hh(3),hh1(3)
 	type(quant_app)::quant
 	
@@ -780,10 +780,10 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,msh,quant)
     type(quant_app)::quant
     integer edge
     complex(kind=8) value
-    real*8 theta, phi
+    real(kind=8) theta, phi
     integer i,ii,jj,node1,node2,node3
-	real*8 lm,einc(3),a(3),nr(3),k(3)
-	real*8, allocatable::x(:),y(:),z(:),w(:)
+	real(kind=8) lm,einc(3),a(3),nr(3),k(3)
+	real(kind=8), allocatable::x(:),y(:),z(:),w(:)
     complex(kind=8)  phase,ctemp_e,ctemp_h,value_e,value_h,ee(3),hh(3),hh1(3)
 	type(mesh)::msh
 	
@@ -838,14 +838,14 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
 	use MODULE_FILE
     implicit none
     
-    real*8 rcs
+    real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1
-    real*8 theta,phi,dtheta,dphi
+    real(kind=8) theta,phi,dtheta,dphi
     
     integer i,j,ii,jj,iii,jjj,patch,flag
-    real*8 l_edge,l_edgefine
-    real*8 a(3)
-    real*8,allocatable:: x(:),y(:),z(:),w(:)
+    real(kind=8) l_edge,l_edgefine
+    real(kind=8) a(3)
+    real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
     complex(kind=8):: curr(:,:)
 	type(mesh)::msh
 	type(quant_app)::quant
@@ -916,15 +916,15 @@ subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
-    real*8 theta,phi
+    real(kind=8) theta,phi
     type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj,patch,flag
-    real*8 l_edge,l_edgefine
-    real*8 a(3)
+    real(kind=8) l_edge,l_edgefine
+    real(kind=8) a(3)
     complex(kind=8)::curr
     integer edge,edge_m,edge_n
     type(mesh)::msh
-	real*8,allocatable:: x(:),y(:),z(:),w(:)
+	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 		
 	allocate(x(msh%integral_points))
 	allocate(y(msh%integral_points))
@@ -963,14 +963,14 @@ subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
-    real*8 theta,phi
+    real(kind=8) theta,phi
     type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj,patch,flag
-    real*8 l_edge,l_edgefine
-    real*8 a(3)
+    real(kind=8) l_edge,l_edgefine
+    real(kind=8) a(3)
     complex(kind=8)::curr
 	type(mesh)::msh
-	real*8,allocatable:: x(:),y(:),z(:),w(:)
+	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 	
     integer edge,edge_m,edge_n
     
@@ -1012,9 +1012,9 @@ subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
     use MODULE_FILE
     implicit none
     complex(kind=8)::curr(:)
-    real*8 rcs
+    real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
-    real*8 dsita,dphi
+    real(kind=8) dsita,dphi
     integer edge,edge_m,edge_n,ierr
 	type(mesh)::msh
     type(quant_app)::quant
@@ -1044,9 +1044,9 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
     use MODULE_FILE
     implicit none
     
-    real*8 rcs
+    real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
-    real*8 dsita,dphi    
+    real(kind=8) dsita,dphi    
     integer edge,edge_m,edge_n,ierr
     complex(kind=8)::curr(:)
 	type(mesh)::msh
@@ -1091,13 +1091,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	! include "mkl_vml.fi"	 
 	
-    real*8 para
-    real*8 tolerance
+    real(kind=8) para
+    real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,x,y,z,r,theta,phi
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	
 	character(len=:),allocatable  :: string
@@ -1308,7 +1308,7 @@ subroutine geo_modeling_SURF(msh,quant,ptree,DATA_DIR)
     integer node1, node2
     integer node_temp(2)
 	integer Dimn
-    real*8 a(3),b(3),c(3),r0
+    real(kind=8) a(3),b(3),c(3),r0
 	type(mesh)::msh
 	type(quant_app)::quant
 	type(proctree)::ptree
@@ -1477,12 +1477,12 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     integer i, j, ii, jj, iii, jjj,ierr
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
-    real*8 theta, phi, dphi, rcs_V, rcs_H
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
-    real*8 n1,n2,rtemp
+    real(kind=8) n1,n2,rtemp
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
-	real*8:: rel_error
+	real(kind=8):: rel_error
 	type(Hoption)::option
 	type(hobf)::ho_bf_for,ho_bf_inv
 	type(mesh)::msh

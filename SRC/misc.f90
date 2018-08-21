@@ -12,6 +12,107 @@ use omp_lib
 
 integer, parameter :: int64 = selected_int_kind(18) 
 
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
+
+
+interface gemmf90
+  module procedure dgemmf90
+  module procedure zgemmf90
+end interface
+
+interface gesvdf90
+  module procedure dgesvdf90
+  module procedure zgesvdf90
+end interface
+
+interface gesddf90
+  module procedure dgesddf90
+  module procedure zgesddf90
+end interface
+
+interface geqrff90
+  module procedure dgeqrff90
+  module procedure zgeqrff90
+end interface
+
+
+interface geqp3f90
+  module procedure dgeqp3f90
+  module procedure zgeqp3f90
+end interface
+
+
+interface geqp3modf90
+  module procedure dgeqp3modf90
+  module procedure zgeqp3modf90
+end interface
+
+
+interface un_or_mqrf90
+  module procedure ormqrf90
+  module procedure unmqrf90
+end interface
+
+
+interface un_or_gqrf90
+  module procedure ungqrf90
+  module procedure orgqrf90
+end interface
+
+
+interface getrff90
+  module procedure dgetrff90
+  module procedure zgetrff90
+end interface
+
+interface getrsf90
+  module procedure dgetrsf90
+  module procedure zgetrsf90
+end interface
+
+interface getrif90
+  module procedure dgetrif90
+  module procedure zgetrif90
+end interface
+
+interface trsmf90
+  module procedure dtrsmf90
+  module procedure ztrsmf90
+end interface
+
+interface pun_or_mqrf90
+  module procedure pzunmqrf90
+  module procedure pdormqrf90
+end interface
+
+
+interface pgeqpfmodf90
+  module procedure pzgeqpfmodf90
+  module procedure pdgeqpfmodf90
+end interface
+
+
+interface pgetrif90
+  module procedure pzgetrif90
+  module procedure pdgetrif90
+end interface
+
+
+interface pgesvdf90
+  module procedure pzgesvdf90
+  module procedure pdgesvdf90
+end interface
+
+
 contains
  
 ! #ifndef mymacro(x)
@@ -28,7 +129,7 @@ subroutine linspaceI(startI,endI,N,array)
 implicit none
 integer startI,endI,N
 integer array(1:N)
-real*8::rtemp
+real(kind=8)::rtemp
 integer i
 
 rtemp=dble(endI-startI+1)/dble(N)
@@ -52,7 +153,7 @@ implicit none
 	
 	! logical::nan
 	integer::M,N
-	complex(kind=8)::A(M,N),ctemp
+	DT::A(M,N),ctemp
 	integer ii,jj
 	
 	ctemp = 0
@@ -72,10 +173,10 @@ implicit none
 	implicit none 
 	
 	integer m,n,k
-	complex(kind=8)::A(m,n),B(n,k),C(m,k)
-	complex(kind=8),allocatable::A1(:,:),B1(:,:)
-	complex(kind=8)::ctemp
-	real*8::n1,n2
+	DT::A(m,n),B(n,k),C(m,k)
+	DT,allocatable::A1(:,:),B1(:,:)
+	DT::ctemp
+	real(kind=8)::n1,n2
 	integer ii,jj,kk
 	
 	allocate(A1(m,n))
@@ -121,10 +222,10 @@ implicit none
 	implicit none 
 	
 	integer m,n,k
-	complex(kind=8)::A(n,m),B(n,k),C(m,k)
-	complex(kind=8),allocatable::A1(:,:),B1(:,:)	
-	complex(kind=8)::ctemp
-	real*8::n1,n2
+	DT::A(n,m),B(n,k),C(m,k)
+	DT,allocatable::A1(:,:),B1(:,:)	
+	DT::ctemp
+	real(kind=8)::n1,n2
 	integer ii,jj,kk
 	allocate(A1(n,m))
 	allocate(B1(n,k))	
@@ -139,7 +240,7 @@ implicit none
 		   
 	ctemp = 0
 	do kk=1,n
-		ctemp = ctemp + conjg(A1(kk,ii))*B1(kk,jj)	
+		ctemp = ctemp + conjg(cmplx(A1(kk,ii),kind=8))*B1(kk,jj)	
 	end do
 	C(ii,jj) = ctemp
 	end do
@@ -162,10 +263,10 @@ implicit none
 	implicit none 
 	
 	integer m,n,k
-	complex(kind=8)::A(m,n),B(k,n),C(m,k)
-	complex(kind=8),allocatable::A1(:,:),B1(:,:)	
-	complex(kind=8)::ctemp
-	real*8::n1,n2
+	DT::A(m,n),B(k,n),C(m,k)
+	DT,allocatable::A1(:,:),B1(:,:)	
+	DT::ctemp
+	real(kind=8)::n1,n2
 	integer ii,jj,kk
 	
 	allocate(A1(m,n))
@@ -180,7 +281,7 @@ implicit none
 		   
 	ctemp = 0
 	do kk=1,n
-		ctemp = ctemp + A1(ii,kk)*conjg(B1(jj,kk))	
+		ctemp = ctemp + A1(ii,kk)*conjg(cmplx(B1(jj,kk),kind=8))	
 	end do
 	C(ii,jj) = ctemp
 	end do
@@ -201,10 +302,10 @@ implicit none
 	implicit none 
 	
 	integer m,n,k
-	complex(kind=8)::A(n,m),B(n,k),C(m,k)
-	complex(kind=8),allocatable::A1(:,:),B1(:,:)		
-	complex(kind=8)::ctemp
-	real*8::n1,n2
+	DT::A(n,m),B(n,k),C(m,k)
+	DT,allocatable::A1(:,:),B1(:,:)		
+	DT::ctemp
+	real(kind=8)::n1,n2
 	integer ii,jj,kk
 
 	allocate(A1(n,m))
@@ -242,10 +343,10 @@ implicit none
 	implicit none 
 	
 	integer m,n,k
-	complex(kind=8)::A(m,n),B(k,n),C(m,k)
-	complex(kind=8),allocatable::A1(:,:),B1(:,:)		
-	complex(kind=8)::ctemp
-	real*8::n1,n2
+	DT::A(m,n),B(k,n),C(m,k)
+	DT,allocatable::A1(:,:),B1(:,:)		
+	DT::ctemp
+	real(kind=8)::n1,n2
 	integer ii,jj,kk
 	allocate(A1(m,n))
 	allocate(B1(k,n))	
@@ -280,9 +381,9 @@ implicit none
   subroutine copymatN_omp(A,B,m,n)
 	implicit none 
 	integer m,n
-	complex(kind=8)::A(:,:),B(:,:)
+	DT::A(:,:),B(:,:)
 	character:: chara
-	real*8::n1,n2
+	real(kind=8)::n1,n2
 	integer ii,jj,ijind
 	
 	! n1 = OMP_get_wtime()
@@ -306,8 +407,8 @@ implicit none
   subroutine copymatT_omp(A,B,m,n)
 	implicit none 
 	integer m,n
-	complex(kind=8)::A(:,:),B(:,:) 
-	real*8::n1,n2
+	DT::A(:,:),B(:,:) 
+	real(kind=8)::n1,n2
 	integer ii,jj,ijind
 	
 	! n1 = OMP_get_wtime()
@@ -329,8 +430,8 @@ implicit none
 
 function fnorm(A,m,n)
 	implicit none 
-	real*8:: fnorm 
-	complex(kind=8)::A(m,n)
+	real(kind=8):: fnorm 
+	DT::A(m,n)
 	integer m,n,ii,jj
 	fnorm = 0
 	do ii =1,m
@@ -341,124 +442,30 @@ function fnorm(A,m,n)
 	fnorm = sqrt(fnorm)
  end function fnorm
  
- 
 
-
-! subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
-	! ! use lapack95
-	! ! use blas95
-    ! use MODULE_FILE
-    ! implicit none
-	
-	! integer N,M,rmax
-	! real*8 Flops
-	! real*8 SVD_tolerance
-	! integer i, j, ii, jj, indx, rank_1, rank_2
-	! integer rank, ranknew,ldaU,ldaV
-	
-	! complex(kind=8)::matU(:,:),matV(:,:)	
-	! complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	! real*8, allocatable :: Singularsml(:)
-	! integer,allocatable :: jpvt1(:),jpvt2(:)
-
-	! ldaU = size(matU,1)
-	! ldaV = size(matV,1)
-    ! Flops=0
-
-	! allocate(QQ1(M,rmax))
-	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
-	! allocate (tau_Q(rmax))
-	! allocate (jpvt1(rmax))
-	! jpvt1=0
-	! call geqp3f90(QQ1,jpvt1,tau_Q)
-	! Flops = Flops + flops_zgeqrf(M, rmax)
-	
-	! allocate (RR1(rmax,rmax))
-	! RR1=(0,0)
-	! ! !$omp parallel do default(shared) private(i,j)
-	! do j=1, rmax
-		! do i=1, j
-			! RR1(i,jpvt1(j))=QQ1(i,j)
-		! enddo
-	! enddo
-	! ! !$omp end parallel do	
-	! call ungqrf90(QQ1,tau_Q)
-	! deallocate(tau_Q)
-	! deallocate(jpvt1)
-	! Flops = Flops + flops_zungqr(M, rmax, rmax)
-
-	! allocate(QQ2(N,rmax))
-	! call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
-	! allocate (tau_Q(rmax))
-	! ! call geqrff90(QQ2,tau_Q)
-	! allocate (jpvt2(rmax))
-	! jpvt2=0
-	! call geqp3f90(QQ2,jpvt2,tau_Q)
-
-	! Flops = Flops + flops_zgeqrf(N, rmax)
-	
-	! allocate (RR2(rmax,rmax))
-	! RR2=(0,0)
-	! ! !$omp parallel do default(shared) private(i,j)
-	! do j=1, rmax
-		! do i=1, j
-			! RR2(i,jpvt2(j))=QQ2(i,j)
-		! enddo
-	! enddo
-	! ! !$omp end parallel do	
-
-	! call ungqrf90(QQ2,tau_Q)
-	! deallocate(jpvt2)
-	! deallocate(tau_Q)
-	! Flops = Flops + flops_zungqr(N, rmax, rmax)
-	
-	! allocate(mattemp(rmax,rmax))
-	! mattemp=0
-	! ! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
-	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
-	! Flops = Flops + flops_zgemm(rmax, rmax, rmax)
-	! allocate(UUsml(rmax,rmax),VVsml(rmax,rmax),Singularsml(rmax))
-	! call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	! Flops = Flops + flops_zgesdd(rmax, rmax)
-	! do i=1,ranknew
-		! UUsml(1:rmax,i) = UUsml(1:rmax,i) * Singularsml(i)
-	! enddo
-	! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
-	! Flops = Flops + flops_zgemm(M,ranknew,rmax)	
-	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
-	! Flops = Flops + flops_zgemm(ranknew,N,rmax)		
-	
-	! rank = ranknew
-	
-	
-	! deallocate(mattemp,RR1,QQ1,UUsml,VVsml,Singularsml)
-	! deallocate(QQ2,RR2)
-
-
-! end subroutine LR_ReCompression	
-	
-
-
-subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
+subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
     implicit none
 	
 	integer N,M,rmax
-	real*8 Flops
-	real*8 SVD_tolerance
+	real(kind=8),optional:: Flops
+	real(kind=8):: flop
+	real(kind=8) SVD_tolerance
 	integer i, j, ii, jj, indx, rank_1, rank_2
 	integer rank, ranknew,ldaU,ldaV
 	
-	complex(kind=8)::matU(:,:),matV(:,:)	
-	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	real*8, allocatable :: Singularsml(:)
+	DT::matU(:,:),matV(:,:)	
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	real(kind=8), allocatable :: Singularsml(:)
 	integer,allocatable :: jpvt1(:),jpvt2(:)
 
+	if(present(Flops))Flops=0d0
+	
 	ldaU = size(matU,1)
 	ldaV = size(matV,1)
-    Flops=0
+ 
 
 	allocate(QQ1(M,rmax))
 	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
@@ -466,11 +473,11 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
 	! call geqp3f90(QQ1,jpvt1,tau_Q)
-	call geqrff90(QQ1,tau_Q)
-	Flops = Flops + flops_zgeqrf(M, rmax)
+	call geqrff90(QQ1,tau_Q,flop)
+	if(present(Flops))Flops = Flops + flop
 	
 	allocate (RR1(rmax,rmax))
-	RR1=(0,0)
+	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -478,10 +485,10 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ1,tau_Q)
+	call un_or_gqrf90(QQ1,tau_Q,flop)
 	deallocate(tau_Q)
 	! deallocate(jpvt1)
-	Flops = Flops + flops_zungqr(M, rmax, rmax)
+	if(present(Flops))Flops = Flops + flop
 
 	allocate(QQ2(N,rmax))
 	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
@@ -489,12 +496,12 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
 	! call geqrff90(QQ2,tau_Q)
 	! allocate (jpvt2(rmax))
 	! jpvt2=0
-	call geqrff90(QQ2,tau_Q)
+	call geqrff90(QQ2,tau_Q,flop)
 
-	Flops = Flops + flops_zgeqrf(N, rmax)
+	if(present(Flops))Flops = Flops + flop
 	
 	allocate (RR2(rmax,rmax))
-	RR2=(0,0)
+	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -503,26 +510,28 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance)
 	enddo
 	! !$omp end parallel do	
 
-	call ungqrf90(QQ2,tau_Q)
+	call un_or_gqrf90(QQ2,tau_Q,flop)
 	! deallocate(jpvt2)
 	deallocate(tau_Q)
-	Flops = Flops + flops_zungqr(N, rmax, rmax)
+	if(present(Flops))Flops = Flops + flop
 	
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
-	! call gemmf90(RR1,RR2,mattemp,'N','T',cone,czero)
-	call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
-	Flops = Flops + flops_zgemm(rmax, rmax, rmax)
+	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
+	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop)
+	if(present(Flops))Flops = Flops + flop
 	allocate(UUsml(rmax,rmax),VVsml(rmax,rmax),Singularsml(rmax))
-	call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	Flops = Flops + flops_zgesdd(rmax, rmax)
+	call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop)
+	if(present(Flops))Flops = Flops + flop
 	do i=1,ranknew
 		UUsml(1:rmax,i) = UUsml(1:rmax,i) * Singularsml(i)
 	enddo
-	call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
-	Flops = Flops + flops_zgemm(M,ranknew,rmax)	
-	call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
-	Flops = Flops + flops_zgemm(ranknew,N,rmax)		
+	! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
+	call gemmf90(QQ1,M,UUsml,rmax,matU,ldaU,'N','N',M,ranknew,rmax, cone,czero,flop)
+	if(present(Flops))Flops = Flops + flop
+	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
+	call gemmf90(VVsml,rmax,QQ2,N,matV,ldaV,'N','T',ranknew,N,rmax, cone,czero,flop)
+	if(present(Flops))Flops = Flops + flop	
 	
 	rank = ranknew
 	
@@ -535,23 +544,26 @@ end subroutine LR_ReCompression
 	
 	
 
-subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
+subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
     implicit none
 	
 	integer N,M,rmax
-	real*8 norm
-	real*8 tolerance
+	real(kind=8) norm
+	real(kind=8),optional:: Flops
+	real(kind=8):: flop
+	real(kind=8) tolerance
 	integer i, j, ii, jj, indx, rank_1, rank_2
 	integer rank, ranknew,mn, ranknew1, ranknew2
 	
-	complex(kind=8)::matU(:,:),matV(:,:)	
-	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
-	real*8, allocatable :: Singularsml(:),Singular(:)
+	DT::matU(:,:),matV(:,:)	
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
+	real(kind=8), allocatable :: Singularsml(:),Singular(:)
 	integer,allocatable :: jpvt(:),jpvt1(:),jpvt2(:)
 
+	if(present(Flops))Flops=0
 	
 	! mn= min(M,rmax)
 
@@ -587,11 +599,12 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 	allocate(QQ1(M,rmax))
 	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
 	allocate (tau_Q(rmax))
-	call geqrff90(QQ1,tau_Q)
+	call geqrff90(QQ1,tau_Q,flop)
+	if(present(Flops))Flops= Flops + flop
 	deallocate(tau_Q)
 
 	allocate (RR1(rmax,rmax))
-	RR1=(0,0)
+	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -603,11 +616,12 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 	allocate(QQ2(N,rmax))
 	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
 	allocate (tau_Q(rmax))
-	call geqrff90(QQ2,tau_Q)
+	call geqrff90(QQ2,tau_Q,flop)
+	if(present(Flops))Flops= Flops + flop
 	deallocate(tau_Q)
 	
 	allocate (RR2(rmax,rmax))
-	RR2=(0,0)
+	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -618,8 +632,9 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
-	call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
-	
+	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,,rmax,czero,mattemp,rmax)
+	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop)
+	if(present(Flops))Flops= Flops + flop
 	norm = fnorm(mattemp,rmax,rmax)
 	
 	deallocate(mattemp,RR1,QQ1)
@@ -647,7 +662,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 	
 	! if(ranknew1>0 .and. ranknew2>0)then
 		! allocate (RR1(ranknew1,rmax))
-		! RR1=(0,0)
+		! RR1=0d0
 		! ! !$omp parallel do default(shared) private(i,j)
 		! do j=1, ranknew1
 			! do i=1, j
@@ -657,7 +672,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 		! ! !$omp end parallel do		
 		
 		! allocate (RR2(ranknew2,rmax))
-		! RR2=(0,0)
+		! RR2=0d0
 		! ! !$omp parallel do default(shared) private(i,j)
 		! do j=1, ranknew2
 			! do i=1, j
@@ -696,7 +711,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 	
 	! if(ranknew>0)then
 		! allocate (RR1(ranknew,rmax))
-		! RR1=(0,0)
+		! RR1=0d0
 		! ! !$omp parallel do default(shared) private(i,j)
 		! do j=1, ranknew
 			! do i=1, j
@@ -705,7 +720,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance)
 		! enddo
 		! ! !$omp end parallel do	
 
-		! call ungqrf90(QQ1,tau_Q)
+		! call un_or_gqrf90(QQ1,tau_Q)
 
 		! allocate(QQ2(rmax,N))
 		! do ii=1,rmax
@@ -737,10 +752,10 @@ subroutine GetRank(M,N,mat,rank,eps)
 ! ! use blas95
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj
-complex(kind=8)::mat(M,N)
-real*8 eps
-complex(kind=8), allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:),mat1(:,:)
-real*8,allocatable :: Singular(:)
+DT::mat(:,:)
+real(kind=8) eps
+DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:),mat1(:,:)
+real(kind=8),allocatable :: Singular(:)
 integer,allocatable :: jpvt(:)
 
 allocate(mat1(M,N))
@@ -847,10 +862,10 @@ subroutine ComputeRange(M,N,mat,rank,rrflag,eps)
 ! use blas95
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj,rrflag
-complex(kind=8)::mat(:,:)
-real*8 eps
-complex(kind=8), allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:)
-real*8,allocatable :: Singular(:)
+DT::mat(:,:)
+real(kind=8) eps
+DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:)
+real(kind=8),allocatable :: Singular(:)
 integer,allocatable :: jpvt(:)
 
 mn=min(M,N)
@@ -891,7 +906,7 @@ end if
 	enddo
 	!$omp end parallel do
 	
-	call ungqrf90(Atmp,tau)
+	call un_or_gqrf90(Atmp,tau)
 	
 	if(M>=N)then
 		mat = Atmp
@@ -925,13 +940,13 @@ subroutine CheckRandomizedLR(M,N,mat,tolerance)
 ! use blas95
 implicit none 
 integer M,N,rank,mn,i,j,k,rankmax_c,rankmax_r,rankmax_min,flag0,rank_new,rmax
-complex(kind=8)::mat(M,N),ctemp
-complex(kind=8),allocatable::mat1(:,:),mat2(:,:)								
-real*8 tolerance,Smax
-complex(kind=8), allocatable :: UU(:,:), VV(:,:),matrix_U(:,:), matrix_V(:,:),U_new(:,:),V_new(:,:),U_new1(:,:),V_new1(:,:),test_in(:,:),test_out1(:,:),test_out2(:,:),test_out3(:,:)
-real*8,allocatable :: Singular(:)
+DT::mat(M,N),ctemp
+DT,allocatable::mat1(:,:),mat2(:,:)								
+real(kind=8) tolerance,Smax
+DT, allocatable :: UU(:,:), VV(:,:),matrix_U(:,:), matrix_V(:,:),U_new(:,:),V_new(:,:),U_new1(:,:),V_new1(:,:),test_in(:,:),test_out1(:,:),test_out2(:,:),test_out3(:,:)
+real(kind=8),allocatable :: Singular(:)
 integer,allocatable:: select_row(:), select_column(:)
-complex(kind=8),allocatable::MatrixSubselection(:,:)
+DT,allocatable::MatrixSubselection(:,:)
 
 allocate(mat1(M,N))
 allocate(mat2(M,N))		   
@@ -1012,7 +1027,7 @@ do j=1, rank_new
 	do i=1, M
 		ctemp=0
 		do k=1, rankmax_c
-			ctemp=ctemp+matrix_U(i,k)*conjg(VV(j,k))
+			ctemp=ctemp+matrix_U(i,k)*conjg(cmplx(VV(j,k),kind=8))
 		enddo
 		U_new(i,j)=ctemp
 	enddo
@@ -1023,7 +1038,7 @@ do j=1, rank_new
 	do i=1, N
 		ctemp=0
 		do k=1, rankmax_r
-			ctemp=ctemp+conjg(UU(k,j))*matrix_V(i,k)
+			ctemp=ctemp+conjg(cmplx(UU(k,j),kind=8))*matrix_V(i,k)
 		enddo
 		V_new(j,i)=ctemp/Singular(j)
 	enddo
@@ -1039,7 +1054,7 @@ write(*,*)M,N
 do j=1,N
 do i=1,M
 	write(211,*)dble(mat1(i,j))
-	write(212,*)aimag(mat1(i,j))
+	write(212,*)aimag(cmplx(mat1(i,j),kind=8))
 end do
 end do
 
@@ -1051,7 +1066,7 @@ allocate(test_out1(M,1))
 allocate(test_out2(M,1))
 ! allocate(test_out3(M,1))
 do i=1,N
-	test_in(i,1) = random_complex_number()
+	call random_dp_number(test_in(i,1))
 end do
 
 call gemm_omp(mat,test_in,test_out1,M,N,1)
@@ -1084,16 +1099,6 @@ end subroutine CheckRandomizedLR
 
 
 
-
-! Form the first mxn elements in the memory occupied by mut to a new mxn matrix new_mut
-subroutine DirectCopy(mut,new_mut,m,n)
-integer m,n
-complex(kind=8):: mut(m,n),new_mut(m,n)
-new_mut = mut(1:m,1:n)
-end subroutine DirectCopy
-
-
-
   ! generate random permutation of 1:N  
   subroutine rperm(N, p)
 
@@ -1102,7 +1107,7 @@ end subroutine DirectCopy
 
     integer:: i
     integer:: k, j, ipj, itemp, m
-    real*8, dimension(100) :: u
+    real(kind=8), dimension(100) :: u
 
 	call assert(N<1d9,'In rperm, N too large')
 	! write(*,*)p(1)
@@ -1176,9 +1181,9 @@ end subroutine DirectCopy
 
 
 
-  real*8 function random_real_number(mag)
+  real(kind=8) function random_real_number(mag)
 	implicit none 
-	real*8 a,b,c,d,mag
+	real(kind=8) a,b,c,d,mag
 	integer seed
 	
 	! Uniform distribution
@@ -1195,32 +1200,41 @@ end subroutine DirectCopy
 
 
 
-  complex(kind=8) function random_complex_number()
+   subroutine random_dp_number(val)
 	implicit none 
-	real*8 a,b,c,d
+	real(kind=8) a,b,c,d
 	integer seed
+	class(*) val
 	
-	! Uniform distribution
-	call random_number(a)
-	call random_number(b)
-	call random_number(c)
-	call random_number(d)
-	if (c<0.5d0) then
-		a=-a
-	endif
-	if (d<0.5d0) then
-		b=-b
-	endif
-	random_complex_number=a+junit*b
+	select type(val)
+	type is (complex(kind=8))
 	
-	
-	! ! ! Normal distribution
-	! ! call random_number(a)
-	! ! seed = a*10000000
-	! ! random_complex_number =  c8_normal_01 ( seed )
-	
+		! Uniform distribution
+		call random_number(a)
+		call random_number(b)
+		call random_number(c)
+		call random_number(d)
+		if (c<0.5d0) then
+			a=-a
+		endif
+		if (d<0.5d0) then
+			b=-b
+		endif
+		val=a+junit*b
+		
+		
+		! ! ! Normal distribution
+		! ! call random_number(a)
+		! ! seed = a*10000000
+		! ! random_dp_number =  c8_normal_01 ( seed )
+	type is (real(kind=8))
+		! Uniform distribution
+		call random_number(a)
+		val = a*2d0-1d0
+		
+	end select
 	return
-	end function random_complex_number
+	end subroutine random_dp_number
 
 	
 
@@ -1254,13 +1268,13 @@ complex(kind=8) function c8_normal_01(seed)
 !
   implicit none
 
-  real*8, parameter :: r8_pi = 3.141592653589793D+00
-  ! real*8 r8_uniform_01
+  real(kind=8), parameter :: r8_pi = 3.141592653589793D+00
+  ! real(kind=8) r8_uniform_01
   integer ( kind = 4 ) seed
-  real*8 v1
-  real*8 v2
-  real*8 x_c
-  real*8 x_r
+  real(kind=8) v1
+  real(kind=8) v2
+  real(kind=8) x_c
+  real(kind=8) x_r
 
   v1 = r8_uniform_01 ( seed )
   v2 = r8_uniform_01 ( seed )
@@ -1273,7 +1287,7 @@ complex(kind=8) function c8_normal_01(seed)
   return
 end function c8_normal_01
 
-real*8 function r8_normal_01(seed)
+real(kind=8) function r8_normal_01(seed)
 !*****************************************************************************80
 !
 !! R8_NORMAL_01 returns a unit pseudonormal R8.
@@ -1300,18 +1314,18 @@ real*8 function r8_normal_01(seed)
 !    Input/output, integer ( kind = 4 ) SEED, a seed for the random
 !    number generator.
 !
-!    Output, real*8 R8_NORMAL_01, a normally distributed
+!    Output, real(kind=8) R8_NORMAL_01, a normally distributed
 !    random value.
 !
   implicit none
 
-  real*8 r1
-  real*8 r2
+  real(kind=8) r1
+  real(kind=8) r2
 
-  real*8, parameter :: r8_pi = 3.141592653589793D+00
-  ! real*8 r8_uniform_01
+  real(kind=8), parameter :: r8_pi = 3.141592653589793D+00
+  ! real(kind=8) r8_uniform_01
   integer ( kind = 4 ) seed
-  real*8 x
+  real(kind=8) x
 
   r1 = r8_uniform_01 ( seed )
   r2 = r8_uniform_01 ( seed )
@@ -1323,7 +1337,7 @@ real*8 function r8_normal_01(seed)
 end function r8_normal_01
 
 
-real*8 function r8_uniform_01(seed)
+real(kind=8) function r8_uniform_01(seed)
 
 !*****************************************************************************80
 !
@@ -1395,7 +1409,7 @@ real*8 function r8_uniform_01(seed)
 !    should NOT be 0.
 !    On output, SEED has been updated.
 !
-!    Output, real*8 R8_UNIFORM_01, a new pseudorandom variate,
+!    Output, real(kind=8) R8_UNIFORM_01, a new pseudorandom variate,
 !    strictly between 0 and 1.
 !
   implicit none
@@ -1435,7 +1449,7 @@ subroutine assert(statement,msg)
 end subroutine assert
 
 function floor_safe(input)
-real*8::input
+real(kind=8)::input
 integer floor_safe
 integer input_nint
 input_nint = NINT(input)
@@ -1448,7 +1462,7 @@ end if
 end function floor_safe
 
 function ceiling_safe(input)
-real*8::input
+real(kind=8)::input
 integer ceiling_safe
 integer input_nint
 input_nint = NINT(input)
@@ -1461,7 +1475,7 @@ end if
 end function ceiling_safe
 
 function INT_safe(input)
-real*8::input
+real(kind=8)::input
 integer INT_safe
 integer input_nint
 input_nint = NINT(input)
@@ -1475,10 +1489,10 @@ end function INT_safe
 
 subroutine cscalar(a,b,c)
 	  implicit none
-	real*8 b(3)
+	real(kind=8) b(3)
 	complex(kind=8) a(3),c
 	complex(kind=8) ax,ay,az
-	real*8 bx,by,bz
+	real(kind=8) bx,by,bz
 	ax=a(1);ay=a(2);az=a(3)
 	bx=b(1);by=b(2);bz=b(3)
 	c=ax*bx+ay*by+az*bz
@@ -1487,9 +1501,9 @@ end subroutine cscalar
 
 subroutine scalar(a,b,c)
 	  implicit none
-	real*8 a(3),b(3),c
-	real*8 ax,ay,az
-	real*8 bx,by,bz
+	real(kind=8) a(3),b(3),c
+	real(kind=8) ax,ay,az
+	real(kind=8) bx,by,bz
 	ax=a(1);ay=a(2);az=a(3)
 	bx=b(1);by=b(2);bz=b(3)
 	c=ax*bx+ay*by+az*bz
@@ -1499,10 +1513,10 @@ end subroutine scalar
 
 subroutine curl(a,b,c)
 	  implicit none
-	real*8 a(3),b(3),c(3)
-	real*8 ax,ay,az
-	real*8 bx,by,bz
-	real*8 cx,cy,cz
+	real(kind=8) a(3),b(3),c(3)
+	real(kind=8) ax,ay,az
+	real(kind=8) bx,by,bz
+	real(kind=8) cx,cy,cz
 	ax=a(1);ay=a(2);az=a(3)
 	bx=b(1);by=b(2);bz=b(3)
 
@@ -1516,9 +1530,9 @@ end subroutine curl
 	  
 subroutine ccurl(a,b,c)
 	  implicit none
-	real*8 a(3)
+	real(kind=8) a(3)
 	complex(kind=8) b(3),c(3)
-	real*8 ax,ay,az
+	real(kind=8) ax,ay,az
 	complex(kind=8) bx,by,bz
 	complex(kind=8) cx,cy,cz
 	ax=a(1);ay=a(2);az=a(3)
@@ -1531,102 +1545,22 @@ subroutine ccurl(a,b,c)
 	  return
 end subroutine ccurl
 
- real*8 function norm_vector(vector,n)
+ real(kind=8) function norm_vector(vector,n)
 	  implicit none
 	  integer n
-	  complex(kind=8) vector(n)
+	  DT:: vector(n)
 	  integer i
-	  real*8 sum
+	  real(kind=8) sum
 	  
 	  sum=0.0d0
       do i=1,n
-	      sum=sum+dble(vector(i)*conjg(vector(i)))
+	      sum=sum+dble(vector(i)*conjg(cmplx(vector(i),kind=8)))
       enddo
       
       norm_vector=sum
       
       return 
 end function norm_vector
-
-subroutine matrix_real_inverse(a,n)
-           implicit none
-		   integer i,j,k,n
-		   real*8     a(n,n)
-	       real*8     h,z
-		   real*8,allocatable :: b(:),c(:)
-		   integer,allocatable :: p(:),q(:)
-           allocate(b(n),c(n),p(n),q(n))
-
-	       do  6 i=1,n
-	        p(i)=0
-	        q(i)=0
-	        b(i)=0
-	        c(i)=0
-6        continue
-
-	       do  100 k=1,n
-
-	        h=0
-	       do  10 i=k,n
-	       do  10  j=k,n
-	        if(abs(a(i,j)).le.abs(h))  goto 10
-	        h=a(i,j)
-	        p(k)=i
-	        q(k)=j
-10       continue
-	       if(abs(h).le.1d-35)  goto  150
-	       if(p(k).eq.k) goto  40
-
-	       do  30 j=1,n
-	        z=a(p(k),j)
-	        a(p(k),j)=a(k,j)
-30        a(k,j)=z
-40       if(q(k).eq.k) goto 60
-
-	       do  50 i=1,n
-	        z=a(i,q(k))
-	        a(i,q(k))=a(i,k)
-50        a(i,k)=z
-
-60       do  80 j=1,n
-	       if(j-k) 65,70,65
-65       c(j)=a(j,k)
-	       b(j)=-a(k,j)/h
-	       goto 75
-70       c(j)=1.
-	       b(j)=1./h
-75       a(k,j)=0.
-	       a(j,k)=0.
-80       continue
-
-	        do 90 i=1,n
-	        do 90 j=1,n
-90        a(i,j)=a(i,j)+c(i)*b(j)
-100       continue
-
-	       do 140 k=n,1,-1
-	       if(p(k).eq.k)  goto  120
-
-	       do 110 i=1,n
-	        z=a(i,p(k))
-	        a(i,p(k))=a(i,k)
-110      a(i,k)=z
-120       if(q(k).eq.k) goto 140
-	        do  130 j=1,n 
-	         z=a(q(k),j)
-	         a(q(k),j)=a(k,j)
-130        a(k,j)=z
-140       continue
-
-            deallocate(b,c,p,q)
-
-	        return
-
-150	       write(*,160)
-160	       format(1x,'matrix is singular')
-	         stop 00
-end subroutine matrix_real_inverse
-
 
 
 subroutine LeastSquare(m,n,k,A,b,x,eps_r)
@@ -1635,14 +1569,14 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 	implicit none
 	
 	integer m,n,k,mn_min
-	complex(kind=8):: A(m,n),x(n,k),b(m,k)
-	real*8,allocatable::Singular(:)
-	complex(kind=8),allocatable:: Atmp(:,:),xtmp(:,:),tau(:),A_tmp(:,:),UU(:,:),VV(:,:),UU_h(:,:),VV_h(:,:),VV_h2(:,:),z_arb(:,:),x_arb(:,:),matrixtemp(:,:),A_tmp_rank(:,:),xtmp_rank(:,:),xtmp_rank3(:,:),A_tmp_rank2(:,:),xtmp_rank2(:,:)
-	real*8:: eps_r
+	DT:: A(m,n),x(n,k),b(m,k)
+	real(kind=8),allocatable::Singular(:)
+	DT,allocatable:: Atmp(:,:),xtmp(:,:),tau(:),A_tmp(:,:),UU(:,:),VV(:,:),UU_h(:,:),VV_h(:,:),VV_h2(:,:),z_arb(:,:),x_arb(:,:),matrixtemp(:,:),A_tmp_rank(:,:),xtmp_rank(:,:),xtmp_rank3(:,:),A_tmp_rank2(:,:),xtmp_rank2(:,:)
+	real(kind=8):: eps_r
 	integer ii,jj,i,j,flag0,rank
 	integer,allocatable:: jpvt(:)
 
-	complex(kind=8):: alpha,beta
+	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
 
@@ -1740,7 +1674,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 		
 		! ! do ii = 1,n
 		! ! do jj =1,k
-			! ! xtmp(ii,jj) = random_complex_number()
+			! ! xtmp(ii,jj) = random_dp_number()
 		! ! end do
 		! ! end do 
 		
@@ -1782,18 +1716,18 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 			
 			do ii=1,rank
 			do jj =1,m
-				UU_h(ii,jj) = conjg(UU(jj,ii))	
+				UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))	
 			end do
 			end do
 			
 			do ii=1,n
 			do jj=1,rank
-				VV_h(ii,jj) = conjg(VV(jj,ii))/Singular(jj)	
+				VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)	
 			end do
 			end do 
 			
-			call gemmf90(UU_h, b, matrixtemp,'N','N',alpha,beta)  
-			call gemmf90(VV_h, matrixtemp, x,'N','N',alpha,beta)  
+			call gemmf90(UU_h, rank, b,m, matrixtemp,rank,'N','N',rank,k,m,alpha,beta)  
+			call gemmf90(VV_h, n, matrixtemp,rank, x,n,'N','N',n,k,rank,alpha,beta)  
 			
 			deallocate(UU_h,VV_h,matrixtemp)	
 		end if	
@@ -1838,14 +1772,14 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 	implicit none
 	
 	integer m,n,mn_min
-	complex(kind=8):: A(m,n),A_inv(n,m)
-	real*8,allocatable::Singular(:)
-	complex(kind=8),allocatable:: Atmp(:,:),tau(:),UU(:,:),VV(:,:),UU_h(:,:),VV_h(:,:),matrixtemp(:,:),A_tmp_rank(:,:),xtmp_rank(:,:),xtmp_rank3(:,:),A_tmp_rank2(:,:),xtmp_rank2(:,:)
-	real*8:: eps_r
+	DT:: A(:,:),A_inv(:,:)
+	real(kind=8),allocatable::Singular(:)
+	DT,allocatable:: Atmp(:,:),tau(:),UU(:,:),VV(:,:),UU_h(:,:),VV_h(:,:),matrixtemp(:,:),A_tmp_rank(:,:),xtmp_rank(:,:),xtmp_rank3(:,:),A_tmp_rank2(:,:),xtmp_rank2(:,:)
+	real(kind=8):: eps_r
 	integer ii,jj,i,j,flag0,rank
 	integer,allocatable:: jpvt(:) 
 
-	complex(kind=8):: alpha,beta
+	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
 	
@@ -1883,17 +1817,17 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 
 		do ii=1,rank
 		do jj =1,m
-			UU_h(ii,jj) = conjg(UU(jj,ii))	
+			UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))	
 		end do
 		end do
 		
 		do ii=1,n
 		do jj=1,rank
-			VV_h(ii,jj) = conjg(VV(jj,ii))/Singular(jj)	
+			VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)	
 		end do
 		end do 
 		
-		call gemmf90(VV_h, UU_h, A_inv,'N','N',alpha,beta)  
+		call gemmf90(VV_h,n, UU_h,rank, A_inv,n,'N','N',n,m,rank,alpha,beta)  
 		
 		deallocate(UU_h,VV_h)
 	endif
@@ -1916,23 +1850,23 @@ end subroutine GeneralInverse
     integer i, j, ii, jj, indx, rank_1, rank_2
     integer blocks, index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real*8 norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
+    real(kind=8) norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
     integer rank,rank1,rank2,rank12, ranknew, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min,rmax,idxs_r,idxs_c
-    complex(kind=8) value_Z,value_UV,maxvalue
-    complex(kind=8) inner_U,inner_V,ctemp
-    real*8 inner_UV
+    DT value_Z,value_UV,maxvalue
+    DT inner_U,inner_V,ctemp
+    real(kind=8) inner_UV
     integer,allocatable:: select_column(:), select_row(:)
-	complex(kind=8)::matU(rankmax_r,rmax),matV(rmax,rankmax_c),matRcol(rankmax_c,rmax),matZRcol(rankmax_r,rmax),matRrow(rankmax_r,rmax),matZcRrow(rankmax_c,rmax)
-	complex(kind=8),allocatable::matZRcol1(:,:),matZcRrow1(:,:),tau(:)
-	complex(kind=8),allocatable::QQ1(:,:),RR1(:,:),QQ2(:,:),RR2(:,:),RrowcZRcol(:,:)
-	real*8::Singular(rmax)
-    complex(kind=8),allocatable:: row_R(:),column_R(:),matM(:,:),matrixtemp(:,:)
-    real*8,allocatable:: norm_row_R(:),norm_column_R(:)
+	DT::matU(rankmax_r,rmax),matV(rmax,rankmax_c),matRcol(rankmax_c,rmax),matZRcol(rankmax_r,rmax),matRrow(rankmax_r,rmax),matZcRrow(rankmax_c,rmax)
+	DT,allocatable::matZRcol1(:,:),matZcRrow1(:,:),tau(:)
+	DT,allocatable::QQ1(:,:),RR1(:,:),QQ2(:,:),RR2(:,:),RrowcZRcol(:,:)
+	real(kind=8)::Singular(rmax)
+    DT,allocatable:: row_R(:),column_R(:),matM(:,:),matrixtemp(:,:)
+    real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	
-	complex(kind=8), allocatable :: RrowcQ1(:,:),RrowcQ1inv(:,:),Q2cRcol(:,:),Q2cRcolinv(:,:), QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	real*8, allocatable :: Singularsml(:)
+	DT, allocatable :: RrowcQ1(:,:),RrowcQ1inv(:,:),Q2cRcol(:,:),Q2cRcolinv(:,:), QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	real(kind=8), allocatable :: Singularsml(:)
 	integer,allocatable:: jpvt(:)
 	
 
@@ -1957,7 +1891,7 @@ end subroutine GeneralInverse
 	tau=0
 	call geqp3f90(QQ1,jpvt,tau)
 	!  call geqrff90(QQ1,tau)
-	RR1=(0,0)
+	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -1965,7 +1899,7 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ1,tau)
+	call un_or_gqrf90(QQ1,tau)
 	
 	! write(*,*)fnorm(QQ1,rankmax_r,rmax),rankmax_r,rmax,fnorm(RR1,rmax,rmax),rmax,rmax,'really'
 	
@@ -1988,7 +1922,7 @@ end subroutine GeneralInverse
 	tau = 0
 	call geqp3f90(QQ2,jpvt,tau)
 	!  call geqrff90(QQ2,tau)
-	RR2=(0,0)
+	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rmax
 		do i=1, j
@@ -1996,7 +1930,7 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ2,tau)
+	call un_or_gqrf90(QQ2,tau)
 	
 	if(abs(RR2(1,1))<SafeUnderflow)then
 		rank2=1
@@ -2115,7 +2049,7 @@ end subroutine GeneralInverse
 		! matrixtemp = matInv
 		! do ii=1,rmax
 		! do jj=1,rmax
-			! matInv(ii,jj) = conjg(matrixtemp(jj,ii))
+			! matInv(ii,jj) = conjg(cmplx(matrixtemp(jj,ii),kind=8))
 		! end do
 		! end do
 		! deallocate(matrixtemp)
@@ -2156,9 +2090,9 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	implicit none
 	
 	integer m,n,k,mn_min,ktmp
-	complex(kind=8):: A(m,n)
+	class(*):: A(m,n)
 	real(kind=8):: c			 
-	real*8,allocatable::Singular(:),Ar(:,:),Ai(:,:)
+	real(kind=8),allocatable::Singular(:),Ar(:,:),Ai(:,:)
 	complex(kind=8):: ctemp
 	complex(kind=8),allocatable:: UU(:,:),VV(:,:)
 	integer ii,jj,kk,i,j,flag0,rank
@@ -2167,6 +2101,9 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	type(VSL_STREAM_STATE) ::stream(2)
 #endif		
 	integer brng, method, seedd,ierror	
+	
+	
+
 	
  	ktmp = k
 	if(ktmp>min(m,n))then
@@ -2179,28 +2116,48 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	
 
 #ifdef Intel
-	allocate(Ar(m,n))
-	allocate(Ai(m,n))
-	brng   = VSL_BRNG_MCG31
-	method = VSL_RNG_METHOD_UNIFORM_STD
-	call random_number(c)
-	seedd = NINT(1000*c)
-	ierror=vslnewstream( stream(1), brng,  seedd )
-	call random_number(c)
-	seedd = NINT(1000*c)
-	ierror=vslnewstream( stream(2), brng,  seedd )
-	ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
-	ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
-	! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
-	ierror=vsldeletestream(stream(1))	
-	ierror=vsldeletestream(stream(2))	
-	A = Ar + junit*Ai
-	deallocate(Ar)
-	deallocate(Ai)
+
+	select type(A)
+	type is (complex(kind=8))
+	
+		allocate(Ar(m,n))
+		allocate(Ai(m,n))
+		brng   = VSL_BRNG_MCG31
+		method = VSL_RNG_METHOD_UNIFORM_STD
+		call random_number(c)
+		seedd = NINT(1000*c)
+		ierror=vslnewstream( stream(1), brng,  seedd )
+		call random_number(c)
+		seedd = NINT(1000*c)
+		ierror=vslnewstream( stream(2), brng,  seedd )
+		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
+		ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
+		! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
+		ierror=vsldeletestream(stream(1))	
+		ierror=vsldeletestream(stream(2))	
+		A = Ar + junit*Ai
+		deallocate(Ar)
+		deallocate(Ai)
+	type is (real(kind=8))
+	
+		allocate(Ar(m,n))
+		brng   = VSL_BRNG_MCG31
+		method = VSL_RNG_METHOD_UNIFORM_STD
+		call random_number(c)
+		seedd = NINT(1000*c)
+		ierror=vslnewstream( stream(1), brng,  seedd )
+		call random_number(c)
+		seedd = NINT(1000*c)
+		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
+		ierror=vsldeletestream(stream(1))	
+		A = Ar 
+		deallocate(Ar)
+		
+	end select
 #else
 	do ii=1,m
 	do jj=1,n
-		A(ii,jj)=random_complex_number()
+		call random_dp_number(A(ii,jj))
 	end do
 	end do
 
@@ -2253,17 +2210,17 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
     integer i, j, ii, jj, indx, rank_1, rank_2
     integer blocks, index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real*8 norm_Z,norm_U,norm_V,tolerance
+    real(kind=8) norm_Z,norm_U,norm_V,tolerance
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
     integer rank, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min
-    complex(kind=8) value_Z,value_UV,maxvalue,MatrixSubselection(:,:)
-    complex(kind=8) inner_U,inner_V,ctemp
-    real*8 inner_UV
+    DT value_Z,value_UV,maxvalue,MatrixSubselection(:,:)
+    DT inner_U,inner_V,ctemp
+    real(kind=8) inner_UV
     integer select_column(rankmax_c), select_row(rankmax_r)
 
-    complex(kind=8),allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:)
-    real*8,allocatable:: norm_row_R(:),norm_column_R(:)
+    DT,allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:)
+    real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	rankmax_min = min(rankmax_r,rankmax_c)
     norm_Z=0
 	select_column = 0
@@ -2278,7 +2235,7 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
     do j=1, rankmax_c
         value_Z=MatrixSubselection(select_row(1),j)
         row_R(j)=value_Z
-        norm_row_R(j)=dble(value_Z*conjg(value_Z))
+        norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
     enddo
     ! !$omp end parallel do
 
@@ -2300,7 +2257,7 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
     do i=1,rankmax_r
         value_Z=MatrixSubselection(i,select_column(1))
         column_R(i)=value_Z
-        norm_column_R(i)=dble(value_Z*conjg(value_Z))
+        norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
     enddo
     ! !$omp end parallel do
 
@@ -2331,7 +2288,7 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
                 value_UV=value_UV+matrixtemp_U(select_row(rank+1),i)*matrixtemp_V(j,i)
             enddo
             row_R(j)=value_Z-value_UV
-            norm_row_R(j)=dble(row_R(j)*conjg(row_R(j)))
+            norm_row_R(j)=dble(row_R(j)*conjg(cmplx(row_R(j),kind=8)))
         enddo
         ! !$omp end parallel do
 
@@ -2361,7 +2318,7 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
                 value_UV=value_UV+matrixtemp_U(i,j)*matrixtemp_V(select_column(rank+1),j)
             enddo
             column_R(i)=value_Z-value_UV
-            norm_column_R(i)=dble(column_R(i)*conjg(column_R(i)))
+            norm_column_R(i)=dble(column_R(i)*conjg(cmplx(column_R(i),kind=8)))
         enddo
         ! !$omp end parallel do
 
@@ -2384,13 +2341,13 @@ subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankm
 	        ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
             do i=1,rankmax_r
                 ctemp=matrixtemp_U(i,rank+1)*matrixtemp_U(i,j)
-                inner_U=inner_U+ctemp*conjg(ctemp)
+                inner_U=inner_U+ctemp*conjg(cmplx(ctemp,kind=8))
             enddo
             ! !$omp end parallel do
             ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
             do i=1,rankmax_c
                 ctemp=matrixtemp_V(i,rank+1)*matrixtemp_V(i,j)
-                inner_V=inner_V+ctemp*conjg(ctemp)
+                inner_V=inner_V+ctemp*conjg(cmplx(ctemp,kind=8))
             enddo
             ! !$omp end parallel do
             inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
@@ -2426,21 +2383,21 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     integer i, j, ii, jj, indx, rank_1, rank_2
     integer blocks, index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real*8 norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
+    real(kind=8) norm_Z,norm_U,norm_V,tolerance,SVD_tolerance
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
     integer rank, ranknew, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min,rmax
-    complex(kind=8) value_Z,value_UV,maxvalue
-    complex(kind=8) inner_U,inner_V,ctemp
-    real*8 inner_UV
+    DT value_Z,value_UV,maxvalue
+    DT inner_U,inner_V,ctemp
+    real(kind=8) inner_UV
     integer,allocatable:: select_column(:), select_row(:)
-	complex(kind=8)::mat(rankmax_r,rankmax_c),matU(rankmax_r,rmax),matV(rmax,rankmax_c)
+	DT::mat(rankmax_r,rankmax_c),matU(rankmax_r,rmax),matV(rmax,rankmax_c)
 	
-    complex(kind=8),allocatable:: row_R(:),column_R(:)
-    real*8,allocatable:: norm_row_R(:),norm_column_R(:)
+    DT,allocatable:: row_R(:),column_R(:)
+    real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	
-	complex(kind=8), allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:),QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
-	real*8, allocatable :: Singularsml(:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:),QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+	real(kind=8), allocatable :: Singularsml(:)
 	
 		
 	rankmax_min = min(rankmax_r,rankmax_c)
@@ -2457,7 +2414,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     do j=1, rankmax_c
         value_Z=mat(select_row(1),j)
         row_R(j)=value_Z
-        norm_row_R(j)=dble(value_Z*conjg(value_Z))
+        norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
     enddo
     ! !$omp end parallel do
 
@@ -2479,7 +2436,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     do i=1,rankmax_r
         value_Z=mat(i,select_column(1))
         column_R(i)=value_Z
-        norm_column_R(i)=dble(value_Z*conjg(value_Z))
+        norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
     enddo
     ! !$omp end parallel do
 
@@ -2511,7 +2468,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
                 value_UV=value_UV+matU(select_row(rank+1),i)*matV(i,j)
             enddo
             row_R(j)=value_Z-value_UV
-            norm_row_R(j)=dble(row_R(j)*conjg(row_R(j)))
+            norm_row_R(j)=dble(row_R(j)*conjg(cmplx(row_R(j),kind=8)))
         enddo
         ! !$omp end parallel do
 
@@ -2541,7 +2498,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
                 value_UV=value_UV+matU(i,j)*matV(j,select_column(rank+1))
             enddo
             column_R(i)=value_Z-value_UV
-            norm_column_R(i)=dble(column_R(i)*conjg(column_R(i)))
+            norm_column_R(i)=dble(column_R(i)*conjg(cmplx(column_R(i),kind=8)))
         enddo
         ! !$omp end parallel do
 
@@ -2564,13 +2521,13 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	        ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
             do i=1,rankmax_r
                 ctemp=matU(i,rank+1)*matU(i,j)
-                inner_U=inner_U+ctemp*conjg(ctemp)
+                inner_U=inner_U+ctemp*conjg(cmplx(ctemp,kind=8))
             enddo
             ! !$omp end parallel do
             ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
             do i=1,rankmax_c
                 ctemp=matV(rank+1,i)*matV(j,i)
-                inner_V=inner_V+ctemp*conjg(ctemp)
+                inner_V=inner_V+ctemp*conjg(cmplx(ctemp,kind=8))
             enddo
             ! !$omp end parallel do
             inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
@@ -2602,7 +2559,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	call geqrff90(QQ1,tau_Q)
 	
 	allocate (RR1(rank,rank))
-	RR1=(0,0)
+	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rank
 		do i=1, j
@@ -2610,7 +2567,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ1,tau_Q)
+	call un_or_gqrf90(QQ1,tau_Q)
 	deallocate(tau_Q)
 
 
@@ -2620,7 +2577,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	call geqrff90(QQ2tmp,tau_Q)
 	
 	allocate (RR2tmp(rank,rank))
-	RR2tmp=(0,0)
+	RR2tmp=0d0
 	! !$omp parallel do default(shared) private(i,j)
 	do j=1, rank
 		do i=1, j
@@ -2628,7 +2585,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call ungqrf90(QQ2tmp,tau_Q)
+	call un_or_gqrf90(QQ2tmp,tau_Q)
 	deallocate(tau_Q)
 	
 	allocate(QQ2(rank,rankmax_c))
@@ -2677,16 +2634,17 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 end subroutine ACA_CompressionFull
 
 
-subroutine SVD_Truncate(mat,mm,nn,mn,UU,VV,Singular,tolerance,rank)
+subroutine SVD_Truncate(mat,mm,nn,mn,UU,VV,Singular,tolerance,rank,flop)
 ! ! use lapack95
 ! ! use blas95
 implicit none 
 integer mm,nn,mn,rank,ii,jj
-real*8:: tolerance
-complex(kind=8)::mat(mm,nn),UU(mm,mn),VV(mn,nn)
-complex(kind=8),allocatable::mat0(:,:)					 
-real*8:: Singular(mn)
+real(kind=8):: tolerance
+DT::mat(mm,nn),UU(mm,mn),VV(mn,nn)
+DT,allocatable::mat0(:,:)					 
+real(kind=8):: Singular(mn)
 integer::i,flag
+real(kind=8),optional::flop
 
 UU=0
 VV=0
@@ -2694,7 +2652,7 @@ Singular=0
 
 allocate(mat0(mm,nn))
 mat0 = mat
-call gesvd_robust(mat0,Singular,UU,VV,mm,nn,mn)
+call gesvd_robust(mat0,Singular,UU,VV,mm,nn,mn,flop)
 rank=mn
 
 if(Singular(1)<SafeUnderflow)then
@@ -2714,6 +2672,8 @@ else
 endif
 deallocate(mat0)
 
+
+
 end subroutine SVD_Truncate
 
 
@@ -2722,8 +2682,8 @@ end subroutine SVD_Truncate
 subroutine PIKSRT_DBLE_Multi(N,M,ARR)
   implicit none
   integer j,i,N,M
-  real*8 ARR(N,M)
-  real*8,allocatable::a(:)
+  real(kind=8) ARR(N,M)
+  real(kind=8),allocatable::a(:)
   allocate(a(M))		   
   do j=2, N
     a=ARR(j,:)
@@ -2749,7 +2709,7 @@ subroutine quick_sort(list, order, n)
 
 IMPLICIT NONE
 integer n
-real*8 list(n)
+real(kind=8) list(n)
 INTEGER  order(n)
 
 ! Local variable
@@ -2769,7 +2729,7 @@ INTEGER, INTENT(IN) :: left_end, right_end
 
 !     Local variables
 INTEGER             :: i, j, itemp
-real*8                :: reference, temp
+real(kind=8)                :: reference, temp
 INTEGER, PARAMETER  :: max_simple_sort_size = 6
 
 IF (right_end < left_end + max_simple_sort_size) THEN
@@ -2819,7 +2779,7 @@ INTEGER, INTENT(IN) :: left_end, right_end
 
 !     Local variables
 INTEGER             :: i, j, itemp
-real*8                :: temp
+real(kind=8)                :: temp
 
 DO i = left_end, right_end - 1
   DO j = i+1, right_end
@@ -2837,9 +2797,9 @@ END subroutine quick_sort
 
 subroutine Cart2Sph(xin,yin,zin,origin,r,theta,phi)
 implicit none
-real*8,intent(in)::xin,yin,zin,origin(3)
-real*8,intent(out)::r,theta,phi
-real*8:: x,y,z
+real(kind=8),intent(in)::xin,yin,zin,origin(3)
+real(kind=8),intent(out)::r,theta,phi
+real(kind=8):: x,y,z
 	
 	x = xin-origin(1)
 	y = yin-origin(2)
@@ -2869,13 +2829,14 @@ real*8:: x,y,z
 end subroutine Cart2Sph
 
 
-subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
+subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
     use MODULE_FILE
 	implicit none 
 	integer mm,nn,mn_min
-	complex(kind=8)Matrix(mm,nn),UU(mm,mn_min),VV(mn_min,nn)
-	real*8 Singular(mn_min)
-
+	DT Matrix(:,:),UU(:,:),VV(:,:)
+	real(kind=8) Singular(:)
+	real(kind=8),optional::flop
+	
 	if(mm==1)then
 		UU(1,1)=1d0
 		Singular(1) = fnorm(Matrix,mm,nn)
@@ -2904,10 +2865,10 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
 			VV=0
 			
 			
-			call gesddf90(Matrix,Singular,UU,VV)
+			call gesddf90(Matrix,Singular,UU,VV,flop)
 			
 			!!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC) 
-			! call gesvdf90(Matrix,Singular,UU,VV)  
+			! call gesvdf90(Matrix,Singular,UU,VV,flop)  
 			
 		endif
 	endif
@@ -2915,19 +2876,21 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min)
 	
 end subroutine gesvd_robust
 		
-	
-subroutine gesvdf90(Matrix,Singular,UU,VV)	
+
+		
+subroutine zgesvdf90(Matrix,Singular,UU,VV,flop)	
 
 ! ! use lapack95
 
 implicit none
 complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
-real*8 Singular(:)
+real(kind=8) Singular(:)
 integer m,n,mn_min
+real(kind=8),optional::flop
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
-real*8,allocatable::RWORK(:)
+real(kind=8),allocatable::RWORK(:)
 
 complex(kind=8),allocatable:: WORK(:)
 
@@ -2956,25 +2919,69 @@ endif
 
 deallocate(WORK,RWORK)
 
-end subroutine gesvdf90	
+if(present(flop))flop = flops_zgesvd(m,n)
+
+end subroutine zgesvdf90	
+
+
+subroutine dgesvdf90(Matrix,Singular,UU,VV,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
+real(kind=8) Singular(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+real(kind=8),optional::flop
+
+real(kind=8),allocatable:: WORK(:)
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+
+LWORK=-1
+call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
+allocate(WORK(LWORK))     
+WORK=0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, INFO)
+
+if(INFO/=0)then
+	write(*,*)'SVD failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+if(present(flop))flop = flops_dgesvd(m,n)
+end subroutine dgesvdf90
 
 
 
-subroutine gesddf90(Matrix,Singular,UU,VV)	
+
+subroutine zgesddf90(Matrix,Singular,UU,VV,flop)	
 
 ! ! use lapack95
 
 implicit none
 complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
-real*8 Singular(:)
+real(kind=8) Singular(:)
 integer m,n,mn_min
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
-real*8,allocatable::RWORK(:)
+real(kind=8),allocatable::RWORK(:)
 integer,allocatable::IWORK(:)
 
 complex(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
 
 m=size(Matrix,1)
 n=size(Matrix,2)
@@ -3001,19 +3008,65 @@ if(INFO/=0)then
 endif
 
 deallocate(WORK,RWORK,IWORK)
-
-end subroutine gesddf90	
-
-
+if(present(flop))flop = flops_zgesdd(m,n)
+end subroutine zgesddf90	
 
 
-subroutine geqrff90(Matrix,tau)	
+
+subroutine dgesddf90(Matrix,Singular,UU,VV,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
+real(kind=8) Singular(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+real(kind=8),allocatable::RWORK(:)
+integer,allocatable::IWORK(:)
+
+complex(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+
+allocate(IWORK(8*mn_min))
+LWORK=-1
+call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, IWORK, INFO)
+
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, IWORK, INFO)
+
+if(INFO/=0)then
+	write(*,*)'SDD failed!!',INFO
+	stop
+endif
+
+deallocate(WORK,IWORK)
+if(present(flop))flop = flops_dgesdd(m,n)
+end subroutine dgesddf90	
+
+
+
+
+subroutine zgeqrff90(Matrix,tau,flop)	
 
 ! ! use lapack95
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
 integer m,n,mn_min
+real(kind=8),optional::flop
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
@@ -3035,7 +3088,7 @@ call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
 
 
 if(INFO/=0)then
-	write(*,*)'geqrff90 failed!!',INFO
+	write(*,*)'zgeqrff90 failed!!',INFO
 	stop
 endif
 
@@ -3043,11 +3096,55 @@ deallocate(WORK)
 
 
 ! call geqrf(Matrix,tau)
+if(present(flop))flop = flops_zgetrf(m,n)
+end subroutine zgeqrff90
 
-end subroutine geqrff90
 
 
-subroutine geqp3f90(Matrix,jpvt,tau)	
+
+subroutine dgeqrff90(Matrix,tau,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),tau(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+
+
+LWORK=-1
+call DGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+call DGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
+
+
+if(INFO/=0)then
+	write(*,*)'dgeqrff90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+
+! call geqrf(Matrix,tau)
+if(present(flop))flop = flops_dgetrf(m,n)
+end subroutine dgeqrff90
+
+
+
+subroutine zgeqp3f90(Matrix,jpvt,tau,flop)	
 
 ! ! use lapack95
 
@@ -3058,9 +3155,11 @@ integer m,n,mn_min
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
-real*8,allocatable::RWORK(:)
+real(kind=8),allocatable::RWORK(:)
 
 complex(kind=8),allocatable:: WORK(:)
+
+real(kind=8),optional::flop
 
 m=size(Matrix,1)
 n=size(Matrix,2)
@@ -3084,12 +3183,96 @@ deallocate(WORK)
 deallocate(RWORK)
 
 ! call geqp3(Matrix,jpvt,tau)
-
-end subroutine geqp3f90
+if(present(flop))flop = flops_zgetrf(m,n)
+end subroutine zgeqp3f90
 	
 
 
-subroutine geqp3modf90(Matrix,jpvt,tau,rtol,atol,rank)	
+subroutine dgeqp3f90(Matrix,jpvt,tau,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),tau(:)
+integer jpvt(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+
+LWORK=-1
+call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK)) 
+WORK=0    
+call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
+
+if(INFO/=0)then
+	write(*,*)'geqp3f90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+! call geqp3(Matrix,jpvt,tau)
+if(present(flop))flop = flops_dgetrf(m,n)
+end subroutine dgeqp3f90	
+	
+	
+
+subroutine dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),tau(:)
+integer jpvt(:)
+integer m,n,mn_min
+
+real(kind=8)::rtol,atol
+integer LWORK,INFO,rank
+real(kind=8):: TEMP(1)
+real(kind=8),optional::flop
+real(kind=8),allocatable:: WORK(:)
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+rank=0
+
+
+LWORK=-1
+! call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
+call DGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK,INFO, RANK, RTOL, ATOL)
+
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK)) 
+WORK=0    
+! call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
+call DGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK,INFO, RANK, RTOL, ATOL)
+
+
+if(INFO/=0)then
+	write(*,*)'geqp3modf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+! call geqp3(Matrix,jpvt,tau)
+if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
+end subroutine dgeqp3modf90		
+	
+
+subroutine zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
 
 ! ! use lapack95
 
@@ -3098,12 +3281,13 @@ complex(kind=8)Matrix(:,:),tau(:)
 integer jpvt(:)
 integer m,n,mn_min
 
-real*8::rtol,atol
+real(kind=8)::rtol,atol
 integer LWORK,INFO,rank
 complex(kind=8):: TEMP(1)
-real*8,allocatable::RWORK(:)
+real(kind=8),allocatable::RWORK(:)
 
 complex(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
 
 m=size(Matrix,1)
 n=size(Matrix,2)
@@ -3133,19 +3317,61 @@ deallocate(WORK)
 deallocate(RWORK)
 
 ! call geqp3(Matrix,jpvt,tau)
+if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
+end subroutine zgeqp3modf90	
+	
 
-end subroutine geqp3modf90	
+
+subroutine ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) a(:,:),tau(:),c(:,:)
+integer m,n,k,lda,ldc, mn_min
+
+character,value:: side, trans
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+
+if(trans=='C')trans='T'  
+
+ldc=size(c,1)
+lda=size(a,1)
+
+LWORK=-1
+call DORMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))
+WORK=0     
+call DORMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
+
+if(INFO/=0)then
+	write(*,*)'ormqrf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+! call unmqr(a,tau,c,side,trans)
+if(present(flop))flop = flops_dunmqr(side,m,n,k)
+end subroutine ormqrf90
+
 	
 	
-subroutine unmqrf90(a,tau,c,side,trans,m,n,k)	
+subroutine unmqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
 ! ! use lapack95
 
 implicit none
 complex(kind=8)a(:,:),tau(:),c(:,:)
 integer m,n,k,lda,ldc, mn_min
-
-character side, trans
+real(kind=8),optional::flop
+character,value:: side, trans
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
@@ -3170,19 +3396,67 @@ endif
 deallocate(WORK)
 
 ! call unmqr(a,tau,c,side,trans)
-
+if(present(flop))flop = flops_zunmqr(side,m,n,k)
 end subroutine unmqrf90
 
 	
 	
-subroutine ungqrf90(Matrix,tau)	
+
+
+
+subroutine orgqrf90(Matrix,tau,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),tau(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+call assert(m>=n,'size of Matrix incorrect')
+
+mn_min = min(m,n)
+
+
+LWORK=-1
+call DORGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+call DORGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
+
+
+if(INFO/=0)then
+	write(*,*)'orgqrf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+
+! call ungqr(Matrix,tau)
+if(present(flop))flop = flops_dungqr(m,n,mn_min)
+end subroutine orgqrf90	
+	
+
+	
+	
+subroutine ungqrf90(Matrix,tau,flop)	
 
 ! ! use lapack95
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
 integer m,n,mn_min
-
+real(kind=8),optional::flop
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
 
@@ -3211,14 +3485,45 @@ endif
 
 deallocate(WORK)
 
-
+if(present(flop))flop = flops_zungqr(m,n,mn_min)
 ! call ungqr(Matrix,tau)
 
 end subroutine ungqrf90	
 	
 	
+	
 
-subroutine getrff90(Matrix,ipiv)	
+subroutine dgetrff90(Matrix,ipiv,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:)
+integer ipiv(:)
+integer m,n,mn_min
+
+integer INFO
+real(kind=8),optional::flop
+
+m=size(Matrix,1)
+n=size(Matrix,2)
+mn_min = min(m,n)
+	
+call DGETRF( m, n, Matrix, m, ipiv, INFO )
+	
+
+if(INFO/=0)then
+	write(*,*)'getrff90 failed!!',INFO
+	stop
+endif
+	
+	
+! call getrf(Matrix,ipiv)	
+if(present(flop))flop = flops_dgeqrf(m,n)
+end subroutine dgetrff90		
+	
+	
+subroutine zgetrff90(Matrix,ipiv,flop)	
 
 ! ! use lapack95
 
@@ -3226,7 +3531,7 @@ implicit none
 complex(kind=8) Matrix(:,:)
 integer ipiv(:)
 integer m,n,mn_min
-
+real(kind=8),optional::flop
 integer INFO
 
 m=size(Matrix,1)
@@ -3243,12 +3548,43 @@ endif
 	
 	
 ! call getrf(Matrix,ipiv)	
+if(present(flop))flop = flops_zgeqrf(m,n)
+end subroutine zgetrff90	
 	
-end subroutine getrff90	
+
+
+
+subroutine dgetrsf90(Matrix,ipiv,B,trans,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:),B(:,:)
+integer ipiv(:)
+integer m,n,mn_min,nrhs
+character,value:: trans
+real(kind=8),optional::flop
+integer INFO
+
+n=size(Matrix,1)
+nrhs=size(B,2)
+
+if(trans=='C')trans='T'
+
+call DGETRS( trans, n, nrhs, Matrix, n, ipiv, B, n, INFO )
+
+
+if(INFO/=0)then
+	write(*,*)'getrsf90 failed!!',INFO
+	stop
+endif
 	
 	
+! call getrs(Matrix,ipiv,B,trans)	
+if(present(flop))flop = flops_dgetrs(n,nrhs)	
+end subroutine dgetrsf90		
 	
-subroutine getrsf90(Matrix,ipiv,B,trans)	
+subroutine zgetrsf90(Matrix,ipiv,B,trans,flop)	
 
 ! ! use lapack95
 
@@ -3256,8 +3592,8 @@ implicit none
 complex(kind=8) Matrix(:,:),B(:,:)
 integer ipiv(:)
 integer m,n,mn_min,nrhs
-character trans
-
+character,value:: trans
+real(kind=8),optional::flop
 integer INFO
 
 n=size(Matrix,1)
@@ -3274,13 +3610,56 @@ endif
 	
 	
 ! call getrs(Matrix,ipiv,B,trans)	
-	
-end subroutine getrsf90		
-	
-	
+if(present(flop))flop = flops_zgetrs(n,nrhs)	
+end subroutine zgetrsf90		
 	
 	
-subroutine getrif90(Matrix,ipiv)	
+
+
+subroutine dgetrif90(Matrix,ipiv,flop)	
+
+! ! use lapack95
+
+implicit none
+real(kind=8) Matrix(:,:)
+integer ipiv(:)
+integer m,n,mn_min
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+m=size(Matrix,1)
+n=size(Matrix,2)
+call assert(m<=n,'size of Matrix incorrect')
+
+mn_min = min(m,n)
+
+
+LWORK=-1
+call DGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+call DGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
+
+
+if(INFO/=0)then
+	write(*,*)'getrif90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+
+! call getri(Matrix,ipiv)	
+if(present(flop))flop = flops_dgetri(mn_min)
+end subroutine dgetrif90	
+	
+	
+subroutine zgetrif90(Matrix,ipiv,flop)	
 
 ! ! use lapack95
 
@@ -3291,7 +3670,7 @@ integer m,n,mn_min
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
-
+real(kind=8),optional::flop
 complex(kind=8),allocatable:: WORK(:)
 
 m=size(Matrix,1)
@@ -3319,12 +3698,15 @@ deallocate(WORK)
 
 
 ! call getri(Matrix,ipiv)	
-
-end subroutine getrif90		
+if(present(flop))flop = flops_zgetri(mn_min)
+end subroutine zgetrif90		
 	
 
 
-subroutine trsmf90(Matrix,B,side,uplo,transa,diag,m,n)	
+	
+	
+
+subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
 
 ! ! use blas95
 
@@ -3332,7 +3714,7 @@ implicit none
 complex(kind=8) Matrix(:,:),B(:,:),alpha
 integer m,n,lda,ldb
 character side,uplo,transa,diag
-
+real(kind=8),optional::flop
 integer INFO
 
 alpha=1d0
@@ -3344,55 +3726,427 @@ call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
 
 ! call trsm(Matrix,B,side,uplo,transa,diag)	
-	
-end subroutine trsmf90		
+if(present(flop))flop = flops_ztrsm(side,m,n)
+end subroutine ztrsmf90		
 
 
-
-subroutine gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
+subroutine dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
 
 ! ! use blas95
 
 implicit none
-complex(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
+real(kind=8) Matrix(:,:),B(:,:),alpha
+integer m,n,lda,ldb
+character side,uplo,transa,diag
+real(kind=8),optional::flop
+integer INFO
+
+alpha=1d0
+
+ldb=size(B,1)
+lda=size(Matrix,1)
+
+call DTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
+
+
+! call trsm(Matrix,B,side,uplo,transa,diag)	
+if(present(flop))flop = flops_dtrsm(side,m,n)
+end subroutine dtrsmf90		
+
+
+
+
+subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
+
+! ! use blas95
+
+implicit none
 integer m,n,k,lda,ldb,ldc
+real(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
 character transa,transb
+real(kind=8),optional::flop
 
-m=size(MatC,1)
-n=size(MatC,2)
-ldc=m
+call dgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
-if(transa=='N' .or. transa=='n')then
-k=size(MatA,2)
-lda=m
-! write(*,*)fnorm(MatA,m,k),'A'
-
-endif
-
-if(transa=='T' .or. transa=='t')then
-k=size(MatA,1)
-lda=k
-! write(*,*)fnorm(MatA,k,m),'A'
-endif
+! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
+if(present(flop))flop = flops_dgemm(m,n,k)
+end subroutine dgemmf90
 
 
-if(transb=='N' .or. transb=='n')then
-ldb=k
-! write(*,*)fnorm(MatB,k,n),'B'
 
-endif
+subroutine zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
 
-if(transb=='T' .or. transb=='t')then
-ldb=n
-! write(*,*)fnorm(MatB,n,k),'B'
-endif
+! ! use blas95
 
+implicit none
+integer m,n,k,lda,ldb,ldc
+complex(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
+character transa,transb
+real(kind=8),optional::flop
 
 call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
 ! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
+if(present(flop))flop = flops_zgemm(m,n,k)				
+end subroutine zgemmf90
 
-end subroutine gemmf90
+
+
+subroutine pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
+implicit none
+character side,trans
+integer m,n,k,ia,ja,ic,jc
+real(kind=8) MatA(:,:),MatC(:,:),tau(:)
+integer desca(9),descc(9)
+real(kind=8),allocatable:: WORK(:)
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+real(kind=8),optional::flop
+LWORK=-1
+call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0		
+call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
+deallocate(WORK)
+
+if(present(flop))flop = flops_dunmqr(side,m,n,k)
+
+end subroutine pdormqrf90
+
+
+subroutine pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
+implicit none
+character side,trans
+integer m,n,k,ia,ja,ic,jc
+complex(kind=8) MatA(:,:),MatC(:,:),tau(:)
+integer desca(9),descc(9)
+complex(kind=8),allocatable:: WORK(:)
+integer LWORK,INFO
+complex(kind=8):: TEMP(1)
+real(kind=8),optional::flop
+
+LWORK=-1
+call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0		
+call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
+
+deallocate(WORK)
+if(present(flop))flop = flops_zunmqr(side,m,n,k)
+end subroutine pzunmqrf90
+
+
+
+
+
+
+subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
+implicit none
+integer M,N,ia,ja
+complex(kind=8) Matrix(:,:),tau(:)
+integer ipiv(:),jpiv(:),JPERM(:)
+integer rank
+integer desca(9)
+real(kind=8)::rtol,atol
+integer LWORK,LRWORK,INFO,ierr
+complex(kind=8):: TEMP(1)
+real(kind=8),allocatable::RWORK(:)
+complex(kind=8),allocatable:: WORK(:)
+real(kind=8):: RTEMP(1)
+real(kind=8),optional::flop
+
+LWORK=-1
+LRWORK=-1
+call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0
+lrwork=NINT(dble(RTEMP(1)*2.001))
+allocate(RWORK(lrwork))     
+RWORK=0		
+call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
+
+deallocate(WORK)
+deallocate(RWORK)
+
+if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
+end subroutine pzgeqpfmodf90
+
+
+subroutine pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
+implicit none
+integer M,N,ia,ja
+real(kind=8) Matrix(:,:),tau(:)
+integer ipiv(:),jpiv(:),JPERM(:)
+integer rank
+integer desca(9)
+real(kind=8)::rtol,atol
+integer LWORK,INFO,ierr
+real(kind=8):: TEMP(1)
+real(kind=8),allocatable:: WORK(:)
+
+real(kind=8),optional::flop
+LWORK=-1
+
+call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0	
+call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
+
+deallocate(WORK)
+if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
+
+end subroutine pdgeqpfmodf90
+
+
+
+
+subroutine pgemr2df90(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+implicit none
+integer M,N,ia,ja,ib,jb
+class(*) MatA(:,:),MatB(:,:)
+integer desca(9),descb(9)
+integer ictxt
+
+select type(MatA)
+type is (real(kind=8))
+	select type(MatB)
+	type is (real(kind=8))
+	call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)	
+	end select
+type is (complex(kind=8))
+	select type(MatB)
+	type is (complex(kind=8))
+	call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+	end select
+end select
+end subroutine pgemr2df90	
+
+
+
+
+subroutine pgemmf90(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc,flop)
+implicit none
+character transa,transb
+integer m,n,k,ia,ja,ib,jb,ic,jc
+class(*) alpha,beta,a(:,:),b(:,:),c(:,:)
+integer desca(9),descb(9),descc(9)
+real(kind=8),optional::flop
+select type(a)
+type is (real(kind=8))
+	select type(b)
+	type is (real(kind=8))
+	select type(c)
+	type is (real(kind=8))
+	select type(alpha)
+	type is (real(kind=8))	
+	select type(beta)
+	type is (real(kind=8))		
+	call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+	if(present(flop))flop = flops_dgemm(m,n,k)
+	end select
+	end select	
+	end select	
+	end select
+type is (complex(kind=8))
+	select type(b)
+	type is (complex(kind=8))
+	select type(c)
+	type is (complex(kind=8))
+	select type(alpha)
+	type is (complex(kind=8))
+	select type(beta)
+	type is (complex(kind=8))	
+	call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+	if(present(flop))flop = flops_zgemm(m,n,k)
+	end select
+	end select	
+	end select	
+	end select
+end select
+end subroutine pgemmf90
+
+
+subroutine ptrsmf90(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb,flop)
+implicit none
+character side, uplo,transa,diag
+integer m,n,ia,ja,ib,jb
+integer desca(9),descb(9)
+class(*) a(:,:),b(:,:),alpha
+real(kind=8),optional::flop
+
+select type(a)
+type is (real(kind=8))
+	select type(b)
+	type is (real(kind=8))
+	select type(alpha)
+	type is (real(kind=8))	
+	call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+	if(present(flop))flop = flops_dtrsm(side, m,n)
+	end select
+	end select	
+type is (complex(kind=8))
+	select type(b)
+	type is (complex(kind=8))
+	select type(alpha)
+	type is (complex(kind=8))
+	call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+	if(present(flop))flop = flops_ztrsm(side, m,n)
+	end select
+	end select		
+end select
+end subroutine ptrsmf90
+
+
+subroutine pgetrff90(m, n, a, ia, ja, desca, ipiv, info,flop)
+implicit none
+integer m,n,ia,ja
+class(*) a(:,:)
+integer desca(9)
+integer ipiv(:)
+integer info
+real(kind=8),optional::flop
+
+select type(a)
+type is (real(kind=8))
+	call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
+	if(present(flop))flop = flops_dgetrf(m,n)	
+type is (complex(kind=8))
+	call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)	
+	if(present(flop))flop = flops_zgetrf(m,n)		
+end select
+end subroutine pgetrff90	
+
+
+
+subroutine pdgetrif90(n, a, ia, ja, desca, ipiv,flop)
+implicit none
+integer n,ia,ja
+real(kind=8):: a(:,:)
+real(kind=8):: TEMP(1)
+integer desca(9)
+integer ipiv(:)
+integer info
+integer TEMPI(1)
+integer lwork,liwork
+integer, allocatable :: iwork(:)
+real(kind=8),allocatable:: work(:)
+real(kind=8),optional::flop
+
+call pdgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(work(lwork))
+work=0
+liwork=TEMPI(1)
+allocate(iwork(liwork))
+iwork=0	
+call pdgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)	
+deallocate(iwork)
+deallocate(work)
+
+if(present(flop))flop = flops_dgetri(n)
+
+end subroutine pdgetrif90
+
+subroutine pzgetrif90(n, a, ia, ja, desca, ipiv,flop)
+implicit none
+integer n,ia,ja
+complex(kind=8):: a(:,:)
+complex(kind=8):: TEMP(1)
+integer desca(9)
+integer ipiv(:)
+integer info
+integer TEMPI(1)
+integer lwork,liwork
+integer, allocatable :: iwork(:)
+complex(kind=8),allocatable:: work(:)
+real(kind=8),optional::flop
+
+call pzgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(work(lwork))
+work=0
+liwork=TEMPI(1)
+allocate(iwork(liwork))
+iwork=0	
+call pzgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)
+	
+deallocate(iwork)
+deallocate(work)
+
+if(present(flop))flop = flops_zgetri(n)
+
+end subroutine pzgetrif90
+
+
+
+subroutine pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
+implicit none
+
+character jobu,jobvt
+integer m,n,ia,ja,iu,ju,ivt,jvt
+real(kind=8):: a(:,:),u(:,:),vt(:,:)
+integer desca(9),descu(9),descvt(9)
+real(kind=8):: s(:)
+real(kind=8):: TEMP(1)
+integer LWORK,mnmax,mnmin
+real(kind=8),allocatable:: WORK(:)	
+integer info
+real(kind=8),optional::flop
+mnmax = max(m,n)
+mnmin = min(m,n)
+
+lwork=-1
+call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, info)
+
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0
+call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, info)
+
+deallocate(WORK)	
+if(present(flop))flop = flops_dgesvd(m,n)
+
+end subroutine pdgesvdf90
+
+
+
+subroutine pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
+implicit none
+
+character jobu,jobvt
+integer m,n,ia,ja,iu,ju,ivt,jvt
+complex(kind=8):: a(:,:),u(:,:),vt(:,:)
+integer desca(9),descu(9),descvt(9)
+real(kind=8):: s(:)
+complex(kind=8):: TEMP(1)
+integer LWORK,mnmax,mnmin
+complex(kind=8),allocatable:: WORK(:)	
+real(kind=8),allocatable::RWORK(:)
+integer info
+real(kind=8),optional::flop
+
+mnmax = max(m,n)
+mnmin = min(m,n)
+
+allocate(rwork(1+4*mnmax))
+rwork=0
+lwork=-1
+call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, rwork, info)
+
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))     
+WORK=0
+call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, rwork, info)
+
+
+deallocate(WORK,rwork)	
+if(present(flop))flop = flops_zgesvd(m,n)
+
+end subroutine pzgesvdf90
 
 
 
@@ -3403,7 +4157,7 @@ complex(kind=8) function Hankel02_Func(x)
 use MODULE_FILE    
 implicit none
     
-    real*8 x
+    real(kind=8) x
     complex(kind=8) y
     
     Hankel02_Func=BesselJ0_func(x)-junit*BesselY0_func(x)
@@ -3412,12 +4166,12 @@ implicit none
     
 end function Hankel02_Func
 
-real*8 function BesselJ0_func(x)
+real(kind=8) function BesselJ0_func(x)
 
     implicit none
     
-    real*8 x, z, ax
-    real*8 y, rtemp1, rtemp2, xx
+    real(kind=8) x, z, ax
+    real(kind=8) y, rtemp1, rtemp2, xx
     
     ax=abs(x)
     if (ax<8d0) then
@@ -3439,12 +4193,12 @@ real*8 function BesselJ0_func(x)
     
 end function BesselJ0_func
 
-real*8 function BesselY0_func(x)
+real(kind=8) function BesselY0_func(x)
 
     implicit none
     
-    real*8 x, z, ax
-    real*8 y, rtemp1, rtemp2, xx
+    real(kind=8) x, z, ax
+    real(kind=8) y, rtemp1, rtemp2, xx
     
     if (x<8.0d0) then
         y=x*x
@@ -3753,7 +4507,7 @@ end subroutine CreateNewGrid
 ! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o 
 subroutine Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
 implicit none
-complex(kind=8)::dat_i(:,:),dat_o(:,:)
+DT::dat_i(:,:),dat_o(:,:)
 integer pgno_i,pgno_o,N
 integer M_p_i(:,:),M_p_o(:,:)
 integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
@@ -3841,7 +4595,7 @@ else
 			sendid = ii+ptree%pgrp(pgno_i)%head-1
 			if(ptree%MyID/=sendid)then
 				Nreqr = Nreqr+1
-				call MPI_Irecv(recvquant(ii)%dat,recvquant(ii)%size*N,MPI_double_complex,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
+				call MPI_Irecv(recvquant(ii)%dat,recvquant(ii)%size*N,MPI_DT,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
 			endif
 		endif
 	enddo
@@ -3856,7 +4610,7 @@ else
 				recvquant(ii)%dat=sendquant(jj)%dat ! make the direct copy if I own both send and receive pieces
 			else
 				Nreqs = Nreqs+1
-				call MPI_Isend(sendquant(jj)%dat,sendquant(jj)%size*N,MPI_double_complex,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
+				call MPI_Isend(sendquant(jj)%dat,sendquant(jj)%size*N,MPI_DT,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
 			endif
 		endif
 	enddo
@@ -3969,7 +4723,7 @@ end function gcd
 
 
 
-real*8 function flops_zgesdd(m, n)
+real(kind=8) function flops_zgesdd(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -3979,7 +4733,7 @@ real*8 function flops_zgesdd(m, n)
 	endif
 end function flops_zgesdd
 
-real*8 function flops_dgesdd(m, n)
+real(kind=8) function flops_dgesdd(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -3990,7 +4744,7 @@ real*8 function flops_dgesdd(m, n)
 end function flops_dgesdd
 
 
-real*8 function flops_zgesvd(m, n)
+real(kind=8) function flops_zgesvd(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -4001,7 +4755,7 @@ real*8 function flops_zgesvd(m, n)
 end function flops_zgesvd
 
 
-real*8 function flops_dgesvd(m, n)
+real(kind=8) function flops_dgesvd(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -4012,7 +4766,7 @@ real*8 function flops_dgesvd(m, n)
 end function flops_dgesvd
 
 
-real*8 function flops_dgeqpfmod(m, n, k)
+real(kind=8) function flops_dgeqpfmod(m, n, k)
 	implicit none 
 	integer m,n,k
 	if(m>n)then	
@@ -4022,7 +4776,7 @@ real*8 function flops_dgeqpfmod(m, n, k)
 	endif
 end function flops_dgeqpfmod
 
-real*8 function flops_zgeqpfmod(m, n, k)
+real(kind=8) function flops_zgeqpfmod(m, n, k)
 	implicit none 
 	integer m,n,k
 	if(m>n)then	
@@ -4034,7 +4788,7 @@ end function flops_zgeqpfmod
 
 
 
-real*8 function fmuls_geqrf(m, n)
+real(kind=8) function fmuls_geqrf(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -4043,7 +4797,7 @@ real*8 function fmuls_geqrf(m, n)
 		fmuls_geqrf = n*m*m - 1./3.*m*m*m + 2*n*m - 0.5*m*m + 23./6.*m
 	endif
 end function fmuls_geqrf
-real*8 function fadds_geqrf(m, n)
+real(kind=8) function fadds_geqrf(m, n)
 	implicit none 
 	integer m,n
 	if(m>n)then	
@@ -4052,12 +4806,12 @@ real*8 function fadds_geqrf(m, n)
 		fadds_geqrf = n*m*m - 1./3.*m*m*m + n*m - 0.5*m*m + 5./6.*m
 	endif
 end function fadds_geqrf
-real*8 function flops_zgeqrf(m, n)
+real(kind=8) function flops_zgeqrf(m, n)
 	implicit none 
 	integer m,n
 	flops_zgeqrf = 6.*fmuls_geqrf(m, n) + 2.*fadds_geqrf(m, n)
 end function flops_zgeqrf
-real*8 function flops_dgeqrf(m, n)
+real(kind=8) function flops_dgeqrf(m, n)
 	implicit none 
 	integer m,n
 	flops_dgeqrf = fmuls_geqrf(m, n) + fadds_geqrf(m, n)
@@ -4065,22 +4819,22 @@ end function flops_dgeqrf
 
 
 
-real*8 function fmuls_ungqr(m, n, k)
+real(kind=8) function fmuls_ungqr(m, n, k)
 	implicit none 
 	integer m,n,k
     fmuls_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + 2.*n*k - k*k - 5./3.*k
 end function fmuls_ungqr
-real*8 function fadds_ungqr(m, n, k)
+real(kind=8) function fadds_ungqr(m, n, k)
 	implicit none 
 	integer m,n,k
     fadds_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + n*k - m*k + 1./3.*k
 end function fadds_ungqr
-real*8 function flops_zungqr(m, n,k)
+real(kind=8) function flops_zungqr(m, n,k)
 	implicit none 
 	integer m,n,k
 	flops_zungqr = 6.*fmuls_ungqr(m, n,k) + 2.*fadds_ungqr(m, n,k)
 end function flops_zungqr
-real*8 function flops_dungqr(m, n,k)
+real(kind=8) function flops_dungqr(m, n,k)
 	implicit none 
 	integer m,n,k
 	flops_dungqr = fmuls_ungqr(m, n,k) + fadds_ungqr(m, n,k)
@@ -4088,7 +4842,7 @@ end function flops_dungqr
 
 
 
-real*8 function fmuls_unmqr(side, m, n, k)
+real(kind=8) function fmuls_unmqr(side, m, n, k)
 	integer m,n,k
 	character side
 	if(side=='L')then
@@ -4098,7 +4852,7 @@ real*8 function fmuls_unmqr(side, m, n, k)
 	endif
 end function fmuls_unmqr
 
-real*8 function fadds_unmqr(side, m, n, k)
+real(kind=8) function fadds_unmqr(side, m, n, k)
 	integer m,n,k
 	character side
 	if(side=='L')then
@@ -4108,21 +4862,21 @@ real*8 function fadds_unmqr(side, m, n, k)
 	endif
 end function fadds_unmqr
 
-real*8 function flops_zunmqr(side, m, n, k)
+real(kind=8) function flops_zunmqr(side, m, n, k)
 	integer m,n,k
 	character side
 	flops_zunmqr = 6.*fmuls_unmqr(side, m, n, k) + 2.*fadds_unmqr(side, m, n, k)
 end function flops_zunmqr
 
 
-real*8 function flops_dunmqr(side, m, n, k)
+real(kind=8) function flops_dunmqr(side, m, n, k)
 	integer m,n,k
 	character side
 	flops_dunmqr = fmuls_unmqr(side, m, n, k) + fadds_unmqr(side, m, n, k)
 end function flops_dunmqr
 
 
-real*8 function fmuls_getrf(m, n)
+real(kind=8) function fmuls_getrf(m, n)
 	implicit none 
 	integer m,n
 	
@@ -4132,7 +4886,7 @@ real*8 function fmuls_getrf(m, n)
 		fmuls_getrf = 0.5*n*m*m - 1./6.*m*m*m + 0.5*n*m - 0.5*m*m + 2./3.*m
 	endif	
 end function fmuls_getrf
-real*8 function fadds_getrf(m, n)
+real(kind=8) function fadds_getrf(m, n)
 	implicit none 
 	integer m,n
 	
@@ -4142,12 +4896,12 @@ real*8 function fadds_getrf(m, n)
 		fadds_getrf = 0.5*n*m*m - 1./6.*m*m*m - 0.5*n*m + 1./6.*m
 	endif	
 end function fadds_getrf
-real*8 function flops_zgetrf(m, n)
+real(kind=8) function flops_zgetrf(m, n)
 	implicit none 
 	integer m,n
 	flops_zgetrf = 6.*fmuls_getrf(m, n) + 2.*fadds_getrf(m, n)
 end function flops_zgetrf
-real*8 function flops_dgetrf(m, n)
+real(kind=8) function flops_dgetrf(m, n)
 	implicit none 
 	integer m,n
 	flops_dgetrf = fmuls_getrf(m, n) + fadds_getrf(m, n)
@@ -4156,22 +4910,22 @@ end function flops_dgetrf
 
 
 
-real*8 function fmuls_getrs(n, nrhs)
+real(kind=8) function fmuls_getrs(n, nrhs)
 	implicit none
 	integer n,nrhs
     fmuls_getrs =  nrhs*n*n
 end function fmuls_getrs	
-real*8 function fadds_getrs(n, nrhs)
+real(kind=8) function fadds_getrs(n, nrhs)
 	implicit none
 	integer n,nrhs
     fadds_getrs =  nrhs*n*(n - 1)
 end function fadds_getrs	
-real*8 function flops_zgetrs(n, nrhs)
+real(kind=8) function flops_zgetrs(n, nrhs)
 	implicit none 
 	integer n,nrhs
 	flops_zgetrs = 6.*fmuls_getrs(n,nrhs) + 2.*fadds_getrs(n,nrhs)
 end function flops_zgetrs
-real*8 function flops_dgetrs(n, nrhs)
+real(kind=8) function flops_dgetrs(n, nrhs)
 	implicit none 
 	integer n,nrhs
 	flops_dgetrs = fmuls_getrs(n,nrhs) + fadds_getrs(n,nrhs)
@@ -4179,29 +4933,29 @@ end function flops_dgetrs
 
 
 
-real*8 function fmuls_getri(n)
+real(kind=8) function fmuls_getri(n)
 	implicit none 
 	integer n
     fmuls_getri = 2./3.*n*n*n + 0.5*n*n + 5./6.*n
 end function fmuls_getri	
-real*8 function fadds_getri(n)
+real(kind=8) function fadds_getri(n)
 	implicit none 
 	integer n
     fadds_getri = 2./3.*n*n*n - 1.5*n*n + 5./6.*n
 end function fadds_getri	
-real*8 function flops_zgetri(n)
+real(kind=8) function flops_zgetri(n)
 	implicit none 
 	integer n
 	flops_zgetri = 6.*fmuls_getri(n) + 2.*fadds_getri(n)
 end function flops_zgetri
-real*8 function flops_dgetri(n)
+real(kind=8) function flops_dgetri(n)
 	implicit none 
 	integer n
 	flops_dgetri = fmuls_getri(n) + fadds_getri(n)
 end function flops_dgetri
 
 
-real*8 function fmuls_trsm(side, m, n)
+real(kind=8) function fmuls_trsm(side, m, n)
 	integer m,n
 	character side
 	if(side=='L')then
@@ -4210,7 +4964,7 @@ real*8 function fmuls_trsm(side, m, n)
 		fmuls_trsm = 0.5*m*n*(n + 1)
 	endif
 end function fmuls_trsm	
-real*8 function fadds_trsm(side, m, n)
+real(kind=8) function fadds_trsm(side, m, n)
 	integer m,n
 	character side
 	if(side=='L')then
@@ -4219,34 +4973,34 @@ real*8 function fadds_trsm(side, m, n)
 		fadds_trsm = 0.5*m*n*(n - 1)
 	endif
 end function fadds_trsm	
-real*8 function flops_ztrsm(side, m, n)
+real(kind=8) function flops_ztrsm(side, m, n)
 	integer m,n
 	character side
 	flops_ztrsm = 6.*fmuls_trsm(side, m, n) + 2.*fadds_trsm(side, m, n)
 end function flops_ztrsm
-real*8 function flops_dtrsm(side, m, n)
+real(kind=8) function flops_dtrsm(side, m, n)
 	integer m,n
 	character side
 	flops_dtrsm = fmuls_trsm(side, m, n) + fadds_trsm(side, m, n)
 end function flops_dtrsm
 
 
-real*8 function fmuls_gemm(m, n, k)
+real(kind=8) function fmuls_gemm(m, n, k)
 	implicit none 
 	integer m,n,k
     fmuls_gemm = m*n*k
 end function fmuls_gemm
-real*8 function fadds_gemm(m, n, k)
+real(kind=8) function fadds_gemm(m, n, k)
 	implicit none 
 	integer m,n,k
     fadds_gemm = m*n*k
 end function fadds_gemm
-real*8 function flops_zgemm(m, n,k)
+real(kind=8) function flops_zgemm(m, n,k)
 	implicit none 
 	integer m,n,k
 	flops_zgemm = 6.*fmuls_gemm(m, n,k) + 2.*fadds_gemm(m, n,k)
 end function flops_zgemm
-real*8 function flops_dgemm(m, n,k)
+real(kind=8) function flops_dgemm(m, n,k)
 	implicit none 
 	integer m,n,k
 	flops_dgemm = fmuls_gemm(m, n,k) + fadds_gemm(m, n,k)

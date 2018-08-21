@@ -16,6 +16,6 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-	-Denable_complex=ON
+	-Denable_complex=OFF
 	# -DCMAKE_Fortran_FLAGS="-cpp -DIntel -DPRNTlevel=0 -nologo -traceback -fpe0 -debug full -O0 -check bounds" \ 
 	# -DCMAKE_Fortran_FLAGS="-cpp -DIntel -DPRNTlevel=0 -O3 -no-prec-div -axAVX,SSE4.2 -msse2 -align records -parallel -lpthread" \

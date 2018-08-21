@@ -5,13 +5,13 @@ implicit none
 
 	!**** define your application-related variables here   
 	type quant_app
-		real*8 wavenum    ! CEM: wave number  
-		real*8 wavelength  ! CEM: wave length
-		real*8 omiga       ! CEM: angular frequency
-		real*8 rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
+		real(kind=8) wavenum    ! CEM: wave number  
+		real(kind=8) wavelength  ! CEM: wave length
+		real(kind=8) omiga       ! CEM: angular frequency
+		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
-		real*8:: CFIE_alpha ! CEM: combination parameter in CFIE
+		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
 	end type quant_app
 
 contains
@@ -24,7 +24,7 @@ contains
 		
 		integer edge_m, edge_n, i, j, flag
 		integer, INTENT(IN):: m,n
-		real*8 r_mn, rtemp1, rtemp2
+		real(kind=8) r_mn, rtemp1, rtemp2
 		complex(kind=8) value_e
 		type(mesh)::msh
 		class(kernelquant)::ker
@@ -80,7 +80,7 @@ contains
 		implicit none
 		complex(kind=8)::curr
 		complex(kind=8) ctemp,phase,ctemp_1
-		real*8 dsita,dphi    
+		real(kind=8) dsita,dphi    
 		integer edge
 		type(mesh)::msh
 		type(quant_app)::quant
@@ -98,12 +98,12 @@ contains
 		! use APPLICATION_MODULE
 		implicit none
 		complex(kind=8)::curr(:)
-		real*8 rcs
+		real(kind=8) rcs
 		complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1,ctemp_loc
-		real*8 ddphi,dphi
+		real(kind=8) ddphi,dphi
 		
 		integer i,j,ii,jj,iii,jjj,patch,flag
-		real*8 l_edge,l_edgefine
+		real(kind=8) l_edge,l_edgefine
 		type(mesh)::msh
 		integer edge,edge_m,edge_n,ierr
 		type(quant_app)::quant 
@@ -145,9 +145,9 @@ contains
 		! use APPLICATION_MODULE
 		implicit none
 		
-		real*8 rcs
+		real(kind=8) rcs
 		complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
-		real*8 dsita,dphi
+		real(kind=8) dsita,dphi
 		integer edge,edge_m,edge_n,ierr
 		complex(kind=8):: curr(:)
 		type(mesh)::msh
@@ -181,7 +181,7 @@ contains
 		
 		integer edge
 		complex(kind=8) value
-		real*8 theta, phi
+		real(kind=8) theta, phi
 		complex(kind=8)  phase
 		type(mesh)::msh
 		type(quant_app)::quant
@@ -211,13 +211,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	! include "mkl_vml.fi"	 
 	
-    real*8 para
-    real*8 tolerance
+    real(kind=8) para
+    real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,x,y,z,r,theta,phi
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	
 	character(len=:),allocatable  :: string
@@ -947,12 +947,12 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     integer i, j, ii, jj, iii, jjj, ierr
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
-    real*8 theta, phi, dphi, rcs_V, rcs_H
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
-    real*8 n1,n2,rtemp	
+    real(kind=8) n1,n2,rtemp	
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
-	real*8:: rel_error
+	real(kind=8):: rel_error
 	type(Hoption)::option
 	type(mesh)::msh
 	type(quant_app)::quant

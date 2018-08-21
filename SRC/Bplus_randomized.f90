@@ -3,6 +3,18 @@ module Bplus_randomized
 ! use Butterfly_rightmultiply
 use misc
 use Utilities
+
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 contains 
 
 
@@ -14,15 +26,15 @@ subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vou
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
-   complex(kind=8) :: ctemp1,ctemp2
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
+   DT :: ctemp1,ctemp2
    type(matrixblock),pointer::block_inv,block_schur,block_off1,block_off2
    integer groupn,groupm,mm,nn,ierr
    type(hobf)::ho_bf1
    type(proctree)::ptree
    type(Hstat)::stats
-   real*8::n1,n2
+   real(kind=8)::n1,n2
 	
    ctemp1=1.0d0
    ctemp2=0.0d0
@@ -161,13 +173,13 @@ subroutine BF_Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
     
     use MODULE_FILE
     implicit none
-        real*8:: mem_vec
+        real(kind=8):: mem_vec
     integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
     integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,level_butterfly
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer num_col,num_row
 	type(matrixblock):: block_rand
@@ -298,11 +310,11 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
     integer level_c,rowblock,kover
 	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
     integer dimension_max,dimension_rank, dimension_m, dimension_n, blocks, groupm, groupm_start,groupn_start,groupn,index_j,index_i
-    real*8 a,b,c,d
-    complex (kind=8) ctemp
+    real(kind=8) a,b,c,d
+    DT ctemp
 	type(matrixblock)::block,block_rand
-	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
-	real*8, allocatable:: Singular(:)
+	DT, allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
+	real(kind=8), allocatable:: Singular(:)
 	integer rankmax
     type(partitionedblocks)::partitioned_block
 	
@@ -458,8 +470,8 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
    integer nth_s,nth_e,unique_nth
    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,mm,kk,level_left,level_right, rs,re,rank,level_right_start,level_left_start
    integer index_i, index_j, iter, vector1, vector2, direction, round, flag
-   real*8 a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
-   complex(kind=8) ctemp
+   real(kind=8) a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
+   DT ctemp
    integer kmax
    type(Hoption)::option
    type(Hstat)::stats
@@ -467,11 +479,11 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
    type(RandomBlock) :: vec_rand
    
    integer, allocatable :: ipiv(:), kernel_selection(:)
-   real*8, allocatable :: Singular(:)
-   complex(kind=8), allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
-   complex(kind=8), allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   real(kind=8), allocatable :: Singular(:)
+   DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
+   DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer num_vect_sub,num_vect_subsub,nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly
-   real*8::n1,n2
+   real(kind=8)::n1,n2
    type(matrixblock) :: blocks
    
    call assert(nth_e==nth_e,'Nbind/=1')
@@ -537,7 +549,7 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
    ! use blas95
    implicit none 
    type(matrixblock) :: blocks
-   complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
+   DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
@@ -600,7 +612,7 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
    ! use blas95
    implicit none 
    type(matrixblock) :: blocks
-   complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer index_i,index_j,i,j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,ieo,noe,rs,re,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption) :: option
@@ -705,19 +717,19 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
    
    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,level_left,level_right, rank,level_right_start,level_left_start,nn1,nn2,rs,re
    integer index_i, index_j, mm, nn, iter, vector1, vector2, direction, round, flag
-   real*8 a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
-   complex(kind=8) ctemp
+   real(kind=8) a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
+   DT ctemp
    
    type(matrixblock) :: blocks
    ! type(RandomBlock), pointer :: random
    type(RandomBlock) :: vec_rand
    
    integer, allocatable :: ipiv(:), kernel_selection(:)
-   real*8, allocatable :: Singular(:)
-   complex(kind=8), allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
-   complex(kind=8), allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   real(kind=8), allocatable :: Singular(:)
+   DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
+   DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer num_vect_sub,num_vect_subsub,nth,ind_r,ind_c,noe,Ng,nth_s,nth_e,dimension_mm,dimension_n,jeo,level_butterfly
-   real*8::n1,n2
+   real(kind=8)::n1,n2
    integer::kmax,unique_nth
    type(Hoption)::option
    type(Hstat)::stats
@@ -786,7 +798,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
    ! use blas95
    implicit none 
    type(matrixblock) :: blocks
-   complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
+   DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer i,level_left,unique_nth,dimension_mm,mm,rank,num_vect_sub,nth,nth_s,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
@@ -861,7 +873,7 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
    ! use blas95
    implicit none 
    type(matrixblock) :: blocks
-   complex(kind=8), allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer index_i,index_j,i,j,level_left,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,jeo,noe,rs,re,level_left_start,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
@@ -1002,21 +1014,21 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
     integer blocks1, blocks2, blocks3, level_butterfly, rank0, i, j, k, num_blocks
     integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,r1,r2,r3,r3tmp,mn,rank
     character chara
-    real*8 T0
+    real(kind=8) T0
     type(matrixblock),pointer::block_o,block_off1,block_off2
     type(matrixblock)::blocks_o
     type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D,block_tmp
     integer rank_new_max,rank_pre_max
-	real*8:: rank_new_avr,error,rankrate
+	real(kind=8):: rank_new_avr,error,rankrate
 	integer niter,groupm,groupn
-	real*8:: error_inout
+	real(kind=8):: error_inout
 	integer itermax,ntry
-	real*8:: n1,n2,Memory
-	complex (kind=8), allocatable::matrix_small(:,:),U1(:,:),V1(:,:),U2(:,:),V2(:,:),U3(:,:),V3(:,:),U3tmp(:,:),V3tmp(:,:),UUtmp(:,:),VVtmp(:,:),UU(:,:),VV(:,:),UUr(:,:),VVr(:,:)
-	real*8,allocatable :: Singular(:)
-	complex (kind=8), allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:)
-	complex (kind=8)::ctemp1,ctemp2
-	complex(kind=8),allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
+	real(kind=8):: n1,n2,Memory
+	DT, allocatable::matrix_small(:,:),U1(:,:),V1(:,:),U2(:,:),V2(:,:),U3(:,:),V3(:,:),U3tmp(:,:),V3tmp(:,:),UUtmp(:,:),VVtmp(:,:),UU(:,:),VV(:,:),UUr(:,:),VVr(:,:)
+	real(kind=8),allocatable :: Singular(:)
+	DT, allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:)
+	DT::ctemp1,ctemp2
+	DT,allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
 	integer idx_start_m_ref
 	class(*):: operand
 	class(*),optional:: operand1
@@ -1095,7 +1107,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer level_right_start,num_col,num_row
 	
@@ -1103,16 +1115,16 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     type(RandomBlock), pointer :: random
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
-    real*8::n1,n2
+    real(kind=8)::n1,n2
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
 	type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
-	real*8::rank_new_avr,error 
-	complex(kind=8),allocatable::matrixtmp(:,:)
+	real(kind=8)::rank_new_avr,error 
+	DT,allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
-	real*8:: error_inout
+	real(kind=8):: error_inout
 	integer,allocatable::perms(:)
 	type(partitionedblocks)::partitioned_block
 	class(*):: operand	
@@ -1197,10 +1209,10 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer level_left_start,num_row,num_col
-    real*8::n1,n2
+    real(kind=8)::n1,n2
 	type(Hoption)::option
 	type(Hstat)::stats
 	
@@ -1213,8 +1225,8 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     integer tt
 	! type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
     integer::rank_new_max,dimension_rank
-	real*8::rank_new_avr 
-	complex(kind=8),allocatable::matrixtmp(:,:)
+	real(kind=8)::rank_new_avr 
+	DT,allocatable::matrixtmp(:,:)
 	integer niter,unique_nth
 	type(partitionedblocks)::partitioned_block
 	
@@ -1296,16 +1308,16 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 	integer nth
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,groupm
     integer mm,nn
-    real*8 a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
-    complex(kind=8) ctemp
+    real(kind=8) a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
+    DT ctemp
     
     ! type(matricesblock), pointer :: blocks
     type(RandomBlock), pointer :: random
 	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly
 	integer*8 idx_start
-	real*8::error
+	real(kind=8)::error
 	integer level_c,rowblock,dimension_m 
-	complex(kind=8),allocatable::Vdref(:,:),Id(:,:),Vd(:,:)
+	DT,allocatable::Vdref(:,:),Id(:,:),Vd(:,:)
 	type(proctree)::ptree
 	type(Hstat)::stats
 	type(matrixblock)::block_o,block_rand
@@ -1664,9 +1676,9 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
    implicit none
    integer level, ii, M, N, num_vect_sub, mv,nv
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vout_tmp(:,:),Vbuff(:,:)
-   complex(kind=8) :: ctemp1,ctemp2,a,b
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vout_tmp(:,:),Vbuff(:,:)
+   DT :: ctemp1,ctemp2,a,b
    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
    integer groupn,groupm,mm,nn
    class(*)::partitioned_block
@@ -1830,9 +1842,9 @@ subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,tran
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: V_tmp1(:,:),V_tmp2(:,:),Vin_tmp(:,:),Vout_tmp(:,:)
-   complex(kind=8) :: ctemp1,ctemp2,a,b
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: V_tmp1(:,:),V_tmp2(:,:),Vin_tmp(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
    integer groupn,groupm,mm,nn
    class(*)::partitioned_block
@@ -1928,9 +1940,9 @@ subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_su
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:)
-   complex(kind=8) :: ctemp1,ctemp2,a,b
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
    type(matrixblock),pointer::block_off1,block_off2
    integer groupn,groupm,mm,nn
    class(*)::ho_bf1
@@ -2003,15 +2015,15 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vbuff1(:,:),Vout_tmp(:,:)
-   complex(kind=8) :: ctemp1,ctemp2,a,b
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vbuff1(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
    type(matrixblock)::block_Xn
    integer groupn,groupm,mm,nn
    class(*)::schulz_op
    class(*),optional::operand1
    type(matrixblock)::block_o
-   real*8::scale_new
+   real(kind=8)::scale_new
    type(proctree)::ptree
    type(Hstat)::stats
 	
@@ -2177,10 +2189,10 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans,trans_new
-   real*8::eps,memory
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:),matrixtmp(:,:)
-   complex(kind=8) :: ctemp1,ctemp2,a,b
+   real(kind=8)::eps,memory
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:),matrixtmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
    type(matrixblock)::block_Xn
    integer groupn,groupm,mm,nn
    class(*)::schulz_op
@@ -2197,13 +2209,13 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 			ctemp1=1d0
 			ctemp2=0d0
 			if(operand1==1)then ! X0
-				Vin=conjg(Vin)
+				Vin=conjg(cmplx(Vin,kind=8))
 				if(trans=='N')trans_new='T'
 				if(trans=='T')trans_new='N'				
 				call butterfly_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + Vin
-				Vin=conjg(Vin)
-				Vout=conjg(Vout)
+				Vin=conjg(cmplx(Vin,kind=8))
+				Vout=conjg(cmplx(Vout,kind=8))
 				schulz_op%scale=(2d0-eps)/schulz_op%A2norm**2d0
 				Vout = Vout*schulz_op%scale
 				
@@ -2246,15 +2258,15 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,M,N,mv,nv
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character trans
-    ! real*8 a,b,c,d
-    complex(kind=8) ctemp, ctemp1, ctemp2,a,b
+    ! real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2,a,b
 	
 	
     ! type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vbuff(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vbuff(:,:),Vout_tmp(:,:)
 	
 	integer Nsub,Ng
 	integer*8 idx_start   
@@ -2265,8 +2277,8 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 	
 	integer nth_s,nth_e,num_vect_sub,nth,level_right_start
 	! type(RandomBlock), pointer :: random
-	real*8::n1,n2
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
+	real(kind=8)::n1,n2
+	DT :: Vin(:,:), Vout(:,:)
 	type(vectorsblock),pointer:: RandomVectors_InOutput_tmp(:)
 
 	class(*)::ho_bf1
@@ -2432,16 +2444,16 @@ subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vo
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
 	type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
 	integer groupn,groupm,mm,nn
 
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
 	integer level_butterfly,groupm_diag
-	! real*8 a,b,c,d
+	! real(kind=8) a,b,c,d
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer*8 idx_start   
 	integer level_blocks
@@ -2456,7 +2468,7 @@ subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vo
 	class(*),optional::operand1	
 	
 	
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
    select TYPE(bplus)
    
@@ -2500,9 +2512,9 @@ subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8),allocatable :: Vout_tmp(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT,allocatable :: Vout_tmp(:,:)
+	DT :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
 	integer M,N,mv,nv
 	
 	type(Hstat)::stats
@@ -2510,7 +2522,7 @@ subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub
 	type(matrixblock)::block_o
 	class(*),optional::operand1
 	type(proctree)::ptree
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
 	ctemp3=-1.0d0 ; ctemp4=1.0d0
 	
@@ -2554,8 +2566,8 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
 	type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
 	integer groupn,groupm,mm,nn
 	type(proctree)::ptree
@@ -2563,9 +2575,9 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 	
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
 	integer level_butterfly,groupm_diag
-	! real*8 a,b,c,d
+	! real(kind=8) a,b,c,d
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer*8 idx_start   
 	integer level_blocks
@@ -2579,7 +2591,7 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 	class(*),optional::operand1	
 	
 	
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
    select TYPE(ho_bf1)
    
@@ -2649,9 +2661,9 @@ subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8),allocatable :: Vout_tmp(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT,allocatable :: Vout_tmp(:,:)
+	DT :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
 	integer M,N,mv,nv
 	type(proctree)::ptree
 	class(*):: ho_bf1
@@ -2659,7 +2671,7 @@ subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_
 	class(*),optional::operand1
 	type(Hstat)::stats
 	
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
 	ctemp3=-1.0d0 ; ctemp4=1.0d0
 	
@@ -2700,16 +2712,16 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,Ctemp,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,Ctemp,a,b
 	type(blockplus),pointer::bplus_o
 	integer groupn,groupm,mm,nn
 
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,M,N,mv,nv
 	integer level_butterfly,groupm_diag
-	! real*8 a,b,c,d
+	! real(kind=8) a,b,c,d
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer*8 idx_start   
 	integer level_blocks
@@ -2725,7 +2737,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 
 	
 	
@@ -2850,9 +2862,9 @@ subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_s
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8),allocatable :: Vout_tmp(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT,allocatable :: Vout_tmp(:,:)
+	DT :: ctemp1,ctemp2,ctemp3,ctemp4,a,b
 	integer M,N,mv,nv
 	type(Hstat)::stats
 	
@@ -2860,7 +2872,7 @@ subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_s
 	type(matrixblock)::block_o
 	class(*),optional::operand1
 	type(proctree)::ptree
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
 	ctemp3=-1.0d0 ; ctemp4=1.0d0
 	
@@ -2906,16 +2918,16 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
-   complex(kind=8) :: ctemp1,ctemp2
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
+   DT :: ctemp1,ctemp2
    type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2
    type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
    integer groupn,groupm,mm,nn,ierr
    type(hobf)::ho_bf1
    type(proctree)::ptree
    type(Hstat)::stats
-   real*8::n1,n2
+   real(kind=8)::n1,n2
    ctemp1=1.0d0
    ctemp2=0.0d0
    
@@ -3025,16 +3037,16 @@ subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,V
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
-   complex(kind=8) :: Vin(:,:), Vout(:,:)
-   complex(kind=8),allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
-   complex(kind=8) :: ctemp1,ctemp2, a, b
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vin1(:,:),Vin2(:,:),Vout1(:,:),Vout2(:,:)
+   DT :: ctemp1,ctemp2, a, b
    type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2
    type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
    integer groupn,groupm,mm1,nn1,mm2,nn2,ierr,nin1,nout1,nin2,nout2,offin1,offout1,offin2,offout2
    type(hobf)::ho_bf1
    type(proctree)::ptree
    type(Hstat)::stats
-   real*8::n1,n2
+   real(kind=8)::n1,n2
    integer,pointer::Nin_p1(:,:),Nin_p2(:,:),Nout_p1(:,:),Nout_p2(:,:)
    ! ctemp1=1.0d0
    ! ctemp2=0.0d0
@@ -3152,16 +3164,16 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
 	! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
 	integer groupn,groupm,mm,nn
 
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
 	integer level_butterfly,groupm_diag
-	! real*8 a,b,c,d
+	! real(kind=8) a,b,c,d
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer*8 idx_start   
 	integer level_blocks
@@ -3175,7 +3187,7 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 	class(*),optional::operand1	
 	type(proctree)::ptree
 	type(Hstat)::stats
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
    select TYPE(bplus)
    
@@ -3252,16 +3264,16 @@ subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
-	complex(kind=8) :: Vin(:,:), Vout(:,:)
-	complex(kind=8) :: ctemp1,ctemp2,a,b
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
 	! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
 	integer groupn,groupm,mm,nn
 
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test
 	integer level_butterfly,groupm_diag
-	! real*8 a,b,c,d
+	! real(kind=8) a,b,c,d
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer*8 idx_start   
 	integer level_blocks
@@ -3275,7 +3287,7 @@ subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 	class(*),optional::operand1	
 	type(Hstat)::stats
 	
-	real*8::n2,n1 	
+	real(kind=8)::n2,n1 	
 	
    select TYPE(bplus)
    
@@ -3355,15 +3367,15 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 
     type(blockplus),pointer::bplus
 	integer:: ii,ll,bb,jj,bb_o,tt,rank0,rankthusfar
-    real*8 Memory,rtemp,error_inout,n2,n1,mem_vec,rankrate	
+    real(kind=8) Memory,rtemp,error_inout,n2,n1,mem_vec,rankrate	
 	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall
-	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vout3(:,:),Vin(:,:)
+	DT,allocatable::Vout1(:,:),Vout2(:,:),Vout3(:,:),Vin(:,:)
 	integer M,N,idx_start_n,idx_start_m,idx_start_n_loc,idx_end_n_loc,idx_start_m_loc,idx_end_m_loc,mm,nn,rmax,rank,idx_start_n_ref,idx_start_m_ref,idx_end_n_ref,idx_end_m_ref,head,tail
-	complex(kind=8)::ctemp1,ctemp2,Ctemp
+	DT::ctemp1,ctemp2,Ctemp
 	type(matrixblock)::blocks
 	type(matrixblock)::block_dummy
-	complex(kind=8), allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:)
-	real*8, allocatable :: Singular(:)
+	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:)
+	real(kind=8), allocatable :: Singular(:)
 	integer level_c,rowblock,Nactive
 	integer,allocatable::boxindex(:)
 	integer Chunksize, Nchunk, Nidx, idx_s,cc
@@ -3372,8 +3384,8 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 	character(*)  :: strings
 	type(Hoption)::option
 	type(Hstat)::stats
-	complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
-	complex(kind=8), allocatable :: matU_glo(:,:), matV_glo(:,:)
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
+	DT, allocatable :: matU_glo(:,:), matV_glo(:,:)
 	procedure(BF_MVP_blk)::blackbox_MVP_dat
 	type(proctree)::ptree
 	
@@ -3445,7 +3457,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					
 					! do ii=idx_start_n_loc,idx_end_n_loc
 					! do jj=1,rmax
-						! RandVectInR(ii,jj)=random_complex_number()
+						! RandVectInR(ii,jj)=random_dp_number()
 					! end do
 					! end do
 					
@@ -3479,7 +3491,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					! write(*,*)mem_vec,'dd2',M,N,Nidx
 					! do ii=idx_start_m_loc,idx_end_m_loc
 					! do jj=1,rmax
-						! RandVectInL(ii,jj)=random_complex_number()
+						! RandVectInL(ii,jj)=random_dp_number()
 					! end do
 					! end do
 					
@@ -3494,8 +3506,8 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					deallocate(RandVectOutL)
 				end do
 																	
-				matRrow = conjg(matRrow)															   
-				matZcRrow = conjg(matZcRrow)
+				matRrow = conjg(cmplx(matRrow,kind=8))															   
+				matZcRrow = conjg(cmplx(matZcRrow,kind=8))
 							
 
 				!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -3534,7 +3546,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				allocate(Vout2(mm,1))
 				allocate(Vout3(rank,1))
 				do ii=1,nn
-					Vin(ii,1)=random_complex_number()
+					call random_dp_number(Vin(ii,1))
 				end do
 				
 				
@@ -3657,10 +3669,10 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
     ! type(blockplus),pointer::bplus
     type(blockplus)::bplus_o
 	integer:: ii,ll,bb
-    real*8 rtemp,error,Memory,n2,n1,rate,error_inout,err_avr,rankrate_inner,rankrate_outter	
+    real(kind=8) rtemp,error,Memory,n2,n1,rate,error_inout,err_avr,rankrate_inner,rankrate_outter	
 	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall,M,N,err_cnt
-	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
-	complex(kind=8) ctemp, ctemp1, ctemp2	
+	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
+	DT ctemp, ctemp1, ctemp2	
 	integer level_c,rowblock,rank_new_max,rank0_inner,rank0_outter
 	type(matrixblock),pointer::block_off1,block_off2,block_o
 	class(*)::operand
@@ -3751,10 +3763,10 @@ subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized)
     integer level_c,rowblock
 	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
     integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,tmpi,tmpj
-    real*8 a,b,c,d
-    complex (kind=8) ctemp
-	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
-	real*8, allocatable:: Singular(:)
+    real(kind=8) a,b,c,d
+    DT ctemp
+	DT, allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
+	real(kind=8), allocatable:: Singular(:)
 	integer mn_min,index_i,index_j,blocks_idx
 	type(matrixblock)::block
 	type(blockplus)::Bplus,Bplus_randomized

@@ -6,7 +6,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	
     implicit none
     
-	real*8:: n1,n2,error
+	real(kind=8):: n1,n2,error
 	integer:: i,j,k,level,num_row,num_col,mm,nn, dimension_m,dimension_n,dimension_rank,inner_rank,num_blocks,level_butterfly,threads_num,num_vect
 	type(matrixblock),pointer::block
 	complex(kind=8) ctemp, ctemp1, ctemp2
@@ -83,10 +83,10 @@ subroutine create_butterfly_simple(block,level_butterfly,dimension_m,dimension_n
     integer level_c,rowblock
 	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
     integer dimension_rank, inner_rank, dimension_m, dimension_n, blocks, groupm, groupn,tmpi,tmpj
-    real*8 a,b,c,d
+    real(kind=8) a,b,c,d
     complex (kind=8) ctemp
 	complex (kind=8), allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
-	real*8, allocatable:: Singular(:)
+	real(kind=8), allocatable:: Singular(:)
 	integer mn_min,index_i,index_j,blocks_idx
 	type(matrixblock)::block
 	integer seed_myid(12)

@@ -126,35 +126,29 @@ public:
 	}  
   
   
-  inline void Sample(int m, int n, doublecomplex* val){
+  inline void Sample(int m, int n, double* val){
 	switch(_ker){
 	case 1: //Gaussian kernel
-		val->i=0;
-		val->r = Gauss_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
+		*val = Gauss_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
 		if (m==n)
-		val->r += _l;
+		*val += _l;
 		break;
 	case 2: //R^4 kernel
-		val->i=0;
-		val->r = K07_kernel(&_data[m * _d], &_data[n * _d], _d);	
+		*val = K07_kernel(&_data[m * _d], &_data[n * _d], _d);	
 		break;
 	case 3: //sqrt(R^2+h) kernel
-		val->i=0;
-		val->r = K08_kernel(&_data[m * _d], &_data[n * _d], _d, _h);	
+		*val = K08_kernel(&_data[m * _d], &_data[n * _d], _d, _h);	
 		break;
 	case 4: //1/sqrt(R^2+h) kernel
-		val->i=0;
-		val->r = K09_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
+		*val = K09_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
 		break;
 	case 5: //Polynomial kernel (X^tY+h)^2
-		val->i=0;
-		val->r = K10_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
+		*val = K10_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
 		break;
 	case 6: //Low-rank product of two random matrices
-		val->i=0;
-		val->r =0;
+		*val =0;
 		for (int k = 0; k < _rank_rand; k++){
-			val->r += _MatU[k*_n_rand+m]*_MatV[k*_n_rand+n];
+			*val += _MatU[k*_n_rand+m]*_MatV[k*_n_rand+n];
 		}
 		break;
 	}
@@ -163,7 +157,7 @@ public:
 
 
 // The sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmn(int *m, int *n, doublecomplex *val, C2Fptr quant) {
+inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 	
   C_QuantZmn* Q = (C_QuantZmn*) quant;	
   Q->Sample(*m,*n,val);
@@ -208,7 +202,7 @@ int main(int argc, char* argv[])
 	
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
-#if 1	
+#if 0	
 	string filename("./EXAMPLE/SUSY/susy_10Kn");
 	h = 0.1;
 	lambda = 10.;
@@ -225,7 +219,7 @@ int main(int argc, char* argv[])
 	
 	/*****************************************************************/
 	/* Test Kernels for Random point clouds */
-#if 0	
+#if 1	
 	h = 3.267; //0.47;
 	lambda = 10.;
 	ker = 1;
@@ -302,13 +296,10 @@ int main(int argc, char* argv[])
 	
 	set_D_option(&option, "tol_comp", 1e-4);
 	set_I_option(&option, "preorder", 0);
-	set_I_option(&option, "Nmin_leaf", 200);
+	set_I_option(&option, "Nmin_leaf", 200); 
 	set_I_option(&option, "RecLR_leaf", 4); //1:SVD 2:RRQR 3:ACA 4:BACA
 	
-	
-	//create hodlr quantities
-	FC_GLOBAL_(c_hodlr_construct,C_HODLR_CONSTRUCT)(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
-	
+
     // construct hodlr with geometrical points	
 	FC_GLOBAL_(c_hodlr_construct,C_HODLR_CONSTRUCT)(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
 	
@@ -317,12 +308,11 @@ int main(int argc, char* argv[])
 
 	// solve the system 
 	int nrhs=1;
-	doublecomplex* b = new doublecomplex[nrhs*myseg];
-	doublecomplex* x = new doublecomplex[nrhs*myseg];
+	double* b = new double[nrhs*myseg];
+	double* x = new double[nrhs*myseg];
 	
 	for (int i = 0; i < nrhs*myseg; i++){
-		b[i].r=1;
-		b[i].i=0;
+		b[i]=1;
 	}	
 	FC_GLOBAL_(c_hodlr_solve,C_HODLR_SOLVE)(x,b,&myseg,&nrhs,&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
 

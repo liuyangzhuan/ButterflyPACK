@@ -4,10 +4,10 @@ implicit none
 
 	!**** define your application-related variables here   
 	type quant_app
-		complex(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
-		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files		
+		real(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
+		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files		
 		integer:: rank
-		complex(kind=8):: lambda
+		real(kind=8):: lambda
 	end type quant_app
 
 contains
@@ -21,7 +21,7 @@ contains
 		class(*),pointer :: quant
 		type(mesh)::msh
 		integer, INTENT(IN):: m,n
-		complex(kind=8)::value_e 
+		real(kind=8)::value_e 
 		integer ii
 
 		real(kind=8) r_mn
@@ -54,7 +54,7 @@ contains
 		class(*),pointer :: quant
 		type(mesh)::msh
 		integer, INTENT(IN):: m,n
-		complex(kind=8)::value_e 
+		real(kind=8)::value_e 
 		integer ii
 
 		real(kind=8) r_mn
@@ -93,14 +93,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 
 	! include "mkl_vml.fi"	 
 	
-    real*8 para
-    real*8 tolerance
+    real(kind=8) para
+    real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,x,y,z,r,theta,phi
-	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
+	real(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	real(kind=8),allocatable:: datain(:)
 	
 	character(len=:),allocatable  :: string
@@ -214,7 +214,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 		quant%matZ_glo(:,ii)=datain
 	enddo
 	close(10)
-	call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
+	call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 	
 		
 !******************************************************************************!	

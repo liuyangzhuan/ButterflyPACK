@@ -2,6 +2,17 @@ module HODLR_randomMVP
 use Bplus_randomized 
 use HODLR_Solve
 use Bplus_compress_forward
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 contains
 
 subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,Memory,error,option,stats,operand,ptree,msh)
@@ -9,15 +20,15 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,M
 	! use blas95
     use MODULE_FILE
     implicit none
-	real*8:: n1,n2,Memory,error_inout,Memtmp,tmpfact,error
+	real(kind=8):: n1,n2,Memory,error_inout,Memtmp,tmpfact,error
 	integer level_c,rankmax,level_butterfly,bb,rank_new_max,ii,groupm,groupn,N
 	type(matrixblock),pointer::block_o,block_ref
-	complex(kind=8),allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:)
+	DT,allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:)
 	type(matrixblock),allocatable::block_rand(:)
 	type(hobf)::ho_bf1
 	type(Hoption)::option
 	type(Hstat)::stats
-	real*8:: time_gemm1
+	real(kind=8):: time_gemm1
 	class(*)::operand
 	procedure(HOBF_MVP_blk)::blackbox_HODLR_MVP_randomized_dat
 	type(proctree)::ptree
@@ -91,7 +102,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,M
 	allocate(Vout1(N,1))
 	allocate(Vout2(N,1))
 	do ii=1,N
-		Vin(ii,1) = random_complex_number()
+		call random_dp_number(Vin(ii,1))
 	end do
 
 	call blackbox_HODLR_MVP_randomized_dat('N',N,1,Vin,Vout1,msh,operand)
@@ -109,20 +120,20 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 	! use blas95
     use MODULE_FILE
     implicit none
-	real*8:: n1,n2,Memory,error_inout,Memtmp
+	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer mn,rankref,level_c,rmax,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
 	type(matrixblock),pointer::block_o,block_ref
-	complex(kind=8),allocatable::RandVectTmp(:,:)
-	complex(kind=8), allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:),matrixtemp(:,:),matrixtempQ(:,:)
-	real*8, allocatable:: Singular(:)
-	complex(kind=8)::ctemp1,ctemp2
-	complex (kind=8), allocatable::UU(:,:),VV(:,:)
+	DT,allocatable::RandVectTmp(:,:)
+	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:),matrixtemp(:,:),matrixtempQ(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	DT::ctemp1,ctemp2
+	DT, allocatable::UU(:,:),VV(:,:)
 	integer q,qq,N
 	integer,allocatable::perms(:), ranks(:) 
 	type(hobf)::ho_bf1
 	type(matrixblock)::block_rand(:)
 	type(Hoption)::option
-	complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	class(*)::operand
 	type(proctree)::ptree
 	type(Hstat)::stats
@@ -169,9 +180,9 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 	! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
 	q=0
 	do qq=1,q
-		RandVectOutR=conjg(RandVectOutR)
+		RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
 		call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats,msh)
-		RandVectInR=conjg(RandVectInR)
+		RandVectInR=conjg(cmplx(RandVectInR,kind=8))
 		call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'N', RandVectInR, RandVectOutR, N,level_c,num_vect,operand,ptree,stats,msh)
 	enddo
 	
@@ -196,9 +207,9 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 	end do
 
 	! computation of B = Q^c*A
-	RandVectOutR=conjg(RandVectOutR)
+	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
 	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,'T', RandVectOutR, RandVectInR, N,level_c,num_vect,operand,ptree,stats,msh)
-	RandVectOutR=conjg(RandVectOutR)
+	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
 	
 	! computation of SVD of B and LR of A
 	do bb=1,ho_bf1%levels(level_c)%N_block_forward
@@ -264,18 +275,18 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,tr
 	! use blas95
     use MODULE_FILE
     implicit none
-	real*8:: n1,n2,Memory,error_inout,Memtmp
+	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer N,mn,rankref,level_c,rmax,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
 	type(matrixblock),pointer::block_o,block_ref
-	complex(kind=8),allocatable::RandVectTmp(:,:)
-	complex(kind=8), allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:),matrixtemp(:,:)
-	real*8, allocatable:: Singular(:)
-	complex(kind=8)::ctemp1,ctemp2
+	DT,allocatable::RandVectTmp(:,:)
+	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:),matrixtemp(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	DT::ctemp1,ctemp2
 	complex (kind=8), allocatable::UU(:,:),VV(:,:)
 	integer,allocatable::perms(:) 
 	character trans
-	complex(kind=8)::VectIn(:,:),VectOut(:,:)
-	complex(kind=8),allocatable:: RandVectIn(:,:),RandVectOut(:,:)
+	DT::VectIn(:,:),VectOut(:,:)
+	DT,allocatable:: RandVectIn(:,:),RandVectOut(:,:)
 	type(hobf)::ho_bf1
 	class(*)::operand
 	type(proctree)::ptree
@@ -435,15 +446,15 @@ subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_da
 	! use blas95
     use MODULE_FILE
     implicit none
-	real*8:: n1,n2,Memory,error_inout,Memtmp
+	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer N,rankref,level_c,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
 	type(matrixblock),pointer::block_o,block_ref
-	complex(kind=8),allocatable::RandVectTmp(:,:)
-	complex(kind=8), allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:)
-	real*8, allocatable:: Singular(:)
-	complex(kind=8)::ctemp1,ctemp2
+	DT,allocatable::RandVectTmp(:,:)
+	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),mattmp1(:,:),mattmp2(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	DT::ctemp1,ctemp2
 	type(hobf)::ho_bf1
-	complex(kind=8),allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	class(*)::operand
 	type(proctree)::ptree
 	type(Hstat)::stats
@@ -528,7 +539,7 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomiz
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer level_right_start,num_col,num_row
     
@@ -537,7 +548,7 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomiz
     type(RandomBlock),allocatable :: vec_rand(:)
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
-    real*8::n1,n2
+    real(kind=8)::n1,n2
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
@@ -545,10 +556,10 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomiz
 
 	
     integer::rank_new_max,dimension_rank
-	real*8::rank_new_avr,error 
-	complex(kind=8),allocatable::matrixtmp(:,:)
+	real(kind=8)::rank_new_avr,error 
+	DT,allocatable::matrixtmp(:,:)
 	integer niter,unique_nth  ! level# where each block is touched only once  
-	real*8:: error_inout
+	real(kind=8):: error_inout
 	integer,allocatable::perms(:)
 	
     type(matrixblock)::block_rand(:)
@@ -632,7 +643,7 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomiz
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer level_right_start,num_col,num_row
     
@@ -640,16 +651,16 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomiz
     ! type(RandomBlock), pointer :: random
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
-    real*8::n1,n2
+    real(kind=8)::n1,n2
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
     type(matrixblock),pointer::block_o
     integer::rank_new_max,dimension_rank,level_left_start
-	real*8::rank_new_avr 
-	complex(kind=8),allocatable::matrixtmp(:,:)
+	real(kind=8)::rank_new_avr 
+	DT,allocatable::matrixtmp(:,:)
 	integer niter,unique_nth  ! level# where each block is touched only once  
-	real*8:: error_inout,rtemp
+	real(kind=8):: error_inout,rtemp
 	integer,allocatable::perms(:)
 	type(RandomBlock),allocatable :: vec_rand(:)
 	
@@ -740,16 +751,16 @@ subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_d
 	integer nth
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,groupm,groupn,bb
     integer N,mm,nn
-    real*8 a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
-    complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
+    DT ctemp, ctemp1, ctemp2
     
     ! type(matricesblock), pointer :: blocks
     type(RandomBlock), pointer :: random
 	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly
 	integer*8 idx_start
-	real*8::error
+	real(kind=8)::error
 	integer level_c,rowblock,dimension_m,header_m,tailer_m,header_n,tailer_n
-	complex(kind=8),allocatable::RandomVectors_Output_ref(:,:)
+	DT,allocatable::RandomVectors_Output_ref(:,:)
 	type(matrixblock),pointer::block_o
 	
 	type(hobf)::ho_bf1
@@ -780,7 +791,7 @@ subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_d
 		k=header_n-1	
 		do jj=1,num_vect
 			do ii=1, nn
-				RandomVectors_InOutput(1)%vector(ii+k,jj)=random_complex_number()	! matrixtemp1(jj,ii) ! 
+				call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,jj))	! matrixtemp1(jj,ii) ! 
 			enddo
 		enddo
 	end do	
@@ -826,11 +837,11 @@ end subroutine HODLR_Test_Error_RR
 subroutine HODLR_MVP_randomized_Fullmat(trans,N,num_vect,Vin,Vout,msh,operand)
 	implicit none 
 	character trans
-	complex(kind=8) Vin(:,:),Vout(:,:)
-	complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
-	complex(kind=8) ctemp,a,b
+	DT Vin(:,:),Vout(:,:)
+	DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
+	DT ctemp,a,b
 	integer ii,jj,num_vect,nn,fl_transpose,kk,black_step,N
-	real*8 n1,n2,tmp(2)
+	real(kind=8) n1,n2,tmp(2)
 	type(mesh)::msh
 	class(*)::operand
 	
@@ -846,7 +857,7 @@ subroutine HODLR_MVP_randomized_Fullmat(trans,N,num_vect,Vin,Vout,msh,operand)
 		enddo	
 		a=1d0
 		b=0d0
-		call gemmf90(operand%matZ_glo,Vin_tmp,Vout_tmp,trans,'N',a,b)	
+		call gemmf90(operand%matZ_glo,N,Vin_tmp,N,Vout_tmp,N,trans,'N',N,num_vect,N,a,b)	
 
 		do ii=1,N
 		Vout(ii,:)=Vout_tmp(msh%new2old(ii),:)
@@ -874,15 +885,15 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     integer N,i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,bb
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
-    real*8 a,b,c,d
-    ! complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    ! DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
     type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
 	
 	integer Nsub,Ng
 	integer*8 idx_start   
@@ -893,7 +904,7 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_right_start
 	! type(RandomBlock), pointer :: random
-	real*8::n1,n2
+	real(kind=8)::n1,n2
 	
 	type(hobf)::ho_bf1
 	type(matrixblock)::block_rand(:)
@@ -951,7 +962,7 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 					! !$omp parallel do default(shared) private(ii,jj)
 					 do jj=1,num_vect_subsub
 						 do ii=1, mm
-							 RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj)=random_complex_number()	! matrixtemp1(jj,ii) ! 
+							 call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj))	! matrixtemp1(jj,ii) ! 
 						 enddo
 					 enddo
 					 ! !$omp end parallel do
@@ -1035,15 +1046,15 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     integer N,i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,bb
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
-    real*8 a,b,c,d
-    ! complex(kind=8) ctemp, ctemp1, ctemp2
+    real(kind=8) a,b,c,d
+    ! DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
     ! type(vectorsblock), pointer :: random1, random2
     
-    real*8,allocatable :: Singular(:)
+    real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	complex(kind=8),allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
 	
 	integer Nsub,Ng
 	integer*8 idx_start   
@@ -1054,7 +1065,7 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 	
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_left_start
 	! type(RandomBlock), pointer :: random
-	real*8::n1,n2
+	real(kind=8)::n1,n2
 
 	type(hobf)::ho_bf1
 	type(matrixblock)::block_rand(:)
@@ -1111,7 +1122,7 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 					! !$omp parallel do default(shared) private(ii,jj)
 					 do jj=1,num_vect_subsub
 						 do ii=1, nn
-							 RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj)=random_complex_number()	! matrixtemp1(jj,ii) ! 
+							 call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj))	! matrixtemp1(jj,ii) ! 
 						 enddo
 					 enddo
 					 ! !$omp end parallel do

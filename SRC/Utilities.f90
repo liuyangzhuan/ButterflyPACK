@@ -1,5 +1,16 @@
 module Utilities
 use misc
+
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+
 contains
  
 
@@ -11,7 +22,7 @@ subroutine delete_blocks(blocks)
     
     integer butterflyB_inuse, level_actual, num_col, num_row
     integer i, j, mm, nn, rank, num_blocks, level, level_butterfly,index_i_m,index_j_m,levelm
-    real*8 memory_butterfly, rtemp
+    real(kind=8) memory_butterfly, rtemp
     type(matrixblock)::blocks
 	
 
@@ -98,7 +109,7 @@ type(blockplus)::bplus
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8::rtemp
+real(kind=8)::rtemp
 
 
 do ll=1,LplusMax
@@ -125,7 +136,7 @@ type(matrixblock)::block_i,block_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
-real*8,optional::memory
+real(kind=8),optional::memory
 if(present(memory))memory=0
 block_o%level = block_i%level
 block_o%col_group = block_i%col_group
@@ -260,7 +271,7 @@ type(matrixblock)::block_i,block_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
-real*8,optional::memory
+real(kind=8),optional::memory
 if(present(memory))memory=0
 block_o%level = block_i%level
 block_o%col_group = block_i%col_group
@@ -406,7 +417,7 @@ type(matrixblock)::block_i
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
-real*8::memory
+real(kind=8)::memory
 memory=0
 
 level_butterfly = block_i%level_butterfly
@@ -455,7 +466,7 @@ type(matrixblock)::block_i
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
-real*8:: temp
+real(kind=8):: temp
 
 level_butterfly = block_i%level_butterfly
 num_blocks=2**level_butterfly
@@ -519,8 +530,8 @@ type(blockplus)::bplus_i,bplus_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8,optional::memory
-real*8::rtemp
+real(kind=8),optional::memory
+real(kind=8)::rtemp
 
 if(present(memory))memory=0
 
@@ -545,10 +556,12 @@ do ll=1,LplusMax
 			call copy_butterfly(bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
 			if(present(memory))memory=memory+rtemp
 		end do
-		Nboundall=size(bplus_i%LL(ll)%boundary_map)
-		allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
-		if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
-		bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
+		if(allocated(bplus_i%LL(ll)%boundary_map))then
+			Nboundall=size(bplus_i%LL(ll)%boundary_map)
+			allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
+			if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
+			bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
+		endif
 	end if
 end do
 
@@ -565,8 +578,8 @@ type(blockplus)::bplus_i,bplus_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8,optional::memory
-real*8::rtemp
+real(kind=8),optional::memory
+real(kind=8)::rtemp
 
 if(present(memory))memory=0
 
@@ -610,8 +623,8 @@ type(blockplus)::bplus_i,bplus_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8::memory
-real*8::rtemp
+real(kind=8)::memory
+real(kind=8)::rtemp
 
 memory=0
 
@@ -639,7 +652,7 @@ type(blockplus)::bplus_i,bplus_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real*8::rtemp
+real(kind=8)::rtemp
 CheckNAN_Bplus = .false.
 
 do ll=1,LplusMax
@@ -667,8 +680,8 @@ type(hobf)::ho_bf_i,ho_bf_o
 integer ii
 integer level_c
 
-! real*8,optional::memory
-! real*8::rtemp
+! real(kind=8),optional::memory
+! real(kind=8)::rtemp
 
 
 ho_bf_o%Maxlevel = ho_bf_i%Maxlevel
@@ -711,8 +724,8 @@ type(matrixblock)::block_i
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,truerank,index_i,index_j,levelm,index_i_m,index_j_m,mm1,mm2,nn1,nn2
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
-complex(kind=8),allocatable::matrixtemp(:,:),mat11(:,:),mat12(:,:),mat21(:,:),mat22(:,:)
-real*8::tolerance
+DT,allocatable::matrixtemp(:,:),mat11(:,:),mat12(:,:),mat21(:,:),mat22(:,:)
+real(kind=8)::tolerance
 
 level_butterfly = block_i%level_butterfly
 num_blocks=2**level_butterfly
@@ -933,7 +946,7 @@ integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,level_butterfly_loc,ij_loc	
 character LR
-real*8,optional::memory
+real(kind=8),optional::memory
 if(present(memory))memory=0
 
 !!!!! be careful here, may need changes later 
@@ -1119,7 +1132,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2, level_end, level_start
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	integer num_vect_sub,num_vect_subsub,nth_s,nth_e,Ng,nth,dimension_rank,level_butterfly
     
@@ -1150,7 +1163,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 						!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 						do jj=1, num_vect_subsub						
 							do ii=1, rank
-								ctemp=(0.,0.)
+								ctemp=0d0
 								do kk=1, nn
 									ctemp=ctemp+block_rand%ButterflyV%blocks(j)%matrix(kk,ii)*random%RandomVectorRR(0)%blocks(1,j)%matrix(kk,jj+(nth-nth_s)*num_vect_subsub)
 								enddo
@@ -1190,7 +1203,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 							!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 							do jj=1, num_vect_subsub							
 								do ii=1, mm
-									ctemp=(0.,0.)
+									ctemp=0d0
 									do kk=1, nn1
 										ctemp=ctemp+block_rand%ButterflyKerl(level)%blocks(i,j)%matrix(ii,kk)*random%RandomVectorRR(level)%blocks(index_i,j)%matrix(kk,jj+(nth-nth_s)*num_vect_subsub)
 									enddo
@@ -1211,7 +1224,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 							!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 							do jj=1, num_vect_subsub							
 								do ii=1, mm
-									ctemp=(0.,0.)
+									ctemp=0d0
 									do kk=1, nn1
 										ctemp=ctemp+block_rand%ButterflyKerl(level)%blocks(i+1,j)%matrix(ii,kk)*random%RandomVectorRR(level)%blocks(index_i,j)%matrix(kk,jj+(nth-nth_s)*num_vect_subsub)
 									enddo
@@ -1252,7 +1265,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 						!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 						do jj=1, num_vect_subsub						
 							do ii=1, rank
-								ctemp=(0.,0.)
+								ctemp=0d0
 								do kk=1, mm
 									ctemp=ctemp+block_rand%ButterflyU%blocks(i)%matrix(kk,ii)*random%RandomVectorLL(0)%blocks(i,1)%matrix(kk,jj+(nth-nth_s)*num_vect_subsub)
 								enddo
@@ -1290,7 +1303,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 							!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 							do ii=1, num_vect_subsub							
 								do jj=1, nn
-									ctemp=(0.,0.)
+									ctemp=0d0
 									do kk=1, mm1
 										ctemp=ctemp+random%RandomVectorLL(level)%blocks(i,index_j)%matrix(kk,ii+(nth-nth_s)*num_vect_subsub)*block_rand%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix(kk,jj)
 									enddo
@@ -1309,7 +1322,7 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
 							!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 							do ii=1, num_vect_subsub							
 								do jj=1, nn
-									ctemp=(0.,0.)
+									ctemp=0d0
 									do kk=1, mm1
 										ctemp=ctemp+random%RandomVectorLL(level)%blocks(i,index_j)%matrix(kk,ii+(nth-nth_s)*num_vect_subsub)*block_rand%ButterflyKerl(level_butterfly-level+1)%blocks(i,j+1)%matrix(kk,jj)
 									enddo
@@ -1348,19 +1361,20 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
     integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	type(matrixblock)::blocks
     integer:: middleflag
 	type(proctree)::ptree
 	integer pgno,comm,ierr
 	type(Hstat)::stats
+	real(kind=8)::flops
 
 	
     type(butterfly_Kerl),allocatable :: ButterflyVector(:)
-    !  complex(kind=8) :: random1(N,Nrnd), random2(M,Nrnd)
-        complex(kind=8) :: random1(:,:), random2(:,:)
-	complex(kind=8),allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
+        DT :: random1(:,:), random2(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 	!  write(*,*)'nima-1'
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
 	
@@ -1384,20 +1398,20 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 		Vout_tmp = 0
 		! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1 
 		if (chara=='N') then !Vout=U*V^T*Vin
-			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,random1,matrixtemp,'T','N',cone,czero)	
-			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(rank,Nrnd,size(blocks%ButterflyV%blocks(1)%matrix,1))
+			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,size(blocks%ButterflyV%blocks(1)%matrix,1),random1,size(random1,1),matrixtemp,rank,'T','N',rank,Nrnd,size(blocks%ButterflyV%blocks(1)%matrix,1),cone,czero,flops)	
+			stats%Flop_Tmp = stats%Flop_Tmp + flops
 			call assert(MPI_COMM_NULL/=comm,'communicator should not be null 2')
-			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DOUBLE_COMPLEX,MPI_SUM,comm,ierr)
-			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)
-			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(size(blocks%ButterflyU%blocks(1)%matrix,1),rank,Nrnd)			
+			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DT,MPI_SUM,comm,ierr)
+			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,size(blocks%ButterflyU%blocks(1)%matrix,1),matrixtemp1,rank,Vout_tmp,size(random2,1),'N','N',size(blocks%ButterflyU%blocks(1)%matrix,1),Nrnd,rank,cone,czero,flops)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops
 			random2 = b*random2+a*Vout_tmp
 		else if(chara=='T')then !Vout=V*U^T*Vin
-			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,random1,matrixtemp,'T','N',cone,czero)
-			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(rank,Nrnd,size(blocks%ButterflyU%blocks(1)%matrix,1))			
+			call gemmf90(blocks%ButterflyU%blocks(1)%matrix,size(blocks%ButterflyU%blocks(1)%matrix,1),random1,size(random1,1),matrixtemp,rank,'T','N',rank,Nrnd,size(blocks%ButterflyU%blocks(1)%matrix,1),cone,czero,flops)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops
 			call assert(MPI_COMM_NULL/=comm,'communicator should not be null 3')
-			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DOUBLE_COMPLEX,MPI_SUM,comm,ierr)
-			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,matrixtemp1,Vout_tmp,'N','N',cone,czero)
-			stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(size(blocks%ButterflyV%blocks(1)%matrix,1),rank,Nrnd)				
+			call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*Nrnd,MPI_DT,MPI_SUM,comm,ierr)
+			call gemmf90(blocks%ButterflyV%blocks(1)%matrix,size(blocks%ButterflyV%blocks(1)%matrix,1),matrixtemp1,rank,Vout_tmp,size(random2,1),'N','N',size(blocks%ButterflyV%blocks(1)%matrix,1),Nrnd,rank,cone,czero,flops)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops
 			random2 = b*random2+a*Vout_tmp		
 		endif		
 		
@@ -1857,7 +1871,7 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
     integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    complex(kind=8) ctemp, a, b,ctemp1,ctemp2
+    DT ctemp, a, b,ctemp1,ctemp2
     character chara
 	type(matrixblock),pointer::blocks,blocks_1
     integer:: middleflag
@@ -1869,10 +1883,10 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
 	type(Hstat)::stats
 	
     type(butterfly_Kerl),allocatable :: ButterflyVector(:)
-    !  complex(kind=8) :: random1(N,Nrnd), random2(M,Nrnd)
-        complex(kind=8) :: random1(:,:), random2(:,:)
-        complex(kind=8),allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
-	complex(kind=8),allocatable::matrixtemp(:,:),matrixtemp1(:,:)
+    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
+        DT :: random1(:,:), random2(:,:)
+        DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
 	!  write(*,*)'nima-1'
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
 	
@@ -1959,7 +1973,7 @@ subroutine ComputeRandVectIndexArray(blocks,chara,level,IndexArray)
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
     integer::IndexArray(:,:,:)
 	integer::level_butterfly
-	complex(kind=8) ctemp, a, b
+	DT ctemp, a, b
     character chara
 
 	type(matrixblock)::blocks
@@ -2080,7 +2094,7 @@ subroutine CountMaxIntermidiateVector(blocks,Nmax)
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
 	integer::level_butterfly
-	complex(kind=8) ctemp, a, b
+	DT ctemp, a, b
     character chara
 
 	type(matrixblock)::blocks
@@ -2147,7 +2161,7 @@ subroutine CountIndexArrayShape(blocks,chara,level,Ni,Nj)
     integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_butterfly
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
     
 	type(matrixblock)::blocks
@@ -2207,7 +2221,7 @@ subroutine Butterfly_value(mi,nj,blocks,value)
     integer mm, nn, mi, nj, groupm_start, groupn_start, level_butterfly, flag
     integer i, j, ii, jj, rank, group_m, group_n, header_mm, header_nn, k, kk
     integer group, level, mii, njj, rank1, rank2, index_ij, level_blocks, flag1
-    complex(kind=8) ctemp, value
+    DT ctemp, value
     
     type(matrixblock) :: blocks
     type(vectorset),allocatable:: vectors_set(:)    
@@ -2323,13 +2337,13 @@ subroutine fullmat_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)
     integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	type(matrixblock)::blocks
 	integer M,N
-    complex(kind=8) :: random1(M,N), random2(M,N)
-	complex(kind=8):: al,be
-	complex(kind=8),allocatable :: random2tmp(:,:)
+    DT :: random1(M,N), random2(M,N)
+	DT:: al,be
+	DT,allocatable :: random2tmp(:,:)
 	allocate(random2tmp(M,N))
 	
 	al=1d0
@@ -2349,14 +2363,14 @@ subroutine fullmat_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)
 		call assert(group_m==group_n,'fullmat not square')
         ! level_blocks=blocks%level
 		! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
-		! call gemmf90(blocks%fullmat, random1, random2,'N','N',al,be)                   
+		! call gemmf90(blocks%fullmat, random1, random2,'N','N',M,N,M,al,be)                   
 		call gemm_omp(blocks%fullmat, random1, random2,M,M,N)                   
     elseif (chara=='T') then
         group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
         group_n=blocks%col_group
 		call assert(group_m==group_n,'fullmat not square')
         ! level_blocks=blocks%level
-		! call gemmf90(blocks%fullmat, random1, random2,'T','N',al,be)    
+		! call gemmf90(blocks%fullmat, random1, random2,'T','N',M,N,M,al,be)    
 		call gemmTN_omp(blocks%fullmat, random1, random2,M,M,N)
 	end if
 	
@@ -2431,16 +2445,16 @@ subroutine Butterfly_sym2asym(blocks)
     integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	type(matrixblock)::blocks
     integer:: middleflag,dimension_n,num_row,num_col,mn_min
 	
-	complex(kind=8),allocatable::matrixtemp(:,:),matrixtemp1(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
 	!  write(*,*)'nima-1'
 
-    real*8, allocatable :: Singular(:)
-    complex(kind=8), allocatable :: UU(:,:),VV(:,:)
+    real(kind=8), allocatable :: Singular(:)
+    DT, allocatable :: UU(:,:),VV(:,:)
 
 	
 	if(allocated(blocks%ButterflyMiddle))then
@@ -2613,16 +2627,16 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
     integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	type(matrixblock)::blocks
     integer:: middleflag,dimension_n,dimension_m,num_row,num_col,mn_min
 	
-	complex(kind=8),allocatable::matrixtemp(:,:),matrixtemp1(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
 	!  write(*,*)'nima-1'
 
-    real*8, allocatable :: Singular(:)
-    complex(kind=8), allocatable :: UU(:,:),VV(:,:)
+    real(kind=8), allocatable :: Singular(:)
+    DT, allocatable :: UU(:,:),VV(:,:)
 
 	
 	group_m=blocks%row_group ! Note: row_group and col_group interchanged here   
@@ -2780,16 +2794,16 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
     integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
     integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
     integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    complex(kind=8) ctemp, a, b
+    DT ctemp, a, b
     character chara
 	type(matrixblock)::blocks
     integer:: middleflag,dimension_n,dimension_m,num_row,num_col,mn_min
 	
-	complex(kind=8),allocatable::matrixtemp(:,:),matrixtemp1(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
 	!  write(*,*)'nima-1'
 
-    real*8, allocatable :: Singular(:)
-    complex(kind=8), allocatable :: UU(:,:),VV(:,:)
+    real(kind=8), allocatable :: Singular(:)
+    DT, allocatable :: UU(:,:),VV(:,:)
 
 	
 	group_m=blocks%row_group ! Note: row_group and col_group interchanged here   
@@ -2883,7 +2897,7 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 						write(*,*)'Singular NAN at 2',mm1+mm2,rank
 						do ii=1,mm1+mm2
 							do jj=1,rank
-								write(777,*)dble(matrixtemp(ii,jj)),aimag(matrixtemp(ii,jj)),abs(matrixtemp(ii,jj))
+								write(777,*)dble(matrixtemp(ii,jj)),aimag(cmplx(matrixtemp(ii,jj),kind=8)),abs(matrixtemp(ii,jj))
 							end do
 						end do
 						stop
@@ -3086,8 +3100,8 @@ integer,allocatable:: statuss(:,:),statusr(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax
 type(blockplus)::bplus_o
 type(matrixblock),pointer::blocks
-complex(kind=8),pointer::dat_new(:,:),dat_old(:,:)
-real*8::n1,n2
+DT,pointer::dat_new(:,:),dat_old(:,:)
+real(kind=8)::n1,n2
 type(Hstat)::stats
 
 

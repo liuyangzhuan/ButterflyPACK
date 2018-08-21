@@ -10,13 +10,13 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	use HODLR_randomMVP
     implicit none
 
-    real*8 para,error
-    real*8 tolerance
+    real(kind=8) para,error
+    real(kind=8) tolerance
     integer Primary_block, nn, mm
     integer i,j,k, threads_num,ii,jj
 	integer seed_myid(12)
 	integer times(8)	
-	real*8 t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
+	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
 	complex(kind=8),allocatable:: InputVec(:)
 	complex(kind=8):: ctemp
 	integer Ntunnel,kk,black_step,rankmax
@@ -279,7 +279,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		allocate(Vout1(msh%Nunk,1))
 		allocate(Vout2(msh%Nunk,1))
 		do ii=1,msh%Nunk
-			Vin(ii,1) = random_complex_number()
+			call random_dp_number(Vin(ii,1))
 		end do
 		
 		call MVM_Z_forward('N',msh%Nunk,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,stats)

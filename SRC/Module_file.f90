@@ -3,25 +3,35 @@ module MODULE_FILE
 	implicit none
     INCLUDE 'mpif.h'   
 	
+#ifdef DAT_CMPLX
+#define DT complex(kind=8)
+#define MPI_DT MPI_DOUBLE_COMPLEX
+#define C_DT complex(kind=C_DOUBLE_COMPLEX)
+#else
+#define DT real(kind=8)
+#define MPI_DT MPI_DOUBLE_PRECISION
+#define C_DT real(kind=C_DOUBLE)
+#endif	
+	
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)
-	real*8,parameter :: pi = 4d0*atan(1d0)
+	real(kind=8),parameter :: pi = 4d0*atan(1d0)
 	complex(kind=8),parameter :: junit=(0d0,1d0)
-	real*8,parameter :: Bigvalue=1d300
+	real(kind=8),parameter :: Bigvalue=1d300
 	real(kind=8),parameter:: SafeUnderflow=1D-30
 	real(kind=8),parameter:: SafeAbsoulte=1D-14
-	complex(kind=8),parameter :: cone=CMPLX(1d0,0d0,kind=8)
-	complex(kind=8),parameter :: czero=CMPLX(0d0,0d0,kind=8)
+	DT,parameter :: cone=1d0
+	DT,parameter :: czero=0d0
     integer,parameter :: Main_ID = 0 ! Head MPI rank
 	integer,parameter :: nbslpk=16 ! blacs/scalapack block size
 	
 	
 	!**** parameters for CEM
-	real*8,parameter :: cd = 299792458d0 ! free-space speed of light
-	real*8,parameter :: eps0=1d7/(4d0*pi*cd**2) ! free-space permittivity 
-    real*8,parameter :: mu0=pi*4d-7 ! free-space permeability
-    real*8,parameter :: gamma=1.781072418d0 ! gamma constant 
-    real*8,parameter :: impedence0=sqrt(mu0/eps0) ! free-space wave impedance 
+	real(kind=8),parameter :: cd = 299792458d0 ! free-space speed of light
+	real(kind=8),parameter :: eps0=1d7/(4d0*pi*cd**2) ! free-space permittivity 
+    real(kind=8),parameter :: mu0=pi*4d-7 ! free-space permeability
+    real(kind=8),parameter :: gamma=1.781072418d0 ! gamma constant 
+    real(kind=8),parameter :: impedence0=sqrt(mu0/eps0) ! free-space wave impedance 
 	
 	
 	!**** solver parameters
@@ -80,7 +90,7 @@ module MODULE_FILE
 	type commquant1D
 		integer offset ! offset in my local array
 		integer size ! size of the message along first dimension 
-		complex(kind=8),allocatable::dat(:,:) ! communication buffer
+		DT,allocatable::dat(:,:) ! communication buffer
 	end type commquant1D
 	
 	
@@ -91,9 +101,9 @@ module MODULE_FILE
          integer head ! head index
          integer tail ! tail index
          integer level ! level of this cluster group 
-         real*8 radius ! geomerical radius of this group 
-		 real*8:: boundary(2) ! seperators used to split this group into children group
-         real*8,allocatable:: center(:) ! geometrical center of this group
+         real(kind=8) radius ! geomerical radius of this group 
+		 real(kind=8):: boundary(2) ! seperators used to split this group into children group
+         real(kind=8),allocatable:: center(:) ! geometrical center of this group
      end type basisgroup
 
 	 
@@ -103,19 +113,19 @@ module MODULE_FILE
          ! integer style
          ! integer head
          ! integer tail
-         complex(kind=8),allocatable :: vector(:,:)
+         DT,allocatable :: vector(:,:)
      end type vectorsblock
      
 	 
 	 !**** a vector used to extract one element of a butterfly
      type vectorset
-         complex(kind=8),allocatable :: vector(:)
+         DT,allocatable :: vector(:)
      end type vectorset
 
  
 	 !**** one rank*rank butterfly block
      type butterflymatrix
-         complex(kind=8),allocatable :: matrix(:,:) ! entries of the block
+         DT,allocatable :: matrix(:,:) ! entries of the block
 		 integer::mdim,ndim	 ! dimensions of the block	 
      end type butterflymatrix
 	 
@@ -159,8 +169,8 @@ module MODULE_FILE
          integer,pointer:: N_p(:,:)=>null() ! column sizes of all processes sharing this block 
          integer,pointer:: M_p_db(:,:)=>null()
          integer,pointer:: N_p_db(:,:)=>null()
-		 complex(kind=8),allocatable :: fullmat(:,:) ! full matrix entries
-         complex(kind=8),allocatable:: KerInv(:,:)	! a small random rank*rank block used in randomized construction 
+		 DT,allocatable :: fullmat(:,:) ! full matrix entries
+         DT,allocatable:: KerInv(:,:)	! a small random rank*rank block used in randomized construction 
 		 type(butterfly_UV) :: ButterflyU ! leftmost factor 
          type(butterfly_UV) :: ButterflyV ! rightmost factor 
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:) ! middle factor 		 
@@ -186,7 +196,7 @@ module MODULE_FILE
          integer row_group ! row group number 
 		 integer pgno   ! process group number 
          integer Lplus  ! Number of Bplus layers, 2 if option%TwoLayerOnly=1
-		 real*8:: boundary(2) ! A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value  
+		 real(kind=8):: boundary(2) ! A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value  
 		 type(onelplus),pointer:: LL(:)=>null() !  
 	 end type blockplus
 	 
@@ -195,9 +205,9 @@ module MODULE_FILE
 	 !**** Structure holding operand in Schulz iteration
 	 type schulz_operand
 		type(matrixblock):: matrices_block ! the original butterfly B in I+B
-		real*8::A2norm ! largest singular value of B in I+B
-		real*8::scale ! scalar carried on Identities
-		real*8,allocatable::diags(:)
+		real(kind=8)::A2norm ! largest singular value of B in I+B
+		real(kind=8)::scale ! scalar carried on Identities
+		real(kind=8),allocatable::diags(:)
 		integer order ! order of schulz iteration 
 	 end type schulz_operand
 	
@@ -247,10 +257,10 @@ module MODULE_FILE
 		integer::LRlevel  ! The top LRlevel level blocks are butterfly or Bplus		
 		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus  		
 		integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
-		real*8 touch_para   ! parameters used to determine whether one patch is closer to seperator		
+		real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator		
 		
 		! options for matrix construction
-		real*8 tol_comp      ! matrix construction tolerance
+		real(kind=8) tol_comp      ! matrix construction tolerance
 		integer::Nmin_leaf ! leaf sizes of HODLR tree	
 		integer preorder ! 1: the matrix is preordered, no reordering will be performed, clustering is defined in pretree. 2: the matrix needs reordering		
 		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
@@ -258,14 +268,14 @@ module MODULE_FILE
 		
 		
 		! options for inversion
-		real*8 tol_LS       ! tolerance in pseudo inverse
-		real*8 tol_Rdetect  ! tolerance to detect numerical ranks
-		real*8 tol_rand     ! tolerance for randomized contruction 
+		real(kind=8) tol_LS       ! tolerance in pseudo inverse
+		real(kind=8) tol_Rdetect  ! tolerance to detect numerical ranks
+		real(kind=8) tol_rand     ! tolerance for randomized contruction 
 		integer::schulzorder ! order (2 or 3) of schultz iteration 
 		integer::schulzlevel ! (I+B)^-1 is computed by schultz iteration for butterfly with more than schulzlevel levels 
 		
 		! options for solve 
-		real*8 tol_itersol  ! tolerance for iterative solvers 
+		real(kind=8) tol_itersol  ! tolerance for iterative solvers 
 		integer n_iter  ! maximum number of iterations for iterative solver
 		integer precon  ! DIRECT: use factored HODLR as direct solver, HODLRPRECON: use factored HODLR as preconditioner, NOPRECON: use forward HODLR as fast matvec,  
 		
@@ -280,10 +290,10 @@ module MODULE_FILE
 
 	!**** statistics 	
 	type Hstat
-		real*8 Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
-		real*8 Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol
-		real*8 Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct,Mem_int_vec,Mem_For
-		real*8 Flop_Fill, Flop_Factor, Flop_Sol, Flop_Tmp
+		real(kind=8) Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
+		real(kind=8) Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol
+		real(kind=8) Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct,Mem_int_vec,Mem_For
+		real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_Tmp
 		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:) ! maximum and minimum ranks observed at each level of HODLR during matrix fill and factorization
 	 end type Hstat	
 
@@ -292,7 +302,7 @@ module MODULE_FILE
 	type Mesh	
 		integer Nunk ! size of the matrix 
 		integer idxs,idxe  ! range of local row/column indices after reordering
-		real*8,allocatable:: xyz(:,:)   ! coordinates of the points
+		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: info_unk(:,:)  
 		! for 2D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice  
 		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
@@ -304,31 +314,31 @@ module MODULE_FILE
 		! 2D/3D mesh
 		integer maxnode ! # of vertices in a mesh
 		integer maxedge ! # of edges in a mesh 
-		real*8 maxedgelength,minedgelength ! maximum and minimum edge length for 2D and 3D meshes	
+		real(kind=8) maxedgelength,minedgelength ! maximum and minimum edge length for 2D and 3D meshes	
 		
 		! 3D mesh
 		integer integral_points ! #of Gauss quadrature points on a triangular
 		integer maxpatch ! # of triangular patches
 		integer mesh_normal	 ! flags to flip the unit normal vectors of a triangular patch
-		real*8 scaling  ! scaling factor of the coordinates of vertices of a 3D mesh 
-		real*8, allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
-		real*8,allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
+		real(kind=8) scaling  ! scaling factor of the coordinates of vertices of a 3D mesh 
+		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
+		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
-		real*8:: Origins(3) ! orgin of the 3D points, only used for spherical coordinate transform	
+		real(kind=8):: Origins(3) ! orgin of the 3D points, only used for spherical coordinate transform	
 		
 		! 2D mesh
 		integer model2d ! # shape of 2-D curves: (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon
-		real*8 Delta_ll	! edge length of each element in 2D curves	
+		real(kind=8) Delta_ll	! edge length of each element in 2D curves	
 		integer::Ncorner ! # of corners in 2D curves to facilate partitioning
-		real*8,allocatable::corner_points(:,:) ! coordinates of corner points 
-		real*8::corner_radius ! radius of the corner points within which no partitioning is performed 
+		real(kind=8),allocatable::corner_points(:,:) ! coordinates of corner points 
+		real(kind=8)::corner_radius ! radius of the corner points within which no partitioning is performed 
 		
 	end type Mesh
 	 
 	!**** quantities related to specific matrix kernels  
 	type kernelquant
 
-		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
+		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
 		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Z_elem),pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
@@ -344,7 +354,7 @@ module MODULE_FILE
 			implicit none
 			character trans
 			integer M, N, num_vect_sub
-			complex(kind=8) :: Vin(:,:), Vout(:,:)
+			DT :: Vin(:,:), Vout(:,:)
 			type(mesh)::msh
 			class(*)::operand
 		end subroutine HOBF_MVP_blk
@@ -359,14 +369,14 @@ module MODULE_FILE
 			integer M, N, num_vect_sub
 			type(proctree)::ptree
 			type(Hstat)::stats
-			complex(kind=8) :: Vin(:,:), Vout(:,:),a,b
+			DT :: Vin(:,:), Vout(:,:),a,b
 		end subroutine BF_MVP_blk
 
 		subroutine Z_elem(edge_m,edge_n,value,msh,ker)
 			import::mesh,kernelquant
 			implicit none
 			integer edge_m, edge_n
-			complex(kind=8) value
+			DT value
 			type(mesh)::msh
 			type(kernelquant)::ker
 		end subroutine Z_elem
@@ -377,14 +387,14 @@ module MODULE_FILE
 		  class(*),pointer :: quant
 		  type(mesh)::msh
 		  integer, INTENT(IN):: m,n
-		  complex(kind=8)::val 
+		  DT::val 
 		end subroutine F_Z_elem
 
 		subroutine C_Z_elem (m,n,val,quant) ! m,n represents old indices
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
 		  integer(kind=C_INT), INTENT(IN):: m,n
-		  complex(kind=C_DOUBLE_COMPLEX)::val 
+		  C_DT::val 
 		end subroutine C_Z_elem		
 		
 		
@@ -392,7 +402,7 @@ module MODULE_FILE
 	
 	
 	!*** need to further work on the following: 
-	 real*8::time_tmp
+	 real(kind=8)::time_tmp
      type(basisgroup),allocatable:: basis_group(:)
 	 integer vecCNT
 	 
