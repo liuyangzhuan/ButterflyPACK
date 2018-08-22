@@ -9,20 +9,9 @@ USE IFPORT
 #endif  
 use omp_lib
 
+#include "HODLR_config.fi"
 
 integer, parameter :: int64 = selected_int_kind(18) 
-
-#ifdef DAT_CMPLX
-#define DT complex(kind=8)
-#define MPI_DT MPI_DOUBLE_COMPLEX
-#define C_DT complex(kind=C_DOUBLE_COMPLEX)
-#else
-#define DT real(kind=8)
-#define MPI_DT MPI_DOUBLE_PRECISION
-#define C_DT real(kind=C_DOUBLE)
-#endif	
-
-
 
 interface gemmf90
   module procedure dgemmf90
@@ -3330,25 +3319,25 @@ implicit none
 real(kind=8) a(:,:),tau(:),c(:,:)
 integer m,n,k,lda,ldc, mn_min
 
-character,value:: side, trans
+character:: side, trans,trans1
 
 integer LWORK,INFO
 real(kind=8):: TEMP(1)
 real(kind=8),allocatable:: WORK(:)
 real(kind=8),optional::flop
 
-
-if(trans=='C')trans='T'  
+trans1=trans
+if(trans1=='C')trans1='T'  
 
 ldc=size(c,1)
 lda=size(a,1)
 
 LWORK=-1
-call DORMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
+call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
 LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))
 WORK=0     
-call DORMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
+call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
 if(INFO/=0)then
 	write(*,*)'ormqrf90 failed!!',INFO
@@ -3371,7 +3360,7 @@ implicit none
 complex(kind=8)a(:,:),tau(:),c(:,:)
 integer m,n,k,lda,ldc, mn_min
 real(kind=8),optional::flop
-character,value:: side, trans
+character:: side, trans
 
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
@@ -3562,16 +3551,17 @@ implicit none
 real(kind=8) Matrix(:,:),B(:,:)
 integer ipiv(:)
 integer m,n,mn_min,nrhs
-character,value:: trans
+character:: trans,trans1
 real(kind=8),optional::flop
 integer INFO
 
 n=size(Matrix,1)
 nrhs=size(B,2)
 
-if(trans=='C')trans='T'
+trans1=trans
+if(trans1=='C')trans1='T' 
 
-call DGETRS( trans, n, nrhs, Matrix, n, ipiv, B, n, INFO )
+call DGETRS( trans1, n, nrhs, Matrix, n, ipiv, B, n, INFO )
 
 
 if(INFO/=0)then
@@ -3592,7 +3582,7 @@ implicit none
 complex(kind=8) Matrix(:,:),B(:,:)
 integer ipiv(:)
 integer m,n,mn_min,nrhs
-character,value:: trans
+character:: trans
 real(kind=8),optional::flop
 integer INFO
 

@@ -3,15 +3,7 @@ module MODULE_FILE
 	implicit none
     INCLUDE 'mpif.h'   
 	
-#ifdef DAT_CMPLX
-#define DT complex(kind=8)
-#define MPI_DT MPI_DOUBLE_COMPLEX
-#define C_DT complex(kind=C_DOUBLE_COMPLEX)
-#else
-#define DT real(kind=8)
-#define MPI_DT MPI_DOUBLE_PRECISION
-#define C_DT real(kind=C_DOUBLE)
-#endif	
+#include "HODLR_config.fi"
 	
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)
