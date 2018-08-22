@@ -2169,7 +2169,7 @@ implicit none
 			allocate(UU(blocks%M,rmax))
 			allocate(VV(rmax,blocks%N))
 		
-			call BatchACA_CompressionForward(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
+			call BatchACA_CompressionForward(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,error)	
 					
 			blocks%rankmax = rank
 			blocks%rankmin = rank
@@ -3095,7 +3095,7 @@ end subroutine ACA_CompressionForward
 
 
 
-subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,error)
+subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,error)
 	! use lapack95
 	! use blas95
     use MODULE_FILE
@@ -3106,7 +3106,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 	DT::matU(M,rmax),matV(rmax,N)
 	DT, allocatable :: core(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
 	real(kind=8):: normA,normUV,flop
-	integer itr,itrmax,r_est,Nqr
+	integer itr,itrmax,r_est,Nqr,bsize
 	integer,allocatable:: select_column(:), select_row(:), perms(:)
 	integer,allocatable :: jpvt(:)
 	
@@ -3135,7 +3135,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 	! !$omp end parallel do		
 
 	
-	r_est=min(200,min(M,N))
+	r_est=min(bsize,min(M,N))
 	! r_est=min(M,N)
 	itrmax = floor_safe(min(M,N)/dble(r_est))*2
 	

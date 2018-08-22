@@ -37,7 +37,7 @@ end subroutine element_Zmn_user_C
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!ptree_Cptr: the structure containing process tree
-subroutine C_CreatePtree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_createptree_")	
+subroutine c_hodlr_createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_hodlr_createptree")	
 	implicit none 
 	integer nmpi
 	integer MPIcomm
@@ -48,7 +48,7 @@ subroutine C_CreatePtree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_c
 	allocate(ptree)
 	call CreatePtree(nmpi,groupmembers,MPIcomm,ptree)
 	ptree_Cptr=c_loc(ptree)
-end subroutine C_CreatePtree
+end subroutine c_hodlr_createptree
 
 
 !**** C interface of initializing statistics
@@ -56,7 +56,7 @@ end subroutine C_CreatePtree
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!stats_Cptr: the structure containing statistics
-subroutine C_CreateStats(stats_Cptr) bind(c, name="c_createstats_")	
+subroutine c_hodlr_createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")	
 	implicit none 
 	type(c_ptr), intent(out) :: stats_Cptr
 	type(Hstat),pointer::stats
@@ -66,12 +66,12 @@ subroutine C_CreateStats(stats_Cptr) bind(c, name="c_createstats_")
 	call InitStat(stats)	
 	stats_Cptr=c_loc(stats)
 	
-end subroutine C_CreateStats
+end subroutine c_hodlr_createstats
 
 
 !**** C interface of initializing option
 	!option_Cptr: the structure containing option       
-subroutine C_CreateOption(option_Cptr) bind(c, name="c_createoption_")	
+subroutine c_hodlr_createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	type(Hoption),pointer::option	
@@ -82,13 +82,13 @@ subroutine C_CreateOption(option_Cptr) bind(c, name="c_createoption_")
 	
 	option_Cptr=c_loc(option)
 	
-end subroutine C_CreateOption
+end subroutine c_hodlr_createoption
 
 
 
 !**** C interface of set one entry in option
 	!option_Cptr: the structure containing option       
-subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")	
+subroutine c_hodlr_setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_setoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	character(kind=c_char,len=1) :: nam(*)
@@ -164,6 +164,11 @@ subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")
 	option%ErrFillFull=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='BACA_Batch')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%BACA_Batch=val_i
+	valid_opt=1
+	endif	
 	if(trim(str)=='ErrSol')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%ErrSol=val_i
@@ -217,7 +222,7 @@ subroutine C_SetOption(option_Cptr,nam,val_Cptr) bind(c, name="c_setoption_")
 	deallocate(str)
 	option_Cptr=c_loc(option)
 	
-end subroutine C_SetOption
+end subroutine c_hodlr_setoption
 
 
 
@@ -244,7 +249,7 @@ end subroutine C_SetOption
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_QuantZmn: the C_pointer to user-defined quantities required to sample mn^th entry of the matrix
 	!MPIcomm: user-provided MPI communicator
-subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_construct_")	
+subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantZmn,MPIcomm) bind(c, name="c_hodlr_construct")	
 	implicit none 
 	integer Npo,Ndim
 	real(kind=8) Locations(*)
@@ -422,7 +427,7 @@ end subroutine C_HODLR_Construct
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor_")	
+subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor")	
 	implicit none 
 
 	type(c_ptr), intent(inout) :: ho_bf_for_Cptr
@@ -475,7 +480,7 @@ end subroutine C_HODLR_Factor
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve_")	
+subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve")	
 	implicit none 
 
 	integer Nloc,Nrhs
@@ -520,7 +525,7 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr
 end subroutine C_HODLR_Solve
 
 
-! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply_")	
+! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply")	
 	! implicit none 
 	! integer Npo,Ncol,Nmin, Ntot
 	! real(kind=8) Xin(*),Xout(*)

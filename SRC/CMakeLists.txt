@@ -1,6 +1,6 @@
 set(headers
     C_HODLR_C_Interface.h
-    ${PROJECT_BINARY_DIR}/hodlrbf_config.h
+    # ${PROJECT_BINARY_DIR}/hodlrbf_config.h
 )
 
 set(sources

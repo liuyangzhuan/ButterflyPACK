@@ -27,11 +27,11 @@ INCLUDE(CTest)
 ######################################################################
 
 
-include(FortranCInterface)
-FortranCInterface_HEADER("${PROJECT_BINARY_DIR}/hodlrbf_config.h"
-  MACRO_NAMESPACE "FC_")
-include_directories(${PROJECT_BINARY_DIR} ${CMAKE_SOURCE_DIR}/SRC ${CMAKE_SOURCE_DIR}/EXAMPLE)
-FortranCInterface_VERIFY(CXX)
+# include(FortranCInterface)
+# FortranCInterface_HEADER("${PROJECT_BINARY_DIR}/hodlrbf_config.h"
+  # MACRO_NAMESPACE "FC_")
+# include_directories(${PROJECT_BINARY_DIR} ${CMAKE_SOURCE_DIR}/SRC ${CMAKE_SOURCE_DIR}/EXAMPLE)
+# FortranCInterface_VERIFY(CXX)
 
 
 ######################################################################

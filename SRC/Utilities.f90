@@ -1372,6 +1372,7 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 	
 	level_butterfly=blocks%level_butterfly
 	pgno = blocks%pgno
+	! write(*,*)blocks%
 	comm = ptree%pgrp(pgno)%comm
 	if(comm==MPI_COMM_NULL)then
 		write(*,*)'ninin',pgno,comm==MPI_COMM_NULL,ptree%MyID
@@ -1748,7 +1749,10 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 								! deallocate(matrixtemp)
 								! deallocate(matrixtemp1)	
 								
-								call gemmTN_omp(blocks%ButterflyMiddle(index_i,j)%matrix,ButterflyVector(level+1)%blocks(index_i,j)%matrix,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,nn,num_vectors)
+								allocate(matrixtemp(nn,num_vectors))
+								matrixtemp = ButterflyVector(level+1)%blocks(index_i,j)%matrix
+								call gemmf90(blocks%ButterflyMiddle(index_i,j)%matrix,nn,matrixtemp,nn,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,nn,cone,czero)								
+								deallocate(matrixtemp)
 								
 							end if
 						enddo
@@ -2999,7 +3003,8 @@ subroutine SetDefaultOptions(option)
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=1
+	option%ErrFillFull=0
+	option%BACA_Batch=64
 	option%RecLR_leaf=BACA
 	option%preorder=0
 	option%ErrSol=0

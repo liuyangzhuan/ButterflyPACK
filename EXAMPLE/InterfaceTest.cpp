@@ -203,7 +203,7 @@ int main(int argc, char* argv[])
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
 #if 0	
-	string filename("./EXAMPLE/SUSY/susy_10Kn");
+	string filename("../EXAMPLE/SUSY/susy_10Kn");
 	h = 0.1;
 	lambda = 10.;
 	ker = 1;
@@ -260,11 +260,6 @@ int main(int argc, char* argv[])
 
 	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
 	
-	
-	int Nmin=200; //finest leafsize 
-	double tol=1e-4; //compression tolerance
-	int nmpi=size;	 //number of active MPI ranks 
-	int ninc=1;      // use one rank in HODLR per ninc ranks in HSS
 	int myseg=0;     // local number of unknowns
 	int* perms = new int[Npo]; //permutation vector returned by HODLR
 	int nlevel = 0; // 0: tree level, nonzero if a tree is provided 
@@ -288,23 +283,31 @@ int main(int argc, char* argv[])
 	
 	for (int i = 0; i < size; i++)groups[i]=i;
 	// create hodlr data structures
-	FC_GLOBAL_(c_createptree,C_CREATEPTREE)(&nmpi, groups, &Fcomm, &ptree);
-	FC_GLOBAL_(c_createoption,C_CREATEOPTION)(&option);	
-	FC_GLOBAL_(c_createstats,C_CREATESTATS)(&stats);		
+	c_hodlr_createptree(&size, groups, &Fcomm, &ptree);
+	c_hodlr_createoption(&option);	
+	c_hodlr_createstats(&stats);		
 	
 	// set hodlr options
-	
-	set_D_option(&option, "tol_comp", 1e-4);
-	set_I_option(&option, "preorder", 0);
-	set_I_option(&option, "Nmin_leaf", 200); 
-	set_I_option(&option, "RecLR_leaf", 4); //1:SVD 2:RRQR 3:ACA 4:BACA
+	int Nmin=200; //finest leafsize 
+	double tol=1e-4; //compression tolerance
+	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
+	int sort_opt=1; //1:KD tree 3:balanced 2-means
+	int checkerr = 1; //1: check compression quality 
+	int batch = 100; //batch size for BACA
+	set_hodlr_D_option(&option, "tol_comp", tol);
+	set_hodlr_I_option(&option, "preorder", preorder);
+	set_hodlr_I_option(&option, "Nmin_leaf", Nmin); 
+	set_hodlr_I_option(&option, "RecLR_leaf", com_opt); 
+	set_hodlr_I_option(&option, "xyzsort", sort_opt); 
+	set_hodlr_I_option(&option, "ErrFillFull", checkerr); 
+	set_hodlr_I_option(&option, "BACA_Batch", batch); 
 	
 
     // construct hodlr with geometrical points	
-	FC_GLOBAL_(c_hodlr_construct,C_HODLR_CONSTRUCT)(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
+	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
 	
 	// factor hodlr
-	FC_GLOBAL_(c_hodlr_factor,C_HODLR_FACTOR)(&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
+	c_hodlr_factor(&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
 
 	// solve the system 
 	int nrhs=1;
@@ -314,7 +317,7 @@ int main(int argc, char* argv[])
 	for (int i = 0; i < nrhs*myseg; i++){
 		b[i]=1;
 	}	
-	FC_GLOBAL_(c_hodlr_solve,C_HODLR_SOLVE)(x,b,&myseg,&nrhs,&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
+	c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
 
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
     return 0;

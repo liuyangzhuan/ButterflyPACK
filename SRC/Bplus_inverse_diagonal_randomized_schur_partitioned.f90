@@ -1058,6 +1058,38 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%N=N2
 		
 		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+		blocks_A%M_loc=blocks_A%M
+		blocks_A%N_loc=blocks_A%N
+		allocate(blocks_A%M_p(1,2))
+		blocks_A%M_p(1,1)=1
+		blocks_A%M_p(1,2)=blocks_A%M
+		allocate(blocks_A%N_p(1,2))
+		blocks_A%N_p(1,1)=1
+		blocks_A%N_p(1,2)=blocks_A%N
+		blocks_B%M_loc=blocks_B%M
+		blocks_B%N_loc=blocks_B%N
+		allocate(blocks_B%M_p(1,2))
+		blocks_B%M_p(1,1)=1
+		blocks_B%M_p(1,2)=blocks_B%M
+		allocate(blocks_B%N_p(1,2))
+		blocks_B%N_p(1,1)=1
+		blocks_B%N_p(1,2)=blocks_B%N
+		blocks_C%M_loc=blocks_C%M
+		blocks_C%N_loc=blocks_C%N
+		allocate(blocks_C%M_p(1,2))
+		blocks_C%M_p(1,1)=1
+		blocks_C%M_p(1,2)=blocks_C%M
+		allocate(blocks_C%N_p(1,2))
+		blocks_C%N_p(1,1)=1
+		blocks_C%N_p(1,2)=blocks_C%N	
+		blocks_D%M_loc=blocks_D%M
+		blocks_D%N_loc=blocks_D%N
+		allocate(blocks_D%M_p(1,2))
+		blocks_D%M_p(1,1)=1
+		blocks_D%M_p(1,2)=blocks_D%M
+		allocate(blocks_D%N_p(1,2))
+		blocks_D%N_p(1,1)=1
+		blocks_D%N_p(1,2)=blocks_D%N			
 		! stop		
 		
 		
@@ -1250,6 +1282,34 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%N=N2
 		
 		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+		blocks_A%M_loc=blocks_A%M
+		blocks_A%N_loc=blocks_A%N
+		allocate(blocks_A%M_p(1,2))
+		blocks_A%M_p(1,1)=1
+		blocks_A%M_p(1,2)=blocks_A%M
+		blocks_A%N_p(1,1)=1
+		blocks_A%N_p(1,2)=blocks_A%N
+		blocks_B%M_loc=blocks_B%M
+		blocks_B%N_loc=blocks_B%N
+		allocate(blocks_B%M_p(1,2))
+		blocks_B%M_p(1,1)=1
+		blocks_B%M_p(1,2)=blocks_B%M
+		blocks_B%N_p(1,1)=1
+		blocks_B%N_p(1,2)=blocks_B%N
+		blocks_C%M_loc=blocks_C%M
+		blocks_C%N_loc=blocks_C%N
+		allocate(blocks_C%M_p(1,2))
+		blocks_C%M_p(1,1)=1
+		blocks_C%M_p(1,2)=blocks_C%M
+		blocks_C%N_p(1,1)=1
+		blocks_C%N_p(1,2)=blocks_C%N	
+		blocks_D%M_loc=blocks_D%M
+		blocks_D%N_loc=blocks_D%N
+		allocate(blocks_D%M_p(1,2))
+		blocks_D%M_p(1,1)=1
+		blocks_D%M_p(1,2)=blocks_D%M
+		blocks_D%N_p(1,1)=1
+		blocks_D%N_p(1,2)=blocks_D%N	
 		! stop
 	
 		if(level_butterfly_c/=0)then
