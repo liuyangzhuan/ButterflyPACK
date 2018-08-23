@@ -202,7 +202,7 @@ int main(int argc, char* argv[])
 	
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
-#if 0	
+#if 1	
 	string filename("../EXAMPLE/SUSY/susy_10Kn");
 	h = 0.1;
 	lambda = 10.;
@@ -219,7 +219,7 @@ int main(int argc, char* argv[])
 	
 	/*****************************************************************/
 	/* Test Kernels for Random point clouds */
-#if 1	
+#if 0	
 	h = 3.267; //0.47;
 	lambda = 10.;
 	ker = 1;
@@ -269,8 +269,7 @@ int main(int argc, char* argv[])
 	double d_opt;
 	
 	
-	F2Cptr ho_bf_for;  //forward HODLR returned by Fortran code 
-	F2Cptr ho_bf_inv;  //factored HODLR returned by Fortran code 
+	F2Cptr ho_bf;  //HODLR returned by Fortran code 
 	F2Cptr option;     //option structure returned by Fortran code 
 	F2Cptr stats;      //statistics structure returned by Fortran code
 	F2Cptr msh;		   //mesh structure returned by Fortran code
@@ -304,10 +303,10 @@ int main(int argc, char* argv[])
 	
 
     // construct hodlr with geometrical points	
-	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf_for, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
+	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
 	
 	// factor hodlr
-	c_hodlr_factor(&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
+	c_hodlr_factor(&ho_bf,&option,&stats,&ptree);
 
 	// solve the system 
 	int nrhs=1;
@@ -317,7 +316,7 @@ int main(int argc, char* argv[])
 	for (int i = 0; i < nrhs*myseg; i++){
 		b[i]=1;
 	}	
-	c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf_for,&ho_bf_inv,&option,&stats,&ptree);
+	c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
     return 0;

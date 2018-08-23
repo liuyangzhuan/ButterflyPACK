@@ -187,7 +187,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     option%schulzlevel=3000
 	option%LRlevel=0
 	option%ErrFillFull=1
-	option%RecLR_leaf=BACA
+	option%ErrSol=1
+	option%RecLR_leaf=RRQR
 
 
    !***********************************************************************

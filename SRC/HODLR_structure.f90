@@ -530,8 +530,9 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 		ho_bf1%levels(level_c)%Bidxs = 2**(ho_bf1%Maxlevel+1)
 		ho_bf1%levels(level_c)%Bidxe = -2**(ho_bf1%Maxlevel+1)
 
-		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))		
+		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))			
 		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
+		allocate(ho_bf1%levels(level_c)%BP_inverse_update(ho_bf1%levels(level_c)%N_block_forward))	
 		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
 	end do
 

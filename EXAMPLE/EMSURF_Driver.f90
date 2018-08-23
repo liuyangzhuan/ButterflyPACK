@@ -1266,7 +1266,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
     call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
-		call copy_HOBF(ho_bf,ho_bf_copy)	
+		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if    
 	if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -1281,7 +1281,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	end if
 
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
-    call EM_solve_SURF(ho_bf_copy,ho_bf,option,msh,quant,ptree,stats)
+    call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
@@ -1463,7 +1463,7 @@ end subroutine geo_modeling_SURF
 
 
 
-subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
+subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
     use APPLICATION_MODULE
     use MODULE_FILE
 	! use RCS_Bi
@@ -1484,7 +1484,7 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
 	type(Hoption)::option
-	type(hobf)::ho_bf_for,ho_bf_inv
+	type(hobf)::ho_bf_inv
 	type(mesh)::msh
 	type(quant_app)::quant
 	type(proctree)::ptree
@@ -1493,7 +1493,7 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 	
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	endif
 	
 	
@@ -1529,7 +1529,7 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
         
         T0=secnds(0.0)
         		
-		call HODLR_Solution(ho_bf_for,ho_bf_inv,Current,Voltage,N_unk_loc,2,option,ptree,stats)
+		call HODLR_Solution(ho_bf_inv,Current,Voltage,N_unk_loc,2,option,ptree,stats)
 					
 		
         if(ptree%MyID==Main_ID)write (*,*) ''
@@ -1575,7 +1575,7 @@ subroutine EM_solve_SURF(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 			!$omp end parallel do
         enddo
 		
-		call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 		do j=0, num_sample 			
 			phi=j*dphi

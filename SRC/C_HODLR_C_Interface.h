@@ -16,9 +16,9 @@ extern "C" {
 	
     void c_hodlr_construct(int* Npo, int* Ndim, double* Locations, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, double*,C2Fptr), C2Fptr C_QuantZmn, MPI_Fint* MPIcomm);	
  
-	void c_hodlr_factor(F2Cptr* ho_bf_for,F2Cptr* ho_bf_inv,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
+	void c_hodlr_factor(F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 
-	void c_hodlr_solve(double* x, double* b, int* Nloc, int* Nrhs, F2Cptr* ho_bf_for,F2Cptr* ho_bf_inv,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
+	void c_hodlr_solve(double* x, double* b, int* Nloc, int* Nrhs, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 	
 	void c_hodlr_createptree(int* nmpi, int* groupmembers, MPI_Fint* MPIcomm, F2Cptr* ptree);
 	

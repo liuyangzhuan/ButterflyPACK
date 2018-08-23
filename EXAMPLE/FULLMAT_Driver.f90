@@ -294,7 +294,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
     call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
-	call copy_HOBF(ho_bf,ho_bf_copy)	
+	! call copy_HOBF(ho_bf,ho_bf_copy)	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
@@ -309,7 +309,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	if(option%ErrSol==1)then
     if(ptree%MyID==Main_ID)write(*,*) "Test Solve ......"
-		call HODLR_Test_Solve_error(ho_bf_copy,ho_bf,option,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf,option,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "Test Solve finished"
 	endif
 	

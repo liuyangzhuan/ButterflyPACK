@@ -137,6 +137,7 @@ block_o%style = block_i%style
 block_o%level_butterfly = block_i%level_butterfly
 block_o%rankmax = block_i%rankmax
 block_o%rankmin = block_i%rankmin
+block_o%dimension_rank = block_i%dimension_rank
 block_o%M = block_i%M
 block_o%N = block_i%N
 block_o%headm = block_i%headm
@@ -148,6 +149,8 @@ block_o%N_loc = block_i%N_loc
 block_o%N_loc_db = block_i%N_loc_db
 block_o%pgno = block_i%pgno
 block_o%pgno_db = block_i%pgno_db
+
+
 
 if(associated(block_i%N_p))then
 	allocate(block_o%N_p(size(block_i%N_p,1),2))
@@ -1372,7 +1375,7 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 	
 	level_butterfly=blocks%level_butterfly
 	pgno = blocks%pgno
-	! write(*,*)blocks%
+	! write(*,*)blocks%col_group,blocks%row_group,blocks%pgno,level_butterfly,'dd'
 	comm = ptree%pgrp(pgno)%comm
 	if(comm==MPI_COMM_NULL)then
 		write(*,*)'ninin',pgno,comm==MPI_COMM_NULL,ptree%MyID
@@ -3012,7 +3015,7 @@ subroutine SetDefaultOptions(option)
 end subroutine SetDefaultOptions	
 
 
-! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the end column/row of each process sharing this block
+! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
 subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,flag)
 	implicit none 
 	type(matrixblock)::block
@@ -3036,13 +3039,13 @@ subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,flag)
 		num_blocks = 2**level_p
 		
 		if(flag==0)then
-			allocate(block%M_p(nproc+1,2))
-			allocate(block%N_p(nproc+1,2))
+			allocate(block%M_p(nproc,2))
+			allocate(block%N_p(nproc,2))
 			M_p => block%M_p
 			N_p => block%N_p
 		else
-			allocate(block%M_p_db(nproc+1,2))
-			allocate(block%N_p_db(nproc+1,2))
+			allocate(block%M_p_db(nproc,2))
+			allocate(block%N_p_db(nproc,2))
 			M_p => block%M_p_db
 			N_p => block%N_p_db		
 		endif
@@ -3184,6 +3187,9 @@ if(bplus_o%Lplus==1)then
 		endif
 	else
 		write(*,*)'redistribution of butterfly not implemented'
+				! write(*,*)blocks%N_p,blocks%N_loc,blocks%N_p_db,blocks%rankmax,blocks%pgno
+				! call assert(blocks%N_p(1,2)-blocks%N_p(1,1)+1==blocks%N_loc,'not good')
+				! call assert(blocks%M_p(1,2)-blocks%M_p(1,1)+1==blocks%M_loc,'not good')
 		! stop	
 	endif
 	

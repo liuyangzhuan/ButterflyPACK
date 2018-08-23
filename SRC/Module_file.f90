@@ -211,7 +211,8 @@ module MODULE_FILE
 		integer N_block_inverse ! # of inverse blocks 
 		integer Bidxs,Bidxe   ! indice range of my local groups		
 		type(blockplus),pointer:: BP(:)=>null()  ! forward blocks 
-		type(blockplus),pointer:: BP_inverse(:)=>null() ! inverse blocks 
+		type(blockplus),pointer:: BP_inverse(:)=>null() ! inverse blocks
+		type(blockplus),pointer:: BP_inverse_update(:)=>null() ! updated blocks dimension-wise matching forward blocks		
 		type(blockplus),pointer:: BP_inverse_schur(:)=>null() ! schur complement blocks 
 	 end type cascadingfactors
 

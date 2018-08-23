@@ -265,9 +265,9 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
 		call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
-		if(option%precon/=DIRECT)then
-			call copy_HOBF(ho_bf,ho_bf_copy)	
-		end if		
+		! if(option%precon/=DIRECT)then
+			! call copy_HOBF(ho_bf,ho_bf_copy)	
+		! end if		
 		write(*,*) "H_matrices filling finished"
 		write(*,*) "    "
 		t2 = OMP_get_wtime()   

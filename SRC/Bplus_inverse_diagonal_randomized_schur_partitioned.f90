@@ -70,8 +70,8 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	
 	error_inout=0
 	
-	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
-	block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)	
+	block_off1 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2)%LL(1)%matrices_block(1)	
 
 	
 	block_o => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)	
@@ -158,8 +158,8 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	type(Hstat)::stats
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
-	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)	
-	block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)	
+	block_off1 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2)%LL(1)%matrices_block(1)	
 	
 	
 	! ! allocate BP_inverse_schur on the second process grid 
@@ -505,8 +505,8 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	ctemp1 = 1d0
 	ctemp2 = 0d0
 	
-	block_off1 => ho_bf1%levels(level_c)%BP(rowblock*2-1)%LL(1)%matrices_block(1)			
-	block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)			
+	block_off1 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1)%LL(1)%matrices_block(1)			
+	block_off2 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2)%LL(1)%matrices_block(1)			
 	block_o => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
 ! write(*,*)block_o%row_group,block_o%col_group,level_c,rowblock,block_o%level,'diao'	
 	block_o%level_butterfly = block_off1%level_butterfly	
@@ -519,7 +519,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	ho_bf1%ind_bk=rowblock
 	Bplus =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)
 	
-	rank0_inner = ho_bf1%levels(level_c)%BP(2*rowblock-1)%LL(2)%rankmax
+	rank0_inner = ho_bf1%levels(level_c)%BP_inverse_update(2*rowblock-1)%LL(2)%rankmax
 	rankrate_inner = 2.0d0
 	
 	rank0_outter = max(block_off1%rankmax,block_off2%rankmax)
@@ -1057,7 +1057,7 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%headn=blocks_i%headn+N1
 		blocks_D%N=N2
 		
-		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+				write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
 		blocks_A%M_loc=blocks_A%M
 		blocks_A%N_loc=blocks_A%N
 		allocate(blocks_A%M_p(1,2))
@@ -1065,7 +1065,19 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_A%M_p(1,2)=blocks_A%M
 		allocate(blocks_A%N_p(1,2))
 		blocks_A%N_p(1,1)=1
-		blocks_A%N_p(1,2)=blocks_A%N
+		blocks_A%N_p(1,2)=blocks_A%N		
+		blocks_A%pgno=blocks_i%pgno
+
+		allocate(blocks_A%M_p_db(1,2))
+		blocks_A%M_p_db(1,1)=1
+		blocks_A%M_p_db(1,2)=blocks_A%M
+		allocate(blocks_A%N_p_db(1,2))
+		blocks_A%N_p_db(1,1)=1
+		blocks_A%N_p_db(1,2)=blocks_A%N		
+		blocks_A%pgno_db=blocks_i%pgno_db
+
+
+		
 		blocks_B%M_loc=blocks_B%M
 		blocks_B%N_loc=blocks_B%N
 		allocate(blocks_B%M_p(1,2))
@@ -1074,6 +1086,17 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		allocate(blocks_B%N_p(1,2))
 		blocks_B%N_p(1,1)=1
 		blocks_B%N_p(1,2)=blocks_B%N
+		blocks_B%pgno=blocks_i%pgno
+		
+		allocate(blocks_B%M_p_db(1,2))
+		blocks_B%M_p_db(1,1)=1
+		blocks_B%M_p_db(1,2)=blocks_B%M
+		allocate(blocks_B%N_p_db(1,2))
+		blocks_B%N_p_db(1,1)=1
+		blocks_B%N_p_db(1,2)=blocks_B%N		
+		blocks_B%pgno_db=blocks_i%pgno_db		
+		
+		
 		blocks_C%M_loc=blocks_C%M
 		blocks_C%N_loc=blocks_C%N
 		allocate(blocks_C%M_p(1,2))
@@ -1082,6 +1105,16 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		allocate(blocks_C%N_p(1,2))
 		blocks_C%N_p(1,1)=1
 		blocks_C%N_p(1,2)=blocks_C%N	
+		blocks_C%pgno=blocks_i%pgno
+		
+		allocate(blocks_C%M_p_db(1,2))
+		blocks_C%M_p_db(1,1)=1
+		blocks_C%M_p_db(1,2)=blocks_C%M
+		allocate(blocks_C%N_p_db(1,2))
+		blocks_C%N_p_db(1,1)=1
+		blocks_C%N_p_db(1,2)=blocks_C%N		
+		blocks_C%pgno_db=blocks_i%pgno_db			
+		
 		blocks_D%M_loc=blocks_D%M
 		blocks_D%N_loc=blocks_D%N
 		allocate(blocks_D%M_p(1,2))
@@ -1089,7 +1122,17 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%M_p(1,2)=blocks_D%M
 		allocate(blocks_D%N_p(1,2))
 		blocks_D%N_p(1,1)=1
-		blocks_D%N_p(1,2)=blocks_D%N			
+		blocks_D%N_p(1,2)=blocks_D%N
+		blocks_D%pgno=blocks_i%pgno			
+
+		allocate(blocks_D%M_p_db(1,2))
+		blocks_D%M_p_db(1,1)=1
+		blocks_D%M_p_db(1,2)=blocks_D%M
+		allocate(blocks_D%N_p_db(1,2))
+		blocks_D%N_p_db(1,1)=1
+		blocks_D%N_p_db(1,2)=blocks_D%N		
+		blocks_D%pgno_db=blocks_i%pgno_db	
+		
 		! stop		
 		
 		
@@ -1281,35 +1324,82 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%headn=blocks_i%headn+N1
 		blocks_D%N=N2
 		
-		write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
+				write(*,*)'M_loc,N_loc,N_p,M_p needs to be defined for ABCD'
 		blocks_A%M_loc=blocks_A%M
 		blocks_A%N_loc=blocks_A%N
 		allocate(blocks_A%M_p(1,2))
 		blocks_A%M_p(1,1)=1
 		blocks_A%M_p(1,2)=blocks_A%M
+		allocate(blocks_A%N_p(1,2))
 		blocks_A%N_p(1,1)=1
-		blocks_A%N_p(1,2)=blocks_A%N
+		blocks_A%N_p(1,2)=blocks_A%N		
+		blocks_A%pgno=blocks_i%pgno
+
+		allocate(blocks_A%M_p_db(1,2))
+		blocks_A%M_p_db(1,1)=1
+		blocks_A%M_p_db(1,2)=blocks_A%M
+		allocate(blocks_A%N_p_db(1,2))
+		blocks_A%N_p_db(1,1)=1
+		blocks_A%N_p_db(1,2)=blocks_A%N		
+		blocks_A%pgno_db=blocks_i%pgno_db
+
+
+		
 		blocks_B%M_loc=blocks_B%M
 		blocks_B%N_loc=blocks_B%N
 		allocate(blocks_B%M_p(1,2))
 		blocks_B%M_p(1,1)=1
 		blocks_B%M_p(1,2)=blocks_B%M
+		allocate(blocks_B%N_p(1,2))
 		blocks_B%N_p(1,1)=1
 		blocks_B%N_p(1,2)=blocks_B%N
+		blocks_B%pgno=blocks_i%pgno
+		
+		allocate(blocks_B%M_p_db(1,2))
+		blocks_B%M_p_db(1,1)=1
+		blocks_B%M_p_db(1,2)=blocks_B%M
+		allocate(blocks_B%N_p_db(1,2))
+		blocks_B%N_p_db(1,1)=1
+		blocks_B%N_p_db(1,2)=blocks_B%N		
+		blocks_B%pgno_db=blocks_i%pgno_db		
+		
+		
 		blocks_C%M_loc=blocks_C%M
 		blocks_C%N_loc=blocks_C%N
 		allocate(blocks_C%M_p(1,2))
 		blocks_C%M_p(1,1)=1
 		blocks_C%M_p(1,2)=blocks_C%M
+		allocate(blocks_C%N_p(1,2))
 		blocks_C%N_p(1,1)=1
 		blocks_C%N_p(1,2)=blocks_C%N	
+		blocks_C%pgno=blocks_i%pgno
+		
+		allocate(blocks_C%M_p_db(1,2))
+		blocks_C%M_p_db(1,1)=1
+		blocks_C%M_p_db(1,2)=blocks_C%M
+		allocate(blocks_C%N_p_db(1,2))
+		blocks_C%N_p_db(1,1)=1
+		blocks_C%N_p_db(1,2)=blocks_C%N		
+		blocks_C%pgno_db=blocks_i%pgno_db			
+		
 		blocks_D%M_loc=blocks_D%M
 		blocks_D%N_loc=blocks_D%N
 		allocate(blocks_D%M_p(1,2))
 		blocks_D%M_p(1,1)=1
 		blocks_D%M_p(1,2)=blocks_D%M
+		allocate(blocks_D%N_p(1,2))
 		blocks_D%N_p(1,1)=1
-		blocks_D%N_p(1,2)=blocks_D%N	
+		blocks_D%N_p(1,2)=blocks_D%N
+		blocks_D%pgno=blocks_i%pgno			
+
+		allocate(blocks_D%M_p_db(1,2))
+		blocks_D%M_p_db(1,1)=1
+		blocks_D%M_p_db(1,2)=blocks_D%M
+		allocate(blocks_D%N_p_db(1,2))
+		blocks_D%N_p_db(1,1)=1
+		blocks_D%N_p_db(1,2)=blocks_D%N		
+		blocks_D%pgno_db=blocks_i%pgno_db	
+		
 		! stop
 	
 		if(level_butterfly_c/=0)then

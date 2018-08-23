@@ -70,6 +70,8 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 			stats%Flop_Factor = stats%Flop_Factor + flop
 			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop)		
 			stats%Flop_Factor = stats%Flop_Factor + flop
+			!!!!!!! the forward block BP can be deleted if not used in solution phase
+			
 			! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
 
 			deallocate(ipiv)
@@ -121,7 +123,7 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 				! ! call Butterfly_Sblock_randomized_symmetric(level_c,rowblock)
 			! end if
 			
-				call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP(rowblock),rtemp)
+				call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock),rtemp)
 				stats%Mem_Sblock = stats%Mem_Sblock + rtemp
 			
 			
@@ -159,8 +161,8 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 				
 
 				
-				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP(rowblock*2-1),stats,ptree)
-				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP(rowblock*2),stats,ptree)
+				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree)
+				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2),stats,ptree)
 				
 				! write(*,*)level_c,rowblock,ptree%MyID,'aha'
 				call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)

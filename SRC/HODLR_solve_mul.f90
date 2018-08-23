@@ -8,7 +8,7 @@ use Bplus_compress_forward
 contains 
 
 
-subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats)
+subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats)
     
     use MODULE_FILE
     implicit none
@@ -23,7 +23,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
 	type(proctree)::ptree
 	type(Hstat)::stats
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	type(hobf)::hobf_forward,hobf_inverse
+	type(hobf)::hobf_inverse
 	DT::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
 	DT,allocatable::r0_initial(:)
 
@@ -36,7 +36,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
 		do ii=1,num_vectors
 			iter = 0
 			rel_error = option%tol_itersol
-			call HODLR_Ztfqmr(option%precon,option%n_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_forward,hobf_inverse,ptree,stats)
+			call HODLR_Ztfqmr(option%precon,option%n_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_inverse,ptree,stats)
 		end do
 		
 		deallocate(r0_initial)
@@ -49,7 +49,7 @@ subroutine HODLR_Solution(hobf_forward,hobf_inverse,x,b,Ns_loc,num_vectors,optio
 end subroutine HODLR_Solution
 
 
-  subroutine HODLR_Ztfqmr(precond,ntotal,nn_loc,b,x,err,iter,r0_initial,hobf_forward,hobf_inverse,ptree,stats)
+  subroutine HODLR_Ztfqmr(precond,ntotal,nn_loc,b,x,err,iter,r0_initial,hobf_inverse,ptree,stats)
     implicit none
 	integer level_c,rowblock,ierr
     integer,intent(in)::ntotal
@@ -72,7 +72,7 @@ end subroutine HODLR_Solution
 	type(Hstat)::stats
 		
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	type(hobf)::hobf_forward,hobf_inverse
+	type(hobf)::hobf_inverse
 	DT::r0_initial(:)
 	integer precond
 	type(proctree)::ptree
@@ -95,7 +95,7 @@ end subroutine HODLR_Solution
     d=0d0
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
     r=bb-r !residual from the initial guess
@@ -107,7 +107,7 @@ end subroutine HODLR_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree,stats)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
     v=ayo
@@ -134,7 +134,7 @@ end subroutine HODLR_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
-	   call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,ye,ytmp,hobf_forward,ptree,stats)
+	   call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,ye,ytmp,hobf_inverse,ptree,stats)
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,hobf_inverse,stats)	
 	
        !  start odd (2n-1) m loop
@@ -168,7 +168,7 @@ end subroutine HODLR_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-		  call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
+		  call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
 		  call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
           r=bb-r
@@ -202,7 +202,7 @@ end subroutine HODLR_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
-		call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,yo,ytmp,hobf_forward,ptree,stats)
+		call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
        !MAGIC
@@ -210,7 +210,7 @@ end subroutine HODLR_Solution
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_forward%Maxlevel+1,x,ytmp,hobf_forward,ptree,stats)
+    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
 	
@@ -250,7 +250,7 @@ end subroutine HODLR_Solution
 
 	
 	
-subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
+subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
     
     use MODULE_FILE
     ! use blas95
@@ -269,14 +269,14 @@ subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
 	! type(mesh)::msh
 	! type(kernelquant)::ker
 	type(proctree)::ptree
-	type(hobf)::ho_bf_for,ho_bf_inv
+	type(hobf)::ho_bf_inv
 	type(Hstat)::stats	
 	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
 
 	! if(option%PRECON==DIRECT)then
-		idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+		idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
 	! else 
 		! ! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
 		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
@@ -292,9 +292,9 @@ subroutine HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
 	call RandomMat(N_unk_loc,1,1,xtrue,0)	
 	allocate (b(N_unk_loc,1))	
 	b=0
-	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_for%Maxlevel+1,xtrue,b,ho_bf_for,ptree,stats)
+	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,xtrue,b,ho_bf_inv,ptree,stats)
 	
-	call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk_loc,1,option,ptree,stats)
+	call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,1,option,ptree,stats)
 	
 	rtemp1 = fnorm(xtrue-x,N_unk_loc,1)**2d0;
 	rtemp2 = fnorm(xtrue,N_unk_loc,1)**2d0;

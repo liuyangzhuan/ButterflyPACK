@@ -398,7 +398,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     ! call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
     call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
-		call copy_HOBF(ho_bf,ho_bf_copy)	
+		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -413,7 +413,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	end if
 
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
-    call EM_solve_CURV(ho_bf_copy,ho_bf,option,msh,quant,ptree,stats)
+    call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
@@ -933,7 +933,7 @@ end subroutine geo_modeling_CURV
 
 
 
-subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
+subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
     
     use MODULE_FILE
 	use APPLICATION_MODULE
@@ -957,12 +957,12 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 	type(mesh)::msh
 	type(quant_app)::quant
 	type(proctree)::ptree
-	type(hobf)::ho_bf_for,ho_bf_inv
+	type(hobf)::ho_bf_inv
 	type(Hstat)::stats	
 	complex(kind=8),allocatable:: current(:),voltage(:)
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	endif
 	
 	
@@ -995,7 +995,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
         
         n1 = OMP_get_wtime()
         
-		call HODLR_Solution(ho_bf_for,ho_bf_inv,Current,Voltage,N_unk_loc,1,option,ptree,stats)
+		call HODLR_Solution(ho_bf_inv,Current,Voltage,N_unk_loc,1,option,ptree,stats)
 		
 		n2 = OMP_get_wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -1043,7 +1043,7 @@ subroutine EM_solve_CURV(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 			!$omp end parallel do
 		enddo
 		
-		call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 			
 		do j=0, num_sample 	

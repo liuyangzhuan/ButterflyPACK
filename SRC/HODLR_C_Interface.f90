@@ -422,38 +422,37 @@ end subroutine C_HODLR_Construct
 
 
 !**** C interface of HODLR factorization
-	!ho_bf_for_Cptr: the structure containing forward HODLR         
-	!ho_bf_inv_Cptr: the structure containing factored HODLR         
+	!ho_bf_for_Cptr: the structure containing HODLR                  
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor")	
+subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor")	
 	implicit none 
 
 	type(c_ptr), intent(inout) :: ho_bf_for_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr) :: option_Cptr
 	type(c_ptr), intent(inout) :: stats_Cptr
-	type(c_ptr), intent(out) :: ho_bf_inv_Cptr
+	! type(c_ptr), intent(out) :: ho_bf_inv_Cptr
 	
 
 	type(Hoption),pointer::option	
 	type(Hstat),pointer::stats
-	type(hobf),pointer::ho_bf_for
-	type(hobf),pointer::ho_bf_inv,ho_bf_tmp
+	type(hobf),pointer::ho_bf1
+	type(hobf),pointer::ho_bf_inv
 	type(proctree),pointer::ptree	
 
 	! real(kind=8):: tol_fact
 	
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf_for)
+	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-	allocate(ho_bf_tmp)
-	call copy_HOBF(ho_bf_for,ho_bf_tmp)	! currently this subroutine only copies forward components 
-	ho_bf_inv=>ho_bf_for
-	ho_bf_for=>ho_bf_tmp
+	! allocate(ho_bf_tmp)
+	! call copy_HOBF(ho_bf1,ho_bf_tmp)	! currently this subroutine only copies forward components 
+	! ho_bf_inv=>ho_bf1
+	! ho_bf1=>ho_bf_tmp
 	
 	
 	if(option%precon/=NOPRECON)then
@@ -464,8 +463,8 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,p
 	end if
 	
 	! return the C address of hodlr structures to C caller
-	ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
-	ho_bf_for_Cptr=c_loc(ho_bf_for)	
+	! ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
+	ho_bf_for_Cptr=c_loc(ho_bf1)	
 
 end subroutine C_HODLR_Factor
 
@@ -475,12 +474,11 @@ end subroutine C_HODLR_Factor
 	!b: local RHS        
 	!Nloc: size of local RHS     
 	!Nrhs: number of RHSs     
-	!ho_bf_for_Cptr: the structure containing forward HODLR         
-	!ho_bf_inv_Cptr: the structure containing factored HODLR         
+	!ho_bf_for_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve")	
+subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve")	
 	implicit none 
 
 	integer Nloc,Nrhs
@@ -490,18 +488,18 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: option_Cptr
 	type(c_ptr), intent(in) :: stats_Cptr
-	type(c_ptr), intent(in) :: ho_bf_inv_Cptr
+	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
 	
 
 	type(Hoption),pointer::option	
 	type(Hstat),pointer::stats
-	type(hobf),pointer::ho_bf_for
-	type(hobf),pointer::ho_bf_inv
+	type(hobf),pointer::ho_bf1
+	! type(hobf),pointer::ho_bf_inv
 	type(proctree),pointer::ptree	
 
 
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf_for)
-	call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
+	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
@@ -509,10 +507,10 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,ho_bf_inv_Cptr,option_Cptr
     if(ptree%MyID==Main_ID)write(*,*) "Solve ......"
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
+		call HODLR_Test_Solve_error(ho_bf1,option,ptree,stats)
 	endif		
 	
-	call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,Nloc,Nrhs,option,ptree,stats)
+	call HODLR_Solution(ho_bf1,x,b,Nloc,Nrhs,option,ptree,stats)
 
     if(ptree%MyID==Main_ID)write(*,*) "Solve finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	

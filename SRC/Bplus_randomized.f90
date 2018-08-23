@@ -32,8 +32,8 @@ subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vou
    ctemp2=0.0d0
 
    
-	block_off1 => ho_bf1%levels(level)%BP(ii*2-1)%LL(1)%matrices_block(1)	
-	block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
+	block_off1 => ho_bf1%levels(level)%BP_inverse_update(ii*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level)%BP_inverse_update(ii*2)%LL(1)%matrices_block(1)
 	block_schur => ho_bf1%levels(level)%BP_inverse_schur(ii)%LL(1)%matrices_block(1)	
 	block_inv => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)	
 	
@@ -1947,8 +1947,8 @@ subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_su
    
    type is (hobf)
 
-		block_off1 => ho_bf1%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2-1)%LL(1)%matrices_block(1)	
-		block_off2 => ho_bf1%levels(ho_bf1%ind_lv)%BP(ho_bf1%ind_bk*2)%LL(1)%matrices_block(1)			
+		block_off1 => ho_bf1%levels(ho_bf1%ind_lv)%BP_inverse_update(ho_bf1%ind_bk*2-1)%LL(1)%matrices_block(1)	
+		block_off2 => ho_bf1%levels(ho_bf1%ind_lv)%BP_inverse_update(ho_bf1%ind_bk*2)%LL(1)%matrices_block(1)			
 		
 		groupn=block_off1%col_group    ! Note: row_group and col_group interchanged here   
 		nn=block_off1%N  
@@ -2332,7 +2332,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 					idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 					idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
@@ -2386,7 +2386,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 					idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 					idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else 
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)					
@@ -2591,8 +2591,8 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 		level_c = ho_bf1%ind_lv
 		rowblock = ho_bf1%ind_bk
 		
-		bplus_off1 => ho_bf1%levels(level_c)%BP(2*rowblock-1)	
-		bplus_off2 => ho_bf1%levels(level_c)%BP(2*rowblock)	
+		bplus_off1 => ho_bf1%levels(level_c)%BP_inverse_update(2*rowblock-1)	
+		bplus_off2 => ho_bf1%levels(level_c)%BP_inverse_update(2*rowblock)	
 		
 		mv=size(Vout,1)
 		nv=size(Vout,2)
@@ -2745,7 +2745,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 		level_c = ho_bf1%ind_lv
 		rowblock = ho_bf1%ind_bk
 		if(trans=='N')then
-			bplus_o => ho_bf1%levels(level_c)%BP(rowblock)	
+			bplus_o => ho_bf1%levels(level_c)%BP_inverse_update(rowblock)	
 			
 			groupn=bplus_o%col_group  ! Note: row_group and col_group interchanged here   
 			nn=bplus_o%LL(1)%matrices_block(1)%N
@@ -2775,7 +2775,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1
 					
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%	matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%	matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else 
 						call Bplus_block_MVP_inverse_dat(ho_bf1, level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
@@ -2791,7 +2791,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
    
 	   
 	   else if(trans=='T')then
-			bplus_o => ho_bf1%levels(level_c)%BP(rowblock)  
+			bplus_o => ho_bf1%levels(level_c)%BP_inverse_update(rowblock)  
 			groupn=bplus_o%col_group  ! Note: row_group and col_group interchanged here   
 			nn=bplus_o%LL(1)%matrices_block(1)%N	
 			groupm=bplus_o%row_group  ! Note: row_group and col_group interchanged here   
@@ -2816,7 +2816,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					idx_start_loc = basis_group(groupm_diag)%head-idx_start_glo+1
 					idx_end_loc = basis_group(groupm_diag)%tail-idx_start_glo+1				
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else
 						call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)	
@@ -2923,8 +2923,8 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
    ctemp1=1.0d0
    ctemp2=0.0d0
    
-	block_off1 => ho_bf1%levels(level)%BP(ii*2-1)%LL(1)%matrices_block(1)	
-	block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
+	block_off1 => ho_bf1%levels(level)%BP_inverse_update(ii*2-1)%LL(1)%matrices_block(1)	
+	block_off2 => ho_bf1%levels(level)%BP_inverse_update(ii*2)%LL(1)%matrices_block(1)
 	block_schur => ho_bf1%levels(level)%BP_inverse_schur(ii)%LL(1)%matrices_block(1)	
 	block_inv => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)	
 	
@@ -2951,8 +2951,8 @@ subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,
    allocate(Vout2(nn,num_vect_sub))
    Vout2=0
    
-	bplus_off1 => ho_bf1%levels(level)%BP(ii*2-1)	
-	bplus_off2 => ho_bf1%levels(level)%BP(ii*2)
+	bplus_off1 => ho_bf1%levels(level)%BP_inverse_update(ii*2-1)	
+	bplus_off2 => ho_bf1%levels(level)%BP_inverse_update(ii*2)
 	bplus_o => ho_bf1%levels(level)%BP_inverse_schur(ii)
 	if(trans=='N')then
 		call Bplus_block_MVP_dat(bplus_off1,trans,mm,nn,num_vect_sub,&
