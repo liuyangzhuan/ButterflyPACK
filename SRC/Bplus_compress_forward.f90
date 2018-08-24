@@ -396,7 +396,7 @@ contains
 		! allocate(matrix_little_inv(rank_new,rank_new))
 		! allocate (matrix_V_tmp(rank_new,nn))
 		! call GeneralInverse(rank_new,rank_new,matrix_little,matrix_little_inv,ACA_tolerance_forward)
-		! call gemm_omp(matrix_little_inv,matrix_V,matrix_V_tmp,rank_new,rank_new,nn)
+		! call gemm_omp(matrix_little_inv,matrix_V,matrix_V_tmp,rank_new,nn,rank_new)
 		! matrix_V = matrix_V_tmp
 		! deallocate(matrix_little_inv)
 		! deallocate(matrix_V_tmp)		
@@ -661,7 +661,7 @@ contains
 	! allocate(matrix_little_inv(rank_new,rank_new))
 	! allocate (matrix_V_tmp(rank_new,nn))
 	! call GeneralInverse(rank_new,rank_new,matrix_little,matrix_little_inv,ACA_tolerance_forward)
-	! call gemm_omp(matrix_little_inv,matrix_V,matrix_V_tmp,rank_new,rank_new,nn)
+	! call gemm_omp(matrix_little_inv,matrix_V,matrix_V_tmp,rank_new,nn,rank_new)
 	! matrix_V = matrix_V_tmp
 	! deallocate(matrix_little_inv)
 	! deallocate(matrix_V_tmp)
@@ -2207,7 +2207,7 @@ implicit none
 					call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,ker)
 				end do
 			end do
-			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank,flop)		
+			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank,flop=flop)		
 			stats%Flop_Fill = stats%Flop_Fill + flop
 			blocks%rankmax = rank
 			blocks%rankmin = rank
@@ -2410,7 +2410,7 @@ implicit none
 				allocate(Singular(mnmin))
 				Singular=0
 
-				call pgesvdf90('V', 'V', M1, rank1+rank2, matU, 1, 1, descsmatU, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop)
+				call pgesvdf90('V', 'V', M1, rank1+rank2, matU, 1, 1, descsmatU, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 			
 				
@@ -2464,9 +2464,9 @@ implicit none
 				
 				blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank		
 
-				call pgemmf90('N','T',N1,rank,rank1,cone, matV1,1,1,descsmatV1,VV,1,1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,flop)
+				call pgemmf90('N','T',N1,rank,rank1,cone, matV1,1,1,descsmatV1,VV,1,1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
-				call pgemmf90('N','T',N2,rank,rank2,cone, matV2,1,1,descsmatV2,VV,1,1+rank1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1+N1,1,descButterflyV,flop)
+				call pgemmf90('N','T',N2,rank,rank2,cone, matV2,1,1,descsmatV2,VV,1,1+rank1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1+N1,1,descButterflyV,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)			
 				deallocate(UU,VV,Singular,matV1,matV2)
 		
@@ -2554,7 +2554,7 @@ implicit none
 				
 				allocate(Singular(mnmin))
 				Singular=0	
-				call pgesvdf90('V', 'V', N1, rank1+rank2, matV, 1, 1, descsmatV, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop)			
+				call pgesvdf90('V', 'V', N1, rank1+rank2, matV, 1, 1, descsmatV, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop=flop)			
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
 				deallocate (matV)
@@ -2610,10 +2610,10 @@ implicit none
 				
 				blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank		
 
-				call pgemmf90('N','T',M1,rank,rank1,cone, matU1,1,1,descsmatU1,VV,1,1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,flop)
+				call pgemmf90('N','T',M1,rank,rank1,cone, matU1,1,1,descsmatU1,VV,1,1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 			
-				call pgemmf90('N','T',M2,rank,rank2,cone, matU2,1,1,descsmatU2,VV,1,1+rank1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1+M1,1,descButterflyU,flop)
+				call pgemmf90('N','T',M2,rank,rank2,cone, matU2,1,1,descsmatU2,VV,1,1+rank1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1+M1,1,descButterflyU,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 			
 			
@@ -3026,7 +3026,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	allocate(QQ1(rankmax_r,rank))
 	call copymatN_omp(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
 	allocate (tau_Q(rank))
-	call geqrff90(QQ1,tau_Q,flop)
+	call geqrff90(QQ1,tau_Q,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	
@@ -3039,14 +3039,14 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau_Q,flop)
+	call un_or_gqrf90(QQ1,tau_Q,flop=flop)
 	deallocate(tau_Q)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 
 	allocate(QQ2(rankmax_c,rank))
 	call copymatT_omp(matV(1:rank,1:rankmax_c),QQ2,rank,rankmax_c)
 	allocate (tau_Q(rank))
-	call geqrff90(QQ2,tau_Q,flop)
+	call geqrff90(QQ2,tau_Q,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	allocate (RR2(rank,rank))
@@ -3058,23 +3058,23 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ2,tau_Q,flop)
+	call un_or_gqrf90(QQ2,tau_Q,flop=flop)
 	deallocate(tau_Q)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	allocate(mattemp(rank,rank))
 	mattemp=0
-	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','T',rank,rank,rank,cone,czero,flop)
+	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','T',rank,rank,rank,cone,czero,flop=flop)
 	! call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
-	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop)
+	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-	call gemmf90(QQ1,rankmax_r,UUsml,rank,matU,rankmax_r,'N','N',rankmax_r,ranknew,rank,cone,czero,flop)
+	call gemmf90(QQ1,rankmax_r,UUsml,rank,matU,rankmax_r,'N','N',rankmax_r,ranknew,rank,cone,czero,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax) 
-	call gemmf90(VVsml,rank,QQ2,rankmax_c,matV,rmax,'N','T',ranknew,rankmax_c,rank,cone,czero,flop)
+	call gemmf90(VVsml,rank,QQ2,rankmax_c,matV,rmax,'N','T',ranknew,rankmax_c,rank,cone,czero,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	
 	rank = ranknew
@@ -3207,7 +3207,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		call copymatT_omp(column_R,column_RT,M,r_est)
 		jpvt=0	
 		! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(column_RT,jpvt,tau,flop)
+		call geqp3f90(column_RT,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop		
 		select_row(1:r_est) = jpvt(1:r_est)
 		
@@ -3243,7 +3243,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		jpvt=0
 		row_Rtmp = row_R		
 		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(row_Rtmp,jpvt,tau,flop)
+		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop	
 		select_column(1:r_est) = jpvt(1:r_est)
 		! write(*,*)sum(jpvt)
@@ -3294,7 +3294,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 			matVtmp(1:rank,j) = matV(1:rank,select_column(j))
 			enddo		
 			! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
-			call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop)
+			call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop
 			deallocate(matUtmp)
 			deallocate(matVtmp)
@@ -3310,7 +3310,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		jpvt=0	
 		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(row_Rtmp,jpvt,tau,flop)
+		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_column(1:r_est) = jpvt(1:r_est)	
 		
@@ -3340,15 +3340,15 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		
 		jpvt=0	
-		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop)
+		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		rankup = ranknew
 		
 		if(rankup>0)then		
 		row_Rtmp = row_R
-		call un_or_mqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup,flop)	
+		call un_or_mqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup,flop=flop)	
 		stats%Flop_Fill = stats%Flop_Fill + flop
-		call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N,flop)
+		call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		
 		if(rank+rankup>min(M,N))rankup=min(M,N)-rank
@@ -3363,9 +3363,9 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		if(rank==min(M,N))exit
 		
 		!**** update fnorm of UV and matUmatV 
-		call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,flop)	
+		call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)	
 		stats%Flop_Fill = stats%Flop_Fill + flop		
-		call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,flop)
+		call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		
 		endif
@@ -3379,7 +3379,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 	! write(*,*)normUV,normA
 	error = normUV/normA
 	
-	call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,flop)
+	call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,Flops=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
 	rank = ranknew
 	
@@ -3491,15 +3491,15 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 		jpiv=0
 		allocate(tau(min(rmaxr,rmaxc)))
 		tau=0
-		call geqp3modf90(MatrixSubselection,jpiv,tau,tolerance,SafeUnderflow,rank_new,flop)
+		call geqp3modf90(MatrixSubselection,jpiv,tau,tolerance,SafeUnderflow,rank_new,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		rank = rank_new
 		if(rank>0)then
 			matV = conjg(cmplx(matV,kind=8))
-			call un_or_mqrf90(MatrixSubselection,tau,matV,'R','N',N, rmaxr, rank_new,flop)
+			call un_or_mqrf90(MatrixSubselection,tau,matV,'R','N',N, rmaxr, rank_new,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop				
 			matV = conjg(cmplx(matV,kind=8))
-			call trsmf90(MatrixSubselection,matV,'R', 'U', 'T', 'N', N, rank_new,flop)
+			call trsmf90(MatrixSubselection,matV,'R', 'U', 'T', 'N', N, rank_new,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop	
 		else 
 			rank=1
@@ -3586,7 +3586,7 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 			jpiv=0
 			allocate(JPERM(rmaxc))
 			JPERM=0
-			call pgeqpfmodf90(rmaxr, rmaxc, MatrixSubselection, 1, 1, descsub, ipiv, tau, JPERM, jpiv, rank_new,tolerance, SafeUnderflow,flop)
+			call pgeqpfmodf90(rmaxr, rmaxc, MatrixSubselection, 1, 1, descsub, ipiv, tau, JPERM, jpiv, rank_new,tolerance, SafeUnderflow,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
 			
@@ -3601,7 +3601,7 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 				
 				
 				! Compute matV*conjg(Q)*(R^T)^-1
-				call ptrsmf90('R', 'U', 'T', 'N', N, rank_new, cone, MatrixSubselection, 1, 1, descsub, matV, 1, 1, descsmatV,flop)
+				call ptrsmf90('R', 'U', 'T', 'N', N, rank_new, cone, MatrixSubselection, 1, 1, descsub, matV, 1, 1, descsmatV,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
 				call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)

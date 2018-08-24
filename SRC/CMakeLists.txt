@@ -9,6 +9,7 @@ zgeqp3mod.f
 SCALAPACK_pdgeqpfmod.f
 SCALAPACK_pzgeqpfmod.f
 Module_file.f90
+DenseLA_wrapper.f90
 misc.f90
 Utilities.f90
 HODLR_structure.f90

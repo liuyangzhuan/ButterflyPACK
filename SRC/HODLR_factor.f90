@@ -66,9 +66,9 @@ subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 			ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 			nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,1)
 			allocate(ipiv(nn))
-			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop)
+			call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop=flop)
 			stats%Flop_Factor = stats%Flop_Factor + flop
-			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop)		
+			call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop=flop)		
 			stats%Flop_Factor = stats%Flop_Factor + flop
 			!!!!!!! the forward block BP can be deleted if not used in solution phase
 			

@@ -969,8 +969,11 @@ if(LR=='L')then
 					rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,1)
 					deallocate(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix)					
 					allocate(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix(rank,dimension_n))
-					call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix, block_i%ButterflyV%blocks(2*index_j-1)%matrix, &
-					&block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank,nn,dimension_n)
+					! call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix, block_i%ButterflyV%blocks(2*index_j-1)%matrix, &
+					! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank,dimension_n,nn)
+					call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,rank, block_i%ButterflyV%blocks(2*index_j-1)%matrix,dimension_n, block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank, 'N','T',rank,dimension_n,nn,cone,czero)					
+					
+					
 
 					if(isnan(fnorm(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank,dimension_n)))then
 						write(*,*)'NAN in L 1'
@@ -982,9 +985,10 @@ if(LR=='L')then
 					rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,1)
 					deallocate(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix)					
 					allocate(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix(rank,dimension_n))
-					call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix, block_i%ButterflyV%blocks(2*index_j)%matrix, &
-					&block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank,nn,dimension_n)
-
+					! call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix, block_i%ButterflyV%blocks(2*index_j)%matrix, &
+					! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank,dimension_n,nn)
+					call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,rank, block_i%ButterflyV%blocks(2*index_j)%matrix,dimension_n, block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank, 'N','T',rank,dimension_n,nn,cone,czero)						
+					
 					if(isnan(fnorm(block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank,dimension_n)))then
 						write(*,*)'NAN in L 2'
 					end if					
@@ -1047,8 +1051,11 @@ else if(LR=='R')then
 					! write(*,*)dimension_m,mm,rank,'d'
 					deallocate(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix)					
 					allocate(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix(dimension_m,rank))
-					call gemm_omp(block_i%ButterflyU%blocks(2*index_i-1)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix,&
-					&block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,dimension_m,mm,rank)
+					! call gemm_omp(block_i%ButterflyU%blocks(2*index_i-1)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix,&
+					! &block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,dimension_m,rank,mm)
+					
+					call gemmf90(block_i%ButterflyU%blocks(2*index_i-1)%matrix,dimension_m,block_i%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix,mm,block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,dimension_m,'N','N',dimension_m,rank,mm,cone,czero)	
+					
 ! write(*,*)'good 1.1'
 
 					if(isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,dimension_m,rank)))then
@@ -1060,8 +1067,11 @@ else if(LR=='R')then
 					rank=size(block_i%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix,2)
 					deallocate(block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix)					
 					allocate(block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix(dimension_m,rank))
-					call gemm_omp(block_i%ButterflyU%blocks(2*index_i)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix,&
-					&block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,dimension_m,mm,rank)
+					! call gemm_omp(block_i%ButterflyU%blocks(2*index_i)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix,&
+					! &block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,dimension_m,rank,mm)
+					
+					call gemmf90(block_i%ButterflyU%blocks(2*index_i)%matrix,dimension_m,block_i%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix,mm,block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,dimension_m,'N','N',dimension_m,rank,mm,cone,czero)	
+					
 ! write(*,*)'good 2'
 					if(isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,dimension_m,rank)))then
 						write(*,*)'NAN in R 2'
@@ -1553,10 +1563,11 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 						! ! stop
 					! ! end if
 							if(level==levelm .and. middleflag==1 .and. level_butterfly>=2)then	
-								! allocate(matrixtemp(mm,num_vectors))
-								call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,ButterflyVector(level+1)%blocks(i,index_j)%matrix,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,mm,num_vectors)
-								! ButterflyVector(level+1)%blocks(i,index_j)%matrix = matrixtemp
-								! deallocate(matrixtemp)
+								allocate(matrixtemp(mm,num_vectors))
+								matrixtemp = ButterflyVector(level+1)%blocks(i,index_j)%matrix 
+								! call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,matrixtemp,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,num_vectors,mm)
+								call gemmf90(blocks%ButterflyMiddle(i,index_j)%matrix,mm, matrixtemp,mm, ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm, 'N','N',mm,num_vectors,mm,cone,czero)  
+								deallocate(matrixtemp)
 							end if					
 						enddo
 						! !$omp end parallel do
@@ -1747,7 +1758,7 @@ subroutine butterfly_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptr
 								! allocate(matrixtemp(nn,num_vectors))
 								! allocate(matrixtemp1(nn,nn))
 								! call copymatT_OMP(blocks%ButterflyMiddle(index_i,j)%matrix,matrixtemp1,nn,nn)
-								! call gemm_omp(matrixtemp1,ButterflyVector(level+1)%blocks(index_i,j)%matrix,matrixtemp,nn,nn,num_vectors)
+								! call gemm_omp(matrixtemp1,ButterflyVector(level+1)%blocks(index_i,j)%matrix,matrixtemp,nn,num_vectors,nn)
 								! ButterflyVector(level+1)%blocks(index_i,j)%matrix = matrixtemp
 								! deallocate(matrixtemp)
 								! deallocate(matrixtemp1)	
@@ -2362,15 +2373,16 @@ subroutine fullmat_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)
 		call assert(group_m==group_n,'fullmat not square')
         ! level_blocks=blocks%level
 		! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
-		! call gemmf90(blocks%fullmat, random1, random2,'N','N',M,N,M,al,be)                   
-		call gemm_omp(blocks%fullmat, random1, random2,M,M,N)                   
+		                 
+		! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)    
+		call gemmf90(blocks%fullmat,M, random1,M, random2,M,'N','N',M,N,M,cone,czero)  		
     elseif (chara=='T') then
         group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
         group_n=blocks%col_group
 		call assert(group_m==group_n,'fullmat not square')
-        ! level_blocks=blocks%level
-		! call gemmf90(blocks%fullmat, random1, random2,'T','N',M,N,M,al,be)    
-		call gemmTN_omp(blocks%fullmat, random1, random2,M,M,N)
+        ! level_blocks=blocks%level  
+		! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
+		call gemmf90(blocks%fullmat,M, random1,M, random2,M, 'T','N',M,N,M,al,be)  
 	end if
 	
 	random2 = a*random2+ b*random2tmp
@@ -2483,9 +2495,19 @@ subroutine Butterfly_sym2asym(blocks)
 			nn1=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,2)
 			nn2=size(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,2)
 			mm=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,1)
-
-			call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,mm,nn1)
-			call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,mm,nn2)			
+			
+			allocate(matrixtemp(mm,nn1))
+			matrixtemp = blocks%ButterflyKerl(level)%blocks(i,j)%matrix
+			! call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,nn1,mm)
+			call gemmf90(blocks%ButterflyMiddle(i,index_j)%matrix,mm,matrixtemp,mm,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,'N','N',mm,nn1,mm,cone,czero)
+			deallocate(matrixtemp)
+			
+			allocate(matrixtemp(mm,nn2))
+			matrixtemp = blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix
+			! call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,nn2,mm)
+			call gemmf90(blocks%ButterflyMiddle(i,index_j)%matrix,mm,matrixtemp,mm,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,'N','N',mm,nn2,mm,cone,czero)			
+			deallocate(matrixtemp)
+			
 			deallocate(blocks%ButterflyMiddle(i,index_j)%matrix)
 		enddo
 		! !$omp end parallel do
@@ -2522,7 +2544,10 @@ subroutine Butterfly_sym2asym(blocks)
 					index_i = ceiling_safe(dble(iijj)/dble(blocks%ButterflyKerl(level+1)%num_col))
 					mm1=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,1)
 					allocate(matrixtemp1(mm1,mn_min))
-					call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,rank,mn_min)	
+					matrixtemp1=0
+					! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)	
+					call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,mm1,UU,rank,matrixtemp1,mm1,'N','N',mm1,mn_min,rank,cone,czero)
+					
 					deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix)
 					allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix(mm1,mn_min))
 					blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix = matrixtemp1
@@ -2530,7 +2555,8 @@ subroutine Butterfly_sym2asym(blocks)
 					
 					mm2=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,1)
 					allocate(matrixtemp1(mm2,mn_min))
-					call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,rank,mn_min)	
+					! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)	
+					call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,mm2,UU,rank,matrixtemp1,mm2,'N','N',mm2,mn_min,rank,cone,czero)
 					deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix)
 					allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix(mm2,mn_min))
 					blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix = matrixtemp1
@@ -2582,7 +2608,8 @@ subroutine Butterfly_sym2asym(blocks)
 
 						mm1=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,1)
 						allocate(matrixtemp1(mm1,mn_min))
-						call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,rank,mn_min)	
+						! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)	
+						call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,mm1,UU,rank,matrixtemp1,mm1,'N','N',mm1,mn_min,rank,cone,czero)
 						deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix)
 						allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix(mm1,mn_min))
 						blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix = matrixtemp1
@@ -2590,7 +2617,8 @@ subroutine Butterfly_sym2asym(blocks)
 						
 						mm2=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,1)
 						allocate(matrixtemp1(mm2,mn_min))
-						call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,rank,mn_min)	
+						! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
+						call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,mm2,UU,rank,matrixtemp1,mm2,'N','N',mm2,mn_min,rank,cone,czero)						
 						deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix)
 						allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix(mm2,mn_min))
 						blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix = matrixtemp1
@@ -2678,7 +2706,9 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 
 				mm1=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,1)
 				allocate(matrixtemp1(mm1,mn_min))
-				call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,rank,mn_min)	
+				! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
+				call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,mm1,UU,rank,matrixtemp1,mm1,'N','N',mm1,mn_min,rank,cone,czero)	
+				
 				deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix)
 				allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix(mm1,mn_min))
 				blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix = matrixtemp1
@@ -2686,7 +2716,8 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 				
 				mm2=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,1)
 				allocate(matrixtemp1(mm2,mn_min))
-				call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,rank,mn_min)	
+				! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
+				call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,mm2,UU,rank,matrixtemp1,mm2,'N','N',mm2,mn_min,rank,cone,czero)				
 				deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix)
 				allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix(mm2,mn_min))
 				blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix = matrixtemp1
@@ -2740,7 +2771,10 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 
 						mm1=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,1)
 						allocate(matrixtemp1(mm1,mn_min))
-						call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,rank,mn_min)	
+						! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)	
+						
+						call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,mm1,UU,rank,matrixtemp1,mm1,'N','N',mm1,mn_min,rank,cone,czero)	
+						
 						deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix)
 						allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix(mm1,mn_min))
 						blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix = matrixtemp1
@@ -2748,7 +2782,9 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 						
 						mm2=size(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,1)
 						allocate(matrixtemp1(mm2,mn_min))
-						call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,rank,mn_min)	
+						! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)	
+						call gemmf90(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,mm2,UU,rank,matrixtemp1,mm2,'N','N',mm2,mn_min,rank,cone,czero)	
+						
 						deallocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix)
 						allocate(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix(mm2,mn_min))
 						blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix = matrixtemp1
@@ -2756,7 +2792,8 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 					else 
 						mm1 = size(blocks%ButterflyU%blocks(i)%matrix,1)
 						allocate(matrixtemp1(mm1,mn_min))
-						call gemm_omp(blocks%ButterflyU%blocks(i)%matrix,UU,matrixtemp1,mm1,rank,mn_min)
+						! call gemm_omp(blocks%ButterflyU%blocks(i)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
+						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm1,UU,rank,matrixtemp1,mm1,'N','N',mm1,mn_min,rank,cone,czero)	
 						deallocate(blocks%ButterflyU%blocks(i)%matrix)
 						allocate(blocks%ButterflyU%blocks(i)%matrix(mm1,mn_min))
 						blocks%ButterflyU%blocks(i)%matrix = matrixtemp1
@@ -2843,7 +2880,9 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 				
 				nn1=size(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,2)
 				allocate(matrixtemp1(mn_min,nn1))
-				call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,rank,nn1)			
+				! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,nn1,rank)	
+				call gemmf90(VV,mn_min,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,rank,matrixtemp1,mn_min,'N','N',mn_min,nn1,rank,cone,czero)	
+				
 				deallocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix)
 				allocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix(mn_min,nn1))
 				blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix = matrixtemp1
@@ -2851,7 +2890,8 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 
 				nn2=size(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,2)
 				allocate(matrixtemp1(mn_min,nn2))
-				call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,rank,nn2)			
+				! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,nn2,rank)			
+				call gemmf90(VV,mn_min,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,rank,matrixtemp1,mn_min,'N','N',mn_min,nn2,rank,cone,czero)	
 				deallocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix)
 				allocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix(mn_min,nn2))
 				blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix = matrixtemp1
@@ -2922,7 +2962,9 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 						nn1 = size(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,2)
 						
 						allocate(matrixtemp1(mn_min,nn1))
-						call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,rank,nn1)
+						! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,nn1,rank)
+						call gemmf90(VV,mn_min,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,rank,matrixtemp1,mn_min,'N','N',mn_min,nn1,rank,cone,czero)	
+						
 						deallocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix)
 						allocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix(mn_min,nn1))
 						blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix = matrixtemp1
@@ -2930,7 +2972,10 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 						
 						nn2 = size(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,2)
 						allocate(matrixtemp1(mn_min,nn2))
-						call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,rank,nn2)
+						! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,nn2,rank)
+						call gemmf90(VV,mn_min,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,rank,matrixtemp1,mn_min,'N','N',mn_min,nn2,rank,cone,czero)	
+						
+						
 						deallocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix)
 						allocate(blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix(mn_min,nn2))
 						blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix = matrixtemp1
@@ -2938,7 +2983,8 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 					else 
 						nn1 = size(blocks%ButterflyV%blocks(j)%matrix,1)
 						allocate(matrixtemp1(nn1,mn_min))
-						call gemmNT_omp(blocks%ButterflyV%blocks(j)%matrix,VV,matrixtemp1,nn1,rank,mn_min)
+						! call gemmNT_omp(blocks%ButterflyV%blocks(j)%matrix,VV,matrixtemp1,nn1,mn_min,rank)
+						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn1, VV,mn_min, matrixtemp1,nn1, 'N','T',nn1,mn_min,rank,cone,czero)		
 						deallocate(blocks%ButterflyV%blocks(j)%matrix)
 						allocate(blocks%ButterflyV%blocks(j)%matrix(nn1,mn_min))
 						blocks%ButterflyV%blocks(j)%matrix = matrixtemp1

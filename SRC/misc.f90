@@ -8,99 +8,10 @@ use MODULE_FILE
 USE IFPORT    
 #endif  
 use omp_lib
-
+use DenseLA_wrapper
 #include "HODLR_config.fi"
 
 integer, parameter :: int64 = selected_int_kind(18) 
-
-interface gemmf90
-  module procedure dgemmf90
-  module procedure zgemmf90
-end interface
-
-interface gesvdf90
-  module procedure dgesvdf90
-  module procedure zgesvdf90
-end interface
-
-interface gesddf90
-  module procedure dgesddf90
-  module procedure zgesddf90
-end interface
-
-interface geqrff90
-  module procedure dgeqrff90
-  module procedure zgeqrff90
-end interface
-
-
-interface geqp3f90
-  module procedure dgeqp3f90
-  module procedure zgeqp3f90
-end interface
-
-
-interface geqp3modf90
-  module procedure dgeqp3modf90
-  module procedure zgeqp3modf90
-end interface
-
-
-interface un_or_mqrf90
-  module procedure ormqrf90
-  module procedure unmqrf90
-end interface
-
-
-interface un_or_gqrf90
-  module procedure ungqrf90
-  module procedure orgqrf90
-end interface
-
-
-interface getrff90
-  module procedure dgetrff90
-  module procedure zgetrff90
-end interface
-
-interface getrsf90
-  module procedure dgetrsf90
-  module procedure zgetrsf90
-end interface
-
-interface getrif90
-  module procedure dgetrif90
-  module procedure zgetrif90
-end interface
-
-interface trsmf90
-  module procedure dtrsmf90
-  module procedure ztrsmf90
-end interface
-
-interface pun_or_mqrf90
-  module procedure pzunmqrf90
-  module procedure pdormqrf90
-end interface
-
-
-interface pgeqpfmodf90
-  module procedure pzgeqpfmodf90
-  module procedure pdgeqpfmodf90
-end interface
-
-
-interface pgetrif90
-  module procedure pzgetrif90
-  module procedure pdgetrif90
-end interface
-
-
-interface pgesvdf90
-  module procedure pzgesvdf90
-  module procedure pdgesvdf90
-end interface
-
 
 contains
  
@@ -156,214 +67,216 @@ implicit none
  end function check_NAN
 
 
- subroutine gemm_omp(A,B,C,m,n,k)
- 	! ! use lapack95
-	! ! use blas95
-	implicit none 
+ ! subroutine gemm_omp(A,B,C,m,k,n)
+ 	! ! ! use lapack95
+	! ! ! use blas95
+	! implicit none 
 	
-	integer m,n,k
-	DT::A(m,n),B(n,k),C(m,k)
-	DT,allocatable::A1(:,:),B1(:,:)
-	DT::ctemp
-	real(kind=8)::n1,n2
-	integer ii,jj,kk
+	! integer m,n,k
+	! DT::A(m,n),B(n,k),C(m,k)
+	! DT,allocatable::A1(:,:),B1(:,:)
+	! DT::ctemp
+	! real(kind=8)::n1,n2
+	! integer ii,jj,kk
 	
-	allocate(A1(m,n))
-	allocate(B1(n,k))
+	! allocate(A1(m,n))
+	! allocate(B1(n,k))
 	
-	! n1 = OMP_get_wtime()	
+	! ! n1 = OMP_get_wtime()	
 
-	if(isnan(fnorm(A,m,n)) .or. isnan(fnorm(B,n,k)))then
-		write(*,*)fnorm(A,m,n),fnorm(B,n,k),'diaod'
-		stop
-	end if
+	! if(isnan(fnorm(A,m,n)) .or. isnan(fnorm(B,n,k)))then
+		! write(*,*)fnorm(A,m,n),fnorm(B,n,k),'diaod'
+		! stop
+	! end if
 	
-	A1 = A
-	B1 = B
+	! A1 = A
+	! B1 = B
 	
-	!$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	do ii =1,m	
-	do jj =1,k	
-	ctemp = 0
-	do kk=1,n
-		ctemp = ctemp + A1(ii,kk)*B1(kk,jj)	
-	end do
-	C(ii,jj) = ctemp
-	end do
-	end do
-	!$omp end parallel do
+	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
+	! do ii =1,m	
+	! do jj =1,k	
+	! ctemp = 0
+	! do kk=1,n
+		! ctemp = ctemp + A1(ii,kk)*B1(kk,jj)	
+	! end do
+	! C(ii,jj) = ctemp
+	! end do
+	! end do
+	! !$omp end parallel do
 	 
-	! ! call gemmf90(A,B,C,'N','N')
+	! ! ! call gemmf90(A,B,C,'N','N')
 	
 							 
  
-	! n2 = OMP_get_wtime()
-	! time_gemm = time_gemm + n2-n1
+	! ! n2 = OMP_get_wtime()
+	! ! time_gemm = time_gemm + n2-n1
 	
-	deallocate(A1)
-	deallocate(B1)
- end subroutine gemm_omp
+	! deallocate(A1)
+	! deallocate(B1)
+ ! end subroutine gemm_omp
 
  
- subroutine gemmHN_omp(A,B,C,m,n,k)
- 	! ! use lapack95
-	! ! use blas95
-	implicit none 
+ ! subroutine gemmHN_omp(A,B,C,m,k,n)
+ 	! ! ! use lapack95
+	! ! ! use blas95
+	! implicit none 
 	
-	integer m,n,k
-	DT::A(n,m),B(n,k),C(m,k)
-	DT,allocatable::A1(:,:),B1(:,:)	
-	DT::ctemp
-	real(kind=8)::n1,n2
-	integer ii,jj,kk
-	allocate(A1(n,m))
-	allocate(B1(n,k))	
+	! integer m,n,k
+	! DT::A(n,m),B(n,k),C(m,k)
+	! DT,allocatable::A1(:,:),B1(:,:)	
+	! DT::ctemp
+	! real(kind=8)::n1,n2
+	! integer ii,jj,kk
+	! allocate(A1(n,m))
+	! allocate(B1(n,k))	
 	
-	! n1 = OMP_get_wtime()	
-	A1 = A
-	B1 = B
+	! ! n1 = OMP_get_wtime()	
+	! A1 = A
+	! B1 = B
 	
-	!$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	do jj =1,k	
-	do ii =1,m
+	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
+	! do jj =1,k	
+	! do ii =1,m
 		   
-	ctemp = 0
-	do kk=1,n
-		ctemp = ctemp + conjg(cmplx(A1(kk,ii),kind=8))*B1(kk,jj)	
-	end do
-	C(ii,jj) = ctemp
-	end do
-	end do
-	!$omp end parallel do
+	! ctemp = 0
+	! do kk=1,n
+		! ctemp = ctemp + conjg(cmplx(A1(kk,ii),kind=8))*B1(kk,jj)	
+	! end do
+	! C(ii,jj) = ctemp
+	! end do
+	! end do
+	! !$omp end parallel do
 	
-	! ! call gemmf90(A,B,C,'N','N')
+	! ! ! call gemmf90(A,B,C,'N','N')
 	
-	! n2 = OMP_get_wtime()
-	! time_gemm = time_gemm + n2-n1
+	! ! n2 = OMP_get_wtime()
+	! ! time_gemm = time_gemm + n2-n1
 	
-	deallocate(A1)
-	deallocate(B1)	
- end subroutine gemmHN_omp 
+	! deallocate(A1)
+	! deallocate(B1)	
+ ! end subroutine gemmHN_omp 
  
 
- subroutine gemmNH_omp(A,B,C,m,n,k)
- 	! ! use lapack95
-	! ! use blas95
-	implicit none 
+ ! subroutine gemmNH_omp(A,B,C,m,k,n)
+ 	! ! ! use lapack95
+	! ! ! use blas95
+	! implicit none 
 	
-	integer m,n,k
-	DT::A(m,n),B(k,n),C(m,k)
-	DT,allocatable::A1(:,:),B1(:,:)	
-	DT::ctemp
-	real(kind=8)::n1,n2
-	integer ii,jj,kk
+	! integer m,n,k
+	! DT::A(m,n),B(k,n),C(m,k)
+	! DT,allocatable::A1(:,:),B1(:,:)	
+	! DT::ctemp
+	! real(kind=8)::n1,n2
+	! integer ii,jj,kk
 	
-	allocate(A1(m,n))
-	allocate(B1(k,n))
+	! allocate(A1(m,n))
+	! allocate(B1(k,n))
 	
-	! n1 = OMP_get_wtime()	
-	A1 = A
-	B1 = B
-	!$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	do jj =1,k
-	do ii =1,m
+	! ! n1 = OMP_get_wtime()	
+	! A1 = A
+	! B1 = B
+	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
+	! do jj =1,k
+	! do ii =1,m
 		   
-	ctemp = 0
-	do kk=1,n
-		ctemp = ctemp + A1(ii,kk)*conjg(cmplx(B1(jj,kk),kind=8))	
-	end do
-	C(ii,jj) = ctemp
-	end do
-	end do
-	!$omp end parallel do
+	! ctemp = 0
+	! do kk=1,n
+		! ctemp = ctemp + A1(ii,kk)*conjg(cmplx(B1(jj,kk),kind=8))	
+	! end do
+	! C(ii,jj) = ctemp
+	! end do
+	! end do
+	! !$omp end parallel do
 	
-	! ! call gemmf90(A,B,C,'N','N')
+	! ! ! call gemmf90(A,B,C,'N','N')
 	
-	! n2 = OMP_get_wtime()
-	! time_gemm = time_gemm + n2-n1
-	deallocate(A1)
-	deallocate(B1)		
- end subroutine gemmNH_omp 
+	! ! n2 = OMP_get_wtime()
+	! ! time_gemm = time_gemm + n2-n1
+	! deallocate(A1)
+	! deallocate(B1)		
+ ! end subroutine gemmNH_omp 
  
- subroutine gemmTN_omp(A,B,C,m,n,k)
- 	! ! use lapack95
-	! ! use blas95
-	implicit none 
+ 
+ 
+ ! subroutine gemmTN_omp(A,B,C,m,k,n)
+ 	! ! ! use lapack95
+	! ! ! use blas95
+	! implicit none 
 	
-	integer m,n,k
-	DT::A(n,m),B(n,k),C(m,k)
-	DT,allocatable::A1(:,:),B1(:,:)		
-	DT::ctemp
-	real(kind=8)::n1,n2
-	integer ii,jj,kk
+	! integer m,n,k
+	! DT::A(n,m),B(n,k),C(m,k)
+	! DT,allocatable::A1(:,:),B1(:,:)		
+	! DT::ctemp
+	! real(kind=8)::n1,n2
+	! integer ii,jj,kk
 
-	allocate(A1(n,m))
-	allocate(B1(n,k))	
+	! allocate(A1(n,m))
+	! allocate(B1(n,k))	
 	
-	! n1 = OMP_get_wtime()	
-	A1 = A
-	B1 = B
-	!$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	do jj =1,k	
-	do ii =1,m
+	! ! n1 = OMP_get_wtime()	
+	! A1 = A
+	! B1 = B
+	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
+	! do jj =1,k	
+	! do ii =1,m
 		   
-	ctemp = 0
-	do kk=1,n
-		ctemp = ctemp + A1(kk,ii)*B1(kk,jj)	
-	end do
-	C(ii,jj) = ctemp
-	end do
-	end do
-	!$omp end parallel do
+	! ctemp = 0
+	! do kk=1,n
+		! ctemp = ctemp + A1(kk,ii)*B1(kk,jj)	
+	! end do
+	! C(ii,jj) = ctemp
+	! end do
+	! end do
+	! !$omp end parallel do
 	
-	! ! call gemmf90(A,B,C,'N','N')
+	! ! ! call gemmf90(A,B,C,'N','N')
 	
-	! n2 = OMP_get_wtime()
-	! time_gemm = time_gemm + n2-n1
-	deallocate(A1)
-	deallocate(B1)		
- end subroutine gemmTN_omp 
+	! ! n2 = OMP_get_wtime()
+	! ! time_gemm = time_gemm + n2-n1
+	! deallocate(A1)
+	! deallocate(B1)		
+ ! end subroutine gemmTN_omp 
  
  
 
- subroutine gemmNT_omp(A,B,C,m,n,k)
- 	! ! use lapack95
-	! ! use blas95
-	implicit none 
+ ! subroutine gemmNT_omp(A,B,C,m,k,n)
+ 	! ! ! use lapack95
+	! ! ! use blas95
+	! implicit none 
 	
-	integer m,n,k
-	DT::A(m,n),B(k,n),C(m,k)
-	DT,allocatable::A1(:,:),B1(:,:)		
-	DT::ctemp
-	real(kind=8)::n1,n2
-	integer ii,jj,kk
-	allocate(A1(m,n))
-	allocate(B1(k,n))	
+	! integer m,n,k
+	! DT::A(m,n),B(k,n),C(m,k)
+	! DT,allocatable::A1(:,:),B1(:,:)		
+	! DT::ctemp
+	! real(kind=8)::n1,n2
+	! integer ii,jj,kk
+	! allocate(A1(m,n))
+	! allocate(B1(k,n))	
 	
-	! n1 = OMP_get_wtime()	
-	A1 = A
-	B1 = B
-	!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
-	do jj =1,k	
-	do ii =1,m
+	! ! n1 = OMP_get_wtime()	
+	! A1 = A
+	! B1 = B
+	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+	! do jj =1,k	
+	! do ii =1,m
 		   
-	ctemp = 0
-	do kk=1,n
-		ctemp = ctemp + A1(ii,kk)*B1(jj,kk)	
-	end do
-	C(ii,jj) = ctemp
-	end do
-	end do
-	!$omp end parallel do
+	! ctemp = 0
+	! do kk=1,n
+		! ctemp = ctemp + A1(ii,kk)*B1(jj,kk)	
+	! end do
+	! C(ii,jj) = ctemp
+	! end do
+	! end do
+	! !$omp end parallel do
 	
-	! ! call gemmf90(A,B,C,'N','N')
+	! ! ! call gemmf90(A,B,C,'N','N')
 	
-	! n2 = OMP_get_wtime()
-	! time_gemm = time_gemm + n2-n1
+	! ! n2 = OMP_get_wtime()
+	! ! time_gemm = time_gemm + n2-n1
 
-	deallocate(A1)
-	deallocate(B1)		
- end subroutine gemmNT_omp  
+	! deallocate(A1)
+	! deallocate(B1)		
+ ! end subroutine gemmNT_omp  
  
 
  
@@ -417,19 +330,19 @@ implicit none
  end subroutine copymatT_omp
  
 
-function fnorm(A,m,n)
-	implicit none 
-	real(kind=8):: fnorm 
-	DT::A(m,n)
-	integer m,n,ii,jj
-	fnorm = 0
-	do ii =1,m
-	do jj =1,n
-		fnorm = fnorm + abs(A(ii,jj))**2d0
-	end do
-	end do
-	fnorm = sqrt(fnorm)
- end function fnorm
+! function fnorm(A,m,n)
+	! implicit none 
+	! real(kind=8):: fnorm 
+	! DT::A(m,n)
+	! integer m,n,ii,jj
+	! fnorm = 0
+	! do ii =1,m
+	! do jj =1,n
+		! fnorm = fnorm + abs(A(ii,jj))**2d0
+	! end do
+	! end do
+	! fnorm = sqrt(fnorm)
+ ! end function fnorm
  
 
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
@@ -462,7 +375,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
 	! call geqp3f90(QQ1,jpvt1,tau_Q)
-	call geqrff90(QQ1,tau_Q,flop)
+	call geqrff90(QQ1,tau_Q,flop=flop)
 	if(present(Flops))Flops = Flops + flop
 	
 	allocate (RR1(rmax,rmax))
@@ -474,7 +387,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau_Q,flop)
+	call un_or_gqrf90(QQ1,tau_Q,flop=flop)
 	deallocate(tau_Q)
 	! deallocate(jpvt1)
 	if(present(Flops))Flops = Flops + flop
@@ -485,7 +398,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! call geqrff90(QQ2,tau_Q)
 	! allocate (jpvt2(rmax))
 	! jpvt2=0
-	call geqrff90(QQ2,tau_Q,flop)
+	call geqrff90(QQ2,tau_Q,flop=flop)
 
 	if(present(Flops))Flops = Flops + flop
 	
@@ -499,7 +412,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	enddo
 	! !$omp end parallel do	
 
-	call un_or_gqrf90(QQ2,tau_Q,flop)
+	call un_or_gqrf90(QQ2,tau_Q,flop=flop)
 	! deallocate(jpvt2)
 	deallocate(tau_Q)
 	if(present(Flops))Flops = Flops + flop
@@ -507,19 +420,19 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
 	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
-	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop)
+	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops = Flops + flop
 	allocate(UUsml(rmax,rmax),VVsml(rmax,rmax),Singularsml(rmax))
-	call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop)
+	call SVD_Truncate(mattemp,rmax,rmax,rmax,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew,flop=flop)
 	if(present(Flops))Flops = Flops + flop
 	do i=1,ranknew
 		UUsml(1:rmax,i) = UUsml(1:rmax,i) * Singularsml(i)
 	enddo
 	! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
-	call gemmf90(QQ1,M,UUsml,rmax,matU,ldaU,'N','N',M,ranknew,rmax, cone,czero,flop)
+	call gemmf90(QQ1,M,UUsml,rmax,matU,ldaU,'N','N',M,ranknew,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops = Flops + flop
 	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
-	call gemmf90(VVsml,rmax,QQ2,N,matV,ldaV,'N','T',ranknew,N,rmax, cone,czero,flop)
+	call gemmf90(VVsml,rmax,QQ2,N,matV,ldaV,'N','T',ranknew,N,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops = Flops + flop	
 	
 	rank = ranknew
@@ -588,7 +501,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	allocate(QQ1(M,rmax))
 	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
 	allocate (tau_Q(rmax))
-	call geqrff90(QQ1,tau_Q,flop)
+	call geqrff90(QQ1,tau_Q,flop=flop)
 	if(present(Flops))Flops= Flops + flop
 	deallocate(tau_Q)
 
@@ -605,7 +518,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	allocate(QQ2(N,rmax))
 	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
 	allocate (tau_Q(rmax))
-	call geqrff90(QQ2,tau_Q,flop)
+	call geqrff90(QQ2,tau_Q,flop=flop)
 	if(present(Flops))Flops= Flops + flop
 	deallocate(tau_Q)
 	
@@ -622,7 +535,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
 	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,,rmax,czero,mattemp,rmax)
-	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop)
+	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops= Flops + flop
 	norm = fnorm(mattemp,rmax,rmax)
 	
@@ -1005,7 +918,7 @@ write(*,*)'rank=',rank,'rank_new',rank_new
 ! end do
 ! V_new1 = VV(1:rank_new,1:N)
 
-! call gemm_omp(U_new1,V_new1,mat2,M,rank_new,N)
+! call gemm_omp(U_new1,V_new1,mat2,M,N,rank_new)
 ! write(*,*)Singular(1:rank_new+2)
 Smax = Singular(1)
         
@@ -1036,8 +949,8 @@ enddo
 deallocate (matrix_U,VV)
 deallocate (matrix_V,UU,Singular)
 
-call gemm_omp(U_new,V_new,mat1,M,rank_new,N)
-
+! call gemm_omp(U_new,V_new,mat1,M,N,rank_new)
+call gemmf90(U_new,M,V_new,rank_new,mat1,M,'N','N',M,N,rank_new,cone,czero)
 
 write(*,*)M,N
 do j=1,N
@@ -1058,9 +971,12 @@ do i=1,N
 	call random_dp_number(test_in(i,1))
 end do
 
-call gemm_omp(mat,test_in,test_out1,M,N,1)
-call gemm_omp(mat1,test_in,test_out2,M,N,1)
-! call gemm_omp(mat2,test_in,test_out3,M,N,1)
+! call gemm_omp(mat,test_in,test_out1,M,1,N)
+call gemmf90(mat,M,test_in,N,test_out1,M,'N','N',M,1,N,cone,czero)
+! call gemm_omp(mat1,test_in,test_out2,M,1,N)
+call gemmf90(mat1,M,test_in,N,test_out2,M,'N','N',M,1,N,cone,czero)
+
+! call gemm_omp(mat2,test_in,test_out3,M,1,N)
 ! write(*,*)'testing vector error:', fnorm(test_out1-test_out2,M,1)/fnorm(test_out1,M,1),fnorm(test_out1-test_out3,M,1)/fnorm(test_out1,M,1)
 write(*,*)'testing vector error:', fnorm(test_out1-test_out2,M,1)/fnorm(test_out1,M,1)
 
@@ -1077,7 +993,10 @@ allocate(matrix_V(rmax,N))
 
 call ACA_CompressionFull(mat,matrix_U,matrix_V,M,N,rmax,rank_new,tolerance*0.3d0,tolerance)
 
-call gemm_omp(matrix_U(1:M,1:rank_new),matrix_V(1:rank_new,1:N),mat2,M,rank_new,N)
+! call gemm_omp(matrix_U(1:M,1:rank_new),matrix_V(1:rank_new,1:N),mat2,M,N,rank_new)
+call gemmf90(matrix_U,M,matrix_V,rmax,mat2,M,'N','N',M,N,rank_new,cone,czero)
+
+
 write(*,*)'F-norm residual:', fnorm(mat-mat2,M,N)/fnorm(mat,M,N),' rank:',rank_new
 		
 		
@@ -1953,7 +1872,8 @@ end subroutine GeneralInverse
 	RrowcQ1=0
 	allocate(RrowcQ1inv(rank1,rmax))
 	RrowcQ1inv=0
-	call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rankmax_r,rank1)
+	! call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rank1,rankmax_r)
+	call gemmf90(matRrow,rankmax_r,QQ1,rankmax_r,RrowcQ1,rmax,'C','N',rmax,rank1,rankmax_r, cone,czero)
 	
 	call GeneralInverse(rmax,rank1,RrowcQ1,RrowcQ1inv,tolerance)
 	deallocate(RrowcQ1)
@@ -1973,8 +1893,8 @@ end subroutine GeneralInverse
 	Q2cRcol=0
 	allocate(Q2cRcolinv(rmax,rank2))
 	Q2cRcolinv=0
-	call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rankmax_c,rmax)
-	
+	! call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rmax,rankmax_c)
+	call gemmf90(QQ2,rankmax_c,matRcol,rankmax_c,Q2cRcol,rank2,'C','N',rank2,rmax,rankmax_c, cone,czero)	
 	call GeneralInverse(rank2,rmax,Q2cRcol,Q2cRcolinv,tolerance)
 	deallocate(Q2cRcol)
 
@@ -1986,18 +1906,24 @@ end subroutine GeneralInverse
 	! deallocate(Q2cRcol)	
 	
 	
-	call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rankmax_r,rmax)	
+	! call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rmax,rankmax_r)
+	call gemmf90(matRrow,rankmax_r,matZRcol,rankmax_r,RrowcZRcol,rmax,'C','N',rmax,rmax,rankmax_r, cone,czero)	
+	
 	allocate(matrixtemp(rmax,rank2))
 	matrixtemp=0
 	allocate(matM(rank1,rank2))
 	matM=0
-	call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rmax,rank2)
-	call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rmax,rank2)
+	! call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rank2,rmax)
+	call gemmf90(RrowcZRcol,rmax,Q2cRcolinv,rmax,matrixtemp,rmax,'N','N',rmax,rank2,rmax,cone,czero)
+	
+	! call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rank2,rmax)
+	call gemmf90(RrowcQ1inv,rank1,matrixtemp,rmax,matM,rank1,'N','N',rank1,rank2,rmax,cone,czero)
+	
 	deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)
 	
 	! allocate(matrixtemp(rankmax_r,rank2))
 	! allocate(matM(rank1,rank2))
-	! call gemm_omp(matZRcol,Q2cRcolinv,matrixtemp,rankmax_r,rmax,rank2)
+	! call gemm_omp(matZRcol,Q2cRcolinv,matrixtemp,rankmax_r,rank2,rmax)
 	! call gemmHN_omp(QQ1(1:rankmax_r,1:rank1),matrixtemp,matM,rank1,rankmax_r,rank2)
 	! deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)	
 	
@@ -2011,8 +1937,12 @@ end subroutine GeneralInverse
 	! write(111,*)UUsml(1:rank1,1:rank)
 	! stop	
 	
-	call gemm_omp(QQ1(1:rankmax_r,1:rank1),UUsml(1:rank1,1:rank),matU(1:rankmax_r,1:rank),rankmax_r,rank1,rank)
-	call gemmNH_omp(VVsml(1:rank,1:rank2),QQ2(1:rankmax_c,1:rank2),matV(1:rank,1:rankmax_c),rank,rank2,rankmax_c)
+	! call gemm_omp(QQ1(1:rankmax_r,1:rank1),UUsml(1:rank1,1:rank),matU(1:rankmax_r,1:rank),rankmax_r,rank,rank1)
+	call gemmf90(QQ1,rankmax_r,UUsml,rank1,matU,rankmax_r,'N','N',rankmax_r,rank,rank1,cone,czero)
+	
+	! call gemmNH_omp(VVsml(1:rank,1:rank2),QQ2(1:rankmax_c,1:rank2),matV(1:rank,1:rankmax_c),rank,rankmax_c,rank2)
+	call gemmf90(VVsml,rank12,QQ2,rankmax_c,matV,rmax,'N','H',rank,rankmax_c,rank2, cone,czero)	
+
 	Singular(1:rank) = Singularsml(1:rank)
 	deallocate(UUsml,VVsml,Singularsml,matM)
 	
@@ -2042,12 +1972,12 @@ end subroutine GeneralInverse
 		! end do
 		! end do
 		! deallocate(matrixtemp)
-		! call gemmNH_omp(matInv,matZcRrow,matM,rmax,rmax,rankmax_c)
+		! call gemmNH_omp(matInv,matZcRrow,matM,rmax,rankmax_c,rmax)
 	! else if(rankmax_c==rmax)then
 	! call GetRank(rmax,rmax,matRcol,rank,tolerance)
 	! write(*,*)rmax,rank,'ga'	
 		! call GeneralInverse(rmax,rmax,matRcol,matInv,tolerance)
-		! call gemm_omp(matZRcol,matInv,matM,rankmax_r,rmax,rankmax_c)
+		! call gemm_omp(matZRcol,matInv,matM,rankmax_r,rankmax_c,rmax)
 	! end if	
 	
 	! write(*,*)fnorm(matM,rankmax_r,rankmax_c),'woao'
@@ -2588,7 +2518,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	! allocate(matV1(rank,rankmax_c))
 	! call gemm_omp(QQ1,RR1,matU1,rankmax_r,rank,rank)
 	
-	! call gemm_omp(RR2,QQ2,matV1,rank,rank,rankmax_c)
+	! call gemm_omp(RR2,QQ2,matV1,rank,rankmax_c,rank)
 	
 	! write(*,*)fnorm(matU1-matU(1:rankmax_r,1:rank),rankmax_r,rank),fnorm(matV1-matV(1:rank,1:rankmax_c),rank,rankmax_c)
 	
@@ -2596,17 +2526,18 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	
 	deallocate(QQ2tmp,RR2tmp)
 	allocate(mattemp(rank,rank))
-	call gemm_omp(RR1,RR2,mattemp,rank,rank,rank)
-	
+	! call gemm_omp(RR1,RR2,mattemp,rank,rank,rank)
+	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','N',rank,rank,rank,cone,czero)
 	
 	
 	
 	allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
 	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
 	
-	call gemm_omp(QQ1,UUsml(1:rank,1:ranknew),matU(1:rankmax_r,1:ranknew),rankmax_r,rank,ranknew)
-	
-	call gemm_omp(VVsml(1:ranknew,1:rank),QQ2,matV(1:ranknew,1:rankmax_c),ranknew,rank,rankmax_c)
+	! call gemm_omp(QQ1,UUsml(1:rank,1:ranknew),matU(1:rankmax_r,1:ranknew),rankmax_r,ranknew,rank)
+	call gemmf90(QQ1,rankmax_r,UUsml,rank,matU,rankmax_r,'N','N',rankmax_r,ranknew,rank,cone,czero)
+	! call gemm_omp(VVsml(1:ranknew,1:rank),QQ2,matV(1:ranknew,1:rankmax_c),ranknew,rankmax_c,rank)
+	call gemmf90(VVsml,rank,QQ2,rank,matV,rmax,'N','N',ranknew,rankmax_c,rank,cone,czero)
 	! write(*,*)'aca rank:',rank,'after svd',ranknew
 	
 	rank = ranknew
@@ -2641,7 +2572,7 @@ Singular=0
 
 allocate(mat0(mm,nn))
 mat0 = mat
-call gesvd_robust(mat0,Singular,UU,VV,mm,nn,mn,flop)
+call gesvd_robust(mat0,Singular,UU,VV,mm,nn,mn,flop=flop)
 rank=mn
 
 if(Singular(1)<SafeUnderflow)then
@@ -2816,1327 +2747,6 @@ real(kind=8):: x,y,z
 		end if
 	end if
 end subroutine Cart2Sph
-
-
-subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
-    use MODULE_FILE
-	implicit none 
-	integer mm,nn,mn_min
-	DT Matrix(:,:),UU(:,:),VV(:,:)
-	real(kind=8) Singular(:)
-	real(kind=8),optional::flop
-	
-	if(mm==1)then
-		UU(1,1)=1d0
-		Singular(1) = fnorm(Matrix,mm,nn)
-		if(Singular(1)<SafeUnderflow)then
-			VV = 0d0
-		else 
-			VV = Matrix/Singular(1)
-		endif
-	elseif(nn==1)then
-		VV(1,1)=1d0
-		Singular(1) = fnorm(Matrix,mm,nn)
-		if(Singular(1)<SafeUnderflow)then
-			UU = 0d0
-		else 
-			UU = Matrix/Singular(1)
-		endif			
-	else
-		if(fnorm(Matrix,mm,nn)<SafeUnderflow)then
-			Singular=0
-			UU=0
-			VV=0
-		else 
-			! write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
-			Singular=0
-			UU=0
-			VV=0
-			
-			
-			call gesddf90(Matrix,Singular,UU,VV,flop)
-			
-			!!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC) 
-			! call gesvdf90(Matrix,Singular,UU,VV,flop)  
-			
-		endif
-	endif
-	
-	
-end subroutine gesvd_robust
-		
-
-		
-subroutine zgesvdf90(Matrix,Singular,UU,VV,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
-real(kind=8) Singular(:)
-integer m,n,mn_min
-real(kind=8),optional::flop
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-
-complex(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-
-allocate(RWORK(5*mn_min))
-RWORK=0
-LWORK=-1
-call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
-allocate(WORK(LWORK))     
-WORK=0
-
-! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
-
-call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'SVD failed!!',INFO
-	stop
-endif
-
-deallocate(WORK,RWORK)
-
-if(present(flop))flop = flops_zgesvd(m,n)
-
-end subroutine zgesvdf90	
-
-
-subroutine dgesvdf90(Matrix,Singular,UU,VV,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
-real(kind=8) Singular(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-real(kind=8),optional::flop
-
-real(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-LWORK=-1
-call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
-allocate(WORK(LWORK))     
-WORK=0
-
-! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
-
-call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'SVD failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-if(present(flop))flop = flops_dgesvd(m,n)
-end subroutine dgesvdf90
-
-
-
-
-subroutine zgesddf90(Matrix,Singular,UU,VV,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
-real(kind=8) Singular(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-integer,allocatable::IWORK(:)
-
-complex(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-allocate(RWORK(max(1,min(m,n)*max(5*min(m,n)+7,2*max(m,n)+2*min(m,n)+1))))
-allocate(IWORK(8*mn_min))
-RWORK=0
-LWORK=-1
-call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, IWORK, INFO)
-
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-
-! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
-
-call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, IWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'SDD failed!!',INFO
-	stop
-endif
-
-deallocate(WORK,RWORK,IWORK)
-if(present(flop))flop = flops_zgesdd(m,n)
-end subroutine zgesddf90	
-
-
-
-subroutine dgesddf90(Matrix,Singular,UU,VV,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
-real(kind=8) Singular(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-integer,allocatable::IWORK(:)
-
-complex(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-allocate(IWORK(8*mn_min))
-LWORK=-1
-call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, IWORK, INFO)
-
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-
-! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
-
-call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, IWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'SDD failed!!',INFO
-	stop
-endif
-
-deallocate(WORK,IWORK)
-if(present(flop))flop = flops_dgesdd(m,n)
-end subroutine dgesddf90	
-
-
-
-
-subroutine zgeqrff90(Matrix,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),tau(:)
-integer m,n,mn_min
-real(kind=8),optional::flop
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-
-complex(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-
-LWORK=-1
-call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'zgeqrff90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-
-! call geqrf(Matrix,tau)
-if(present(flop))flop = flops_zgetrf(m,n)
-end subroutine zgeqrff90
-
-
-
-
-subroutine dgeqrff90(Matrix,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),tau(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-
-real(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-
-LWORK=-1
-call DGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call DGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'dgeqrff90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-
-! call geqrf(Matrix,tau)
-if(present(flop))flop = flops_dgetrf(m,n)
-end subroutine dgeqrff90
-
-
-
-subroutine zgeqp3f90(Matrix,jpvt,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),tau(:)
-integer jpvt(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-
-complex(kind=8),allocatable:: WORK(:)
-
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-allocate(RWORK(2*max(m,n)))
-RWORK=0
-LWORK=-1
-call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
-call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'geqp3f90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-deallocate(RWORK)
-
-! call geqp3(Matrix,jpvt,tau)
-if(present(flop))flop = flops_zgetrf(m,n)
-end subroutine zgeqp3f90
-	
-
-
-subroutine dgeqp3f90(Matrix,jpvt,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),tau(:)
-integer jpvt(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-
-real(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-
-LWORK=-1
-call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
-call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'geqp3f90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-! call geqp3(Matrix,jpvt,tau)
-if(present(flop))flop = flops_dgetrf(m,n)
-end subroutine dgeqp3f90	
-	
-	
-
-subroutine dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),tau(:)
-integer jpvt(:)
-integer m,n,mn_min
-
-real(kind=8)::rtol,atol
-integer LWORK,INFO,rank
-real(kind=8):: TEMP(1)
-real(kind=8),optional::flop
-real(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-rank=0
-
-
-LWORK=-1
-! call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
-call DGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK,INFO, RANK, RTOL, ATOL)
-
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
-! call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
-call DGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK,INFO, RANK, RTOL, ATOL)
-
-
-if(INFO/=0)then
-	write(*,*)'geqp3modf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-! call geqp3(Matrix,jpvt,tau)
-if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
-end subroutine dgeqp3modf90		
-	
-
-subroutine zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),tau(:)
-integer jpvt(:)
-integer m,n,mn_min
-
-real(kind=8)::rtol,atol
-integer LWORK,INFO,rank
-complex(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-
-complex(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-rank=0
-
-allocate(RWORK(2*max(m,n)))
-RWORK=0
-LWORK=-1
-! call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
-call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
-
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
-! call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
-call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
-
-
-if(INFO/=0)then
-	write(*,*)'geqp3modf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-deallocate(RWORK)
-
-! call geqp3(Matrix,jpvt,tau)
-if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
-end subroutine zgeqp3modf90	
-	
-
-
-subroutine ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) a(:,:),tau(:),c(:,:)
-integer m,n,k,lda,ldc, mn_min
-
-character:: side, trans,trans1
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-real(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-trans1=trans
-if(trans1=='C')trans1='T'  
-
-ldc=size(c,1)
-lda=size(a,1)
-
-LWORK=-1
-call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))
-WORK=0     
-call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'ormqrf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-! call unmqr(a,tau,c,side,trans)
-if(present(flop))flop = flops_dunmqr(side,m,n,k)
-end subroutine ormqrf90
-
-	
-	
-subroutine unmqrf90(a,tau,c,side,trans,m,n,k,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)a(:,:),tau(:),c(:,:)
-integer m,n,k,lda,ldc, mn_min
-real(kind=8),optional::flop
-character:: side, trans
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-complex(kind=8),allocatable:: WORK(:)
-
-
-ldc=size(c,1)
-lda=size(a,1)
-
-LWORK=-1
-call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))
-WORK=0     
-call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
-
-if(INFO/=0)then
-	write(*,*)'unmqrf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-! call unmqr(a,tau,c,side,trans)
-if(present(flop))flop = flops_zunmqr(side,m,n,k)
-end subroutine unmqrf90
-
-	
-	
-
-
-
-subroutine orgqrf90(Matrix,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),tau(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-
-real(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-call assert(m>=n,'size of Matrix incorrect')
-
-mn_min = min(m,n)
-
-
-LWORK=-1
-call DORGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call DORGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'orgqrf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-
-! call ungqr(Matrix,tau)
-if(present(flop))flop = flops_dungqr(m,n,mn_min)
-end subroutine orgqrf90	
-	
-
-	
-	
-subroutine ungqrf90(Matrix,tau,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:),tau(:)
-integer m,n,mn_min
-real(kind=8),optional::flop
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-
-complex(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-call assert(m>=n,'size of Matrix incorrect')
-
-mn_min = min(m,n)
-
-
-LWORK=-1
-call ZUNGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call ZUNGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'ungqrf90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-if(present(flop))flop = flops_zungqr(m,n,mn_min)
-! call ungqr(Matrix,tau)
-
-end subroutine ungqrf90	
-	
-	
-	
-
-subroutine dgetrff90(Matrix,ipiv,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:)
-integer ipiv(:)
-integer m,n,mn_min
-
-integer INFO
-real(kind=8),optional::flop
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-	
-call DGETRF( m, n, Matrix, m, ipiv, INFO )
-	
-
-if(INFO/=0)then
-	write(*,*)'getrff90 failed!!',INFO
-	stop
-endif
-	
-	
-! call getrf(Matrix,ipiv)	
-if(present(flop))flop = flops_dgeqrf(m,n)
-end subroutine dgetrff90		
-	
-	
-subroutine zgetrff90(Matrix,ipiv,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8) Matrix(:,:)
-integer ipiv(:)
-integer m,n,mn_min
-real(kind=8),optional::flop
-integer INFO
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-mn_min = min(m,n)
-	
-call ZGETRF( m, n, Matrix, m, ipiv, INFO )
-	
-
-if(INFO/=0)then
-	write(*,*)'getrff90 failed!!',INFO
-	stop
-endif
-	
-	
-! call getrf(Matrix,ipiv)	
-if(present(flop))flop = flops_zgeqrf(m,n)
-end subroutine zgetrff90	
-	
-
-
-
-subroutine dgetrsf90(Matrix,ipiv,B,trans,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:),B(:,:)
-integer ipiv(:)
-integer m,n,mn_min,nrhs
-character:: trans,trans1
-real(kind=8),optional::flop
-integer INFO
-
-n=size(Matrix,1)
-nrhs=size(B,2)
-
-trans1=trans
-if(trans1=='C')trans1='T' 
-
-call DGETRS( trans1, n, nrhs, Matrix, n, ipiv, B, n, INFO )
-
-
-if(INFO/=0)then
-	write(*,*)'getrsf90 failed!!',INFO
-	stop
-endif
-	
-	
-! call getrs(Matrix,ipiv,B,trans)	
-if(present(flop))flop = flops_dgetrs(n,nrhs)	
-end subroutine dgetrsf90		
-	
-subroutine zgetrsf90(Matrix,ipiv,B,trans,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8) Matrix(:,:),B(:,:)
-integer ipiv(:)
-integer m,n,mn_min,nrhs
-character:: trans
-real(kind=8),optional::flop
-integer INFO
-
-n=size(Matrix,1)
-nrhs=size(B,2)
-
-
-call ZGETRS( trans, n, nrhs, Matrix, n, ipiv, B, n, INFO )
-
-
-if(INFO/=0)then
-	write(*,*)'getrsf90 failed!!',INFO
-	stop
-endif
-	
-	
-! call getrs(Matrix,ipiv,B,trans)	
-if(present(flop))flop = flops_zgetrs(n,nrhs)	
-end subroutine zgetrsf90		
-	
-	
-
-
-subroutine dgetrif90(Matrix,ipiv,flop)	
-
-! ! use lapack95
-
-implicit none
-real(kind=8) Matrix(:,:)
-integer ipiv(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-
-real(kind=8),allocatable:: WORK(:)
-real(kind=8),optional::flop
-m=size(Matrix,1)
-n=size(Matrix,2)
-call assert(m<=n,'size of Matrix incorrect')
-
-mn_min = min(m,n)
-
-
-LWORK=-1
-call DGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call DGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'getrif90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-
-! call getri(Matrix,ipiv)	
-if(present(flop))flop = flops_dgetri(mn_min)
-end subroutine dgetrif90	
-	
-	
-subroutine zgetrif90(Matrix,ipiv,flop)	
-
-! ! use lapack95
-
-implicit none
-complex(kind=8)Matrix(:,:)
-integer ipiv(:)
-integer m,n,mn_min
-
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-real(kind=8),optional::flop
-complex(kind=8),allocatable:: WORK(:)
-
-m=size(Matrix,1)
-n=size(Matrix,2)
-call assert(m<=n,'size of Matrix incorrect')
-
-mn_min = min(m,n)
-
-
-LWORK=-1
-call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
-
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
-WORK=0
-call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
-
-
-if(INFO/=0)then
-	write(*,*)'getrif90 failed!!',INFO
-	stop
-endif
-
-deallocate(WORK)
-
-
-! call getri(Matrix,ipiv)	
-if(present(flop))flop = flops_zgetri(mn_min)
-end subroutine zgetrif90		
-	
-
-
-	
-	
-
-subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
-
-! ! use blas95
-
-implicit none
-complex(kind=8) Matrix(:,:),B(:,:),alpha
-integer m,n,lda,ldb
-character side,uplo,transa,diag
-real(kind=8),optional::flop
-integer INFO
-
-alpha=1d0
-
-ldb=size(B,1)
-lda=size(Matrix,1)
-
-call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
-
-
-! call trsm(Matrix,B,side,uplo,transa,diag)	
-if(present(flop))flop = flops_ztrsm(side,m,n)
-end subroutine ztrsmf90		
-
-
-subroutine dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
-
-! ! use blas95
-
-implicit none
-real(kind=8) Matrix(:,:),B(:,:),alpha
-integer m,n,lda,ldb
-character side,uplo,transa,diag
-real(kind=8),optional::flop
-integer INFO
-
-alpha=1d0
-
-ldb=size(B,1)
-lda=size(Matrix,1)
-
-call DTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
-
-
-! call trsm(Matrix,B,side,uplo,transa,diag)	
-if(present(flop))flop = flops_dtrsm(side,m,n)
-end subroutine dtrsmf90		
-
-
-
-
-subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
-
-! ! use blas95
-
-implicit none
-integer m,n,k,lda,ldb,ldc
-real(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
-character transa,transb
-real(kind=8),optional::flop
-
-call dgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
-
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
-if(present(flop))flop = flops_dgemm(m,n,k)
-end subroutine dgemmf90
-
-
-
-subroutine zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
-
-! ! use blas95
-
-implicit none
-integer m,n,k,lda,ldb,ldc
-complex(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
-character transa,transb
-real(kind=8),optional::flop
-
-call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
-
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
-if(present(flop))flop = flops_zgemm(m,n,k)				
-end subroutine zgemmf90
-
-
-
-subroutine pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
-implicit none
-character side,trans
-integer m,n,k,ia,ja,ic,jc
-real(kind=8) MatA(:,:),MatC(:,:),tau(:)
-integer desca(9),descc(9)
-real(kind=8),allocatable:: WORK(:)
-integer LWORK,INFO
-real(kind=8):: TEMP(1)
-real(kind=8),optional::flop
-LWORK=-1
-call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0		
-call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
-deallocate(WORK)
-
-if(present(flop))flop = flops_dunmqr(side,m,n,k)
-
-end subroutine pdormqrf90
-
-
-subroutine pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
-implicit none
-character side,trans
-integer m,n,k,ia,ja,ic,jc
-complex(kind=8) MatA(:,:),MatC(:,:),tau(:)
-integer desca(9),descc(9)
-complex(kind=8),allocatable:: WORK(:)
-integer LWORK,INFO
-complex(kind=8):: TEMP(1)
-real(kind=8),optional::flop
-
-LWORK=-1
-call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0		
-call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
-
-deallocate(WORK)
-if(present(flop))flop = flops_zunmqr(side,m,n,k)
-end subroutine pzunmqrf90
-
-
-
-
-
-
-subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
-implicit none
-integer M,N,ia,ja
-complex(kind=8) Matrix(:,:),tau(:)
-integer ipiv(:),jpiv(:),JPERM(:)
-integer rank
-integer desca(9)
-real(kind=8)::rtol,atol
-integer LWORK,LRWORK,INFO,ierr
-complex(kind=8):: TEMP(1)
-real(kind=8),allocatable::RWORK(:)
-complex(kind=8),allocatable:: WORK(:)
-real(kind=8):: RTEMP(1)
-real(kind=8),optional::flop
-
-LWORK=-1
-LRWORK=-1
-call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0
-lrwork=NINT(dble(RTEMP(1)*2.001))
-allocate(RWORK(lrwork))     
-RWORK=0		
-call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
-
-deallocate(WORK)
-deallocate(RWORK)
-
-if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
-end subroutine pzgeqpfmodf90
-
-
-subroutine pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
-implicit none
-integer M,N,ia,ja
-real(kind=8) Matrix(:,:),tau(:)
-integer ipiv(:),jpiv(:),JPERM(:)
-integer rank
-integer desca(9)
-real(kind=8)::rtol,atol
-integer LWORK,INFO,ierr
-real(kind=8):: TEMP(1)
-real(kind=8),allocatable:: WORK(:)
-
-real(kind=8),optional::flop
-LWORK=-1
-
-call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0	
-call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
-
-deallocate(WORK)
-if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
-
-end subroutine pdgeqpfmodf90
-
-
-
-
-subroutine pgemr2df90(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
-implicit none
-integer M,N,ia,ja,ib,jb
-class(*) MatA(:,:),MatB(:,:)
-integer desca(9),descb(9)
-integer ictxt
-
-select type(MatA)
-type is (real(kind=8))
-	select type(MatB)
-	type is (real(kind=8))
-	call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)	
-	end select
-type is (complex(kind=8))
-	select type(MatB)
-	type is (complex(kind=8))
-	call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
-	end select
-end select
-end subroutine pgemr2df90	
-
-
-
-
-subroutine pgemmf90(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc,flop)
-implicit none
-character transa,transb
-integer m,n,k,ia,ja,ib,jb,ic,jc
-class(*) alpha,beta,a(:,:),b(:,:),c(:,:)
-integer desca(9),descb(9),descc(9)
-real(kind=8),optional::flop
-select type(a)
-type is (real(kind=8))
-	select type(b)
-	type is (real(kind=8))
-	select type(c)
-	type is (real(kind=8))
-	select type(alpha)
-	type is (real(kind=8))	
-	select type(beta)
-	type is (real(kind=8))		
-	call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-	if(present(flop))flop = flops_dgemm(m,n,k)
-	end select
-	end select	
-	end select	
-	end select
-type is (complex(kind=8))
-	select type(b)
-	type is (complex(kind=8))
-	select type(c)
-	type is (complex(kind=8))
-	select type(alpha)
-	type is (complex(kind=8))
-	select type(beta)
-	type is (complex(kind=8))	
-	call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-	if(present(flop))flop = flops_zgemm(m,n,k)
-	end select
-	end select	
-	end select	
-	end select
-end select
-end subroutine pgemmf90
-
-
-subroutine ptrsmf90(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb,flop)
-implicit none
-character side, uplo,transa,diag
-integer m,n,ia,ja,ib,jb
-integer desca(9),descb(9)
-class(*) a(:,:),b(:,:),alpha
-real(kind=8),optional::flop
-
-select type(a)
-type is (real(kind=8))
-	select type(b)
-	type is (real(kind=8))
-	select type(alpha)
-	type is (real(kind=8))	
-	call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
-	if(present(flop))flop = flops_dtrsm(side, m,n)
-	end select
-	end select	
-type is (complex(kind=8))
-	select type(b)
-	type is (complex(kind=8))
-	select type(alpha)
-	type is (complex(kind=8))
-	call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
-	if(present(flop))flop = flops_ztrsm(side, m,n)
-	end select
-	end select		
-end select
-end subroutine ptrsmf90
-
-
-subroutine pgetrff90(m, n, a, ia, ja, desca, ipiv, info,flop)
-implicit none
-integer m,n,ia,ja
-class(*) a(:,:)
-integer desca(9)
-integer ipiv(:)
-integer info
-real(kind=8),optional::flop
-
-select type(a)
-type is (real(kind=8))
-	call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
-	if(present(flop))flop = flops_dgetrf(m,n)	
-type is (complex(kind=8))
-	call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)	
-	if(present(flop))flop = flops_zgetrf(m,n)		
-end select
-end subroutine pgetrff90	
-
-
-
-subroutine pdgetrif90(n, a, ia, ja, desca, ipiv,flop)
-implicit none
-integer n,ia,ja
-real(kind=8):: a(:,:)
-real(kind=8):: TEMP(1)
-integer desca(9)
-integer ipiv(:)
-integer info
-integer TEMPI(1)
-integer lwork,liwork
-integer, allocatable :: iwork(:)
-real(kind=8),allocatable:: work(:)
-real(kind=8),optional::flop
-
-call pdgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(work(lwork))
-work=0
-liwork=TEMPI(1)
-allocate(iwork(liwork))
-iwork=0	
-call pdgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)	
-deallocate(iwork)
-deallocate(work)
-
-if(present(flop))flop = flops_dgetri(n)
-
-end subroutine pdgetrif90
-
-subroutine pzgetrif90(n, a, ia, ja, desca, ipiv,flop)
-implicit none
-integer n,ia,ja
-complex(kind=8):: a(:,:)
-complex(kind=8):: TEMP(1)
-integer desca(9)
-integer ipiv(:)
-integer info
-integer TEMPI(1)
-integer lwork,liwork
-integer, allocatable :: iwork(:)
-complex(kind=8),allocatable:: work(:)
-real(kind=8),optional::flop
-
-call pzgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
-LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(work(lwork))
-work=0
-liwork=TEMPI(1)
-allocate(iwork(liwork))
-iwork=0	
-call pzgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)
-	
-deallocate(iwork)
-deallocate(work)
-
-if(present(flop))flop = flops_zgetri(n)
-
-end subroutine pzgetrif90
-
-
-
-subroutine pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
-implicit none
-
-character jobu,jobvt
-integer m,n,ia,ja,iu,ju,ivt,jvt
-real(kind=8):: a(:,:),u(:,:),vt(:,:)
-integer desca(9),descu(9),descvt(9)
-real(kind=8):: s(:)
-real(kind=8):: TEMP(1)
-integer LWORK,mnmax,mnmin
-real(kind=8),allocatable:: WORK(:)	
-integer info
-real(kind=8),optional::flop
-mnmax = max(m,n)
-mnmin = min(m,n)
-
-lwork=-1
-call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, info)
-
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0
-call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, info)
-
-deallocate(WORK)	
-if(present(flop))flop = flops_dgesvd(m,n)
-
-end subroutine pdgesvdf90
-
-
-
-subroutine pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
-implicit none
-
-character jobu,jobvt
-integer m,n,ia,ja,iu,ju,ivt,jvt
-complex(kind=8):: a(:,:),u(:,:),vt(:,:)
-integer desca(9),descu(9),descvt(9)
-real(kind=8):: s(:)
-complex(kind=8):: TEMP(1)
-integer LWORK,mnmax,mnmin
-complex(kind=8),allocatable:: WORK(:)	
-real(kind=8),allocatable::RWORK(:)
-integer info
-real(kind=8),optional::flop
-
-mnmax = max(m,n)
-mnmin = min(m,n)
-
-allocate(rwork(1+4*mnmax))
-rwork=0
-lwork=-1
-call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, rwork, info)
-
-lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0
-call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, rwork, info)
-
-
-deallocate(WORK,rwork)	
-if(present(flop))flop = flops_zgesvd(m,n)
-
-end subroutine pzgesvdf90
 
 
 
@@ -4710,291 +3320,5 @@ integer :: a,b,t,as,bs
 	end do
 	gcd = abs(as)
 end function gcd
-
-
-
-real(kind=8) function flops_zgesdd(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		flops_zgesdd = 4.*(8.*m*n*n + 4./3.*n*n*n)
-	else
-		flops_zgesdd = 4.*(8.*n*m*m + 4./3.*m*m*m)
-	endif
-end function flops_zgesdd
-
-real(kind=8) function flops_dgesdd(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		flops_dgesdd = 8.*m*n*n + 4./3.*n*n*n
-	else
-		flops_dgesdd = 8.*n*m*m + 4./3.*m*m*m
-	endif
-end function flops_dgesdd
-
-
-real(kind=8) function flops_zgesvd(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		flops_zgesvd = 4.*(12.*m*n*n + 16./3.*n*n*n)
-	else
-		flops_zgesvd = 4.*(12.*n*m*m + 16./3.*m*m*m)
-	endif
-end function flops_zgesvd
-
-
-real(kind=8) function flops_dgesvd(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		flops_dgesvd = 12.*m*n*n + 16./3.*n*n*n
-	else
-		flops_dgesvd = 12.*n*m*m + 16./3.*m*m*m
-	endif
-end function flops_dgesvd
-
-
-real(kind=8) function flops_dgeqpfmod(m, n, k)
-	implicit none 
-	integer m,n,k
-	if(m>n)then	
-		flops_dgeqpfmod = 2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k))
-	else
-		flops_dgeqpfmod = 2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k))
-	endif
-end function flops_dgeqpfmod
-
-real(kind=8) function flops_zgeqpfmod(m, n, k)
-	implicit none 
-	integer m,n,k
-	if(m>n)then	
-		flops_zgeqpfmod = 4.*(2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k)))
-	else
-		flops_zgeqpfmod = 4.*(2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k)))
-	endif
-end function flops_zgeqpfmod
-
-
-
-real(kind=8) function fmuls_geqrf(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		fmuls_geqrf = m*n*n - 1./3.*n*n*n +   m*n + 0.5*n*n + 23./6.*n
-	else
-		fmuls_geqrf = n*m*m - 1./3.*m*m*m + 2*n*m - 0.5*m*m + 23./6.*m
-	endif
-end function fmuls_geqrf
-real(kind=8) function fadds_geqrf(m, n)
-	implicit none 
-	integer m,n
-	if(m>n)then	
-		fadds_geqrf = m*n*n - 1./3.*n*n*n + 0.5*n*n       + 5./6.*n
-	else
-		fadds_geqrf = n*m*m - 1./3.*m*m*m + n*m - 0.5*m*m + 5./6.*m
-	endif
-end function fadds_geqrf
-real(kind=8) function flops_zgeqrf(m, n)
-	implicit none 
-	integer m,n
-	flops_zgeqrf = 6.*fmuls_geqrf(m, n) + 2.*fadds_geqrf(m, n)
-end function flops_zgeqrf
-real(kind=8) function flops_dgeqrf(m, n)
-	implicit none 
-	integer m,n
-	flops_dgeqrf = fmuls_geqrf(m, n) + fadds_geqrf(m, n)
-end function flops_dgeqrf
-
-
-
-real(kind=8) function fmuls_ungqr(m, n, k)
-	implicit none 
-	integer m,n,k
-    fmuls_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + 2.*n*k - k*k - 5./3.*k
-end function fmuls_ungqr
-real(kind=8) function fadds_ungqr(m, n, k)
-	implicit none 
-	integer m,n,k
-    fadds_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + n*k - m*k + 1./3.*k
-end function fadds_ungqr
-real(kind=8) function flops_zungqr(m, n,k)
-	implicit none 
-	integer m,n,k
-	flops_zungqr = 6.*fmuls_ungqr(m, n,k) + 2.*fadds_ungqr(m, n,k)
-end function flops_zungqr
-real(kind=8) function flops_dungqr(m, n,k)
-	implicit none 
-	integer m,n,k
-	flops_dungqr = fmuls_ungqr(m, n,k) + fadds_ungqr(m, n,k)
-end function flops_dungqr
-
-
-
-real(kind=8) function fmuls_unmqr(side, m, n, k)
-	integer m,n,k
-	character side
-	if(side=='L')then
-		fmuls_unmqr = 2.*n*m*k - n*k*k + 2.*n*k
-	else
-		fmuls_unmqr = 2.*n*m*k - m*k*k + m*k + n*k - 0.5*k*k + 0.5*k
-	endif
-end function fmuls_unmqr
-
-real(kind=8) function fadds_unmqr(side, m, n, k)
-	integer m,n,k
-	character side
-	if(side=='L')then
-		fadds_unmqr = 2.*n*m*k - n*k*k + n*k
-	else
-		fadds_unmqr = 2.*n*m*k - m*k*k + m*k
-	endif
-end function fadds_unmqr
-
-real(kind=8) function flops_zunmqr(side, m, n, k)
-	integer m,n,k
-	character side
-	flops_zunmqr = 6.*fmuls_unmqr(side, m, n, k) + 2.*fadds_unmqr(side, m, n, k)
-end function flops_zunmqr
-
-
-real(kind=8) function flops_dunmqr(side, m, n, k)
-	integer m,n,k
-	character side
-	flops_dunmqr = fmuls_unmqr(side, m, n, k) + fadds_unmqr(side, m, n, k)
-end function flops_dunmqr
-
-
-real(kind=8) function fmuls_getrf(m, n)
-	implicit none 
-	integer m,n
-	
-	if(m>n)then	
-		fmuls_getrf = 0.5*m*n*n - 1./6.*n*n*n + 0.5*m*n - 0.5*n*n + 2./3.*n
-	else
-		fmuls_getrf = 0.5*n*m*m - 1./6.*m*m*m + 0.5*n*m - 0.5*m*m + 2./3.*m
-	endif	
-end function fmuls_getrf
-real(kind=8) function fadds_getrf(m, n)
-	implicit none 
-	integer m,n
-	
-	if(m>n)then	
-		fadds_getrf = 0.5*m*n*n - 1./6.*n*n*n - 0.5*m*n + 1./6.*n
-	else
-		fadds_getrf = 0.5*n*m*m - 1./6.*m*m*m - 0.5*n*m + 1./6.*m
-	endif	
-end function fadds_getrf
-real(kind=8) function flops_zgetrf(m, n)
-	implicit none 
-	integer m,n
-	flops_zgetrf = 6.*fmuls_getrf(m, n) + 2.*fadds_getrf(m, n)
-end function flops_zgetrf
-real(kind=8) function flops_dgetrf(m, n)
-	implicit none 
-	integer m,n
-	flops_dgetrf = fmuls_getrf(m, n) + fadds_getrf(m, n)
-end function flops_dgetrf
-
-
-
-
-real(kind=8) function fmuls_getrs(n, nrhs)
-	implicit none
-	integer n,nrhs
-    fmuls_getrs =  nrhs*n*n
-end function fmuls_getrs	
-real(kind=8) function fadds_getrs(n, nrhs)
-	implicit none
-	integer n,nrhs
-    fadds_getrs =  nrhs*n*(n - 1)
-end function fadds_getrs	
-real(kind=8) function flops_zgetrs(n, nrhs)
-	implicit none 
-	integer n,nrhs
-	flops_zgetrs = 6.*fmuls_getrs(n,nrhs) + 2.*fadds_getrs(n,nrhs)
-end function flops_zgetrs
-real(kind=8) function flops_dgetrs(n, nrhs)
-	implicit none 
-	integer n,nrhs
-	flops_dgetrs = fmuls_getrs(n,nrhs) + fadds_getrs(n,nrhs)
-end function flops_dgetrs
-
-
-
-real(kind=8) function fmuls_getri(n)
-	implicit none 
-	integer n
-    fmuls_getri = 2./3.*n*n*n + 0.5*n*n + 5./6.*n
-end function fmuls_getri	
-real(kind=8) function fadds_getri(n)
-	implicit none 
-	integer n
-    fadds_getri = 2./3.*n*n*n - 1.5*n*n + 5./6.*n
-end function fadds_getri	
-real(kind=8) function flops_zgetri(n)
-	implicit none 
-	integer n
-	flops_zgetri = 6.*fmuls_getri(n) + 2.*fadds_getri(n)
-end function flops_zgetri
-real(kind=8) function flops_dgetri(n)
-	implicit none 
-	integer n
-	flops_dgetri = fmuls_getri(n) + fadds_getri(n)
-end function flops_dgetri
-
-
-real(kind=8) function fmuls_trsm(side, m, n)
-	integer m,n
-	character side
-	if(side=='L')then
-		fmuls_trsm = 0.5*n*m*(m + 1)
-	elseif(side=='R')then
-		fmuls_trsm = 0.5*m*n*(n + 1)
-	endif
-end function fmuls_trsm	
-real(kind=8) function fadds_trsm(side, m, n)
-	integer m,n
-	character side
-	if(side=='L')then
-		fadds_trsm = 0.5*n*m*(m - 1)
-	elseif(side=='R')then
-		fadds_trsm = 0.5*m*n*(n - 1)
-	endif
-end function fadds_trsm	
-real(kind=8) function flops_ztrsm(side, m, n)
-	integer m,n
-	character side
-	flops_ztrsm = 6.*fmuls_trsm(side, m, n) + 2.*fadds_trsm(side, m, n)
-end function flops_ztrsm
-real(kind=8) function flops_dtrsm(side, m, n)
-	integer m,n
-	character side
-	flops_dtrsm = fmuls_trsm(side, m, n) + fadds_trsm(side, m, n)
-end function flops_dtrsm
-
-
-real(kind=8) function fmuls_gemm(m, n, k)
-	implicit none 
-	integer m,n,k
-    fmuls_gemm = m*n*k
-end function fmuls_gemm
-real(kind=8) function fadds_gemm(m, n, k)
-	implicit none 
-	integer m,n,k
-    fadds_gemm = m*n*k
-end function fadds_gemm
-real(kind=8) function flops_zgemm(m, n,k)
-	implicit none 
-	integer m,n,k
-	flops_zgemm = 6.*fmuls_gemm(m, n,k) + 2.*fadds_gemm(m, n,k)
-end function flops_zgemm
-real(kind=8) function flops_dgemm(m, n,k)
-	implicit none 
-	integer m,n,k
-	flops_dgemm = fmuls_gemm(m, n,k) + fadds_gemm(m, n,k)
-end function flops_dgemm
-
 
 end module misc

@@ -250,7 +250,9 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 		allocate(matrixtempQ(mm,ranks(bb)))
 		matrixtempQ = RandVectOutR(header_m:header_m+mm-1,1:ranks(bb))
 		
-		call gemm_omp(matrixtempQ,UU(1:ranks(bb),1:rank),block_rand(bb)%ButterflyU%blocks(1)%matrix,mm,ranks(bb),rank)
+		! call gemm_omp(matrixtempQ,UU(1:ranks(bb),1:rank),block_rand(bb)%ButterflyU%blocks(1)%matrix,mm,rank,ranks(bb))
+		call gemmf90(matrixtempQ,mm,UU,ranks(bb),block_rand(bb)%ButterflyU%blocks(1)%matrix,mm,'N','N',mm,rank,ranks(bb),cone,czero)
+		
 		
 		deallocate(matrixtemp,matrixtempQ,UU,VV,Singular)
 

@@ -574,7 +574,10 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 		write(*,*)shape(matB),fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei',fnorm(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix,dimension_nn,mm)
 		stop
 	   end if
-	   call gemm_omp(matB,matinv,matA,mm,dimension_nn,rank)
+	   ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
+	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero)
+	   
+	   
 	   call LeastSquare(mm,rank,dimension_nn,matA,matB,matC,option%tol_LS)
 	   call copymatT_omp(matC,blocks%ButterflyV%blocks(j)%matrix,rank,dimension_nn)						   
 	   deallocate(matB,matC,matA,matinv)						   
@@ -589,7 +592,8 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 		write(*,*)fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei1'
 		stop
 	   end if
-	   call gemm_omp(matB,matinv,matA,mm,dimension_nn,rank)
+	   ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
+	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero)
 	   if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
 	   call copymatT_omp(matA,vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)					   
 	   deallocate(matB,matA,matinv)	
@@ -657,7 +661,8 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'ho'
 		 stop
 	    end if
-		call gemm_omp(matB,matinv,matA,mm,nn1+nn2,rank)
+		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
 		call copymatN_omp(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix,rank,nn1)
 		call copymatN_omp(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix,rank,nn2)							
@@ -685,7 +690,8 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'ho1'
 		 stop
 	    end if		
-		call gemm_omp(matB,matinv,matA,mm,nn1+nn2,rank)
+		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(rank,num_vect_sub))
 		call copymatT_omp(matA,vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matC,matA,matinv)	
@@ -818,7 +824,8 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
 			 stop
 			end if		
-			call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)							
+			! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)							
+			call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS)
 			call copymatT_omp(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA,matinv)
@@ -848,7 +855,8 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 		 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee1'
 		 stop
 	    end if			
-		call gemm_omp(matB,matinv,matA,mm,dimension_mm,rank)
+		! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)
+		call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 		call copymatT_OMP(matA,vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)					
@@ -948,8 +956,8 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
 			 stop
 			end if	
-			call gemm_omp(matB,matinv,matA,mm,nn1+nn2,rank)
-			
+			! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
+			call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
 			call copymatT_omp(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
 			call copymatT_omp(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
@@ -979,7 +987,8 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
 		 stop
 		end if			
-		call gemm_omp(matB,matinv,matA,mm,nn1+nn2,rank)
+		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix))allocate(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(rank,num_vect_sub))
 		call copymatT_omp(matA,vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)
@@ -3555,9 +3564,10 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				deallocate(RandVectOutR)
 				! write(*,*)'yani 5'
 
-				call gemm_omp(matV_glo(1:rank,1:nn),Vin,Vout3,rank,nn,1)
-				call gemm_omp(matU_glo(1:mm,1:rank),Vout3,Vout2,mm,rank,1)
-				
+				! call gemm_omp(matV_glo(1:rank,1:nn),Vin,Vout3,rank,1,nn)
+				call gemmf90(matV_glo,rmax,Vin,nn,Vout3,rank,'N','N',rank,1,nn,cone,czero)
+				! call gemm_omp(matU_glo(1:mm,1:rank),Vout3,Vout2,mm,1,rank)
+				call gemmf90(matU_glo,mm,Vout3,rank,Vout2,mm,'N','N',mm,1,rank,cone,czero)
 				
 				error_inout = fnorm(Vout2-Vout1,mm,1)/fnorm(Vout1,mm,1)
 				! write(*,*)error_inout,bb_o,'ninini'				

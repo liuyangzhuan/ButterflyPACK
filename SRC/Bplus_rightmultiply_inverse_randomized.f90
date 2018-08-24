@@ -112,14 +112,13 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) a,b,c,d
-    DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o,blocks
 	
     type(vectorsblock), pointer :: random1, random2
     
     real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_end_diag,idx_start_loc,idx_end_loc
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:)
 	
 	integer Nsub,Ng,unique_nth,level_left_start
 	integer*8 idx_start   
@@ -141,11 +140,7 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 	  
     level_butterfly=block_o%level_butterfly
     call assert(level_butterfly==0,'Butterfly_Sblock_LowRank only works with LowRank blocks')
-	
-	
-	ctemp1=1.0d0 ; ctemp2=0.0d0
-	
-	
+		
 	
 	
 	num_blocks=2**level_butterfly
@@ -186,7 +181,7 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 			idx_end_loc = tail-idx_start_glo+1
 			if(level==ho_bf1%Maxlevel+1)then
 				call fullmat_block_MVP_dat(blocks,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
-				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
+				&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,czero)
 			else 
 				call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
 			endif	

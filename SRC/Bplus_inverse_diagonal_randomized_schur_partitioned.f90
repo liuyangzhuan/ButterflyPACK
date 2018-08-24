@@ -998,7 +998,8 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_A%ButterflyV%blocks(1)%ndim=nn1		
 		allocate(blocks_A%ButterflyU%blocks(1)%matrix(M1,nn1))
 		allocate(blocks_A%ButterflyV%blocks(1)%matrix(N1,nn1))		
-		call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,blocks_A%ButterflyU%blocks(1)%matrix, M1, mm1, nn1)
+		! call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,blocks_A%ButterflyU%blocks(1)%matrix, M1, nn1, mm1)
+		call gemmf90(blocks_i%ButterflyU%blocks(1)%matrix,M1,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,mm1,blocks_A%ButterflyU%blocks(1)%matrix,M1,'N','N',M1, nn1, mm1,cone,czero)
 		blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
 		blocks_A%rankmax = nn1
 		blocks_A%rankmin = nn1
@@ -1010,7 +1011,8 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_B%ButterflyV%blocks(1)%ndim=nn2		
 		allocate(blocks_B%ButterflyU%blocks(1)%matrix(M1,nn2))
 		allocate(blocks_B%ButterflyV%blocks(1)%matrix(N2,nn2))
-		call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,blocks_B%ButterflyU%blocks(1)%matrix, M1, mm1, nn2)
+		! call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,blocks_B%ButterflyU%blocks(1)%matrix, M1, nn2, mm1)
+		call gemmf90(blocks_i%ButterflyU%blocks(1)%matrix,M1,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,mm1,blocks_B%ButterflyU%blocks(1)%matrix,M1,'N','N',M1, nn2, mm1,cone,czero)
 		blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix		
 		blocks_B%rankmax = nn2
 		blocks_B%rankmin = nn2
@@ -1022,7 +1024,8 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_C%ButterflyV%blocks(1)%ndim=nn1			
 		allocate(blocks_C%ButterflyU%blocks(1)%matrix(M2,nn1))
 		allocate(blocks_C%ButterflyV%blocks(1)%matrix(N1,nn1))
-		call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,blocks_C%ButterflyU%blocks(1)%matrix, M2, mm2, nn1)
+		! call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,blocks_C%ButterflyU%blocks(1)%matrix, M2, nn1, mm2)
+		call gemmf90(blocks_i%ButterflyU%blocks(2)%matrix,M2,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,mm2,blocks_C%ButterflyU%blocks(1)%matrix,M2,'N','N',M2, nn1, mm2,cone,czero)
 		blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
 		blocks_C%rankmax = nn1
 		blocks_C%rankmin = nn1				
@@ -1034,7 +1037,8 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		blocks_D%ButterflyV%blocks(1)%ndim=nn2			
 		allocate(blocks_D%ButterflyU%blocks(1)%matrix(M2,nn2))
 		allocate(blocks_D%ButterflyV%blocks(1)%matrix(N2,nn2))
-		call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,blocks_D%ButterflyU%blocks(1)%matrix, M2, mm2, nn2)
+		! call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,blocks_D%ButterflyU%blocks(1)%matrix, M2, nn2, mm2)
+		call gemmf90(blocks_i%ButterflyU%blocks(2)%matrix,M2,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,mm2,blocks_D%ButterflyU%blocks(1)%matrix,M2,'N','N',M2, nn2, mm2,cone,czero)
 		blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix			
 		blocks_D%rankmax = nn2
 		blocks_D%rankmin = nn2
@@ -1161,8 +1165,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			M1=M1+blocks_A%ButterflyU%blocks(ii)%mdim
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,matrixtemp1,mm1,nn1,kk)
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,matrixtemp2,mm2,nn2,kk)
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,matrixtemp1,mm1,kk,nn1)
+			
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
+			
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,matrixtemp2,mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
 			blocks_A%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_A%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
 			deallocate(matrixtemp1)
@@ -1180,8 +1188,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,matrixtemp1, mm1,nn1,kk)
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,matrixtemp2, mm2,nn2,kk)
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,matrixtemp1, mm1,kk,nn1)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)  
+			
+			
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,matrixtemp2, mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero) 			
 			blocks_A%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_A%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
 			deallocate(matrixtemp1)
@@ -1202,8 +1214,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			blocks_B%ButterflyU%blocks(ii)%ndim=kk
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))			
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,matrixtemp1,mm1,nn1,kk)
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,matrixtemp2,mm2,nn2,kk)
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,matrixtemp1,mm1,kk,nn1)
+			
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
+			
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,matrixtemp2,mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
 			blocks_B%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_B%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
 			deallocate(matrixtemp1)
@@ -1219,8 +1235,11 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			blocks_B%ButterflyV%blocks(ii)%ndim=kk
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))	
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,nn1,kk)
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,nn2,kk)
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,kk,nn1)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)			
+			
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)	
 			blocks_B%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_B%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
 			deallocate(matrixtemp1)
@@ -1240,8 +1259,10 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			blocks_C%ButterflyU%blocks(ii)%ndim=kk
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))			
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,matrixtemp1,mm1,nn1,kk)
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,matrixtemp2,mm2,nn2,kk)
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,matrixtemp1,mm1,kk,nn1)
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)			
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,matrixtemp2,mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
 			blocks_C%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_C%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
 			deallocate(matrixtemp1)
@@ -1257,8 +1278,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			allocate(blocks_C%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
 			blocks_C%ButterflyV%blocks(ii)%mdim=mm1+mm2
 			blocks_C%ButterflyV%blocks(ii)%ndim=kk			
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,matrixtemp1, mm1,nn1,kk)
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,matrixtemp2, mm2,nn2,kk)
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,matrixtemp1, mm1,kk,nn1)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)					
+			
+			
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,matrixtemp2, mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)				
 			blocks_C%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_C%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
 			deallocate(matrixtemp1)
@@ -1281,8 +1306,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			blocks_D%ButterflyU%blocks(ii)%ndim=kk			
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,matrixtemp1,mm1,nn1,kk)
-			call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,matrixtemp2,mm2,nn2,kk)
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,matrixtemp1,mm1,kk,nn1)
+			
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
+			
+			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,matrixtemp2,mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
 			blocks_D%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_D%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
 			deallocate(matrixtemp1)
@@ -1299,8 +1328,10 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 			blocks_D%ButterflyV%blocks(ii)%ndim=kk					
 			allocate(matrixtemp1(mm1,kk))
 			allocate(matrixtemp2(mm2,kk))
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,nn1,kk)
-			call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,nn2,kk)
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,kk,nn1)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)				
+			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,kk,nn2)
+			call gemmf90(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)				
 			blocks_D%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
 			blocks_D%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2			
 			deallocate(matrixtemp1) 
@@ -1577,7 +1608,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	
 	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp)
 	
-	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop)	
+	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop=flop)	
 	stats%Flop_Factor = stats%Flop_Factor + flop
 	
 	! write(*,*)'goog1'
@@ -1592,9 +1623,9 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	if(rank<=nbslpk)then
 		allocate(ipiv(rank))
 		ipiv=0
-		call getrff90(matrixtemp1,ipiv,flop)
+		call getrff90(matrixtemp1,ipiv,flop=flop)
 		stats%Flop_Factor = stats%Flop_Factor + flop
-		call getrif90(matrixtemp1,ipiv,flop)	
+		call getrif90(matrixtemp1,ipiv,flop=flop)	
 		stats%Flop_Factor = stats%Flop_Factor + flop
 		deallocate(ipiv)
 	else 
@@ -1625,10 +1656,10 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
-			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop)
+			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop=flop)
 			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 			
-			call pgetrif90(rank,matrix_small,1,1,descsmall,ipiv,flop)
+			call pgetrif90(rank,matrix_small,1,1,descsmall,ipiv,flop=flop)
 			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 			
 			deallocate(ipiv)
@@ -1643,7 +1674,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	endif
 	
 	
-	call gemmf90(matU,block_o%M_loc,matrixtemp1,rank,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,'N','N',block_o%M_loc,rank,rank,cone,czero,flop)	
+	call gemmf90(matU,block_o%M_loc,matrixtemp1,rank,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,'N','N',block_o%M_loc,rank,rank,cone,czero,flop=flop)	
 	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
 	stats%Flop_Factor = stats%Flop_Factor + flop
 	
