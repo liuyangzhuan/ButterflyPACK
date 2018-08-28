@@ -1,9 +1,10 @@
-module MODULE_FILE
+#include "HODLR_config.fi"
+module HODLR_DEFS
 	use iso_c_binding    
 	implicit none
     INCLUDE 'mpif.h'   
 	
-#include "HODLR_config.fi"
+
 	
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)
@@ -222,8 +223,8 @@ module MODULE_FILE
 		integer Maxlevel,N ! HODLR levels and sizes 
 		integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
 		type(cascadingfactors),allocatable::levels(:) ! 	 
-	end type hobf 
-	 
+	end type hobf
+	
 	 
 	!**** partitioned blocks for reursive computing (I+B)^-1
 	 type partitionedblocks
@@ -292,7 +293,7 @@ module MODULE_FILE
 
 	 
 	!**** quantities related to geometries, meshes, unknowns and points 
-	type Mesh	
+	type mesh	
 		integer Nunk ! size of the matrix 
 		integer idxs,idxe  ! range of local row/column indices after reordering
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
@@ -326,7 +327,7 @@ module MODULE_FILE
 		real(kind=8),allocatable::corner_points(:,:) ! coordinates of corner points 
 		real(kind=8)::corner_radius ! radius of the corner points within which no partitioning is performed 
 		
-	end type Mesh
+	end type mesh
 	 
 	!**** quantities related to specific matrix kernels  
 	type kernelquant
@@ -374,7 +375,7 @@ module MODULE_FILE
 			type(kernelquant)::ker
 		end subroutine Z_elem
 		
-		subroutine F_Z_elem(ker,m,n,val,msh,quant) ! m,n represents old indices
+		subroutine F_Z_elem(ker,m,n,val,msh,quant) ! m,n represents indices in natural order
 		  import::mesh,kernelquant
 		  class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
 		  class(*),pointer :: quant
@@ -383,11 +384,11 @@ module MODULE_FILE
 		  DT::val 
 		end subroutine F_Z_elem
 
-		subroutine C_Z_elem (m,n,val,quant) ! m,n represents old indices
+		subroutine C_Z_elem (m,n,val,quant) ! m,n represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
 		  integer(kind=C_INT), INTENT(IN):: m,n
-		  C_DT::val 
+		  CBIND_DT::val 
 		end subroutine C_Z_elem		
 		
 		
@@ -400,7 +401,4 @@ module MODULE_FILE
 	 integer vecCNT
 	 
 	 integer,allocatable:: basis_group_pre(:,:)
-	 
-
-end module
-
+end module HODLR_DEFS

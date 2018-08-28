@@ -6,5 +6,5 @@ Name: @CMAKE_PROJECT_NAME@
 Description: Distributed-memory HOD-LR-BF solver
 Version: @PROJECT_VERSION@
 
-Libs: -L${libdir} -lhodlrbf
+Libs: -L${libdir} -lzhodlrbf -ldhodlrbf
 Cflags: -I${includedir}

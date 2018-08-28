@@ -61,10 +61,10 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 if (BUILD_SHARED_LIBS)
   message("-- HOD-LR-BF will be built as a shared library.")
-  set(PROJECT_NAME_LIB_EXPORT libhodlrbf.so)
+  # set(PROJECT_NAME_LIB_EXPORT libhodlrbf.so)
 else()
   message("-- HOD-LR-BF will be built as a static library.")
-  set(PROJECT_NAME_LIB_EXPORT libhodlrbf.a)
+  # set(PROJECT_NAME_LIB_EXPORT libhodlrbf.a)
 endif()
 
 enable_language (C)
@@ -82,27 +82,27 @@ if (NOT CMAKE_INSTALL_PREFIX)
   set(CMAKE_INSTALL_PREFIX /usr/local)
 endif()
 
-# setup default options
-set(enable_complex_DEFAULT OFF)
+# # setup default options
+# set(enable_complex_DEFAULT OFF)
 
 
-if (enable_complex)
-  message("-- HOD-LR-BF will be built for double-complex data type only.")
-  set(CMAKE_Fortran_FLAGS "-DDAT_CMPLX ${CMAKE_Fortran_FLAGS}")
-else()
-  message("-- HOD-LR-BF will be built for double data type only.")
-  # set(CMAKE_Fortran_FLAGS "-DCMPLX ${CMAKE_Fortran_FLAGS}")
-endif()
+# if (enable_complex)
+  # message("-- HOD-LR-BF will be built for double-complex data type only.")
+  # set(CMAKE_Fortran_FLAGS "-DDAT=0 ${CMAKE_Fortran_FLAGS}")
+# else()
+  # message("-- HOD-LR-BF will be built for double data type only.")
+  # set(CMAKE_Fortran_FLAGS "-DDAT=1 ${CMAKE_Fortran_FLAGS}")
+# endif()
 
 
-# setup required compiler defines and options.
-## get_directory_property( DirDefs COMPILE_DEFINITIONS )
-# set(CMAKE_C_FLAGS "-DDEBUGlevel=0 -DPRNTlevel=0 ${CMAKE_C_FLAGS}")
-if(XSDK_INDEX_SIZE EQUAL 64)
-    message("-- Using 64 bit integer for index size")
-    set(CMAKE_C_FLAGS "-D_LONGINT ${CMAKE_C_FLAGS}")
-endif()	
-set(CMAKE_C_FLAGS_RELEASE "-O3" CACHE STRING "")
+# # setup required compiler defines and options.
+# ## get_directory_property( DirDefs COMPILE_DEFINITIONS )
+# # set(CMAKE_C_FLAGS "-DDEBUGlevel=0 -DPRNTlevel=0 ${CMAKE_C_FLAGS}")
+# if(XSDK_INDEX_SIZE EQUAL 64)
+    # message("-- Using 64 bit integer for index size")
+    # set(CMAKE_C_FLAGS "-D_LONGINT ${CMAKE_C_FLAGS}")
+# endif()	
+# set(CMAKE_C_FLAGS_RELEASE "-O3" CACHE STRING "")
 
 ######################################################################
 #
@@ -238,7 +238,8 @@ include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 #
 ######################################################################
 
-add_subdirectory(SRC)
+add_subdirectory(SRC_DOUBLE)
+add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(EXAMPLE)
 
 if(enable_doc)

@@ -1,4 +1,4 @@
-      SUBROUTINE PZGEQPFmod( M, N, A, IA, JA, DESCA, IPIV, TAU, WORK,
+      subroutine PZGEQPFmod( M, N, A, IA, JA, DESCA, IPIV, TAU, WORK,
      $                    LWORK, RWORK, LRWORK, INFO, JPERM, JPIV, RANK,
      $                    RTOL, ATOL )
 *
@@ -587,4 +587,4 @@
 *
 *     End of PZGEQPF
 *
-      END
+      end subroutine PZGEQPFmod

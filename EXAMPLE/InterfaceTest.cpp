@@ -19,7 +19,7 @@
 #include <atomic>
 #include <mpi.h>
 
-#include "C_HODLR_C_Interface.h"
+#include "dC_HODLR_C_Interface.h"
 
 
 
@@ -272,7 +272,7 @@ int main(int argc, char* argv[])
 	F2Cptr ho_bf;  //HODLR returned by Fortran code 
 	F2Cptr option;     //option structure returned by Fortran code 
 	F2Cptr stats;      //statistics structure returned by Fortran code
-	F2Cptr msh;		   //mesh structure returned by Fortran code
+	F2Cptr msh;		   //d_mesh structure returned by Fortran code
 	F2Cptr kerquant;   //kernel quantities structure returned by Fortran code
 	F2Cptr ptree;      //process tree returned by Fortran code
 	
@@ -293,13 +293,13 @@ int main(int argc, char* argv[])
 	int sort_opt=1; //1:KD tree 3:balanced 2-means
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
-	set_hodlr_D_option(&option, "tol_comp", tol);
-	set_hodlr_I_option(&option, "preorder", preorder);
-	set_hodlr_I_option(&option, "Nmin_leaf", Nmin); 
-	set_hodlr_I_option(&option, "RecLR_leaf", com_opt); 
-	set_hodlr_I_option(&option, "xyzsort", sort_opt); 
-	set_hodlr_I_option(&option, "ErrFillFull", checkerr); 
-	set_hodlr_I_option(&option, "BACA_Batch", batch); 
+	c_hodlr_set_D_option(&option, "tol_comp", tol);
+	c_hodlr_set_I_option(&option, "preorder", preorder);
+	c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
+	c_hodlr_set_I_option(&option, "RecLR_leaf", com_opt); 
+	c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 
+	c_hodlr_set_I_option(&option, "ErrFillFull", checkerr); 
+	c_hodlr_set_I_option(&option, "BACA_Batch", batch); 
 	
 
     // construct hodlr with geometrical points	

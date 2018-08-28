@@ -1,6 +1,6 @@
 PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
 	use omp_lib
 	use Utilities
 	
@@ -11,7 +11,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	type(matrixblock),pointer::block
 	complex(kind=8) ctemp, ctemp1, ctemp2
 	complex(kind=8),allocatable:: vec_in(:,:),vec_out(:,:)
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	
 	! time_indexarray = 0
 	! time_leastsquare = 0
@@ -74,8 +74,8 @@ END PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 
 
 subroutine create_butterfly_simple(block,level_butterfly,dimension_m,dimension_n,dimension_rank,inner_rank)
-	use misc
-    use MODULE_FILE
+	use z_misc
+    use z_HODLR_DEFS
 	! ! use lapack95
 	! ! use blas95
     implicit none

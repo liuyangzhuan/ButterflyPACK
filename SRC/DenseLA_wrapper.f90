@@ -1,104 +1,99 @@
-
-module DenseLA_wrapper
-use MODULE_FILE
-use omp_lib
 #include "HODLR_config.fi"
-
-interface fnorm
-  module procedure dlangef90
-  module procedure zlangef90
-end interface
-
-interface gemmf90
-  module procedure dgemmf90
-  module procedure zgemmf90
-end interface
-
-interface gesvdf90
-  module procedure dgesvdf90
-  module procedure zgesvdf90
-end interface
-
-interface gesddf90
-  module procedure dgesddf90
-  module procedure zgesddf90
-end interface
-
-interface geqrff90
-  module procedure dgeqrff90
-  module procedure zgeqrff90
-end interface
+module DenseLA_wrapper
+use HODLR_DEFS
+use omp_lib
 
 
-interface geqp3f90
-  module procedure dgeqp3f90
-  module procedure zgeqp3f90
-end interface
+
+! interface geqrff90
+  ! module procedure dgeqrff90
+  ! module procedure zgeqrff90
+! end interface
 
 
-interface geqp3modf90
-  module procedure dgeqp3modf90
-  module procedure zgeqp3modf90
-end interface
+! interface geqp3f90
+  ! module procedure dgeqp3f90
+  ! module procedure zgeqp3f90
+! end interface
 
 
-interface un_or_mqrf90
-  module procedure ormqrf90
-  module procedure unmqrf90
-end interface
+! interface geqp3modf90
+  ! module procedure dgeqp3modf90
+  ! module procedure zgeqp3modf90
+! end interface
 
 
-interface un_or_gqrf90
-  module procedure ungqrf90
-  module procedure orgqrf90
-end interface
+! interface un_or_mqrf90
+  ! module procedure ormqrf90
+  ! module procedure unmqrf90
+! end interface
 
 
-interface getrff90
-  module procedure dgetrff90
-  module procedure zgetrff90
-end interface
-
-interface getrsf90
-  module procedure dgetrsf90
-  module procedure zgetrsf90
-end interface
-
-interface getrif90
-  module procedure dgetrif90
-  module procedure zgetrif90
-end interface
-
-interface trsmf90
-  module procedure dtrsmf90
-  module procedure ztrsmf90
-end interface
-
-interface pun_or_mqrf90
-  module procedure pzunmqrf90
-  module procedure pdormqrf90
-end interface
+! interface un_or_gqrf90
+  ! module procedure ungqrf90
+  ! module procedure orgqrf90
+! end interface
 
 
-interface pgeqpfmodf90
-  module procedure pzgeqpfmodf90
-  module procedure pdgeqpfmodf90
-end interface
+! interface getrff90
+  ! module procedure dgetrff90
+  ! module procedure zgetrff90
+! end interface
+
+! interface getrsf90
+  ! module procedure dgetrsf90
+  ! module procedure zgetrsf90
+! end interface
+
+! interface getrif90
+  ! module procedure dgetrif90
+  ! module procedure zgetrif90
+! end interface
+
+! interface trsmf90
+  ! module procedure dtrsmf90
+  ! module procedure ztrsmf90
+! end interface
+
+! interface pun_or_mqrf90
+  ! module procedure pzunmqrf90
+  ! module procedure pdormqrf90
+! end interface
 
 
-interface pgetrif90
-  module procedure pzgetrif90
-  module procedure pdgetrif90
-end interface
+! interface pgeqpfmodf90
+  ! module procedure pzgeqpfmodf90
+  ! module procedure pdgeqpfmodf90
+! end interface
 
 
-interface pgesvdf90
-  module procedure pzgesvdf90
-  module procedure pdgesvdf90
-end interface
+! interface pgetrif90
+  ! module procedure pzgetrif90
+  ! module procedure pdgetrif90
+! end interface
+
+
+! interface pgesvdf90
+  ! module procedure pzgesvdf90
+  ! module procedure pdgesvdf90
+! end interface
 
 contains
 
+
+
+real(kind=8) function fnorm(Matrix,M,N,norm)
+class(*) Matrix(:,:)
+integer M,N
+character,optional:: norm
+select type(Matrix)
+type is (real(kind=8))
+	fnorm = dlangef90(Matrix,M,N,norm)	
+type is (complex(kind=8))
+	fnorm = zlangef90(Matrix,M,N,norm)	
+end select
+
+end function fnorm
 
 
 
@@ -161,7 +156,7 @@ end function zlangef90
 
 
 subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
-    use MODULE_FILE
+    use HODLR_DEFS
 	implicit none 
 	integer mm,nn,mn_min
 	DT Matrix(:,:),UU(:,:),VV(:,:)
@@ -209,6 +204,40 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
 end subroutine gesvd_robust
 		
 
+		
+		
+
+subroutine gesvdf90(Matrix,Singular,UU,VV,flop)
+implicit none
+class(*)::Matrix(:,:),UU(:,:),VV(:,:)
+real(kind=8) Singular(:)
+real(kind=8),optional::flop
+
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(UU)
+	type is (real(kind=8))
+	select type(VV)
+	type is (real(kind=8))
+		call dgesvdf90(Matrix,Singular,UU,VV,flop)
+	end select
+	end select
+	
+type is (complex(kind=8))
+	select type(UU)
+	type is (complex(kind=8))
+	select type(VV)
+	type is (complex(kind=8))
+		call zgesvdf90(Matrix,Singular,UU,VV,flop)
+	end select
+	end select
+	
+end select
+
+end subroutine gesvdf90
+		
+		
 		
 subroutine zgesvdf90(Matrix,Singular,UU,VV,flop)	
 
@@ -296,6 +325,37 @@ if(present(flop))flop = flops_dgesvd(m,n)
 end subroutine dgesvdf90
 
 
+
+
+subroutine gesddf90(Matrix,Singular,UU,VV,flop)
+implicit none
+class(*)::Matrix(:,:),UU(:,:),VV(:,:)
+real(kind=8) Singular(:)
+real(kind=8),optional::flop
+
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(UU)
+	type is (real(kind=8))
+	select type(VV)
+	type is (real(kind=8))
+		call dgesddf90(Matrix,Singular,UU,VV,flop)
+	end select
+	end select
+	
+type is (complex(kind=8))
+	select type(UU)
+	type is (complex(kind=8))
+	select type(VV)
+	type is (complex(kind=8))
+		call zgesddf90(Matrix,Singular,UU,VV,flop)
+	end select
+	end select
+	
+end select
+
+end subroutine gesddf90
 
 
 subroutine zgesddf90(Matrix,Singular,UU,VV,flop)	
@@ -391,6 +451,31 @@ end subroutine dgesddf90
 
 
 
+subroutine geqrff90(Matrix,tau,flop)
+implicit none
+class(*)::Matrix(:,:),tau(:)
+real(kind=8),optional::flop
+
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+		call dgeqrff90(Matrix,tau,flop)
+	end select
+	
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+		call zgeqrff90(Matrix,tau,flop)
+	end select
+end select
+
+end subroutine geqrff90
+
+
+
+
 subroutine zgeqrff90(Matrix,tau,flop)	
 
 ! ! use lapack95
@@ -476,6 +561,34 @@ end subroutine dgeqrff90
 
 
 
+
+
+subroutine geqp3f90(Matrix,jpvt,tau,flop)	
+
+! ! use lapack95
+
+implicit none
+class(*):: Matrix(:,:),tau(:)
+integer jpvt(:)
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+		call dgeqp3f90(Matrix,jpvt,tau,flop)	
+	end select
+	
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+		call zgeqp3f90(Matrix,jpvt,tau,flop)	
+	end select
+end select
+
+end subroutine geqp3f90
+
+
 subroutine zgeqp3f90(Matrix,jpvt,tau,flop)	
 
 ! ! use lapack95
@@ -556,6 +669,34 @@ deallocate(WORK)
 ! call geqp3(Matrix,jpvt,tau)
 if(present(flop))flop = flops_dgetrf(m,n)
 end subroutine dgeqp3f90	
+	
+	
+subroutine geqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+
+! ! use lapack95
+
+implicit none
+class(*):: Matrix(:,:),tau(:)
+integer jpvt(:)
+real(kind=8)::rtol,atol
+integer rank
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+		call dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+	end select
+	
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+		call zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+	end select
+end select
+
+end subroutine geqp3modf90	
 	
 	
 
@@ -653,7 +794,40 @@ if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
 end subroutine zgeqp3modf90	
 	
 
+subroutine un_or_mqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
+! ! use lapack95
+
+implicit none
+class(*) a(:,:),tau(:),c(:,:)
+integer m,n,k
+character:: side, trans
+real(kind=8),optional::flop
+
+select type(a)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+	select type(c)
+	type is (real(kind=8))
+		call ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
+	end select
+	end select
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+	select type(c)
+	type is (complex(kind=8))
+		call unmqrf90(a,tau,c,side,trans,m,n,k,flop)	
+	end select
+	end select
+end select
+
+
+end	subroutine un_or_mqrf90
+	
+	
+	
 subroutine ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
 ! ! use lapack95
@@ -734,7 +908,29 @@ end subroutine unmqrf90
 	
 	
 
+subroutine un_or_gqrf90(Matrix,tau,flop)
+class(*) Matrix(:,:),tau(:)
+real(kind=8),optional::flop
 
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+		call orgqrf90(Matrix,tau,flop)
+	end select
+	
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+		call ungqrf90(Matrix,tau,flop)
+	end select
+end select
+
+
+end subroutine un_or_gqrf90
+
+	
+	
 
 subroutine orgqrf90(Matrix,tau,flop)	
 
@@ -783,7 +979,6 @@ end subroutine orgqrf90
 	
 
 	
-	
 subroutine ungqrf90(Matrix,tau,flop)	
 
 ! ! use lapack95
@@ -829,6 +1024,22 @@ end subroutine ungqrf90
 	
 	
 	
+
+subroutine getrff90(Matrix,ipiv,flop)	
+class(*) Matrix(:,:)
+integer ipiv(:)
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	call dgetrff90(Matrix,ipiv,flop)
+type is (complex(kind=8))
+	call zgetrff90(Matrix,ipiv,flop)
+end select
+
+end subroutine getrff90
+	
+		
 
 subroutine dgetrff90(Matrix,ipiv,flop)	
 
@@ -889,6 +1100,29 @@ if(present(flop))flop = flops_zgeqrf(m,n)
 end subroutine zgetrff90	
 	
 
+	
+subroutine getrsf90(Matrix,ipiv,B,trans,flop)	
+class(*) Matrix(:,:),B(:,:)
+integer ipiv(:)
+character:: trans
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(B)
+	type is (real(kind=8))
+	call dgetrsf90(Matrix,ipiv,B,trans,flop)		
+	end select
+type is (complex(kind=8))
+	select type(B)
+	type is (complex(kind=8))
+	call zgetrsf90(Matrix,ipiv,B,trans,flop)		
+	end select
+end select
+
+end subroutine getrsf90
+		
+	
 
 
 subroutine dgetrsf90(Matrix,ipiv,B,trans,flop)	
@@ -952,7 +1186,23 @@ if(present(flop))flop = flops_zgetrs(n,nrhs)
 end subroutine zgetrsf90		
 	
 	
+	
 
+subroutine getrif90(Matrix,ipiv,flop)	
+
+implicit none
+class(*) Matrix(:,:)
+integer ipiv(:)
+real(kind=8),optional::flop	
+	
+select type(Matrix)
+type is (real(kind=8))
+	call dgetrif90(Matrix,ipiv,flop)			
+type is (complex(kind=8))
+	call zgetrif90(Matrix,ipiv,flop)		
+end select	
+	
+end subroutine getrif90
 
 subroutine dgetrif90(Matrix,ipiv,flop)	
 
@@ -1048,30 +1298,31 @@ end subroutine zgetrif90
 
 
 	
-	
 
-subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
-
-! ! use blas95
+subroutine trsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
 
 implicit none
-complex(kind=8) Matrix(:,:),B(:,:),alpha
-integer m,n,lda,ldb
+class(*) Matrix(:,:),B(:,:)
+integer m,n
 character side,uplo,transa,diag
 real(kind=8),optional::flop
-integer INFO
 
-alpha=1d0
+select type(Matrix)
+type is (real(kind=8))
+	select type(B)
+	type is (real(kind=8))
+	call dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+	end select
+type is (complex(kind=8))
+	select type(B)
+	type is (complex(kind=8))
+	call ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+	end select
+end select
 
-ldb=size(B,1)
-lda=size(Matrix,1)
 
-call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
-
-
-! call trsm(Matrix,B,side,uplo,transa,diag)	
-if(present(flop))flop = flops_ztrsm(side,m,n)
-end subroutine ztrsmf90		
+end subroutine trsmf90
+	
 
 
 subroutine dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
@@ -1098,6 +1349,99 @@ if(present(flop))flop = flops_dtrsm(side,m,n)
 end subroutine dtrsmf90		
 
 
+subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+
+! ! use blas95
+
+implicit none
+complex(kind=8) Matrix(:,:),B(:,:),alpha
+integer m,n,lda,ldb
+character side,uplo,transa,diag
+real(kind=8),optional::flop
+integer INFO
+
+alpha=1d0
+
+ldb=size(B,1)
+lda=size(Matrix,1)
+
+call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
+
+
+! call trsm(Matrix,B,side,uplo,transa,diag)	
+if(present(flop))flop = flops_ztrsm(side,m,n)
+end subroutine ztrsmf90		
+
+
+
+subroutine gemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,al,be,flop)
+integer m,n,k,lda,ldb,ldc
+class(*) MatA(:,:),MatB(:,:),MatC(:,:)
+class(*),optional:: al,be
+character transa,transb
+real(kind=8),optional::flop
+real(kind=8)alphar,betar
+complex(kind=8)alphac,betac
+
+! use default value if not presentd
+alphar=1d0
+betar=0d0
+alphac=1d0
+betac=0d0
+
+select type(MatA)
+type is (real(kind=8))
+	select type(MatB)
+	type is (real(kind=8))
+	select type(MatC)
+	type is (real(kind=8))
+	
+	if(present(al))then
+	select type(al)
+	type is (real(kind=8))
+		alphar=al
+	end select
+	endif
+
+	if(present(be))then
+	select type(be)
+	type is (real(kind=8))
+		betar=be
+	end select
+	endif	
+	call dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alphar,betar,flop)
+	
+	end select		
+	end select
+	
+type is (complex(kind=8))
+	select type(MatB)
+	type is (complex(kind=8))
+	select type(MatC)
+	type is (complex(kind=8))
+	
+	if(present(al))then
+	select type(al)
+	type is (complex(kind=8))
+		alphac=al
+	end select
+	endif
+
+	if(present(be))then
+	select type(be)
+	type is (complex(kind=8))
+		betac=be
+	end select
+	endif	
+	call zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alphac,betac,flop)
+	
+	end select		
+	end select
+end select
+
+
+end subroutine gemmf90
+
 
 
 subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
@@ -1106,7 +1450,8 @@ subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,fl
 
 implicit none
 integer m,n,k,lda,ldb,ldc
-real(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
+real(kind=8) MatA(:,:),MatB(:,:),MatC(:,:)
+real(kind=8):: alpha,beta
 character transa,transb
 real(kind=8),optional::flop
 
@@ -1124,7 +1469,8 @@ subroutine zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,fl
 
 implicit none
 integer m,n,k,lda,ldb,ldc
-complex(kind=8) MatA(:,:),MatB(:,:),MatC(:,:),alpha,beta
+complex(kind=8) MatA(:,:),MatB(:,:),MatC(:,:)
+complex(kind=8):: alpha,beta
 character transa,transb
 real(kind=8),optional::flop
 
@@ -1133,6 +1479,41 @@ call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc
 ! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
 if(present(flop))flop = flops_zgemm(m,n,k)				
 end subroutine zgemmf90
+
+
+
+
+
+subroutine pun_or_mqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
+implicit none
+character side,trans
+integer m,n,k,ia,ja,ic,jc
+class(*) MatA(:,:),MatC(:,:),tau(:)
+integer desca(9),descc(9)
+real(kind=8),optional::flop
+
+
+select type(MatA)
+type is (real(kind=8))
+	select type(MatC)
+	type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))	
+	call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)	
+	end select
+	end select
+type is (complex(kind=8))
+	select type(MatC)
+	type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))	
+	call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
+	end select
+	end select
+end select
+
+end subroutine pun_or_mqrf90
+
 
 
 
@@ -1186,6 +1567,33 @@ end subroutine pzunmqrf90
 
 
 
+subroutine pgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
+implicit none
+integer M,N,ia,ja
+class(*) Matrix(:,:),tau(:)
+integer ipiv(:),jpiv(:),JPERM(:)
+integer rank
+integer desca(9)
+real(kind=8)::rtol,atol
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))	
+	call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)	
+	end select
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))	
+	call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
+	end select
+end select
+
+end subroutine pgeqpfmodf90
+
+
+
 subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
 implicit none
 integer M,N,ia,ja
@@ -1203,14 +1611,14 @@ real(kind=8),optional::flop
 
 LWORK=-1
 LRWORK=-1
-call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
+call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
 lwork=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(lwork))     
 WORK=0
 lrwork=NINT(dble(RTEMP(1)*2.001))
 allocate(RWORK(lrwork))     
 RWORK=0		
-call pzgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
+call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
 
 deallocate(WORK)
 deallocate(RWORK)
@@ -1234,11 +1642,11 @@ real(kind=8),allocatable:: WORK(:)
 real(kind=8),optional::flop
 LWORK=-1
 
-call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
+call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
 lwork=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(lwork))     
 WORK=0	
-call pdgeqpfmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
+call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
 
 deallocate(WORK)
 if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
@@ -1365,6 +1773,23 @@ end select
 end subroutine pgetrff90	
 
 
+subroutine pgetrif90(n, a, ia, ja, desca, ipiv,flop)
+implicit none
+integer n,ia,ja
+class(*):: a(:,:)
+integer desca(9)
+integer ipiv(:)
+real(kind=8),optional::flop
+
+select type(a)
+type is (real(kind=8))
+	call pdgetrif90(n, a, ia, ja, desca, ipiv,flop)
+type is (complex(kind=8))
+	call pzgetrif90(n, a, ia, ja, desca, ipiv,flop)
+end select
+
+end subroutine pgetrif90
+
 
 subroutine pdgetrif90(n, a, ia, ja, desca, ipiv,flop)
 implicit none
@@ -1395,6 +1820,10 @@ if(present(flop))flop = flops_dgetri(n)
 
 end subroutine pdgetrif90
 
+
+
+
+
 subroutine pzgetrif90(n, a, ia, ja, desca, ipiv,flop)
 implicit none
 integer n,ia,ja
@@ -1424,6 +1853,40 @@ deallocate(work)
 if(present(flop))flop = flops_zgetri(n)
 
 end subroutine pzgetrif90
+
+
+
+subroutine pgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
+implicit none
+
+character jobu,jobvt
+integer m,n,ia,ja,iu,ju,ivt,jvt
+class(*):: a(:,:),u(:,:),vt(:,:)
+integer desca(9),descu(9),descvt(9)
+real(kind=8):: s(:)
+real(kind=8),optional::flop
+
+
+select type(a)
+type is (real(kind=8))
+	select type(u)
+	type is (real(kind=8))
+	select type(vt)
+	type is (real(kind=8))	
+	call pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
+	end select
+	end select	
+type is (complex(kind=8))
+	select type(u)
+	type is (complex(kind=8))
+	select type(vt)
+	type is (complex(kind=8))
+	call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
+	end select
+	end select		
+end select
+
+end subroutine pgesvdf90
 
 
 

@@ -16,7 +16,7 @@
 #  The name of the libraries to be created/linked to
 #
 HODLRBFroot	= /home/administrator/Desktop/research/hod-lr-bf/build
-DHODLRBFLIB   	= $(HODLRBFroot)/SRC/libhodlrbf.a
+DHODLRBFLIB   	= $(HODLRBFroot)/SRC_DOUBLE/libdhodlrbf.a $(HODLRBFroot)/SRC_DOUBLECOMPLEX/libzhodlrbf.a
 
 LIBS		= $(DHODLRBFLIB) ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
 

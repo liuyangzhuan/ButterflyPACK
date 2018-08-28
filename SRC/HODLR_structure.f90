@@ -1,10 +1,11 @@
+#include "HODLR_config.fi"
 module H_structure 
 use Utilities
 contains 
 
 real(kind=8) function group_dist(group_m,group_n)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
     integer group_m, group_n,farblock, level
@@ -34,7 +35,7 @@ end function group_dist
 
 logical function near_or_far(group_m,group_n,para)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
     integer group_m, group_n,farblock, level
@@ -70,11 +71,11 @@ logical function near_or_far(group_m,group_n,para)
     endif
     deallocate(a,b)
 	
-end function
+end function near_or_far
 
 real(kind=8) function func_distance(node1,node2,msh)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer node1, node2
@@ -96,10 +97,9 @@ real(kind=8) function func_distance(node1,node2,msh)
     
 end function func_distance
 
-
 subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
     
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
     implicit none
     
@@ -466,7 +466,7 @@ end subroutine H_matrix_structuring
 
 
 subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
-	use MODULE_FILE
+	use HODLR_DEFS
 	use misc
 	implicit none 
 	

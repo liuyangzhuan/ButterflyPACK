@@ -1,5 +1,5 @@
 module APPLICATION_MODULE
-use MODULE_FILE
+use d_HODLR_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -15,7 +15,7 @@ contains
 
 	!**** cutoff distance for gaussian kernel 
 	real(kind=8) function arg_thresh_Zmn(quant)
-		use MODULE_FILE
+		use d_HODLR_DEFS
 		implicit none 
 		
 		type(quant_app)::quant
@@ -26,12 +26,12 @@ contains
 	
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Z_elem_RBF(ker,m,n,value_e,msh,quant)
-		use MODULE_FILE
+		use d_HODLR_DEFS
 		implicit none 
 		
-		class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(mesh)::msh
+		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 
@@ -60,16 +60,15 @@ end module APPLICATION_MODULE
 
 
 PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
-    use MODULE_FILE
+    use d_HODLR_DEFS
     use APPLICATION_MODULE
 	! use geometry_model
-	use H_structure
-	use cascading_factorization
-	use HODLR_construction
+	use d_H_structure
+	use d_cascading_factorization
+	use d_HODLR_construction
 	use omp_lib
-	use MISC
-	use HODLR_construction
-	
+	use d_misc
+
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -88,15 +87,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
+	type(d_Hoption)::option	
+	type(d_Hstat)::stats
+	type(d_mesh)::msh
+	type(d_kernelquant)::ker
 	type(quant_app),target::quant
-	type(hobf)::ho_bf,ho_bf_copy
+	type(d_hobf)::ho_bf,ho_bf_copy
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
@@ -109,7 +108,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	enddo	
 	
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -138,8 +137,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	endif
 	
 	!**** initialize statistics variables  
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_initstat(stats)
+	call d_setdefaultoptions(option)
 	
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_RBF
@@ -209,8 +208,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,option,msh,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
+    call d_H_matrix_structuring(ho_bf,option,msh,ptree)
+	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -220,8 +219,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
-	call copy_HOBF(ho_bf,ho_bf_copy)	
+    call d_matrices_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
+	! call copy_HOBF(ho_bf,ho_bf_copy)	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
@@ -229,13 +228,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats,ptree)
+    call d_cascading_factorizing(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
 
     if(ptree%MyID==Main_ID)write(*,*) "Solve and Prediction......"
-    call RBF_solve(ho_bf_copy,ho_bf,option,msh,quant,ptree,stats)
+    call RBF_solve(ho_bf,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
@@ -249,10 +248,10 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 !**** read training sets into msh%xyz and create a natural order in msh%info_unk(0,:)
 subroutine geo_modeling_RBF(msh,quant,ptree)
 
-    use MODULE_FILE
+    use d_HODLR_DEFS
 	use APPLICATION_MODULE
     implicit none
-    type(mesh)::msh
+    type(d_mesh)::msh
 	type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
@@ -265,7 +264,7 @@ subroutine geo_modeling_RBF(msh,quant,ptree)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	
 	Dimn = quant%dimn
 	msh%Ncorner = 0
@@ -283,12 +282,12 @@ subroutine geo_modeling_RBF(msh,quant,ptree)
 end subroutine geo_modeling_RBF
 
 
-subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
+subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
     
-    use MODULE_FILE
+    use d_HODLR_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use HODLR_Solve
+	use d_HODLR_Solve
     ! use blas95
     implicit none
     
@@ -301,12 +300,12 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(mesh)::msh
+	type(d_Hoption)::option
+	type(d_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
-	type(hobf)::ho_bf_for,ho_bf_inv
-	type(Hstat)::stats	
+	type(d_proctree)::ptree
+	type(d_hobf)::ho_bf_for
+	type(d_Hstat)::stats	
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	real(kind=8),allocatable:: xyz_test(:,:)
@@ -315,7 +314,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 
 
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_for,ho_bf_inv,option,ptree,stats)
+		call d_HODLR_Test_Solve_error(ho_bf_for,option,ptree,stats)
 	endif	
 	
 	
@@ -343,7 +342,7 @@ subroutine RBF_solve(ho_bf_for,ho_bf_inv,option,msh,quant,ptree,stats)
 	
 	n1 = OMP_get_wtime()
 	
-	call HODLR_Solution(ho_bf_for,ho_bf_inv,x,b,N_unk_loc,1,option,ptree,stats)
+	call d_HODLR_Solution(ho_bf_for,x,b,N_unk_loc,1,option,ptree,stats)
 	
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1

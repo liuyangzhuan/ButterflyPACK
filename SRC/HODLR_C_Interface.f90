@@ -1,22 +1,22 @@
+#include "HODLR_config.fi"
 module HODLR_C_Interface
-    use MODULE_FILE
+    use HODLR_DEFS
 	! use geometry_model
 	use H_structure
 	use cascading_factorization
 	use HODLR_construction
 	use omp_lib
-	use MISC
+	use misc
 	use HODLR_Solve
     use iso_c_binding    
 	
-#include "HODLR_config.fi"
-	
+
 contains 
 
 
 
 subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     integer edge_m, edge_n
     DT value_e

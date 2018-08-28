@@ -1,6 +1,7 @@
 set(headers
     C_HODLR_C_Interface.h
-    # ${PROJECT_BINARY_DIR}/hodlrbf_config.h
+    # HODLR_config.fi
+    # ${PROJECT_BINARY_DIR}/HODLR_config.h
 )
 
 set(sources
@@ -30,8 +31,9 @@ add_library(hodlrbf ${sources} ${HEADERS})
 target_link_libraries(hodlrbf
                       ${MPI_Fortran_LIBRARIES} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
 set_target_properties(hodlrbf PROPERTIES
-                      VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR}
+                      VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
+
 
 # Define GNU standard installation directories
 include(GNUInstallDirs)

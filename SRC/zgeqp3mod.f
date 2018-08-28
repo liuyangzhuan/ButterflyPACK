@@ -1,5 +1,6 @@
+
 *  =====================================================================
-      SUBROUTINE ZGEQP3mod( M, N, A, LDA, JPVT, TAU, WORK, LWORK, RWORK,
+      subroutine ZGEQP3mod( M, N, A, LDA, JPVT, TAU, WORK, LWORK, RWORK,
      $                   INFO, RANK, RTOL, ATOL )
 *
 *  -- LAPACK computational routine (version 3.4.2) --
@@ -241,4 +242,4 @@
 *
 *     End of ZGEQP3
 *
-      END
+      end subroutine ZGEQP3mod

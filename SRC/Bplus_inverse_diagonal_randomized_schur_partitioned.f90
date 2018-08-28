@@ -1,17 +1,16 @@
+#include "HODLR_config.fi"
 module Bplus_inversion_schur_partition
 ! use Butterfly_inversion_schur_partition
 use Bplus_randomized
 
 integer rankthusfarBC
 
-#include "HODLR_config.fi"
-
 contains 
 
 
 subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -42,7 +41,7 @@ end subroutine Bplus_inverse_schur_partitionedinverse
 
 subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -120,7 +119,7 @@ end subroutine BF_inverse_schur_partitionedinverse
 
 subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
@@ -130,14 +129,14 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm_diag
     character chara
     real(kind=8) a,b,c,d
-    DT ctemp, ctemp1, ctemp2
+    DT ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
 	
     ! type(vectorsblock), pointer :: random1, random2
     
     real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
+	! DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
 	
 	integer Nsub,Ng,unique_nth,level_left_start,ll
 	integer*8 idx_start   
@@ -230,7 +229,7 @@ end subroutine LR_minusBC
 
 subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -356,7 +355,7 @@ end subroutine BF_inverse_schulziteration_IplusButter
 
 subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -467,7 +466,7 @@ end subroutine compute_schulz_init
 
 subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -590,7 +589,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 								
 							call delete_blocks(agent_block)
 							! deallocate(agent_block)	
-							call delete_bplus(agent_bplus)
+							call delete_Bplus(agent_bplus)
 							! deallocate(agent_bplus)	
 
 						end if
@@ -663,7 +662,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 								
 							call delete_blocks(agent_block)
 							! deallocate(agent_block)	
-							call delete_bplus(agent_bplus)
+							call delete_Bplus(agent_bplus)
 							! deallocate(agent_bplus)								
 
 						end if
@@ -698,7 +697,7 @@ end subroutine MultiL_inverse_schur_partitionedinverse
 
 
 subroutine Extract_partial_Bplus(bplus_i,ll_s,row_group,agent_bplus)
-use MODULE_FILE
+use HODLR_DEFS
 use misc
 implicit none 
 type(matrixblock),pointer::block_i,block_o
@@ -760,7 +759,7 @@ end subroutine Extract_partial_Bplus
 
 recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats,ptree,pgno)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -871,7 +870,7 @@ end subroutine BF_inverse_partitionedinverse_IplusButter
 
 
 subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -1553,7 +1552,7 @@ end subroutine BF_split
 
 subroutine get_minmaxrank_ABCD(partitioned_block,rankmax)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
 	integer rankmax
@@ -1571,7 +1570,7 @@ end subroutine get_minmaxrank_ABCD
 
 subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	! use blas95
     implicit none

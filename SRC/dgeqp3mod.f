@@ -1,5 +1,6 @@
+
 *  =====================================================================
-      SUBROUTINE DGEQP3mod( M, N, A, LDA, JPVT, TAU, WORK, LWORK, INFO,
+      subroutine DGEQP3mod( M, N, A, LDA, JPVT, TAU, WORK, LWORK, INFO,
      $                      RANK, RTOL, ATOL )
 *
 *  -- LAPACK computational routine (version 3.4.2) --
@@ -237,4 +238,4 @@
 *
 *     End of DGEQP3
 *
-      END
+      end subroutine DGEQP3mod

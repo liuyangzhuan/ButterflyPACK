@@ -1,10 +1,10 @@
+#include "HODLR_config.fi"
 module Bplus_rightmultiply
 ! use Butterfly_rightmultiply
 use Bplus_randomized
 integer rankthusfarS
 
-#include "HODLR_config.fi"
-					
+		
 contains
 
 
@@ -13,7 +13,7 @@ contains
 
 subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	! use lapack95
     ! use blas95	
 	use omp_lib
@@ -102,7 +102,7 @@ end subroutine Bplus_Sblock_randomized_memfree
 
 subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none

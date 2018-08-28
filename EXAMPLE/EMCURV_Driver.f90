@@ -1,6 +1,6 @@
 module APPLICATION_MODULE
-use MODULE_FILE
-use MISC
+use z_HODLR_DEFS
+use z_misc
 implicit none
 
 	!**** define your application-related variables here   
@@ -19,15 +19,15 @@ contains
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Z_elem_EMCURV(ker,m,n,value_e,msh,quant)
 		
-		use MODULE_FILE
+		use z_HODLR_DEFS
 		implicit none
 		
 		integer edge_m, edge_n, i, j, flag
 		integer, INTENT(IN):: m,n
 		real(kind=8) r_mn, rtemp1, rtemp2
 		complex(kind=8) value_e
-		type(mesh)::msh
-		class(kernelquant)::ker
+		type(z_mesh)::msh
+		class(z_kernelquant)::ker
 		class(*),pointer :: quant
 		
 		select TYPE(quant)
@@ -55,7 +55,7 @@ contains
 				
 						r_mn=(msh%xyz(1,msh%info_unk(0,edge_m))-msh%xyz(1,msh%info_unk(0,edge_n)))**2+(msh%xyz(2,msh%info_unk(0,edge_m))-msh%xyz(2,msh%info_unk(0,edge_n)))**2
 						r_mn=sqrt(r_mn)
-						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*Hankel02_Func(quant%wavenum*r_mn)
+						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*z_Hankel02_Func(quant%wavenum*r_mn)
 					endif
 				else
 					value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*(1.0-junit*2.0/pi*(LOG(gamma*quant%wavenum*msh%Delta_ll/4.0)-1.0))
@@ -75,14 +75,14 @@ contains
 
 	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
 		
-		use MODULE_FILE
+		use z_HODLR_DEFS
 		! use APPLICATION_MODULE
 		implicit none
 		complex(kind=8)::curr
 		complex(kind=8) ctemp,phase,ctemp_1
 		real(kind=8) dsita,dphi    
 		integer edge
-		type(mesh)::msh
+		type(z_mesh)::msh
 		type(quant_app)::quant
 		
 		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(dphi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(dphi*pi/180.))
@@ -94,7 +94,7 @@ contains
 
 	subroutine RCS_bistatic_CURV(curr,msh,quant,ptree)
 		!integer flag
-		use MODULE_FILE
+		use z_HODLR_DEFS
 		! use APPLICATION_MODULE
 		implicit none
 		complex(kind=8)::curr(:)
@@ -104,10 +104,10 @@ contains
 		
 		integer i,j,ii,jj,iii,jjj,patch,flag
 		real(kind=8) l_edge,l_edgefine
-		type(mesh)::msh
+		type(z_mesh)::msh
 		integer edge,edge_m,edge_n,ierr
 		type(quant_app)::quant 
-		type(proctree)::ptree
+		type(z_proctree)::ptree
 		
 		if(ptree%MyID==Main_ID)open (100, file='VV_bistatic.txt')
 	  
@@ -141,7 +141,7 @@ contains
 
 	subroutine RCS_monostatic_VV_CURV(dphi,rcs,curr,msh,quant,ptree)
 
-		use MODULE_FILE
+		use z_HODLR_DEFS
 		! use APPLICATION_MODULE
 		implicit none
 		
@@ -150,9 +150,9 @@ contains
 		real(kind=8) dsita,dphi
 		integer edge,edge_m,edge_n,ierr
 		complex(kind=8):: curr(:)
-		type(mesh)::msh
+		type(z_mesh)::msh
 		type(quant_app)::quant
-		type(proctree)::ptree
+		type(z_proctree)::ptree
 		
 		ctemp_loc=0
 			rcs=0
@@ -175,7 +175,7 @@ contains
 
 	subroutine element_Vinc_VV_CURV(phi,edge,value,msh,quant)
 
-		use MODULE_FILE
+		use z_HODLR_DEFS
 		! use APPLICATION_MODULE
 		implicit none
 		
@@ -183,7 +183,7 @@ contains
 		complex(kind=8) value
 		real(kind=8) theta, phi
 		complex(kind=8)  phase
-		type(mesh)::msh
+		type(z_mesh)::msh
 		type(quant_app)::quant
 		
 		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(phi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(phi*pi/180.))
@@ -199,14 +199,14 @@ end module APPLICATION_MODULE
 
 
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
-    use MODULE_FILE
+    use z_HODLR_DEFS
     use APPLICATION_MODULE
 	! use geometry_model
-	use H_structure
-	use cascading_factorization
-	use HODLR_construction
+	use z_H_structure
+	use z_cascading_factorization
+	use z_HODLR_construction
 	use omp_lib
-	use MISC
+	use z_misc
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -226,14 +226,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
-	type(hobf)::ho_bf,ho_bf_copy
+	type(z_Hoption)::option	
+	type(z_Hstat)::stats
+	type(z_mesh)::msh
+	type(z_kernelquant)::ker
+	type(z_hobf)::ho_bf,ho_bf_copy
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	type(quant_app),target::quant
 	CHARACTER (LEN=1000) DATA_DIR	
 	
@@ -246,7 +246,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -275,8 +275,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     write(*,*) "   "
 	endif
 	
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call z_InitStat(stats)
+	call z_SetDefaultOptions(option)
 	
 	time_tmp = 0
 	
@@ -382,8 +382,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,option,msh,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
+    call z_H_matrix_structuring(ho_bf,option,msh,ptree)
+	call z_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -396,7 +396,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
     ! call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
-    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    call z_matrices_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
@@ -407,7 +407,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats,ptree)
+    call z_cascading_factorizing(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -430,10 +430,10 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 subroutine geo_modeling_CURV(msh,quant,ptree)
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
 	use APPLICATION_MODULE
     implicit none
-    type(mesh)::msh
+    type(z_mesh)::msh
 	type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
@@ -446,7 +446,7 @@ subroutine geo_modeling_CURV(msh,quant,ptree)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	
 	Maxedge	= msh%Nunk
 
@@ -935,12 +935,12 @@ end subroutine geo_modeling_CURV
 
 subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
     
-    use MODULE_FILE
+    use z_HODLR_DEFS
 	use APPLICATION_MODULE
 	! use RCS_Bi
 	! use RCS_Mono
 	! use element_vinc
-	use HODLR_Solve	
+	use z_HODLR_Solve	
     ! use blas95
     implicit none
     
@@ -953,16 +953,16 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(mesh)::msh
+	type(z_Hoption)::option
+	type(z_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
-	type(hobf)::ho_bf_inv
-	type(Hstat)::stats	
+	type(z_proctree)::ptree
+	type(z_hobf)::ho_bf_inv
+	type(z_Hstat)::stats	
 	complex(kind=8),allocatable:: current(:),voltage(:)
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
+		call z_hodlr_test_solve_error(ho_bf_inv,option,ptree,stats)
 	endif
 	
 	
@@ -995,7 +995,7 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
         
         n1 = OMP_get_wtime()
         
-		call HODLR_Solution(ho_bf_inv,Current,Voltage,N_unk_loc,1,option,ptree,stats)
+		call z_hodlr_solution(ho_bf_inv,Current,Voltage,N_unk_loc,1,option,ptree,stats)
 		
 		n2 = OMP_get_wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -1043,7 +1043,7 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
 			!$omp end parallel do
 		enddo
 		
-		call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call z_hodlr_solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 			
 		do j=0, num_sample 	

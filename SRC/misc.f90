@@ -1,22 +1,22 @@
+#include "HODLR_config.fi"
 #ifdef Intel
 include "mkl_vsl.f90"
 #endif
 
 module misc
-use MODULE_FILE
+use HODLR_DEFS
 #ifdef Intel
 USE IFPORT    
 #endif  
 use omp_lib
 use DenseLA_wrapper
-#include "HODLR_config.fi"
+
 
 integer, parameter :: int64 = selected_int_kind(18) 
 
 contains
  
 ! #ifndef mymacro(x)
-
 ! #define mymacro(x) print *, "Now giving information about ", "x" ; \
                    ! call mysub( x, size(x,1), size(x,2) ) ; \
                    ! print *, "About to do function on ", "x"; \
@@ -45,26 +45,6 @@ enddo
 
 end subroutine linspaceI
 
-
-logical function check_NAN(A,M,N)
-! ! use lapack95
-! ! use blas95
-implicit none 
-	
-	! logical::nan
-	integer::M,N
-	DT::A(M,N),ctemp
-	integer ii,jj
-	
-	ctemp = 0
-	do ii=1,M
-	do jj=1,N
-		ctemp = ctemp + A(ii,jj)
-	end do
-	end do
-	check_NAN = isnan(abs(ctemp))
-
- end function check_NAN
 
 
  ! subroutine gemm_omp(A,B,C,m,k,n)
@@ -114,7 +94,6 @@ implicit none
 	! deallocate(A1)
 	! deallocate(B1)
  ! end subroutine gemm_omp
-
  
  ! subroutine gemmHN_omp(A,B,C,m,k,n)
  	! ! ! use lapack95
@@ -154,7 +133,7 @@ implicit none
 	
 	! deallocate(A1)
 	! deallocate(B1)	
- ! end subroutine gemmHN_omp 
+ ! end subroutine gemmHN_omp
  
 
  ! subroutine gemmNH_omp(A,B,C,m,k,n)
@@ -194,7 +173,7 @@ implicit none
 	! ! time_gemm = time_gemm + n2-n1
 	! deallocate(A1)
 	! deallocate(B1)		
- ! end subroutine gemmNH_omp 
+ ! end subroutine gemmNH_omp
  
  
  
@@ -235,7 +214,7 @@ implicit none
 	! ! time_gemm = time_gemm + n2-n1
 	! deallocate(A1)
 	! deallocate(B1)		
- ! end subroutine gemmTN_omp 
+ ! end subroutine gemmTN_omp
  
  
 
@@ -276,37 +255,35 @@ implicit none
 
 	! deallocate(A1)
 	! deallocate(B1)		
- ! end subroutine gemmNT_omp  
- 
+! end subroutine gemmNT_omp
 
- 
-  subroutine copymatN_omp(A,B,m,n)
-	implicit none 
-	integer m,n
-	DT::A(:,:),B(:,:)
-	character:: chara
-	real(kind=8)::n1,n2
-	integer ii,jj,ijind
+! subroutine copymatN(A,B,m,n)
+	! implicit none 
+	! integer m,n
+	! DT::A(:,:),B(:,:)
+	! character:: chara
+	! real(kind=8)::n1,n2
+	! integer ii,jj,ijind
 	
-	! n1 = OMP_get_wtime()
+	! ! n1 = OMP_get_wtime()
 	
 
-	! !$omp parallel do default(shared) private(ii,jj)	
-		do ii =1,m
-		do jj =1,n
-			B(ii,jj) = A(ii,jj)
-		end do
-		end do
-	! !$omp end parallel do	
+	! ! !$omp parallel do default(shared) private(ii,jj)	
+		! do ii =1,m
+		! do jj =1,n
+			! B(ii,jj) = A(ii,jj)
+		! end do
+		! end do
+	! ! !$omp end parallel do	
 	
 
-	! n2 = OMP_get_wtime()
-	! time_memcopy = time_memcopy + n2-n1
+	! ! n2 = OMP_get_wtime()
+	! ! time_memcopy = time_memcopy + n2-n1
 	
- end subroutine copymatN_omp
+ ! end subroutine copymatN
  
  
-  subroutine copymatT_omp(A,B,m,n)
+  subroutine copymatT(A,B,m,n)
 	implicit none 
 	integer m,n
 	DT::A(:,:),B(:,:) 
@@ -327,7 +304,7 @@ implicit none
 	! n2 = OMP_get_wtime()
 	! time_memcopy = time_memcopy + n2-n1
 	
- end subroutine copymatT_omp
+ end subroutine copymatT
  
 
 ! function fnorm(A,m,n)
@@ -348,7 +325,7 @@ implicit none
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -370,7 +347,8 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
  
 
 	allocate(QQ1(M,rmax))
-	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
+	QQ1 = matU(1:M,1:rmax)
 	allocate (tau_Q(rmax))
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
@@ -393,7 +371,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	if(present(Flops))Flops = Flops + flop
 
 	allocate(QQ2(N,rmax))
-	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	call copymatT(matV(1:rmax,1:N),QQ2,rmax,N)
 	allocate (tau_Q(rmax))
 	! call geqrff90(QQ2,tau_Q)
 	! allocate (jpvt2(rmax))
@@ -449,7 +427,7 @@ end subroutine LR_ReCompression
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -471,7 +449,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 
 	
 	! allocate(QQ1(M,rmax))
-	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 
 	! allocate(UU(M,mn))
 	! allocate(VV(mn,rmax))
@@ -481,7 +459,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! VV(ii,:) = VV(ii,:)*Singular(ii)
 	! enddo
 	! ! allocate(QQ2(rmax,N))
-	! ! call copymatN_omp(matV(1:rmax,1:N),QQ2,rmax,N)	
+	! ! call copymatN(matV(1:rmax,1:N),QQ2,rmax,N)	
 	
 	! allocate(mattemp(mn,N))
 	! mattemp=0
@@ -499,7 +477,8 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 	
 	allocate(QQ1(M,rmax))
-	call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
+	QQ1 = matU(1:M,1:rmax)
 	allocate (tau_Q(rmax))
 	call geqrff90(QQ1,tau_Q,flop=flop)
 	if(present(Flops))Flops= Flops + flop
@@ -516,7 +495,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! !$omp end parallel do	
 
 	allocate(QQ2(N,rmax))
-	call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	call copymatT(matV(1:rmax,1:N),QQ2,rmax,N)
 	allocate (tau_Q(rmax))
 	call geqrff90(QQ2,tau_Q,flop=flop)
 	if(present(Flops))Flops= Flops + flop
@@ -546,7 +525,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 	
 	! allocate(QQ1(M,rmax))
-	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
@@ -555,7 +534,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 
 	! allocate(QQ2(N,rmax))
-	! call copymatT_omp(matV(1:rmax,1:N),QQ2,rmax,N)
+	! call copymatT(matV(1:rmax,1:N),QQ2,rmax,N)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt2(rmax))
 	! jpvt2=0
@@ -602,7 +581,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 
 	! allocate(QQ1(M,rmax))
-	! call copymatN_omp(matU(1:M,1:rmax),QQ1,M,rmax)
+	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt(rmax))
 	! jpvt=0
@@ -692,7 +671,7 @@ else
 		if(M>=N)then
 			Atmp = mat
 		else 
-			call copymatT_omp(mat,Atmp,M,N)
+			call copymatT(mat,Atmp,M,N)
 		end if
 				
 		allocate(jpvt(mn))
@@ -785,7 +764,7 @@ end if
 	if(M>=N)then
 		Atmp = mat
 	else 
-		call copymatT_omp(mat,Atmp,M,N)
+		call copymatT(mat,Atmp,M,N)
 	end if
 			
 	allocate(jpvt(mn))
@@ -813,7 +792,7 @@ end if
 	if(M>=N)then
 		mat = Atmp
 	else 
-		call copymatT_omp(Atmp,mat,N,M)
+		call copymatT(Atmp,mat,N,M)
 	end if	
 	
 	rank = mn
@@ -1007,144 +986,124 @@ end subroutine CheckRandomizedLR
 
 
 
-  ! generate random permutation of 1:N  
-  subroutine rperm(N, p)
+! generate random permutation of 1:N  
+subroutine rperm(N, p)
 
-    integer, intent(in):: N
-    integer:: p(N)
+integer, intent(in):: N
+integer:: p(N)
 
-    integer:: i
-    integer:: k, j, ipj, itemp, m
-    real(kind=8), dimension(100) :: u
+integer:: i
+integer:: k, j, ipj, itemp, m
+real(kind=8), dimension(100) :: u
 
-	call assert(N<1d9,'In rperm, N too large')
-	! write(*,*)p(1)
-    p = (/ (i, i=1,N) /)
+call assert(N<1d9,'In rperm, N too large')
+! write(*,*)p(1)
+p = (/ (i, i=1,N) /)
 
-    ! Generate up to 100 U(0,1) numbers at a time.
-    do i=1,N,100
-      m = min(N-i+1, 100)
-      call random_number(u)
-      do j=1,m
-        ipj = i+j-1
-        k = int(u(j)*(N-ipj+1)) + ipj
-        itemp = p(ipj)
-        p(ipj) = p(k)
-        p(k) = itemp
-      end do
-    end do
-    return
+! Generate up to 100 U(0,1) numbers at a time.
+do i=1,N,100
+  m = min(N-i+1, 100)
+  call random_number(u)
+  do j=1,m
+	ipj = i+j-1
+	k = int(u(j)*(N-ipj+1)) + ipj
+	itemp = p(ipj)
+	p(ipj) = p(k)
+	p(k) = itemp
+  end do
+end do
+return
 
-  end subroutine rperm	
-  
-  
-  
-  subroutine init_random_seed()
-	implicit none
-	integer, allocatable :: seed(:)
-	integer :: i, n, un, istat, dt(8), pid
-	integer*8 :: t
-  
-	call random_seed(size = n)
-	allocate(seed(n))
-	! First try if the OS provides a random number generator
-
-   ! Fallback to XOR:ing the current time and pid. The PID is
-   ! useful in case one launches multiple instances of the same
-   ! program in parallel.
-   call system_clock(t)
-   if (t == 0) then
-	  call date_and_time(values=dt)
-	  t = (dt(1) - 1970) * 365_int64 * 24 * 60 * 60 * 1000 &
-		   + dt(2) * 31_int64 * 24 * 60 * 60 * 1000 &
-		   + dt(3) * 24_int64 * 60 * 60 * 1000 &
-		   + dt(5) * 60 * 60 * 1000 &
-		   + dt(6) * 60 * 1000 + dt(7) * 1000 &
-		   + dt(8)
-   end if
-   
-   pid = getpid()
-   ! pid = 0
-   
-   t = ieor(t, int(pid, kind(t)))
-   do i = 1, n
-	  seed(i) = lcg(t)
-   end do
-	call random_seed(put=seed)
-  contains
-	! This simple PRNG might not be good enough for real work, but is
-	! sufficient for seeding a better PRNG.
-	function lcg(s)
-	  integer :: lcg
-	  integer(int64) :: s
-	  if (s == 0) then
-		 s = 104729
-	  else
-		 s = mod(s, 4294967296_int64)
-	  end if
-	  s = mod(s * 279470273_int64, 4294967291_int64)
-	  lcg = int(mod(s, int(huge(0), int64)), kind(0))
-	end function lcg
-  end subroutine init_random_seed
+end subroutine rperm	
 
 
 
-  real(kind=8) function random_real_number(mag)
-	implicit none 
-	real(kind=8) a,b,c,d,mag
-	integer seed
-	
+subroutine init_random_seed()
+implicit none
+integer, allocatable :: seed(:)
+integer :: i, n, un, istat, dt(8), pid
+integer*8 :: t
+
+call random_seed(size = n)
+allocate(seed(n))
+! First try if the OS provides a random number generator
+
+! Fallback to XOR:ing the current time and pid. The PID is
+! useful in case one launches multiple instances of the same
+! program in parallel.
+call system_clock(t)
+if (t == 0) then
+  call date_and_time(values=dt)
+  t = (dt(1) - 1970) * 365_int64 * 24 * 60 * 60 * 1000 &
+	   + dt(2) * 31_int64 * 24 * 60 * 60 * 1000 &
+	   + dt(3) * 24_int64 * 60 * 60 * 1000 &
+	   + dt(5) * 60 * 60 * 1000 &
+	   + dt(6) * 60 * 1000 + dt(7) * 1000 &
+	   + dt(8)
+end if
+
+pid = getpid()
+! pid = 0
+
+t = ieor(t, int(pid, kind(t)))
+do i = 1, n
+  seed(i) = lcg(t)
+end do
+call random_seed(put=seed)
+contains
+! This simple PRNG might not be good enough for real work, but is
+! sufficient for seeding a better PRNG.
+function lcg(s)
+  integer :: lcg
+  integer(int64) :: s
+  if (s == 0) then
+	 s = 104729
+  else
+	 s = mod(s, 4294967296_int64)
+  end if
+  s = mod(s * 279470273_int64, 4294967291_int64)
+  lcg = int(mod(s, int(huge(0), int64)), kind(0))
+end function lcg
+end subroutine init_random_seed
+
+
+subroutine random_dp_number(val)
+implicit none 
+real(kind=8) a,b,c,d
+integer seed
+class(*) val
+
+select type(val)
+type is (complex(kind=8))
+
 	! Uniform distribution
-	call random_number(a)	
-	a = (a-0.5d0)*2d0*mag
+	call random_number(a)
+	call random_number(b)
+	call random_number(c)
+	call random_number(d)
+	if (c<0.5d0) then
+		a=-a
+	endif
+	if (d<0.5d0) then
+		b=-b
+	endif
+	val=a+junit*b
 	
-	random_real_number=a
-
 	
-	return
-	end function random_real_number
-
-
-
-
-
-   subroutine random_dp_number(val)
-	implicit none 
-	real(kind=8) a,b,c,d
-	integer seed
-	class(*) val
+	! ! ! Normal distribution
+	! ! call random_number(a)
+	! ! seed = a*10000000
+	! ! random_dp_number =  c8_normal_01 ( seed )
+type is (real(kind=8))
+	! Uniform distribution
+	call random_number(a)
+	val = a*2d0-1d0
 	
-	select type(val)
-	type is (complex(kind=8))
-	
-		! Uniform distribution
-		call random_number(a)
-		call random_number(b)
-		call random_number(c)
-		call random_number(d)
-		if (c<0.5d0) then
-			a=-a
-		endif
-		if (d<0.5d0) then
-			b=-b
-		endif
-		val=a+junit*b
-		
-		
-		! ! ! Normal distribution
-		! ! call random_number(a)
-		! ! seed = a*10000000
-		! ! random_dp_number =  c8_normal_01 ( seed )
-	type is (real(kind=8))
-		! Uniform distribution
-		call random_number(a)
-		val = a*2d0-1d0
-		
-	end select
-	return
-	end subroutine random_dp_number
+end select
+return
+end subroutine random_dp_number
 
-	
+
 
 complex(kind=8) function c8_normal_01(seed)
 
@@ -1752,7 +1711,7 @@ end subroutine GeneralInverse
 	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
 	! ! use lapack95
 	! ! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2123,7 +2082,7 @@ end subroutine RandomMat
 
 subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2296,7 +2255,7 @@ end subroutine ACA_SubsetSelection
 subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2473,7 +2432,8 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 ! ACA followed by SVD	
 	
 	allocate(QQ1(rankmax_r,rank))
-	call copymatN_omp(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
+	! call copymatN(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
+	QQ1 = matU(1:rankmax_r,1:rank)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ1,tau_Q)
 	
@@ -2491,7 +2451,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 
 
 	allocate(QQ2tmp(rankmax_c,rank))
-	call copymatT_omp(matV(1:rank,1:rankmax_c),QQ2tmp,rank,rankmax_c)
+	call copymatT(matV(1:rank,1:rankmax_c),QQ2tmp,rank,rankmax_c)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ2tmp,tau_Q)
 	
@@ -2508,9 +2468,9 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	deallocate(tau_Q)
 	
 	allocate(QQ2(rank,rankmax_c))
-	call copymatT_omp(QQ2tmp,QQ2,rankmax_c,rank)	
+	call copymatT(QQ2tmp,QQ2,rankmax_c,rank)	
 	allocate(RR2(rank,rank))
-	call copymatT_omp(RR2tmp,RR2,rank,rank)	
+	call copymatT(RR2tmp,RR2,rank,rank)	
 	
 	
 	
@@ -2754,7 +2714,7 @@ end subroutine Cart2Sph
 
 complex(kind=8) function Hankel02_Func(x)
 
-use MODULE_FILE    
+use HODLR_DEFS    
 implicit none
     
     real(kind=8) x

@@ -1,13 +1,13 @@
 PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
-    use MODULE_FILE
+    use d_HODLR_DEFS
 	! use geometry_model
-	use H_structure
-	use cascading_factorization
-	use HODLR_construction
+	use d_H_structure
+	use d_cascading_factorization
+	use d_HODLR_construction
 	use omp_lib
-	use Bplus_compress_forward
-	use HODLR_randomMVP
+	use dBplus_compress_forward
+	use dHODLR_randomMVP
     implicit none
 
     real(kind=8) para,error
@@ -22,14 +22,14 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Ntunnel,kk,black_step,rankmax
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
-	type(Hoption):: option
-	type(Hstat)::stats	
-	type(mesh)::msh	
-	type(kernelquant)::ker
+	type(d_Hoption):: option
+	type(d_Hstat)::stats	
+	type(d_mesh)::msh	
+	type(d_kernelquant)::ker
 	integer:: explicitflag
-	type(hobf)::ho_bf,ho_bf_copy
+	type(d_hobf)::ho_bf,ho_bf_copy
 	integer Nin1,Nout1,Nin2,Nout2	
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	integer,allocatable:: groupmembers(:)	
 	integer :: ierr
 	integer :: nmpi
@@ -43,7 +43,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -68,8 +68,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     write(*,*) "FOR X64 COMPILER"
     write(*,*) "   "
 
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_initstat(stats)
+	call d_setdefaultoptions(option)
 	
 	! time_indexarray = 0
 	! time_leastsquare = 0
@@ -229,8 +229,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,option,msh,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
+    call d_H_matrix_structuring(ho_bf,option,msh,ptree)
+	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "H_matrices formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -264,7 +264,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 		t1 = OMP_get_wtime()	
 		write(*,*) "H_matrices filling......"
-		call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
+		call d_matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
 		! if(option%precon/=DIRECT)then
 			! call copy_HOBF(ho_bf,ho_bf_copy)	
 		! end if		
@@ -311,7 +311,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call cascading_factorizing(ho_bf,option,stats,ptree)
+    ! call d_cascading_factorizing(ho_bf,option,stats,ptree)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 

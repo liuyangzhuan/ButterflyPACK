@@ -1,16 +1,16 @@
+#include "HODLR_config.fi"
 module cascading_factorization
 ! use Butterfly_inversion_schur_iterative
 ! use Butterfly_inversion_schur_partition
 use Bplus_rightmultiply
 use Bplus_inversion_schur_partition
 
-#include "HODLR_config.fi"
 
 contains 
 
 subroutine cascading_factorizing(ho_bf1,option,stats,ptree)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
     ! use blas95	
 	use misc

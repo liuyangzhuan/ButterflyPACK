@@ -1,18 +1,16 @@
+#include "HODLR_config.fi"
 module Bplus_randomized
 ! use Utilites_randomized
 ! use Butterfly_rightmultiply
 use misc
 use Utilities
 
-
-#include "HODLR_config.fi"
-
 contains 
 
 
 
 subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -126,7 +124,7 @@ end subroutine BF_block_MVP_inverse_dat
 
 
 subroutine BF_Delete_RandVect(chara,random,level_butterfly)
-	use MODULE_FILE
+	use HODLR_DEFS
 	implicit none 
     character chara
 	integer num_col,num_row,level,i,j	
@@ -163,7 +161,7 @@ end subroutine BF_Delete_RandVect
 
 subroutine BF_Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
         real(kind=8):: mem_vec
     integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
@@ -296,7 +294,7 @@ end subroutine BF_Init_RandVect_Empty
 
 subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
     integer level_c,rowblock,kover
@@ -454,7 +452,7 @@ end subroutine BF_Init_randomized
 
 subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -536,7 +534,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 end subroutine BF_Resolving_Butterfly_LL_new
 
 subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none 
@@ -552,7 +550,7 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
    if(level_right==unique_nth)then
 	   dimension_nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
 	   allocate(matB(mm,dimension_nn))
-	   call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
+	   call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
 	   call GetRank(mm,dimension_nn,matB,rank,option%tol_Rdetect)
 	   if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 							   
@@ -568,8 +566,8 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   ! call RandomMat(rank,dimension_nn,min(rank,dimension_nn),blocks%ButterflyVInv(j)%matrix,0)
 	   
 	   allocate(matC(rank,dimension_nn),matA(mm,rank),matinv(dimension_nn,rank))
-	   ! call copymatT_omp(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
-	   call copymatT_omp(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																		   
+	   ! call copymatT(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
+	   call copymatT(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																		   
 	   if(isnan(fnorm(matB,mm,dimension_nn)) .or. isnan(fnorm(matinv,dimension_nn,rank)))then
 		write(*,*)shape(matB),fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei',fnorm(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix,dimension_nn,mm)
 		stop
@@ -579,15 +577,15 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   
 	   
 	   call LeastSquare(mm,rank,dimension_nn,matA,matB,matC,option%tol_LS)
-	   call copymatT_omp(matC,blocks%ButterflyV%blocks(j)%matrix,rank,dimension_nn)						   
+	   call copymatT(matC,blocks%ButterflyV%blocks(j)%matrix,rank,dimension_nn)						   
 	   deallocate(matB,matC,matA,matinv)						   
    else 
 	   rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
 	   dimension_nn=size(blocks%ButterflyV%blocks(j)%matrix,1)									
 	   allocate(matB(mm,dimension_nn),matA(mm,rank),matinv(dimension_nn,rank))
-	   call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
-	   ! call copymatT_omp(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
-	   call copymatT_omp(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																					   
+	   call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
+	   ! call copymatT(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
+	   call copymatT(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																					   
 	   if(isnan(fnorm(matB,mm,dimension_nn)) .or. isnan(fnorm(matinv,dimension_nn,rank)))then
 		write(*,*)fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei1'
 		stop
@@ -595,15 +593,15 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
 	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero)
 	   if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
-	   call copymatT_omp(matA,vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)					   
+	   call copymatT(matA,vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)					   
 	   deallocate(matB,matA,matinv)	
    end if   
    
-end subroutine BF_OneV_LL 	
+end subroutine BF_OneV_LL
 
 
 subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none 
@@ -625,8 +623,8 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 
 	if(level_right==unique_nth)then
 		allocate (matB(mm,nn1+nn2))
-		call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
-		call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)
+		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
+		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)
 		if(mod(noe,2)==1)then
 			call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
@@ -656,7 +654,8 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		
 
 		allocate (matC(rank,nn1+nn2),matA(mm,rank),matinv(nn1+nn2,rank))
-		call copymatN_omp(blocks%KerInv(1:nn1+nn2,rs:re),matinv,nn1+nn2,rank)																  
+		! call copymatN(blocks%KerInv(1:nn1+nn2,rs:re),matinv,nn1+nn2,rank)
+		matinv = blocks%KerInv(1:nn1+nn2,rs:re)	
 		if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'ho'
 		 stop
@@ -664,8 +663,10 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
 		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
-		call copymatN_omp(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix,rank,nn1)
-		call copymatN_omp(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix,rank,nn2)							
+		! call copymatN(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix,rank,nn1)
+		blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix = matC(1:rank,1:nn1)
+		! call copymatN(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix,rank,nn2)	
+		blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix = 	matC(1:rank,nn1+1:nn1+nn2)	
 		deallocate(matB,matC,matA,matinv)
 		deallocate(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix)
 		deallocate(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix)
@@ -681,11 +682,12 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 			re = rs+rank-1
 		end if
 		allocate (matB(mm,nn1+nn2),matC(rank,nn1+nn2),matA(mm,rank),matinv(nn1+nn2,rank))
-		call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
-		call copymatT_omp(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)
+		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
+		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)
 										
 
-		call copymatN_omp(blocks%KerInv(1:nn1+nn2,rs:re),matinv,nn1+nn2,rank)																		  
+		! call copymatN(blocks%KerInv(1:nn1+nn2,rs:re),matinv,nn1+nn2,rank)
+		matinv=	blocks%KerInv(1:nn1+nn2,rs:re)	
 		if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'ho1'
 		 stop
@@ -693,7 +695,7 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
 		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(rank,num_vect_sub))
-		call copymatT_omp(matA,vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
+		call copymatT(matA,vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matC,matA,matinv)	
 		deallocate(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix)
 		deallocate(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix)
@@ -702,13 +704,13 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 
 
    
-end subroutine BF_OneKernel_LL   
+end subroutine BF_OneKernel_LL
 
 
 
 subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -749,7 +751,7 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 	   ! random=>vec_rand
 	   if(level_left_start>0 .and. level_left_start==unique_nth)then
 			n1 = OMP_get_wtime()
-			call Butterfly_partial_MVP_Half(blocks,'N',0,level_left_start-1,vec_rand,num_vect_sub,nth_s,nth_e,Ng)
+			call Butterfly_Partial_MVP_Half(blocks,'N',0,level_left_start-1,vec_rand,num_vect_sub,nth_s,nth_e,Ng)
 			n2 = OMP_get_wtime()
 			! time_halfbuttermul = time_halfbuttermul + n2-n1		 
 		endif 
@@ -791,7 +793,7 @@ end subroutine BF_Resolving_Butterfly_RR_new
 
 
 subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none 
@@ -808,7 +810,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 		if(level_butterfly>0)then
 			dimension_mm=size(blocks%ButterflyU%blocks(i)%matrix,1)	
 			allocate(matB(mm,dimension_mm))
-			call copymatT_omp(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
+			call copymatT(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
 			call GetRank(mm,dimension_mm,matB,rank,option%tol_Rdetect)
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 			
@@ -819,7 +821,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			blocks%ButterflyU%blocks(i)%ndim=rank
 			allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 			allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
-			call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
+			call copymatT(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
 			if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
 			 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
 			 stop
@@ -827,30 +829,30 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)							
 			call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS)
-			call copymatT_omp(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
+			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA,matinv)
 		else 
 			dimension_mm=size(blocks%ButterflyU%blocks(i)%matrix,1)	
 			allocate(matB(mm,dimension_mm))
-			call copymatT_omp(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)									
+			call copymatT(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)									
 			rank = size(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix,1)
 			if(allocated(blocks%ButterflyU%blocks(i)%matrix))deallocate(blocks%ButterflyU%blocks(i)%matrix)
 			allocate(blocks%ButterflyU%blocks(i)%matrix(dimension_mm,rank))
 			blocks%ButterflyU%blocks(i)%mdim=dimension_mm
 			blocks%ButterflyU%blocks(i)%ndim=rank
 			allocate(matC(rank,dimension_mm),matA(mm,rank))	
-			call copymatT_omp(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
+			call copymatT(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS)
 			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
-			call copymatT_omp(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
+			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA)			
 		endif			
 	else 
 		dimension_mm=size(blocks%ButterflyU%blocks(i)%matrix,1)						
 		rank=size(blocks%ButterflyU%blocks(i)%matrix,2)						
 		allocate(matB(mm,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
-		call copymatT_omp(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)
-		call copymatT_omp(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
+		call copymatT(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)
+		call copymatT(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
 		if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
 		 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee1'
 		 stop
@@ -858,17 +860,17 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 		! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)
 		call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
-		call copymatT_OMP(matA,vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
+		call copymatT(matA,vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)					
 	end if	   
    
 
-end subroutine BF_OneU_RR  
+end subroutine BF_OneU_RR
 
 
 
 subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none 
@@ -891,8 +893,8 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 	if(level_left==unique_nth)then
 		if(level_left==level_left_start)then
 			allocate (matB(mm,nn1+nn2))
-			call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
-			call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
+			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
+			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
 			
 			if(mod(noe,2)==1)then
 				rank = size(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix,1)
@@ -915,16 +917,16 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%ndim=rank
 			
 			allocate(matC(rank,nn1+nn2),matA(mm,rank))
-			call copymatT_omp(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
+			call copymatT(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
-			call copymatT_omp(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
-			call copymatT_omp(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
+			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
+			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
 			deallocate(matB,matC,matA)
 
 		else 
 			allocate (matB(mm,nn1+nn2))
-			call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
-			call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
+			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
+			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
 			if(mod(noe,2)==1)then
 				call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
 				if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
@@ -950,7 +952,7 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			allocate(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(rank,mm))
 			
 			allocate(matC(rank,nn1+nn2),matA(mm,rank),matinv(nn1+nn2,rank))
-			call copymatT_OMP(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)															   
+			call copymatT(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)															   
 
 			if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 			 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
@@ -959,8 +961,8 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
 			call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
-			call copymatT_omp(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
-			call copymatT_omp(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
+			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
+			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
 			deallocate(matB,matC,matA,matinv)
 			
 		end if
@@ -978,10 +980,10 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			re = rs+rank-1
 		end if							
 		allocate (matB(mm,nn1+nn2),matA(mm,rank),matinv(nn1+nn2,rank))
-		call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
-		call copymatT_omp(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
+		call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
+		call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
 		
-		call copymatT_omp(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)																		  
+		call copymatT(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)																		  
 
 		if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
@@ -990,19 +992,19 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
 		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
 		if(.not. allocated(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix))allocate(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(rank,num_vect_sub))
-		call copymatT_omp(matA,vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
+		call copymatT(matA,vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)
 		deallocate(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix)		
 		deallocate(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix)				
 	end if
 
 	! write(*,'(I5,I5,I5,I5,I5,Es16.7E3,A2)')unique_nth,level_left,nth,i,j,error0,'R'
-end subroutine BF_OneKernel_RR  
+end subroutine BF_OneKernel_RR
 
 
 subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,operand1) 
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use misc
 	! use lapack95
 	! use blas95
@@ -1099,7 +1101,7 @@ end subroutine BF_randomized
 
 subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
     integer level_c,rowblock
@@ -1201,7 +1203,7 @@ end subroutine BF_Reconstruction_LL
 
 subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
     integer level_c,rowblock    
@@ -1303,7 +1305,7 @@ end subroutine BF_Reconstruction_RR
 
 subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_dat,error,ptree,stats,operand1)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
 	integer nth
@@ -1369,7 +1371,7 @@ end subroutine BF_Test_Reconstruction_Error
 
 subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,stats,operand1)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
@@ -1519,7 +1521,7 @@ end subroutine BF_Randomized_Vectors_LL
 
 subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,stats,operand1)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
@@ -1671,7 +1673,7 @@ end subroutine BF_Randomized_Vectors_RR
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -1837,7 +1839,7 @@ end subroutine BF_block_MVP_inverse_ABCD_dat
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -1935,7 +1937,7 @@ end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
 
 subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -2010,7 +2012,7 @@ end subroutine BF_block_MVP_inverse_minusBC_dat
 
 
 subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -2184,7 +2186,7 @@ end subroutine BF_block_MVP_schulz_dat
 
 
 subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -2250,7 +2252,7 @@ end subroutine BF_block_MVP_schulz_Xn_dat
 
 subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
@@ -2439,7 +2441,7 @@ end subroutine BF_block_MVP_Sblock_dat
 
 
 subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2507,7 +2509,7 @@ end subroutine Bplus_block_MVP_Exact_dat
 
 
 subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2561,7 +2563,7 @@ end subroutine Bplus_block_MVP_Outter_Exact_dat
 
 
 subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2656,7 +2658,7 @@ end subroutine Bplus_block_MVP_minusBC_dat
 
 
 subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2707,7 +2709,7 @@ end subroutine Bplus_block_MVP_Outter_minusBC_dat
 
 
 subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2857,7 +2859,7 @@ end subroutine Bplus_block_MVP_Sblock_dat
 
 
 subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -2913,7 +2915,7 @@ end subroutine Bplus_block_MVP_Outter_Sblock_dat
 
 
 subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -3032,7 +3034,7 @@ end subroutine Bplus_block_MVP_inverse_dat
 
 
 subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,a,b,ptree,stats)
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    implicit none
@@ -3159,7 +3161,7 @@ end subroutine Bplus_block_MVP_twoforward_dat
 
 
 subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -3259,7 +3261,7 @@ end subroutine Bplus_block_MVP_BplusB_dat
 
 
 subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use MODULE_FILE
+	use HODLR_DEFS
 	! use lapack95
 	! use blas95
 	implicit none
@@ -3360,7 +3362,7 @@ end subroutine Bplus_block_MVP_BBplus_dat
 
 subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,operand1)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    use misc
@@ -3634,9 +3636,10 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				blocks%rankmin = rank
 				
 				allocate (blocks%ButterflyV%blocks(1)%matrix(nn,rank))
-				call copymatT_OMP(matV_glo(1:rank,1:nn),blocks%ButterflyV%blocks(1)%matrix,rank,nn)
+				call copymatT(matV_glo(1:rank,1:nn),blocks%ButterflyV%blocks(1)%matrix,rank,nn)
 				allocate (blocks%ButterflyU%blocks(1)%matrix(mm,rank))
-				call copymatN_OMP(matU_glo(1:mm,1:rank),blocks%ButterflyU%blocks(1)%matrix,mm,rank)
+				! call copymatN(matU_glo(1:mm,1:rank),blocks%ButterflyU%blocks(1)%matrix,mm,rank)
+				blocks%ButterflyU%blocks(1)%matrix = matU_glo(1:mm,1:rank)
 				deallocate(matV_glo)
 				deallocate(matU_glo)
 
@@ -3662,7 +3665,7 @@ end subroutine Bplus_MultiLrandomized_Onesubblock
 
 subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,rankrate_inner,blackbox_MVP_dat_inner,rank0_outter,rankrate_outter,blackbox_MVP_dat_outter,error_inout,strings,option,stats,ptree)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    use misc
@@ -3757,7 +3760,7 @@ end subroutine Bplus_randomized_constr
 
 subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized)
 	use misc
-    use MODULE_FILE
+    use HODLR_DEFS
 	! use lapack95
 	! use blas95
     implicit none

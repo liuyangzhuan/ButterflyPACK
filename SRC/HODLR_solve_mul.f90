@@ -1,8 +1,7 @@
+#include "HODLR_config.fi"
 module HODLR_Solve
 ! use Butterfly_rightmultiply
 use Bplus_compress_forward
-
-#include "HODLR_config.fi"
 
 
 contains 
@@ -10,7 +9,7 @@ contains
 
 subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
     integer i, j, ii, jj, iii, jjj
@@ -252,7 +251,7 @@ end subroutine HODLR_Solution
 	
 subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use blas95
     implicit none
     
@@ -314,7 +313,7 @@ end subroutine HODLR_Test_Solve_error
 
 subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
     implicit none
     
@@ -379,12 +378,10 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
     return                
 
 end subroutine MVM_Z_factorized
- 
-
 
 subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
     implicit none
     
@@ -448,7 +445,6 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 	 
     return                
 
-end subroutine MVM_Z_forward  	
-	
-	
+end subroutine MVM_Z_forward
+
 end module HODLR_Solve

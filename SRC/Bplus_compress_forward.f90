@@ -1,14 +1,14 @@
+#include "HODLR_config.fi"
 module Bplus_compress_forward 
 use Bplus_randomized 
 use H_structure
 ! use element_Z 
 
-#include "HODLR_config.fi"
 
 contains 
 ! subroutine Butterfly_compress(blocks,Memory,msh,element_Zmn,ker)
 
-   ! use MODULE_FILE
+   ! use HODLR_DEFS
    ! implicit none
 	! type(mesh)::msh
 	! type(kernelquant)::ker
@@ -104,7 +104,7 @@ contains
 
 ! subroutine decomposition_UkerlV(index_i,index_j,level,blocks,tolerance,msh,element_Zmn,ker)
 
-    ! use MODULE_FILE
+    ! use HODLR_DEFS
     ! implicit none
 
     ! integer mm, nn, level, level_butterfly
@@ -127,7 +127,7 @@ contains
 
 ! subroutine butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn,ker)
 
-    ! use MODULE_FILE
+    ! use HODLR_DEFS
     ! ! use lapack95
     ! implicit none
 
@@ -428,7 +428,7 @@ contains
  
 ! subroutine butterfly_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn,ker)
 
-    ! use MODULE_FILE
+    ! use HODLR_DEFS
     ! ! use lapack95
     ! implicit none
 
@@ -701,7 +701,7 @@ contains
 
 subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    use misc
@@ -755,7 +755,7 @@ end subroutine Bplus_compress_N15
 
 subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    use misc
@@ -1171,7 +1171,7 @@ end subroutine Butterfly_compress_N15_withoutBoundary
 
 subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use MODULE_FILE
+   use HODLR_DEFS
    ! use lapack95
    ! use blas95
    use misc
@@ -2055,7 +2055,7 @@ end subroutine Butterfly_compress_N15
 
 
 recursive subroutine BlockLR(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gd,cridx)
-use MODULE_FILE
+use HODLR_DEFS
 implicit none 
     integer rank,ranktmp,leafsize
     integer header_m, header_n
@@ -2716,7 +2716,7 @@ end subroutine BlockLR
 subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,error)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2875,9 +2875,9 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 			call element_Zmn(edge_m,edge_n,row_R(j),msh,ker)	
 		enddo
 		!$omp end parallel do
-#ifdef DAT_CMPLX
+#if DAT==z
 	call zgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
-#else
+#elif DAT==d
 	call dgemm('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
 #endif		
 
@@ -2926,9 +2926,9 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		!$omp end parallel do		
 
 
-#ifdef DAT_CMPLX
+#if DAT==z
 		call zgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
-#else
+#elif DAT==d
 		call dgemm('N','N',rankmax_r,1,rank, cone, matU, rankmax_r,matV(1,select_column(rank+1)),rmax,czero,value_UV,rankmax_r)
 #endif		
 
@@ -3024,7 +3024,8 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 ! ACA followed by SVD	
 	
 	allocate(QQ1(rankmax_r,rank))
-	call copymatN_omp(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
+	QQ1 = matU(1:rankmax_r,1:rank)
+	! call copymatN(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ1,tau_Q,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
@@ -3044,7 +3045,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	stats%Flop_Fill = stats%Flop_Fill + flop
 
 	allocate(QQ2(rankmax_c,rank))
-	call copymatT_omp(matV(1:rank,1:rankmax_c),QQ2,rank,rankmax_c)
+	call copymatT(matV(1:rank,1:rankmax_c),QQ2,rank,rankmax_c)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ2,tau_Q,flop=flop)
 	stats%Flop_Fill = stats%Flop_Fill + flop
@@ -3098,7 +3099,7 @@ end subroutine ACA_CompressionForward
 subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,error)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
 	integer rank, rankup, ranknew, row, column, rankmax,N,M,rmax
@@ -3189,10 +3190,10 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		if(rank>0)then
 			do j=1,r_est
 			
-#ifdef DAT_CMPLX
+#if DAT==z
 			call zgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M, 1,rank)
-#else
+#elif DAT==d
 			call dgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(M, 1,rank)
 #endif				
@@ -3204,7 +3205,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		
 		!**** Find row pivots from the columns column_R
-		call copymatT_omp(column_R,column_RT,M,r_est)
+		call copymatT(column_R,column_RT,M,r_est)
 		jpvt=0	
 		! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
 		call geqp3f90(column_RT,jpvt,tau,flop=flop)
@@ -3227,10 +3228,10 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 			do i=1,r_est
 
 
-#ifdef DAT_CMPLX
+#if DAT==z
 			call zgemm('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(1, N,rank)
-#else
+#elif DAT==d
 			call dgemm('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
 			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(1, N,rank)
 #endif			
@@ -3260,10 +3261,10 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		if(rank>0)then
 			do j=1,r_est
 			
-#ifdef DAT_CMPLX
+#if DAT==z
 			call zgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_zgemm(M, 1,rank)
-#else
+#elif DAT==d
 			call dgemm('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_dgemm(M, 1,rank)
 #endif	
@@ -3413,7 +3414,7 @@ end subroutine BatchACA_CompressionForward
 subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,ctxt,pgno)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2, rank
@@ -3760,7 +3761,7 @@ end subroutine SeudoSkeleton_CompressionForward
 
 
 subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,ButterflyP_old,ButterflyP)
-use MISC
+use misc
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyL,index_i_m,index_i,index_j,level,group_m,mm,nn,nn1,nn2,j,i,mn,rank,mm1
 type(butterfly_Kerl)ButterflyP_old,ButterflyP
@@ -3888,7 +3889,7 @@ end subroutine  LocalButterflySVD_Left
 
 
 subroutine LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,ButterflyP_old,ButterflyP)
-use MISC
+use misc
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyR,level_butterfly,index_j_m,index_i,index_j,level,group_n,mm,nn,nn1,mm1,mm2,j,i,mn,rank
 type(butterfly_Kerl)ButterflyP_old,ButterflyP
@@ -4012,7 +4013,7 @@ end subroutine LocalButterflySVD_Right
 
 !!!!!!! check error of LR compression of blocks by comparing the full block, assuming 2D block-cyclic distribution   
 subroutine CheckLRError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
-use MODULE_FILE
+use HODLR_DEFS
 implicit none 
 
 	type(matrixblock)::blocks
@@ -4122,7 +4123,7 @@ end subroutine CheckLRError
 
 ! integer function rank_approximate_func(group_m, group_n, flag,ker)
 
-    ! use MODULE_FILE
+    ! use HODLR_DEFS
     ! implicit none
 
     ! integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag

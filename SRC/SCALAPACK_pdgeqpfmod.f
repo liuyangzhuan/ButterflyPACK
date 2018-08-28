@@ -1,4 +1,4 @@
-      SUBROUTINE PDGEQPFmod( M, N, A, IA, JA, DESCA, IPIV, TAU, WORK,
+      subroutine PDGEQPFmod( M, N, A, IA, JA, DESCA, IPIV, TAU, WORK,
      $                    LWORK, INFO, JPERM, JPIV, RANK, RTOL, ATOL )
 *
 *  -- ScaLAPACK routine (version 1.7) --
@@ -562,4 +562,4 @@
 *
 *     End of PDGEQPF
 *
-      END
+      end subroutine PDGEQPFmod

@@ -1,17 +1,17 @@
+#include "HODLR_config.fi"
 module HODLR_construction
 ! use Butterfly_rightmultiply
 ! use Butterfly_exact
 use Bplus_compress_forward
 use Bplus_randomized
 
-#include "HODLR_config.fi"
 
 contains 
 
 
 subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	
-	use MODULE_FILE
+	use HODLR_DEFS
 	implicit none
 	
 	integer edge_m, edge_n
@@ -33,7 +33,7 @@ end subroutine element_Zmn_user
 subroutine matrices_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	real(kind=8) n1,n2
     integer i, j, ii, ii_inv, jj, kk, iii, jjj,ll
@@ -160,7 +160,7 @@ end subroutine matrices_construction
 
 subroutine full_filling(blocks,msh,ker,element_Zmn)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 
     integer group_m, group_n, i, j
@@ -199,7 +199,7 @@ end subroutine full_filling
 
 subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 
-    use MODULE_FILE
+    use HODLR_DEFS
 	use Utilities	
     implicit none
     

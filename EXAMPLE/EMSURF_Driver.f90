@@ -1,6 +1,6 @@
 module APPLICATION_MODULE
-use MODULE_FILE
-use MISC
+use z_HODLR_DEFS
+use z_misc
 implicit none
 
 	!**** define your application-related variables here   
@@ -20,7 +20,7 @@ contains
 !**** user-defined subroutine to sample Z_mn
 subroutine Z_elem_EMSURF(ker,m,n,value_e,msh,quant)
 	
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
 	
     integer, INTENT(IN):: m,n
@@ -35,8 +35,8 @@ subroutine Z_elem_EMSURF(ker,m,n,value_e,msh,quant)
     real(kind=8) distance
     real(kind=8) ianl,ianl1,ianl2
     real(kind=8) area
-	type(mesh)::msh
-	class(kernelquant)::ker
+	type(z_mesh)::msh
+	class(z_kernelquant)::ker
 	class(*),pointer :: quant
 	
 	
@@ -155,15 +155,74 @@ end subroutine Z_elem_EMSURF
 
 
 
+subroutine cscalar(a,b,c)
+	  implicit none
+	real(kind=8) b(3)
+	complex(kind=8) a(3),c
+	complex(kind=8) ax,ay,az
+	real(kind=8) bx,by,bz
+	ax=a(1);ay=a(2);az=a(3)
+	bx=b(1);by=b(2);bz=b(3)
+	c=ax*bx+ay*by+az*bz
+	  return
+end subroutine cscalar
+
+subroutine scalar(a,b,c)
+	  implicit none
+	real(kind=8) a(3),b(3),c
+	real(kind=8) ax,ay,az
+	real(kind=8) bx,by,bz
+	ax=a(1);ay=a(2);az=a(3)
+	bx=b(1);by=b(2);bz=b(3)
+	c=ax*bx+ay*by+az*bz
+	  return
+end subroutine scalar
+
+
+subroutine curl(a,b,c)
+	  implicit none
+	real(kind=8) a(3),b(3),c(3)
+	real(kind=8) ax,ay,az
+	real(kind=8) bx,by,bz
+	real(kind=8) cx,cy,cz
+	ax=a(1);ay=a(2);az=a(3)
+	bx=b(1);by=b(2);bz=b(3)
+
+	cx=ay*bz-by*az
+	cy=-ax*bz+bx*az
+	cz=ax*by-bx*ay
+	c(1)=cx;c(2)=cy;c(3)=cz
+	  return
+end subroutine curl
+	  
+	  
+subroutine ccurl(a,b,c)
+	  implicit none
+	real(kind=8) a(3)
+	complex(kind=8) b(3),c(3)
+	real(kind=8) ax,ay,az
+	complex(kind=8) bx,by,bz
+	complex(kind=8) cx,cy,cz
+	ax=a(1);ay=a(2);az=a(3)
+	bx=b(1);by=b(2);bz=b(3)
+
+	cx=ay*bz-by*az
+	cy=-ax*bz+bx*az
+	cz=ax*by-bx*ay
+	c(1)=cx;c(2)=cy;c(3)=cz
+	  return
+end subroutine ccurl
+
+
 !***********************************
 !	seven points gauss integration
 !	provide w(n) and x,y,z(n) (n=7)
 !***********************************
   subroutine gau_grobal(nn,j,x,y,z,w,msh)
   
-  use MODULE_FILE
+  use z_HODLR_DEFS
   implicit none
-  type(mesh)::msh
+  type(z_mesh)::msh
   integer nn ,flag
   real(kind=8) x(:),y(:),z(:),w(:)
   integer i,j,ii
@@ -210,12 +269,12 @@ end subroutine Z_elem_EMSURF
 
   subroutine gauss_points(msh)
   
-      use MODULE_FILE
+      use z_HODLR_DEFS
       implicit none
       
       real(kind=8) v1,v2,v3,v4,v5
       real(kind=8) wa,wb,wc
-	  type(mesh)::msh
+	  type(z_mesh)::msh
 	  
     !	wa=area*9./40
 !	wb=area*(155.-sqrt(15.))/1200.
@@ -343,7 +402,7 @@ end subroutine Z_elem_EMSURF
 !**********************************	
 function ianalytic(mm,jj,xi,yi,zi,msh)
 
-use     MODULE_FILE
+use     z_HODLR_DEFS
 integer mm,jj,j,i
 real(kind=8) xi,yi,zi
 real(kind=8)    temp,ianalytic
@@ -354,7 +413,7 @@ real(kind=8)    s(2,3),t(-1:1,3)
 real(kind=8)    f2(3),beta(3)
 real(kind=8)    r(-1:1,3)
 real(kind=8)    area
-type(mesh)::msh
+type(z_mesh)::msh
 
 ii=msh%info_unk(jj,mm)  
 node1=msh%node_of_patch(1,ii)
@@ -443,7 +502,7 @@ end function ianalytic
 !**********************************	
 function ianalytic2(mm,jj,xi,yi,zi,iii,msh)
 
-use MODULE_FILE
+use z_HODLR_DEFS
 integer mm,jj,j,i
 real(kind=8) ianalytic2
 integer ii,node1,node2,node3,iii
@@ -459,7 +518,7 @@ real(kind=8) temp,temp1,temp2,temp3
 real(kind=8) iua,iva
 real(kind=8) n0(3)
 real(kind=8)    area
-type(mesh)::msh
+type(z_mesh)::msh
 
 ii=msh%info_unk(jj,mm)
 node1=msh%node_of_patch(1,ii)
@@ -584,7 +643,7 @@ end function ianalytic2
 
 subroutine current_node_patch_mapping(chara,curr,msh)
     
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     integer patch, edge, node_patch(3), node_edge, node
@@ -593,7 +652,7 @@ subroutine current_node_patch_mapping(chara,curr,msh)
     character chara
     character(20) string 
     complex(kind=8)::curr(:)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	
     real(kind=8),allocatable :: current_at_patch(:), current_at_node(:)
     integer,allocatable :: edge_of_patch(:,:)
@@ -691,12 +750,12 @@ end subroutine current_node_patch_mapping
 
 real(kind=8) function triangle_area(patch,msh)
     
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     integer patch,i
     real(kind=8) a(3),b(3),c(3)
-	type(mesh)::msh
+	type(z_mesh)::msh
     
     do i=1,3
         a(i)=msh%xyz(i,msh%node_of_patch(2,patch))-msh%xyz(i,msh%node_of_patch(1,patch))
@@ -712,14 +771,14 @@ end function triangle_area
 
 subroutine element_Vinc_VV_SURF(theta,phi,edge,value,msh,quant)
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     integer edge
     complex(kind=8) value
     real(kind=8) theta, phi
     integer i,ii,jj,node1,node2,node3
-    type(mesh)::msh
+    type(z_mesh)::msh
 	real(kind=8) lm,einc(3),a(3),nr(3),k(3)
 	real(kind=8), allocatable::x(:),y(:),z(:),w(:)
     complex(kind=8)  phase,ctemp_e,ctemp_h,value_e,value_h,ee(3),hh(3),hh1(3)
@@ -774,7 +833,7 @@ end subroutine element_Vinc_VV_SURF
 
 subroutine element_Vinc_HH_SURF(theta,phi,edge,value,msh,quant)
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
 	
     type(quant_app)::quant
@@ -785,7 +844,7 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,msh,quant)
 	real(kind=8) lm,einc(3),a(3),nr(3),k(3)
 	real(kind=8), allocatable::x(:),y(:),z(:),w(:)
     complex(kind=8)  phase,ctemp_e,ctemp_h,value_e,value_h,ee(3),hh(3),hh1(3)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	
 	allocate(x(msh%integral_points))
 	allocate(y(msh%integral_points))
@@ -835,7 +894,7 @@ end subroutine element_Vinc_HH_SURF
 
 subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     !integer flag
-	use MODULE_FILE
+	use z_HODLR_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -847,9 +906,9 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     real(kind=8) a(3)
     real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
     complex(kind=8):: curr(:,:)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	
     integer edge,edge_m,edge_n,ierr
     
@@ -912,7 +971,7 @@ end subroutine RCS_bistatic_SURF
 
 subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -923,7 +982,7 @@ subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     real(kind=8) a(3)
     complex(kind=8)::curr
     integer edge,edge_m,edge_n
-    type(mesh)::msh
+    type(z_mesh)::msh
 	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 		
 	allocate(x(msh%integral_points))
@@ -959,7 +1018,7 @@ end subroutine VV_polar_SURF
 
 subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -969,7 +1028,7 @@ subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,msh,quant)
     real(kind=8) l_edge,l_edgefine
     real(kind=8) a(3)
     complex(kind=8)::curr
-	type(mesh)::msh
+	type(z_mesh)::msh
 	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 	
     integer edge,edge_m,edge_n
@@ -1009,16 +1068,16 @@ end subroutine HH_polar_SURF
 
 subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     complex(kind=8)::curr(:)
     real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
     real(kind=8) dsita,dphi
     integer edge,edge_m,edge_n,ierr
-	type(mesh)::msh
+	type(z_mesh)::msh
     type(quant_app)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	
     ctemp_loc=(0.,0.)
         rcs=0
@@ -1041,7 +1100,7 @@ end subroutine RCS_monostatic_VV_SURF
 
 subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use MODULE_FILE
+    use z_HODLR_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -1049,9 +1108,9 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
     real(kind=8) dsita,dphi    
     integer edge,edge_m,edge_n,ierr
     complex(kind=8)::curr(:)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	
     ctemp_loc=(0.,0.)
         rcs=0
@@ -1079,14 +1138,14 @@ end module APPLICATION_MODULE
 
 
 PROGRAM HODLR_BUTTERFLY_SOLVER_3D
-    use MODULE_FILE
+    use z_HODLR_DEFS
 	use APPLICATION_MODULE
 	! use geometry_model
-	use H_structure
-	use cascading_factorization
-	use HODLR_construction
+	use z_H_structure
+	use z_cascading_factorization
+	use z_HODLR_construction
 	use omp_lib
-	use MISC
+	use z_misc
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -1106,13 +1165,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
-	type(Hstat)::stats	
-	type(mesh)::msh	
-	type(hobf)::ho_bf,ho_bf_copy
-	type(kernelquant)::ker
+	type(z_Hoption)::option	
+	type(z_Hstat)::stats	
+	type(z_mesh)::msh	
+	type(z_hobf)::ho_bf,ho_bf_copy
+	type(z_kernelquant)::ker
 	type(quant_app),target::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	integer,allocatable:: groupmembers(:)	
 	integer nmpi
 	CHARACTER (LEN=1000) DATA_DIR	
@@ -1125,7 +1184,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -1152,8 +1211,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     write(*,*) "HODLR_BUTTERFLY_SOLVER_3D"
     write(*,*) "   "
 	endif
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call z_InitStat(stats)
+	call z_SetDefaultOptions(option)
 	
 	time_tmp = 0
 	
@@ -1251,8 +1310,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,option,msh,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
+    call z_H_matrix_structuring(ho_bf,option,msh,ptree)
+	call z_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -1264,7 +1323,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    call z_matrices_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if    
@@ -1275,7 +1334,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	
 	if(option%precon/=NOPRECON)then								
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats,ptree)
+    call z_cascading_factorizing(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -1298,8 +1357,8 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 subroutine geo_modeling_SURF(msh,quant,ptree,DATA_DIR)
 	use APPLICATION_MODULE
-    use MODULE_FILE
-	use misc
+    use z_HODLR_DEFS
+	use z_misc
     implicit none
     
     integer i,j,ii,jj,iii,jjj
@@ -1309,9 +1368,9 @@ subroutine geo_modeling_SURF(msh,quant,ptree,DATA_DIR)
     integer node_temp(2)
 	integer Dimn
     real(kind=8) a(3),b(3),c(3),r0
-	type(mesh)::msh
+	type(z_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 	CHARACTER (*) DATA_DIR
 	integer Maxedge
 	
@@ -1465,11 +1524,11 @@ end subroutine geo_modeling_SURF
 
 subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
     use APPLICATION_MODULE
-    use MODULE_FILE
+    use z_HODLR_DEFS
 	! use RCS_Bi
 	! use RCS_Mono
 	! use element_vinc
-	use HODLR_Solve
+	use z_HODLR_Solve
 	
     ! use blas95
     implicit none
@@ -1483,17 +1542,17 @@ subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(hobf)::ho_bf_inv
-	type(mesh)::msh
+	type(z_Hoption)::option
+	type(z_hobf)::ho_bf_inv
+	type(z_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
-	type(Hstat)::stats
+	type(z_proctree)::ptree
+	type(z_Hstat)::stats
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
 	
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
+		call z_hodlr_test_solve_error(ho_bf_inv,option,ptree,stats)
 	endif
 	
 	
@@ -1529,7 +1588,7 @@ subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
         
         T0=secnds(0.0)
         		
-		call HODLR_Solution(ho_bf_inv,Current,Voltage,N_unk_loc,2,option,ptree,stats)
+		call z_hodlr_solution(ho_bf_inv,Current,Voltage,N_unk_loc,2,option,ptree,stats)
 					
 		
         if(ptree%MyID==Main_ID)write (*,*) ''
@@ -1575,7 +1634,7 @@ subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
 			!$omp end parallel do
         enddo
 		
-		call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call z_hodlr_solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 		do j=0, num_sample 			
 			phi=j*dphi

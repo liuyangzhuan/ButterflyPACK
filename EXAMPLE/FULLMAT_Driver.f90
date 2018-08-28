@@ -1,5 +1,5 @@
 module APPLICATION_MODULE
-use MODULE_FILE
+use d_HODLR_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -14,12 +14,12 @@ contains
 	
 	!**** user-defined subroutine to sample Z_mn as two LR products
 	subroutine Z_elem_LR(ker,m,n,value_e,msh,quant)
-		use MODULE_FILE
+		use d_HODLR_DEFS
 		implicit none 
 		
-		class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(mesh)::msh
+		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 		integer ii
@@ -47,12 +47,12 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Z_elem_FULL(ker,m,n,value_e,msh,quant)
-		use MODULE_FILE
+		use d_HODLR_DEFS
 		implicit none 
 		
-		class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(mesh)::msh
+		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 		integer ii
@@ -78,16 +78,16 @@ end module APPLICATION_MODULE
 
 
 PROGRAM HODLR_BUTTERFLY_SOLVER
-    use MODULE_FILE
+    use d_HODLR_DEFS
     use APPLICATION_MODULE
-	use HODLR_Solve
+	use d_HODLR_Solve
 	! use geometry_model
-	use H_structure
-	use cascading_factorization
-	use HODLR_construction
+	use d_H_structure
+	use d_cascading_factorization
+	use d_HODLR_construction
 	use omp_lib
-	use MISC
-	use HODLR_construction
+	use d_misc
+	use d_HODLR_construction
 	
     implicit none
 
@@ -109,16 +109,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
+	type(d_Hoption)::option	
+	type(d_Hstat)::stats
+	type(d_mesh)::msh
+	type(d_kernelquant)::ker
 	type(quant_app),target::quant
-	type(hobf)::ho_bf,ho_bf_copy
+	type(d_hobf)::ho_bf,ho_bf_copy
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	integer level,Maxlevel
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
@@ -131,7 +131,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	enddo	
 	
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
@@ -161,8 +161,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	endif
 	
 	!**** initialize statistics variables  
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_initstat(stats)
+	call d_setdefaultoptions(option)
 	
 	
 	
@@ -262,7 +262,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	enddo
 	Maxlevel=level
 	allocate(msh%pretree(2**Maxlevel))
-	call CreateLeaf_Natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree)
+	call d_createleaf_natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree)
 	! write(*,*)msh%pretree
 	
 	allocate (msh%info_unk(0:0,msh%Nunk))
@@ -282,8 +282,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call H_matrix_structuring(ho_bf,option,msh,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
+    call d_H_matrix_structuring(ho_bf,option,msh,ptree)
+	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -293,7 +293,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
     !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_user,ptree)
+    call d_matrices_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
 	! call copy_HOBF(ho_bf,ho_bf_copy)	
     if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -302,14 +302,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call cascading_factorizing(ho_bf,option,stats,ptree)
+    call d_cascading_factorizing(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
 	
 	if(option%ErrSol==1)then
     if(ptree%MyID==Main_ID)write(*,*) "Test Solve ......"
-		call HODLR_Test_Solve_error(ho_bf,option,ptree,stats)
+		call d_HODLR_Test_Solve_error(ho_bf,option,ptree,stats)
     if(ptree%MyID==Main_ID)write(*,*) "Test Solve finished"
 	endif
 	

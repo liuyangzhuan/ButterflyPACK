@@ -1,16 +1,16 @@
+#include "HODLR_config.fi"
 module HODLR_randomMVP
 use Bplus_randomized 
 use HODLR_Solve
 use Bplus_compress_forward
 
-#include "HODLR_config.fi"
 
 contains
 
 subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,Memory,error,option,stats,operand,ptree,msh)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp,tmpfact,error
 	integer level_c,rankmax,level_butterfly,bb,rank_new_max,ii,groupm,groupn,N
@@ -110,7 +110,7 @@ end subroutine HODLR_randomized
 subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,rmax,option,operand,ptree,stats,msh)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer mn,rankref,level_c,rmax,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
@@ -218,7 +218,7 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 		tailer_n=nn+header_n-1		
 		
 		allocate(matrixtemp(ranks(bb),nn))
-		call copymatT_omp(RandVectInR(header_n:header_n+nn-1,1:ranks(bb)),matrixtemp,nn,ranks(bb))
+		call copymatT(RandVectInR(header_n:header_n+nn-1,1:ranks(bb)),matrixtemp,nn,ranks(bb))
 		
 				
 		mn=min(ranks(bb),nn)
@@ -245,7 +245,7 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 		allocate(block_rand(bb)%ButterflyV%blocks(1))		
 		
 		allocate(block_rand(bb)%ButterflyV%blocks(1)%matrix(nn,rank))
-		call copymatT_omp(VV(1:rank,1:nn),block_rand(bb)%ButterflyV%blocks(1)%matrix,rank,nn)
+		call copymatT(VV(1:rank,1:nn),block_rand(bb)%ButterflyV%blocks(1)%matrix,rank,nn)
 		allocate(block_rand(bb)%ButterflyU%blocks(1)%matrix(mm,rank))
 		allocate(matrixtempQ(mm,ranks(bb)))
 		matrixtempQ = RandVectOutR(header_m:header_m+mm-1,1:ranks(bb))
@@ -267,7 +267,7 @@ end subroutine HODLR_MVP_randomized_OneL_Lowrank
 subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand,ptree,stats,msh)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer N,mn,rankref,level_c,rmax,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
@@ -438,7 +438,7 @@ end subroutine HODLR_MVP_randomized_OneL
 subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,level_c,Memory,operand,ptree,stats,msh)
 	! use lapack95
 	! use blas95
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
 	integer N,rankref,level_c,rmaxloc,level_butterfly,bb,rank_new_max,rank,num_vect,groupn,groupm,header_n,header_m,tailer_m,tailer_n,ii,jj,k,mm,nn
@@ -507,7 +507,8 @@ subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_da
 		
 		block_o%style = 1
 		allocate(block_o%fullmat(mm,nn))
-		call copymatN_omp(RandVectOutR(k+1:k+mm,1:nn),block_o%fullmat,mm,nn)
+		! call copymatN(RandVectOutR(k+1:k+mm,1:nn),block_o%fullmat,mm,nn)
+		block_o%fullmat = RandVectOutR(k+1:k+mm,1:nn)
 		Memory = Memory + SIZEOF(block_o%fullmat)/1024.0d3
 	end do		
 	
@@ -524,7 +525,7 @@ end subroutine HODLR_randomized_OneL_Fullmat
 
 subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree,msh)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
     integer level_c,rowblock,N
@@ -628,7 +629,7 @@ end subroutine HODLR_Reconstruction_LL
 
 subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,option,stats,operand,ptree,msh)
     
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
 	
     integer level_c,rowblock
@@ -739,7 +740,7 @@ end subroutine HODLR_Reconstruction_RR
 
 subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,error,operand,ptree,stats,msh)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     implicit none
     
 	integer nth
@@ -870,7 +871,7 @@ end subroutine HODLR_MVP_randomized_Fullmat
 
 subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats,msh)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
@@ -1031,7 +1032,7 @@ end subroutine HODLR_Randomized_Vectors_LL
 
 subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats,msh)
 
-    use MODULE_FILE
+    use HODLR_DEFS
     ! use lapack95
 	use misc
     implicit none
