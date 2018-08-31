@@ -121,7 +121,7 @@ public:
   
   C_QuantZmn(int n_rand, int rank_rand, int ker, vector<double> MatU, vector<double> MatV)
     : _n_rand(n_rand), _rank_rand(rank_rand), _ker(ker), _MatU(move(MatU)), _MatV(move(MatV)){
-	cout<<_n_rand<<_rank_rand<<_MatU.size()<<endl;
+	// cout<<_n_rand<<_rank_rand<<_MatU.size()<<endl;
     assert(size_t(_n_rand * _rank_rand) == _MatU.size());
 	}  
   
