@@ -3,6 +3,7 @@ export OMP_NUM_THREADS=1
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
 
+nmpi=2
 
 ######## Liza's datset
 tst=1
@@ -19,7 +20,7 @@ checkerr=1
 batch=100
 
 # mpirun -n 1 $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out
-srun -n 1 -c 2 --cpu_bind=cores $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
+srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
 
 
 
@@ -37,7 +38,7 @@ checkerr=1
 batch=100
 
 # mpirun -n 1 $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out
-srun -n 1 -c 2 --cpu_bind=cores $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out  
+srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out  
   
 ######## product of Gaussian 
 tst=3
@@ -51,5 +52,5 @@ batch=100
 
 
 # mpirun -n 1 $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out  
-srun -n 1 -c 2 --cpu_bind=cores $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out  
+srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out  
   
