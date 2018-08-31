@@ -1,6 +1,6 @@
 #include "HODLR_config.fi"
-module H_structure 
-use Utilities
+module HODLR_structure 
+use HODLR_Utilities
 contains 
 
 real(kind=8) function group_dist(group_m,group_n)
@@ -97,7 +97,7 @@ real(kind=8) function func_distance(node1,node2,msh)
     
 end function func_distance
 
-subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
+subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
     
     use HODLR_DEFS
 	use misc
@@ -462,7 +462,7 @@ subroutine H_matrix_structuring(ho_bf1,option,msh,ptree)
 	endif
     return
     
-end subroutine H_matrix_structuring
+end subroutine HODLR_structuring
 
 
 subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
@@ -1092,4 +1092,4 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 end subroutine BPlus_structuring
 
 
-end module H_structure 
+end module HODLR_structure 

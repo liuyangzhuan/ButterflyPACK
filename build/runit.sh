@@ -1,0 +1,17 @@
+CUR_DIR=`pwd`
+FILE_DIR=$CUR_DIR
+INPUT_DIR=./EXAMPLE
+FILE_NAME=fullmatexe
+FILE=$FILE_DIR/$FILE_NAME
+
+OMP_NUM_THREADS=1
+
+
+  for MAT in K04N4096.csv K05N4096.csv K06N4096.csv K07N4096.csv K08N4096.csv K09N4096.csv K10N4096.csv K12N4096.csv
+  do
+	for COM in 2 3 4 
+	do
+		export OMP_NUM_THREADS=$OMP_NUM_THREADS
+		mpirun -n 1 $FILE $INPUT_DIR/$MAT $COM | tee $MAT_$COM_1x1
+	done
+  done

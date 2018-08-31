@@ -62,10 +62,10 @@ end module APPLICATION_MODULE
 PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     use d_HODLR_DEFS
     use APPLICATION_MODULE
-	! use geometry_model
-	use d_H_structure
-	use d_cascading_factorization
-	use d_HODLR_construction
+	
+	use d_HODLR_structure
+	use d_HODLR_factor
+	use d_HODLR_constr
 	use omp_lib
 	use d_misc
 
@@ -207,10 +207,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call d_H_matrix_structuring(ho_bf,option,msh,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
+    call d_HODLR_structuring(ho_bf,option,msh,ptree)
 	call d_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
+    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
@@ -218,17 +218,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call d_matrices_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
+    call d_HODLR_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
 	! call copy_HOBF(ho_bf,ho_bf_copy)	
-    if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
+    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call d_cascading_factorizing(ho_bf,option,stats,ptree)
+    call d_HODLR_Factorization(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -287,8 +287,8 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
     use d_HODLR_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use d_HODLR_Solve
-    ! use blas95
+	use d_HODLR_Solve_Mul
+    
     implicit none
     
     integer i, j, ii, jj, iii, jjj, ierr, ntest,Dimn,edge_m,edge_n,ncorrect

@@ -19,7 +19,7 @@
 #include <atomic>
 #include <mpi.h>
 
-#include "dC_HODLR_C_Interface.h"
+#include "dC_HODLR_wrapper.h"
 
 
 
@@ -194,54 +194,102 @@ int main(int argc, char* argv[])
 	double lambda ; //kernel parameter 
 	int ker ; // kernel choice 
 	int Npo;   // matrix size
-	int Ndim; //data dimension
+	int Ndim=1; //data dimension
 	double starttime, endtime;
 	double* dat_ptr; 
 	int preorder;  // 0: holdr code will reorder the elements and return a permutation 1: holdr code will use user-supplied tree to create the holdr structure	
 	
+
+	int Nmin=200; //finest leafsize 
+	double tol=1e-4; //compression tolerance
+	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
+	int sort_opt=1; //1:KD tree 3:balanced 2-means
+	int checkerr = 1; //1: check compression quality 
+	int batch = 100; //batch size for BACA
+	string filename("smalltest.dat");
+	C_QuantZmn* quant_ptr;
 	
+	
+    int tst = stoi(argv[1]);
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
-#if 1	
-	string filename("../EXAMPLE/SUSY/susy_10Kn");
-	h = 0.1;
-	lambda = 10.;
-	ker = 1;
-	Ndim = 8;
-
+if(tst==1){
+	filename = string(argv[2]);
+	Ndim = stoi(argv[3]);
+	ker = stoi(argv[4]);
+	h = stof(argv[5]);
+	lambda = stof(argv[6]);
+	Nmin = stoi(argv[7]);
+	tol = stof(argv[8]);
+	com_opt = stoi(argv[9]);
+	checkerr = stoi(argv[10]);
+	batch = stoi(argv[11]);
+	
+	// Ndim = 8;
+	// h = 0.2;
+	// lambda = 10.;
+	// ker = 1;
+	
     vector<double> data_train = write_from_file(filename + "_train.csv");
 	Npo = data_train.size() / Ndim;
 
-	C_QuantZmn quant(data_train, Ndim, h, lambda,ker);	
-	dat_ptr = data_train.data();
+	quant_ptr=new C_QuantZmn(data_train, Ndim, h, lambda,ker);	
+	// dat_ptr = data_train.data();
+	dat_ptr = new double[data_train.size()];
+	for(int ii=0;ii<data_train.size();ii++)
+		dat_ptr[ii] = data_train.data()[ii];
 	preorder=0;
-#endif
+}
 	
 	/*****************************************************************/
 	/* Test Kernels for Random point clouds */
-#if 0	
-	h = 3.267; //0.47;
-	lambda = 10.;
-	ker = 1;
-	Ndim = 6;
-	Npo = 4096;
+if(tst==2){	
+	// h = 3.267; //0.47;
+	// lambda = 10.;
+	// ker = 1;
+	// Ndim = 6;
+	// Npo = 4096;
+	
+	
+	Npo = stoi(argv[2]);
+	Ndim = stoi(argv[3]);
+	ker = stoi(argv[4]);
+	h = stof(argv[5]);
+	lambda = stof(argv[6]);
+	Nmin = stoi(argv[7]);
+	tol = stof(argv[8]);
+	com_opt = stoi(argv[9]);
+	checkerr = stoi(argv[10]);
+	batch = stoi(argv[11]);
 	
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
 	data_train[i] = (double)rand() / RAND_MAX;
 	MPI_Bcast(data_train.data(), Npo*Ndim, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-	C_QuantZmn quant(data_train, Ndim, h, lambda,ker);	
-	dat_ptr = data_train.data();
+	quant_ptr=new C_QuantZmn(data_train, Ndim, h, lambda,ker);	
+	// dat_ptr = data_train.data();
+	dat_ptr = new double[data_train.size()];
+	for(int ii=0;ii<data_train.size();ii++)
+		dat_ptr[ii] = data_train.data()[ii];	
 	preorder=0;
-#endif	
+}	
 	
 	/*****************************************************************/
 	/* Test Product of two Random matrices*/
-#if 0	
+if(tst==3){
 	ker = 6;
 	int rank_rand = 10;
 	Npo = 10000;
+	
+	Npo = stoi(argv[2]);
+	rank_rand = stoi(argv[3]);
+	Nmin = stoi(argv[4]);
+	tol = stof(argv[5]);
+	com_opt = stoi(argv[6]);
+	checkerr = stoi(argv[7]);
+	batch = stoi(argv[8]);		
+	
 	
 	vector<double> matU(Npo*rank_rand);
       for (int i=0; i<Npo*rank_rand; i++)
@@ -253,9 +301,10 @@ int main(int argc, char* argv[])
 	matV[i] = (double)rand() / RAND_MAX;
 	MPI_Bcast(matV.data(), Npo*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-	C_QuantZmn quant(Npo, rank_rand, ker, matU, matV);	
+	quant_ptr=new C_QuantZmn(Npo, rank_rand, ker, matU, matV);	
 	preorder=1;
-#endif	
+}	
+
 	/*****************************************************************/
 
 	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
@@ -287,12 +336,6 @@ int main(int argc, char* argv[])
 	c_hodlr_createstats(&stats);		
 	
 	// set hodlr options
-	int Nmin=200; //finest leafsize 
-	double tol=1e-4; //compression tolerance
-	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
-	int sort_opt=1; //1:KD tree 3:balanced 2-means
-	int checkerr = 1; //1: check compression quality 
-	int batch = 100; //batch size for BACA
 	c_hodlr_set_D_option(&option, "tol_comp", tol);
 	c_hodlr_set_I_option(&option, "preorder", preorder);
 	c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
@@ -303,7 +346,7 @@ int main(int argc, char* argv[])
 	
 
     // construct hodlr with geometrical points	
-	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &quant, &Fcomm);	
+	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
 	
 	// factor hodlr
 	c_hodlr_factor(&ho_bf,&option,&stats,&ptree);

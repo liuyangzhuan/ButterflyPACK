@@ -1,7 +1,7 @@
 #include "HODLR_config.fi"
-module HODLR_Solve
-! use Butterfly_rightmultiply
-use Bplus_compress_forward
+module HODLR_Solve_Mul
+
+use Bplus_compress
 
 
 contains 
@@ -252,7 +252,7 @@ end subroutine HODLR_Solution
 subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
     
     use HODLR_DEFS
-    ! use blas95
+    
     implicit none
     
     integer i, j, ii, jj, iii, jjj, ierr
@@ -314,7 +314,7 @@ end subroutine HODLR_Test_Solve_error
 subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 
     use HODLR_DEFS
-    ! use lapack95
+    
     implicit none
     
 	integer Ns
@@ -365,7 +365,6 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 				stats%Flop_Tmp=0
 				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
 				stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-				! call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
 				
 			endif
 		end do
@@ -382,7 +381,7 @@ end subroutine MVM_Z_factorized
 subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
 
     use HODLR_DEFS
-    ! use lapack95
+    
     implicit none
     
 	character trans
@@ -447,4 +446,4 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 
 end subroutine MVM_Z_forward
 
-end module HODLR_Solve
+end module HODLR_Solve_Mul

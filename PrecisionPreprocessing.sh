@@ -25,6 +25,8 @@ echo "#define DT complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_COMPLEX" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_DOUBLE_COMPLEX)" >> $MACRO_FILE
 echo "#define C_DT doublecomplex" >> $MACRO_FILE
+echo "#define flops_gemm flops_zgemm" >> $MACRO_FILE
+echo "#define gemmf77 zgemm" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 while IFS= read -r line ; do
     echo "#define $line z_$line" >> $MACRO_FILE
@@ -36,6 +38,8 @@ echo "#define DT real(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_PRECISION" >> $MACRO_FILE
 echo "#define CBIND_DT real(kind=C_DOUBLE)" >> $MACRO_FILE
 echo "#define C_DT double" >> $MACRO_FILE
+echo "#define flops_gemm flops_dgemm" >> $MACRO_FILE
+echo "#define gemmf77 dgemm" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 while IFS= read -r line ; do
     echo "#define $line d_$line" >> $MACRO_FILE

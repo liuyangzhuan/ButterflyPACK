@@ -1,9 +1,9 @@
 #include "HODLR_config.fi"
 module Bplus_randomized
 ! use Utilites_randomized
-! use Butterfly_rightmultiply
+
 use misc
-use Utilities
+use HODLR_Utilities
 
 contains 
 
@@ -11,8 +11,8 @@ contains
 
 subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
@@ -61,21 +61,21 @@ subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vou
    
 	
 	if(trans=='N')then
-		call butterfly_block_MVP_dat(block_off1,trans,mm,nn,num_vect_sub,&
+		call BF_block_MVP_dat(block_off1,trans,mm,nn,num_vect_sub,&
 		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1- Vout1
 		Vout2 = Vin2
 		
 		! write(2111,*)abs(Vout)
 		
-		call butterfly_block_MVP_dat(block_schur,trans,mm,mm,num_vect_sub,&
+		call BF_block_MVP_dat(block_schur,trans,mm,mm,num_vect_sub,&
 		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)			
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 
 		! write(2112,*)abs(Vin)			
 		
-		call butterfly_block_MVP_dat(block_off2,trans,nn,mm,num_vect_sub,&
+		call BF_block_MVP_dat(block_off2,trans,nn,mm,num_vect_sub,&
 		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)			
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
@@ -84,17 +84,17 @@ subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vou
 		! stop
 		
 	else if(trans=='T')then
-		call butterfly_block_MVP_dat(block_off2,trans,nn,mm,num_vect_sub,&
+		call BF_block_MVP_dat(block_off2,trans,nn,mm,num_vect_sub,&
 		&Vin2,Vout1,ctemp1,ctemp2,ptree,stats)
 		Vout1 = Vin1 - Vout1
 		Vout2 = Vin2
 		
-		call butterfly_block_MVP_dat(block_schur,trans,mm,mm,num_vect_sub,&
+		call BF_block_MVP_dat(block_schur,trans,mm,mm,num_vect_sub,&
 		&Vout1,Vin1,ctemp1,ctemp2,ptree,stats)				
 		Vin1 = Vout1 + Vin1
 		Vin2 = Vout2
 		
-		call butterfly_block_MVP_dat(block_off1,trans,mm,nn,num_vect_sub,&
+		call BF_block_MVP_dat(block_off1,trans,mm,nn,num_vect_sub,&
 		&Vin1,Vout2,ctemp1,ctemp2,ptree,stats)
 		Vout2 = Vin2 - Vout2
 		Vout1 = Vin1
@@ -453,8 +453,8 @@ end subroutine BF_Init_randomized
 subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    
    integer nth_s,nth_e,unique_nth
@@ -500,7 +500,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 			   do nth = nth_s,nth_e
 				   !$omp parallel do default(shared) private(j)
 				   do j=1, num_blocks
-						call BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)	   
+						call BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)	   
 					end do
 					!$omp end parallel do
 				end do
@@ -519,7 +519,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 				   !$omp parallel do default(shared) private(j,index_j)
 				   do j=1, num_col, 2
 						index_j=int((j+1)/2)
-						call BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+						call BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
 				   enddo
 				   !$omp end parallel do
 			   enddo
@@ -533,16 +533,20 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 
 end subroutine BF_Resolving_Butterfly_LL_new
 
-subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none 
    type(matrixblock) :: blocks
    DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
+   type(Hstat)::stats
+   real(kind=8)::flop
+   real(kind=8)::Flops
+	Flops=0
    
    ! blocks => butterfly_block_randomized(1)   
    level_butterfly=blocks%level_butterfly 
@@ -551,7 +555,8 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   dimension_nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
 	   allocate(matB(mm,dimension_nn))
 	   call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
-	   call GetRank(mm,dimension_nn,matB,rank,option%tol_Rdetect)
+	   call GetRank(mm,dimension_nn,matB,rank,option%tol_Rdetect,flop=flop)
+	   Flops = Flops + flop
 	   if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 							   
 	   if(allocated(blocks%ButterflyV%blocks(j)%matrix))deallocate(blocks%ButterflyV%blocks(j)%matrix)
@@ -573,10 +578,11 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 		stop
 	   end if
 	   ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
-	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero)
+	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero,flop=flop)
+	   Flops = Flops + flop
 	   
-	   
-	   call LeastSquare(mm,rank,dimension_nn,matA,matB,matC,option%tol_LS)
+	   call LeastSquare(mm,rank,dimension_nn,matA,matB,matC,option%tol_LS,Flops=flop)
+	   Flops = Flops + flop
 	   call copymatT(matC,blocks%ButterflyV%blocks(j)%matrix,rank,dimension_nn)						   
 	   deallocate(matB,matC,matA,matinv)						   
    else 
@@ -591,26 +597,33 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 		stop
 	   end if
 	   ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
-	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero)
+	   call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero,flop=flop)
+	   Flops = Flops + flop
 	   if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
 	   call copymatT(matA,vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)					   
 	   deallocate(matB,matA,matinv)	
    end if   
    
+   stats%Flop_Tmp = stats%Flop_Tmp + Flops
+   
 end subroutine BF_OneV_LL
 
 
-subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none 
    type(matrixblock) :: blocks
    DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer index_i,index_j,i,j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,ieo,noe,rs,re,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption) :: option
-   
+   type(Hstat) :: stats
+   real(kind=8)::flop
+   real(kind=8)::Flops
+	Flops=0
+	
    ! blocks => butterfly_block_randomized(1)   
    level_butterfly=blocks%level_butterfly 
    
@@ -626,13 +639,15 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
 		call copymatT(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)
 		if(mod(noe,2)==1)then
-			call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
+			call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect,flop=flop)
+			Flops = Flops + flop
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 			
 			rs = 1
 			re = rank
 		else 
-			call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
+			call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect,flop=flop)
+			Flops = Flops + flop
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 									   
 			rs = size(blocks%ButterflyKerl(level_right)%blocks(i,j)%matrix,1)+1
@@ -661,8 +676,10 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		 stop
 	    end if
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
-		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
-		call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero,flop=flop)
+		Flops = Flops + flop
+		call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
+		Flops = Flops + flop
 		! call copymatN(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix,rank,nn1)
 		blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix = matC(1:rank,1:nn1)
 		! call copymatN(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix,rank,nn2)	
@@ -693,7 +710,8 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		 stop
 	    end if		
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
-		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero,flop=flop)
+		Flops = Flops + flop
 		if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(rank,num_vect_sub))
 		call copymatT(matA,vec_rand%RandomVectorLL(level_butterfly-level_right+1)%blocks(ieo,index_j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matC,matA,matinv)	
@@ -701,9 +719,7 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		deallocate(vec_rand%RandomVectorLL(level_butterfly-level_right+2)%blocks(index_i,j+1)%matrix)
 	end if
 		! write(*,'(I5,I5,I5,I5,I5,Es16.7E3,A2)')unique_nth,level_right,nth,i,j,error0,'L' 
-
-
-   
+	stats%Flop_Tmp = stats%Flop_Tmp + Flops
 end subroutine BF_OneKernel_LL
 
 
@@ -711,8 +727,8 @@ end subroutine BF_OneKernel_LL
 subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    
    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,level_left,level_right, rank,level_right_start,level_left_start,nn1,nn2,rs,re
@@ -762,7 +778,7 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 				do nth=nth_s,nth_e
 					!$omp parallel do default(shared) private(i)
 					do i=1, num_blocks   
-						call BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+						call BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
 					end do
 					!$omp end parallel do					
 				end do
@@ -778,7 +794,7 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 				   !$omp parallel do default(shared) private(i,index_i)
 				   do i=1, num_row, 2
 					   index_i=int((i+1)/2)
-					   call BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)									
+					   call BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)									
 				   enddo
 				   !$omp end parallel do	
 			   enddo	   
@@ -792,16 +808,20 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 end subroutine BF_Resolving_Butterfly_RR_new
 
 
-subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none 
    type(matrixblock) :: blocks
    DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
    integer i,level_left,unique_nth,dimension_mm,mm,rank,num_vect_sub,nth,nth_s,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
+   type(Hstat)::stats
+   real(kind=8)::flop
+   real(kind=8)::Flops
+   Flops=0  
 	
    ! blocks => butterfly_block_randomized(1)   
    level_butterfly=blocks%level_butterfly 
@@ -811,7 +831,8 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			dimension_mm=size(blocks%ButterflyU%blocks(i)%matrix,1)	
 			allocate(matB(mm,dimension_mm))
 			call copymatT(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)							
-			call GetRank(mm,dimension_mm,matB,rank,option%tol_Rdetect)
+			call GetRank(mm,dimension_mm,matB,rank,option%tol_Rdetect,flop)
+			Flops = Flops + flop
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 			
 			if(allocated(blocks%ButterflyU%blocks(i)%matrix))deallocate(blocks%ButterflyU%blocks(i)%matrix)
@@ -827,8 +848,10 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			 stop
 			end if		
 			! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)							
-			call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
-			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS)
+			call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero,flop=flop)
+			Flops = Flops + flop
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS,Flops=flop)
+			Flops = Flops + flop
 			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA,matinv)
 		else 
@@ -842,7 +865,8 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			blocks%ButterflyU%blocks(i)%ndim=rank
 			allocate(matC(rank,dimension_mm),matA(mm,rank))	
 			call copymatT(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
-			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS)
+			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS,Flops=flop)
+			Flops = Flops + flop
 			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
 			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA)			
@@ -858,27 +882,33 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 		 stop
 	    end if			
 		! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)
-		call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero)
+		call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero,flop=flop)
+		Flops = Flops + flop
 		if(.not. allocated(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 		call copymatT(matA,vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)					
 	end if	   
    
-
+	stats%Flop_Tmp = stats%Flop_Tmp + Flops
 end subroutine BF_OneU_RR
 
 
 
-subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option)
+subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none 
    type(matrixblock) :: blocks
    DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
    integer index_i,index_j,i,j,level_left,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,nn1,nn2,jeo,noe,rs,re,level_left_start,level_butterfly
    type(RandomBlock) :: vec_rand
    type(Hoption):: option
+   type(Hstat)::stats
+   real(kind=8)::flop
+   real(kind=8)::Flops
+   Flops=0  
+	
 	
    ! blocks => butterfly_block_randomized(1)   
    level_butterfly=blocks%level_butterfly 
@@ -918,7 +948,8 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			
 			allocate(matC(rank,nn1+nn2),matA(mm,rank))
 			call copymatT(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
-			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
+			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
+			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
 			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
 			deallocate(matB,matC,matA)
@@ -928,13 +959,15 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
 			call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
 			if(mod(noe,2)==1)then
-				call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
+				call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect,flop)
+				Flops = Flops + flop
 				if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 				
 				rs = 1
 				re = rank
 			else 
-				call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect)
+				call GetRank(mm,nn1+nn2,matB,rank,option%tol_Rdetect,flop)
+				Flops = Flops + flop
 				if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 				
 				rs = size(blocks%ButterflyKerl(level_left)%blocks(i,j)%matrix,2)+1
@@ -959,8 +992,10 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			 stop
 			end if	
 			! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
-			call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
-			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS)
+			call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero,flop=flop)
+			Flops = Flops + flop
+			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
+			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
 			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
 			deallocate(matB,matC,matA,matinv)
@@ -990,14 +1025,15 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 		 stop
 		end if			
 		! call gemm_omp(matB,matinv,matA,mm,rank,nn1+nn2)
-		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero)
+		call gemmf90(matB,mm,matinv,nn1+nn2,matA,mm,'N','N',mm,rank,nn1+nn2,cone,czero,flop=flop)
+		Flops = Flops + flop
 		if(.not. allocated(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix))allocate(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(rank,num_vect_sub))
 		call copymatT(matA,vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
 		deallocate(matB,matA,matinv)
 		deallocate(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix)		
 		deallocate(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix)				
 	end if
-
+	stats%Flop_Tmp = stats%Flop_Tmp + Flops
 	! write(*,'(I5,I5,I5,I5,I5,Es16.7E3,A2)')unique_nth,level_left,nth,i,j,error0,'R'
 end subroutine BF_OneKernel_RR
 
@@ -1006,10 +1042,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 
     use HODLR_DEFS
 	use misc
-	! use lapack95
-	! use blas95
     use omp_lib
-	
 	
     implicit none
     
@@ -1043,6 +1076,8 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 	type(proctree)::ptree
 	ctemp1 = 1d0; ctemp2 = 0d0
 	Memory = 0
+	
+	stats%Flop_Tmp=0
 	
 	do tt = 1,10
 	
@@ -1084,7 +1119,8 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			rank_new_max = block_rand(1)%rankmax
 			call copy_delete_butterfly(block_rand(1),blocks_o,Memory) 
 			deallocate(block_rand)
-
+			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+			stats%Flop_Tmp=0
 			return			
 		end if		
 	end do
@@ -1353,7 +1389,7 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 
 	call blackbox_MVP_dat(operand,block_o,'N',mm,nn,num_vect,Id,Vdref,cone,czero,ptree,stats,operand1)
 
-	call butterfly_block_MVP_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,cone,czero,ptree,stats)
+	call BF_block_MVP_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,cone,czero,ptree,stats)
 
 	error = fnorm(Vd-Vdref,mm,num_vect)/fnorm(Vdref,mm,num_vect)
 	
@@ -1372,7 +1408,7 @@ end subroutine BF_Test_Reconstruction_Error
 subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,stats,operand1)
 
     use HODLR_DEFS
-    ! use lapack95
+    
 	use misc
     implicit none
     
@@ -1522,7 +1558,7 @@ end subroutine BF_Randomized_Vectors_LL
 subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,stats,operand1)
 
     use HODLR_DEFS
-    ! use lapack95
+    
 	use misc
     implicit none
     
@@ -1674,8 +1710,8 @@ end subroutine BF_Randomized_Vectors_RR
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, M, N, num_vect_sub, mv,nv
    character trans
@@ -1724,10 +1760,10 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 		Vbuff = 0
 	   
 		if(trans=='N')then
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
-			call butterfly_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
 			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
 			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
@@ -1739,9 +1775,9 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 			
 			! write(2111,*)abs(Vout)
 			
-			call butterfly_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
 			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vin = Vout + Vin
 
@@ -1751,9 +1787,9 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 			end if		
 			! write(2112,*)abs(Vin)			
 			
-			call butterfly_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
 			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vbuff, Vout(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1+mm:mm+nn,1:num_vect_sub) = Vout(1+mm:mm+nn,1:num_vect_sub) + Vbuff
 			
@@ -1769,10 +1805,10 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 			
 		else if(trans=='T')then
 		
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
 			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
-			call butterfly_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
 			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
 			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) 
@@ -1782,9 +1818,9 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 				stop
 			end if		
 			
-			call butterfly_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
 			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)				
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vin = Vout + Vin
 
@@ -1793,9 +1829,9 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 				stop
 			end if		
 			
-			call butterfly_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
 			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			call butterfly_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
 			&Vbuff,Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
 			Vout(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub)+Vbuff
 			
@@ -1840,8 +1876,8 @@ end subroutine BF_block_MVP_inverse_ABCD_dat
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
@@ -1890,27 +1926,27 @@ subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,tran
 	   
 		if(trans=='N')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_C,'N',nn,mm,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(blocks_C,'N',nn,mm,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_D,'N',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)		
+			call BF_block_MVP_dat(blocks_D,'N',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)		
 			V_tmp2 = V_tmp2 + V_tmp1
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_B,'N',mm,nn,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(blocks_B,'N',mm,nn,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=-1.0d0
-			call butterfly_block_MVP_dat(blocks_A,'N',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)
+			call BF_block_MVP_dat(blocks_A,'N',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)
 	
 			
 		else if(trans=='T')then
 		
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_B,'T',mm,nn,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)
+			call BF_block_MVP_dat(blocks_B,'T',mm,nn,num_vect_sub,Vin_tmp,V_tmp1,ctemp1,ctemp2,ptree,stats)
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_D,'T',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)
+			call BF_block_MVP_dat(blocks_D,'T',nn,nn,num_vect_sub,V_tmp1,V_tmp2,ctemp1,ctemp2,ptree,stats)
 			V_tmp2 = V_tmp2 + V_tmp1
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(blocks_C,'T',nn,mm,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(blocks_C,'T',nn,mm,num_vect_sub,V_tmp2,Vout,ctemp1,ctemp2,ptree,stats)	
 			ctemp1=1.0d0 ; ctemp2=-1.0d0
-			call butterfly_block_MVP_dat(blocks_A,'T',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)		
+			call BF_block_MVP_dat(blocks_A,'T',mm,mm,num_vect_sub,Vin_tmp,Vout,ctemp1,ctemp2,ptree,stats)		
 		end if
 
 
@@ -1938,8 +1974,8 @@ end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
 subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
@@ -1980,14 +2016,14 @@ subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_su
 	   
 		if(trans=='N')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(block_off2,'N',nn,mm,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
-			call butterfly_block_MVP_dat(block_off1,'N',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(block_off2,'N',nn,mm,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(block_off1,'N',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			Vout = -Vout		
 			
 		else if(trans=='T')then
 			ctemp1=1.0d0 ; ctemp2=0.0d0
-			call butterfly_block_MVP_dat(block_off1,'T',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
-			call butterfly_block_MVP_dat(block_off2,'T',nn,mm,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(block_off1,'T',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(block_off2,'T',nn,mm,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			Vout = -Vout			
 		end if
 
@@ -2013,8 +2049,8 @@ end subroutine BF_block_MVP_inverse_minusBC_dat
 
 subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans
@@ -2061,7 +2097,7 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
 					
 					! AXnR
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
 					Vout = 	Vbuff+Vout	
 					
 					! (2-AXn)R
@@ -2076,7 +2112,7 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats,operand1)				
 					
 					! RXnA
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vout,Vbuff,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vout,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vout+Vbuff
 					
 					! RXnAXn
@@ -2119,13 +2155,13 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
 					
 					! AXnR
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree,stats)
 					Vbuff1 = 	Vbuff+Vbuff1	
 					
 					
 					! (AXn)^2R
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree,stats,operand1)
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
 					Vout = 	Vout+Vbuff
 					
 					! (3-3AXn+(AXn)^2)R
@@ -2141,12 +2177,12 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vout,Vin,ctemp1,ctemp2,ptree,stats,operand1)				
 					
 					! RXn*AXn
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vin+Vbuff
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vbuff1,ctemp1,ctemp2,ptree,stats,operand1)
 
 					! RXn*(AXn)^2
-					call butterfly_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree,stats)
+					call BF_block_MVP_dat(schulz_op%matrices_block,trans,mm,nn,num_vect_sub,Vbuff1,Vbuff,ctemp1,ctemp2,ptree,stats)
 					Vbuff=	Vbuff1+Vbuff
 					call BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats,operand1)
 
@@ -2187,8 +2223,8 @@ end subroutine BF_block_MVP_schulz_dat
 
 subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, M, N, num_vect_sub,mv,nv
    character trans,trans_new
@@ -2215,7 +2251,7 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 				Vin=conjg(cmplx(Vin,kind=8))
 				if(trans=='N')trans_new='T'
 				if(trans=='T')trans_new='N'				
-				call butterfly_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + Vin
 				Vin=conjg(cmplx(Vin,kind=8))
 				Vout=conjg(cmplx(Vout,kind=8))
@@ -2226,7 +2262,7 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 				
 				! if(trans=='N')trans_new='T'
 				! if(trans=='T')trans_new='N'				
-				! call butterfly_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				! call BF_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
 				! Vout = Vin - Vout/schulz_op%A2norm	
 
 				
@@ -2234,12 +2270,12 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 				! call copy_butterfly(schulz_op%matrices_block,block_o,memory)
 				! call LR_SMW(block_o,memory)
 				
-				! call butterfly_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+				! call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
 				! Vout = Vout + Vin
 	
 				
 			else ! Xn
-				call butterfly_block_MVP_dat(block_Xn,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(block_Xn,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout=	Vout+Vin*schulz_op%scale					
 			endif
 			
@@ -2253,7 +2289,7 @@ end subroutine BF_block_MVP_schulz_Xn_dat
 subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 
     use HODLR_DEFS
-    ! use lapack95
+    
 	use misc
     implicit none
     
@@ -2323,7 +2359,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 			idx_start_glo = basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 		n1 = OMP_get_wtime()  
-		  call butterfly_block_MVP_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
+		  call BF_block_MVP_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
 		n2 = OMP_get_wtime()
 		! time_tmp = time_tmp + n2 - n1	
 			mm=block_o%M	
@@ -2416,7 +2452,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 			mm=block_o%M
 			nn=block_o%N
 			n1 = OMP_get_wtime()
-			call butterfly_block_MVP_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
+			call BF_block_MVP_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)	
 			n2 = OMP_get_wtime()
 			! time_tmp = time_tmp + n2 - n1		
 
@@ -2442,8 +2478,8 @@ end subroutine BF_block_MVP_Sblock_dat
 
 subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
@@ -2510,8 +2546,8 @@ end subroutine Bplus_block_MVP_Exact_dat
 
 subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
@@ -2564,8 +2600,8 @@ end subroutine Bplus_block_MVP_Outter_Exact_dat
 
 subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
@@ -2659,8 +2695,8 @@ end subroutine Bplus_block_MVP_minusBC_dat
 
 subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
@@ -2710,8 +2746,8 @@ end subroutine Bplus_block_MVP_Outter_minusBC_dat
 
 subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
@@ -2860,8 +2896,8 @@ end subroutine Bplus_block_MVP_Sblock_dat
 
 subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub
 	character trans
@@ -2916,8 +2952,8 @@ end subroutine Bplus_block_MVP_Outter_Sblock_dat
 
 subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
@@ -3035,8 +3071,8 @@ end subroutine Bplus_block_MVP_inverse_dat
 
 subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,a,b,ptree,stats)
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    implicit none
    integer level, ii, N, num_vect_sub
    character trans
@@ -3162,8 +3198,8 @@ end subroutine Bplus_block_MVP_twoforward_dat
 
 subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
@@ -3222,7 +3258,7 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 			if(trans=='N')then
 				! get the right multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				call butterfly_block_MVP_dat(operand1,'N',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(operand1,'N',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				
 				call Bplus_block_MVP_dat(bplus,'N',mm,mm,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + vec_new
@@ -3236,7 +3272,7 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 				call Bplus_block_MVP_dat(bplus,'T',mm,mm,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				vec_new = vec_new + Vin
 				
-				call butterfly_block_MVP_dat(operand1,'T',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(operand1,'T',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				deallocate(vec_new)
 				
 		   end if
@@ -3262,8 +3298,8 @@ end subroutine Bplus_block_MVP_BplusB_dat
 
 subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
 	implicit none
 	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
 	character trans
@@ -3324,14 +3360,14 @@ subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 				call Bplus_block_MVP_dat(bplus,'N',nn,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				vec_new = vec_new + Vin
 				
-				call butterfly_block_MVP_dat(operand1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(operand1,'N',mm,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				deallocate(vec_new)
 
 		   else if(trans=='T')then
 
 				! get the left multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				call butterfly_block_MVP_dat(operand1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(operand1,'T',mm,nn,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 				
 				call Bplus_block_MVP_dat(bplus,'T',nn,nn,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
 				Vout = Vout + vec_new
@@ -3363,8 +3399,8 @@ end subroutine Bplus_block_MVP_BBplus_dat
 subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,operand1)
 
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    use misc
    implicit none
 
@@ -3391,9 +3427,12 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 	DT, allocatable :: matU_glo(:,:), matV_glo(:,:)
 	procedure(BF_MVP_blk)::blackbox_MVP_dat
 	type(proctree)::ptree
+	real(kind=8)flop
 	
 	select TYPE(operand1)
 	type is (blockplus)
+		stats%Flop_tmp=0
+	
 		! select TYPE(operand)
 		! type is (hobf)	
 			
@@ -3527,7 +3566,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				
 				! write(*,*)mm,nn,rmax,'didi'
 				
-				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_comp)				
+				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_comp,Flops=flop)				
 				rankthusfar = max(rankthusfar,rank)
 				! write(*,*)'yani 4'
 				do ii=1,rank
@@ -3652,6 +3691,10 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				stop
 			end if
 
+			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+			stats%Flop_Tmp=0
+			stats%Flop_Factor = stats%Flop_Factor + flop
+			
 			return		
 		! end select		
 	class default
@@ -3666,8 +3709,8 @@ end subroutine Bplus_MultiLrandomized_Onesubblock
 subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,rankrate_inner,blackbox_MVP_dat_inner,rank0_outter,rankrate_outter,blackbox_MVP_dat_outter,error_inout,strings,option,stats,ptree)
 
    use HODLR_DEFS
-   ! use lapack95
-   ! use blas95
+   
+   
    use misc
    implicit none
 
@@ -3761,8 +3804,8 @@ end subroutine Bplus_randomized_constr
 subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized)
 	use misc
     use HODLR_DEFS
-	! use lapack95
-	! use blas95
+	
+	
     implicit none
     
     integer level_c,rowblock

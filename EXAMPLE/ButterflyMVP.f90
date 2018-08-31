@@ -2,7 +2,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 
     use z_HODLR_DEFS
 	use omp_lib
-	use Utilities
+	use HODLR_Utilities
 	
     implicit none
     
@@ -59,7 +59,7 @@ PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 	
 	vec_in=1d0
 	
-	call butterfly_block_MVP_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2,ptree,stats)
+	call BF_block_MVP_dat(block,'N',mm,nn,num_vect,vec_in,vec_out,ctemp1,ctemp2,ptree,stats)
 	
 	write(*,*)'output fnorm: ',fnorm(vec_out,mm,1)
 	
@@ -76,8 +76,8 @@ END PROGRAM RANDOMIZED_BUTTERFLY_CONSTRUCTION
 subroutine create_butterfly_simple(block,level_butterfly,dimension_m,dimension_n,dimension_rank,inner_rank)
 	use z_misc
     use z_HODLR_DEFS
-	! ! use lapack95
-	! ! use blas95
+	! 
+	! 
     implicit none
     
     integer level_c,rowblock

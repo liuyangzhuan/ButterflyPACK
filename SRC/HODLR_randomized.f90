@@ -1,15 +1,15 @@
 #include "HODLR_config.fi"
 module HODLR_randomMVP
 use Bplus_randomized 
-use HODLR_Solve
-use Bplus_compress_forward
+use HODLR_Solve_Mul
+use Bplus_compress
 
 
 contains
 
 subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,Memory,error,option,stats,operand,ptree,msh)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp,tmpfact,error
@@ -108,8 +108,8 @@ end subroutine HODLR_randomized
 
 
 subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,rmax,option,operand,ptree,stats,msh)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
@@ -265,8 +265,8 @@ end subroutine HODLR_MVP_randomized_OneL_Lowrank
 
 
 subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP_randomized_dat,trans, VectIn, VectOut, N,level_c,num_vect,operand,ptree,stats,msh)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
@@ -436,8 +436,8 @@ end subroutine HODLR_MVP_randomized_OneL
 
 
 subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,level_c,Memory,operand,ptree,stats,msh)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	real(kind=8):: n1,n2,Memory,error_inout,Memtmp
@@ -811,7 +811,7 @@ subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP_randomized_d
 		header_n=block_o%headn
 		tailer_n=nn+header_n-1
 	
-		call butterfly_block_MVP_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree,stats)	
+		call BF_block_MVP_dat(block_rand(bb),'N',mm,nn,num_vect,RandomVectors_InOutput(1)%vector(header_n:header_n+nn-1,:),RandomVectors_InOutput(2)%vector(header_m:header_m+mm-1,:),ctemp1,ctemp2,ptree,stats)	
 		
 	end do		
 
@@ -872,7 +872,7 @@ end subroutine HODLR_MVP_randomized_Fullmat
 subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats,msh)
 
     use HODLR_DEFS
-    ! use lapack95
+    
 	use misc
     implicit none
     
@@ -1033,7 +1033,7 @@ end subroutine HODLR_Randomized_Vectors_LL
 subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP_randomized_dat,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,operand,ptree,stats,msh)
 
     use HODLR_DEFS
-    ! use lapack95
+    
 	use misc
     implicit none
     

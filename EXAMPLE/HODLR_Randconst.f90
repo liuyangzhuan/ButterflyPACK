@@ -1,12 +1,12 @@
 PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
     use d_HODLR_DEFS
-	! use geometry_model
-	use d_H_structure
-	use d_cascading_factorization
-	use d_HODLR_construction
+	
+	use d_HODLR_structure
+	use d_HODLR_factor
+	use d_HODLR_constr
 	use omp_lib
-	use dBplus_compress_forward
+	use dBplus_compress
 	use dHODLR_randomMVP
     implicit none
 
@@ -228,10 +228,10 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 	
 	t1 = OMP_get_wtime()	
-    write(*,*) "constructing H_matrices formatting......"
-    call d_H_matrix_structuring(ho_bf,option,msh,ptree)
+    write(*,*) "constructing HODLR formatting......"
+    call d_HODLR_structuring(ho_bf,option,msh,ptree)
 	call d_BPlus_structuring(ho_bf,option,msh,ptree)
-    write(*,*) "H_matrices formatting finished"
+    write(*,*) "HODLR formatting finished"
     write(*,*) "    "
 	t2 = OMP_get_wtime()
 	write(*,*)t2-t1,'secnds'	
@@ -263,12 +263,12 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	if(explicitflag ==1)then
 
 		t1 = OMP_get_wtime()	
-		write(*,*) "H_matrices filling......"
-		call d_matrices_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
+		write(*,*) "HODLR construction......"
+		call d_HODLR_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
 		! if(option%precon/=DIRECT)then
 			! call copy_HOBF(ho_bf,ho_bf_copy)	
 		! end if		
-		write(*,*) "H_matrices filling finished"
+		write(*,*) "HODLR construction finished"
 		write(*,*) "    "
 		t2 = OMP_get_wtime()   
 		write(*,*)t2-t1, 'secnds'			
@@ -311,7 +311,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call d_cascading_factorizing(ho_bf,option,stats,ptree)
+    ! call d_HODLR_Factorization(ho_bf,option,stats,ptree)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 

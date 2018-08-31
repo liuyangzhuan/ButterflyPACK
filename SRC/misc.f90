@@ -9,7 +9,7 @@ use HODLR_DEFS
 USE IFPORT    
 #endif  
 use omp_lib
-use DenseLA_wrapper
+use DenseLA
 
 
 integer, parameter :: int64 = selected_int_kind(18) 
@@ -48,8 +48,8 @@ end subroutine linspaceI
 
 
  ! subroutine gemm_omp(A,B,C,m,k,n)
- 	! ! ! use lapack95
-	! ! ! use blas95
+ 	! ! 
+	! ! 
 	! implicit none 
 	
 	! integer m,n,k
@@ -96,8 +96,8 @@ end subroutine linspaceI
  ! end subroutine gemm_omp
  
  ! subroutine gemmHN_omp(A,B,C,m,k,n)
- 	! ! ! use lapack95
-	! ! ! use blas95
+ 	! ! 
+	! ! 
 	! implicit none 
 	
 	! integer m,n,k
@@ -137,8 +137,8 @@ end subroutine linspaceI
  
 
  ! subroutine gemmNH_omp(A,B,C,m,k,n)
- 	! ! ! use lapack95
-	! ! ! use blas95
+ 	! ! 
+	! ! 
 	! implicit none 
 	
 	! integer m,n,k
@@ -178,8 +178,8 @@ end subroutine linspaceI
  
  
  ! subroutine gemmTN_omp(A,B,C,m,k,n)
- 	! ! ! use lapack95
-	! ! ! use blas95
+ 	! ! 
+	! ! 
 	! implicit none 
 	
 	! integer m,n,k
@@ -219,8 +219,8 @@ end subroutine linspaceI
  
 
  ! subroutine gemmNT_omp(A,B,C,m,k,n)
- 	! ! ! use lapack95
-	! ! ! use blas95
+ 	! ! 
+	! ! 
 	! implicit none 
 	
 	! integer m,n,k
@@ -323,8 +323,8 @@ end subroutine linspaceI
  
 
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	
@@ -425,8 +425,8 @@ end subroutine LR_ReCompression
 	
 
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 	
@@ -628,9 +628,9 @@ end subroutine LR_Fnorm
 	 
 
 
-subroutine GetRank(M,N,mat,rank,eps)
-! ! use lapack95
-! ! use blas95
+subroutine GetRank(M,N,mat,rank,eps,flop)
+! 
+! 
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj
 DT::mat(:,:)
@@ -638,6 +638,7 @@ real(kind=8) eps
 DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:),mat1(:,:)
 real(kind=8),allocatable :: Singular(:)
 integer,allocatable :: jpvt(:)
+real(kind=8),optional::flop
 
 allocate(mat1(M,N))
 
@@ -655,7 +656,7 @@ if(isnan(fnorm(mat,M,N)))then
 end if
 
 
-call gesvd_robust(mat1,Singular,UU,VV,M,N,mn)
+call gesvd_robust(mat1,Singular,UU,VV,M,N,mn,flop)
 ! write(*,*)Singular,'hh'
 if(Singular(1)<SafeUnderflow)then
 	rank = 1
@@ -681,7 +682,7 @@ else
 		
 		! RRQR
 		jpvt = 0
-		call geqp3f90(Atmp,jpvt,tau)
+		call geqp3f90(Atmp,jpvt,tau,flop)
 		if(isnan(fnorm(Atmp,mnl,mn)))then
 			write(*,*)'Q or R has NAN in GetRank'
 			stop
@@ -739,8 +740,8 @@ end subroutine GetRank
 
 subroutine ComputeRange(M,N,mat,rank,rrflag,eps)
 
-! use lapack95
-! use blas95
+
+
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj,rrflag
 DT::mat(:,:)
@@ -817,8 +818,8 @@ end subroutine ComputeRange
 
 
 subroutine CheckRandomizedLR(M,N,mat,tolerance)
-! use lapack95
-! use blas95
+
+
 implicit none 
 integer M,N,rank,mn,i,j,k,rankmax_c,rankmax_r,rankmax_min,flag0,rank_new,rmax
 DT::mat(M,N),ctemp
@@ -1430,9 +1431,9 @@ end subroutine ccurl
 end function norm_vector
 
 
-subroutine LeastSquare(m,n,k,A,b,x,eps_r)
-	! ! use lapack95
-	! ! use blas95
+subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
+	! 
+	! 
 	implicit none
 	
 	integer m,n,k,mn_min
@@ -1442,10 +1443,14 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 	real(kind=8):: eps_r
 	integer ii,jj,i,j,flag0,rank
 	integer,allocatable:: jpvt(:)
+	real(kind=8),optional::Flops
+	real(kind=8)::flop
 
 	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
+	
+	if(present(Flops))Flops=0
 
 	allocate(xtmp(n,k))
 	allocate(tau(n))
@@ -1469,8 +1474,8 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 	
 	
 	! SVD
-    call gesvd_robust(Atmp,Singular,UU,VV,m,n,n)
-	
+    call gesvd_robust(Atmp,Singular,UU,VV,m,n,n,flop)
+	if(present(Flops))Flops=Flops+flop
 	
 ! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow 
 	! if(isnan(sum(Singular)))then
@@ -1593,8 +1598,10 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r)
 			end do
 			end do 
 			
-			call gemmf90(UU_h, rank, b,m, matrixtemp,rank,'N','N',rank,k,m,alpha,beta)  
-			call gemmf90(VV_h, n, matrixtemp,rank, x,n,'N','N',n,k,rank,alpha,beta)  
+			call gemmf90(UU_h, rank, b,m, matrixtemp,rank,'N','N',rank,k,m,alpha,beta,flop)  
+			if(present(Flops))Flops=Flops+flop	
+			call gemmf90(VV_h, n, matrixtemp,rank, x,n,'N','N',n,k,rank,alpha,beta,flop)
+			if(present(Flops))Flops=Flops+flop			
 			
 			deallocate(UU_h,VV_h,matrixtemp)	
 		end if	
@@ -1633,9 +1640,9 @@ end subroutine LeastSquare
 	
 	
 
-subroutine GeneralInverse(m,n,A,A_inv,eps_r)
-	! ! use lapack95
-	! ! use blas95
+subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
+	! 
+	! 
 	implicit none
 	
 	integer m,n,mn_min
@@ -1645,10 +1652,14 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 	real(kind=8):: eps_r
 	integer ii,jj,i,j,flag0,rank
 	integer,allocatable:: jpvt(:) 
-
+	real(kind=8),optional::Flops
+	real(kind=8)::flop
+	
 	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
+	
+	if(present(Flops))Flops=0
 	
 	A_inv=0
 	
@@ -1663,7 +1674,8 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 	
 	! write(*,*)fnorm(Atmp,m,n),'ggg'
 	
-    call gesvd_robust(Atmp,Singular,UU,VV,m,n,mn_min)
+    call gesvd_robust(Atmp,Singular,UU,VV,m,n,mn_min,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	if(Singular(1)<SafeUnderflow)then
 		write(*,*)'Warning: A zero in GeneralInverse'
@@ -1694,7 +1706,8 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 		end do
 		end do 
 		
-		call gemmf90(VV_h,n, UU_h,rank, A_inv,n,'N','N',n,m,rank,alpha,beta)  
+		call gemmf90(VV_h,n, UU_h,rank, A_inv,n,'N','N',n,m,rank,alpha,beta,flop=flop)  
+		if(present(Flops))Flops=Flops+flop
 		
 		deallocate(UU_h,VV_h)
 	endif
@@ -1708,9 +1721,9 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r)
 end subroutine GeneralInverse	
 	
 
-	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
-	! ! use lapack95
-	! ! use blas95
+	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,Flops)
+	! 
+	! 
     use HODLR_DEFS
     implicit none
 
@@ -1735,8 +1748,12 @@ end subroutine GeneralInverse
 	DT, allocatable :: RrowcQ1(:,:),RrowcQ1inv(:,:),Q2cRcol(:,:),Q2cRcolinv(:,:), QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
 	real(kind=8), allocatable :: Singularsml(:)
 	integer,allocatable:: jpvt(:)
+	real(kind=8),optional::Flops
+	real(kind=8)::flop
 	
 
+	if(present(Flops))Flops=0
+	
 	allocate(matZRcol1(rankmax_r,rmax))
 	allocate(matZcRrow1(rankmax_c,rmax))
 	allocate(tau(rmax))
@@ -1756,7 +1773,8 @@ end subroutine GeneralInverse
 	QQ1 = matZRcol
 	jpvt = 0
 	tau=0
-	call geqp3f90(QQ1,jpvt,tau)
+	call geqp3f90(QQ1,jpvt,tau,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	!  call geqrff90(QQ1,tau)
 	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -1766,7 +1784,8 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau)
+	call un_or_gqrf90(QQ1,tau,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	! write(*,*)fnorm(QQ1,rankmax_r,rmax),rankmax_r,rmax,fnorm(RR1,rmax,rmax),rmax,rmax,'really'
 	
@@ -1787,7 +1806,8 @@ end subroutine GeneralInverse
 	QQ2 = matZcRrow
 	jpvt = 0
 	tau = 0
-	call geqp3f90(QQ2,jpvt,tau)
+	call geqp3f90(QQ2,jpvt,tau,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	!  call geqrff90(QQ2,tau)
 	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -1797,7 +1817,8 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ2,tau)
+	call un_or_gqrf90(QQ2,tau,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	if(abs(RR2(1,1))<SafeUnderflow)then
 		rank2=1
@@ -1832,9 +1853,11 @@ end subroutine GeneralInverse
 	allocate(RrowcQ1inv(rank1,rmax))
 	RrowcQ1inv=0
 	! call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rank1,rankmax_r)
-	call gemmf90(matRrow,rankmax_r,QQ1,rankmax_r,RrowcQ1,rmax,'C','N',rmax,rank1,rankmax_r, cone,czero)
+	call gemmf90(matRrow,rankmax_r,QQ1,rankmax_r,RrowcQ1,rmax,'C','N',rmax,rank1,rankmax_r, cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
-	call GeneralInverse(rmax,rank1,RrowcQ1,RrowcQ1inv,tolerance)
+	call GeneralInverse(rmax,rank1,RrowcQ1,RrowcQ1inv,tolerance,Flops=flop)
+	if(present(Flops))Flops=Flops+flop
 	deallocate(RrowcQ1)
 
 	! allocate(ipiv(rmax))
@@ -1853,8 +1876,10 @@ end subroutine GeneralInverse
 	allocate(Q2cRcolinv(rmax,rank2))
 	Q2cRcolinv=0
 	! call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rmax,rankmax_c)
-	call gemmf90(QQ2,rankmax_c,matRcol,rankmax_c,Q2cRcol,rank2,'C','N',rank2,rmax,rankmax_c, cone,czero)	
-	call GeneralInverse(rank2,rmax,Q2cRcol,Q2cRcolinv,tolerance)
+	call gemmf90(QQ2,rankmax_c,matRcol,rankmax_c,Q2cRcol,rank2,'C','N',rank2,rmax,rankmax_c, cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop	
+	call GeneralInverse(rank2,rmax,Q2cRcol,Q2cRcolinv,tolerance,Flops=flop)
+	if(present(Flops))Flops=Flops+flop
 	deallocate(Q2cRcol)
 
 	! allocate(ipiv(rmax))
@@ -1866,17 +1891,20 @@ end subroutine GeneralInverse
 	
 	
 	! call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rmax,rankmax_r)
-	call gemmf90(matRrow,rankmax_r,matZRcol,rankmax_r,RrowcZRcol,rmax,'C','N',rmax,rmax,rankmax_r, cone,czero)	
+	call gemmf90(matRrow,rankmax_r,matZRcol,rankmax_r,RrowcZRcol,rmax,'C','N',rmax,rmax,rankmax_r, cone,czero,flop=flop)	
+	if(present(Flops))Flops=Flops+flop
 	
 	allocate(matrixtemp(rmax,rank2))
 	matrixtemp=0
 	allocate(matM(rank1,rank2))
 	matM=0
 	! call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rank2,rmax)
-	call gemmf90(RrowcZRcol,rmax,Q2cRcolinv,rmax,matrixtemp,rmax,'N','N',rmax,rank2,rmax,cone,czero)
+	call gemmf90(RrowcZRcol,rmax,Q2cRcolinv,rmax,matrixtemp,rmax,'N','N',rmax,rank2,rmax,cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	! call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rank2,rmax)
-	call gemmf90(RrowcQ1inv,rank1,matrixtemp,rmax,matM,rank1,'N','N',rank1,rank2,rmax,cone,czero)
+	call gemmf90(RrowcQ1inv,rank1,matrixtemp,rmax,matM,rank1,'N','N',rank1,rank2,rmax,cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)
 	
@@ -1891,16 +1919,19 @@ end subroutine GeneralInverse
 	UUsml=0
 	VVsml=0
 	Singularsml=0
-	call SVD_Truncate(matM,rank1,rank2,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank)
+	call SVD_Truncate(matM,rank1,rank2,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	! write(111,*)UUsml(1:rank1,1:rank)
 	! stop	
 	
 	! call gemm_omp(QQ1(1:rankmax_r,1:rank1),UUsml(1:rank1,1:rank),matU(1:rankmax_r,1:rank),rankmax_r,rank,rank1)
-	call gemmf90(QQ1,rankmax_r,UUsml,rank1,matU,rankmax_r,'N','N',rankmax_r,rank,rank1,cone,czero)
+	call gemmf90(QQ1,rankmax_r,UUsml,rank1,matU,rankmax_r,'N','N',rankmax_r,rank,rank1,cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop
 	
 	! call gemmNH_omp(VVsml(1:rank,1:rank2),QQ2(1:rankmax_c,1:rank2),matV(1:rank,1:rankmax_c),rank,rankmax_c,rank2)
-	call gemmf90(VVsml,rank12,QQ2,rankmax_c,matV,rmax,'N','H',rank,rankmax_c,rank2, cone,czero)	
+	call gemmf90(VVsml,rank12,QQ2,rankmax_c,matV,rmax,'N','H',rank,rankmax_c,rank2, cone,czero,flop=flop)
+	if(present(Flops))Flops=Flops+flop	
 
 	Singular(1:rank) = Singularsml(1:rank)
 	deallocate(UUsml,VVsml,Singularsml,matM)
@@ -1958,8 +1989,8 @@ end subroutine RandomizedSVD
 subroutine RandomMat(m,n,k,A,Oflag)
 
 
-	! ! use lapack95
-	! ! use blas95
+	! 
+	! 
 #ifdef Intel
 	use mkl_vsl_type
 	use mkl_vsl				 
@@ -2253,8 +2284,8 @@ end subroutine ACA_SubsetSelection
 
 
 subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
-	! use lapack95
-	! use blas95
+	
+	
     use HODLR_DEFS
     implicit none
 
@@ -2515,8 +2546,8 @@ end subroutine ACA_CompressionFull
 
 
 subroutine SVD_Truncate(mat,mm,nn,mn,UU,VV,Singular,tolerance,rank,flop)
-! ! use lapack95
-! ! use blas95
+! 
+! 
 implicit none 
 integer mm,nn,mn,rank,ii,jj
 real(kind=8):: tolerance

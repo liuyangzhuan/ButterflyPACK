@@ -1140,10 +1140,10 @@ end module APPLICATION_MODULE
 PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     use z_HODLR_DEFS
 	use APPLICATION_MODULE
-	! use geometry_model
-	use z_H_structure
-	use z_cascading_factorization
-	use z_HODLR_construction
+	
+	use z_HODLR_structure
+	use z_HODLR_factor
+	use z_HODLR_constr
 	use omp_lib
 	use z_misc
     implicit none
@@ -1309,10 +1309,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing H_matrices formatting......"
-    call z_H_matrix_structuring(ho_bf,option,msh,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
+    call z_HODLR_structuring(ho_bf,option,msh,ptree)
 	call z_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "H_matrices formatting finished"
+    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
@@ -1322,19 +1322,19 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling......"
-    call z_matrices_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
+    call z_HODLR_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if    
-	if(ptree%MyID==Main_ID)write(*,*) "H_matrices filling finished"
+	if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then								
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call z_cascading_factorizing(ho_bf,option,stats,ptree)
+    call z_HODLR_Factorization(ho_bf,option,stats,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -1528,9 +1528,9 @@ subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
 	! use RCS_Bi
 	! use RCS_Mono
 	! use element_vinc
-	use z_HODLR_Solve
+	use z_HODLR_Solve_Mul
 	
-    ! use blas95
+    
     implicit none
     
     integer i, j, ii, jj, iii, jjj,ierr
