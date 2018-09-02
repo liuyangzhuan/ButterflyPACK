@@ -1,8 +1,8 @@
 clear all;
 close all;
 clc;
-rcs_new = load('bistaticH.out');
-% rcs_new1 = load('VV_bistatic1.txt');
+% rcs_new = load('bistaticH.out');
+rcs_new = load('HH_bistatic.txt');
 plot(rcs_new(:,1),rcs_new(:,2));
 hold on
 % plot(rcs_new1(:,1),rcs_new1(:,2),'g');
