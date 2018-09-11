@@ -3183,15 +3183,6 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		!$omp end parallel do	
 		if(rank>0)then
 			do j=1,r_est
-<<<<<<< HEAD:SRC/Bplus_compress.f90
-			
-
-			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
-			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1,rank)
-		
-			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)	
-		
-=======
 			
 
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
@@ -3203,42 +3194,6 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 			enddo
 		endif
 		
-		
-		!**** Find row pivots from the columns column_R
-		call copymatT(column_R,column_RT,M,r_est)
-		jpvt=0	
-		! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(column_RT,jpvt,tau,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop		
-		select_row(1:r_est) = jpvt(1:r_est)
-		
-	
-	
-		!**** Compute rows row_R in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do i=1,r_est
-		do j=1,N
-			edge_m = header_m + select_row(i) - 1
-			edge_n = header_n + j - 1			
-			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,ker)
-		enddo
-		enddo
-		!$omp end parallel do		
-		if(rank>0)then
-			do i=1,r_est
-
-
-
-			call gemmf77('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
-			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N,rank)
-		
-			! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)			
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
-			
-			enddo
-		endif
-		
-<<<<<<< HEAD:SRC/Bplus_compress.f90
 					
 		!**** Find row pivots from the columns column_R
 		call copymatT(column_R,column_RT,M,r_est)
@@ -3345,100 +3300,11 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_column(1:r_est) = jpvt(1:r_est)	
-=======
-		!**** Find column pivots from the rows row_R
-		jpvt=0
-		row_Rtmp = row_R		
-		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop	
-		select_column(1:r_est) = jpvt(1:r_est)
-		! write(*,*)sum(jpvt)
-		!**** Compute columns column_R in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,r_est
-		do i=1,M
-			edge_m = header_m + i - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,ker)
-		enddo
-		enddo
-		!$omp end parallel do	
-		if(rank>0)then
-			do j=1,r_est
-			
-
-			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
-			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1,rank)
-	
-			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
-
-			
-			enddo
-		endif		
-		
-		
-		!**** Compute the skeleton matrix in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do i=1,r_est
-		do j=1,r_est
-			edge_m = header_m + select_row(i) - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,core(i,j),msh,ker)
-		enddo
-		enddo
-		!$omp end parallel do	
-		if(rank>0)then
-			allocate(matUtmp(r_est,rank))
-			allocate(matVtmp(rank,r_est))
-			do i=1,r_est
-			matUtmp(i,1:rank) = matU(select_row(i),1:rank)
-			enddo
-			do j=1,r_est
-			matVtmp(1:rank,j) = matV(1:rank,select_column(j))
-			enddo		
-			! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
-			call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop=flop)
-			stats%Flop_Fill = stats%Flop_Fill + flop
-			deallocate(matUtmp)
-			deallocate(matVtmp)
-		endif	
-			
-			
-		!**** generate column indices for the next iteration	
-		row_Rtmp = row_R
-		do j=1,r_est
-		row_Rtmp(:,select_column(j))=0d0
-		enddo
-		
-		
-		jpvt=0	
-		! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
-		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop
-		select_column(1:r_est) = jpvt(1:r_est)	
 		
 		
 		!**** form the LR update by CUR
 		
 		
-		! call GeneralInverse(r_est,r_est,core,core_inv,tolerance)
-		! call zgemm('N','N',r_est,N,r_est, cone, core_inv, r_est,row_R,r_est,czero,row_Rtmp,r_est)
-		! ! call LeastSquare(r_est,r_est,N,core,row_R,row_Rtmp,tolerance)
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
-		
-		! call LR_ReCompression(column_R,row_Rtmp,M,N,r_est,rankup,SVD_tolerance)
-		! ! rankup = r_est
-		
-<<<<<<< HEAD:SRC/Bplus_compress.f90
-		!**** form the LR update by CUR
-=======
-		! if(rankup>0)then
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
-		
-		! call assert(rank+rankup<rmax,'try to increase rmax')
-		
-<<<<<<< HEAD:SRC/Bplus_compress.f90
 		! call GeneralInverse(r_est,r_est,core,core_inv,tolerance)
 		! call zgemm('N','N',r_est,N,r_est, cone, core_inv, r_est,row_R,r_est,czero,row_Rtmp,r_est)
 		! ! call LeastSquare(r_est,r_est,N,core,row_R,row_Rtmp,tolerance)
@@ -3503,57 +3369,11 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 
 		! write(*,*)itr,rank,rankup,error
-=======
-		! matU(:,rank+1:rank+rankup) = column_R(:,1:rankup)
-		! matV(rank+1:rank+rankup,:) = row_Rtmp(1:rankup,:)
-		! rank = rank + rankup
-		
-		! !**** update fnorm of UV and matUmatV 
-		! call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2)		
-		! call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2)
-		! endif
-		
-		
-		jpvt=0	
-		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop
-		rankup = ranknew
-		
-		if(rankup>0)then		
-		row_Rtmp = row_R
-		call un_or_mqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup,flop=flop)	
-		stats%Flop_Fill = stats%Flop_Fill + flop
-		call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop
-		
-		if(rank+rankup>min(M,N))rankup=min(M,N)-rank
-		
-		call assert(rank+rankup<=rmax,'try to increase rmax')
-		do j=1,rankup
-		matU(:,rank+j) = column_R(:,jpvt(j))
-		enddo
-		matV(rank+1:rank+rankup,:) = row_Rtmp(1:rankup,:)
-		rank = rank + rankup
-		
-		if(rank==min(M,N))exit
-		
-		!**** update fnorm of UV and matUmatV 
-		call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)	
-		stats%Flop_Fill = stats%Flop_Fill + flop		
-		call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop
-		
-		endif
-		
-		
-		write(*,*)itr,rank,rankup,normUV/normA
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
 	
 		itr = itr + 1
 	enddo
 
 	! write(*,*)normUV,normA
-<<<<<<< HEAD:SRC/Bplus_compress.f90
 	
 	if(rank>0)then	
 		call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,Flops=flop)
@@ -3586,36 +3406,6 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 
 end subroutine BatchACA_CompressionForward
 
-=======
-	error = normUV/normA
-	
-	call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,Flops=flop)
-	stats%Flop_Fill = stats%Flop_Fill + flop
-	rank = ranknew
-	
-
-	deallocate(jpvt)
-	deallocate(tau)
-	deallocate(select_column)
-	deallocate(select_row)	
-	deallocate(row_R)
-	deallocate(row_Rtmp)
-	deallocate(column_R)
-	deallocate(column_RT)
-	deallocate(core)
-	! deallocate(core_inv)
-	deallocate(perms)
-	
-
-	n2 = OMP_get_wtime()	
-	time_tmp = time_tmp + n2 - n1	
-	
-	
-    return
-
-end subroutine BatchACA_CompressionForward
-
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
 
 
 
@@ -3729,17 +3519,10 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 
 		allocate(blocks%ButterflyV%blocks(1)%matrix(N,rank))
 		blocks%ButterflyV%blocks(1)%matrix = matV(1:N,1:rank)
-<<<<<<< HEAD:SRC/Bplus_compress.f90
 		
 		blocks%rankmax = rank
 		blocks%rankmin = rank		
 		
-=======
-		
-		blocks%rankmax = rank
-		blocks%rankmin = rank		
-		
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/Bplus_compress.f90
 		deallocate(matV)
 		deallocate(jpiv)
 		deallocate(tau)

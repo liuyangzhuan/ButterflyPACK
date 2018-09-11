@@ -69,7 +69,6 @@ subroutine c_hodlr_createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")
 end subroutine c_hodlr_createstats
 
 
-<<<<<<< HEAD
 
 !**** C interface of printing statistics
 	!stats_Cptr: the structure containing statistics
@@ -89,8 +88,6 @@ subroutine c_hodlr_printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_print
 end subroutine c_hodlr_printstats
 
 
-=======
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 !**** C interface of initializing option
 	!option_Cptr: the structure containing option       
 subroutine c_hodlr_createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
@@ -303,11 +300,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	type(kernelquant),pointer::ker
 	type(hobf),pointer::ho_bf
 	type(proctree),pointer::ptree	
-<<<<<<< HEAD
 	integer seed_myid(50)
-=======
-	integer seed_myid(12)
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	character(len=1024)  :: strings
@@ -341,12 +334,8 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	call DATE_AND_TIME(values=times)     ! Get the current time 
 	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
 	! seed_myid(1) = myid*1000
-<<<<<<< HEAD
 	! call RANDOM_SEED(PUT=seed_myid)
 	call init_random_seed()
-=======
-	call RANDOM_SEED(PUT=seed_myid)
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	
 	if(ptree%MyID==Main_ID)then
     write(*,*) "HODLR_BUTTERFLY_SOLVER"
@@ -368,11 +357,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 	!**** the geometry points are provided by user and require reordering 
 	if(option%preorder==0)then 
-<<<<<<< HEAD
 		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel requiring reorder:"
-=======
-		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with geometrical points:"
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		Dimn = Ndim 
 		allocate (msh%xyz(Dimn,0:msh%Nunk))
 		ii=0
@@ -381,13 +366,8 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 			ii = ii + Dimn
 		enddo  	
 	else 
-<<<<<<< HEAD
 		if(nlevel==0)then  !**** the geometry points may not be provided, and the preorder tree is not provided, create a natural order tree 
 			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with natural reorder:"
-=======
-		if(nlevel==0)then  !**** the geometry points are not provided, the preorder tree is not provided, create a natural order tree 
-			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel without tree:"
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 			level=0; i=1
 			do while (int(msh%Nunk/i)>option%Nmin_leaf)
 				level=level+1
@@ -397,15 +377,9 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 			allocate(msh%pretree(2**Maxlevel))
 			call CreateLeaf_Natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree) 
 			
-<<<<<<< HEAD
 		else   !**** the geometry points may not be provided, but the preorder tree is provided 			
 			
 			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel and user-supplied tree order:"
-=======
-		else   !**** the geometry points are not provided, but the preorder tree is provided 			
-			
-			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel with tree:"
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 			Maxlevel=nlevel
 			allocate(msh%pretree(2**Maxlevel))
 			msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
@@ -441,29 +415,17 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	! write(*,*)t2-t1
 
 	
-<<<<<<< HEAD
 	!**** return the permutation vector (if preorder==1, Permutation is the natural order)
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
 	Npo_loc = msh%idxe-msh%idxs+1		
 	! if(option%preorder==0)then 
-=======
-	!**** return the permutation vector if preorder==0
-	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
-	Npo_loc = msh%idxe-msh%idxs+1		
-	if(option%preorder==0)then 
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	if (ptree%MyID==Main_ID) then	
 		do edge=1,Npo
 			Permutation(edge) = msh%info_unk(0,edge)
 		enddo
 	endif	
-<<<<<<< HEAD
 	! endif
-=======
-	endif
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	
 	!**** return the C address of hodlr structures to C caller
 	ho_bf_Cptr=c_loc(ho_bf)
@@ -581,7 +543,6 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 end subroutine C_HODLR_Solve
 
 
-<<<<<<< HEAD
 
 !**** C interface of HODLR-vector multiplication
 	!xin: input vector         
@@ -636,193 +597,6 @@ subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr
 	! write(*,*)t2-t1	
 	
 end subroutine C_HODLR_Mult
-=======
-! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply")	
-	! implicit none 
-	! integer Npo,Ncol,Nmin, Ntot
-	! real(kind=8) Xin(*),Xout(*)
-	! ! real(kind=8) Xin(Npo*Ncol),Xout(Npo*Ncol)
-	! real(kind=8) n1,n2
-	
-    ! integer i, j, ii, jj, iii, jjj, num_blocks, mm, nn
-    ! integer level, blocks, edge, patch, node, group, groupm,Maxgroup_loc,g_start_glo,g_start_loc
-    ! integer rank, index_near, m, n, length, flag, num_sample,vectors_x,vectors_y,vectors_start, Dimn
-    ! real(kind=8) theta, phi, dphi, rcs_V, rcs_H, T0, T1, vecnorm, rtemp
-    ! double complex value_Z, ctemp
-    
-    ! double complex, allocatable :: ctemp_vector(:), ctemp_vector1(:), ctemp_vector2(:), output(:,:)
-    ! integer, allocatable :: intemp_vector1(:), intemp_vector2(:)     
-
-	! type(matricesblock), pointer :: blocks_i,blocks_j
-	! complex(kind=8), allocatable:: labels(:)		
-	! integer segsize
-	
-	! if(MPI_Comm_H/=MPI_COMM_NULL)then
-	
-	
-	! call MPI_verbose_barrier('1')
-	! n1=OMP_get_wtime()		
-	
-	! call assert(Maxedge==Npo,'Npo incorrect')
-	
-	! blocks_i=>Local_matrices_block(1,1)
-	! groupm = blocks_i%col_group
-	! Maxgroup_loc = 2**(Maxlevel_for_blocks-blocks_i%level+1)-1
-	! allocate(vectors_block_o(0:Maxgroup_loc))
-	
-	! do level=0,Maxlevel_for_blocks-blocks_i%level
-		! g_start_loc = 2**level
-		! g_start_glo = groupm*2**level
-		! do group = 1,2**level
-			! vectors_block_o(group+g_start_loc-1)%head=basis_group(group+g_start_glo-1)%head - basis_group(groupm)%head + 1
-            ! vectors_block_o(group+g_start_loc-1)%tail=basis_group(group+g_start_glo-1)%tail - basis_group(groupm)%head + 1
-            ! vectors_block_o(group+g_start_loc-1)%style=4
-            ! vectors_block_o(group+g_start_loc-1)%group=group+g_start_glo-1
-		! end do
-	! end do	
-	! allocate(vectors_block_o(1)%vector(vectors_block_o(1)%tail-vectors_block_o(1)%head+1,Ncol))	
-	! vectors_block_o(1)%style=1
-	! vectors_block_o(1)%vector=0.0	
-	
-	
-	! num_blocks=2**Parallel_level_inverse_MPI
-	! vectors_start=num_blocks-1		
-	
-	! ! i=MyID+1
-	! ! vectors_x=vectors_start+i
-	
-	! vectors_x=1
-	
-	! call MPI_barrier(MPI_Comm_H,ierr)
-	! n2=OMP_get_wtime()
-	
-	! if(MyID==0)write(*,*)"before kernel apply time: ",n2-n1 
-		
-	
-	! call MPI_verbose_barrier('1')
-	! n1=OMP_get_wtime()
-	
-	
-	! allocate(vectors_block(0:Maxgroup_loc))
-	
-	! do j=1,num_blocks
-	
-		! blocks_i=>Local_matrices_block(j,1)
-		
-		! groupm = blocks_i%row_group
-		! Maxgroup_loc = 2**(Maxlevel_for_blocks-blocks_i%level+1)-1
-		
-		
-		! do level=0,Maxlevel_for_blocks-blocks_i%level
-			! g_start_loc = 2**level
-			! g_start_glo = groupm*2**level
-			! do group = 1,2**level
-				! vectors_block(group+g_start_loc-1)%head=basis_group(group+g_start_glo-1)%head - basis_group(groupm)%head + 1
-				! vectors_block(group+g_start_loc-1)%tail=basis_group(group+g_start_glo-1)%tail - basis_group(groupm)%head + 1
-				! vectors_block(group+g_start_loc-1)%style=4
-				! vectors_block(group+g_start_loc-1)%group=group+g_start_glo-1
-			! end do
-		! end do	
-		! allocate(vectors_block(1)%vector(vectors_block(1)%tail-vectors_block(1)%head+1,Ncol))	
-		! vectors_block(1)%style=1
-		! vectors_block(1)%vector=0.0			
-		
-		! if(MyID==j-1)then
-			! ! do jj=1,Ncol
-			! ! do ii=basis_group(groupm)%head,basis_group(groupm)%tail
-				! ! vectors_block(1)%vector(ii-basis_group(groupm)%head+1,jj) = Xin((jj-1)*Maxedge+node_of_edge(0,ii))
-			! ! enddo
-			! ! enddo
-			! do jj=1,Ncol
-			! do ii=1,basis_group(groupm)%tail-basis_group(groupm)%head+1
-				! vectors_block(1)%vector(ii,jj) = Xin((jj-1)*(basis_group(groupm)%tail-basis_group(groupm)%head+1)+ii)
-			! enddo
-			! enddo			
-		! endif
-		! call MPI_Bcast(vectors_block(1)%vector,(vectors_block(1)%tail-vectors_block(1)%head+1)*Ncol,MPI_double_complex,j-1,MPI_Comm_H,ierr)
-		
-		! vectors_y=1
-		
-		! ! write(*,*)vectors_x,vectors_y,vectors_block_o(vectors_x)%style,vectors_block_o(vectors_y)%style,'nima'
-		! call Vector_add_multiply_o(vectors_x,'+',blocks_i,'N',vectors_y)	
-		! ! call aggregate_vectors_o(vectors_x)				
-	
-		! deallocate(vectors_block(1)%vector)
-	! enddo
-
-	! call MPI_barrier(MPI_Comm_H,ierr)
-	! n2=OMP_get_wtime()
-	
-	! if(MyID==0)write(*,*)"kernel apply time: ",n2-n1 
-		
-
-
-	! call MPI_verbose_barrier('1')
-	! n1=OMP_get_wtime()		
-	
-	
-	! blocks_i=>Local_matrices_block(1,1)
-	! groupm = blocks_i%col_group
-	! segsize = basis_group(groupm)%tail-basis_group(groupm)%head+1
-	
-	! do jj=1,Ncol
-	! do ii=1,segsize
-		! Xout((jj-1)*segsize+ii) = dble(vectors_block_o(1)%vector(ii,jj)) 
-		! ! write(*,*)Xout((jj-1)*Maxedge+node_of_edge(0,ii))
-	! enddo
-	! enddo	
-
-	! ! if(MyID/=0)then
-		! ! Ntot = (vectors_block_o(1)%tail-vectors_block_o(1)%head+1)*Ncol	
-		! ! call MPI_Send(vectors_block_o(1)%vector,Ntot,MPI_double_complex,Main_ID,MyID,MPI_Comm_H,ierr)
-	! ! else 
-		! ! do i=1,num_blocks
-			! ! blocks_i=>Local_matrices_block(i,1)
-			! ! groupm = blocks_i%row_group
-			! ! Ntot = (basis_group(groupm)%tail - basis_group(groupm)%head + 1)*Ncol		
-			! ! allocate(output(basis_group(groupm)%tail - basis_group(groupm)%head + 1,Ncol))	
-			! ! if(i-1==0)then
-				! ! output = vectors_block_o(1)%vector
-			! ! else
-				! ! call MPI_Recv(output,Ntot,MPI_double_complex,i-1,i-1,MPI_Comm_H,status,ierr)
-			! ! endif
-			
-			! ! do jj=1,Ncol
-			! ! do ii=basis_group(groupm)%head,basis_group(groupm)%tail
-				! ! Xout((jj-1)*Maxedge+node_of_edge(0,ii)) = dble(output(ii-basis_group(groupm)%head+1,jj)) 
-				! ! ! write(*,*)Xout((jj-1)*Maxedge+node_of_edge(0,ii))
-			! ! enddo
-			! ! enddo				
-			
-			! ! deallocate(output)
-		! ! enddo
-	! ! endif	
-	
-	! deallocate (vectors_block_o(1)%vector)
-	! deallocate (vectors_block_o)
-	! deallocate (vectors_block)
-	
-	! call MPI_barrier(MPI_Comm_H,ierr)
-	! n2=OMP_get_wtime()
-	
-	! if(MyID==Main_ID)write(*,*)"after kernel apply time: ",n2-n1 
-	! ! if(MyID==0)write(*,*)"output norm: ",sqrt(sum(Xout(1:segsize*Ncol)**2d0))
-	
-	! rtemp = sum(Xout(1:segsize*Ncol)**2d0)
-	! call MPI_REDUCE(rtemp, vecnorm, 1,MPI_double, MPI_SUM, Main_ID, MPI_Comm_H,ierr)	
-	! if(MyID==Main_ID)write(*,*)"output norm: ",sqrt(vecnorm)
-	
-	! ! if(MyID==0)then
-	! ! do ii=1,Maxedge*Ncol
-		! ! write(777,*)Xout(ii)
-	! ! enddo
-	
-	! ! endif		
-	
-	! endif
-
-! end subroutine H_Matrix_Apply
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 
 

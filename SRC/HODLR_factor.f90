@@ -50,11 +50,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 		stats%Flop_Factor = stats%Flop_Factor + flop
 		!!!!!!! the forward block BP can be deleted if not used in solution phase
 		
-<<<<<<< HEAD
 		stats%Mem_Direct_inv=stats%Mem_Direct_inv+SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3	
-=======
-		! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 		deallocate(ipiv)
 	end do		

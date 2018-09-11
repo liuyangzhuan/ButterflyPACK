@@ -124,11 +124,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						if(ptree%MyID==Main_ID)write (*,*) 'constructing level',level
 					endif
 					call full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn)
-<<<<<<< HEAD:SRC/HODLR_constr.f90
 					stats%Mem_Direct_for=stats%Mem_Direct_for+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
-=======
-					stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_constr.f90
 				endif
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
 				if(level==option%level_check)then
@@ -146,10 +142,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	call MPI_ALLREDUCE(stats%rankmax_of_level,stats%rankmax_of_level_global,ho_bf1%Maxlevel,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level_global
 	if(ptree%MyID==Main_ID)write (*,*) ''
-<<<<<<< HEAD:SRC/HODLR_constr.f90
 	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-=======
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_constr.f90
 	if(ptree%MyID==Main_ID)write (*,*) 'Total construction time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A26Es14.2)') 'Total construction flops:',rtemp

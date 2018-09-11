@@ -102,10 +102,6 @@ integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
 real(kind=8)::rtemp
-<<<<<<< HEAD:SRC/HODLR_utilities.f90
-=======
-
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 
 if(associated(bplus%LL))then
 do ll=1,LplusMax
@@ -534,11 +530,8 @@ integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
 real(kind=8),optional::memory
 real(kind=8)::rtemp
-<<<<<<< HEAD:SRC/HODLR_utilities.f90
 
 call delete_Bplus(bplus_o)
-=======
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 
 if(present(memory))memory=0
 
@@ -1465,11 +1458,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 		! stop
 		if(CheckNAN_butterfly(blocks))then
 			write(*,*)'NAN in 0 BF_block_MVP_dat'
-<<<<<<< HEAD:SRC/HODLR_utilities.f90
 			stop
-=======
-			stop		
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 		end if
 		
 		if (chara=='N') then
@@ -3098,16 +3087,12 @@ subroutine InitStat(stats)
 	stats%Flop_Fill=0
 	stats%Flop_Factor=0
 	stats%Flop_Sol=0
-<<<<<<< HEAD:SRC/HODLR_utilities.f90
 	stats%Flop_C_Mult=0
-=======
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 	time_tmp = 0
 end subroutine InitStat
 
 
 
-<<<<<<< HEAD:SRC/HODLR_utilities.f90
 subroutine PrintStat(stats,ptree)
 	implicit none 
 	type(Hstat)::stats	
@@ -3174,8 +3159,6 @@ end subroutine PrintStat
 
 
 
-=======
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 subroutine SetDefaultOptions(option)
 	implicit none 
 	type(Hoption)::option	

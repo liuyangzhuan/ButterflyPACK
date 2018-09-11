@@ -170,11 +170,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	msh%scaling=1d0
 	option%preorder=0
 	option%Nmin_leaf=200
-<<<<<<< HEAD
 	option%tol_comp=1d-2
-=======
-	option%tol_comp=1d-4
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
@@ -189,15 +185,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-<<<<<<< HEAD
 	option%ErrFillFull=0
 	option%ErrSol=1
 	option%RecLR_leaf=BACA
-=======
-	option%ErrFillFull=1
-	option%ErrSol=1
-	option%RecLR_leaf=RRQR
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 
    !***********************************************************************

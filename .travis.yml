@@ -34,11 +34,7 @@ before_install:
   - export BLUE="\033[34;1m"
   - mkdir -p installDir
 
-<<<<<<< HEAD
   - printf  "${BLUE} GC; Installing gcc-6 via apt\n"
-=======
-  - printf "${BLUE} GC; Installing gcc-6 via apt\n"
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
   - sudo apt-get update
   - sudo apt-get install build-essential software-properties-common -y
   - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
@@ -91,8 +87,13 @@ install:
   - mkdir -p build
   - sh PrecisionPreprocessing.sh  
   - cd build 
-  - |
--DTPL_PARMETIS_INCLUDE_DIRS="$TRAVIS_BUILD_DIR/installDir/parmetis-4.0.3/metis/include;$TRAVIS_BUILD_DIR/installDir/parmetis-4.0.3/install/include" \
+  - export CRAYPE_LINK_TYPE=dynamic
+  - rm -rf CMakeCache.txt
+  - rm -rf DartConfiguration.tcl
+  - rm -rf CTestTestfile.cmake
+  - rm -rf cmake_install.cmake
+  - rm -rf CMakeFiles
+  - cmake .. \
     -DTPL_PARMETIS_LIBRARIES="$TRAVIS_BUILD_DIR/installDir/parmetis-4.0.3/install/lib/libparmetis.so" \
     -DCMAKE_C_FLAGS="-std=c11 -DPRNTlevel=1 -DPROFlevel=1 -DDEBUGlevel=0" \
     -DCMAKE_CXX_FLAGS="-Ofast -std=c++11" \

@@ -22,18 +22,12 @@ extern "C" {
 
 	void c_hodlr_solve(C_DT* x, C_DT* b, int* Nloc, int* Nrhs, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 	
-<<<<<<< HEAD
 	void c_hodlr_mult(C_DT* xin, C_DT* xout, int* Nloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 	
 	void c_hodlr_createptree(int* nmpi, int* groupmembers, MPI_Fint* MPIcomm, F2Cptr* ptree);
 	
 	void c_hodlr_createstats(F2Cptr* stats);		
 	void c_hodlr_printstats(F2Cptr* stats,F2Cptr* ptree);		
-=======
-	void c_hodlr_createptree(int* nmpi, int* groupmembers, MPI_Fint* MPIcomm, F2Cptr* ptree);
-	
-	void c_hodlr_createstats(F2Cptr* stats);		
->>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	void c_hodlr_createoption(F2Cptr* option);	
 	void c_hodlr_setoption(F2Cptr* option, char const * nam, C2Fptr val);	
 	
