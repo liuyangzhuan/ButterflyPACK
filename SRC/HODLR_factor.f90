@@ -50,7 +50,11 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 		stats%Flop_Factor = stats%Flop_Factor + flop
 		!!!!!!! the forward block BP can be deleted if not used in solution phase
 		
+<<<<<<< HEAD
+		stats%Mem_Direct_inv=stats%Mem_Direct_inv+SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3	
+=======
 		! stats%Mem_Direct=stats%Mem_Direct+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3		
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 		deallocate(ipiv)
 	end do		
@@ -93,8 +97,8 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 		if(ptree%MyID==Main_ID)write(*,*)'compute block inverse at level:',level_c
 		n1 = OMP_get_wtime()
 		do rowblock = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
-		
-			pgno =  ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno			
+			
+			pgno =  ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno		
 			if((ptree%MyID >=ptree%pgrp(pgno)%head .and. ptree%MyID <=ptree%pgrp(pgno)%tail))then	
 				
 				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree)
@@ -134,13 +138,13 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
     if(ptree%MyID==Main_ID)write (*,'(A21Es14.2)') 'Factorization flops:',rtemp	
 	
     if(ptree%MyID==Main_ID)write(*,*)''
-	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly inverse blocks'
-	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly Sblocks'
-	call MPI_ALLREDUCE(stats%Mem_Direct,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct inverse blocks'
-	call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for storing intermidiate vectors'
     if(ptree%MyID==Main_ID)write(*,*)''	
 

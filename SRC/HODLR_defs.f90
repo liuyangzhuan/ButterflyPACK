@@ -285,10 +285,18 @@ module HODLR_DEFS
 	!**** statistics 	
 	type Hstat
 		real(kind=8) Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
+<<<<<<< HEAD:SRC/HODLR_defs.f90
+		real(kind=8) Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol, Time_C_Mult
+		real(kind=8) Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct_inv,Mem_Direct_for,Mem_int_vec,Mem_Comp_for
+		real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_Tmp
+		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:) ! maximum and minimum ranks observed at each level of HODLR during matrix fill and factorization
+		integer, allocatable:: rankmax_of_level_global(:) ! maximum ranks among all processes observed at each level of HODLR during matrix fill and factorization
+=======
 		real(kind=8) Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol
 		real(kind=8) Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct,Mem_int_vec,Mem_For
 		real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_Tmp
 		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:) ! maximum and minimum ranks observed at each level of HODLR during matrix fill and factorization
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_defs.f90
 	 end type Hstat	
 
 	 

@@ -25,7 +25,13 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
 	type(hobf)::hobf_inverse
 	DT::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
 	DT,allocatable::r0_initial(:)
+<<<<<<< HEAD
+	real(kind=8) n1,n2,rtemp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
+	n1 = OMP_get_wtime()
+	
 	if(option%precon/=DIRECT)then
         allocate(r0_initial(1:Ns_loc))	
 		do ii=1,Ns_loc
@@ -42,6 +48,10 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
 	else 			
 		call MVM_Z_factorized(Ns_loc,num_vectors,b,x,hobf_inverse,ptree,stats)
 	end if	
+ 
+ 
+	n2 = OMP_get_wtime()
+	stats%Time_Sol = stats%Time_Sol + n2-n1
  
     return
     
@@ -95,6 +105,10 @@ end subroutine HODLR_Solution
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
     call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
     r=bb-r !residual from the initial guess
@@ -107,6 +121,10 @@ end subroutine HODLR_Solution
 		! ! end if		
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)    
     call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
     v=ayo
@@ -134,7 +152,12 @@ end subroutine HODLR_Solution
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
 	   call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,ye,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+	   stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+	   call HODLR_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,hobf_inverse,stats)	
+=======
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,hobf_inverse,stats)	
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -168,6 +191,10 @@ end subroutine HODLR_Solution
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
 		  call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+		  stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		  call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
           r=bb-r
@@ -202,6 +229,10 @@ end subroutine HODLR_Solution
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
 		call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+		stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
 	
        !MAGIC
@@ -210,6 +241,10 @@ end subroutine HODLR_Solution
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
     call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+<<<<<<< HEAD
+	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
 	
 	
@@ -292,7 +327,11 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	allocate (b(N_unk_loc,1))	
 	b=0
 	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,xtrue,b,ho_bf_inv,ptree,stats)
+<<<<<<< HEAD
+	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+=======
 	
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,1,option,ptree,stats)
 	
 	rtemp1 = fnorm(xtrue-x,N_unk_loc,1)**2d0;
@@ -414,7 +453,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 	allocate(vec_new(Ns,num_vectors))
 	! vec_old(1:Ns,1:num_vectors) = Vin
 	vec_new = 0
-
+	stats%Flop_Tmp =0
 	
 	do level = level_start,level_end !ho_bf1%Maxlevel+1
 		do ii =ho_bf1%levels(level)%Bidxs,ho_bf1%levels(level)%Bidxe
@@ -428,11 +467,9 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 			if(level==ho_bf1%Maxlevel+1)then	
 				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
-				stats%Flop_Sol = stats%Flop_Sol + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)				
+				stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)				
 			else
-				stats%Flop_Tmp=0
 				call Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,idx_end_loc-idx_start_loc+1,num_vectors,Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2,ptree,stats)
-				stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 			endif
 		
 		end do				

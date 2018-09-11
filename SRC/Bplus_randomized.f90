@@ -3699,7 +3699,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 		! end select		
 	class default
 		write(*,*)"unexpected type"
-		stop					
+		stop
 	end select	
 
 end subroutine Bplus_MultiLrandomized_Onesubblock

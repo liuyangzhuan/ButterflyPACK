@@ -215,7 +215,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
-	integer seed_myid(12)
+	integer seed_myid(50)
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)

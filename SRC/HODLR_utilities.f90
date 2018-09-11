@@ -102,19 +102,26 @@ integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
 real(kind=8)::rtemp
+<<<<<<< HEAD:SRC/HODLR_utilities.f90
+=======
 
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 
+if(associated(bplus%LL))then
 do ll=1,LplusMax
 	if(bplus%LL(ll)%Nbound>0)then
+		if(associated(bplus%LL(ll)%matrices_block))then
 		do bb=1,bplus%LL(ll)%Nbound
 			! write(*,*)ll,bplus%Lplus,bb,bplus%LL(ll)%Nbound,'fff'
 			call delete_blocks(bplus%LL(ll)%matrices_block(bb))
 		end do		
 		deallocate(bplus%LL(ll)%matrices_block)
+		endif
 		if(allocated(bplus%LL(ll)%boundary_map))deallocate(bplus%LL(ll)%boundary_map)
 	end if
 end do
 deallocate(bplus%LL)
+endif
 
 end subroutine delete_Bplus
 
@@ -527,6 +534,11 @@ integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
 real(kind=8),optional::memory
 real(kind=8)::rtemp
+<<<<<<< HEAD:SRC/HODLR_utilities.f90
+
+call delete_Bplus(bplus_o)
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 
 if(present(memory))memory=0
 
@@ -1453,7 +1465,11 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 		! stop
 		if(CheckNAN_butterfly(blocks))then
 			write(*,*)'NAN in 0 BF_block_MVP_dat'
+<<<<<<< HEAD:SRC/HODLR_utilities.f90
+			stop
+=======
 			stop		
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 		end if
 		
 		if (chara=='N') then
@@ -3066,6 +3082,7 @@ subroutine InitStat(stats)
 	stats%Time_random=0  ! Intialization, MVP, Reconstruction 
 	stats%Time_Sblock=0
 	stats%Time_Sol=0
+	stats%Time_C_Mult=0
 	stats%Time_Inv=0
 	stats%Time_RedistB=0
 	stats%Time_RedistV=0
@@ -3074,17 +3091,91 @@ subroutine InitStat(stats)
 	stats%Mem_peak=0
 	stats%Mem_Sblock=0
 	stats%Mem_SMW=0
-	stats%Mem_Direct=0
+	stats%Mem_Direct_for=0
+	stats%Mem_Direct_inv=0
 	stats%Mem_int_vec=0
-	stats%Mem_For=0
+	stats%Mem_Comp_for=0
 	stats%Flop_Fill=0
 	stats%Flop_Factor=0
 	stats%Flop_Sol=0
+<<<<<<< HEAD:SRC/HODLR_utilities.f90
+	stats%Flop_C_Mult=0
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 	time_tmp = 0
 end subroutine InitStat
 
 
 
+<<<<<<< HEAD:SRC/HODLR_utilities.f90
+subroutine PrintStat(stats,ptree)
+	implicit none 
+	type(Hstat)::stats	
+	type(proctree)::ptree
+	real(kind=8)::rtemp,rtemp1,rtemp2
+	integer ierr
+	
+	
+	! stats%Time_random=0  ! Intialization, MVP, Reconstruction 
+	! stats%Time_Sblock=0
+	! stats%Time_Sol=0
+	! stats%Time_Inv=0
+	! stats%Time_RedistB=0
+	! stats%Time_RedistV=0
+	! stats%Time_SMW=0
+	! stats%Time_Fill=0
+	! stats%Mem_peak=0
+	! stats%Mem_Sblock=0
+	! stats%Mem_SMW=0
+	! stats%Mem_Direct_for=0
+	! stats%Mem_Direct_inv=0
+	! stats%Mem_int_vec=0
+	! stats%Mem_Comp_for=0
+	! stats%Flop_Fill=0
+	! stats%Flop_Factor=0
+	! stats%Flop_Sol=0
+
+	
+
+	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Construction time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_Direct_for,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Construction mem:',rtemp+rtemp1,'MB'	
+	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Construction flops:',rtemp
+
+
+
+	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Factorization time:',rtemp,'Seconds'	
+	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)	
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Factorization mem:',rtemp+rtemp1+rtemp2,'MB'	
+	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factorization flops:',rtemp	
+
+	
+	
+	
+	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Solve time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Solve flops:',rtemp
+
+
+	call MPI_ALLREDUCE(stats%Time_C_Mult,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'C_mult time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Flop_C_Mult,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'C_mult flops:',rtemp	
+	
+end subroutine PrintStat
+
+
+
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af:SRC/HODLR_utilities.f90
 subroutine SetDefaultOptions(option)
 	implicit none 
 	type(Hoption)::option	
@@ -3203,8 +3294,6 @@ type(matrixblock),pointer::blocks
 DT,pointer::dat_new(:,:),dat_old(:,:)
 real(kind=8)::n1,n2
 type(Hstat)::stats
-
-
 
 if(bplus_o%Lplus==1)then
 	blocks => bplus_o%LL(1)%matrices_block(1)

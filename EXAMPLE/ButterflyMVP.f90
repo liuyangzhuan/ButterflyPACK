@@ -89,7 +89,7 @@ subroutine create_butterfly_simple(block,level_butterfly,dimension_m,dimension_n
 	real(kind=8), allocatable:: Singular(:)
 	integer mn_min,index_i,index_j,blocks_idx
 	type(matrixblock)::block
-	integer seed_myid(12)
+	integer seed_myid(50)
 	integer times(8)
 	
 	call DATE_AND_TIME(values=times)     ! Get the current time 

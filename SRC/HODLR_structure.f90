@@ -1077,6 +1077,9 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				! ! end if
 			end if
 			! end if
+			
+			call copy_Bplus(ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP_inverse_update(ii))		
+			
 		end do
 	end do	
 

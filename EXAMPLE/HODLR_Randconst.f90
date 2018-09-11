@@ -14,7 +14,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     real(kind=8) tolerance
     integer Primary_block, nn, mm
     integer i,j,k, threads_num,ii,jj
-	integer seed_myid(12)
+	integer seed_myid(50)
 	integer times(8)	
 	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
 	complex(kind=8),allocatable:: InputVec(:)

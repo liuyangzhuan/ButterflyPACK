@@ -175,18 +175,30 @@
 #define Butterfly_MoveSingulartoLeft z_Butterfly_MoveSingulartoLeft
 #define Butterfly_MoveSingulartoRight z_Butterfly_MoveSingulartoRight
 #define InitStat z_InitStat
+<<<<<<< HEAD
+#define PrintStat z_PrintStat
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define SetDefaultOptions z_SetDefaultOptions
 #define ComputeParallelIndices z_ComputeParallelIndices
 #define DoubleDistributeBplus z_DoubleDistributeBplus
 #define element_Zmn_user_C z_element_Zmn_user_C
 #define c_hodlr_createptree z_c_hodlr_createptree
 #define c_hodlr_createstats z_c_hodlr_createstats
+<<<<<<< HEAD
+#define c_hodlr_printstats z_c_hodlr_printstats
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define c_hodlr_createoption z_c_hodlr_createoption
 #define c_hodlr_setoption z_c_hodlr_setoption
 #define C_HODLR_Construct z_C_HODLR_Construct
 #define C_HODLR_Factor z_C_HODLR_Factor
 #define C_HODLR_Solve z_C_HODLR_Solve
+<<<<<<< HEAD
+#define C_HODLR_Mult z_C_HODLR_Mult
+=======
 #define H_Matrix_Apply z_H_Matrix_Apply
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define linspaceI z_linspaceI
 #define gemm_omp z_gemm_omp
 #define gemmHN_omp z_gemmHN_omp
@@ -501,18 +513,30 @@
 #define Butterfly_MoveSingulartoLeft d_Butterfly_MoveSingulartoLeft
 #define Butterfly_MoveSingulartoRight d_Butterfly_MoveSingulartoRight
 #define InitStat d_InitStat
+<<<<<<< HEAD
+#define PrintStat d_PrintStat
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define SetDefaultOptions d_SetDefaultOptions
 #define ComputeParallelIndices d_ComputeParallelIndices
 #define DoubleDistributeBplus d_DoubleDistributeBplus
 #define element_Zmn_user_C d_element_Zmn_user_C
 #define c_hodlr_createptree d_c_hodlr_createptree
 #define c_hodlr_createstats d_c_hodlr_createstats
+<<<<<<< HEAD
+#define c_hodlr_printstats d_c_hodlr_printstats
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define c_hodlr_createoption d_c_hodlr_createoption
 #define c_hodlr_setoption d_c_hodlr_setoption
 #define C_HODLR_Construct d_C_HODLR_Construct
 #define C_HODLR_Factor d_C_HODLR_Factor
 #define C_HODLR_Solve d_C_HODLR_Solve
+<<<<<<< HEAD
+#define C_HODLR_Mult d_C_HODLR_Mult
+=======
 #define H_Matrix_Apply d_H_Matrix_Apply
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 #define linspaceI d_linspaceI
 #define gemm_omp d_gemm_omp
 #define gemmHN_omp d_gemmHN_omp

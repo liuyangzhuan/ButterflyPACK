@@ -69,6 +69,28 @@ subroutine c_hodlr_createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")
 end subroutine c_hodlr_createstats
 
 
+<<<<<<< HEAD
+
+!**** C interface of printing statistics
+	!stats_Cptr: the structure containing statistics
+	!ptree_Cptr: the structure containing process tree
+subroutine c_hodlr_printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_printstats")	
+	implicit none 
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: ptree_Cptr
+	type(Hstat),pointer::stats
+	type(proctree),pointer::ptree	
+
+	call c_f_pointer(stats_Cptr, stats)	
+	call c_f_pointer(ptree_Cptr, ptree)
+	!**** print statistics variables  	
+	call PrintStat(stats,ptree)	
+	
+end subroutine c_hodlr_printstats
+
+
+=======
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 !**** C interface of initializing option
 	!option_Cptr: the structure containing option       
 subroutine c_hodlr_createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
@@ -281,7 +303,11 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	type(kernelquant),pointer::ker
 	type(hobf),pointer::ho_bf
 	type(proctree),pointer::ptree	
+<<<<<<< HEAD
+	integer seed_myid(50)
+=======
 	integer seed_myid(12)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	character(len=1024)  :: strings
@@ -315,7 +341,12 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	call DATE_AND_TIME(values=times)     ! Get the current time 
 	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
 	! seed_myid(1) = myid*1000
+<<<<<<< HEAD
+	! call RANDOM_SEED(PUT=seed_myid)
+	call init_random_seed()
+=======
 	call RANDOM_SEED(PUT=seed_myid)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	
 	if(ptree%MyID==Main_ID)then
     write(*,*) "HODLR_BUTTERFLY_SOLVER"
@@ -337,7 +368,11 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 	!**** the geometry points are provided by user and require reordering 
 	if(option%preorder==0)then 
+<<<<<<< HEAD
+		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel requiring reorder:"
+=======
 		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with geometrical points:"
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		Dimn = Ndim 
 		allocate (msh%xyz(Dimn,0:msh%Nunk))
 		ii=0
@@ -346,8 +381,13 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 			ii = ii + Dimn
 		enddo  	
 	else 
+<<<<<<< HEAD
+		if(nlevel==0)then  !**** the geometry points may not be provided, and the preorder tree is not provided, create a natural order tree 
+			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with natural reorder:"
+=======
 		if(nlevel==0)then  !**** the geometry points are not provided, the preorder tree is not provided, create a natural order tree 
 			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel without tree:"
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 			level=0; i=1
 			do while (int(msh%Nunk/i)>option%Nmin_leaf)
 				level=level+1
@@ -357,9 +397,15 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 			allocate(msh%pretree(2**Maxlevel))
 			call CreateLeaf_Natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree) 
 			
+<<<<<<< HEAD
+		else   !**** the geometry points may not be provided, but the preorder tree is provided 			
+			
+			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel and user-supplied tree order:"
+=======
 		else   !**** the geometry points are not provided, but the preorder tree is provided 			
 			
 			if(ptree%MyID==Main_ID)write(*,*) "Geometry-free kernel with tree:"
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 			Maxlevel=nlevel
 			allocate(msh%pretree(2**Maxlevel))
 			msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
@@ -395,17 +441,29 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	! write(*,*)t2-t1
 
 	
+<<<<<<< HEAD
+	!**** return the permutation vector (if preorder==1, Permutation is the natural order)
+	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
+	Npo_loc = msh%idxe-msh%idxs+1		
+	! if(option%preorder==0)then 
+=======
 	!**** return the permutation vector if preorder==0
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
 	Npo_loc = msh%idxe-msh%idxs+1		
 	if(option%preorder==0)then 
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	if (ptree%MyID==Main_ID) then	
 		do edge=1,Npo
 			Permutation(edge) = msh%info_unk(0,edge)
 		enddo
 	endif	
+<<<<<<< HEAD
+	! endif
+=======
 	endif
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	
 	!**** return the C address of hodlr structures to C caller
 	ho_bf_Cptr=c_loc(ho_bf)
@@ -523,6 +581,62 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 end subroutine C_HODLR_Solve
 
 
+<<<<<<< HEAD
+
+!**** C interface of HODLR-vector multiplication
+	!xin: input vector         
+	!xout: output vector        
+	!Nloc: size of local vectors     
+	!Ncol: number of vectors     
+	!ho_bf_for_Cptr: the structure containing HODLR         
+	!option_Cptr: the structure containing option         
+	!stats_Cptr: the structure containing statistics         
+	!ptree_Cptr: the structure containing process tree
+subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_mult")	
+	implicit none 
+	real(kind=8) t1,t2
+	integer Nloc,Ncol
+	DT::xin(Nloc,Ncol),xout(Nloc,Ncol)
+	
+	type(c_ptr), intent(in) :: ho_bf_for_Cptr
+	type(c_ptr), intent(in) :: ptree_Cptr	
+	type(c_ptr), intent(in) :: option_Cptr
+	type(c_ptr), intent(in) :: stats_Cptr
+	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
+	
+
+	type(Hoption),pointer::option	
+	type(Hstat),pointer::stats
+	type(hobf),pointer::ho_bf1
+	! type(hobf),pointer::ho_bf_inv
+	type(proctree),pointer::ptree	
+
+	t1 = OMP_get_wtime()
+
+	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	
+    if(ptree%MyID==Main_ID)write(*,*) "Multiply ......"
+	
+	
+	call MVM_Z_forward('N',Nloc,Ncol,1,ho_bf1%Maxlevel+1,xin,xout,ho_bf1,ptree,stats)
+	! need to use another Flop counter for this operation in future
+
+    if(ptree%MyID==Main_ID)write(*,*) "Multiply finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "	
+	
+	t2 = OMP_get_wtime() 
+	
+	stats%Time_C_Mult = stats%Time_C_Mult + t2-t1
+	stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+	
+	! write(*,*)t2-t1	
+	
+end subroutine C_HODLR_Mult
+=======
 ! subroutine H_Matrix_Apply(Npo,Ncol,Xin,Xout) bind(c, name="h_matrix_apply")	
 	! implicit none 
 	! integer Npo,Ncol,Nmin, Ntot
@@ -708,6 +822,7 @@ end subroutine C_HODLR_Solve
 	! endif
 
 ! end subroutine H_Matrix_Apply
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 
 

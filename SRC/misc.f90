@@ -525,11 +525,20 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 	
 	! allocate(QQ1(M,rmax))
+<<<<<<< HEAD
+	! QQ1 = matU(1:M,1:rmax)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt1(rmax))
+	! jpvt1=0
+	! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,SafeUnderflow,ranknew1,flop=flop)
+	! if(present(Flops))Flops= Flops + flop	
+=======
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
 	! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,SafeUnderflow,ranknew1)	
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	! deallocate(tau_Q)
 	
 
@@ -538,7 +547,12 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt2(rmax))
 	! jpvt2=0
+<<<<<<< HEAD
+	! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,SafeUnderflow,ranknew2,flop=flop)
+	! if(present(Flops))Flops= Flops + flop	
+=======
 	! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,SafeUnderflow,ranknew2)	
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	! deallocate(tau_Q)
 	
 	! if(ranknew1>0 .and. ranknew2>0)then
@@ -564,7 +578,13 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		
 		! allocate(mattemp(ranknew1,ranknew2))
 		! mattemp=0
+<<<<<<< HEAD
+		! ! call zgemm('N','T',ranknew1,ranknew2,rmax, cone, RR1, ranknew1,RR2,ranknew2,czero,mattemp,ranknew1)
+		! call gemmf90(RR1, ranknew1,RR2,ranknew2,mattemp,ranknew1,'N','T',ranknew1,ranknew2,rmax, cone,czero,flop=flop)
+		
+=======
 		! call zgemm('N','T',ranknew1,ranknew2,rmax, cone, RR1, ranknew1,RR2,ranknew2,czero,mattemp,ranknew1)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		
 		! norm = fnorm(mattemp,rmax,rmax)
 		
@@ -581,11 +601,20 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 
 	! allocate(QQ1(M,rmax))
+<<<<<<< HEAD
+	! QQ1 = matU(1:M,1:rmax)
+	! allocate (tau_Q(rmax))
+	! allocate (jpvt(rmax))
+	! jpvt=0
+	! call geqp3modf90(QQ1,jpvt,tau_Q,tolerance,SafeUnderflow,ranknew,flop=flop)
+	! if(present(Flops))Flops= Flops + flop
+=======
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt(rmax))
 	! jpvt=0
 	! call geqp3modf90(QQ1,jpvt,tau_Q,tolerance,SafeUnderflow,ranknew)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 	! ! call geqp3f90(QQ1,jpvt,tau_Q)
 	! ranknew=rmax
 
@@ -601,7 +630,12 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! enddo
 		! ! !$omp end parallel do	
 
+<<<<<<< HEAD
+		! call un_or_gqrf90(QQ1,tau_Q,flop=flop)
+		! if(present(Flops))Flops= Flops + flop
+=======
 		! call un_or_gqrf90(QQ1,tau_Q)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 
 		! allocate(QQ2(rmax,N))
 		! do ii=1,rmax
@@ -609,7 +643,13 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! enddo
 		! allocate(mattemp(ranknew,N))
 		! mattemp=0
+<<<<<<< HEAD
+		! ! call zgemm('N','N',ranknew,N,rmax, cone, RR1, ranknew,QQ2,rmax,czero,mattemp,ranknew)
+		! call gemmf90(RR1, ranknew,QQ2,rmax,mattemp,ranknew,'N','N',ranknew,N,rmax, cone,czero,flop=flop)
+		
+=======
 		! call zgemm('N','N',ranknew,N,rmax, cone, RR1, ranknew,QQ2,rmax,czero,mattemp,ranknew)
+>>>>>>> 37a8bb5076fbc403962a70a6fb2317f74d01c3af
 		! norm = fnorm(mattemp,ranknew,rmax)
 		
 		! deallocate(mattemp,RR1)
