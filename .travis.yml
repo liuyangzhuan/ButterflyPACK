@@ -64,10 +64,23 @@ before_install:
   - export LAPACK_LIB=/usr/lib/liblapack.so
   - printf "${BLUE} GC; Done installing LAPACKfrom apt\n"
   
-  - printf "${BLUE} GC; Installing SCALAPACKfrom apt\n"
-  - sudo apt-get install libscalapack-mpi-dev
-  - export SCALAPACK_LIB=/usr/lib/libscalapack.so
-  - printf "${BLUE} GC; Done installing SCALAPACKfrom apt\n"  
+  - printf "${BLUE} GC; Installing ScaLAPACK from source\n"
+  - cd $TRAVIS_BUILD_DIR/installDir
+  - wget http://www.netlib.org/scalapack/scalapack-2.0.2.tgz
+  - tar -xf scalapack-2.0.2.tgz
+  - cd scalapack-2.0.2
+  - cp SLmake.inc.example SLmake.inc
+  - sed -i "s/BLASLIB/#BLASLIB/" SLmake.inc
+  - sed -i "s/LAPACKLIB/#LAPACKLIB/" SLmake.inc
+  - sed -i "s/LIBS/#LIBS/" SLmake.inc
+  - printf "BLASLIB=$BLAS_LIB\n" >> SLmake.inc
+  - printf "LAPACKLIB=$LAPACK_LIB\n" >> SLmake.inc
+  - printf "LIBS=$BLAS_LIB $LAPACK_LIB\n" >> SLmake.inc
+  - sed -i "s/SCA#LAPACKLIB/#SCA#LAPACKLIB/" SLmake.inc
+  - printf "SCALAPACKLIB=libscalapack.a\n" >> SLmake.inc
+  - make lib  > tempMakeOutput.txt 2>&1
+  - export SCALAPACK_LIB=$TRAVIS_BUILD_DIR/installDir/scalapack-2.0.2/libscalapack.a
+  - printf "${BLUE} GC; Done installing ScaLAPACK from source\n"
   
   - printf "${BLUE} GC; Installing ParMetis-4.0 from source\n"
   - cd $TRAVIS_BUILD_DIR/installDir
@@ -83,8 +96,32 @@ install:
   - export BLUE="\033[34;1m"
   - printf "${BLUE} GC; Installing superlu_dist from source\n"
   - cd $TRAVIS_BUILD_DIR
+  - rm -rf build
+  - mkdir -p build
+  - sh PrecisionPreprocessing.sh  
   - cd build 
-  - ./run_cmake_build_gnu_ubuntu.sh
+  - export CRAYPE_LINK_TYPE=dynamic
+  - rm -rf CMakeCache.txt
+  - rm -rf DartConfiguration.tcl
+  - rm -rf CTestTestfile.cmake
+  - rm -rf cmake_install.cmake
+  - rm -rf CMakeFiles
+  - |
+    cmake .. \  
+    -DTPL_PARMETIS_LIBRARIES="$TRAVIS_BUILD_DIR/installDir/parmetis-4.0.3/install/lib/libparmetis.so" \
+    -DCMAKE_C_FLAGS="-std=c11 -DPRNTlevel=1 -DPROFlevel=1 -DDEBUGlevel=0" \
+    -DCMAKE_CXX_FLAGS="-Ofast -std=c++11" \
+    -Denable_blaslib=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_C_COMPILER=mpicc \
+    -DCMAKE_CXX_COMPILER=mpic++ \
+    -DCMAKE_Fortran_COMPILER=mpif90 \
+    -DCMAKE_INSTALL_PREFIX=. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
+    -DCMAKE_Fortran_FLAGS="-cpp -DGNU -DPRNTlevel=0" \
+    -DTPL_LAPACK_LIBRARIES="$BLAS_LIB;$LAPACK_LIB" \
+    -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
   - make
   - make install
   - printf "${BLUE} GC; Done installing hodlrbf from source\n"
