@@ -86,7 +86,7 @@ install:
   - rm -rf build
   - mkdir -p build
   - cd build 
-  - sh run_cmake_build_gnu_ubuntu.sh
+  - ./run_cmake_build_gnu_ubuntu.sh
   - make
   - make install
   - printf "${BLUE} GC; Done installing hodlrbf from source\n"
