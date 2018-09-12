@@ -83,8 +83,6 @@ install:
   - export BLUE="\033[34;1m"
   - printf "${BLUE} GC; Installing superlu_dist from source\n"
   - cd $TRAVIS_BUILD_DIR
-  - rm -rf build
-  - mkdir -p build
   - cd build 
   - ./run_cmake_build_gnu_ubuntu.sh
   - make
