@@ -112,7 +112,7 @@ install:
   - rm -rf CMakeFiles
   - |
     cmake .. \
-    -DCMAKE_CXX_FLAGS="-std=c++11 -O3 -fopenmp -lifcore" \
+    -DCMAKE_CXX_FLAGS="-std=c++11 -O3 -fopenmp" \
     -Denable_blaslib=OFF \
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_C_COMPILER=mpicc \
