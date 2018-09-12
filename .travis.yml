@@ -130,4 +130,4 @@ install:
 
 script: 
   - cd $TRAVIS_BUILD_DIR
-  - ./.travis_tests.sh
+  - sudo sh ./.travis_tests.sh
