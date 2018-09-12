@@ -54,6 +54,10 @@ before_install:
   - sudo apt-get install openmpi-bin libopenmpi-dev
   - printf "${BLUE} GC; Done installing openmpi\n"
 
+  - printf "${BLUE} GC; Installing dos2unixfrom apt\n"
+  - sudo apt-get install dos2unix
+  - printf "${BLUE} GC; Done installing dos2unixfrom apt\n"  
+  
   - printf "${BLUE} GC; Installing BLASfrom apt\n"
   - sudo apt-get install libblas-dev
   - export BLAS_LIB=/usr/lib/libblas/libblas.so
@@ -108,8 +112,7 @@ install:
   - rm -rf CMakeFiles
   - |
     cmake .. \
-    -DCMAKE_C_FLAGS="-std=c11 -DPRNTlevel=1 -DPROFlevel=1 -DDEBUGlevel=0" \
-    -DCMAKE_CXX_FLAGS="-Ofast -std=c++11" \
+    -DCMAKE_CXX_FLAGS="-std=c++11 -O3 -fopenmp -lifcore" \
     -Denable_blaslib=OFF \
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_C_COMPILER=mpicc \
@@ -118,7 +121,7 @@ install:
     -DCMAKE_INSTALL_PREFIX=. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-    -DCMAKE_Fortran_FLAGS="-cpp -DGNU -DPRNTlevel=0" \
+    -DCMAKE_Fortran_FLAGS="-cpp -DGNU -DPRNTlevel=0 -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fopenmp " \
     -DTPL_LAPACK_LIBRARIES="$BLAS_LIB;$LAPACK_LIB" \
     -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
   - make
