@@ -397,7 +397,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
     
     implicit none
     
-	character trans
+	character trans,trans_tmp
 	integer Ns, level_start, level_end
 	integer level_c,rowblock
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
@@ -420,7 +420,13 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 	type(hobf)::ho_bf1
  
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1) 
-		
+	
+	trans_tmp = trans
+	if(trans=='C')then
+		trans_tmp = 'T'
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+	
 	! get the right multiplied vectors
 	ctemp1=1.0d0 ; ctemp2=1.0d0
 	! allocate(vec_old(Ns,num_vectors))
@@ -439,11 +445,11 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 			idx_end_loc = tail-idx_start_glo+1					
 			
 			if(level==ho_bf1%Maxlevel+1)then	
-				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans,idx_end_loc-idx_start_loc+1,num_vectors,&
+				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)				
 			else
-				call Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,idx_end_loc-idx_start_loc+1,num_vectors,Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2,ptree,stats)
+				call Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2,ptree,stats)
 			endif
 		
 		end do				
@@ -452,7 +458,12 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 	Vout = vec_new(1:Ns,1:num_vectors)
 	! deallocate(vec_old)
 	deallocate(vec_new)	
-	 
+
+	if(trans=='C')then
+		Vout=conjg(cmplx(Vout,kind=8))
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+	
     return                
 
 end subroutine MVM_Z_forward

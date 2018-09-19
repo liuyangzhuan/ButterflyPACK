@@ -7,7 +7,8 @@ ZSRCDIR=$ROOTDIR/SRC_DOUBLECOMPLEX
 MACRO_FILE=$SRCDIR/HODLR_config.fi
 TMP_FILE=$PWD/tmp.txt
 
-dos2unix -q $SRCDIR/* 
+dos2unix  -q */* 
+dos2unix  -q */*/* 
 
 ############################################################################
 echo "-- generating macro definition header ..."
@@ -24,7 +25,7 @@ echo " " >> $MACRO_FILE
 echo "#define DT complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_COMPLEX" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_DOUBLE_COMPLEX)" >> $MACRO_FILE
-echo "#define C_DT doublecomplex" >> $MACRO_FILE
+echo "#define C_DT _Complex double" >> $MACRO_FILE
 echo "#define flops_gemm flops_zgemm" >> $MACRO_FILE
 echo "#define gemmf77 zgemm" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
@@ -60,7 +61,11 @@ while IFS= read -r line; do
     eval sed -i -e 's/$line/z_$line/g' $ZSRCDIR/*.f
     eval sed -i -e 's/$line/z_$line/g' $ZSRCDIR/*.h
 done < "$TMP_FILE"
-sed -i -e 's/\<C_DT\>/doublecomplex/g' $ZSRCDIR/*.h
+sed -i -e 's/\<C_DT\>/_Complex double /g' $ZSRCDIR/*.h
+sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.h
+sed -i -e 's/HODLR_WRAP/z_HODLR_WRAP/g' $DSRCDIR/*.h
+sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.f90
+
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
 while IFS= read -r line; do
@@ -69,6 +74,9 @@ while IFS= read -r line; do
 	eval sed -i -e 's/$line/d_$line/g' $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/double/g' $DSRCDIR/*.h
+sed -i -e 's/c_hodlr_/d_c_hodlr_/g' $DSRCDIR/*.h
+sed -i -e 's/HODLR_WRAP/d_HODLR_WRAP/g' $DSRCDIR/*.h
+sed -i -e 's/c_hodlr_/d_c_hodlr_/g' $DSRCDIR/*.f90
 
 
 ###########################################################
@@ -83,6 +91,9 @@ for file in *; do
 done
 sed -i -e 's/\<hodlrbf\>/zhodlrbf/g' $ZSRCDIR/CMakeLists.txt
 sed -i -e 's/-DDAT/-DDAT=0/g' $ZSRCDIR/CMakeLists.txt
+
+sed -i -e '/set(sources/a\../EXAMPLE/EMCURV_Module.f90\n../EXAMPLE/EMSURF_Module.f90' $ZSRCDIR/CMakeLists.txt
+
 cd $DSRCDIR
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != HODLR_config.fi ] ;

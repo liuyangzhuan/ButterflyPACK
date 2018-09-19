@@ -26,7 +26,7 @@ subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
 	
 	value_e=0
 	call c_f_procpointer(ker%C_FuncZmn, proc)
-	call proc(msh%info_unk(0,edge_m)-1,msh%info_unk(0,edge_n)-1,value_e,ker%C_QuantZmn)
+	call proc(msh%new2old(edge_m)-1,msh%new2old(edge_n)-1,value_e,ker%C_QuantZmn)
 	return
     
 end subroutine element_Zmn_user_C
@@ -37,7 +37,7 @@ end subroutine element_Zmn_user_C
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!ptree_Cptr: the structure containing process tree
-subroutine c_hodlr_createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_hodlr_createptree")	
+subroutine C_HODLR_Createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_hodlr_createptree")	
 	implicit none 
 	integer nmpi
 	integer MPIcomm
@@ -48,7 +48,7 @@ subroutine c_hodlr_createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, nam
 	allocate(ptree)
 	call CreatePtree(nmpi,groupmembers,MPIcomm,ptree)
 	ptree_Cptr=c_loc(ptree)
-end subroutine c_hodlr_createptree
+end subroutine C_HODLR_Createptree
 
 
 !**** C interface of initializing statistics
@@ -56,7 +56,7 @@ end subroutine c_hodlr_createptree
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!stats_Cptr: the structure containing statistics
-subroutine c_hodlr_createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")	
+subroutine C_HODLR_Createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")	
 	implicit none 
 	type(c_ptr), intent(out) :: stats_Cptr
 	type(Hstat),pointer::stats
@@ -66,14 +66,14 @@ subroutine c_hodlr_createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")
 	call InitStat(stats)	
 	stats_Cptr=c_loc(stats)
 	
-end subroutine c_hodlr_createstats
+end subroutine C_HODLR_Createstats
 
 
 
 !**** C interface of printing statistics
 	!stats_Cptr: the structure containing statistics
 	!ptree_Cptr: the structure containing process tree
-subroutine c_hodlr_printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_printstats")	
+subroutine C_HODLR_Printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_printstats")	
 	implicit none 
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: ptree_Cptr
@@ -85,12 +85,12 @@ subroutine c_hodlr_printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_print
 	!**** print statistics variables  	
 	call PrintStat(stats,ptree)	
 	
-end subroutine c_hodlr_printstats
+end subroutine C_HODLR_Printstats
 
 
 !**** C interface of initializing option
 	!option_Cptr: the structure containing option       
-subroutine c_hodlr_createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
+subroutine C_HODLR_Createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	type(Hoption),pointer::option	
@@ -101,13 +101,13 @@ subroutine c_hodlr_createoption(option_Cptr) bind(c, name="c_hodlr_createoption"
 	
 	option_Cptr=c_loc(option)
 	
-end subroutine c_hodlr_createoption
+end subroutine C_HODLR_Createoption
 
 
 
 !**** C interface of set one entry in option
 	!option_Cptr: the structure containing option       
-subroutine c_hodlr_setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_setoption")	
+subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_setoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	character(kind=c_char,len=1) :: nam(*)
@@ -156,11 +156,6 @@ subroutine c_hodlr_setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	if(trim(str)=='TwoLayerOnly')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%TwoLayerOnly=val_i
-	valid_opt=1
-	endif
-	if(trim(str)=='touch_para')then
-	call c_f_pointer(val_Cptr, val_i)
-	option%touch_para=val_i
 	valid_opt=1
 	endif
 	if(trim(str)=='schulzorder')then
@@ -235,13 +230,18 @@ subroutine c_hodlr_setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	option%tol_rand=val_d
 	valid_opt=1
 	endif
+	if(trim(str)=='touch_para')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%touch_para=val_d
+	valid_opt=1
+	endif	
     
 	if(valid_opt==0)write(*,*)'invalid HODLR option: '//trim(str)
 	
 	deallocate(str)
 	option_Cptr=c_loc(option)
 	
-end subroutine c_hodlr_setoption
+end subroutine C_HODLR_Setoption
 
 
 
@@ -347,9 +347,6 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	ker%C_FuncZmn => C_FuncZmn	
 	
 
-	msh%Origins=(/0d0,0d0,0d0/)
-	msh%scaling=1d0
-	msh%Ncorner = 0
 	msh%Nunk = Npo
 		
 		
@@ -386,11 +383,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 		endif
 	end if	
 	
-	!**** initialize the permutation vector (msh%info_unk(0,:) and old2new(:) coincide for user-supplied kernels)  
-	allocate (msh%info_unk(0:0,msh%Nunk))
-	do ii=1,msh%Nunk
-		msh%info_unk(0,ii)=ii
-	enddo 	
+	
 	
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -422,7 +415,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	! if(option%preorder==0)then 
 	if (ptree%MyID==Main_ID) then	
 		do edge=1,Npo
-			Permutation(edge) = msh%info_unk(0,edge)
+			Permutation(edge) = msh%new2old(edge)
 		enddo
 	endif	
 	! endif
@@ -553,19 +546,21 @@ end subroutine C_HODLR_Solve
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_mult")	
+subroutine C_HODLR_Mult(trans,xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Nloc,Ncol
 	DT::xin(Nloc,Ncol),xout(Nloc,Ncol)
 	
+	character(kind=c_char,len=1) :: trans(*)
 	type(c_ptr), intent(in) :: ho_bf_for_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: option_Cptr
 	type(c_ptr), intent(in) :: stats_Cptr
 	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
 	
-
+	integer strlen
+	character(len=:),allocatable :: str
 	type(Hoption),pointer::option	
 	type(Hstat),pointer::stats
 	type(hobf),pointer::ho_bf1
@@ -574,6 +569,15 @@ subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr
 
 	t1 = OMP_get_wtime()
 
+	strlen=1
+	do while(trans(strlen) /= c_null_char)
+		strlen = strlen + 1
+	enddo
+	strlen = strlen -1
+	allocate(character(len=strlen) :: str)
+	str = transfer(trans(1:strlen), str)	
+	
+	
 	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
 	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
 	call c_f_pointer(option_Cptr, option)
@@ -583,7 +587,7 @@ subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr
     if(ptree%MyID==Main_ID)write(*,*) "Multiply ......"
 	
 	
-	call MVM_Z_forward('N',Nloc,Ncol,1,ho_bf1%Maxlevel+1,xin,xout,ho_bf1,ptree,stats)
+	call MVM_Z_forward(trim(str),Nloc,Ncol,1,ho_bf1%Maxlevel+1,xin,xout,ho_bf1,ptree,stats)
 	! need to use another Flop counter for this operation in future
 
     if(ptree%MyID==Main_ID)write(*,*) "Multiply finished"
@@ -595,7 +599,7 @@ subroutine C_HODLR_Mult(xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr
 	stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 	
 	! write(*,*)t2-t1	
-	
+	deallocate(str)
 end subroutine C_HODLR_Mult
 
 

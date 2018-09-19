@@ -287,13 +287,13 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 			head_n = blocks%headn
 			do j=1,blocks%N
 			  edge_n = head_n-1+j
-			  center = center + msh%xyz(1:Dimn,msh%info_unk(0,edge_n))
+			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_n))
 			enddo
 			center = center/blocks%N
 			head_m = blocks%headm
 			do i=1,blocks%M
 				edge_m=head_m-1+i
-				distance_m(i) = sum((msh%xyz(1:Dimn,msh%info_unk(0,edge_m))-center(1:Dimn))**2d0)
+				distance_m(i) = sum((msh%xyz(1:Dimn,msh%new2old(edge_m))-center(1:Dimn))**2d0)
 			enddo		
 			deallocate(center)
 			call quick_sort(distance_m,order_m,blocks%M)     
@@ -305,13 +305,13 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 			head_m = blocks%headm
 			do i=1,blocks%M
 			  edge_m = head_m-1+i
-			  center = center + msh%xyz(1:Dimn,msh%info_unk(0,edge_m))
+			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_m))
 			enddo
 			center = center/blocks%M
 			head_n = blocks%headn
 			do j=1,blocks%N
 				edge_n=head_n-1+j
-				distance_n(j) = sum((msh%xyz(1:Dimn,msh%info_unk(0,edge_n))-center(1:Dimn))**2d0)
+				distance_n(j) = sum((msh%xyz(1:Dimn,msh%new2old(edge_n))-center(1:Dimn))**2d0)
 			enddo		
 			deallocate(center)
 			call quick_sort(distance_n,order_n,blocks%N)     

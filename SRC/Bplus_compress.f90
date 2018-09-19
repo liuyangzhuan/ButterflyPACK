@@ -2114,14 +2114,14 @@ implicit none
 		   ! header_n = blocks%headn
 		   ! do j=1,blocks%N
 			  ! edge_n = header_n-1+j
-			  ! center = center + msh%xyz(1:Dimn,msh%info_unk(0,edge_n))
+			  ! center = center + msh%xyz(1:Dimn,msh%new2old(edge_n))
 		   ! enddo
 		   ! center = center/blocks%N
 		   
 		   ! header_m = blocks%headm
 		   ! do i=1,blocks%M
 				! edge_m=header_m-1+i
-				! rtemp = sum((msh%xyz(1:Dimn,msh%info_unk(0,edge_m))-center(1:Dimn))**2d0)
+				! rtemp = sum((msh%xyz(1:Dimn,msh%new2old(edge_m))-center(1:Dimn))**2d0)
 				! if(rtemp<dist)then
 					! dist = rtemp
 					! frow = i

@@ -298,35 +298,9 @@ module HODLR_DEFS
 		integer Nunk ! size of the matrix 
 		integer idxs,idxe  ! range of local row/column indices after reordering
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
-		integer,allocatable:: info_unk(:,:)  
-		! for 2D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice  
-		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
-		! for general: 0 point to coordinates of each unknown x
 		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering 
 		integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering 
 		integer,allocatable::pretree(:) ! dimension 2**Maxlevel containing box size of each leaf node 
- 		
-		! 2D/3D mesh
-		integer maxnode ! # of vertices in a mesh
-		integer maxedge ! # of edges in a mesh 
-		real(kind=8) maxedgelength,minedgelength ! maximum and minimum edge length for 2D and 3D meshes	
-		
-		! 3D mesh
-		integer integral_points ! #of Gauss quadrature points on a triangular
-		integer maxpatch ! # of triangular patches
-		integer mesh_normal	 ! flags to flip the unit normal vectors of a triangular patch
-		real(kind=8) scaling  ! scaling factor of the coordinates of vertices of a 3D mesh 
-		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
-		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
-		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
-		real(kind=8):: Origins(3) ! orgin of the 3D points, only used for spherical coordinate transform	
-		
-		! 2D mesh
-		integer model2d ! # shape of 2-D curves: (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon
-		real(kind=8) Delta_ll	! edge length of each element in 2D curves	
-		integer::Ncorner ! # of corners in 2D curves to facilate partitioning
-		real(kind=8),allocatable::corner_points(:,:) ! coordinates of corner points 
-		real(kind=8)::corner_radius ! radius of the corner points within which no partitioning is performed 
 		
 	end type mesh
 	 

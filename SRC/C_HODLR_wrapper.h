@@ -1,11 +1,9 @@
 #ifndef HODLR_WRAP /* allow multiple inclusions */
 #define HODLR_WRAP
 
-#include "HODLR_config.fi"
-
 // #include "HODLR_config.fi"
 
-typedef struct { double r, i; } doublecomplex;
+// typedef struct { double r, i; } doublecomplex;
 
 
 typedef void* F2Cptr;  // pointer passing fortran derived types to c
@@ -22,7 +20,7 @@ extern "C" {
 
 	void c_hodlr_solve(C_DT* x, C_DT* b, int* Nloc, int* Nrhs, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 	
-	void c_hodlr_mult(C_DT* xin, C_DT* xout, int* Nloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
+	void c_hodlr_mult(char const * trans, C_DT* xin, C_DT* xout, int* Nloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);	
 	
 	void c_hodlr_createptree(int* nmpi, int* groupmembers, MPI_Fint* MPIcomm, F2Cptr* ptree);
 	

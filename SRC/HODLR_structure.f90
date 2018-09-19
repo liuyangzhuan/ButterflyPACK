@@ -168,8 +168,6 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 			msh%new2old(ii) = ii
 		end do
 		
-		! write(*,*)'gan', msh%info_unk(0,100)   
-		
 		   
 		! allocate (distance(msh%Nunk))     
 		
@@ -185,10 +183,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 				! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
 				do edge=basis_group(group)%head, basis_group(group)%tail
 					do ii=1,dimn
-						! write(*,*)edge,msh%info_unk(0,edge)
-						groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%info_unk(0,edge))
+						groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%new2old(edge))
 					enddo
-					! if(group==24)write(*,*)edge,groupcenter(:),msh%xyz(1,msh%info_unk(0,edge))
 				enddo
 				! !$omp end parallel do
 				do ii=1,dimn
@@ -201,9 +197,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 				do edge=basis_group(group)%head, basis_group(group)%tail
 					radius=0
 					do ii=1,dimn
-						radius=radius+(msh%xyz(ii,msh%info_unk(0,edge))-groupcenter(ii))**2
+						radius=radius+(msh%xyz(ii,msh%new2old(edge))-groupcenter(ii))**2
 					enddo
-					! write(*,*)'really',edge, msh%info_unk(0,edge)
 					radius=sqrt(radius)
 					if (radius>radiusmax) then
 						radiusmax=radius
@@ -218,8 +213,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 						xyzmax= -1d300
 						do edge=basis_group(group)%head, basis_group(group)%tail
 							do ii=1,Dimn
-								xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%info_unk(0,edge)))
-								xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%info_unk(0,edge)))
+								xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%new2old(edge)))
+								xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%new2old(edge)))
 							enddo
 						enddo
 						xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
@@ -240,40 +235,10 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 						
 						!$omp parallel do default(shared) private(i)
 						do i=basis_group(group)%head, basis_group(group)%tail
-							distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%info_unk(0,i))
+							distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
 						enddo
 						!$omp end parallel do
 
-					else if(option%xyzsort==SKD)then ! spherical sort
-						phi_end = 0
-						do edge=basis_group(group)%head, basis_group(group)%tail
-							call Cart2Sph(msh%xyz(1,msh%info_unk(0,edge)),msh%xyz(2,msh%info_unk(0,edge)),msh%xyz(3,msh%info_unk(0,edge)),msh%Origins,r,theta,phi)					
-							if(abs(phi-2*pi)< option%touch_para*msh%minedgelength/r)phi_end=1      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! this group contains points near phi=2pi
-						enddo
-						mm = basis_group(group)%tail - basis_group(group)%head + 1
-						allocate (distance(mm))	
-					
-						if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to spheres sort Phi first
-							sortdirec=1
-						else 
-							sortdirec=2
-						end if
-						
-						!$omp parallel do default(shared) private(i,theta,phi,r,phi_tmp)
-						do i=basis_group(group)%head, basis_group(group)%tail
-							call Cart2Sph(msh%xyz(1,msh%info_unk(0,i)),msh%xyz(2,msh%info_unk(0,i)),msh%xyz(3,msh%info_unk(0,i)),msh%Origins,r,theta,phi)
-							if(sortdirec==1)distance(i-basis_group(group)%head+1)=theta
-							if(sortdirec==2)then
-								distance(i-basis_group(group)%head+1)=phi
-								if(phi_end==1)then   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! if the group contains points near phi=2pi, substract phi by pi
-									phi_tmp = phi-pi
-									if(phi_tmp<=0) phi_tmp = phi_tmp + 2*pi
-									distance(i-basis_group(group)%head+1)=phi_tmp
-								end if
-							end if
-						enddo
-						!$omp end parallel do
-						
 					else if(option%xyzsort==TM)then !cobblestone sort
 						
 						mm = basis_group(group)%tail - basis_group(group)%head + 1
@@ -282,33 +247,30 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 						distance(1:mm)=Bigvalue
 						!$omp parallel do default(shared) private(i)
 						do i=basis_group(group)%head, basis_group(group)%tail
-							distance(i-basis_group(group)%head+1)=func_distance(msh%info_unk(0,i),msh%info_unk(0,center_edge),msh)
+							distance(i-basis_group(group)%head+1)=func_distance(msh%new2old(i),msh%new2old(center_edge),msh)
 						enddo
 						!$omp end parallel do					
 
 					end if
 					
-					Ninfo_edge=size(msh%info_unk,1)-1
-					allocate (order(mm),edge_temp(0:Ninfo_edge,mm)) 
+					allocate (order(mm))
 					allocate(map_temp(mm))
 
 					call quick_sort(distance,order,mm)       
 					!$omp parallel do default(shared) private(ii)     
 					do ii=1, mm
-						edge_temp(:,ii)=msh%info_unk(:,order(ii)+basis_group(group)%head-1)
 						map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
 					enddo
 					!$omp end parallel do
 
 					!$omp parallel do default(shared) private(ii)     
 					do ii=1, mm
-						msh%info_unk(:,ii+basis_group(group)%head-1)=edge_temp(:,ii)
 						msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
 					enddo
 					!$omp end parallel do			
 					
 
-					deallocate(edge_temp)
+					! deallocate(edge_temp)
 					deallocate(map_temp)
 					deallocate(order)
 
@@ -333,15 +295,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 						! endif					
 						
 						if(option%xyzsort==CKD)then 
-							seperator = msh%xyz(sortdirec,msh%info_unk(0,basis_group(2*group)%tail))
-							
-						else if(option%xyzsort==SKD)then  
-							call Cart2Sph(msh%xyz(1,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(2,msh%info_unk(0,basis_group(2*group)%tail)),msh%xyz(3,msh%info_unk(0,basis_group(2*group)%tail)),msh%Origins,r,theta,phi)
-							if(sortdirec==1)seperator = theta
-							if(sortdirec==2)then
-								seperator = phi
-								! write(*,*)level,phi*180/pi,basis_group(2*group)%tail,'ganni',phi_end
-							end if
+							seperator = msh%xyz(sortdirec,msh%new2old(basis_group(2*group)%tail))
 						end if
 						
 						
@@ -385,9 +339,9 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 		! do level=0, Maxlevel
 			! do group=2**level, 2**(level+1)-1
 				! do edge=basis_group(group)%head, basis_group(group)%tail
-					! ! write(*,*)edge,msh%info_unk(0,edge)
-					! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
-					! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%info_unk(0,edge))
+					! ! write(*,*)edge,msh%new2old(edge)
+					! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
+					! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
 				! enddo
 			! enddo
 		! enddo	   
@@ -780,11 +734,11 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									CNT = 0
 									if(option%xyzsort==CKD)then	
 										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
-											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
-											if(measure<option%touch_para*msh%minedgelength)then
+											measure = abs(msh%xyz(sortdirec,msh%new2old(nn))-seperator)
+											if(measure<option%touch_para)then
 												Isboundary_M(index_i_m) = 1 
 												CNT = CNT + 1
-												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ msh%xyz(1:Dimn,msh%info_unk(0,nn))
+												Centroid_M(index_i_m,1:Dimn) = Centroid_M(index_i_m,1:Dimn)+ msh%xyz(1:Dimn,msh%new2old(nn))
 											end if
 										end do
 										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
@@ -792,44 +746,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 										! if(blocks%col_group==8 .or. blocks%col_group==9)then
 											! write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT,sortdirec,seperator
 										! endif
-										
-										
-									else if(option%xyzsort==SKD)then
-										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
-											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
-											if(sortdirec==1)then
-												measure = abs(theta-seperator)
-												if(measure< option%touch_para*msh%minedgelength/r)then
-													Isboundary_M(index_i_m) = 1 
-													CNT = CNT + 1
-													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + msh%xyz(1,msh%info_unk(0,nn))
-													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + msh%xyz(2,msh%info_unk(0,nn))
-													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
-												end if
-											end if
-											if(sortdirec==2)then
-												measure = abs(phi-seperator)
-												measure = min(measure, abs(phi-(seperator+2*pi)))  !!! handle phi end point here
-												measure = min(measure, abs(phi-(seperator-2*pi)))  !!! handle phi end point here
-												if(level_c==1)then	
-													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
-													! minbound = min(minbound, abs(phi-2*pi))  
-												end if
-												if(measure< option%touch_para*msh%minedgelength/r)then
-													Isboundary_M(index_i_m) = 1 
-													CNT = CNT + 1
-													Centroid_M(index_i_m,1) = Centroid_M(index_i_m,1) + msh%xyz(1,msh%info_unk(0,nn))
-													Centroid_M(index_i_m,2) = Centroid_M(index_i_m,2) + msh%xyz(2,msh%info_unk(0,nn))
-													Centroid_M(index_i_m,3) = Centroid_M(index_i_m,3) + msh%xyz(3,msh%info_unk(0,nn))	
-													! if(level_c==1 .and. index_i_m==1)write(*,*)CNT, msh%xyz(:,msh%info_unk(0,nn))												
-												end if												
-											end if
-										end do										
-										! if(level_c==1 .and. index_i_m==1)write(*,*)Centroid_M(index_i_m,:),CNT,'dddddd'
-										
-										if(Isboundary_M(index_i_m)==1)Centroid_M(index_i_m,:) = Centroid_M(index_i_m,:)/CNT
-										! if(level_c==1)write(*,*)Centroid_M(1,:),CNT,'dddddd'
-									else 
+
 										write(*,*)'Bplus for other sorting not considered yet'
 										stop
 									end if									
@@ -849,49 +766,15 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									CNT = 0
 									if(option%xyzsort==CKD)then	
 										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
-											measure = abs(msh%xyz(sortdirec,msh%info_unk(0,nn))-seperator)
-											if(measure<option%touch_para*msh%minedgelength)then
+											measure = abs(msh%xyz(sortdirec,msh%new2old(nn))-seperator)
+											if(measure<option%touch_para)then
 												Isboundary_N(index_j_m) = 1 
 												CNT = CNT + 1
-												! write(*,*)nn,index_j_m,'ok'
-												! write(*,*)Centroid_N(index_j_m,1),msh%xyz(1,msh%info_unk(0,nn))
-												Centroid_N(index_j_m,1:Dimn) = Centroid_N(index_j_m,1:Dimn) + msh%xyz(1:Dimn,msh%info_unk(0,nn))
+												
+												Centroid_N(index_j_m,1:Dimn) = Centroid_N(index_j_m,1:Dimn) + msh%xyz(1:Dimn,msh%new2old(nn))
 											end if
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
-										
-									else if(option%xyzsort==SKD)then
-										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
-											call Cart2Sph(msh%xyz(1,msh%info_unk(0,nn)),msh%xyz(2,msh%info_unk(0,nn)),msh%xyz(3,msh%info_unk(0,nn)),msh%Origins,r,theta,phi)
-											if(sortdirec==1)then
-												measure = abs(theta-seperator)
-												if(measure< option%touch_para*msh%minedgelength/r)then
-													Isboundary_N(index_j_m) = 1 
-													CNT = CNT + 1
-													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + msh%xyz(1,msh%info_unk(0,nn))
-													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + msh%xyz(2,msh%info_unk(0,nn))
-													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
-												end if
-											end if
-											if(sortdirec==2)then
-												measure = abs(phi-seperator)
-												measure = min(measure, abs(phi-(seperator+2*pi)))  !!! handle phi end point here
-												measure = min(measure, abs(phi-(seperator-2*pi)))  !!! handle phi end point here
-												if(level_c==1)then	
-													measure = min(measure, abs(phi-pi))     !!! treat phi=pi as extra seperators for the first level groups
-													! minbound = min(minbound, abs(phi-2*pi))  
-												end if
-												if(measure< option%touch_para*msh%minedgelength/r)then
-													Isboundary_N(index_j_m) = 1 
-													CNT = CNT + 1
-													Centroid_N(index_j_m,1) = Centroid_N(index_j_m,1) + msh%xyz(1,msh%info_unk(0,nn))
-													Centroid_N(index_j_m,2) = Centroid_N(index_j_m,2) + msh%xyz(2,msh%info_unk(0,nn))
-													Centroid_N(index_j_m,3) = Centroid_N(index_j_m,3) + msh%xyz(3,msh%info_unk(0,nn))													
-												end if												
-											end if
-										end do										
-										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
-									else 
 										write(*,*)'Bplus for other sorting not considered yet'
 										stop
 									end if	

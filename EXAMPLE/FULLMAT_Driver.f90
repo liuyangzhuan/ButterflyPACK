@@ -223,8 +223,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
     !**** set solver parameters	
 	
-	msh%Origins=(/0d0,0d0,0d0/)
-	msh%scaling=1d0
 	option%preorder=1
 	option%Nmin_leaf=200
 	option%tol_comp=1d-4
@@ -238,7 +236,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	option%xyzsort=TM
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
-	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
@@ -264,11 +261,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	allocate(msh%pretree(2**Maxlevel))
 	call d_createleaf_natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree)
 	! write(*,*)msh%pretree
-	
-	allocate (msh%info_unk(0:0,msh%Nunk))
-	do i=1,msh%Nunk
-		msh%info_unk(0,i)=i
-	enddo  				
+					
 	!***************************************************	
 	
 	

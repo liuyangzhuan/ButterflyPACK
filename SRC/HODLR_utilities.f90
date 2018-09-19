@@ -2017,256 +2017,256 @@ end subroutine Bplus_block_MVP_dat
 
 
 
-subroutine ComputeRandVectIndexArray(blocks,chara,level,IndexArray)
+! subroutine ComputeRandVectIndexArray(blocks,chara,level,IndexArray)
     
-    use HODLR_DEFS
-    implicit none
+    ! use HODLR_DEFS
+    ! implicit none
     
-    integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
-    integer::IndexArray(:,:,:)
-	integer::level_butterfly
-	DT ctemp, a, b
-    character chara
+    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
+    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
+    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
+    ! integer::IndexArray(:,:,:)
+	! integer::level_butterfly
+	! DT ctemp, a, b
+    ! character chara
 
-	type(matrixblock)::blocks
+	! type(matrixblock)::blocks
     
-	level_butterfly = blocks%level_butterfly
+	! level_butterfly = blocks%level_butterfly
 	
-    if (chara=='N') then
-        num_blocks=2**level_butterfly
+    ! if (chara=='N') then
+        ! num_blocks=2**level_butterfly
 		
-		Dimtmp = 0
-		if(level==0)then
-			num_groupn=num_blocks
-			do j=1, num_groupn
-				nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-				Dimtmp = Dimtmp + nn
-				IndexArray(1,j,1) = Dimtmp-nn+1
-				IndexArray(1,j,2) = Dimtmp
-			end do
-		else if(level==1)then
-			num_groupn=num_blocks
-			do j=1, num_groupn
-				rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-				Dimtmp = Dimtmp + rank
-				IndexArray(1,j,1) = Dimtmp-rank+1
-				IndexArray(1,j,2) = Dimtmp
-			end do
-		else if(level<=level_butterfly+1)then
-			num_groupm=blocks%ButterflyKerl(level-1)%num_row
-			num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-			if(num_groupn/=1)then
-				do i=1, num_groupm
-					index_i=int((i+1)/2)
-					do j=1, num_groupn, 2
-						index_j=int((j+1)/2)
-						mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
-						Dimtmp = Dimtmp + mm
-						IndexArray(i,index_j,1) = Dimtmp-mm+1
-						IndexArray(i,index_j,2) = Dimtmp
-					end do
-				end do
-			else 
-				write(*,*)'not implemented'
-				stop
-			end if
-		else if(level==level_butterfly+2)then
-			num_groupm = num_blocks
-			do i=1, num_groupm
-				mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-				Dimtmp = Dimtmp + mm
-				IndexArray(i,1,1) = Dimtmp-mm+1
-				IndexArray(i,1,2) = Dimtmp
-			end do	
-		end if
+		! Dimtmp = 0
+		! if(level==0)then
+			! num_groupn=num_blocks
+			! do j=1, num_groupn
+				! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+				! Dimtmp = Dimtmp + nn
+				! IndexArray(1,j,1) = Dimtmp-nn+1
+				! IndexArray(1,j,2) = Dimtmp
+			! end do
+		! else if(level==1)then
+			! num_groupn=num_blocks
+			! do j=1, num_groupn
+				! rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
+				! Dimtmp = Dimtmp + rank
+				! IndexArray(1,j,1) = Dimtmp-rank+1
+				! IndexArray(1,j,2) = Dimtmp
+			! end do
+		! else if(level<=level_butterfly+1)then
+			! num_groupm=blocks%ButterflyKerl(level-1)%num_row
+			! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
+			! if(num_groupn/=1)then
+				! do i=1, num_groupm
+					! index_i=int((i+1)/2)
+					! do j=1, num_groupn, 2
+						! index_j=int((j+1)/2)
+						! mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
+						! Dimtmp = Dimtmp + mm
+						! IndexArray(i,index_j,1) = Dimtmp-mm+1
+						! IndexArray(i,index_j,2) = Dimtmp
+					! end do
+				! end do
+			! else 
+				! write(*,*)'not implemented'
+				! stop
+			! end if
+		! else if(level==level_butterfly+2)then
+			! num_groupm = num_blocks
+			! do i=1, num_groupm
+				! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+				! Dimtmp = Dimtmp + mm
+				! IndexArray(i,1,1) = Dimtmp-mm+1
+				! IndexArray(i,1,2) = Dimtmp
+			! end do	
+		! end if
 
 			
-	else if (chara=='T') then
-        num_blocks=2**level_butterfly
+	! else if (chara=='T') then
+        ! num_blocks=2**level_butterfly
 
-		Dimtmp = 0
-		if(level==0)then
-			num_groupm=num_blocks
-			do i=1, num_groupm
-				mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-				Dimtmp = Dimtmp + mm
-				IndexArray(i,1,1) = Dimtmp - mm +1
-				IndexArray(i,1,2) = Dimtmp
-			end do		
-		else if(level==1)then
-			num_groupm=num_blocks
-			do i=1, num_groupm
-				rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
-				Dimtmp = Dimtmp + rank
-				IndexArray(i,1,1) = Dimtmp - rank +1
-				IndexArray(i,1,2) = Dimtmp
-			end do	
-		else if(level<=level_butterfly+1)then
-			num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
-			num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col
-			if (num_groupm/=1) then    
-				do j=1, num_groupn
-					index_j=int((j+1)/2)
-					do i=1, num_groupm, 2
-						index_i=int((i+1)/2)
-						nn=size(blocks%ButterflyKerl(level_butterfly-level+2)%blocks(i,j)%matrix,2)
-						Dimtmp = Dimtmp + nn
-						IndexArray(index_i,j,1)=Dimtmp-nn+1
-						IndexArray(index_i,j,2)=Dimtmp
-					end do
-				end do
-			else 
-				write(*,*)'not implemented'
-				stop
-			end if 
-		else if(level==level_butterfly+2)then
-			num_groupn = num_blocks
-			do j=1, num_groupn
-				nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-				Dimtmp = Dimtmp + nn
-				IndexArray(1,j,1) = Dimtmp-nn+1					
-				IndexArray(1,j,2) = Dimtmp					
-			end do		
-		end if
+		! Dimtmp = 0
+		! if(level==0)then
+			! num_groupm=num_blocks
+			! do i=1, num_groupm
+				! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+				! Dimtmp = Dimtmp + mm
+				! IndexArray(i,1,1) = Dimtmp - mm +1
+				! IndexArray(i,1,2) = Dimtmp
+			! end do		
+		! else if(level==1)then
+			! num_groupm=num_blocks
+			! do i=1, num_groupm
+				! rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
+				! Dimtmp = Dimtmp + rank
+				! IndexArray(i,1,1) = Dimtmp - rank +1
+				! IndexArray(i,1,2) = Dimtmp
+			! end do	
+		! else if(level<=level_butterfly+1)then
+			! num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
+			! num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col
+			! if (num_groupm/=1) then    
+				! do j=1, num_groupn
+					! index_j=int((j+1)/2)
+					! do i=1, num_groupm, 2
+						! index_i=int((i+1)/2)
+						! nn=size(blocks%ButterflyKerl(level_butterfly-level+2)%blocks(i,j)%matrix,2)
+						! Dimtmp = Dimtmp + nn
+						! IndexArray(index_i,j,1)=Dimtmp-nn+1
+						! IndexArray(index_i,j,2)=Dimtmp
+					! end do
+				! end do
+			! else 
+				! write(*,*)'not implemented'
+				! stop
+			! end if 
+		! else if(level==level_butterfly+2)then
+			! num_groupn = num_blocks
+			! do j=1, num_groupn
+				! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+				! Dimtmp = Dimtmp + nn
+				! IndexArray(1,j,1) = Dimtmp-nn+1					
+				! IndexArray(1,j,2) = Dimtmp					
+			! end do		
+		! end if
 
-	end if		
-end subroutine ComputeRandVectIndexArray
-
-
+	! end if		
+! end subroutine ComputeRandVectIndexArray
 
 
-subroutine CountMaxIntermidiateVector(blocks,Nmax)
+
+
+! subroutine CountMaxIntermidiateVector(blocks,Nmax)
     
-    use HODLR_DEFS
-    implicit none
+    ! use HODLR_DEFS
+    ! implicit none
     
-    integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start,Nmax
-    integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
-	integer::level_butterfly
-	DT ctemp, a, b
-    character chara
+    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start,Nmax
+    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
+    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
+    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
+	! integer::level_butterfly
+	! DT ctemp, a, b
+    ! character chara
 
-	type(matrixblock)::blocks
+	! type(matrixblock)::blocks
     
-	level_butterfly = blocks%level_butterfly
+	! level_butterfly = blocks%level_butterfly
 	
-		Nmax = 0
-        num_blocks=2**level_butterfly
+		! Nmax = 0
+        ! num_blocks=2**level_butterfly
 		
-		do level = 0,level_butterfly+2
-			Dimtmp = 0
-			if(level==0)then
-				num_groupn=num_blocks
-				do j=1, num_groupn
-					nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-					Dimtmp = Dimtmp + nn
-				end do
-			else if(level==1)then
-				num_groupn=num_blocks
-				do j=1, num_groupn
-					rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-					Dimtmp = Dimtmp + rank
-				end do
-			else if(level<=level_butterfly+1)then
-				num_groupm=blocks%ButterflyKerl(level-1)%num_row
-				num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-				if(num_groupn/=1)then
-					do i=1, num_groupm
-						index_i=int((i+1)/2)
-						do j=1, num_groupn, 2
-							index_j=int((j+1)/2)
-							mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
-							Dimtmp = Dimtmp + mm
-						end do
-					end do
-				else 
-					write(*,*)'not implemented'
-					stop
-				end if
-			else if(level==level_butterfly+2)then
-				num_groupm = num_blocks
-				do i=1, num_groupm
-					mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-					Dimtmp = Dimtmp + mm
-				end do	
-			end if
-			Nmax = max(Nmax,Dimtmp)
-		end do
+		! do level = 0,level_butterfly+2
+			! Dimtmp = 0
+			! if(level==0)then
+				! num_groupn=num_blocks
+				! do j=1, num_groupn
+					! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+					! Dimtmp = Dimtmp + nn
+				! end do
+			! else if(level==1)then
+				! num_groupn=num_blocks
+				! do j=1, num_groupn
+					! rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
+					! Dimtmp = Dimtmp + rank
+				! end do
+			! else if(level<=level_butterfly+1)then
+				! num_groupm=blocks%ButterflyKerl(level-1)%num_row
+				! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
+				! if(num_groupn/=1)then
+					! do i=1, num_groupm
+						! index_i=int((i+1)/2)
+						! do j=1, num_groupn, 2
+							! index_j=int((j+1)/2)
+							! mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
+							! Dimtmp = Dimtmp + mm
+						! end do
+					! end do
+				! else 
+					! write(*,*)'not implemented'
+					! stop
+				! end if
+			! else if(level==level_butterfly+2)then
+				! num_groupm = num_blocks
+				! do i=1, num_groupm
+					! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+					! Dimtmp = Dimtmp + mm
+				! end do	
+			! end if
+			! Nmax = max(Nmax,Dimtmp)
+		! end do
 		
 		
 			
 		
-end subroutine CountMaxIntermidiateVector
+! end subroutine CountMaxIntermidiateVector
 
 
 
-subroutine CountIndexArrayShape(blocks,chara,level,Ni,Nj)
+! subroutine CountIndexArrayShape(blocks,chara,level,Ni,Nj)
     
-    use HODLR_DEFS
-    implicit none
+    ! use HODLR_DEFS
+    ! implicit none
     
-    integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_butterfly
-    DT ctemp, a, b
-    character chara
+    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
+    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
+    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_butterfly
+    ! DT ctemp, a, b
+    ! character chara
     
-	type(matrixblock)::blocks
+	! type(matrixblock)::blocks
 
 
-	level_butterfly = blocks%level_butterfly
+	! level_butterfly = blocks%level_butterfly
     
-    if (chara=='N') then
-        num_blocks=2**level_butterfly
-		if(level==0 .or. level==1)then
-			Ni=1
-			Nj=num_blocks
-		else if(level<=level_butterfly+1)then
-            num_groupm=blocks%ButterflyKerl(level-1)%num_row
-            num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-			if(num_groupn/=1)then
-				Ni = num_groupm
-				Nj = int(num_groupn/2)
-			else 
-				Ni = num_groupm
-				Nj = 1			
-			end if
-		else if(level==level_butterfly+2)then
-			Ni=num_blocks
-			Nj=1			
-		end if
+    ! if (chara=='N') then
+        ! num_blocks=2**level_butterfly
+		! if(level==0 .or. level==1)then
+			! Ni=1
+			! Nj=num_blocks
+		! else if(level<=level_butterfly+1)then
+            ! num_groupm=blocks%ButterflyKerl(level-1)%num_row
+            ! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
+			! if(num_groupn/=1)then
+				! Ni = num_groupm
+				! Nj = int(num_groupn/2)
+			! else 
+				! Ni = num_groupm
+				! Nj = 1			
+			! end if
+		! else if(level==level_butterfly+2)then
+			! Ni=num_blocks
+			! Nj=1			
+		! end if
 		
-	else if (chara=='T') then
-        num_blocks=2**level_butterfly
-		! write(*,*)level,level_butterfly+2
-		if(level==0 .or. level==1)then
-			Ni=num_blocks
-			Nj=1
-		else if(level<=level_butterfly+1)then
-            num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
-            num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col			
-			if(num_groupm/=1)then
-				Ni = int(num_groupm/2)
-				Nj = num_groupn
-			else 
-				Ni = 1
-				Nj = num_groupn			
-			end if
-		else if(level==level_butterfly+2)then
-			Ni=1
-			Nj=num_blocks			
-		end if	
-	end if	
-end subroutine CountIndexArrayShape
+	! else if (chara=='T') then
+        ! num_blocks=2**level_butterfly
+		! ! write(*,*)level,level_butterfly+2
+		! if(level==0 .or. level==1)then
+			! Ni=num_blocks
+			! Nj=1
+		! else if(level<=level_butterfly+1)then
+            ! num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
+            ! num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col			
+			! if(num_groupm/=1)then
+				! Ni = int(num_groupm/2)
+				! Nj = num_groupn
+			! else 
+				! Ni = 1
+				! Nj = num_groupn			
+			! end if
+		! else if(level==level_butterfly+2)then
+			! Ni=1
+			! Nj=num_blocks			
+		! end if	
+	! end if	
+! end subroutine CountIndexArrayShape
  
 
 subroutine Butterfly_value(mi,nj,blocks,value)
@@ -3175,7 +3175,7 @@ subroutine SetDefaultOptions(option)
 	option%xyzsort=TM
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
-	option%touch_para=3
+	option%touch_para=0d0
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0

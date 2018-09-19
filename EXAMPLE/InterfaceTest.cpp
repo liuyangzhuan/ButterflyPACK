@@ -331,25 +331,25 @@ if(tst==3){
 	
 	for (int i = 0; i < size; i++)groups[i]=i;
 	// create hodlr data structures
-	c_hodlr_createptree(&size, groups, &Fcomm, &ptree);
-	c_hodlr_createoption(&option);	
-	c_hodlr_createstats(&stats);		
+	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree);
+	d_c_hodlr_createoption(&option);	
+	d_c_hodlr_createstats(&stats);		
 	
 	// set hodlr options
-	c_hodlr_set_D_option(&option, "tol_comp", tol);
-	c_hodlr_set_I_option(&option, "preorder", preorder);
-	c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
-	c_hodlr_set_I_option(&option, "RecLR_leaf", com_opt); 
-	c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 
-	c_hodlr_set_I_option(&option, "ErrFillFull", checkerr); 
-	c_hodlr_set_I_option(&option, "BACA_Batch", batch); 
+	d_c_hodlr_set_D_option(&option, "tol_comp", tol);
+	d_c_hodlr_set_I_option(&option, "preorder", preorder);
+	d_c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
+	d_c_hodlr_set_I_option(&option, "RecLR_leaf", com_opt); 
+	d_c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 
+	d_c_hodlr_set_I_option(&option, "ErrFillFull", checkerr); 
+	d_c_hodlr_set_I_option(&option, "BACA_Batch", batch); 
 	
 
     // construct hodlr with geometrical points	
-	c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
+	d_c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
 	
 	// factor hodlr
-	c_hodlr_factor(&ho_bf,&option,&stats,&ptree);
+	d_c_hodlr_factor(&ho_bf,&option,&stats,&ptree);
 
 	// solve the system 
 	int nrhs=1;
@@ -359,7 +359,7 @@ if(tst==3){
 	for (int i = 0; i < nrhs*myseg; i++){
 		b[i]=1;
 	}	
-	c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
+	d_c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
     return 0;

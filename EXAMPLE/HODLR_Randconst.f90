@@ -83,8 +83,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! time_resolve = 0
 	! time_halfbuttermul = 0
 
-	msh%Origins=(/0d0,0d0,0d0/)
-    
+
     msh%integral_points=6
     allocate (msh%ng1(msh%integral_points), msh%ng2(msh%integral_points), msh%ng3(msh%integral_points), msh%gauss_w(msh%integral_points))
     ! call gauss_points(msh)
@@ -109,7 +108,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	option%tol_Rdetect=1d-4 !3d-5
     ! Preset_level_butterfly=0
 	option%preorder=0
-	msh%scaling=1d0
 	! ker%wavelength=0.25
 	! Discret=0.05
 	! ker%RCS_static=2
@@ -149,7 +147,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	!Nmin_leaf=250
 	!para=0.01
 	!tolerance=0.001
-	!msh%scaling=1.
 	!alpha=0.5
     !ker%wavelength=2.
     ! tolerance=ACA_tolerance_forward
@@ -193,10 +190,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',msh%Nunk
 	
 	allocate(msh%xyz(3,msh%Nunk))
-	allocate(msh%info_unk(0:0,msh%Nunk))
-	do kk=1,msh%Nunk
-		msh%info_unk(0,kk)=kk
-	enddo
+
 	!!!!!! for simplicity, I'm duplicating locations of each point
 
 	open(unit=521,file=trim(DATA_DIR)//'/edge_cen.out',status='old')

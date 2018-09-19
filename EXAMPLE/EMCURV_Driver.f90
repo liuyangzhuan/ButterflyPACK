@@ -1,206 +1,6 @@
-module APPLICATION_MODULE
-use z_HODLR_DEFS
-use z_misc
-implicit none
-
-	!**** define your application-related variables here   
-	type quant_app
-		real(kind=8) wavenum    ! CEM: wave number  
-		real(kind=8) wavelength  ! CEM: wave length
-		real(kind=8) omiga       ! CEM: angular frequency
-		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter  
-		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
-		integer RCS_Nsample ! CEM: number of RCS samples
-		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
-	end type quant_app
-
-contains
-
-	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_EMCURV(ker,m,n,value_e,msh,quant)
-		
-		use z_HODLR_DEFS
-		implicit none
-		
-		integer edge_m, edge_n, i, j, flag
-		integer, INTENT(IN):: m,n
-		real(kind=8) r_mn, rtemp1, rtemp2
-		complex(kind=8) value_e
-		type(z_mesh)::msh
-		class(z_kernelquant)::ker
-		class(*),pointer :: quant
-		
-		select TYPE(quant)
-			type is (quant_app)
-				! convert to new indices because msh%info_unk has been reordered
-				edge_m = msh%old2new(m)
-				edge_n = msh%old2new(n)
-				
-				if (edge_m/=edge_n) then
-				
-					flag=0
-					do j=1,2
-						do i=1,2
-							if (msh%info_unk(i,edge_m)==msh%info_unk(j,edge_n)) then
-								flag=1
-							endif
-						enddo
-					enddo
-					
-					if (flag==1) then
-						
-						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*(1-junit/pi*(3*LOG(3*gamma*quant%wavenum*msh%Delta_ll/4.0)-LOG(gamma*quant%wavenum*msh%Delta_ll/4.0)-2))
-					
-					else
-				
-						r_mn=(msh%xyz(1,msh%info_unk(0,edge_m))-msh%xyz(1,msh%info_unk(0,edge_n)))**2+(msh%xyz(2,msh%info_unk(0,edge_m))-msh%xyz(2,msh%info_unk(0,edge_n)))**2
-						r_mn=sqrt(r_mn)
-						value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*z_Hankel02_Func(quant%wavenum*r_mn)
-					endif
-				else
-					value_e=quant%wavenum*impedence0/4.0*msh%Delta_ll*(1.0-junit*2.0/pi*(LOG(gamma*quant%wavenum*msh%Delta_ll/4.0)-1.0))
-				endif
-
-			class default
-				write(*,*)"unexpected type"
-				stop
-			end select			
-			
-		return
-		
-	end subroutine Z_elem_EMCURV	
-	
-	
-	
-
-	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
-		
-		use z_HODLR_DEFS
-		! use APPLICATION_MODULE
-		implicit none
-		complex(kind=8)::curr
-		complex(kind=8) ctemp,phase,ctemp_1
-		real(kind=8) dsita,dphi    
-		integer edge
-		type(z_mesh)::msh
-		type(quant_app)::quant
-		
-		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(dphi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(dphi*pi/180.))
-		ctemp_1=curr*msh%Delta_ll*exp(phase)
-
-		return
-		
-	end subroutine VV_polar_CURV
-
-	subroutine RCS_bistatic_CURV(curr,msh,quant,ptree)
-		!integer flag
-		use z_HODLR_DEFS
-		! use APPLICATION_MODULE
-		implicit none
-		complex(kind=8)::curr(:)
-		real(kind=8) rcs
-		complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1,ctemp_loc
-		real(kind=8) ddphi,dphi
-		
-		integer i,j,ii,jj,iii,jjj,patch,flag
-		real(kind=8) l_edge,l_edgefine
-		type(z_mesh)::msh
-		integer edge,edge_m,edge_n,ierr
-		type(quant_app)::quant 
-		type(z_proctree)::ptree
-		
-		if(ptree%MyID==Main_ID)open (100, file='VV_bistatic.txt')
-	  
-		ddphi=180./quant%RCS_Nsample
-		
-		do i=0, quant%RCS_Nsample   !phi=0
-			dphi=i*ddphi
-			ctemp_loc=0
-			rcs=0
-			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)   
-			do edge=msh%idxs,msh%idxe
-				call VV_polar_CURV(dphi,edge,ctemp_1,curr(edge-msh%idxs+1),msh,quant)
-				ctemp_loc=ctemp_loc+ctemp_1    
-			enddo
-			!$omp end parallel do
-			
-			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-			
-			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
-			!rcs=rcs/quant%wavelength
-			rcs=10*log10(rcs)
-			if(ptree%MyID==Main_ID)write(100,*)dphi,rcs
-		enddo
-		if(ptree%MyID==Main_ID) close(100)
-		
-		return
-		
-	end subroutine RCS_bistatic_CURV
-
-
-
-	subroutine RCS_monostatic_VV_CURV(dphi,rcs,curr,msh,quant,ptree)
-
-		use z_HODLR_DEFS
-		! use APPLICATION_MODULE
-		implicit none
-		
-		real(kind=8) rcs
-		complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
-		real(kind=8) dsita,dphi
-		integer edge,edge_m,edge_n,ierr
-		complex(kind=8):: curr(:)
-		type(z_mesh)::msh
-		type(quant_app)::quant
-		type(z_proctree)::ptree
-		
-		ctemp_loc=0
-			rcs=0
-			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
-			do edge=msh%idxs,msh%idxe
-				call VV_polar_CURV(dphi,edge,ctemp_1,curr(edge-msh%idxs+1),msh,quant)
-				ctemp_loc=ctemp_loc+ctemp_1
-			enddo
-			!$omp end parallel do
-			
-			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-			
-			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
-			!rcs=rcs/quant%wavelength
-			rcs=10*log10(rcs)
-			
-		return
-		
-	end subroutine RCS_monostatic_VV_CURV
-
-	subroutine element_Vinc_VV_CURV(phi,edge,value,msh,quant)
-
-		use z_HODLR_DEFS
-		! use APPLICATION_MODULE
-		implicit none
-		
-		integer edge
-		complex(kind=8) value
-		real(kind=8) theta, phi
-		complex(kind=8)  phase
-		type(z_mesh)::msh
-		type(quant_app)::quant
-		
-		phase=junit*quant%wavenum*(msh%xyz(1,msh%info_unk(0,edge))*cos(phi*pi/180.)+msh%xyz(2,msh%info_unk(0,edge))*sin(phi*pi/180.))
-		value=exp(phase)
-		
-		return
-		
-	end subroutine element_Vinc_VV_CURV	
-		
-
-end module APPLICATION_MODULE	
-
-
-
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     use z_HODLR_DEFS
-    use APPLICATION_MODULE
+    use EMCURV_MODULE
 	
 	use z_HODLR_structure
 	use z_HODLR_factor
@@ -217,6 +17,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)	
+	integer edge
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	
@@ -234,7 +35,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	type(z_proctree)::ptree
-	type(quant_app),target::quant
+	type(quant_EMCURV),target::quant
 	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
@@ -279,8 +80,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call z_SetDefaultOptions(option)
 	
 	time_tmp = 0
-	
-	msh%Origins=(/0d0,0d0,0d0/)
+
 	
  	! register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_EMCURV
@@ -294,7 +94,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	CALL getarg(1, DATA_DIR)
 	
 	
-	msh%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
@@ -302,7 +102,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	 msh%Nunk=5000
     ! msh%Nunk=160000	
 	! Refined_level=0
-	
+	quant%Nunk = msh%Nunk
 	
 	
 	
@@ -315,7 +115,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	option%preorder=0 
-	msh%scaling=1d0
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
 	quant%wavelength=0.08
@@ -344,7 +143,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%xyzsort=TM
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
-	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
@@ -374,8 +172,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_CURV(msh,quant,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
+    call geo_modeling_CURV(quant,ptree)
+	
+	! generate the list of points for clustering
+	allocate(msh%xyz(2,quant%Nunk))
+	do edge=1, quant%Nunk
+		msh%xyz(:,edge) = quant%xyz(:,edge*2-1)
+	enddo	
+    option%touch_para = 3* quant%minedgelength
+	
+	if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
@@ -428,13 +234,13 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 
 
-subroutine geo_modeling_CURV(msh,quant,ptree)
+subroutine geo_modeling_CURV(quant,ptree)
 
     use z_HODLR_DEFS
-	use APPLICATION_MODULE
+	use EMCURV_MODULE
     implicit none
-    type(z_mesh)::msh
-	type(quant_app)::quant
+    ! type(z_mesh)::msh
+	type(quant_EMCURV)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
     integer node, patch, edge, flag
@@ -442,488 +248,487 @@ subroutine geo_modeling_CURV(msh,quant,ptree)
     integer node_temp(2)
     real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
     
+	
     real(kind=8),allocatable :: node_xy_original(:,:)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
 	type(z_proctree)::ptree
 	
-	Maxedge	= msh%Nunk
+	Maxedge	= quant%Nunk
 
-	msh%Ncorner = 0
+	quant%Ncorner = 0
 	
-    if (msh%model2d==1) then  !*****single strip*****
+    if (quant%model2d==1) then  !*****single strip*****
         
-        msh%Delta_ll=2d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
-        msh%xyz(1,0)=-1d0 ; msh%xyz(2,0)=0
+        quant%Delta_ll=2d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
+        quant%xyz(1,0)=-1d0 ; quant%xyz(2,0)=0
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, msh%maxnode-1
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node)=dx-1d0
-            msh%xyz(2,node)=0
+        do node=1, quant%maxnode-1
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node)=dx-1d0
+            quant%xyz(2,node)=0
         enddo
         !$omp end parallel do
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1   ! 1 start 0 center 2 end
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1   ! 1 start 0 center 2 end
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo           
         
-    elseif (msh%model2d==2) then  !*****corner reflector*****
+    elseif (quant%model2d==2) then  !*****corner reflector*****
     
-        msh%Delta_ll=2d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=2d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
-        msh%xyz(1,0)=-1d0/sqrt(2d0) ; msh%xyz(2,0)=1d0/sqrt(2d0)
+        quant%xyz(1,0)=-1d0/sqrt(2d0) ; quant%xyz(2,0)=1d0/sqrt(2d0)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node)=(dx-1d0)/sqrt(2d0)
-            msh%xyz(2,node)=(1d0-dx)/sqrt(2d0)
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node)=(dx-1d0)/sqrt(2d0)
+            quant%xyz(2,node)=(1d0-dx)/sqrt(2d0)
         enddo
         !$omp end parallel do
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node+Maxedge)=dx/sqrt(2d0)
-            msh%xyz(2,node+Maxedge)=dx/sqrt(2d0)
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node+Maxedge)=dx/sqrt(2d0)
+            quant%xyz(2,node+Maxedge)=dx/sqrt(2d0)
         enddo
         !$omp end parallel do
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
 		
-		msh%Ncorner = 1
-		allocate(msh%corner_points(2,msh%Ncorner))
-		msh%corner_points(1,1) = 0
-		msh%corner_points(2,1) = 0        
+		quant%Ncorner = 1
+		allocate(quant%corner_points(2,quant%Ncorner))
+		quant%corner_points(1,1) = 0
+		quant%corner_points(2,1) = 0        
     
-    elseif (msh%model2d==3) then  !*****two opposite strips*****
+    elseif (quant%model2d==3) then  !*****two opposite strips*****
     
-        msh%Delta_ll=2d0/Maxedge
-        msh%maxnode=2*Maxedge+2
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=2d0/Maxedge
+        quant%maxnode=2*Maxedge+2
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
-        msh%xyz(1,0)=-0.5d0 ; msh%xyz(2,0)=1.0d0
+        quant%xyz(1,0)=-0.5d0 ; quant%xyz(2,0)=1.0d0
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node)=dx-0.5d0
-            msh%xyz(2,node)=1.0d0
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node)=dx-0.5d0
+            quant%xyz(2,node)=1.0d0
         enddo
         !$omp end parallel do
-        msh%xyz(1,Maxedge+1)=-0.5d0 ; msh%xyz(2,Maxedge+1)=-1.0d0
+        quant%xyz(1,Maxedge+1)=-0.5d0 ; quant%xyz(2,Maxedge+1)=-1.0d0
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node+Maxedge+1)=dx-0.5d0
-            msh%xyz(2,node+Maxedge+1)=-1.0d0
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node+Maxedge+1)=dx-0.5d0
+            quant%xyz(2,node+Maxedge+1)=-1.0d0
         enddo
         !$omp end parallel do
         
         intemp=int(Maxedge/2)
         
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, intemp
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
         
-        msh%info_unk(1,intemp+1)=msh%maxnode/2 ; msh%info_unk(2,intemp+1)=msh%maxnode/2+2 ; msh%info_unk(0,intemp+1)=msh%maxnode/2+1
+        quant%info_unk(1,intemp+1)=quant%maxnode/2 ; quant%info_unk(2,intemp+1)=quant%maxnode/2+2 ; quant%info_unk(0,intemp+1)=quant%maxnode/2+1
         do edge=intemp+2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
     
     
-    elseif (msh%model2d==5) then !************cylinder*****************
+    elseif (quant%model2d==5) then !************cylinder*****************
         
-        msh%Delta_ll=  2.0d0*pi/Maxedge
-        msh%maxnode=2*Maxedge
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
-        msh%xyz(1,0)=1.0d0 ; msh%xyz(2,0)=0.0d0
+        quant%Delta_ll=  2.0d0*pi/Maxedge
+        quant%maxnode=2*Maxedge
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
+        quant%xyz(1,0)=1.0d0 ; quant%xyz(2,0)=0.0d0
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, msh%maxnode-1
-            dx=node*msh%Delta_ll/2
-            msh%xyz(1,node)=cos(dx)
-            msh%xyz(2,node)=sin(dx)
+        do node=1, quant%maxnode-1
+            dx=node*quant%Delta_ll/2
+            quant%xyz(1,node)=cos(dx)
+            quant%xyz(2,node)=sin(dx)
         enddo
         !$omp end parallel do
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge-1
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo     
-        msh%info_unk(1,Maxedge)=msh%info_unk(2,Maxedge-1)
-        msh%info_unk(2,Maxedge)=0
-        msh%info_unk(0,Maxedge)=msh%info_unk(0,Maxedge-1)+2      
+        quant%info_unk(1,Maxedge)=quant%info_unk(2,Maxedge-1)
+        quant%info_unk(2,Maxedge)=0
+        quant%info_unk(0,Maxedge)=quant%info_unk(0,Maxedge-1)+2      
         
-    elseif (msh%model2d==6) then !***********cavity******************
+    elseif (quant%model2d==6) then !***********cavity******************
     
-        msh%Delta_ll=11d0/3d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
-        dx=msh%Delta_ll/2d0
-        msh%xyz(1,0)=-1d0/6. ; msh%xyz(2,0)=1.0d0
+        quant%Delta_ll=11d0/3d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
+        dx=quant%Delta_ll/2d0
+        quant%xyz(1,0)=-1d0/6. ; quant%xyz(2,0)=1.0d0
         node=0
         do while (flag==0) 
             node=node+1
-            msh%xyz(1,node)=msh%xyz(1,node-1)-dx
-            msh%xyz(2,node)=msh%xyz(2,node-1)
-            if (msh%xyz(1,node)<=-0.5d0) then
+            quant%xyz(1,node)=quant%xyz(1,node-1)-dx
+            quant%xyz(2,node)=quant%xyz(2,node-1)
+            if (quant%xyz(1,node)<=-0.5d0) then
                 flag=1
             endif
         enddo
         flag=0
         do while (flag==0) 
             node=node+1
-            msh%xyz(1,node)=msh%xyz(1,node-1)
-            msh%xyz(2,node)=msh%xyz(2,node-1)-dx
-            if (msh%xyz(2,node)<=0.) then
+            quant%xyz(1,node)=quant%xyz(1,node-1)
+            quant%xyz(2,node)=quant%xyz(2,node-1)-dx
+            if (quant%xyz(2,node)<=0.) then
                 flag=1
             endif
         enddo
         flag=0
         do while (flag==0) 
             node=node+1
-            msh%xyz(1,node)=msh%xyz(1,node-1)+dx
-            msh%xyz(2,node)=msh%xyz(2,node-1)
-            if (msh%xyz(1,node)>=0.5d0) then
+            quant%xyz(1,node)=quant%xyz(1,node-1)+dx
+            quant%xyz(2,node)=quant%xyz(2,node-1)
+            if (quant%xyz(1,node)>=0.5d0) then
                 flag=1
             endif
         enddo
         flag=0
         do while (flag==0) 
             node=node+1
-            msh%xyz(1,node)=msh%xyz(1,node-1)
-            msh%xyz(2,node)=msh%xyz(2,node-1)+dx
-            if (msh%xyz(2,node)>=1.0d0) then
+            quant%xyz(1,node)=quant%xyz(1,node-1)
+            quant%xyz(2,node)=quant%xyz(2,node-1)+dx
+            if (quant%xyz(2,node)>=1.0d0) then
                 flag=1
             endif
         enddo
         flag=0
         do while (flag==0) 
             node=node+1
-            msh%xyz(1,node)=msh%xyz(1,node-1)-dx
-            msh%xyz(2,node)=msh%xyz(2,node-1)
-            if (node>=msh%maxnode-1) then
+            quant%xyz(1,node)=quant%xyz(1,node-1)-dx
+            quant%xyz(2,node)=quant%xyz(2,node-1)
+            if (node>=quant%maxnode-1) then
                 flag=1
             endif
         enddo
         
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
 
-		msh%Ncorner = 4
-		allocate(msh%corner_points(2,msh%Ncorner))
-		msh%corner_points(1,1) = -0.5
-		msh%corner_points(2,1) = 0     
-		msh%corner_points(1,2) = 0.5
-		msh%corner_points(2,2) = 0
-		msh%corner_points(1,3) = 0.5
-		msh%corner_points(2,3) = 1
-		msh%corner_points(1,4) = -0.5
-		msh%corner_points(2,4) = 1		
+		quant%Ncorner = 4
+		allocate(quant%corner_points(2,quant%Ncorner))
+		quant%corner_points(1,1) = -0.5
+		quant%corner_points(2,1) = 0     
+		quant%corner_points(1,2) = 0.5
+		quant%corner_points(2,2) = 0
+		quant%corner_points(1,3) = 0.5
+		quant%corner_points(2,3) = 1
+		quant%corner_points(1,4) = -0.5
+		quant%corner_points(2,4) = 1		
 		
-    elseif (msh%model2d==7) then   !************open cylinder*****************
+    elseif (quant%model2d==7) then   !************open cylinder*****************
     
 	
 	
-        msh%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
-        msh%xyz(1,0)=cos(0*pi) ; msh%xyz(2,0)=sin(0*pi)
+        quant%xyz(1,0)=cos(0*pi) ; quant%xyz(2,0)=sin(0*pi)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll
-            msh%xyz(1,node*2)=cos(0*pi+dx)
-            msh%xyz(2,node*2)=sin(0*pi+dx)
+            dx=node*quant%Delta_ll
+            quant%xyz(1,node*2)=cos(0*pi+dx)
+            quant%xyz(2,node*2)=sin(0*pi+dx)
         enddo
         !$omp end parallel do
 		
 		
         !$omp parallel do default(shared) private(node)
         do node=1, Maxedge
-            msh%xyz(1,node*2-1)=(msh%xyz(1,node*2-2)+msh%xyz(1,node*2))/2d0
-            msh%xyz(2,node*2-1)=(msh%xyz(2,node*2-2)+msh%xyz(2,node*2))/2d0
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
         !$omp end parallel do		
 		
 		
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo           
 
-    elseif (msh%model2d==8) then   !************corrugated open cylinder*****************
+    elseif (quant%model2d==8) then   !************corrugated open cylinder*****************
 		M = 0.2d0*quant%wavelength
 		L = 1.5d0*quant%wavelength
         phi_start = 3d0/2d0*pi
 		
-		msh%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+		quant%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
-        msh%xyz(1,0)=cos(phi_start) ; msh%xyz(2,0)=sin(phi_start)
+        quant%xyz(1,0)=cos(phi_start) ; quant%xyz(2,0)=sin(phi_start)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
-            dx=node*msh%Delta_ll
-            msh%xyz(1,node*2)=(1+M*sin(2*pi*dx/L))*cos(phi_start+dx)
-            msh%xyz(2,node*2)=(1+M*sin(2*pi*dx/L))*sin(phi_start+dx)
+            dx=node*quant%Delta_ll
+            quant%xyz(1,node*2)=(1+M*sin(2*pi*dx/L))*cos(phi_start+dx)
+            quant%xyz(2,node*2)=(1+M*sin(2*pi*dx/L))*sin(phi_start+dx)
         enddo
         !$omp end parallel do
 		
 		
         !$omp parallel do default(shared) private(node)
         do node=1, Maxedge
-            msh%xyz(1,node*2-1)=(msh%xyz(1,node*2-2)+msh%xyz(1,node*2))/2d0
-            msh%xyz(2,node*2-1)=(msh%xyz(2,node*2-2)+msh%xyz(2,node*2))/2d0
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
         !$omp end parallel do		
 		
 		
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo    
 
 		
-    elseif (msh%model2d==9) then  !*****corrugated corner reflector*****
+    elseif (quant%model2d==9) then  !*****corrugated corner reflector*****
 		M = 0.2d0*quant%wavelength
 		L = 1.5d0*quant%wavelength
 		
-        msh%Delta_ll=2d0/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=2d0/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
 
 		Am = M*sin(pi/2-2*pi/L)-M		
-		msh%xyz(1,0)=-1d0/sqrt(2d0)+Am/sqrt(2d0); msh%xyz(2,0)=1d0/sqrt(2d0)+Am/sqrt(2d0)
+		quant%xyz(1,0)=-1d0/sqrt(2d0)+Am/sqrt(2d0); quant%xyz(2,0)=1d0/sqrt(2d0)+Am/sqrt(2d0)
 		
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge/2
-            dx=node*msh%Delta_ll
+            dx=node*quant%Delta_ll
 			Am = M*sin(2*pi*dx/L+pi/2-2*pi/L)-M
 			
-            msh%xyz(1,node*2)=(dx-1d0)/sqrt(2d0)+Am/sqrt(2d0)
-            msh%xyz(2,node*2)=(1d0-dx)/sqrt(2d0)+Am/sqrt(2d0)
+            quant%xyz(1,node*2)=(dx-1d0)/sqrt(2d0)+Am/sqrt(2d0)
+            quant%xyz(2,node*2)=(1d0-dx)/sqrt(2d0)+Am/sqrt(2d0)
         enddo
         !$omp end parallel do
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge/2
-            dx=node*msh%Delta_ll
+            dx=node*quant%Delta_ll
 			Am = M*sin(2*pi*(dx+1)/L+pi/2-2*pi/L)-M
 			
-            msh%xyz(1,node*2+Maxedge)=dx/sqrt(2d0)-Am/sqrt(2d0)
-            msh%xyz(2,node*2+Maxedge)=dx/sqrt(2d0)+Am/sqrt(2d0)
+            quant%xyz(1,node*2+Maxedge)=dx/sqrt(2d0)-Am/sqrt(2d0)
+            quant%xyz(2,node*2+Maxedge)=dx/sqrt(2d0)+Am/sqrt(2d0)
         enddo
         !$omp end parallel do
 
         !$omp parallel do default(shared) private(node)
         do node=1, Maxedge
-            msh%xyz(1,node*2-1)=(msh%xyz(1,node*2-2)+msh%xyz(1,node*2))/2d0
-            msh%xyz(2,node*2-1)=(msh%xyz(2,node*2-2)+msh%xyz(2,node*2))/2d0
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
         !$omp end parallel do			
 		
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo  		
 
-		msh%Ncorner = 1
-		allocate(msh%corner_points(2,msh%Ncorner))
-		msh%corner_points(1,1) = 0
-		msh%corner_points(2,1) = 0
+		quant%Ncorner = 1
+		allocate(quant%corner_points(2,quant%Ncorner))
+		quant%corner_points(1,1) = 0
+		quant%corner_points(2,1) = 0
 		
-    elseif (msh%model2d==10) then  !*****cup*****
+    elseif (quant%model2d==10) then  !*****cup*****
 
 		L1 = 0
 		L2 = sqrt(2d0)
 		L3 = sqrt(2d0)
 		L = 3
-        msh%Delta_ll=(2*L1+2*L2+2*L3+L)/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=(2*L1+2*L2+2*L3+L)/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
 		
         !$omp parallel do default(shared) private(node,dx,tt)
         do node=0, Maxedge
-            dx=node*msh%Delta_ll
+            dx=node*quant%Delta_ll
 			if(dx<=L1)then
 				tt = dx
-				msh%xyz(1,node*2)= -(L/2-(L1-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L1+L2+L3)/sqrt(2d0)-tt/sqrt(2d0)			
+				quant%xyz(1,node*2)= -(L/2-(L1-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L1+L2+L3)/sqrt(2d0)-tt/sqrt(2d0)			
 			else if(dx<=L1+L2)then
 				tt = dx - L1
-				msh%xyz(1,node*2)= -(L/2-(-L2+L3)/sqrt(2d0))+tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L2+L3)/sqrt(2d0)-tt/sqrt(2d0)
+				quant%xyz(1,node*2)= -(L/2-(-L2+L3)/sqrt(2d0))+tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L2+L3)/sqrt(2d0)-tt/sqrt(2d0)
 			else if(dx<=L1+L2+L3)then
 				tt = dx - (L1+L2)
-				msh%xyz(1,node*2)= -(L/2-L3/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3)/sqrt(2d0)-tt/sqrt(2d0)				
+				quant%xyz(1,node*2)= -(L/2-L3/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3)/sqrt(2d0)-tt/sqrt(2d0)				
 			else if(dx<=L1+L2+L3+L)then
 				tt = dx - (L1+L2+L3)
-				msh%xyz(1,node*2)= -L/2+tt
-				msh%xyz(2,node*2)= 0
+				quant%xyz(1,node*2)= -L/2+tt
+				quant%xyz(2,node*2)= 0
 			else if(dx<=L1+L2+L3+L+L3)then
 				tt = dx - (L1+L2+L3+L)
-				msh%xyz(1,node*2)= L/2-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= tt/sqrt(2d0)		
+				quant%xyz(1,node*2)= L/2-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= tt/sqrt(2d0)		
 			else if(dx<=L1+L2+L3+L+L3+L2)then
 				tt = dx - (L1+L2+L3+L+L3)
-				msh%xyz(1,node*2)= (L/2-L3/sqrt(2d0))+tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3)/sqrt(2d0)+tt/sqrt(2d0)				
+				quant%xyz(1,node*2)= (L/2-L3/sqrt(2d0))+tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3)/sqrt(2d0)+tt/sqrt(2d0)				
 			else
 				tt = dx - (L1+L2+L3+L+L3+L2)
-				msh%xyz(1,node*2)= (L/2-(-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)							
+				quant%xyz(1,node*2)= (L/2-(-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)							
 			end if 
         enddo
         !$omp end parallel do			
 
         !$omp parallel do default(shared) private(node)
         do node=1, Maxedge
-            msh%xyz(1,node*2-1)=(msh%xyz(1,node*2-2)+msh%xyz(1,node*2))/2d0
-            msh%xyz(2,node*2-1)=(msh%xyz(2,node*2-2)+msh%xyz(2,node*2))/2d0
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
         !$omp end parallel do			
 		
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo  		
 
-		! msh%Ncorner = 4
-		! allocate(msh%corner_points(2,msh%Ncorner))
-		! msh%corner_points(1,1) = -L/2
-		! msh%corner_points(2,1) = 0
-		! msh%corner_points(1,2) = L/2
-		! msh%corner_points(2,2) = 0
-		! msh%corner_points(1,3) = -(L/2-L3/sqrt(2d0))
-		! msh%corner_points(2,3) = (L3)/sqrt(2d0)		
-		! msh%corner_points(1,4) = (L/2-L3/sqrt(2d0))
-		! msh%corner_points(2,4) = (L3)/sqrt(2d0)			
+		! quant%Ncorner = 4
+		! allocate(quant%corner_points(2,quant%Ncorner))
+		! quant%corner_points(1,1) = -L/2
+		! quant%corner_points(2,1) = 0
+		! quant%corner_points(1,2) = L/2
+		! quant%corner_points(2,2) = 0
+		! quant%corner_points(1,3) = -(L/2-L3/sqrt(2d0))
+		! quant%corner_points(2,3) = (L3)/sqrt(2d0)		
+		! quant%corner_points(1,4) = (L/2-L3/sqrt(2d0))
+		! quant%corner_points(2,4) = (L3)/sqrt(2d0)			
 
-    elseif (msh%model2d==11) then  !*****longer cup*****
+    elseif (quant%model2d==11) then  !*****longer cup*****
 		L1 = 1
 		L2 = sqrt(2d0)
 		L3 = sqrt(2d0)
 		L = 3.5
-        msh%Delta_ll=(2*L1+2*L2+2*L3+L)/Maxedge
-        msh%maxnode=2*Maxedge+1
-        allocate (msh%xyz(2,0:msh%maxnode-1), msh%info_unk(0:2,Maxedge))
+        quant%Delta_ll=(2*L1+2*L2+2*L3+L)/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         
 		
         !$omp parallel do default(shared) private(node,dx,tt)
         do node=0, Maxedge
-            dx=node*msh%Delta_ll
+            dx=node*quant%Delta_ll
 			if(dx<=L1)then
 				tt = dx
-				msh%xyz(1,node*2)= -(L/2-(L1-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L1+L2+L3)/sqrt(2d0)-tt/sqrt(2d0)			
+				quant%xyz(1,node*2)= -(L/2-(L1-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L1+L2+L3)/sqrt(2d0)-tt/sqrt(2d0)			
 			else if(dx<=L1+L2)then
 				tt = dx - L1
-				msh%xyz(1,node*2)= -(L/2-(-L2+L3)/sqrt(2d0))+tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L2+L3)/sqrt(2d0)-tt/sqrt(2d0)
+				quant%xyz(1,node*2)= -(L/2-(-L2+L3)/sqrt(2d0))+tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L2+L3)/sqrt(2d0)-tt/sqrt(2d0)
 			else if(dx<=L1+L2+L3)then
 				tt = dx - (L1+L2)
-				msh%xyz(1,node*2)= -(L/2-L3/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3)/sqrt(2d0)-tt/sqrt(2d0)				
+				quant%xyz(1,node*2)= -(L/2-L3/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3)/sqrt(2d0)-tt/sqrt(2d0)				
 			else if(dx<=L1+L2+L3+L)then
 				tt = dx - (L1+L2+L3)
-				msh%xyz(1,node*2)= -L/2+tt
-				msh%xyz(2,node*2)= 0
+				quant%xyz(1,node*2)= -L/2+tt
+				quant%xyz(2,node*2)= 0
 			else if(dx<=L1+L2+L3+L+L3)then
 				tt = dx - (L1+L2+L3+L)
-				msh%xyz(1,node*2)= L/2-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= tt/sqrt(2d0)		
+				quant%xyz(1,node*2)= L/2-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= tt/sqrt(2d0)		
 			else if(dx<=L1+L2+L3+L+L3+L2)then
 				tt = dx - (L1+L2+L3+L+L3)
-				msh%xyz(1,node*2)= (L/2-L3/sqrt(2d0))+tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3)/sqrt(2d0)+tt/sqrt(2d0)				
+				quant%xyz(1,node*2)= (L/2-L3/sqrt(2d0))+tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3)/sqrt(2d0)+tt/sqrt(2d0)				
 			else
 				tt = dx - (L1+L2+L3+L+L3+L2)
-				msh%xyz(1,node*2)= (L/2-(-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
-				msh%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)							
+				quant%xyz(1,node*2)= (L/2-(-L2+L3)/sqrt(2d0))-tt/sqrt(2d0)
+				quant%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)							
 			end if 
         enddo
         !$omp end parallel do			
 
         !$omp parallel do default(shared) private(node)
         do node=1, Maxedge
-            msh%xyz(1,node*2-1)=(msh%xyz(1,node*2-2)+msh%xyz(1,node*2))/2d0
-            msh%xyz(2,node*2-1)=(msh%xyz(2,node*2-2)+msh%xyz(2,node*2))/2d0
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
         !$omp end parallel do			
 		
-        msh%info_unk(1,1)=0 ; msh%info_unk(2,1)=2 ; msh%info_unk(0,1)=1
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
-            msh%info_unk(1,edge)=msh%info_unk(2,edge-1)
-            msh%info_unk(2,edge)=msh%info_unk(2,edge-1)+2
-            msh%info_unk(0,edge)=msh%info_unk(0,edge-1)+2
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo  		
 
-		msh%Ncorner = 6
-		allocate(msh%corner_points(2,msh%Ncorner))
-		msh%corner_points(1,1) = -(L/2-(-L2+L3)/sqrt(2d0))
-		msh%corner_points(2,1) = (L2+L3)/sqrt(2d0)
-		msh%corner_points(1,2) = (L/2-(-L2+L3)/sqrt(2d0))
-		msh%corner_points(2,2) = (L2+L3)/sqrt(2d0)	
-		msh%corner_points(1,3) = -L/2
-		msh%corner_points(2,3) = 0
-		msh%corner_points(1,4) = L/2
-		msh%corner_points(2,4) = 0
-		msh%corner_points(1,5) = -(L/2-L3/sqrt(2d0))
-		msh%corner_points(2,5) = (L3)/sqrt(2d0)		
-		msh%corner_points(1,6) = (L/2-L3/sqrt(2d0))
-		msh%corner_points(2,6) = (L3)/sqrt(2d0)		
+		quant%Ncorner = 6
+		allocate(quant%corner_points(2,quant%Ncorner))
+		quant%corner_points(1,1) = -(L/2-(-L2+L3)/sqrt(2d0))
+		quant%corner_points(2,1) = (L2+L3)/sqrt(2d0)
+		quant%corner_points(1,2) = (L/2-(-L2+L3)/sqrt(2d0))
+		quant%corner_points(2,2) = (L2+L3)/sqrt(2d0)	
+		quant%corner_points(1,3) = -L/2
+		quant%corner_points(2,3) = 0
+		quant%corner_points(1,4) = L/2
+		quant%corner_points(2,4) = 0
+		quant%corner_points(1,5) = -(L/2-L3/sqrt(2d0))
+		quant%corner_points(2,5) = (L3)/sqrt(2d0)		
+		quant%corner_points(1,6) = (L/2-L3/sqrt(2d0))
+		quant%corner_points(2,6) = (L3)/sqrt(2d0)		
     endif
     
-	msh%maxedgelength = 0
+	quant%maxedgelength = 0
 	do edge=1,Maxedge
-		msh%maxedgelength = max(msh%maxedgelength,sqrt(sum(abs(msh%xyz(:,msh%info_unk(1,edge))-msh%xyz(:,msh%info_unk(2,edge))))**2))
+		quant%maxedgelength = max(quant%maxedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge))))**2))
 	end do	
 	
-	msh%minedgelength = 10000000
+	quant%minedgelength = 10000000
 	do edge=1,Maxedge
-		msh%minedgelength = min(msh%minedgelength,sqrt(sum(abs(msh%xyz(:,msh%info_unk(1,edge))-msh%xyz(:,msh%info_unk(2,edge)))**2)))
+		quant%minedgelength = min(quant%minedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
 	end do		
 	
-	msh%corner_radius = 2*msh%maxedgelength
+	quant%corner_radius = 2*quant%maxedgelength
 	
-	! write(*,*)	msh%xyz(1,1:100),sum(msh%xyz(1,:))
+	! write(*,*)	quant%xyz(1,1:100),sum(quant%xyz(1,:))
 	! stop
-
-	
 		
     if(ptree%MyID==Main_ID)write (*,*) ''
     if(ptree%MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
-	if(ptree%MyID==Main_ID)write (*,*) 'dx:',msh%Delta_ll/2
-	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',quant%wavelength/msh%maxedgelength
+	if(ptree%MyID==Main_ID)write (*,*) 'dx:',quant%Delta_ll/2
+	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',quant%wavelength/quant%maxedgelength
 
     
     return
@@ -936,7 +741,7 @@ end subroutine geo_modeling_CURV
 subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
     
     use z_HODLR_DEFS
-	use APPLICATION_MODULE
+	use EMCURV_MODULE
 	! use RCS_Bi
 	! use RCS_Mono
 	! use element_vinc
@@ -955,7 +760,7 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
 	real(kind=8):: rel_error
 	type(z_Hoption)::option
 	type(z_mesh)::msh
-	type(quant_app)::quant
+	type(quant_EMCURV)::quant
 	type(z_proctree)::ptree
 	type(z_hobf)::ho_bf_inv
 	type(z_Hstat)::stats	
@@ -988,7 +793,7 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
 								  
         !$omp parallel do default(shared) private(edge,value_Z)
         do edge=msh%idxs, msh%idxe
-            call element_Vinc_VV_CURV(phi,edge,value_Z,msh,quant)
+            call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
             voltage(edge-msh%idxs+1)=value_Z
         enddo    
         !$omp end parallel do
@@ -1037,7 +842,7 @@ subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
 			do edge=msh%idxs, msh%idxe
-				call element_Vinc_VV_CURV(phi,edge,value_Z,msh,quant)
+				call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
 				b(edge-msh%idxs+1,j+1)=value_Z
 			enddo    
 			!$omp end parallel do

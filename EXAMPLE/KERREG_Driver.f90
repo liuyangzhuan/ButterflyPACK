@@ -166,8 +166,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
     !**** set solver parameters	
 	
-	msh%Origins=(/0d0,0d0,0d0/)
-	msh%scaling=1d0
 	option%preorder=0
 	option%Nmin_leaf=200
 	option%tol_comp=1d-2
@@ -181,7 +179,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	option%xyzsort=TM
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
-	option%touch_para=3
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
@@ -245,7 +242,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 
-!**** read training sets into msh%xyz and create a natural order in msh%info_unk(0,:)
+!**** read training sets 
 subroutine geo_modeling_RBF(msh,quant,ptree)
 
     use d_HODLR_DEFS
@@ -267,13 +264,10 @@ subroutine geo_modeling_RBF(msh,quant,ptree)
 	type(d_proctree)::ptree
 	
 	Dimn = quant%dimn
-	msh%Ncorner = 0
 	
 	open (90,file=quant%trainfile_p)
-	allocate (msh%xyz(Dimn,0:msh%Nunk), msh%info_unk(0:0,msh%Nunk))
-	! write(*,*)msh%Nunk, Dimn,shape(msh%info_unk)
+	allocate (msh%xyz(Dimn,0:msh%Nunk))
 	do edge=1,msh%Nunk
-		msh%info_unk(0,edge)=edge
 		read (90,*) msh%xyz(1:Dimn,edge)
 	enddo  			
  
@@ -335,7 +329,7 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
 		labels(ii)=label
 	enddo
 	do ii=1,N_unk_loc
-		b(ii,1) = labels(msh%info_unk(0,ii-1+msh%idxs))
+		b(ii,1) = labels(msh%new2old(ii-1+msh%idxs))
 	enddo
 	deallocate(labels)	
 	
@@ -367,7 +361,7 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	vout_tmp = 0	
 	do edge=1, N_unk_loc 
 		do edge_m=1,ntest
-			r_mn=sum((xyz_test(1:dimn,edge_m)-msh%xyz(1:dimn,msh%info_unk(0,edge+msh%idxs-1)))**2)
+			r_mn=sum((xyz_test(1:dimn,edge_m)-msh%xyz(1:dimn,msh%new2old(edge+msh%idxs-1)))**2)
 			value_Z = exp(-r_mn/2.0/quant%sigma**2)
 			vout_tmp(edge_m,1) = vout_tmp(edge_m,1) + value_Z*x(edge,1)
 		enddo
