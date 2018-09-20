@@ -37,7 +37,7 @@ contains
 
 
 !**** user-defined subroutine to sample Z_mn
-subroutine Z_elem_EMSURF(ker,m,n,value_e,msh,quant)
+subroutine Z_elem_EMSURF(m,n,value_e,quant)
 	
     use z_HODLR_DEFS
     implicit none
@@ -54,8 +54,7 @@ subroutine Z_elem_EMSURF(ker,m,n,value_e,msh,quant)
     real(kind=8) distance
     real(kind=8) ianl,ianl1,ianl2
     real(kind=8) area
-	type(z_mesh)::msh
-	class(z_kernelquant)::ker
+
 	class(*),pointer :: quant
 	
 	

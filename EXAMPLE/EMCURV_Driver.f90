@@ -114,7 +114,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	
-	option%preorder=0 
+	option%nogeo=0 
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
 	quant%wavelength=0.08
@@ -188,7 +188,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call z_HODLR_structuring(ho_bf,option,msh,ptree)
+    call z_HODLR_structuring(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
 	call z_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "

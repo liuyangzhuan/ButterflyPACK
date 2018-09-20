@@ -107,7 +107,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	! SVD_tolerance_factor=1d-4
 	option%tol_Rdetect=1d-4 !3d-5
     ! Preset_level_butterfly=0
-	option%preorder=0
+	option%nogeo=0
 	! ker%wavelength=0.25
 	! Discret=0.05
 	! ker%RCS_static=2
@@ -223,7 +223,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	t1 = OMP_get_wtime()	
     write(*,*) "constructing HODLR formatting......"
-    call d_HODLR_structuring(ho_bf,option,msh,ptree)
+    call d_HODLR_structuring(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
 	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     write(*,*) "HODLR formatting finished"
     write(*,*) "    "

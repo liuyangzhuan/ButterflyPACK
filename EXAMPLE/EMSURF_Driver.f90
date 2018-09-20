@@ -103,7 +103,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! SVD_tolerance_factor=1d-4
 	option%tol_Rdetect=3d-5
     ! Preset_level_butterfly=0
-	option%preorder=0
+	option%nogeo=0
 	quant%scaling=1d0
 	quant%wavelength=1.0
 	! Discret=0.05
@@ -179,7 +179,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call z_HODLR_structuring(ho_bf,option,msh,ptree)
+    call z_HODLR_structuring(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
 	call z_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "

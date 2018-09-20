@@ -12,7 +12,7 @@ module HODLR_DEFS
 	complex(kind=8),parameter :: junit=(0d0,1d0)
 	real(kind=8),parameter :: Bigvalue=1d300
 	real(kind=8),parameter:: SafeUnderflow=1D-30
-	real(kind=8),parameter:: SafeAbsoulte=1D-14
+	real(kind=8),parameter:: SafeEps=1D-14
 	DT,parameter :: cone=1d0
 	DT,parameter :: czero=0d0
     integer,parameter :: Main_ID = 0 ! Head MPI rank
@@ -39,9 +39,10 @@ module HODLR_DEFS
 	integer,parameter:: ACA=3   
 	integer,parameter:: BACA=4   
 	
+	integer,parameter:: NATURAL=0  ! natural order 
 	integer,parameter:: CKD=1  ! cartesian kd tree 
-	integer,parameter:: SKD=2  ! spherical kd tree
-	integer,parameter:: TM=3   ! 2 mins (no recursive)
+	integer,parameter:: TM=2   ! cobble-like ordering
+	integer,parameter:: TM_GRAM=3   ! gram distance-based cobble-like ordering, the behaviour is undefined if matrix is not SPD, HPD, general symmetric or general hermitian 
 	
 	!**** hierarchical process grid associated with one process node in the process tree (used for parallel recursive LR compression) 
 	type grid
@@ -256,10 +257,11 @@ module HODLR_DEFS
 		! options for matrix construction
 		real(kind=8) tol_comp      ! matrix construction tolerance
 		integer::Nmin_leaf ! leaf sizes of HODLR tree	
-		integer preorder ! 1: the matrix is preordered, no reordering will be performed, clustering is defined in pretree. 2: the matrix needs reordering		
+		integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering	0: geometrical points are available for TM or CKD clustering	
 		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
 		integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
 		
+	
 		
 		! options for inversion
 		real(kind=8) tol_LS       ! tolerance in pseudo inverse
@@ -310,7 +312,7 @@ module HODLR_DEFS
 		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
 		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Z_elem),pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_Z_elem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
 		
 		type(c_ptr),pointer :: C_QuantZmn ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
 		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
@@ -350,11 +352,10 @@ module HODLR_DEFS
 			type(kernelquant)::ker
 		end subroutine Z_elem
 		
-		subroutine F_Z_elem(ker,m,n,val,msh,quant) ! m,n represents indices in natural order
+		subroutine F_Z_elem(m,n,val,quant) ! m,n represents indices in natural order
 		  import::mesh,kernelquant
-		  class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
+		  ! class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
 		  class(*),pointer :: quant
-		  type(mesh)::msh
 		  integer, INTENT(IN):: m,n
 		  DT::val 
 		end subroutine F_Z_elem

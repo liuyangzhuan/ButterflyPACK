@@ -3,77 +3,8 @@ module HODLR_structure
 use HODLR_Utilities
 contains 
 
-real(kind=8) function group_dist(group_m,group_n)
 
-    use HODLR_DEFS
-    implicit none
-    
-    integer group_m, group_n,farblock, level
-    integer i, j, ii, jj
-    real(kind=8) dis, rad1, rad2, para
-	real(kind=8),allocatable::a(:), b(:)
-    integer Dimn
-	Dimn = size(basis_group(group_m)%center,1)
-    allocate(a(Dimn))
-    allocate(b(Dimn))
-	
-    do i=1,Dimn
-        a(i)=basis_group(group_m)%center(i)
-        b(i)=basis_group(group_n)%center(i)
-    enddo
-        
-    dis=0d0
-    do i=1,Dimn
-        dis=dis+(a(i)-b(i))**2
-    enddo
-    group_dist=sqrt(dis)
-    
-	deallocate(a,b)
-
-end function group_dist
-
-
-logical function near_or_far(group_m,group_n,para)
-
-    use HODLR_DEFS
-    implicit none
-    
-    integer group_m, group_n,farblock, level
-    integer i, j, ii, jj
-    real(kind=8) dis, rad1, rad2, para
-    real(kind=8),allocatable:: a(:), b(:)
-    integer Dimn
-	
-	Dimn = size(basis_group(group_m)%center,1)
-    allocate(a(Dimn))
-    allocate(b(Dimn))
-    do i=1,Dimn
-        a(i)=basis_group(group_m)%center(i)
-        b(i)=basis_group(group_n)%center(i)
-    enddo
-    
-    rad1=basis_group(group_m)%radius
-    rad2=basis_group(group_n)%radius
-    
-    dis=0d0
-    do i=1,Dimn
-        dis=dis+(a(i)-b(i))**2
-    enddo
-    dis=sqrt(dis)
-      
-		! write(*,*)dis/((rad1+rad2)/2)
-	 
-    ! if (dis>para*max(rad1,rad2)) then
-    if (dis>para*(rad1+rad2)/2) then
-        near_or_far=.true.
-    else
-        near_or_far=.false.
-    endif
-    deallocate(a,b)
-	
-end function near_or_far
-
-real(kind=8) function func_distance(node1,node2,msh)
+real(kind=8) function euclidean_distance(node1,node2,msh)
     
     use HODLR_DEFS
     implicit none
@@ -91,13 +22,50 @@ real(kind=8) function func_distance(node1,node2,msh)
         dis=dis+(msh%xyz(i,node1)-msh%xyz(i,node2))**2
     enddo
     
-    func_distance=dis
+    euclidean_distance=dis
     
     return
     
-end function func_distance
+end function euclidean_distance
 
-subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
+
+!**** l2 gram distance^2 between element edgem and edgen is 
+!     defined as: Re{Z_ii+Z_jj-Z_ij-Z_ji} for SPD, HPD, general symmetric real, and hermitian matrices
+!     undefined otherwise
+!**** angular gram distance^2 is  
+!     defined as 1-Z_ij^2/(Z_iiZ_jj)
+!     undefined otherwise
+!     Use with caution !!!
+real(kind=8) function gram_distance(edgem,edgen,ker,msh,element_Zmn)
+    
+    use HODLR_DEFS
+    implicit none
+
+    integer edgem, edgen
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Z_elem)::element_Zmn
+	DT r1,r2,r3,r4
+! l2 distance	
+#if 1	
+	call element_Zmn(edgem,edgem,r1,msh,ker)
+	call element_Zmn(edgen,edgen,r2,msh,ker)
+	call element_Zmn(edgem,edgen,r3,msh,ker)
+	call element_Zmn(edgen,edgem,r4,msh,ker)
+    gram_distance=dble(r1+r2-r3-r4)
+! angular distance
+#else   
+	call element_Zmn(edgem,edgem,r1,msh,ker)
+	call element_Zmn(edgen,edgen,r2,msh,ker)
+	call element_Zmn(edgem,edgen,r3,msh,ker)
+    gram_distance=dble(1d0-r3**2d0/(r1*r2))	
+#endif    
+    return
+    
+end function gram_distance
+
+
+subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
     
     use HODLR_DEFS
 	use misc
@@ -110,74 +78,165 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
     integer center_edge
     
     integer index_temp
-    
+    DT r1,r2,r3,r4
     real(kind=8) a, b, c, d, para, xmax,xmin,ymax,ymin,zmax,zmin,seperator,r,theta,phi,phi_tmp
-    real(kind=8) radius, radiusmax
+    real(kind=8) radius, radiusmax, radius2, radiusmax2
     real(kind=8),allocatable:: xyzrange(:),xyzmin(:),xyzmax(:),auxpoint(:),groupcenter(:)
     real(kind=8), allocatable :: distance(:),array(:,:)
-	integer level_c,sortdirec,mm,phi_end,Ninfo_edge
+	integer level_c,sortdirec,mm,phi_end,Ninfo_edge,ind_i,ind_j
 	real(kind=8) t1,t2
-	integer Maxgroup
+	integer Maxgroup,nlevel_pre
 	character(len=1024)  :: strings	
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
-	integer dimn,groupsize,idxstart
+	integer dimn,groupsize,idxstart,Nsmp
 	type(Hoption)::option
 	type(hobf)::ho_bf1
 	integer Maxlevel,Maxgrp
 	type(mesh)::msh
+	type(kernelquant)::ker
 	type(proctree)::ptree
-    
-	! Reorder is needed
-	if(option%preorder==0)then
+    procedure(Z_elem)::element_Zmn
+	integer,allocatable:: perms(:)
 	
 	
-		!**********************Maxlevel*******************
-		level=0; i=1
-		do while (int(msh%Nunk/i)>option%Nmin_leaf)
-			level=level+1
-			i=2**level
+
+	!*************Initialize permutation vector ********	   
+	allocate(msh%new2old(msh%Nunk))    
+	do ii=1,msh%Nunk
+		msh%new2old(ii) = ii
+	end do
+	
+	
+	!************Compute Maxlevel of hodlr tree*******************	
+	nlevel_pre=0
+	if(allocated(msh%pretree))then
+		nlevel_pre = ceiling_safe(log(dble(size(msh%pretree,1))) / log(2d0))
+	endif
+	level=0; i=1
+	do while (int(msh%Nunk/i)>option%Nmin_leaf)
+		level=level+1
+		i=2**level
+	enddo
+	Maxlevel=level
+	if(Maxlevel<nlevel_pre)Maxlevel=nlevel_pre
+	ho_bf1%Maxlevel=Maxlevel
+	
+	
+	!************** check whether the sorting option is valid
+	if(Maxlevel>nlevel_pre)then
+		if(.not. allocated(msh%xyz))then
+			if(option%xyzsort==CKD .or. option%xyzsort==TM)then
+				write(*,*)'Geometrical information is not provided. Try use NATRUAL or TM_GRAM ordering'
+			endif
+		endif
+		
+		if(option%xyzsort==TM_GRAM)then
+			call random_number(a)
+			ind_i =floor_safe(a*(msh%Nunk-1))+1
+			ind_j = ind_i
+			do while(ind_i==ind_j)
+				call random_number(a)
+				ind_j =floor_safe(a*(msh%Nunk-1))+1
+			enddo
+			call element_Zmn(ind_i,ind_i,r1,msh,ker)
+			call element_Zmn(ind_j,ind_j,r2,msh,ker)
+			call element_Zmn(ind_i,ind_j,r3,msh,ker)
+			call element_Zmn(ind_j,ind_i,r4,msh,ker)
+			if(aimag(cmplx(r1,kind=8))/=0 .or. aimag(cmplx(r2,kind=8))/=0 .or. abs(r3-conjg(cmplx(r3,kind=8)))>abs(r3)*SafeEps)then
+				write(*,*)'Matrix not hermitian. The gram distance is undefined'
+			endif
+		endif		
+	endif
+	
+	!***************************************************
+
+	Maxgroup=2**(Maxlevel+1)-1
+	allocate (basis_group(Maxgroup))
+	
+	if(ptree%MyID==Main_ID)write (*,*) ''
+	if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+	if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
+	if(ptree%MyID==Main_ID)write (*,*) ''
+	if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'	
+	
+	!**** construct the top few levels whose ordering is provided by the user
+	basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
+	do level=nlevel_pre,0,-1
+		idxstart=1
+		do group=2**level, 2**(level+1)-1
+			basis_group(group)%level=level
+
+			if(level==nlevel_pre)then
+				if(nlevel_pre==0)then
+					groupsize = msh%Nunk
+				else
+					groupsize = msh%pretree(group-2**nlevel_pre+1)				
+				endif
+				call assert(groupsize>0,'zero leafsize may not be handled')
+				basis_group(group)%head = idxstart
+				basis_group(group)%tail = idxstart + groupsize -1
+				idxstart = idxstart + groupsize
+			else
+				basis_group(group)%head = basis_group(2*group)%head
+				basis_group(group)%tail = basis_group(2*group+1)%tail
+			endif					
 		enddo
-		Maxlevel=level
-		ho_bf1%Maxlevel=Maxlevel
-		!***************************************************
-		
-		Maxgroup=2**(Maxlevel+1)-1
-		allocate (basis_group(Maxgroup))
-		! write(*,*)Maxlevel,Maxgroup,'dfd'
-		
-		dimn=size(msh%xyz,1) 
-		
-		allocate(xyzrange(dimn))
-		allocate(xyzmin(dimn))
-		allocate(xyzmax(dimn))
-		allocate(auxpoint(dimn))
-		allocate(groupcenter(dimn))
-			
-		if(ptree%MyID==Main_ID)write (*,*) ''
-		if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
-		if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/i)
-		if(ptree%MyID==Main_ID)write (*,*) ''
-		if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
+	enddo	
+	
+	
+	!**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
+	dimn=size(msh%xyz,1) 
+	if(dimn>0)then
+	allocate(xyzrange(dimn))
+	allocate(xyzmin(dimn))
+	allocate(xyzmax(dimn))
+	allocate(auxpoint(dimn))
+	allocate(groupcenter(dimn))
+	endif	
 
-		   
-	 
-		!***************************************************************************************	   
-		allocate(msh%new2old(msh%Nunk))    
+	do level=nlevel_pre, Maxlevel
+		do group=2**level, 2**(level+1)-1
+			basis_group(group)%level=level
+								
+			if(option%xyzsort==NATURAL)then !natural ordering		 
+				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				allocate (distance(mm))	
+				do i=basis_group(group)%head, basis_group(group)%tail
+					distance(i-basis_group(group)%head+1)=dble(i)
+				enddo
+		
+			else if(option%xyzsort==CKD)then !msh%xyz sort		 
+				xyzmin= 1d300
+				xyzmax= -1d300
+				do edge=basis_group(group)%head, basis_group(group)%tail
+					do ii=1,Dimn
+						xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%new2old(edge)))
+						xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%new2old(edge)))
+					enddo
+				enddo
+				xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
+				
+				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				allocate (distance(mm))	
+				sortdirec = maxloc(xyzrange(1:Dimn),1)
+				! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
+				
+				! if(ker%Kernel==EMSURF)then
+				! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
+					! sortdirec=2
+				! else 
+					! sortdirec=3
+				! end if
+				! endif
+				
+				
+				!$omp parallel do default(shared) private(i)
+				do i=basis_group(group)%head, basis_group(group)%tail
+					distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
+				enddo
+				!$omp end parallel do
 
-		do ii=1,msh%Nunk
-			msh%new2old(ii) = ii
-		end do
-		
-		   
-		! allocate (distance(msh%Nunk))     
-		
-		!********************************index_of_group**************************************
-		
-		Maxgrp=2**(ptree%nlevel)-1
-		basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
-		do level=0, Maxlevel
-			do group=2**level, 2**(level+1)-1
-				basis_group(group)%level=level
+			else if(option%xyzsort==TM)then !cobblestone sort
 
 				groupcenter(1:dimn)=0.0d0
 				! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
@@ -190,8 +249,6 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 				do ii=1,dimn
 					groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
 				enddo
-				allocate(basis_group(group)%center(dimn))
-				basis_group(group)%center(1:dimn)=groupcenter(1:dimn)
 
 				radiusmax=0.
 				do edge=basis_group(group)%head, basis_group(group)%tail
@@ -205,215 +262,124 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree)
 						center_edge=edge
 					endif			
 				enddo
-				basis_group(group)%radius=radiusmax		
-					
-				if(size(basis_group_pre,1)<2*group+1)then ! if groups not predefined, need to order the points
-					if(option%xyzsort==CKD)then !msh%xyz sort		 
-						xyzmin= 1d300
-						xyzmax= -1d300
-						do edge=basis_group(group)%head, basis_group(group)%tail
-							do ii=1,Dimn
-								xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%new2old(edge)))
-								xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%new2old(edge)))
-							enddo
-						enddo
-						xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
-						
-						mm = basis_group(group)%tail - basis_group(group)%head + 1
-						allocate (distance(mm))	
-						sortdirec = maxloc(xyzrange(1:Dimn),1)
-						! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
-						
-						! if(ker%Kernel==EMSURF)then
-						! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
-							! sortdirec=2
-						! else 
-							! sortdirec=3
-						! end if
-						! endif
-						
-						
-						!$omp parallel do default(shared) private(i)
-						do i=basis_group(group)%head, basis_group(group)%tail
-							distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
-						enddo
-						!$omp end parallel do
 
-					else if(option%xyzsort==TM)then !cobblestone sort
-						
-						mm = basis_group(group)%tail - basis_group(group)%head + 1
-						allocate (distance(mm))	
-						
-						distance(1:mm)=Bigvalue
-						!$omp parallel do default(shared) private(i)
-						do i=basis_group(group)%head, basis_group(group)%tail
-							distance(i-basis_group(group)%head+1)=func_distance(msh%new2old(i),msh%new2old(center_edge),msh)
-						enddo
-						!$omp end parallel do					
-
-					end if
-					
-					allocate (order(mm))
-					allocate(map_temp(mm))
-
-					call quick_sort(distance,order,mm)       
-					!$omp parallel do default(shared) private(ii)     
-					do ii=1, mm
-						map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
-					enddo
-					!$omp end parallel do
-
-					!$omp parallel do default(shared) private(ii)     
-					do ii=1, mm
-						msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
-					enddo
-					!$omp end parallel do			
-					
-
-					! deallocate(edge_temp)
-					deallocate(map_temp)
-					deallocate(order)
-
-					deallocate(distance)
-					
-					
-					if (level<Maxlevel) then
-						basis_group(2*group)%head=basis_group(group)%head
-						basis_group(2*group)%tail=int((basis_group(group)%head+basis_group(group)%tail)/2)
-						basis_group(2*group+1)%head=basis_group(2*group)%tail+1
-						basis_group(2*group+1)%tail=basis_group(group)%tail
-						
-						! if(basis_group(group)%pgno*2<=Maxgrp)then
-							! basis_group(2*group)%pgno=basis_group(group)%pgno*2
-						! else
-							! basis_group(2*group)%pgno=basis_group(group)%pgno
-						! endif
-						! if(basis_group(group)%pgno*2+1<=Maxgrp)then
-							! basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
-						! else
-							! basis_group(2*group+1)%pgno=basis_group(group)%pgno
-						! endif					
-						
-						if(option%xyzsort==CKD)then 
-							seperator = msh%xyz(sortdirec,msh%new2old(basis_group(2*group)%tail))
-						end if
-						
-						
-						basis_group(group)%boundary(1) = sortdirec
-						basis_group(group)%boundary(2) = seperator
-						
-						! fidx = (2*group)- 2**(level+1)+1
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator
-						
-						! fidx = (2*group+1)- 2**(level+1)+1
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = sortdirec
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = seperator				 					
-					endif	
-
-				else 
-					if (level<Maxlevel) then
-						basis_group(2*group)%head=basis_group_pre(2*group,1)
-						basis_group(2*group)%tail=basis_group_pre(2*group,2)
-						basis_group(2*group+1)%head=basis_group_pre(2*group+1,1)
-						basis_group(2*group+1)%tail=basis_group_pre(2*group+1,2)
-						
-						basis_group(group)%boundary(1) = 0
-						basis_group(group)%boundary(2) = 0
-						
-						! fidx = (2*group)- 2**(level+1)+1
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0   ! dummy parameters
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0
-						
-						! fidx = (2*group+1)- 2**(level+1)+1
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(1) = 0
-						! ho_bf1%levels(level+1)%BP(fidx)%boundary(2) = 0				 
-					endif					
-				end if
-			enddo
-		enddo
-		
-		
-		
-		! write(strings , *) Dimn
-		! do level=0, Maxlevel
-			! do group=2**level, 2**(level+1)-1
-				! do edge=basis_group(group)%head, basis_group(group)%tail
-					! ! write(*,*)edge,msh%new2old(edge)
-					! ! write(113,'(I5,I8,Es16.8,Es16.8,Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
-					! write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
-				! enddo
-			! enddo
-		! enddo	   
-		!*************************************************************************************
-	   
-		
-		deallocate(xyzrange)
-		deallocate(xyzmin)
-		deallocate(xyzmax)
-		deallocate(auxpoint)
-		deallocate(groupcenter)	
-		
-		
-		allocate(msh%old2new(msh%Nunk))
-		do ii=1,msh%Nunk
-			msh%old2new(msh%new2old(ii)) = ii
-		end do	
-	else ! the matrix is preordered with msh%pretree
-	!**********************Maxlevel*******************
-		Maxlevel = ceiling_safe(log(dble(size(msh%pretree,1))) / log(2d0))
-		ho_bf1%Maxlevel=Maxlevel
-		!***************************************************
-		
-		Maxgroup=2**(Maxlevel+1)-1
-		allocate (basis_group(Maxgroup))
-		
-		dimn=1
-
-			
-		if(ptree%MyID==Main_ID)write (*,*) ''
-		if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
-		if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
-		if(ptree%MyID==Main_ID)write (*,*) ''
-		if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'
-
-		!***************************************************************************************	   
-		allocate(msh%new2old(msh%Nunk))    
-		do ii=1,msh%Nunk
-			msh%new2old(ii) = ii
-		end do
-		
-		allocate(msh%old2new(msh%Nunk))
-		do ii=1,msh%Nunk
-			msh%old2new(msh%new2old(ii)) = ii
-		end do	
-		!********************************index_of_group**************************************
-		
-		basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
-		do level=Maxlevel,0,-1
-			idxstart=1
-			do group=2**level, 2**(level+1)-1
-				basis_group(group)%level=level
-
-				if(level==Maxlevel)then
-					groupsize = msh%pretree(group-2**Maxlevel+1)
-					call assert(groupsize>0,'zero leafsize may not be handled')
-					basis_group(group)%head = idxstart
-					basis_group(group)%tail = idxstart + groupsize -1
-					idxstart = idxstart + groupsize
-				else
-					basis_group(group)%head = basis_group(2*group)%head
-					basis_group(group)%tail = basis_group(2*group+1)%tail
-				endif					
+				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				allocate (distance(mm))	
 				
-				allocate(basis_group(group)%center(dimn))
-				basis_group(group)%center(1:dimn)=0
-				basis_group(group)%radius=0
+				distance(1:mm)=Bigvalue
+				!$omp parallel do default(shared) private(i)
+				do i=basis_group(group)%head, basis_group(group)%tail
+					distance(i-basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),msh)
+				enddo
+				!$omp end parallel do					
+
+			else if(option%xyzsort==TM_GRAM)then !GRAM-distance-based cobblestone sort
+
+				Nsmp = min(basis_group(group)%tail-basis_group(group)%head+1,50)
+				allocate(perms(basis_group(group)%tail-basis_group(group)%head+1))
+				call rperm(basis_group(group)%tail-basis_group(group)%head+1, perms)
+				
+				radiusmax2=0.
+				do edge=basis_group(group)%head, basis_group(group)%tail
+					radius2=0
+					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center 
+						radius2 = radius2 + gram_distance(edge,perms(ii)+basis_group(group)%head-1,ker,msh,element_Zmn)
+					enddo
+					! call assert(radius2>0,'radius2<0 cannot take square root')
+					! radius2 = sqrt(radius2)
+					radius2 = radius2/Nsmp
+					if (radius2>radiusmax2) then
+						radiusmax2=radius2
+						center_edge=edge
+					endif			
+				enddo
+
+				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				allocate (distance(mm))	
+				
+				distance(1:mm)=Bigvalue
+				
+				
+				!$omp parallel do default(shared) private(i)
+				do i=basis_group(group)%head, basis_group(group)%tail
+					distance(i-basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,element_Zmn)
+				enddo
+				!$omp end parallel do
+
+				deallocate(perms)
+				
+			end if
+			
+			allocate (order(mm))
+			allocate(map_temp(mm))
+
+			call quick_sort(distance,order,mm)       
+			!$omp parallel do default(shared) private(ii)     
+			do ii=1, mm
+				map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
+			enddo
+			!$omp end parallel do
+
+			!$omp parallel do default(shared) private(ii)     
+			do ii=1, mm
+				msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
+			enddo
+			!$omp end parallel do			
+			
+
+			! deallocate(edge_temp)
+			deallocate(map_temp)
+			deallocate(order)
+
+			deallocate(distance)
+			
+			
+			if (level<Maxlevel) then
+				basis_group(2*group)%head=basis_group(group)%head
+				basis_group(2*group)%tail=int((basis_group(group)%head+basis_group(group)%tail)/2)
+				basis_group(2*group+1)%head=basis_group(2*group)%tail+1
+				basis_group(2*group+1)%tail=basis_group(group)%tail
+								
+				if(option%xyzsort==CKD)then 
+					seperator = msh%xyz(sortdirec,msh%new2old(basis_group(2*group)%tail))
+				end if
+				
+				basis_group(group)%boundary(1) = sortdirec
+				basis_group(group)%boundary(2) = seperator
+													
+			endif	
+		enddo
+	enddo	
+	
+   
+	if(dimn>0)then
+	deallocate(xyzrange)
+	deallocate(xyzmin)
+	deallocate(xyzmax)
+	deallocate(auxpoint)
+	deallocate(groupcenter)	
+	endif
+	
+	allocate(msh%old2new(msh%Nunk))
+	do ii=1,msh%Nunk
+		msh%old2new(msh%new2old(ii)) = ii
+	end do		
+		
+	
+	!**********Dump the ordering into a file********************************
+	
+#if	0	
+	write(strings , *) Dimn
+	do level=0, Maxlevel
+		do group=2**level, 2**(level+1)-1
+			do edge=basis_group(group)%head, basis_group(group)%tail
+				write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
 			enddo
 		enddo
-	!*************************************************************************************
+	enddo	   
+#endif
 
-	endif
+
     return
     
 end subroutine HODLR_structuring

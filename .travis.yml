@@ -25,6 +25,7 @@ notifications:
 env:
   matrix:
   - TEST_NUMBER=1"
+  - TEST_NUMBER=2"
 
 
 git:

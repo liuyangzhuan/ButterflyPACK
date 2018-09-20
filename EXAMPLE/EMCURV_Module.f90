@@ -35,7 +35,7 @@ implicit none
 contains
 
 	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_EMCURV(ker,m,n,value_e,msh,quant)
+	subroutine Z_elem_EMCURV(m,n,value_e,quant)
 		
 		use z_HODLR_DEFS
 		implicit none
@@ -44,8 +44,7 @@ contains
 		integer, INTENT(IN):: m,n
 		real(kind=8) r_mn, rtemp1, rtemp2
 		complex(kind=8) value_e
-		type(z_mesh)::msh
-		class(z_kernelquant)::ker
+
 		class(*),pointer :: quant
 		
 		select TYPE(quant)

@@ -22,7 +22,7 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	procedure(F_Z_elem), POINTER :: proc
 	value_e=0
 	proc => ker%FuncZmn
-	call proc(ker,msh%new2old(edge_m),msh%new2old(edge_n),value_e,msh,ker%QuantZmn)
+	call proc(msh%new2old(edge_m),msh%new2old(edge_n),value_e,ker%QuantZmn)
 
 	return
 	

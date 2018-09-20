@@ -3182,7 +3182,7 @@ subroutine SetDefaultOptions(option)
 	option%ErrFillFull=0
 	option%BACA_Batch=64
 	option%RecLR_leaf=BACA
-	option%preorder=0
+	option%nogeo=0
 	option%ErrSol=0
 
 end subroutine SetDefaultOptions	

@@ -13,13 +13,11 @@ implicit none
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as two LR products
-	subroutine Z_elem_LR(ker,m,n,value_e,msh,quant)
+	subroutine Z_elem_LR(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
-		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 		integer ii
@@ -46,13 +44,11 @@ contains
 
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
-	subroutine Z_elem_FULL(ker,m,n,value_e,msh,quant)
+	subroutine Z_elem_FULL(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
-		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 		integer ii
@@ -223,7 +219,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
     !**** set solver parameters	
 	
-	option%preorder=1
+	option%nogeo=1
 	option%Nmin_leaf=200
 	option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
@@ -233,7 +229,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	option%tol_rand=1d-3
 	option%level_check=10000
 	option%precon=DIRECT
-	option%xyzsort=TM
+	option%xyzsort=NATURAL
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
@@ -250,20 +246,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	if(LEN_TRIM(strings)>0)then
 		read(strings,*)option%RecLR_leaf
 	endif	
-
-	!**** create the natural order tree and the natural permutation vector
-	level=0; i=1
-	do while (int(msh%Nunk/i)>option%Nmin_leaf)
-		level=level+1
-		i=2**level
-	enddo
-	Maxlevel=level
-	allocate(msh%pretree(2**Maxlevel))
-	call d_createleaf_natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree)
-	! write(*,*)msh%pretree
-					
-	!***************************************************	
-	
 	
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
@@ -275,7 +257,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call d_HODLR_structuring(ho_bf,option,msh,ptree)
+    call d_HODLR_structuring(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
 	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "

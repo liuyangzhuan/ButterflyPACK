@@ -106,3 +106,4 @@ sed -i -e 's/\<hodlrbf\>/dhodlrbf/g' $DSRCDIR/CMakeLists.txt
 sed -i -e 's/-DDAT/-DDAT=1/g' $DSRCDIR/CMakeLists.txt
 cd $ROOTDIR
 rm -rf $TMP_FILE
+rm -rf $MACRO_FILE

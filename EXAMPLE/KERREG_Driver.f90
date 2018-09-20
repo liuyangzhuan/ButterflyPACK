@@ -8,6 +8,10 @@ implicit none
 		integer dimn  ! dimension of the data sets
 		integer ntrain,ntest ! size of training points and test points
 		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
+		
+		integer Nunk ! size of the matrix 
+		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points		
+		
 	end type quant_app
 
 contains
@@ -25,13 +29,11 @@ contains
 
 	
 	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_RBF(ker,m,n,value_e,msh,quant)
+	subroutine Z_elem_RBF(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
-		class(d_kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type d_kernelquant
 		class(*),pointer :: quant
-		type(d_mesh)::msh
 		integer, INTENT(IN):: m,n
 		real(kind=8)::value_e 
 
@@ -40,9 +42,9 @@ contains
 		
 		select TYPE(quant)
 		type is (quant_app)
-			dimn = size(msh%xyz,1)
+			dimn = size(quant%xyz,1)
 			value_e=0
-			r_mn=sum((msh%xyz(1:dimn,m)-msh%xyz(1:dimn,n))**2)
+			r_mn=sum((quant%xyz(1:dimn,m)-quant%xyz(1:dimn,n))**2)
 			if(r_mn<arg_thresh_Zmn(quant))then
 				value_e = exp(-r_mn/2.0/quant%sigma**2)
 			endif
@@ -155,7 +157,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	read(strings,*)quant%dimn
 	call getarg(3,strings)
 	read(strings,*)quant%ntrain
-	msh%Nunk = quant%ntrain
+	quant%Nunk = quant%ntrain
 	call getarg(4,strings)
 	read(strings,*)quant%ntest
 	call getarg(5,strings)
@@ -166,7 +168,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
     !**** set solver parameters	
 	
-	option%preorder=0
+	option%nogeo=0
 	option%Nmin_leaf=200
 	option%tol_comp=1d-2
 	option%tol_Rdetect=3d-5	
@@ -184,7 +186,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	option%LRlevel=0
 	option%ErrFillFull=0
 	option%ErrSol=1
-	option%RecLR_leaf=BACA
+	option%RecLR_leaf=RRQR
 
 
    !***********************************************************************
@@ -197,7 +199,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_RBF(msh,quant,ptree)
+    call geo_modeling_RBF(quant,ptree)
+	
+	msh%Nunk=quant%Nunk
+	allocate(msh%xyz(quant%dimn,quant%Nunk))
+	msh%xyz=quant%xyz
+	
     if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -205,7 +212,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call d_HODLR_structuring(ho_bf,option,msh,ptree)
+    call d_HODLR_structuring(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
 	call d_BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -243,12 +250,11 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 
 !**** read training sets 
-subroutine geo_modeling_RBF(msh,quant,ptree)
+subroutine geo_modeling_RBF(quant,ptree)
 
     use d_HODLR_DEFS
 	use APPLICATION_MODULE
     implicit none
-    type(d_mesh)::msh
 	type(quant_app)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
@@ -266,9 +272,9 @@ subroutine geo_modeling_RBF(msh,quant,ptree)
 	Dimn = quant%dimn
 	
 	open (90,file=quant%trainfile_p)
-	allocate (msh%xyz(Dimn,0:msh%Nunk))
-	do edge=1,msh%Nunk
-		read (90,*) msh%xyz(1:Dimn,edge)
+	allocate (quant%xyz(Dimn,0:quant%Nunk))
+	do edge=1,quant%Nunk
+		read (90,*) quant%xyz(1:Dimn,edge)
 	enddo  			
  
     return

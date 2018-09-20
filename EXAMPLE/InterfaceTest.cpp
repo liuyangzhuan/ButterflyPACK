@@ -197,13 +197,13 @@ int main(int argc, char* argv[])
 	int Ndim=1; //data dimension
 	double starttime, endtime;
 	double* dat_ptr; 
-	int preorder;  // 0: holdr code will reorder the elements and return a permutation 1: holdr code will use user-supplied tree to create the holdr structure	
+	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy	
 	
 
 	int Nmin=200; //finest leafsize 
 	double tol=1e-4; //compression tolerance
 	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
-	int sort_opt=1; //1:KD tree 3:balanced 2-means
+	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
 	string filename("smalltest.dat");
@@ -238,7 +238,7 @@ if(tst==1){
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];
-	preorder=0;
+	nogeo=0;
 }
 	
 	/*****************************************************************/
@@ -272,7 +272,7 @@ if(tst==2){
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];	
-	preorder=0;
+	nogeo=0;
 }	
 	
 	/*****************************************************************/
@@ -302,7 +302,8 @@ if(tst==3){
 	MPI_Bcast(matV.data(), Npo*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
 	quant_ptr=new C_QuantZmn(Npo, rank_rand, ker, matU, matV);	
-	preorder=1;
+	nogeo=1;
+	sort_opt=0;
 }	
 
 	/*****************************************************************/
@@ -337,7 +338,7 @@ if(tst==3){
 	
 	// set hodlr options
 	d_c_hodlr_set_D_option(&option, "tol_comp", tol);
-	d_c_hodlr_set_I_option(&option, "preorder", preorder);
+	d_c_hodlr_set_I_option(&option, "nogeo", nogeo);
 	d_c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
 	d_c_hodlr_set_I_option(&option, "RecLR_leaf", com_opt); 
 	d_c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 

@@ -188,9 +188,9 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	option%ErrSol=val_i
 	valid_opt=1
 	endif
-	if(trim(str)=='preorder')then
+	if(trim(str)=='nogeo')then
 	call c_f_pointer(val_Cptr, val_i)
-	option%preorder=val_i
+	option%nogeo=val_i
 	valid_opt=1
 	endif
 	if(trim(str)=='RecLR_leaf')then
@@ -247,17 +247,13 @@ end subroutine C_HODLR_Setoption
 
 !**** C interface of HODLR construction
 	!Npo: matrix size
-	!Ndim: data set dimensionality (not used if preorder=1)
-	!Locations: coordinates used for clustering (not used if preorder=1) 
-	!Nmin: leafsize in HODLR tree (not used if preorder=1 and nlevel>0)
+	!Ndim: data set dimensionality (not used if nogeo=1)
+	!Locations: coordinates used for clustering (not used if nogeo=1) 
+	!Nmin: leafsize in HODLR tree 
 	!tol: compression tolerance
-	!nth: number of threads
-	!nmpi: number of processes calling this subroutine 
-	!ninc: pick 1 out of ninc processes to create a new communicator for HODLR
-	!preorder: 0: matrix not pre-ordered,requiring a clustering step 1: matrix pre-ordered 
-	!nlevel: if preorder=1: nlevel=0: require a natural order tree; nlevel=1: an order tree is also provided
+	!nlevel: the number of top levels that have been ordered
 	!tree: the order tree provided by the caller
-	!Permutation: return new2old if preorder=0; return a natural order if preorder=1
+	!Permutation: return the permutation vector new2old
 	!Npo_loc: number of local row/column indices    
 	!ho_bf_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
@@ -352,8 +348,14 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 		
 	t1 = OMP_get_wtime()
 
-	!**** the geometry points are provided by user and require reordering 
-	if(option%preorder==0)then 
+	
+	if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel:"
+	Maxlevel=nlevel
+	allocate(msh%pretree(2**Maxlevel))
+	msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)	
+	
+	!**** the geometry points are provided by user 
+	if(option%nogeo==0)then 
 		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel requiring reorder:"
 		Dimn = Ndim 
 		allocate (msh%xyz(Dimn,0:msh%Nunk))
@@ -361,28 +363,8 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 		do edge=1,msh%Nunk
 			msh%xyz(1:Dimn,edge)= Locations(ii+1:ii+Dimn)
 			ii = ii + Dimn
-		enddo  	
-	else 
-		if(nlevel==0)then  !**** the geometry points may not be provided, and the preorder tree is not provided, create a natural order tree 
-			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel with natural reorder:"
-			level=0; i=1
-			do while (int(msh%Nunk/i)>option%Nmin_leaf)
-				level=level+1
-				i=2**level
-			enddo
-			Maxlevel=level
-			allocate(msh%pretree(2**Maxlevel))
-			call CreateLeaf_Natural(Maxlevel,0,1,1,msh%Nunk,msh%pretree) 
-			
-		else   !**** the geometry points may not be provided, but the preorder tree is provided 			
-			
-			if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel and user-supplied tree order:"
-			Maxlevel=nlevel
-			allocate(msh%pretree(2**Maxlevel))
-			msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
-		endif
-	end if	
-	
+		enddo 
+	endif
 	
 	
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -391,7 +373,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting......"
-    call HODLR_structuring(ho_bf,option,msh,ptree)
+    call HODLR_structuring(ho_bf,option,msh,ker,element_Zmn_user_C,ptree)
 	call BPlus_structuring(ho_bf,option,msh,ptree)
     if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "
@@ -408,17 +390,15 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	! write(*,*)t2-t1
 
 	
-	!**** return the permutation vector (if preorder==1, Permutation is the natural order)
+	!**** return the permutation vector 
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
 	Npo_loc = msh%idxe-msh%idxs+1		
-	! if(option%preorder==0)then 
 	if (ptree%MyID==Main_ID) then	
 		do edge=1,Npo
 			Permutation(edge) = msh%new2old(edge)
 		enddo
 	endif	
-	! endif
 	
 	!**** return the C address of hodlr structures to C caller
 	ho_bf_Cptr=c_loc(ho_bf)
