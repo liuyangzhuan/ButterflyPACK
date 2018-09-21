@@ -127,6 +127,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 		if(.not. allocated(msh%xyz))then
 			if(option%xyzsort==CKD .or. option%xyzsort==TM)then
 				write(*,*)'Geometrical information is not provided. Try use NATRUAL or TM_GRAM ordering'
+				stop
 			endif
 		endif
 		

@@ -3126,8 +3126,8 @@ subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,V
 		Nin_p2 => block_off2%M_p
 		Nout_p1 => block_off1%N_p
 		Nout_p2 => block_off2%N_p	
-		offin1 = block_off1%M
-		offout1 = 0
+		offin1 = 0
+		offout1 = block_off1%M
 		offin2 = block_off1%M
 		offout2 = 0		
 	endif

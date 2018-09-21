@@ -216,6 +216,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
 
+	call MPI_Finalize(ierr)	
+	
     ! ! ! ! pause
 
 end PROGRAM HODLR_BUTTERFLY_SOLVER_3D

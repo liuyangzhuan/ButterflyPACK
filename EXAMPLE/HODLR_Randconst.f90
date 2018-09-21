@@ -318,7 +318,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 
     write(*,*) "-------------------------------program end-------------------------------------"
-
+	call MPI_Finalize(ierr)
     ! ! ! ! pause
 
 end PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE

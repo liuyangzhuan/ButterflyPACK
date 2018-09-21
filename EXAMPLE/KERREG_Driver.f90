@@ -245,6 +245,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
 
+	call MPI_Finalize(ierr)
 	
 end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
