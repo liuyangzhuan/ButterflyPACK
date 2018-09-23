@@ -275,8 +275,8 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
     real T0
     real(kind=8) n1,n2,rtemp	
     DT value_Z
-    DT,allocatable:: Voltage_pre(:),x(:,:),xtrue(:,:),b(:,:)
-	real(kind=8):: rel_error,rtemp1,rtemp2,norm1,norm2
+    DT,allocatable:: Voltage_pre(:),x(:,:),xtrue(:,:),b(:,:),btrue(:,:)
+	real(kind=8):: rel_error,rtemp1,rtemp2,rtemp3,rtemp4,norm1,norm2,norm3,norm4
 	type(Hoption)::option
 	! type(mesh)::msh
 	! type(kernelquant)::ker
@@ -302,11 +302,15 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	x=0		
 	allocate (xtrue(N_unk_loc,1))
 	call RandomMat(N_unk_loc,1,1,xtrue,0)	
+	allocate (btrue(N_unk_loc,1))	
+	btrue=0	
 	allocate (b(N_unk_loc,1))	
 	b=0
-	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,xtrue,b,ho_bf_inv,ptree,stats)
+	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,xtrue,btrue,ho_bf_inv,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call HODLR_Solution(ho_bf_inv,x,b,N_unk_loc,1,option,ptree,stats)
+	call HODLR_Solution(ho_bf_inv,x,btrue,N_unk_loc,1,option,ptree,stats)
+	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,x,b,ho_bf_inv,ptree,stats)
+	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	
 	rtemp1 = fnorm(xtrue-x,N_unk_loc,1)**2d0;
 	rtemp2 = fnorm(xtrue,N_unk_loc,1)**2d0;
@@ -317,8 +321,19 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 		write(*,*)'||x-xtrue||_F/||xtrue||_F: ',sqrt(norm1/norm2)
 	endif
 	
+	rtemp3 = fnorm(btrue-b,N_unk_loc,1)**2d0;
+	rtemp4 = fnorm(btrue,N_unk_loc,1)**2d0;
+	
+	call MPI_ALLREDUCE(rtemp3, norm3, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
+	call MPI_ALLREDUCE(rtemp4, norm4, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)then
+		write(*,*)'||b-Ax||_F/||b||_F: ',sqrt(norm3/norm4)
+	endif	
+	
+	
 	deallocate(x)
 	deallocate(xtrue)
+	deallocate(btrue)
 	deallocate(b)
 	
 end subroutine HODLR_Test_Solve_error

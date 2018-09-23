@@ -43,16 +43,26 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 			
 		ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 		nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,1)
+		
+#if 0		
 		allocate(ipiv(nn))
 		call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop=flop)
 		stats%Flop_Factor = stats%Flop_Factor + flop
 		call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,ipiv,flop=flop)		
 		stats%Flop_Factor = stats%Flop_Factor + flop
+		deallocate(ipiv)
+#else		
+		call GeneralInverse(nn,nn,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,SafeEps,Flops=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+#endif		
+		
 		!!!!!!! the forward block BP can be deleted if not used in solution phase
+		
+		! write(*,*)fnorm(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,nn,nn)
 		
 		stats%Mem_Direct_inv=stats%Mem_Direct_inv+SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3	
 
-		deallocate(ipiv)
+		
 	end do		
 
 

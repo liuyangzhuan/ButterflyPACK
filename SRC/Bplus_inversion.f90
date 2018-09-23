@@ -1625,6 +1625,8 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	
 	
 	if(rank<=nbslpk)then
+	
+#if 0	
 		allocate(ipiv(rank))
 		ipiv=0
 		call getrff90(matrixtemp1,ipiv,flop=flop)
@@ -1632,7 +1634,16 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		call getrif90(matrixtemp1,ipiv,flop=flop)	
 		stats%Flop_Factor = stats%Flop_Factor + flop
 		deallocate(ipiv)
+#else		
+		matrixtemp = matrixtemp1	
+		call GeneralInverse(rank,rank,matrixtemp,matrixtemp1,SafeEps,Flops=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+#endif		
+		
 	else 
+	
+		!!!!!! the SVD-based pseudo inverse needs to be implemented later
+	
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 			if(ptree%MyID==ptree%pgrp(pgno)%head)then

@@ -164,6 +164,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	read(strings,*)quant%sigma
 	call getarg(6,strings)
 	read(strings,*)quant%lambda	
+	call getarg(7,strings)
+	read(strings,*)option%xyzsort
+	call getarg(8,strings)
+	read(strings,*)option%RecLR_leaf	
 	
 
     !**** set solver parameters	
@@ -178,7 +182,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	option%tol_rand=1d-3
 	option%level_check=10000
 	option%precon=DIRECT
-	option%xyzsort=TM
+	! option%xyzsort=TM
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
@@ -186,7 +190,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	option%LRlevel=0
 	option%ErrFillFull=0
 	option%ErrSol=1
-	option%RecLR_leaf=RRQR
+	! option%RecLR_leaf=RRQR
 
 
    !***********************************************************************

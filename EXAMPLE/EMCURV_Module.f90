@@ -50,8 +50,12 @@ contains
 		select TYPE(quant)
 			type is (quant_EMCURV)
 				! convert to new indices because msh%info_unk has been reordered
+
 				edge_m = m
 				edge_n = n
+
+				! if(mod(m,2)==0)edge_m=m-1
+
 				
 				if (edge_m/=edge_n) then
 				
