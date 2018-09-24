@@ -112,9 +112,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! Optimizing_forward=0
     ! Fast_inverse=0
     ! Add_method_of_base_level=2
-    quant%rank_approximate_para1=6.0
-    quant%rank_approximate_para2=6.0
-    quant%rank_approximate_para3=6.0
+    ! quant%rank_approximate_para1=6.0
+    ! quant%rank_approximate_para2=6.0
+    ! quant%rank_approximate_para3=6.0
 	option%tol_LS=1d-12
 	! tfqmr_tolerance=1d-6
 	option%tol_itersol=3d-3
@@ -162,7 +162,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
     
-	call geo_modeling_SURF(quant,ptree,DATA_DIR)
+	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
 	
 	! generate the list of points for clustering
 	msh%Nunk=quant%Nunk
@@ -221,174 +221,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! ! ! ! pause
 
 end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
-
-
-
-
-
-subroutine geo_modeling_SURF(quant,ptree,DATA_DIR)
-	use EMSURF_MODULE
-    use z_HODLR_DEFS
-	use z_misc
-    implicit none
-    
-    integer i,j,ii,jj,iii,jjj
-    integer intemp
-    integer node, patch, edge, flag
-    integer node1, node2
-    integer node_temp(2)
-    real(kind=8) a(3),b(3),c(3),r0
-	! type(z_mesh)::msh
-	type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
-	CHARACTER (*) DATA_DIR
-	integer Maxedge
-	
-
-    open(11,file=trim(DATA_DIR)//'/node.geo')
-    open(111,file=trim(DATA_DIR)//'/elem.geo')
-    
-    read(11,*)quant%maxnode
-    read(111,*)quant%maxpatch
-    Maxedge=quant%maxpatch*3/2
-	
-    
-	
-    allocate(quant%xyz(3,quant%maxnode+Maxedge))
-    allocate(quant%node_of_patch(0:3,quant%maxpatch),quant%info_unk(0:6,maxedge+1000))
-    allocate(quant%normal_of_patch(3,quant%maxpatch))
-    
-    
-    !************quant%xyz****************
-    i=1
-    do while(i<=quant%maxnode)
-        read(11,*)intemp,quant%xyz(1:3,i)
-        quant%xyz(1:3,i)=quant%xyz(1:3,i)/quant%scaling
-        i=i+1
-    enddo
-    close(11)
-    
-    i=1
-    if (quant%mesh_normal==1) then
-        do while(i<=quant%maxpatch)
-            read(111,*)intemp,quant%node_of_patch(1:3,i)
-            i=i+1 
-        enddo
-    elseif (quant%mesh_normal==-1) then
-        do while(i<=quant%maxpatch)
-            read(111,*)intemp,quant%node_of_patch(3,i),quant%node_of_patch(2,i),quant%node_of_patch(1,i)
-            i=i+1 
-        enddo
-    endif
-    close(111)
-    
-    !************quant%normal_of_patch****************
-    
-    !$omp parallel do default(shared) private(patch,i,a,b,c,r0)
-    do patch=1,quant%maxpatch
-        do i=1,3
-            a(i)=(quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
-            b(i)=(quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
-        enddo
-        call curl(a,b,c)
-        r0=sqrt(c(1)**2+c(2)**2+c(3)**2)
-        c(1)=c(1)/r0
-        c(2)=c(2)/r0
-        c(3)=c(3)/r0
-        quant%normal_of_patch(1:3,patch)=c(1:3)	    
-    enddo
-    !$omp end parallel do
-    
-    !************quant%info_unk****************
-
-    edge=0
-    do i=1,quant%maxpatch-1
-        do j=i+1,quant%maxpatch
-            flag=0;node1=0;node2=0;iii=1
-            do ii=1,3
-                do jj=1,3
-	     	         if(quant%node_of_patch(ii,i)==quant%node_of_patch(jj,j))then
-                        flag=flag+1
-                        node_temp(iii)=quant%node_of_patch(ii,i)
-                        iii=iii+1
-                    endif
-                enddo
-            enddo
-            if(flag==2)then
-                edge=edge+1
-                if(node_temp(1)<node_temp(2)) then
-                    quant%info_unk(1,edge)=node_temp(1)
-                    quant%info_unk(2,edge)=node_temp(2)
-                else
-                    quant%info_unk(1,edge)=node_temp(2)
-                    quant%info_unk(2,edge)=node_temp(1)
-                endif
-                quant%info_unk(3,edge)=i
-                quant%info_unk(4,edge)=j       ! notice that : i<j  
-                quant%info_unk(0,edge)=0
-            endif
-        enddo
-    enddo
-    
-    Maxedge=edge
-    
-    !$omp parallel do default(shared) private(edge,node_temp,jj,iii,jjj)
-    do edge=1,maxedge
-	    node_temp(1)=0
-	    node_temp(2)=0	    
-	    do jj=3,4
-             do iii=1,3
-                 do jjj=1,2
-        	            if(quant%node_of_patch(iii,quant%info_unk(jj,edge))==quant%info_unk(jjj,edge)) then
-                           node_temp(jj-2)=node_temp(jj-2)+iii               
-        	            endif
-                 enddo
-             enddo
-         enddo
-         node_temp(1)=6-node_temp(1)
-         node_temp(2)=6-node_temp(2)
-         quant%info_unk(5,edge)=quant%node_of_patch(node_temp(1),quant%info_unk(3,edge))
-         quant%info_unk(6,edge)=quant%node_of_patch(node_temp(2),quant%info_unk(4,edge))
-    enddo
-    !$omp end parallel do
-    
-    node=quant%maxnode
-    do edge=1, Maxedge
-        node=node+1
-        quant%info_unk(0,edge)=node
-        do i=1,3
-            quant%xyz(i,node)=1./2.*(quant%xyz(i,quant%info_unk(1,edge))+quant%xyz(i,quant%info_unk(2,edge)))
-        enddo
-    enddo
-	
-	quant%maxedgelength = 0
-	do edge=1,Maxedge
-		quant%maxedgelength = max(quant%maxedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
-	end do	
-
-	quant%minedgelength = BigValue
-	do edge=1,Maxedge
-		quant%minedgelength = min(quant%minedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
-	end do	
-	
-	! write(*,*)	quant%xyz(1,1:100),sum(quant%xyz(1,:))
-	! stop
-	quant%Nunk = Maxedge
-
-    if(ptree%MyID==Main_ID)write (*,*) ''
-    if(ptree%MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
-	if(ptree%MyID==Main_ID)write (*,*) 'minedgelength:',quant%minedgelength
-	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/minedgelength:',quant%wavelength/quant%minedgelength
-	if(ptree%MyID==Main_ID)write (*,*) 'maxedgelength:',quant%maxedgelength
-	if(ptree%MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',quant%wavelength/quant%maxedgelength
-
-    if(ptree%MyID==Main_ID)write (*,*) '' 
-    
-    return
-    
-end subroutine geo_modeling_SURF
-
-
 
 
 subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)

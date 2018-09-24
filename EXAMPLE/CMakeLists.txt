@@ -1,5 +1,6 @@
 include_directories(${HODLRBF_SOURCE_DIR}/SRC_DOUBLE)
 include_directories(${HODLRBF_SOURCE_DIR}/SRC_DOUBLECOMPLEX)
+include_directories(${HODLRBF_SOURCE_DIR}/EXAMPLE)
 include_directories( ${HODLRBF_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${HODLRBF_BINARY_DIR}/SRC_DOUBLECOMPLEX)
 # Libs linked to all of the examples

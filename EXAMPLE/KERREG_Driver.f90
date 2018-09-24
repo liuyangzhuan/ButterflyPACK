@@ -203,7 +203,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
-    call geo_modeling_RBF(quant,ptree)
+    call geo_modeling_RBF(quant,ptree%Comm)
 	
 	msh%Nunk=quant%Nunk
 	allocate(msh%xyz(quant%dimn,quant%Nunk))
@@ -255,7 +255,7 @@ end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 
 
 !**** read training sets 
-subroutine geo_modeling_RBF(quant,ptree)
+subroutine geo_modeling_RBF(quant,MPIcomm)
 
     use d_HODLR_DEFS
 	use APPLICATION_MODULE
@@ -272,7 +272,9 @@ subroutine geo_modeling_RBF(quant,ptree)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
-	type(d_proctree)::ptree
+	! type(d_proctree)::ptree
+	integer MPIcomm,MyID,ierr
+	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 	
 	Dimn = quant%dimn
 	

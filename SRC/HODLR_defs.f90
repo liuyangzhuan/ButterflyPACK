@@ -354,7 +354,6 @@ module HODLR_DEFS
 		
 		subroutine F_Z_elem(m,n,val,quant) ! m,n represents indices in natural order
 		  import::mesh,kernelquant
-		  ! class(kernelquant)::ker ! this is required if F_Z_elem is a procedure pointer defined in type kernelquant
 		  class(*),pointer :: quant
 		  integer, INTENT(IN):: m,n
 		  DT::val 
