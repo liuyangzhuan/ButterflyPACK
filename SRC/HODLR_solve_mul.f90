@@ -318,7 +318,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	call MPI_ALLREDUCE(rtemp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	call MPI_ALLREDUCE(rtemp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)then
-		write(*,*)'||x-xtrue||_F/||xtrue||_F: ',sqrt(norm1/norm2)
+		write(*,*)'||X_t-H\(H*X_t)||_F/||X_t||_F: ',sqrt(norm1/norm2)
 	endif
 	
 	rtemp3 = fnorm(btrue-b,N_unk_loc,1)**2d0;
@@ -327,7 +327,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	call MPI_ALLREDUCE(rtemp3, norm3, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	call MPI_ALLREDUCE(rtemp4, norm4, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)then
-		write(*,*)'||b-Ax||_F/||b||_F: ',sqrt(norm3/norm4)
+		write(*,*)'||B-H*(H\B)||_F/||B||_F: ',sqrt(norm3/norm4)
 	endif	
 	
 	
