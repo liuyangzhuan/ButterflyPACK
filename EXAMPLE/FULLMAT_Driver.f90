@@ -229,7 +229,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	option%tol_rand=1d-3
 	option%level_check=10000
 	option%precon=DIRECT
-	option%xyzsort=NATURAL
+	option%xyzsort=TM_GRAM !NATURAL
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
@@ -290,8 +290,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
-	deallocate(quant%matU_glo)
-	deallocate(quant%matV_glo)
+	! deallocate(quant%matU_glo)
+	! deallocate(quant%matV_glo)
 	
 	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"

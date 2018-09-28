@@ -122,7 +122,7 @@ endif
 end subroutine delete_Bplus
 
 
-subroutine copy_butterfly(block_i,block_o,memory)
+subroutine copy_butterfly(trans,block_i,block_o,memory)
 use HODLR_DEFS
 use misc
 implicit none 
@@ -131,132 +131,265 @@ type(matrixblock)::block_i,block_o
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly	
+character::trans
 real(kind=8),optional::memory
+
 if(present(memory))memory=0
-block_o%level = block_i%level
-block_o%col_group = block_i%col_group
-block_o%row_group = block_i%row_group
-block_o%style = block_i%style
-block_o%level_butterfly = block_i%level_butterfly
-block_o%rankmax = block_i%rankmax
-block_o%rankmin = block_i%rankmin
-block_o%dimension_rank = block_i%dimension_rank
-block_o%M = block_i%M
-block_o%N = block_i%N
-block_o%headm = block_i%headm
-block_o%headn = block_i%headn
 
-block_o%M_loc = block_i%M_loc
-block_o%M_loc_db = block_i%M_loc_db
-block_o%N_loc = block_i%N_loc
-block_o%N_loc_db = block_i%N_loc_db
-block_o%pgno = block_i%pgno
-block_o%pgno_db = block_i%pgno_db
+if(trans=='N')then
 
+	block_o%level = block_i%level
+	block_o%col_group = block_i%col_group
+	block_o%row_group = block_i%row_group
+	block_o%style = block_i%style
+	block_o%level_butterfly = block_i%level_butterfly
+	block_o%rankmax = block_i%rankmax
+	block_o%rankmin = block_i%rankmin
+	block_o%dimension_rank = block_i%dimension_rank
+	block_o%M = block_i%M
+	block_o%N = block_i%N
+	block_o%headm = block_i%headm
+	block_o%headn = block_i%headn
 
-
-if(associated(block_i%N_p))then
-	allocate(block_o%N_p(size(block_i%N_p,1),2))
-	block_o%N_p = block_i%N_p
-endif
-if(associated(block_i%M_p))then
-	allocate(block_o%M_p(size(block_i%M_p,1),2))
-	block_o%M_p = block_i%M_p
-endif
-if(associated(block_i%N_p_db))then
-	allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
-	block_o%N_p_db = block_i%N_p_db
-endif
-if(associated(block_i%M_p_db))then
-	allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
-	block_o%M_p_db = block_i%M_p_db
-endif
+	block_o%M_loc = block_i%M_loc
+	block_o%M_loc_db = block_i%M_loc_db
+	block_o%N_loc = block_i%N_loc
+	block_o%N_loc_db = block_i%N_loc_db
+	block_o%pgno = block_i%pgno
+	block_o%pgno_db = block_i%pgno_db
 
 
 
-level_butterfly = block_i%level_butterfly
-num_blocks=2**level_butterfly
+	if(associated(block_i%N_p))then
+		allocate(block_o%N_p(size(block_i%N_p,1),2))
+		block_o%N_p = block_i%N_p
+	endif
+	if(associated(block_i%M_p))then
+		allocate(block_o%M_p(size(block_i%M_p,1),2))
+		block_o%M_p = block_i%M_p
+	endif
+	if(associated(block_i%N_p_db))then
+		allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
+		block_o%N_p_db = block_i%N_p_db
+	endif
+	if(associated(block_i%M_p_db))then
+		allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
+		block_o%M_p_db = block_i%M_p_db
+	endif
 
-if(block_i%style==2)then
-	if(allocated(block_i%ButterflyU%blocks))then
-		allocate(block_o%ButterflyU%blocks(num_blocks))
-		allocate(block_o%ButterflyV%blocks(num_blocks))
-		if (level_butterfly/=0) then
-			allocate(block_o%ButterflyKerl(level_butterfly))
-		end if
 
-		do level=0, level_butterfly
-			index_ij=0
-			if (level>0) then
-				block_o%ButterflyKerl(level)%num_row=2**level
-				block_o%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
-				allocate(block_o%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
-			endif
-			do index_i=1, 2**level
-				do index_j=1, 2**(level_butterfly-level)
-					index_ij=index_ij+1
-					if (level==0) then
-						nn=size(block_i%ButterflyV%blocks(index_ij)%matrix,1)
-						rank=size(block_i%ButterflyV%blocks(index_ij)%matrix,2)
-						allocate(block_o%ButterflyV%blocks(index_ij)%matrix(nn,rank))
-						block_o%ButterflyV%blocks(index_ij)%matrix = block_i%ButterflyV%blocks(index_ij)%matrix
-						block_o%ButterflyV%blocks(index_ij)%mdim = block_i%ButterflyV%blocks(index_ij)%mdim
-						block_o%ButterflyV%blocks(index_ij)%ndim = block_i%ButterflyV%blocks(index_ij)%ndim
-						if(present(memory))memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_ij)%matrix)/1024.0d3
-					else                    
-						nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,2)
-						rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,1)
-						allocate(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank,nn))
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%mdim
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%ndim
-						if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix)/1024.0d3
-						nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,2)
-						allocate(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank,nn))
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix                    
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%mdim                    
-						block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%ndim                    
-						if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix)/1024.0d3
-					endif
-					if (level==level_butterfly) then
-						mm=size(block_i%ButterflyU%blocks(index_ij)%matrix,1)
-						rank=size(block_i%ButterflyU%blocks(index_ij)%matrix,2)
-						allocate(block_o%ButterflyU%blocks(index_ij)%matrix(mm,rank))
-						block_o%ButterflyU%blocks(index_ij)%matrix = block_i%ButterflyU%blocks(index_ij)%matrix					
-						block_o%ButterflyU%blocks(index_ij)%mdim = block_i%ButterflyU%blocks(index_ij)%mdim					
-						block_o%ButterflyU%blocks(index_ij)%ndim = block_i%ButterflyU%blocks(index_ij)%ndim					
-						if(present(memory))memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_ij)%matrix)/1024.0d3
-					endif
+
+	level_butterfly = block_i%level_butterfly
+	num_blocks=2**level_butterfly
+
+	if(block_i%style==2)then
+		if(allocated(block_i%ButterflyU%blocks))then
+			allocate(block_o%ButterflyU%blocks(num_blocks))
+			allocate(block_o%ButterflyV%blocks(num_blocks))
+			if (level_butterfly/=0) then
+				allocate(block_o%ButterflyKerl(level_butterfly))
+			end if
+
+			do level=0, level_butterfly
+				index_ij=0
+				if (level>0) then
+					block_o%ButterflyKerl(level)%num_row=2**level
+					block_o%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+					allocate(block_o%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
+				endif
+				do index_i=1, 2**level
+					do index_j=1, 2**(level_butterfly-level)
+						index_ij=index_ij+1
+						if (level==0) then
+							nn=size(block_i%ButterflyV%blocks(index_ij)%matrix,1)
+							rank=size(block_i%ButterflyV%blocks(index_ij)%matrix,2)
+							allocate(block_o%ButterflyV%blocks(index_ij)%matrix(nn,rank))
+							block_o%ButterflyV%blocks(index_ij)%matrix = block_i%ButterflyV%blocks(index_ij)%matrix
+							block_o%ButterflyV%blocks(index_ij)%mdim = block_i%ButterflyV%blocks(index_ij)%mdim
+							block_o%ButterflyV%blocks(index_ij)%ndim = block_i%ButterflyV%blocks(index_ij)%ndim
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_ij)%matrix)/1024.0d3
+						else                    
+							nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,2)
+							rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,1)
+							allocate(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank,nn))
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%mdim
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%ndim
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix)/1024.0d3
+							nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,2)
+							allocate(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank,nn))
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix                    
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%mdim                    
+							block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%ndim                    
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix)/1024.0d3
+						endif
+						if (level==level_butterfly) then
+							mm=size(block_i%ButterflyU%blocks(index_ij)%matrix,1)
+							rank=size(block_i%ButterflyU%blocks(index_ij)%matrix,2)
+							allocate(block_o%ButterflyU%blocks(index_ij)%matrix(mm,rank))
+							block_o%ButterflyU%blocks(index_ij)%matrix = block_i%ButterflyU%blocks(index_ij)%matrix					
+							block_o%ButterflyU%blocks(index_ij)%mdim = block_i%ButterflyU%blocks(index_ij)%mdim					
+							block_o%ButterflyU%blocks(index_ij)%ndim = block_i%ButterflyU%blocks(index_ij)%ndim					
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_ij)%matrix)/1024.0d3
+						endif
+					enddo
 				enddo
 			enddo
-		enddo
-	endif
-	
-	if(allocated(block_i%ButterflyMiddle))then
-		levelm = ceiling_safe(dble(level_butterfly)/2d0)
-		allocate(block_o%ButterflyMiddle(2**levelm,2**(level_butterfly-levelm)))
+		endif
+		
+		if(allocated(block_i%ButterflyMiddle))then
+			levelm = ceiling_safe(dble(level_butterfly)/2d0)
+			allocate(block_o%ButterflyMiddle(2**levelm,2**(level_butterfly-levelm)))
 
-		do index_i_m=1, 2**levelm
-			do index_j_m=1, 2**(level_butterfly-levelm)	
-				rank = size(block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix,1)
-				allocate(block_o%ButterflyMiddle(index_i_m,index_j_m)%matrix(rank,rank))
-				block_o%ButterflyMiddle(index_i_m,index_j_m)%matrix = block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix
-				block_o%ButterflyMiddle(index_i_m,index_j_m)%mdim = block_i%ButterflyMiddle(index_i_m,index_j_m)%mdim
-				block_o%ButterflyMiddle(index_i_m,index_j_m)%ndim = block_i%ButterflyMiddle(index_i_m,index_j_m)%ndim
+			do index_i_m=1, 2**levelm
+				do index_j_m=1, 2**(level_butterfly-levelm)	
+					rank = size(block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix,1)
+					allocate(block_o%ButterflyMiddle(index_i_m,index_j_m)%matrix(rank,rank))
+					block_o%ButterflyMiddle(index_i_m,index_j_m)%matrix = block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix
+					block_o%ButterflyMiddle(index_i_m,index_j_m)%mdim = block_i%ButterflyMiddle(index_i_m,index_j_m)%mdim
+					block_o%ButterflyMiddle(index_i_m,index_j_m)%ndim = block_i%ButterflyMiddle(index_i_m,index_j_m)%ndim
+				end do
 			end do
-		end do
+		end if
+	else if(block_i%style==1)then
+		if(allocated(block_i%fullmat))then
+			mm = size(block_i%fullmat,1)
+			nn = size(block_i%fullmat,2)
+			allocate (block_o%fullmat(mm,nn))
+			block_o%fullmat = block_i%fullmat
+		endif	
+	else 
+		! write(*,*)'block style not implemented'
+		! stop
 	end if
-else if(block_i%style==1)then
-	if(allocated(block_i%fullmat))then
-		mm = size(block_i%fullmat,1)
-		nn = size(block_i%fullmat,2)
-		allocate (block_o%fullmat(mm,nn))
-		block_o%fullmat = block_i%fullmat
-	endif	
-else 
-	! write(*,*)'block style not implemented'
-	! stop
-end if
+else if(trans=='T')then
+
+	block_o%level = block_i%level
+	block_o%col_group = block_i%row_group
+	block_o%row_group = block_i%col_group
+	block_o%style = block_i%style
+	block_o%level_butterfly = block_i%level_butterfly
+	block_o%rankmax = block_i%rankmax
+	block_o%rankmin = block_i%rankmin
+	block_o%dimension_rank = block_i%dimension_rank
+	block_o%M = block_i%N
+	block_o%N = block_i%M
+	block_o%headm = block_i%headn
+	block_o%headn = block_i%headm
+
+	block_o%M_loc = block_i%N_loc
+	block_o%M_loc_db = block_i%N_loc_db
+	block_o%N_loc = block_i%M_loc
+	block_o%N_loc_db = block_i%M_loc_db
+	block_o%pgno = block_i%pgno
+	block_o%pgno_db = block_i%pgno_db
+
+
+
+	if(associated(block_i%N_p))then
+		allocate(block_o%M_p(size(block_i%N_p,1),2))
+		block_o%M_p = block_i%N_p
+	endif
+	if(associated(block_i%M_p))then
+		allocate(block_o%N_p(size(block_i%M_p,1),2))
+		block_o%N_p = block_i%M_p
+	endif
+	if(associated(block_i%N_p_db))then
+		allocate(block_o%M_p_db(size(block_i%N_p_db,1),2))
+		block_o%M_p_db = block_i%N_p_db
+	endif
+	if(associated(block_i%M_p_db))then
+		allocate(block_o%N_p_db(size(block_i%M_p_db,1),2))
+		block_o%N_p_db = block_i%M_p_db
+	endif
+
+
+
+	level_butterfly = block_i%level_butterfly
+	num_blocks=2**level_butterfly
+
+	if(block_i%style==2)then
+		if(allocated(block_i%ButterflyU%blocks))then
+			allocate(block_o%ButterflyU%blocks(num_blocks))
+			allocate(block_o%ButterflyV%blocks(num_blocks))
+			if (level_butterfly/=0) then
+				allocate(block_o%ButterflyKerl(level_butterfly))
+			end if
+
+			do level=0, level_butterfly
+				index_ij=0
+				if (level>0) then
+					block_o%ButterflyKerl(level)%num_col=2**level
+					block_o%ButterflyKerl(level)%num_row=2**(level_butterfly-level+1)
+					allocate(block_o%ButterflyKerl(level)%blocks(2**(level_butterfly-level+1),2**level))
+				endif
+				do index_i=1, 2**level
+					do index_j=1, 2**(level_butterfly-level)
+						index_ij=index_ij+1
+						if (level==0) then
+							nn=size(block_i%ButterflyV%blocks(index_ij)%matrix,1)
+							rank=size(block_i%ButterflyV%blocks(index_ij)%matrix,2)
+							allocate(block_o%ButterflyU%blocks(index_ij)%matrix(nn,rank))
+							block_o%ButterflyU%blocks(index_ij)%matrix = block_i%ButterflyV%blocks(index_ij)%matrix
+							block_o%ButterflyU%blocks(index_ij)%mdim = block_i%ButterflyV%blocks(index_ij)%mdim
+							block_o%ButterflyU%blocks(index_ij)%ndim = block_i%ButterflyV%blocks(index_ij)%ndim
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_ij)%matrix)/1024.0d3
+						else                    
+							nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,2)
+							rank=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,1)
+							allocate(block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j-1,index_i)%matrix(nn,rank))
+							call copymatT(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix,block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j-1,index_i)%matrix,rank,nn)
+							block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j-1,index_i)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%mdim
+							block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j-1,index_i)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%ndim
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j-1,index_i)%matrix)/1024.0d3
+							nn=size(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,2)
+							allocate(block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j,index_i)%matrix(nn,rank))
+							call copymatT(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix,block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j,index_i)%matrix,rank,nn)                   
+							block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j,index_i)%mdim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%mdim                    
+							block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j,index_i)%ndim = block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%ndim                    
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyKerl(level_butterfly-level+1)%blocks(2*index_j,index_i)%matrix)/1024.0d3
+						endif
+						if (level==level_butterfly) then
+							mm=size(block_i%ButterflyU%blocks(index_ij)%matrix,1)
+							rank=size(block_i%ButterflyU%blocks(index_ij)%matrix,2)
+							allocate(block_o%ButterflyV%blocks(index_ij)%matrix(mm,rank))
+							block_o%ButterflyV%blocks(index_ij)%matrix = block_i%ButterflyU%blocks(index_ij)%matrix					
+							block_o%ButterflyV%blocks(index_ij)%mdim = block_i%ButterflyU%blocks(index_ij)%mdim					
+							block_o%ButterflyV%blocks(index_ij)%ndim = block_i%ButterflyU%blocks(index_ij)%ndim					
+							if(present(memory))memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_ij)%matrix)/1024.0d3
+						endif
+					enddo
+				enddo
+			enddo
+		endif
+		
+		if(allocated(block_i%ButterflyMiddle))then
+			levelm = ceiling_safe(dble(level_butterfly)/2d0)
+			allocate(block_o%ButterflyMiddle(2**(level_butterfly-levelm),2**levelm))
+
+			do index_i_m=1, 2**levelm
+				do index_j_m=1, 2**(level_butterfly-levelm)	
+					rank = size(block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix,1)
+					allocate(block_o%ButterflyMiddle(index_j_m,index_i_m)%matrix(rank,rank))
+					call copymatT(block_i%ButterflyMiddle(index_i_m,index_j_m)%matrix,block_o%ButterflyMiddle(index_j_m,index_i_m)%matrix,rank,rank)
+					block_o%ButterflyMiddle(index_j_m,index_i_m)%mdim = block_i%ButterflyMiddle(index_i_m,index_j_m)%ndim
+					block_o%ButterflyMiddle(index_j_m,index_i_m)%ndim = block_i%ButterflyMiddle(index_i_m,index_j_m)%mdim
+				end do
+			end do
+		end if
+	else if(block_i%style==1)then
+		if(allocated(block_i%fullmat))then
+			mm = size(block_i%fullmat,1)
+			nn = size(block_i%fullmat,2)
+			allocate (block_o%fullmat(nn,mm))
+			call copymatT(block_i%fullmat,block_o%fullmat,mm,nn) 
+		endif	
+	else 
+		! write(*,*)'block style not implemented'
+		! stop
+	end if 
+endif
+
 
 end subroutine copy_butterfly
 
@@ -553,7 +686,7 @@ do ll=1,LplusMax
 	if(bplus_i%LL(ll)%Nbound>0)then
 		allocate(bplus_o%LL(ll)%matrices_block(bplus_i%LL(ll)%Nbound))	
 		do bb=1,bplus_i%LL(ll)%Nbound
-			call copy_butterfly(bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
+			call copy_butterfly('N',bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
 			if(present(memory))memory=memory+rtemp
 		end do
 		if(allocated(bplus_i%LL(ll)%boundary_map))then

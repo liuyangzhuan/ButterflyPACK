@@ -33,6 +33,11 @@ set(FDEXM2 KERREG_Driver.f90)
 add_executable(fkerreg ${FDEXM2})
 target_link_libraries(fkerreg ${all_link_libs_d})
 
+set(FDEXM3 FULLMATKERREG_Driver.f90)
+add_executable(ffullkerreg ${FDEXM3})
+target_link_libraries(ffullkerreg ${all_link_libs_d})
+
+
 # endif()
 
 

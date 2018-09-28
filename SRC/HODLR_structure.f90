@@ -47,7 +47,7 @@ real(kind=8) function gram_distance(edgem,edgen,ker,msh,element_Zmn)
 	procedure(Z_elem)::element_Zmn
 	DT r1,r2,r3,r4
 ! l2 distance	
-#if 1	
+#if 0	
 	call element_Zmn(edgem,edgem,r1,msh,ker)
 	call element_Zmn(edgen,edgen,r2,msh,ker)
 	call element_Zmn(edgem,edgen,r3,msh,ker)
@@ -464,6 +464,14 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 	ho_bf1%levels(1)%BP_inverse(1)%pgno = 1
 	! ho_bf1%levels(1)%BP_inverse(1)%style = 2
 	
+	! treat hodlr as a full matrix if Maxlevel=0
+	if(ho_bf1%Maxlevel==0)then 
+		ho_bf1%levels(1)%BP(1)%level = 0
+		ho_bf1%levels(1)%BP(1)%col_group = 1
+		ho_bf1%levels(1)%BP(1)%row_group = 1
+		ho_bf1%levels(1)%BP(1)%pgno = 1		
+	endif
+	
 	do level_c = 1,ho_bf1%Maxlevel
 		do ii = 1, ho_bf1%levels(level_c)%N_block_inverse
 			col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
@@ -528,6 +536,9 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%level = level_c+1
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%col_group = col_group*2
 				ho_bf1%levels(level_c+1)%BP(ii*2-1)%row_group = row_group*2
+				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
+				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1				
 				if(GetTreelevel(ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)==ptree%nlevel)then
 					ho_bf1%levels(level_c+1)%BP(ii*2-1)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
 					ho_bf1%levels(level_c+1)%BP(ii*2)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
@@ -535,9 +546,6 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 					ho_bf1%levels(level_c+1)%BP(ii*2-1)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2
 					ho_bf1%levels(level_c+1)%BP(ii*2)%pgno = ho_bf1%levels(level_c)%BP_inverse(ii)%pgno*2+1					
 				endif
-				ho_bf1%levels(level_c+1)%BP(ii*2)%level = level_c+1
-				ho_bf1%levels(level_c+1)%BP(ii*2)%col_group = col_group*2+1
-				ho_bf1%levels(level_c+1)%BP(ii*2)%row_group = row_group*2+1
 			end if
 	
 			

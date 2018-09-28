@@ -94,7 +94,15 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						if(ptree%MyID==Main_ID)write (*,*) 'constructing level',level
 					endif
 					if(level_c>=ho_bf1%Maxlevel)t1=OMP_GET_WTIME()	
-					call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn,ptree)				
+					
+					! if(mod(ii,2)==1)then
+						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn,ptree)				
+					! else
+						! call delete_blocks(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+						! call copy_butterfly('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+					! endif
+					
+					
 					
 					if(level_c>=ho_bf1%Maxlevel)then
 						t2=OMP_GET_WTIME()

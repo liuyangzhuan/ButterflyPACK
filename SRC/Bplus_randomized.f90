@@ -2267,7 +2267,7 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 
 				
 				
-				! call copy_butterfly(schulz_op%matrices_block,block_o,memory)
+				! call copy_butterfly('N',schulz_op%matrices_block,block_o,memory)
 				! call LR_SMW(block_o,memory)
 				
 				! call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)

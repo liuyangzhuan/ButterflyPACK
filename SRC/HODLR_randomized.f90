@@ -74,7 +74,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,M
 				block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 				call get_butterfly_minmaxrank(block_rand(bb))
 				rank_new_max = max(rank_new_max,block_rand(bb)%rankmax)
-				call copy_butterfly(block_rand(bb),block_o,Memtmp)
+				call copy_butterfly('N',block_rand(bb),block_o,Memtmp)
 				Memory = Memory + Memtmp
 				call delete_blocks(block_rand(bb))
 			end do

@@ -2209,10 +2209,22 @@ implicit none
 			end do
 			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank,flop=flop)		
 			stats%Flop_Fill = stats%Flop_Fill + flop
+			
+			! rank=blocks%N
+			
+			
+			
 			blocks%rankmax = rank
 			blocks%rankmin = rank
 			
 			allocate (blocks%ButterflyV%blocks(1)%matrix(blocks%N,rank));blocks%ButterflyV%blocks(1)%mdim=blocks%N;blocks%ButterflyV%blocks(1)%ndim=rank
+			
+			
+			! blocks%ButterflyV%blocks(1)%matrix=0
+			! do j=1, rank
+					! blocks%ButterflyV%blocks(1)%matrix(j,j)=1d0
+			! enddo
+			
 			
 			!$omp parallel do default(shared) private(i,j)
 			do j=1, rank
@@ -2223,6 +2235,8 @@ implicit none
 			!$omp end parallel do	
 			
 			allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M,rank));blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank
+			
+			! blocks%ButterflyU%blocks(1)%matrix = QQ1
 			
 			!$omp parallel do default(shared) private(i,j)
 			do j=1, rank

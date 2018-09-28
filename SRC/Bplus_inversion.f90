@@ -272,8 +272,8 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	allocate(VecBuff(mm,num_vect))
 	VecBuff=0
 	
-	call copy_butterfly(block_o,schulz_op%matrices_block,memory_temp)
-	call copy_butterfly(block_o,block_Xn,memory_temp)
+	call copy_butterfly('N',block_o,schulz_op%matrices_block,memory_temp)
+	call copy_butterfly('N',block_o,block_Xn,memory_temp)
 	
 	call compute_schulz_init(schulz_op,option,ptree,stats)
 	
@@ -749,7 +749,7 @@ do ll=1,agent_bplus%Lplus
 	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
 		if(basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
 			bb_o = bb_o + 1
-			call copy_butterfly(bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus%LL(ll)%matrices_block(bb_o))
+			call copy_butterfly('N',bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus%LL(ll)%matrices_block(bb_o))
 		end if
 	end do
 end do
