@@ -36,7 +36,7 @@ contains
 			else 
 			value_e = quant%matZ_glo(n,m)
 			endif
-			! if(m==n)value_e = value_e + 1d-6
+			! if(m==n)value_e = value_e + 1d-4
 		class default
 			write(*,*)"unexpected type"
 			stop
@@ -147,12 +147,14 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	read(strings,*)quant%ntest
 	call getarg(4,strings)
 	read(strings,*)option%RecLR_leaf	
+	call getarg(5,strings)
+	read(strings,*)option%tol_comp		
 	
     !**** set solver parameters	
-	option%xyzsort=TM_GRAM
+	option%xyzsort=NATURAL
 	option%nogeo=1
-	option%Nmin_leaf=1000
-	option%tol_comp=1d-9
+	option%Nmin_leaf=500 
+	! option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
