@@ -3317,6 +3317,7 @@ subroutine SetDefaultOptions(option)
 	option%RecLR_leaf=BACA
 	option%nogeo=0
 	option%ErrSol=0
+	option%LR_BLK_NUM=1
 
 end subroutine SetDefaultOptions	
 

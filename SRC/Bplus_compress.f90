@@ -1322,7 +1322,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		
 		! do ii=1,5
 		! leafsize = max(blocks%M,blocks%N)/2**ii
-		leafsize = max(blocks%M,blocks%N)
+		leafsize = max(blocks%M,blocks%N)/option%LR_BLK_NUM
 		
 		! leafsize = 2502
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))deallocate(blocks%ButterflyU%blocks(1)%matrix)

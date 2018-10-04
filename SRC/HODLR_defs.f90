@@ -280,7 +280,8 @@ module HODLR_DEFS
 		integer::level_check ! check compression quality by picking random entries at level_check (only work for nmpi=1 now)		
 		integer::ErrFillFull ! check compression quality by computing all block elements
 		integer::ErrSol ! check solution quality by using artificially generated true solution vector
-		integer::BACA_Batch ! batch size in blocked ACA
+		integer::BACA_Batch ! batch size in batch ACA
+		integer::LR_BLK_NUM ! sqrt of #of bottom-level subblocks in blocked LR
 	 end type Hoption
 	
 

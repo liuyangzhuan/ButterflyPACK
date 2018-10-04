@@ -202,6 +202,11 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	call c_f_pointer(val_Cptr, val_i)
 	option%Nmin_leaf=val_i
 	valid_opt=1
+	endif	
+	if(trim(str)=='LR_BLK_NUM')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%LR_BLK_NUM=val_i
+	valid_opt=1
 	endif
 	
 !**** double parameters 
