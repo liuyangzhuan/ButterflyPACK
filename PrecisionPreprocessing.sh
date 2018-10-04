@@ -63,7 +63,7 @@ while IFS= read -r line; do
 done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/_Complex double /g' $ZSRCDIR/*.h
 sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.h
-sed -i -e 's/HODLR_WRAP/z_HODLR_WRAP/g' $DSRCDIR/*.h
+sed -i -e 's/HODLR_WRAP/z_HODLR_WRAP/g' $ZSRCDIR/*.h
 sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.f90
 
 rm -rf $DSRCDIR
