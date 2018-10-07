@@ -203,9 +203,10 @@ int main(int argc, char* argv[])
 	int Nmin=200; //finest leafsize 
 	double tol=1e-4; //compression tolerance
 	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
-	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
+	int sort_opt=2; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
+	int bnum = 1; //sqrt of #of subblocks in blockLR
 	string filename("smalltest.dat");
 	C_QuantZmn* quant_ptr;
 	
@@ -224,6 +225,7 @@ if(tst==1){
 	com_opt = stoi(argv[9]);
 	checkerr = stoi(argv[10]);
 	batch = stoi(argv[11]);
+	bnum = stoi(argv[12]);	
 	
 	// Ndim = 8;
 	// h = 0.2;
@@ -261,6 +263,7 @@ if(tst==2){
 	com_opt = stoi(argv[9]);
 	checkerr = stoi(argv[10]);
 	batch = stoi(argv[11]);
+	bnum = stoi(argv[12]);	
 	
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
@@ -289,6 +292,7 @@ if(tst==3){
 	com_opt = stoi(argv[6]);
 	checkerr = stoi(argv[7]);
 	batch = stoi(argv[8]);		
+	bnum = stoi(argv[9]);		
 	
 	
 	vector<double> matU(Npo*rank_rand);
@@ -344,6 +348,7 @@ if(tst==3){
 	d_c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 
 	d_c_hodlr_set_I_option(&option, "ErrFillFull", checkerr); 
 	d_c_hodlr_set_I_option(&option, "BACA_Batch", batch); 
+	d_c_hodlr_set_I_option(&option, "LR_BLK_NUM", bnum); 
 	
 
     // construct hodlr with geometrical points	

@@ -91,16 +91,34 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     !tol=0.000001
 	!itmax=10000
 	
-	CALL getarg(1, DATA_DIR)
+	! CALL getarg(1, DATA_DIR)
+	
+	call getarg(1,strings)
+	read(strings,*)option%LR_BLK_NUM		
+	call getarg(2,strings)
+	read(strings,*)quant%model2d
+	call getarg(3,strings)
+	read(strings,*)msh%Nunk	
+	call getarg(4,strings)
+	read(strings,*)quant%wavelength	
+	call getarg(5,strings)
+	read(strings,*)option%tol_comp
+	call getarg(6,strings)
+	read(strings,*)option%ErrFillFull
+	call getarg(7,strings)
+	read(strings,*)option%RecLR_leaf		
+	call getarg(8,strings)
+	read(strings,*)option%BACA_Batch	
+
 	
 	
-	quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	! quant%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
 	! msh%Nunk=20000
-	 msh%Nunk=5000
-    ! msh%Nunk=160000	
+	 ! msh%Nunk=5000
+    ! msh%Nunk=40000	
 	! Refined_level=0
 	quant%Nunk = msh%Nunk
 	
@@ -113,11 +131,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	
-	
+	 
 	option%nogeo=0 
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
-	quant%wavelength=0.08
+	! quant%wavelength=0.06
+	! quant%wavelength=0.01
+	! quant%wavelength=0.003
 
 ! quant%wavelength=0.08
 ! Discret=0.05
@@ -132,7 +152,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	option%Nmin_leaf=50
-	option%tol_comp=1d-4
+	! option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
@@ -146,9 +166,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=1
-	option%RecLR_leaf=BACA
+	! option%ErrFillFull=0 
+	! option%RecLR_leaf=ACA
 	option%ErrSol=1
+	! option%LR_BLK_NUM=2
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	

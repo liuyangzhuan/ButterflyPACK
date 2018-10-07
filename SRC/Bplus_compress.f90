@@ -2101,7 +2101,7 @@ implicit none
 			
 		else if(option%RecLR_leaf==ACA)then 
 			!!!!! ACA-SVD
-			rmax = min(3000,min(blocks%M,blocks%N))
+			rmax = min(6000,min(blocks%M,blocks%N))
 			allocate(UU(blocks%M,rmax))
 			allocate(VV(rmax,blocks%N))
 			allocate(Singular(rmax))
@@ -3382,7 +3382,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		endif
 		
 
-		! write(*,*)itr,rank,rankup,error
+		write(*,*)itr,rank,rankup,error
 	
 		itr = itr + 1
 	enddo
