@@ -18,7 +18,7 @@
 HODLRBFroot	= /home/administrator/Desktop/research/hod-lr-bf/build
 DHODLRBFLIB   	= $(HODLRBFroot)/SRC_DOUBLE/libdhodlrbf.a $(HODLRBFroot)/SRC_DOUBLECOMPLEX/libzhodlrbf.a
 
-LIBS		= $(DHODLRBFLIB) /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_gf_lp64.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_thread.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_core.so /opt/intel/compilers_and_libraries_2018.1.163/linux/compiler/lib/intel64/libiomp5.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_scalapack_lp64.so
+LIBS		= $(DHODLRBFLIB) /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_lp64.a /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_thread.a /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_core.a /opt/intel/compilers_and_libraries_2018.1.163/linux/compiler/lib/intel64/libiomp5.a /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.a /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_scalapack_lp64.a
 
 #
 #  The archiver and the flag(s) to use when building archive (library)

@@ -276,7 +276,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	
     real(kind=8) para
     real(kind=8) tolerance,h,lam
-    integer Primary_block, nn, mm, MyID_old,Maxlevel
+    integer Primary_block, nn, mm, MyID_old,Maxlevel,give,need
     integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
 	real(kind=8),parameter :: cd = 299792458d0
 	integer,allocatable:: groupmembers(:)
@@ -357,7 +357,33 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel:"
 	Maxlevel=nlevel
 	allocate(msh%pretree(2**Maxlevel))
+	
 	msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)	
+
+	
+	!**** make 0-element node a 1-element node 
+ 	
+	! write(*,*)'before adjustment:',msh%pretree
+	need = 0
+	do ii=1,2**Maxlevel
+		if(msh%pretree(ii)==0)need=need+1
+	enddo
+	do while(need>0) 
+		give = ceiling_safe(need/dble(2**Maxlevel-need))
+		do ii=1,2**Maxlevel
+			nn = msh%pretree(ii)
+			if(nn>1)then
+				msh%pretree(ii) = msh%pretree(ii) - min(min(nn-1,give),need)
+				need = need - min(min(nn-1,give),need)
+			endif
+		enddo
+	enddo
+	do ii=1,2**Maxlevel
+		if(msh%pretree(ii)==0)msh%pretree(ii)=1
+	enddo
+	! write(*,*)'after adjustment:',msh%pretree
+	tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel) 
+	
 	
 	!**** the geometry points are provided by user 
 	if(option%nogeo==0)then 

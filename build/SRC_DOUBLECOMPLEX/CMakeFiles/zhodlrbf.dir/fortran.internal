@@ -1,0 +1,18 @@
+# The fortran modules provided by this target.
+provides
+ emcurv_module
+ emsurf_module
+ z_bplus_compress
+ z_bplus_inversion
+ z_bplus_randomized
+ z_bplus_update
+ z_densela
+ z_hodlr_constr
+ z_hodlr_defs
+ z_hodlr_factor
+ z_hodlr_randommvp
+ z_hodlr_solve_mul
+ z_hodlr_structure
+ z_hodlr_utilities
+ z_hodlr_wrapper
+ z_misc

@@ -1,0 +1,16 @@
+# The fortran modules provided by this target.
+provides
+ d_bplus_compress
+ d_bplus_inversion
+ d_bplus_randomized
+ d_bplus_update
+ d_densela
+ d_hodlr_constr
+ d_hodlr_defs
+ d_hodlr_factor
+ d_hodlr_randommvp
+ d_hodlr_solve_mul
+ d_hodlr_structure
+ d_hodlr_utilities
+ d_hodlr_wrapper
+ d_misc
