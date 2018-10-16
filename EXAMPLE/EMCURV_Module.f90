@@ -821,7 +821,8 @@ subroutine C_EMCURV_Sample(m,n,value,quant_emcurv_Cptr) bind(c, name="c_emcurv_s
 
 	call c_f_pointer(quant_emcurv_Cptr, quant)
 	QuantZmn=>quant
-	call Z_elem_EMCURV(m,n,value,QuantZmn)
+	!!!!!  m,n changed to m+1,n+1 because Z_elem_EMCURV assumes indices staring from 1
+	call Z_elem_EMCURV(m+1,n+1,value,QuantZmn)
 end subroutine C_EMCURV_Sample
 
 	
