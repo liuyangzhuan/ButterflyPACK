@@ -95,13 +95,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! CALL getarg(1, DATA_DIR)
 	
 	
-	quant%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
 	! msh%Nunk=20000
-	 ! msh%Nunk=5000
-    msh%Nunk=40000	
+	 msh%Nunk=5000 
+    ! msh%Nunk=40000	
 	! Refined_level=0
 	quant%Nunk = msh%Nunk
 	

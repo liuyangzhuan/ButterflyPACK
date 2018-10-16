@@ -1078,7 +1078,7 @@ end subroutine init_random_seed
 
 subroutine random_dp_number(val)
 implicit none 
-real(kind=8) a,b,c,d
+real(kind=8):: a=0,b=0,c=0,d=0
 integer seed
 class(*) val
 
@@ -1672,7 +1672,7 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 	A_inv=0
 	
 	allocate(Atmp(m,n))
-	
+	Atmp=0
 	! SVD
 	Atmp = A
 	mn_min = min(m,n)
@@ -1680,6 +1680,9 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 	allocate(UU(m,mn_min))
 	allocate(VV(mn_min,n))
 	
+	Singular=0	
+	UU=0
+	VV=0
 	! write(*,*)fnorm(Atmp,m,n),'ggg'
 	
     call gesvd_robust(Atmp,Singular,UU,VV,m,n,mn_min,flop=flop)
@@ -1701,7 +1704,9 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 		
 		allocate(UU_h(rank,m))
 		allocate(VV_h(n,rank))
-
+		UU_h=0
+		VV_h=0
+		
 		do ii=1,rank
 		do jj =1,m
 			UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))	
