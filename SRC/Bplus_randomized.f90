@@ -3412,7 +3412,7 @@ end subroutine Bplus_block_MVP_BBplus_dat
 
 	
 
-subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,operand1)
+subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
 
    use HODLR_DEFS
    
@@ -3443,6 +3443,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 	DT, allocatable :: matU_glo(:,:), matV_glo(:,:)
 	procedure(BF_MVP_blk)::blackbox_MVP_dat
 	type(proctree)::ptree
+	type(mesh)::msh
 	real(kind=8)flop
 	
 	select TYPE(operand1)
@@ -3522,7 +3523,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					call RandomMat(nn,Nidx,min(nn,Nidx),RandVectInR(idx_start_n_loc:idx_end_n_loc,1:Nidx),0)	
 
 
-					call blackbox_MVP_dat(operand,block_dummy,'N',M,N,Nidx,RandVectInR,RandVectOutR,cone,czero,ptree,stats)
+					call blackbox_MVP_dat(operand,block_dummy,'N',M,N,Nidx,RandVectInR,RandVectOutR,cone,czero,ptree,stats,msh)
 					
 					
 					
@@ -3556,7 +3557,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					call RandomMat(mm,Nidx,min(mm,Nidx),RandVectInL(idx_start_m_loc:idx_end_m_loc,1:Nidx),0)		
 							
 		
-					call blackbox_MVP_dat(operand,block_dummy,'T',M,N,Nidx,RandVectInL,RandVectOutL,cone,czero,ptree,stats)
+					call blackbox_MVP_dat(operand,block_dummy,'T',M,N,Nidx,RandVectInL,RandVectOutL,cone,czero,ptree,stats,msh)
 					! write(*,*)'yani 3'	
 					matRrow(1:mm,idx_s:idx_s+Nidx-1) = RandVectInL(idx_start_m_loc:idx_start_m_loc+mm-1,1:Nidx)
 					deallocate(RandVectInL)
@@ -3614,7 +3615,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 				RandVectOutR=0
 				RandVectInR(idx_start_n_loc:idx_end_n_loc,1:1) = Vin
 
-				call blackbox_MVP_dat(operand,block_dummy,'N',M,N,1,RandVectInR,RandVectOutR,cone,czero,ptree,stats)
+				call blackbox_MVP_dat(operand,block_dummy,'N',M,N,1,RandVectInR,RandVectOutR,cone,czero,ptree,stats,msh)
 				
 				Vout1 = RandVectOutR(idx_start_m_loc:idx_start_m_loc+mm-1,1:1)
 				deallocate(RandVectInR)
@@ -3768,7 +3769,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 		! ho_bf1%ind_lv = level_c
 		! ho_bf1%ind_bk = rowblock
 		
-		call Bplus_MultiLrandomized_Onesubblock(rank0_inner,rankrate_inner,rankthusfar,block_o,operand,blackbox_MVP_dat_inner,error,strings,option,stats,ptree,Bplus_randomized)		
+		call Bplus_MultiLrandomized_Onesubblock(rank0_inner,rankrate_inner,rankthusfar,block_o,operand,blackbox_MVP_dat_inner,error,strings,option,stats,ptree,msh,Bplus_randomized)		
 		error_inout = max(error_inout, error)
 		! write(*,*)'go'
 	end do

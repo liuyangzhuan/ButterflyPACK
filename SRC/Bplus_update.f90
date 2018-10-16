@@ -60,7 +60,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			ho_bf1%ind_bk=rowblock
 			rank0 = block_o%rankmax
 			rate = 1.2d0
-			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh)			
+			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh,msh)			
 #if PRNTlevel >= 1
 			write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif
