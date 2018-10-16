@@ -123,7 +123,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 ! quant%wavelength=0.08
 ! Discret=0.05
 	quant%RCS_static=1
-    quant%RCS_Nsample=2000
+    quant%RCS_Nsample=100
 
 	
 	
@@ -132,7 +132,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     ! quant%rank_approximate_para3=6.0
 	
 	
-	option%Nmin_leaf=50
+	option%Nmin_leaf=100
 	option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
@@ -146,13 +146,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%TwoLayerOnly=1
     option%schulzorder=3
     option%schulzlevel=3000
-	option%LRlevel=0
+	!option%LRlevel=100
 	option%ErrFillFull=0 
 	option%RecLR_leaf=ACA
 	option%ErrSol=1
 	! option%LR_BLK_NUM=2
 	call getarg(1,strings)
-	read(strings,*)option%LR_BLK_NUM		
+	read(strings,*)option%LR_BLK_NUM
+
+	call getarg(2,strings)
+	read(strings,*)option%LRlevel
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	

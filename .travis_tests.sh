@@ -11,6 +11,11 @@ export EXAMPLE_FOLDER=$TRAVIS_BUILD_DIR/build/EXAMPLE
 
 case "${TEST_NUMBER}" in
 1) mpirun "-n" "2" "$EXAMPLE_FOLDER/fkerreg" "$DATA_FOLDER/SUSY/susy_10Kn" "8" "10000" "1000" "0.1" "1.0" "2" "2";;
-2) mpirun "-n" "2" "$EXAMPLE_FOLDER/fem2d" "1";;
+2) mpirun "-n" "2" "$EXAMPLE_FOLDER/fem2d" "1" "0";;
+3) mpirun "-n" "1" "$EXAMPLE_FOLDER/fem2d" "1" "100";;
+4) mpirun "-n" "2" "./EXAMPLE/ctest" "1" "../EXAMPLE/SUSY/susy_10Kn" "8" "1" "0.1" "10.0" "200" "1e-2" "3" "0" "100";;
+5) mpirun "-n" "2" "./EXAMPLE/ctest" "2" "1000" "8" "1" "0.1" "10.0" "100" "1e-4" "2" "0" "100";;
+6) mpirun "-n" "2" "./EXAMPLE/ctest" "3" "5000" "20" "100" "1e-4" "2" "0" "100";;
+7) mpirun "-n" "4" "./EXAMPLE/full";;
 *) printf "${RED} ###GC: Unknown test\n" ;;
 esac

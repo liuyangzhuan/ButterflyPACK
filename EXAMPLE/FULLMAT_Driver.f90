@@ -167,21 +167,21 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	
 	
-	! !**** register the user-defined function and type in ker 
-	! ker%FuncZmn=>Z_elem_LR
-	! ker%QuantZmn=>quant
+	!**** register the user-defined function and type in ker 
+	ker%FuncZmn=>Z_elem_LR
+	ker%QuantZmn=>quant
  
-    ! !**** Get matrix size and rank and create the matrix
-	! msh%Nunk = 10000
-	! quant%rank = 10
-	! quant%lambda = 1d5
-	! allocate(quant%matU_glo(msh%Nunk,quant%rank))
-	! call RandomMat(msh%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
-	! call MPI_Bcast(quant%matU_glo,msh%Nunk*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
+    !**** Get matrix size and rank and create the matrix
+	msh%Nunk = 1000
+	quant%rank = 10
+	quant%lambda = 1d5
+	allocate(quant%matU_glo(msh%Nunk,quant%rank))
+	call d_RandomMat(msh%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
+	call MPI_Bcast(quant%matU_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 	
-	! allocate(quant%matV_glo(quant%rank,msh%Nunk))
-	! call RandomMat(quant%rank,msh%Nunk,quant%rank,quant%matV_glo,0)	
-	! call MPI_Bcast(quant%matV_glo,msh%Nunk*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)	
+	allocate(quant%matV_glo(quant%rank,msh%Nunk))
+	call d_RandomMat(quant%rank,msh%Nunk,quant%rank,quant%matV_glo,0)	
+	call MPI_Bcast(quant%matV_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)	
 	
 
 	
@@ -189,28 +189,28 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 !******************************************************************************!
 ! generate a LR matrix stored in a files
 	
-	CALL getarg(1, strings)
-	strings = TRIM(strings)	
-	if(LEN_TRIM(strings)==0)then
-		strings = './EXAMPLE/K05N4096.csv'	
-	endif
+	! CALL getarg(1, strings)
+	! strings = TRIM(strings)	
+	! if(LEN_TRIM(strings)==0)then
+		! strings = './EXAMPLE/K05N4096.csv'	
+	! endif
 	
 	
-	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_FULL
-	ker%QuantZmn=>quant
+	! !**** register the user-defined function and type in ker 
+	! ker%FuncZmn=>Z_elem_FULL
+	! ker%QuantZmn=>quant
 
-    !**** Get matrix size and rank and create the matrix
-	msh%Nunk = 4096
-	allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
-	allocate(datain(msh%Nunk))
-	open(10, file=strings)
-	do ii=1,msh%Nunk
-		read(10,*) datain(:)
-		quant%matZ_glo(:,ii)=datain
-	enddo
-	close(10)
-	call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+    ! !**** Get matrix size and rank and create the matrix
+	! msh%Nunk = 4096
+	! allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
+	! allocate(datain(msh%Nunk))
+	! open(10, file=strings)
+	! do ii=1,msh%Nunk
+		! read(10,*) datain(:)
+		! quant%matZ_glo(:,ii)=datain
+	! enddo
+	! close(10)
+	! call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 	
 		
 !******************************************************************************!	

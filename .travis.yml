@@ -26,6 +26,11 @@ env:
   matrix:
   - TEST_NUMBER=1"
   - TEST_NUMBER=2"
+  - TEST_NUMBER=3"
+  - TEST_NUMBER=4"
+  - TEST_NUMBER=5"
+  - TEST_NUMBER=6"
+  - TEST_NUMBER=7"
 
 
 git:
