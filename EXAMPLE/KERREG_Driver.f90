@@ -78,7 +78,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     real(kind=8) para
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
-    integer i,j,k, threads_num
+    integer i,j,k, threads_num,iii
 	integer seed_myid(50)
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
@@ -99,10 +99,34 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	integer nmpi
 	type(d_proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR	
+	integer MPI_thread
 	
+	call MPI_Init(ierr)
+	
+	
+	do iii=1,1
+	! iii=0
+	! do while(iii==0)
+		
 	
 	!**** nmpi and groupmembers should be provided by the user 
-	call MPI_Init(ierr)
+	
+	! call MPI_Init_thread( MPI_THREAD_SINGLE, MPI_thread,ierr); 
+	
+	call MPI_Query_thread(MPI_thread,ierr);
+	select case (MPI_thread)
+	case (MPI_THREAD_SINGLE)
+		write(*,*)"MPI_Query_thread with MPI_THREAD_SINGLE"
+	case (MPI_THREAD_SERIALIZED)
+		write(*,*)"MPI_Query_thread with MPI_THREAD_SERIALIZED"
+	case (MPI_THREAD_MULTIPLE)
+		write(*,*)"MPI_Query_thread with MPI_THREAD_MULTIPLE"
+	case (MPI_THREAD_FUNNELED)
+		write(*,*)"MPI_Query_thread with MPI_THREAD_FUNNELED"
+	end select
+	
+
+	
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
@@ -111,6 +135,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	!**** create the process tree
 	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -236,7 +261,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call d_HODLR_Factorization(ho_bf,option,stats,ptree)
+    call d_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -246,9 +271,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     if(ptree%MyID==Main_ID)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
+	if(allocated(quant%xyz))deallocate(quant%xyz)
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_delete_HOBF(ho_bf)
 	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
-
+	
+	end do
+	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
 end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
@@ -283,7 +316,7 @@ subroutine geo_modeling_RBF(quant,MPIcomm)
 	do edge=1,quant%Nunk
 		read (90,*) quant%xyz(1:Dimn,edge)
 	enddo  			
- 
+    close(90)
     return
     
 end subroutine geo_modeling_RBF
@@ -345,7 +378,7 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
 		b(ii,1) = labels(msh%new2old(ii-1+msh%idxs))
 	enddo
 	deallocate(labels)	
-	
+	close(91)
 	
 	n1 = OMP_get_wtime()
 	

@@ -848,6 +848,125 @@ end subroutine copy_HOBF
 
 
 
+subroutine delete_HOBF(ho_bf_o)
+use HODLR_DEFS
+use misc
+implicit none 
+
+type(hobf)::ho_bf_o
+
+integer ii
+integer level_c
+
+do level_c = 1,ho_bf_o%Maxlevel+1
+	do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
+		call delete_Bplus(ho_bf_o%levels(level_c)%BP(ii))
+		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse_update(ii))
+	end do
+	do ii = 1, ho_bf_o%levels(level_c)%N_block_inverse
+		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse(ii))
+		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse_schur(ii))
+	end do	
+	deallocate(ho_bf_o%levels(level_c)%BP) 
+	deallocate(ho_bf_o%levels(level_c)%BP_inverse_update) 
+	deallocate(ho_bf_o%levels(level_c)%BP_inverse)	
+	deallocate(ho_bf_o%levels(level_c)%BP_inverse_schur)	
+end do		
+deallocate(ho_bf_o%levels)
+
+end subroutine delete_HOBF
+
+
+
+subroutine delete_kernelquant(ker)
+use HODLR_DEFS
+use misc
+implicit none 
+type(kernelquant)::ker
+if(allocated(ker%matZ_glo))deallocate(ker%matZ_glo)
+end subroutine delete_kernelquant
+
+
+subroutine delete_mesh(msh)
+use HODLR_DEFS
+use misc
+implicit none 
+type(mesh)::msh
+integer ii
+
+if(allocated(msh%xyz))deallocate(msh%xyz)
+if(allocated(msh%new2old))deallocate(msh%new2old)
+if(allocated(msh%old2new))deallocate(msh%old2new)
+if(allocated(msh%pretree))deallocate(msh%pretree)
+if(allocated(msh%basis_group))then
+do ii=1,msh%Maxgroup
+	if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
+enddo
+deallocate(msh%basis_group)
+endif
+
+end subroutine delete_mesh
+
+subroutine delete_proctree(ptree)
+use HODLR_DEFS
+use misc
+implicit none 
+type(proctree)::ptree
+integer ii,Maxgrp
+integer ierr
+
+if(allocated(ptree%pgrp))then
+Maxgrp=2**(ptree%nlevel)-1		
+do ii=1,Maxgrp
+	if(associated(ptree%pgrp(ii)%gd))then
+		call delete_grid(ptree%pgrp(ii)%gd)
+		deallocate(ptree%pgrp(ii)%gd)
+		ptree%pgrp(ii)%gd=>null()
+	endif
+	if(ptree%pgrp(ii)%ctxt/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt)
+	if(ptree%pgrp(ii)%ctxt1D/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1D)
+	if(ptree%pgrp(ii)%ctxt_head/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt_head)
+	if(ptree%pgrp(ii)%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%pgrp(ii)%Comm,ierr)
+enddo
+deallocate(ptree%pgrp)
+endif
+if(ptree%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%Comm,ierr)
+
+end subroutine delete_proctree
+
+
+recursive subroutine delete_grid(gd)
+use HODLR_DEFS
+use misc
+implicit none 
+type(grid)::gd
+integer ierr
+
+if(.not. associated(gd%gdc))then
+	if(gd%ctxt/=-1)call blacs_gridexit(gd%ctxt)
+	if(gd%Comm/=MPI_COMM_NULL)call MPI_Comm_free(gd%Comm,ierr)
+	return
+else
+	call delete_grid(gd%gdc(1))
+	call delete_grid(gd%gdc(2))
+	deallocate(gd%gdc)
+	gd%gdc=>null()
+endif
+end subroutine delete_grid
+
+
+subroutine delete_Hstat(stats)
+use HODLR_DEFS
+use misc
+implicit none 
+type(Hstat)::stats
+
+if(allocated(stats%rankmax_of_level))deallocate(stats%rankmax_of_level)
+if(allocated(stats%rankmin_of_level))deallocate(stats%rankmin_of_level)
+if(allocated(stats%rankmax_of_level_global))deallocate(stats%rankmax_of_level_global)
+
+end subroutine delete_Hstat
+
 subroutine print_butterfly_size_rank(block_i,tolerance)
 use HODLR_DEFS
 use misc
@@ -3324,12 +3443,13 @@ end subroutine SetDefaultOptions
 
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
 
-subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,flag)
+subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,msh,flag)
 implicit none 
 	type(matrixblock)::block
 	integer pgno,level,level_p,level_butterfly,flag,nproc,num_blocks,proc,gg,ii,ii_new,Maxlevel
 	type(proctree)::ptree
 	integer,pointer::M_p(:,:),N_p(:,:)
+	type(mesh)::msh
 	
 	if(flag==0)block%M_loc = 0
 	if(flag==1)block%M_loc_db = 0
@@ -3377,11 +3497,11 @@ implicit none
 			
 			gg = block%row_group*2**level_p+ii_new-1
 			proc = ptree%pgrp(pgno*2**level_p+ii-1)%head - ptree%pgrp(pgno)%head
-			M_p(proc+1,1) = min(M_p(proc+1,1),basis_group(gg)%head-basis_group(block%row_group)%head+1)
-			M_p(proc+1,2) = max(M_p(proc+1,2),basis_group(gg)%tail-basis_group(block%row_group)%head+1)			
+			M_p(proc+1,1) = min(M_p(proc+1,1),msh%basis_group(gg)%head-msh%basis_group(block%row_group)%head+1)
+			M_p(proc+1,2) = max(M_p(proc+1,2),msh%basis_group(gg)%tail-msh%basis_group(block%row_group)%head+1)			
 			gg = block%col_group*2**level_p+ii_new-1
-			N_p(proc+1,1) = min(N_p(proc+1,1),basis_group(gg)%head-basis_group(block%col_group)%head+1)	
-			N_p(proc+1,2) = max(N_p(proc+1,2),basis_group(gg)%tail-basis_group(block%col_group)%head+1)				
+			N_p(proc+1,1) = min(N_p(proc+1,1),msh%basis_group(gg)%head-msh%basis_group(block%col_group)%head+1)	
+			N_p(proc+1,2) = max(N_p(proc+1,2),msh%basis_group(gg)%tail-msh%basis_group(block%col_group)%head+1)				
 		enddo
 
 		if(ptree%myid>=ptree%pgrp(pgno)%head .and. ptree%myid<=ptree%pgrp(pgno)%tail)then
@@ -3412,6 +3532,9 @@ DT,pointer::dat_new(:,:),dat_old(:,:)
 real(kind=8)::n1,n2
 type(Hstat)::stats
 
+dat_new=>null()
+dat_old=>null()
+
 if(bplus_o%Lplus==1)then
 	blocks => bplus_o%LL(1)%matrices_block(1)
 	! call MPI_barrier(ptree%pgrp(blocks%pgno_db)%Comm,ierr)
@@ -3427,6 +3550,7 @@ if(bplus_o%Lplus==1)then
 				rank = 0
 			endif
 			call assert(MPI_COMM_NULL/=ptree%pgrp(blocks%pgno_db)%Comm,'communicator should not be null 4')
+			rankmax=0
 			call MPI_ALLREDUCE(rank,rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(blocks%pgno_db)%Comm,ierr)
 			rank=rankmax
 			

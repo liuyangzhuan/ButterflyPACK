@@ -46,7 +46,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP_randomized_dat,N,rankmax,M
 			do bb = 1, ho_bf1%levels(level_c)%N_block_forward
 				groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
 				groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here   
-				call BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb))						
+				call BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb),msh)						
 			enddo
 			n2 = OMP_get_wtime()
 			stats%Time_random(1) = stats%Time_random(1) + n2-n1
@@ -939,15 +939,15 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1 
 	
 		groupm_start=groupm*2**(level_butterfly)
 		
 		do nth= nth_s,nth_e
 			do i=1, num_blocks
 				if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then	
-					header_m=basis_group(groupm_start+i-1)%head
-					tailer_m=basis_group(groupm_start+i-1)%tail
+					header_m=msh%basis_group(groupm_start+i-1)%head
+					tailer_m=msh%basis_group(groupm_start+i-1)%tail
 					mm=tailer_m-header_m+1
 					k=header_m-1	
 
@@ -977,11 +977,11 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1 
 		groupm_start=groupm*2**(level_butterfly)
 		! random=>random_Block(bb)
 		do i=1, num_blocks
-			header_m=basis_group(groupm_start+i-1)%head
+			header_m=msh%basis_group(groupm_start+i-1)%head
 			k = header_m - 1
 			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
@@ -996,10 +996,10 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		
 		
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1 
 		groupn_start=groupn*2**(level_butterfly)
 		do i=1, num_blocks
-			header_n=basis_group(groupn_start+i-1)%head
+			header_n=msh%basis_group(groupn_start+i-1)%head
 			k = header_n - 1
 			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
@@ -1099,15 +1099,15 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1 
 	
 		groupn_start=groupn*2**(level_butterfly)
 		
 		do nth= nth_s,nth_e
 			do i=1, num_blocks
 				if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then	
-					header_n=basis_group(groupn_start+i-1)%head
-					tailer_n=basis_group(groupn_start+i-1)%tail
+					header_n=msh%basis_group(groupn_start+i-1)%head
+					tailer_n=msh%basis_group(groupn_start+i-1)%tail
 					nn=tailer_n-header_n+1
 					k=header_n-1	
 
@@ -1138,11 +1138,11 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
 
 		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here   
-		! nn=basis_group(groupn)%tail-basis_group(groupn)%head+1 
+		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1 
 		groupn_start=groupn*2**(level_butterfly)
 		! random=>random_Block(bb)
 		do i=1, num_blocks
-			header_n=basis_group(groupn_start+i-1)%head
+			header_n=msh%basis_group(groupn_start+i-1)%head
 			k = header_n - 1		
 			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)
@@ -1157,10 +1157,10 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 		
 		
 		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here   
-		! mm=basis_group(groupm)%tail-basis_group(groupm)%head+1 
+		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1 
 		groupm_start=groupm*2**(level_butterfly)
 		do i=1, num_blocks
-			header_m=basis_group(groupm_start+i-1)%head
+			header_m=msh%basis_group(groupm_start+i-1)%head
 			k = header_m - 1		
 			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
 			! !$omp parallel do default(shared) private(ii,jj)

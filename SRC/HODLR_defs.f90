@@ -49,7 +49,7 @@ module HODLR_DEFS
 		integer :: nsprow,nspcol ! number of process rows/columns as square as possible, it's designed that nspcol>=nsprow
 		integer :: hprow,hpcol ! head process in the row/column process tree		
 		integer :: ctxt ! blacs context
-		integer :: Comm ! MPI communicator for this grid
+		integer :: Comm = MPI_COMM_NULL ! MPI communicator for this grid
 		integer :: gprow,gpcol ! the group number in the row and column dimension, no longer needed once constructed 
 		type(grid),pointer::gdc(:)=>null() ! pointer to its two children
 	end type grid
@@ -63,7 +63,7 @@ module HODLR_DEFS
 		integer :: ctxt ! blacs context 
 		integer :: ctxt1D ! blacs context 1D Row noncyclic (used to distribute from 2D grids to customized noncyclic 1D grid)
 		integer :: ctxt_head ! blacs context only involving the head process (used to gather and broadcast)
-		integer :: Comm ! MPI communicator for all processes in this node
+		integer :: Comm = MPI_COMM_NULL  ! MPI communicator for all processes in this node
 		type(grid),pointer::gd=>null() ! the hierarchical process grid structure associated with each process group
 	end type procgroup
 	
@@ -72,9 +72,9 @@ module HODLR_DEFS
 	!**** binary process tree
 	type proctree
 		integer nlevel ! number of tree levels 
-		integer Comm ! MPI communicator for all processes in this tree
-		integer nproc ! # of processes in this tree
-		integer :: MyID ! MPI Rank in Comm
+		integer :: Comm = MPI_COMM_NULL ! MPI communicator for all processes in this tree
+		integer :: nproc=0 ! # of processes in this tree
+		integer :: MyID=0 ! MPI Rank in Comm
 		type(procgroup),allocatable::pgrp(:) ! tree nodes 
 	end type proctree
 	
@@ -95,8 +95,8 @@ module HODLR_DEFS
          integer head ! head index
          integer tail ! tail index
          integer level ! level of this cluster group 
-         real(kind=8) radius ! geomerical radius of this group 
-		 real(kind=8):: boundary(2) ! seperators used to split this group into children group
+         real(kind=8):: radius=0 ! geomerical radius of this group 
+		 real(kind=8):: boundary(2)=0 ! seperators used to split this group into children group
          real(kind=8),allocatable:: center(:) ! geometrical center of this group
      end type basisgroup
 
@@ -299,12 +299,13 @@ module HODLR_DEFS
 	!**** quantities related to geometries, meshes, unknowns and points 
 	type mesh	
 		integer Nunk ! size of the matrix 
+		integer Maxgroup ! number of nodes in the partition tree
 		integer idxs,idxe  ! range of local row/column indices after reordering
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering 
 		integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering 
 		integer,allocatable::pretree(:) ! dimension 2**Maxlevel containing box size of each leaf node 
-		
+		type(basisgroup),allocatable:: basis_group(:)
 	end type mesh
 	 
 	!**** quantities related to specific matrix kernels  
@@ -373,7 +374,6 @@ module HODLR_DEFS
 	
 	!*** need to further work on the following: 
 	 real(kind=8)::time_tmp
-     type(basisgroup),allocatable:: basis_group(:)
 	 integer vecCNT
 	 
 	 integer,allocatable:: basis_group_pre(:,:)

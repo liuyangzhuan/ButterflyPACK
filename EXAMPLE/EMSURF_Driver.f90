@@ -46,6 +46,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	enddo	
 	
 	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -203,7 +204,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	
 	if(option%precon/=NOPRECON)then								
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call z_HODLR_Factorization(ho_bf,option,stats,ptree)
+    call z_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -214,9 +215,18 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
 
+	call delete_quant_EMSURF(quant)
+	
+	call z_delete_proctree(ptree)
+	call z_delete_Hstat(stats)
+	call z_delete_mesh(msh)
+	call z_delete_kernelquant(ker)
+	call z_delete_HOBF(ho_bf)
+	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
-
-	call MPI_Finalize(ierr)	
+	
+	call blacs_exit(1)
+	call MPI_Finalize(ierr)
 	
     ! ! ! ! pause
 

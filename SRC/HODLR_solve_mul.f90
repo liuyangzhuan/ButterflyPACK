@@ -301,6 +301,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	allocate (x(N_unk_loc,1))
 	x=0		
 	allocate (xtrue(N_unk_loc,1))
+	xtrue=0
 	call RandomMat(N_unk_loc,1,1,xtrue,0)	
 	allocate (btrue(N_unk_loc,1))	
 	btrue=0	

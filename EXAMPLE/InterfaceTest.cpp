@@ -26,6 +26,19 @@
 //------------------------------------------------------------------------------
 using namespace std;
 
+
+extern "C" {
+      ///////////////////////////////////////////////
+      ////// BLACS //////////////////////////////////
+      ///////////////////////////////////////////////
+      // void Cblacs_get(int, int, int *);
+      // void Cblacs_gridinit(int *, const char *, int, int);
+      // void Cblacs_gridmap(int *, int *, int, int, int);
+      // void Cblacs_gridinfo(int, int *, int *, int *, int *);
+      // void Cblacs_gridexit(int);
+      void Cblacs_exit(int);
+}
+
 // 2-norm distance
 inline double dist2(double *x, double *y, int d) {
   double k = 0.;
@@ -350,7 +363,7 @@ if(tst==3){
 	d_c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
 	
 	// factor hodlr
-	d_c_hodlr_factor(&ho_bf,&option,&stats,&ptree);
+	d_c_hodlr_factor(&ho_bf,&option,&stats,&ptree,&msh);
 
 	// solve the system 
 	int nrhs=1;
@@ -362,6 +375,18 @@ if(tst==3){
 	}	
 	d_c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
+	
+	
+	d_c_hodlr_deletestats(&stats);
+	d_c_hodlr_deleteproctree(&ptree);
+	d_c_hodlr_deletemesh(&msh);
+	d_c_hodlr_deletekernelquant(&kerquant);
+	d_c_hodlr_deletehobf(&ho_bf);
+	d_c_hodlr_deleteoption(&option);
+	
+	delete quant_ptr;
+	
+	Cblacs_exit(1);
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
     return 0;
 }

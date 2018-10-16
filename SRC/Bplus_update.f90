@@ -18,7 +18,7 @@ contains
 	!option: containing compression options
 	!stats: statistics 
 	!ptree: process tree
-subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree)
+subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 
     use HODLR_DEFS
 	use omp_lib
@@ -41,6 +41,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	type(proctree)::ptree
+	type(mesh)::msh
 	
 	call copy_Bplus(ho_bf1%levels(level_c)%BP(rowblock),ho_bf1%levels(level_c)%BP_inverse_update(rowblock))
 	!!!!!!! the forward block BP can be deleted if not used in solution phase
@@ -59,7 +60,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			ho_bf1%ind_bk=rowblock
 			rank0 = block_o%rankmax
 			rate = 1.2d0
-			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree)			
+			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh)			
 #if PRNTlevel >= 1
 			write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif
@@ -77,7 +78,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 		rank0_outter = block_o%rankmax
 		rankrate_outter=1.2d0	
 		level_butterfly = block_o%level_butterfly
-		call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option,stats,ptree)
+		call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_Sblock_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Sblock_dat,error_inout,'Sblock+',option,stats,ptree,msh)
 		
 		block_o =>  ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1) 	
 #if PRNTlevel >= 1

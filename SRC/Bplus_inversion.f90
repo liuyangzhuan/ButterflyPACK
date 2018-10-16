@@ -7,7 +7,7 @@ integer rankthusfarBC
 contains 
 
 
-subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
+subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 
     use HODLR_DEFS
 	use misc
@@ -24,13 +24,14 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	type(proctree)::ptree
+	type(mesh)::msh
 	
     bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)	
 	
 	if(bplus%Lplus==1)then
-		call BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
+		call BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree,msh)
 	else 
-		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
+		call MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 	end if	
 
 end subroutine Bplus_inverse_schur_partitionedinverse
@@ -38,7 +39,7 @@ end subroutine Bplus_inverse_schur_partitionedinverse
 
 
 
-subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree)
+subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree,msh)
 
     use HODLR_DEFS
 	use misc
@@ -64,6 +65,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	type(proctree)::ptree
+	type(mesh)::msh
 	integer pgno
 	
 	error_inout=0
@@ -86,7 +88,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 		ho_bf1%ind_bk=rowblock
 		rank0 = max(block_off1%rankmax,block_off2%rankmax)
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree) 	
+		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree,msh) 	
 		error_inout = max(error_inout, error)	
 	endif
 ! write(*,*)ptree%myid,level_c,rowblock,'niddma'
@@ -95,9 +97,9 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
-		call BF_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree)
+		call BF_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree,msh)
 	else
-		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,pgno)
+		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,msh,pgno)
 	endif
 ! write(*,*)ptree%myid,level_c,rowblock,'neeidddma'
 	error_inout = max(error_inout, error)	
@@ -227,7 +229,7 @@ end subroutine LR_minusBC
 
 
 
-subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree)
+subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree,msh)
 
     use HODLR_DEFS
 	use misc
@@ -252,6 +254,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
+	type(mesh)::msh
 	type(schulz_operand)::schulz_op
 	DT,allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
 	DT::ctemp1,ctemp2
@@ -287,7 +290,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 		rank0 = block_Xn%rankmax
 		
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,ii) 	
+		call BF_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,msh,ii) 	
 		
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
 		if(schulz_op%order==3)schulz_op%scale=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
@@ -469,7 +472,7 @@ end subroutine compute_schulz_init
 
 
 
-subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
+subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 
     use HODLR_DEFS
 	use misc
@@ -505,6 +508,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	type(matrixblock):: agent_block
 	type(blockplus):: agent_bplus
 	type(proctree) :: ptree 
+	type(mesh) :: msh 
 	 
 	ctemp1 = 1d0
 	ctemp2 = 0d0
@@ -531,7 +535,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 	
 	level_butterfly = block_o%level_butterfly
 	
-	call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats,ptree)
+	call Bplus_randomized_constr(level_butterfly,Bplus,ho_bf1,rank0_inner,rankrate_inner,Bplus_block_MVP_minusBC_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_minusBC_dat,error,'mBC+',option,stats,ptree,msh)
 	error_inout = max(error_inout, error)
 	
 	
@@ -561,14 +565,14 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				level_butterfly_loc = levelm
 				groupm_start=block_o%row_group*2**levelm
 				
-				! edge_s =basis_group(block_o%row_group)%head 
-				! edge_e =basis_group(block_o%row_group)%tail 
+				! edge_s =msh%basis_group(block_o%row_group)%head 
+				! edge_e =msh%basis_group(block_o%row_group)%tail 
 
 				
 				! write(*,*)'nidiao',llplus,Lplus,Bplus%LL(llplus+1)%Nbound,Bplus%LL(llplus)%matrices_block(1)%row_group,Bplus%LL(llplus)%matrices_block(1)%col_group
 				
 				do ii=1,Bplus%LL(llplus+1)%Nbound
-					! edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					! edge_first = msh%basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
 					edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
 					
 					if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
@@ -579,14 +583,14 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 						else 
 
 							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'L',agent_block)
-							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus)							
+							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus,msh)							
 															
 
 															
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,agent_block) 
+							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,msh,agent_block) 
 							! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade' 
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)						
 								
@@ -613,7 +617,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 			
 			!!!!! invert I+B1 to be I+B2		
 			level_butterfly=block_o%level_butterfly	
-			call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,Bplus%LL(1)%matrices_block(1)%pgno)		
+			call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)		
 			error_inout = max(error_inout, error)		
 	
 			
@@ -631,12 +635,12 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				level_butterfly_loc = levelm
 				groupm_start=block_o%row_group*2**levelm
-				! edge_s =basis_group(block_o%row_group)%head 
-				! edge_e =basis_group(block_o%row_group)%tail 
+				! edge_s =msh%basis_group(block_o%row_group)%head 
+				! edge_e =msh%basis_group(block_o%row_group)%tail 
 
 				
 				do ii=1,Bplus%LL(llplus+1)%Nbound
-					! edge_first = basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
+					! edge_first = msh%basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
 					edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
 					if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
 						ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1					
@@ -652,7 +656,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							! allocate(agent_bplus)
 							
 							call Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,'R',agent_block)
-							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus)							
+							call Extract_partial_Bplus(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus,msh)							
 							
 							
 							
@@ -660,7 +664,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 							rank0 = agent_block%rankmax
 							rate=1.2d0
 							level_butterfly = agent_block%level_butterfly
-							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,agent_block) 	
+							call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,msh,agent_block) 	
 							call Copy_butterfly_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)						
 								
 							err_max = max(err_max, error)															
@@ -701,7 +705,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 end subroutine MultiL_inverse_schur_partitionedinverse
 
 
-subroutine Extract_partial_Bplus(bplus_i,ll_s,row_group,agent_bplus)
+subroutine Extract_partial_Bplus(bplus_i,ll_s,row_group,agent_bplus,msh)
 use HODLR_DEFS
 use misc
 implicit none 
@@ -713,11 +717,12 @@ integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
 real(kind=8)::rtemp
 integer row_group,ll_s,idx_s,idx_e
+type(mesh)::msh
 
 call assert(bplus_i%row_group==bplus_i%col_group,'only works for square matrix')
 
-idx_s = basis_group(row_group)%head
-idx_e = basis_group(row_group)%tail
+idx_s = msh%basis_group(row_group)%head
+idx_e = msh%basis_group(row_group)%tail
 
 ! allocate(agent_bplus)
 allocate(agent_bplus%LL(LplusMax))
@@ -728,13 +733,13 @@ end do
 agent_bplus%Lplus = bplus_i%Lplus - ll_s + 1
 agent_bplus%row_group = 	row_group
 agent_bplus%col_group = 	row_group
-agent_bplus%level = basis_group(row_group)%level
+agent_bplus%level = msh%basis_group(row_group)%level
 
 do ll=1,agent_bplus%Lplus
 	agent_bplus%LL(ll)%Nbound = 0
 	agent_bplus%LL(ll)%rankmax=bplus_i%LL(ll+ll_s-1)%rankmax
 	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
-		if(basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
+		if(msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
 			agent_bplus%LL(ll)%Nbound = agent_bplus%LL(ll)%Nbound + 1
 		end if
 	end do
@@ -747,7 +752,7 @@ end do
 do ll=1,agent_bplus%Lplus
 	bb_o = 0
 	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
-		if(basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
+		if(msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
 			bb_o = bb_o + 1
 			call copy_butterfly('N',bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus%LL(ll)%matrices_block(bb_o))
 		end if
@@ -762,7 +767,7 @@ end subroutine Extract_partial_Bplus
 
 
 
-recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats,ptree,pgno)
+recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats,ptree,msh,pgno)
 
     use HODLR_DEFS
 	use misc
@@ -791,6 +796,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 	type(Hstat)::stats
 	integer level_butterfly_target,pgno,pgno1
 	type(proctree)::ptree
+	type(mesh)::msh
 	
 	type(partitionedblocks)::partitioned_block
 	
@@ -823,7 +829,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		else
 			pgno1=pgno*2
 		endif
-		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,option,error,stats,ptree,pgno1)
+		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,option,error,stats,ptree,msh,pgno1)
 		error_inout = max(error_inout, error)
 		
 		! construct the schur complement A-BD^-1C
@@ -836,7 +842,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree) 
+		call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh) 
 		error_inout = max(error_inout, error)
 		
 		! write(*,*)'ddd1'
@@ -848,13 +854,13 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		else
 			pgno1=pgno*2+1
 		endif		
-		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,option,error,stats,ptree,pgno1)
+		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,option,error,stats,ptree,msh,pgno1)
 		error_inout = max(error_inout, error)		
 
 		level_butterfly = level_butterfly_target
 		call get_minmaxrank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree) 
+		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree,msh) 
 		error_inout = max(error_inout, error)		
 		
 		
@@ -931,10 +937,10 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 		! allocate(blocks_C%ButterflyV%blocks(1))
 		! allocate(blocks_D%ButterflyV%blocks(1))	
 
-		! mm1=basis_group(blocks_A%row_group)%tail-basis_group(blocks_A%row_group)%head+1
-		! nn1=basis_group(blocks_A%col_group)%tail-basis_group(blocks_A%col_group)%head+1
-		! mm2=basis_group(blocks_D%row_group)%tail-basis_group(blocks_D%row_group)%head+1
-		! nn2=basis_group(blocks_D%col_group)%tail-basis_group(blocks_D%col_group)%head+1
+		! mm1=msh%basis_group(blocks_A%row_group)%tail-msh%basis_group(blocks_A%row_group)%head+1
+		! nn1=msh%basis_group(blocks_A%col_group)%tail-msh%basis_group(blocks_A%col_group)%head+1
+		! mm2=msh%basis_group(blocks_D%row_group)%tail-msh%basis_group(blocks_D%row_group)%head+1
+		! nn2=msh%basis_group(blocks_D%col_group)%tail-msh%basis_group(blocks_D%col_group)%head+1
 		! kk = size(blocks_i%ButterflyU%blocks(1)%matrix,2)
 		
 		
@@ -1522,10 +1528,10 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D)
 	end if
 	
 	
-	! mm1=basis_group(blocks_A%row_group)%tail-basis_group(blocks_A%row_group)%head+1
-	! nn1=basis_group(blocks_A%col_group)%tail-basis_group(blocks_A%col_group)%head+1
-	! mm2=basis_group(blocks_D%row_group)%tail-basis_group(blocks_D%row_group)%head+1
-	! nn2=basis_group(blocks_D%col_group)%tail-basis_group(blocks_D%col_group)%head+1
+	! mm1=msh%basis_group(blocks_A%row_group)%tail-msh%basis_group(blocks_A%row_group)%head+1
+	! nn1=msh%basis_group(blocks_A%col_group)%tail-msh%basis_group(blocks_A%col_group)%head+1
+	! mm2=msh%basis_group(blocks_D%row_group)%tail-msh%basis_group(blocks_D%row_group)%head+1
+	! nn2=msh%basis_group(blocks_D%col_group)%tail-msh%basis_group(blocks_D%col_group)%head+1
 
 	
 	! allocate(vin(nn1+nn2,1))

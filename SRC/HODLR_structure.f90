@@ -152,7 +152,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	!***************************************************
 
 	Maxgroup=2**(Maxlevel+1)-1
-	allocate (basis_group(Maxgroup))
+	msh%Maxgroup = Maxgroup
+	allocate (msh%basis_group(Maxgroup))
 	
 	if(ptree%MyID==Main_ID)write (*,*) ''
 	if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
@@ -161,11 +162,11 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'	
 	
 	!**** construct the top few levels whose ordering is provided by the user
-	basis_group(1)%head=1 ; basis_group(1)%tail=msh%Nunk; basis_group(1)%pgno=1
+	msh%basis_group(1)%head=1 ; msh%basis_group(1)%tail=msh%Nunk; msh%basis_group(1)%pgno=1
 	do level=nlevel_pre,0,-1
 		idxstart=1
 		do group=2**level, 2**(level+1)-1
-			basis_group(group)%level=level
+			msh%basis_group(group)%level=level
 
 			if(level==nlevel_pre)then
 				if(nlevel_pre==0)then
@@ -174,12 +175,12 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 					groupsize = msh%pretree(group-2**nlevel_pre+1)				
 				endif
 				call assert(groupsize>0,'zero leafsize may not be handled')
-				basis_group(group)%head = idxstart
-				basis_group(group)%tail = idxstart + groupsize -1
+				msh%basis_group(group)%head = idxstart
+				msh%basis_group(group)%tail = idxstart + groupsize -1
 				idxstart = idxstart + groupsize
 			else
-				basis_group(group)%head = basis_group(2*group)%head
-				basis_group(group)%tail = basis_group(2*group+1)%tail
+				msh%basis_group(group)%head = msh%basis_group(2*group)%head
+				msh%basis_group(group)%tail = msh%basis_group(2*group+1)%tail
 			endif					
 		enddo
 	enddo	
@@ -197,19 +198,19 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 
 	do level=nlevel_pre, Maxlevel
 		do group=2**level, 2**(level+1)-1
-			basis_group(group)%level=level
+			msh%basis_group(group)%level=level
 								
 			if(option%xyzsort==NATURAL)then !natural ordering		 
-				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
 				allocate (distance(mm))	
-				do i=basis_group(group)%head, basis_group(group)%tail
-					distance(i-basis_group(group)%head+1)=dble(i)
+				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					distance(i-msh%basis_group(group)%head+1)=dble(i)
 				enddo
 		
 			else if(option%xyzsort==CKD)then !msh%xyz sort		 
 				xyzmin= 1d300
 				xyzmax= -1d300
-				do edge=basis_group(group)%head, basis_group(group)%tail
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					do ii=1,Dimn
 						xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%new2old(edge)))
 						xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%new2old(edge)))
@@ -217,7 +218,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 				enddo
 				xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
 				
-				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
 				allocate (distance(mm))	
 				sortdirec = maxloc(xyzrange(1:Dimn),1)
 				! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
@@ -232,8 +233,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 				
 				
 				!$omp parallel do default(shared) private(i)
-				do i=basis_group(group)%head, basis_group(group)%tail
-					distance(i-basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
+				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					distance(i-msh%basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
 				enddo
 				!$omp end parallel do
 
@@ -241,18 +242,18 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 
 				groupcenter(1:dimn)=0.0d0
 				! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
-				do edge=basis_group(group)%head, basis_group(group)%tail
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					do ii=1,dimn
 						groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%new2old(edge))
 					enddo
 				enddo
 				! !$omp end parallel do
 				do ii=1,dimn
-					groupcenter(ii)=groupcenter(ii)/(basis_group(group)%tail-basis_group(group)%head+1)
+					groupcenter(ii)=groupcenter(ii)/(msh%basis_group(group)%tail-msh%basis_group(group)%head+1)
 				enddo
 
 				radiusmax=0.
-				do edge=basis_group(group)%head, basis_group(group)%tail
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius=0
 					do ii=1,dimn
 						radius=radius+(msh%xyz(ii,msh%new2old(edge))-groupcenter(ii))**2
@@ -264,27 +265,27 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 					endif			
 				enddo
 
-				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
 				allocate (distance(mm))	
 				
 				distance(1:mm)=Bigvalue
 				!$omp parallel do default(shared) private(i)
-				do i=basis_group(group)%head, basis_group(group)%tail
-					distance(i-basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),msh)
+				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					distance(i-msh%basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),msh)
 				enddo
 				!$omp end parallel do					
 
 			else if(option%xyzsort==TM_GRAM)then !GRAM-distance-based cobblestone sort
 
-				Nsmp = min(basis_group(group)%tail-basis_group(group)%head+1,50)
-				allocate(perms(basis_group(group)%tail-basis_group(group)%head+1))
-				call rperm(basis_group(group)%tail-basis_group(group)%head+1, perms)
+				Nsmp = min(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,50)
+				allocate(perms(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
+				call rperm(msh%basis_group(group)%tail-msh%basis_group(group)%head+1, perms)
 				
 				radiusmax2=0.
-				do edge=basis_group(group)%head, basis_group(group)%tail
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius2=0
 					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center 
-						radius2 = radius2 + gram_distance(edge,perms(ii)+basis_group(group)%head-1,ker,msh,element_Zmn)
+						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,element_Zmn)
 					enddo
 					! call assert(radius2>0,'radius2<0 cannot take square root')
 					! radius2 = sqrt(radius2)
@@ -295,15 +296,15 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 					endif			
 				enddo
 
-				mm = basis_group(group)%tail - basis_group(group)%head + 1
+				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
 				allocate (distance(mm))	
 				
 				distance(1:mm)=Bigvalue
 				
 				
 				!$omp parallel do default(shared) private(i)
-				do i=basis_group(group)%head, basis_group(group)%tail
-					distance(i-basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,element_Zmn)
+				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,element_Zmn)
 				enddo
 				!$omp end parallel do
 
@@ -317,13 +318,13 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 			call quick_sort(distance,order,mm)       
 			!$omp parallel do default(shared) private(ii)     
 			do ii=1, mm
-				map_temp(ii) = msh%new2old(order(ii)+basis_group(group)%head-1)
+				map_temp(ii) = msh%new2old(order(ii)+msh%basis_group(group)%head-1)
 			enddo
 			!$omp end parallel do
 
 			!$omp parallel do default(shared) private(ii)     
 			do ii=1, mm
-				msh%new2old(ii+basis_group(group)%head-1) = map_temp(ii)
+				msh%new2old(ii+msh%basis_group(group)%head-1) = map_temp(ii)
 			enddo
 			!$omp end parallel do			
 			
@@ -336,17 +337,17 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 			
 			
 			if (level<Maxlevel) then
-				basis_group(2*group)%head=basis_group(group)%head
-				basis_group(2*group)%tail=int((basis_group(group)%head+basis_group(group)%tail)/2)
-				basis_group(2*group+1)%head=basis_group(2*group)%tail+1
-				basis_group(2*group+1)%tail=basis_group(group)%tail
+				msh%basis_group(2*group)%head=msh%basis_group(group)%head
+				msh%basis_group(2*group)%tail=int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)
+				msh%basis_group(2*group+1)%head=msh%basis_group(2*group)%tail+1
+				msh%basis_group(2*group+1)%tail=msh%basis_group(group)%tail
 								
 				if(option%xyzsort==CKD)then 
-					seperator = msh%xyz(sortdirec,msh%new2old(basis_group(2*group)%tail))
+					seperator = msh%xyz(sortdirec,msh%new2old(msh%basis_group(2*group)%tail))
 				end if
 				
-				basis_group(group)%boundary(1) = sortdirec
-				basis_group(group)%boundary(2) = seperator
+				msh%basis_group(group)%boundary(1) = sortdirec
+				msh%basis_group(group)%boundary(2) = seperator
 													
 			endif	
 		enddo
@@ -373,7 +374,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	write(strings , *) Dimn
 	do level=0, Maxlevel
 		do group=2**level, 2**(level+1)-1
-			do edge=basis_group(group)%head, basis_group(group)%tail
+			do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 				write(113,'(I5,I8,'//TRIM(strings)//'Es16.8)')level,group,msh%xyz(1:Dimn,msh%new2old(edge))
 			enddo
 		enddo
@@ -412,19 +413,19 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 
 	Maxgrp=2**(ptree%nlevel)-1
 	
-	basis_group(1)%pgno=1
+	msh%basis_group(1)%pgno=1
 	do level=0, ho_bf1%Maxlevel
 		do group=2**level, 2**(level+1)-1
 			if(level<ho_bf1%Maxlevel)then
-			if(basis_group(group)%pgno*2<=Maxgrp)then
-				basis_group(2*group)%pgno=basis_group(group)%pgno*2
+			if(msh%basis_group(group)%pgno*2<=Maxgrp)then
+				msh%basis_group(2*group)%pgno=msh%basis_group(group)%pgno*2
 			else
-				basis_group(2*group)%pgno=basis_group(group)%pgno
+				msh%basis_group(2*group)%pgno=msh%basis_group(group)%pgno
 			endif
-			if(basis_group(group)%pgno*2+1<=Maxgrp)then
-				basis_group(2*group+1)%pgno=basis_group(group)%pgno*2+1
+			if(msh%basis_group(group)%pgno*2+1<=Maxgrp)then
+				msh%basis_group(2*group+1)%pgno=msh%basis_group(group)%pgno*2+1
 			else
-				basis_group(2*group+1)%pgno=basis_group(group)%pgno
+				msh%basis_group(2*group+1)%pgno=msh%basis_group(group)%pgno
 			endif
 			endif
 		enddo
@@ -489,14 +490,14 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 			block_inv%row_group=row_group
 			block_inv%level=ho_bf1%levels(level_c)%BP_inverse(ii)%level
 			block_inv%pgno=ho_bf1%levels(level_c)%BP_inverse(ii)%pgno
-			block_inv%headm=basis_group(row_group)%head
-			block_inv%headn=basis_group(col_group)%head
-			block_inv%M=basis_group(row_group)%tail-basis_group(row_group)%head+1
-			block_inv%N=basis_group(col_group)%tail-basis_group(col_group)%head+1
+			block_inv%headm=msh%basis_group(row_group)%head
+			block_inv%headn=msh%basis_group(col_group)%head
+			block_inv%M=msh%basis_group(row_group)%tail-msh%basis_group(row_group)%head+1
+			block_inv%N=msh%basis_group(col_group)%tail-msh%basis_group(col_group)%head+1
 			
 			block_inv%level_butterfly = ho_bf1%Maxlevel - block_inv%level
 			
-			call ComputeParallelIndices(ho_bf1%Maxlevel,block_inv,block_inv%pgno,ptree,0)
+			call ComputeParallelIndices(ho_bf1%Maxlevel,block_inv,block_inv%pgno,ptree,msh,0)
 
 			if(IOwnPgrp(ptree,block_inv%pgno))then
 				ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
@@ -584,14 +585,14 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
 				block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
 				block_f%style = 1  !!!!! be careful here
-				block_f%pgno = basis_group(block_f%row_group)%pgno
+				block_f%pgno = msh%basis_group(block_f%row_group)%pgno
 				
-				block_f%M = basis_group(block_f%row_group)%tail - basis_group(block_f%row_group)%head + 1
-				block_f%N = basis_group(block_f%col_group)%tail - basis_group(block_f%col_group)%head + 1
-				block_f%headm = basis_group(block_f%row_group)%head
-				block_f%headn = basis_group(block_f%col_group)%head
+				block_f%M = msh%basis_group(block_f%row_group)%tail - msh%basis_group(block_f%row_group)%head + 1
+				block_f%N = msh%basis_group(block_f%col_group)%tail - msh%basis_group(block_f%col_group)%head + 1
+				block_f%headm = msh%basis_group(block_f%row_group)%head
+				block_f%headn = msh%basis_group(block_f%col_group)%head
 				block_f%level_butterfly=0
-				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_f,block_f%pgno,ptree,0)
+				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_f,block_f%pgno,ptree,msh,0)
 				
 				! bottom level dense blocks' inverse 
 				ho_bf1%levels(level_c)%BP_inverse(ii)%Lplus=1				
@@ -606,14 +607,14 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				block_inv%col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
 				block_inv%row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
 				block_inv%style = 1  !!!!! be careful here
-				block_inv%pgno = basis_group(block_inv%row_group)%pgno
+				block_inv%pgno = msh%basis_group(block_inv%row_group)%pgno
 				
-				block_inv%M = basis_group(block_inv%row_group)%tail - basis_group(block_inv%row_group)%head + 1
-				block_inv%N = basis_group(block_inv%col_group)%tail - basis_group(block_inv%col_group)%head + 1
-				block_inv%headm = basis_group(block_inv%row_group)%head
-				block_inv%headn = basis_group(block_inv%col_group)%head
+				block_inv%M = msh%basis_group(block_inv%row_group)%tail - msh%basis_group(block_inv%row_group)%head + 1
+				block_inv%N = msh%basis_group(block_inv%col_group)%tail - msh%basis_group(block_inv%col_group)%head + 1
+				block_inv%headm = msh%basis_group(block_inv%row_group)%head
+				block_inv%headn = msh%basis_group(block_inv%col_group)%head
 				block_inv%level_butterfly=0
-				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_inv,block_inv%pgno,ptree,0)			
+				call ComputeParallelIndices(ho_bf1%Maxlevel+1,block_inv,block_inv%pgno,ptree,msh,0)			
 				if(IOwnPgrp(ptree,block_inv%pgno))then
 					ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
 					ho_bf1%levels(level_c)%Bidxe = max(ho_bf1%levels(level_c)%Bidxe,ii)
@@ -641,7 +642,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				
 				block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
 				block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
-				block_f%pgno=basis_group(block_f%row_group)%pgno
+				block_f%pgno=msh%basis_group(block_f%row_group)%pgno
 
 				
 				
@@ -653,13 +654,13 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 						
 		
 				
-				block_f%M = basis_group(block_f%row_group)%tail - basis_group(block_f%row_group)%head + 1
-				block_f%N = basis_group(block_f%col_group)%tail - basis_group(block_f%col_group)%head + 1
-				block_f%headm = basis_group(block_f%row_group)%head
-				block_f%headn = basis_group(block_f%col_group)%head				
+				block_f%M = msh%basis_group(block_f%row_group)%tail - msh%basis_group(block_f%row_group)%head + 1
+				block_f%N = msh%basis_group(block_f%col_group)%tail - msh%basis_group(block_f%col_group)%head + 1
+				block_f%headm = msh%basis_group(block_f%row_group)%head
+				block_f%headn = msh%basis_group(block_f%col_group)%head				
 				
-				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno,ptree,0)
-				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno_db,ptree,1)
+				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno,ptree,msh,0)
+				call ComputeParallelIndices(ho_bf1%Maxlevel,block_f,block_f%pgno_db,ptree,msh,1)
 				! if(block_f%M==2500)write(*,*)ptree%myID,block_f%pgno,block_f%pgno_db,block_f%N_loc,block_f%N_loc_db,'eref'
 				
 				block_f%style = 2
@@ -669,8 +670,8 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				
 				
 				group = floor((ii-1+2**level_c)/2d0)
-				sortdirec = NINT(basis_group(group)%boundary(1))
-				seperator = basis_group(group)%boundary(2)
+				sortdirec = NINT(msh%basis_group(group)%boundary(1))
+				seperator = msh%basis_group(group)%boundary(2)
 				
 				do ll=1,LplusMax-1
 					if(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound>0)then
@@ -708,7 +709,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 
 									CNT = 0
 									if(option%xyzsort==CKD)then	
-										do nn = basis_group(group_m)%head,basis_group(group_m)%tail
+										do nn = msh%basis_group(group_m)%head,msh%basis_group(group_m)%tail
 											measure = abs(msh%xyz(sortdirec,msh%new2old(nn))-seperator)
 											if(measure<option%touch_para)then
 												Isboundary_M(index_i_m) = 1 
@@ -740,7 +741,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 								
 									CNT = 0
 									if(option%xyzsort==CKD)then	
-										do nn = basis_group(group_n)%head,basis_group(group_n)%tail
+										do nn = msh%basis_group(group_n)%head,msh%basis_group(group_n)%tail
 											measure = abs(msh%xyz(sortdirec,msh%new2old(nn))-seperator)
 											if(measure<option%touch_para)then
 												Isboundary_N(index_j_m) = 1 
@@ -822,20 +823,20 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									blocks => ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)
 									blocks%row_group = group_m
 									blocks%col_group = group_n
-									blocks%level = basis_group(group_m)%level
+									blocks%level = msh%basis_group(group_m)%level
 
-									blocks%pgno = basis_group(group_m)%pgno										
-									blocks%M = basis_group(group_m)%tail - basis_group(group_m)%head + 1
-									blocks%N = basis_group(group_n)%tail - basis_group(group_n)%head + 1
-									blocks%headm = basis_group(group_m)%head
-									blocks%headn = basis_group(group_n)%head						
+									blocks%pgno = msh%basis_group(group_m)%pgno										
+									blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+									blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+									blocks%headm = msh%basis_group(group_m)%head
+									blocks%headn = msh%basis_group(group_n)%head						
 									
 									
 									! blocks%level_butterfly = int((ho_bf1%Maxlevel - blocks%level)/2)*2
 									blocks%level_butterfly = 0 ! only two layer butterfly plus here
 									
 									blocks%style = 2
-									call ComputeParallelIndices(ho_bf1%Maxlevel,blocks,blocks%pgno,ptree,0)
+									call ComputeParallelIndices(ho_bf1%Maxlevel,blocks,blocks%pgno,ptree,msh,0)
 								end if
 							end do
 						end if		
@@ -878,10 +879,10 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 								block_sch%row_group = row_group
 								block_sch%col_group = row_group
 								
-								if(basis_group(row_group)%pgno/=basis_group(INT(row_group/2d0))%pgno)then
-									block_sch%pgno = basis_group(INT(row_group/2d0))%pgno								
+								if(msh%basis_group(row_group)%pgno/=msh%basis_group(INT(row_group/2d0))%pgno)then
+									block_sch%pgno = msh%basis_group(INT(row_group/2d0))%pgno								
 								else 
-									block_sch%pgno = basis_group(row_group)%pgno
+									block_sch%pgno = msh%basis_group(row_group)%pgno
 								end if
 								
 								
@@ -889,11 +890,11 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 								block_sch%level = block_f%level
 								block_sch%level_butterfly = block_f%level_butterfly
 								
-								block_sch%M = basis_group(row_group)%tail - basis_group(row_group)%head + 1
-								block_sch%N = basis_group(row_group)%tail - basis_group(row_group)%head + 1
-								block_sch%headm = basis_group(row_group)%head 
-								block_sch%headn = basis_group(row_group)%head
-								call ComputeParallelIndices(ho_bf1%Maxlevel,block_sch,block_sch%pgno,ptree,0)
+								block_sch%M = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
+								block_sch%N = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
+								block_sch%headm = msh%basis_group(row_group)%head 
+								block_sch%headn = msh%basis_group(row_group)%head
+								call ComputeParallelIndices(ho_bf1%Maxlevel,block_sch,block_sch%pgno,ptree,msh,0)
 							end do
 							
 							
@@ -929,7 +930,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 				! do ll=1,ho_bf1%levels(level_c)%BP(ii)%Lplus
 				! ! write(*,*)ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound,'ddd'
 					! do bb = 1,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound
-						! write(177,'(I3,I7,I3,I3,'//TRIM(strings)//'Es16.7)')level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
+						! write(177,'(I3,I7,I3,I3,'//TRIM(strings)//'Es16.7)')level_c,ii,ll,ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%level,msh%basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%row_group)%center(1:dimn),msh%basis_group(ho_bf1%levels(level_c)%BP(ii)%LL(ll)%matrices_block(bb)%col_group)%center(1:dimn)
 					! end do
 				! end do
 				! ! end if

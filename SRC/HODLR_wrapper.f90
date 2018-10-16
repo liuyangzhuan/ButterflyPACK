@@ -450,11 +450,12 @@ end subroutine C_HODLR_Construct
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_factor")	
+subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) bind(c, name="c_hodlr_factor")	
 	implicit none 
 
 	type(c_ptr), intent(inout) :: ho_bf_for_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
+	type(c_ptr), intent(in) :: msh_Cptr	
 	type(c_ptr) :: option_Cptr
 	type(c_ptr), intent(inout) :: stats_Cptr
 	! type(c_ptr), intent(out) :: ho_bf_inv_Cptr
@@ -465,6 +466,7 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind
 	type(hobf),pointer::ho_bf1
 	! type(hobf),pointer::ho_bf_inv
 	type(proctree),pointer::ptree	
+	type(mesh),pointer::msh	
 
 	! real(kind=8):: tol_fact
 	
@@ -472,6 +474,7 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(msh_Cptr, msh)
 	
 	! allocate(ho_bf_tmp)
 	! call copy_HOBF(ho_bf1,ho_bf_tmp)	! currently this subroutine only copies forward components 
@@ -481,7 +484,7 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call HODLR_Factorization(ho_bf1,option,stats,ptree)
+    call HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -613,6 +616,96 @@ subroutine C_HODLR_Mult(trans,xin,xout,Nloc,Ncol,ho_bf_for_Cptr,option_Cptr,stat
 	deallocate(str)
 end subroutine C_HODLR_Mult
 
+
+
+!**** C interface of deleting statistics
+	!stats_Cptr: the structure containing statistics
+subroutine C_HODLR_Deletestats(stats_Cptr) bind(c, name="c_hodlr_deletestats")	
+	implicit none 
+	type(c_ptr), intent(inout) :: stats_Cptr
+	type(Hstat),pointer::stats
+
+	call c_f_pointer(stats_Cptr, stats)
+	call delete_Hstat(stats)
+	deallocate(stats)
+	stats_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_Deletestats
+
+
+!**** C interface of deleting process tree
+	!ptree_Cptr: the structure containing process tree
+subroutine C_HODLR_Deleteproctree(ptree_Cptr) bind(c, name="c_hodlr_deleteproctree")	
+	implicit none 
+	type(c_ptr), intent(inout) :: ptree_Cptr
+	type(proctree),pointer::ptree
+
+	call c_f_pointer(ptree_Cptr, ptree)
+	call delete_proctree(ptree)
+	deallocate(ptree)
+	ptree_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_Deleteproctree
+
+
+!**** C interface of deleting mesh 
+	!msh_Cptr: the structure containing mesh
+subroutine C_HODLR_Deletemesh(msh_Cptr) bind(c, name="c_hodlr_deletemesh")	
+	implicit none 
+	type(c_ptr), intent(inout) :: msh_Cptr
+	type(mesh),pointer::msh
+
+	call c_f_pointer(msh_Cptr, msh)
+	call delete_mesh(msh)
+	deallocate(msh)
+	msh_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_Deletemesh
+
+
+!**** C interface of deleting kernelquant 
+	!ker_Cptr: the structure containing kernelquant
+subroutine C_HODLR_Deletekernelquant(ker_Cptr) bind(c, name="c_hodlr_deletekernelquant")	
+	implicit none 
+	type(c_ptr), intent(inout) :: ker_Cptr
+	type(kernelquant),pointer::ker
+
+	call c_f_pointer(ker_Cptr, ker)
+	call delete_kernelquant(ker)
+	deallocate(ker)
+	ker_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_Deletekernelquant
+
+
+!**** C interface of deleting HOBF 
+	!ho_bf_Cptr: the structure containing HOBF
+subroutine C_HODLR_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_hodlr_deletehobf")	
+	implicit none 
+	type(c_ptr), intent(inout) :: ho_bf_Cptr
+	type(hobf),pointer::ho_bf
+
+	call c_f_pointer(ho_bf_Cptr, ho_bf)
+	call delete_HOBF(ho_bf)
+	deallocate(ho_bf)
+	ho_bf_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_DeleteHOBF
+
+
+
+!**** C interface of deleting Hoption 
+	!option_Cptr: the structure containing Hoption
+subroutine C_HODLR_Deleteoption(option_Cptr) bind(c, name="c_hodlr_deleteoption")	
+	implicit none 
+	type(c_ptr), intent(inout) :: option_Cptr
+	type(Hoption),pointer::option
+
+	call c_f_pointer(option_Cptr, option)
+	deallocate(option)
+	option_Cptr=c_null_ptr
+	
+end subroutine C_HODLR_Deleteoption
 
 
 end module HODLR_wrapper

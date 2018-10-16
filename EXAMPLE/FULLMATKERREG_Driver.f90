@@ -100,6 +100,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	
 	!**** create the process tree
 	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -232,7 +233,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call d_HODLR_Factorization(ho_bf,option,stats,ptree)
+    call d_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -243,8 +244,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
 	
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_delete_HOBF(ho_bf)
+	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
-
+	
+	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
 end PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
@@ -387,6 +395,8 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	deallocate(x)
 	deallocate(b)	
 	
+	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
+	if(allocated(quant%perms))deallocate(quant%perms)
 	
 	call MPI_barrier(ptree%Comm,ierr)
 	

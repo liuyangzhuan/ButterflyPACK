@@ -48,6 +48,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	enddo	
 	
 	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
 	
@@ -91,16 +92,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     !tol=0.000001
 	!itmax=10000
 	
-	CALL getarg(1, DATA_DIR)
+	! CALL getarg(1, DATA_DIR)
 	
 	
-	quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	quant%model2d=7 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
 	! msh%Nunk=20000
-	 msh%Nunk=5000
-    ! msh%Nunk=160000	
+	 ! msh%Nunk=5000
+    msh%Nunk=40000	
 	! Refined_level=0
 	quant%Nunk = msh%Nunk
 	
@@ -117,7 +118,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%nogeo=0 
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
-	quant%wavelength=0.08
+	quant%wavelength=0.06
 
 ! quant%wavelength=0.08
 ! Discret=0.05
@@ -146,9 +147,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=1
-	option%RecLR_leaf=BACA
+	option%ErrFillFull=0 
+	option%RecLR_leaf=ACA
 	option%ErrSol=1
+	! option%LR_BLK_NUM=2
+	call getarg(1,strings)
+	read(strings,*)option%LR_BLK_NUM		
 
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
@@ -213,7 +217,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call z_HODLR_Factorization(ho_bf,option,stats,ptree)
+    call z_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	end if
@@ -223,10 +227,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
+	call delete_quant_EMCURV(quant)
+	
+	call z_delete_proctree(ptree)
+	call z_delete_Hstat(stats)
+	call z_delete_mesh(msh)
+	call z_delete_kernelquant(ker)
+	call z_delete_HOBF(ho_bf)
 	
     if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
-
-    ! ! ! ! pause
+	
+	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
 end PROGRAM HODLR_BUTTERFLY_SOLVER_2D

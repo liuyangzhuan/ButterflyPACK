@@ -6,7 +6,7 @@ use Bplus_inversion
 
 contains 
 
-subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
+subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 
     use HODLR_DEFS
     
@@ -19,7 +19,8 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
     integer level, blocks, edge, patch, node, group,level_c,groupm_diag
     integer rank, index_near, m, n, length, flag, itemp
     real T0
-	real(kind=8) rtemp,tmpfact
+	real(kind=8)::rtemp=0
+	real(kind=8) tmpfact
     real(kind=8) Memory, Memory_near
 	integer,allocatable:: index_old(:),index_new(:) 
 	integer::block_num,block_num_new,num_blocks,level_butterfly	
@@ -32,6 +33,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	type(proctree)::ptree
+	type(mesh)::msh
 
 
     if(ptree%MyID==Main_ID)write (*,*) ''
@@ -80,7 +82,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 		
 		if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%tail)then			
 			
-			call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree) 
+			call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree,msh) 
 			
 			call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock),rtemp)
 			stats%Mem_Sblock = stats%Mem_Sblock + rtemp
@@ -110,7 +112,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree)
 				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree)
 				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2),stats,ptree)
 				
-				call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree)
+				call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 				call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock),rtemp)
 				stats%Mem_SMW=stats%Mem_SMW+rtemp
 

@@ -34,6 +34,15 @@ implicit none
 
 contains
 
+	subroutine delete_quant_EMCURV(quant)
+		implicit none
+		type(quant_EMCURV):: quant
+		if(allocated(quant%xyz))deallocate(quant%xyz)
+		if(allocated(quant%info_unk))deallocate(quant%info_unk)
+		if(allocated(quant%corner_points))deallocate(quant%corner_points)
+	end subroutine delete_quant_EMCURV
+
+
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Z_elem_EMCURV(m,n,value_e,quant)
 		

@@ -35,6 +35,19 @@ implicit none
 
 contains
 
+subroutine delete_quant_EMSURF(quant)
+implicit none
+type(quant_EMSURF):: quant
+if(allocated(quant%xyz))deallocate(quant%xyz)
+if(allocated(quant%info_unk))deallocate(quant%info_unk)
+if(allocated(quant%ng1))deallocate(quant%ng1)
+if(allocated(quant%ng2))deallocate(quant%ng2)
+if(allocated(quant%ng3))deallocate(quant%ng3)
+if(allocated(quant%gauss_w))deallocate(quant%gauss_w)
+if(allocated(quant%normal_of_patch))deallocate(quant%normal_of_patch)
+if(allocated(quant%node_of_patch))deallocate(quant%node_of_patch)
+
+end subroutine delete_quant_EMSURF 
 
 !**** user-defined subroutine to sample Z_mn
 subroutine Z_elem_EMSURF(m,n,value_e,quant)

@@ -117,7 +117,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						! rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
 						! rankrate_outter=1.2d0
 						! level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
-						! call Bplus_randomized_constr(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree)
+						! call Bplus_randomized_constr(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree,msh)
 						
 						
 						! stop
@@ -340,8 +340,8 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 		nj = order_n(j)
 		
 		
-        ! iii=int((mi+1)/2)+basis_group(group_m)%head-1
-        ! jjj=int((nj+1)/2)+basis_group(group_n)%head-1
+        ! iii=int((mi+1)/2)+msh%basis_group(group_m)%head-1
+        ! jjj=int((nj+1)/2)+msh%basis_group(group_n)%head-1
         ! ii=2-mod(mi,2)
         ! jj=2-mod(nj,2)
 		! call element_Zmn(iii,jjj,ii,jj,value1)

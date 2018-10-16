@@ -154,11 +154,11 @@ contains
     ! level_butterfly=blocks%level_butterfly
     ! group_n=group_n*2**level_butterfly-1+index_j
 
-    ! mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
-    ! nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
-    ! nn_start=basis_group(group_n)%head-basis_group(blocks%col_group)%head
-    ! header_m=basis_group(group_m)%head
-    ! header_n=basis_group(group_n)%head
+    ! mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+    ! nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+    ! nn_start=msh%basis_group(group_n)%head-msh%basis_group(blocks%col_group)%head
+    ! header_m=msh%basis_group(group_m)%head
+    ! header_n=msh%basis_group(group_n)%head
 
     ! rankmax=rank_approximate_func(group_m, group_n, 1,ker)
 
@@ -451,17 +451,17 @@ contains
     ! level_butterfly=blocks%level_butterfly
     ! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here   
     ! group_n=blocks%col_group    
-    ! ii=basis_group(group_m)%head
-    ! jj=basis_group(group_n)%head
+    ! ii=msh%basis_group(group_m)%head
+    ! jj=msh%basis_group(group_n)%head
     ! group_m=group_m*2**level-1+index_i
     ! group_n=group_n*2**(level_butterfly-level)-1+index_j
-    ! header_m=basis_group(group_m)%head
-    ! header_n1=basis_group(group_n)%head
-    ! header_n2=basis_group(2*group_n+1)%head
-    ! nnn1=basis_group(2*group_n)%tail-basis_group(2*group_n)%head+1
+    ! header_m=msh%basis_group(group_m)%head
+    ! header_n1=msh%basis_group(group_n)%head
+    ! header_n2=msh%basis_group(2*group_n+1)%head
+    ! nnn1=msh%basis_group(2*group_n)%tail-msh%basis_group(2*group_n)%head+1
 
-    ! mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
-    ! mmm=basis_group(int(group_m/2))%tail-basis_group(int(group_m/2))%head+1
+    ! mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+    ! mmm=msh%basis_group(int(group_m/2))%tail-msh%basis_group(int(group_m/2))%head+1
     ! index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1
     ! num_groupn=2**(level_butterfly-level+1)
     ! index_iijj=(index_ii-1)*num_groupn+index_jj
@@ -538,7 +538,7 @@ contains
                 ! MatrixSubselection(i,j)=ctemp
             ! endif
 			! ! if(level==1)then
-				! ! write(*,*)nn1,nn2,j,i,edge_m-basis_group(blocks%row_group)%head+1,edge_n-basis_group(blocks%col_group)%head+1
+				! ! write(*,*)nn1,nn2,j,i,edge_m-msh%basis_group(blocks%row_group)%head+1,edge_n-msh%basis_group(blocks%col_group)%head+1
 			! ! end if
         ! enddo
     ! enddo
@@ -860,10 +860,10 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			group_m=group_m*2**levelm-1+index_i_m
 			group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 		
-			mm=basis_group(group_m)%tail-basis_group(group_m)%head+1	
-			nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
-			idxs_m = basis_group(group_m)%head
-			idxs_n = basis_group(group_n)%head
+			mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1	
+			nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+			idxs_m = msh%basis_group(group_m)%head
+			idxs_n = msh%basis_group(group_n)%head
 			
 			rmax = min(500,min(mm,nn))
 			allocate(matU(mm,rmax))
@@ -931,7 +931,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			enddo
 			!$omp end parallel do
 			
-			mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
+			mm1 = msh%basis_group(group_m*2)%tail-msh%basis_group(group_m*2)%head+1
 			allocate(ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%matrix(mm1,rank));ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%mdim=mm1;ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%ndim=rank
 			allocate(ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%matrix(mm-mm1,rank));ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%mdim=mm-mm1;ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%ndim=rank
 			
@@ -953,7 +953,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			do index_ij_loc = 1, 2**level_butterflyL
 				index_j_loc = mod(index_ij_loc-1,2**(level_butterflyL-level_loc))+1
 				index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**(level_butterflyL-level_loc)))
-				call LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,ButterflyP_old,ButterflyP)				
+				call LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)				
 			enddo
 			!$omp end parallel do	
 			
@@ -1030,10 +1030,10 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			group_m=group_m*2**levelm-1+index_i_m
 			group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 		
-			mm=basis_group(group_m)%tail-basis_group(group_m)%head+1	
-			nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
-			idxs_m = basis_group(group_m)%head
-			idxs_n = basis_group(group_n)%head
+			mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1	
+			nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+			idxs_m = msh%basis_group(group_m)%head
+			idxs_n = msh%basis_group(group_n)%head
 			
 			rmax = min(500,min(mm,nn))
 			allocate(matU(mm,rmax))
@@ -1064,7 +1064,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			enddo
 			!$omp end parallel do
 			
-			nn1 = basis_group(group_n*2)%tail-basis_group(group_n*2)%head+1
+			nn1 = msh%basis_group(group_n*2)%tail-msh%basis_group(group_n*2)%head+1
 			allocate(ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%matrix(rank,nn1));ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%mdim=rank;ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%ndim=nn1
 			allocate(ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%matrix(rank,nn-nn1));ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%mdim=rank;ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%ndim=nn-nn1
 			
@@ -1087,7 +1087,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			do index_ij_loc = 1, 2**level_butterflyR
 				index_j_loc = mod(index_ij_loc-1,2**level_loc)+1
 				index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**level_loc))
-				call LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,ButterflyP_old,ButterflyP)				
+				call LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,msh,ButterflyP_old,ButterflyP)				
 			enddo
 			!$omp end parallel do	
 			
@@ -1247,8 +1247,8 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		group_m=blocks%row_group  ! Note: row_group and col_group interchanged here  
 		group_n=blocks%col_group
 
-		mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
-		nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
+		mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+		nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
 		
 		
 		! !!!!! SVD
@@ -1257,8 +1257,8 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		! allocate(QQ(mm,nn))
 		! do ii=1,mm
 			! do jj =1,nn
-				! edge_m = basis_group(group_m)%head + ii - 1
-				! edge_n = basis_group(group_n)%head + jj - 1
+				! edge_m = msh%basis_group(group_m)%head + ii - 1
+				! edge_n = msh%basis_group(group_n)%head + jj - 1
 				! call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
 				! QQ(ii,jj) = ctemp
 			! end do
@@ -1271,8 +1271,8 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		
 		
 		! !!!!! ACA-SVD
-		! idxs_m = basis_group(group_m)%head
-		! idxs_n = basis_group(group_n)%head
+		! idxs_m = msh%basis_group(group_m)%head
+		! idxs_n = msh%basis_group(group_n)%head
 		
 		! rmax = min(500,min(mm,nn))
 		! allocate(UU(mm,rmax))
@@ -1374,13 +1374,13 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						group_n=blocks%col_group
 						group_n=group_n*2**level_butterfly-1+index_j
 
-						mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
-						nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
+						mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+						nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
 						allocate(QQ(mm,nn))
 						do ii=1,mm
 							do jj =1,nn
-								edge_m = basis_group(group_m)%head + ii - 1
-								edge_n = basis_group(group_n)%head + jj - 1
+								edge_m = msh%basis_group(group_m)%head + ii - 1
+								edge_n = msh%basis_group(group_n)%head + jj - 1
 								call element_Zmn(edge_m,edge_n,ctemp,msh,ker)
 								QQ(ii,jj) = ctemp
 							end do
@@ -1406,7 +1406,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						enddo
 						!$omp end parallel do
 						
-						mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
+						mm1 = msh%basis_group(group_m*2)%tail-msh%basis_group(group_m*2)%head+1
 						allocate(ButterflyP%blocks(2*index_i-1,index_j)%matrix(mm1,rank));ButterflyP%blocks(2*index_i-1,index_j)%mdim=mm1;ButterflyP%blocks(2*index_i-1,index_j)%ndim=rank
 						allocate(ButterflyP%blocks(2*index_i,index_j)%matrix(mm-mm1,rank));ButterflyP%blocks(2*index_i,index_j)%mdim=mm-mm1;ButterflyP%blocks(2*index_i,index_j)%ndim=rank
 						
@@ -1432,7 +1432,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						group_m=group_m*2**level-1+index_i
 						group_n=group_n*2**(level_butterfly-level)-1+index_j
 					
-						mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
+						mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
 									
 						! call assert(size(ButterflyP_old%blocks(index_i,2*index_j-1)%matrix,1)==mm,'mm incorrect')
 						if(size(ButterflyP_old%blocks(index_i,2*index_j-1)%matrix,1)/=mm)then
@@ -1485,7 +1485,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 
 
 						if(level/=level_butterfly)then
-							mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
+							mm1 = msh%basis_group(group_m*2)%tail-msh%basis_group(group_m*2)%head+1
 							allocate(ButterflyP%blocks(2*index_i-1,index_j)%matrix(mm1,rank));ButterflyP%blocks(2*index_i-1,index_j)%mdim=mm1;ButterflyP%blocks(2*index_i-1,index_j)%ndim=rank
 							allocate(ButterflyP%blocks(2*index_i,index_j)%matrix(mm-mm1,rank));ButterflyP%blocks(2*index_i,index_j)%mdim=mm-mm1;ButterflyP%blocks(2*index_i,index_j)%ndim=rank
 							
@@ -1608,10 +1608,10 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				group_m=group_m*2**levelm-1+index_i_m
 				group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 			
-				mm=basis_group(group_m)%tail-basis_group(group_m)%head+1	
-				nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
-				idxs_m = basis_group(group_m)%head
-				idxs_n = basis_group(group_n)%head
+				mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1	
+				nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+				idxs_m = msh%basis_group(group_m)%head
+				idxs_n = msh%basis_group(group_n)%head
 				
 				rmax = min(500,min(mm,nn))
 				allocate(matU(mm,rmax))
@@ -1678,7 +1678,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				!$omp end parallel do
 				
 				
-				mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
+				mm1 = msh%basis_group(group_m*2)%tail-msh%basis_group(group_m*2)%head+1
 				allocate(ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%matrix(mm1,rank));ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%mdim=mm1;ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%ndim=rank
 				allocate(ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%matrix(mm-mm1,rank));ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%mdim=mm-mm1;ButterflyP_old%blocks(2*index_i_loc,index_j_loc)%ndim=rank
 				
@@ -1711,7 +1711,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 					index_j_loc = mod(index_ij_loc-1,2**(level_butterflyL-level_loc))+1
 					index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**(level_butterflyL-level_loc)))
 				
-					call LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,ButterflyP_old,ButterflyP)				
+					call LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)				
 				enddo
 				!$omp end parallel do
 				
@@ -1793,10 +1793,10 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				group_m=group_m*2**levelm-1+index_i_m
 				group_n=group_n*2**(level_butterfly-levelm)-1+index_j_m
 			
-				mm=basis_group(group_m)%tail-basis_group(group_m)%head+1	
-				nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
-				idxs_m = basis_group(group_m)%head
-				idxs_n = basis_group(group_n)%head
+				mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1	
+				nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+				idxs_m = msh%basis_group(group_m)%head
+				idxs_n = msh%basis_group(group_n)%head
 				
 				rmax = min(500,min(mm,nn))
 				allocate(matU(mm,rmax))
@@ -1825,7 +1825,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				enddo
 				!$omp end parallel do
 				
-				nn1 = basis_group(group_n*2)%tail-basis_group(group_n*2)%head+1
+				nn1 = msh%basis_group(group_n*2)%tail-msh%basis_group(group_n*2)%head+1
 				allocate(ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%matrix(rank,nn1));ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%mdim=rank;ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%ndim=nn1
 				allocate(ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%matrix(rank,nn-nn1));ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%mdim=rank;ButterflyP_old%blocks(index_i_loc,2*index_j_loc)%ndim=nn-nn1
 				
@@ -1848,7 +1848,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				do index_ij_loc = 1, 2**level_butterflyR
 					index_j_loc = mod(index_ij_loc-1,2**level_loc)+1
 					index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**level_loc))
-					call LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,ButterflyP_old,ButterflyP)				
+					call LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,msh,ButterflyP_old,ButterflyP)				
 				enddo
 				!$omp end parallel do	
 				
@@ -1879,7 +1879,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 						! index_j = (index_j_m-1)*(2**level_loc)+index_j_loc
 						! group_n=blocks%col_group   ! Note: row_group and col_group interchanged here    
 						! group_n=group_n*2**(level_butterfly-level+1)-1+index_j
-						! nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
+						! nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
 									
 						! ! call assert(size(ButterflyP_old%blocks(index_i,2*index_j-1)%matrix,1)==mm,'mm incorrect')
 						! if(size(ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%matrix,2)/=nn)then
@@ -1935,7 +1935,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 
 
 						! if(level_loc/=level_butterflyR)then
-							! nn1 = basis_group(group_n*2)%tail-basis_group(group_n*2)%head+1
+							! nn1 = msh%basis_group(group_n*2)%tail-msh%basis_group(group_n*2)%head+1
 							! allocate(ButterflyP%blocks(index_i_loc,2*index_j_loc-1)%matrix(rank,nn1))
 							! allocate(ButterflyP%blocks(index_i_loc,2*index_j_loc)%matrix(rank,nn-nn1))
 							
@@ -2777,7 +2777,11 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	
 	allocate(row_R(rankmax_c),column_R(rankmax_r))
 	allocate(norm_row_R(rankmax_c),norm_column_R(rankmax_r))
-
+	row_R=0
+	column_R=0
+	norm_row_R=0
+	norm_column_R=0
+	
 	select_row(1)=frow	
 
 	!$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
@@ -2799,6 +2803,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	if(abs(maxvalue)<SafeUnderflow)then
 	
 		do ii=1,100
+			a=0
 			call random_number(a)
 			select_row(1)=floor_safe(a*(rankmax_r-1))+1
 			!$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
@@ -3774,7 +3779,7 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 end subroutine SeudoSkeleton_CompressionForward
 
 
-subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,ButterflyP_old,ButterflyP)
+subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)
 use misc
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyL,index_i_m,index_i,index_j,level,group_m,mm,nn,nn1,nn2,j,i,mn,rank,mm1
@@ -3785,12 +3790,13 @@ real(kind=8),allocatable :: Singular(:)
 type(matrixblock)::blocks
 real(kind=8):: SVD_tolerance
 type(Hoption)::option
+type(mesh)::msh
 
 	index_j = index_j_loc
 	index_i = (index_i_m-1)*(2**level_loc)+index_i_loc
 	group_m=blocks%row_group   ! Note: row_group and col_group interchanged here    
 	group_m=group_m*2**level-1+index_i
-	mm=basis_group(group_m)%tail-basis_group(group_m)%head+1
+	mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
 				
 	! call assert(size(ButterflyP_old%blocks(index_i,2*index_j-1)%matrix,1)==mm,'mm incorrect')
 	if(size(ButterflyP_old%blocks(index_i_loc,2*index_j_loc-1)%matrix,1)/=mm)then
@@ -3846,7 +3852,7 @@ type(Hoption)::option
 
 
 	if(level_loc/=level_butterflyL)then
-		mm1 = basis_group(group_m*2)%tail-basis_group(group_m*2)%head+1
+		mm1 = msh%basis_group(group_m*2)%tail-msh%basis_group(group_m*2)%head+1
 		allocate(ButterflyP%blocks(2*index_i_loc-1,index_j_loc)%matrix(mm1,rank));ButterflyP%blocks(2*index_i_loc-1,index_j_loc)%mdim=mm1;ButterflyP%blocks(2*index_i_loc-1,index_j_loc)%ndim=rank
 		allocate(ButterflyP%blocks(2*index_i_loc,index_j_loc)%matrix(mm-mm1,rank));ButterflyP%blocks(2*index_i_loc,index_j_loc)%mdim=mm-mm1;ButterflyP%blocks(2*index_i_loc,index_j_loc)%ndim=rank
 		
@@ -3902,7 +3908,7 @@ end subroutine  LocalButterflySVD_Left
 
 
 
-subroutine LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,ButterflyP_old,ButterflyP)
+subroutine LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,msh,ButterflyP_old,ButterflyP)
 use misc
 implicit none 
 integer index_i_loc,index_j_loc,level_loc,level_butterflyR,level_butterfly,index_j_m,index_i,index_j,level,group_n,mm,nn,nn1,mm1,mm2,j,i,mn,rank
@@ -3913,12 +3919,13 @@ real(kind=8),allocatable :: Singular(:)
 type(matrixblock)::blocks
 real(kind=8):: SVD_tolerance
 type(Hoption)::option
+type(mesh)::msh
 
 	index_i = index_i_loc
 	index_j = (index_j_m-1)*(2**level_loc)+index_j_loc
 	group_n=blocks%col_group   ! Note: row_group and col_group interchanged here    
 	group_n=group_n*2**(level_butterfly-level+1)-1+index_j
-	nn=basis_group(group_n)%tail-basis_group(group_n)%head+1
+	nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
 				
 	! call assert(size(ButterflyP_old%blocks(index_i,2*index_j-1)%matrix,1)==mm,'mm incorrect')
 	if(size(ButterflyP_old%blocks(2*index_i_loc-1,index_j_loc)%matrix,2)/=nn)then
@@ -3975,7 +3982,7 @@ type(Hoption)::option
 
 
 	if(level_loc/=level_butterflyR)then
-		nn1 = basis_group(group_n*2)%tail-basis_group(group_n*2)%head+1
+		nn1 = msh%basis_group(group_n*2)%tail-msh%basis_group(group_n*2)%head+1
 		allocate(ButterflyP%blocks(index_i_loc,2*index_j_loc-1)%matrix(rank,nn1));ButterflyP%blocks(index_i_loc,2*index_j_loc-1)%mdim=rank;ButterflyP%blocks(index_i_loc,2*index_j_loc-1)%ndim=nn1
 		allocate(ButterflyP%blocks(index_i_loc,2*index_j_loc)%matrix(rank,nn-nn1));ButterflyP%blocks(index_i_loc,2*index_j_loc)%mdim=rank;ButterflyP%blocks(index_i_loc,2*index_j_loc)%ndim=nn-nn1
 		
@@ -4148,11 +4155,11 @@ end subroutine CheckLRError
 		
 		! distance=group_dist(group_m,group_n)
 		! distance=distance**2d0
-		! ! distance=(basis_group(group_m)%center(1)-basis_group(group_n)%center(1))**2+(basis_group(group_m)%center(2)-basis_group(group_n)%center(2))**2+(basis_group(group_m)%center(3)-basis_group(group_n)%center(3))**2
+		! ! distance=(msh%basis_group(group_m)%center(1)-msh%basis_group(group_n)%center(1))**2+(msh%basis_group(group_m)%center(2)-msh%basis_group(group_n)%center(2))**2+(msh%basis_group(group_m)%center(3)-msh%basis_group(group_n)%center(3))**2
 		! ! ! distance=sqrt(distance)
-		! angle=4*pi*(basis_group(group_m)%radius)**2/distance
-		! rank=int(4*pi*(basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
-		! ! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,basis_group(group_n)%radius,basis_group(group_n)%radius,angle,distance
+		! angle=4*pi*(msh%basis_group(group_m)%radius)**2/distance
+		! rank=int(4*pi*(msh%basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
+		! ! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,msh%basis_group(group_n)%radius,msh%basis_group(group_n)%radius,angle,distance
 		! if (flag==1) then
 			! rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
 		! elseif (flag==2) then

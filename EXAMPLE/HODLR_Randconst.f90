@@ -44,6 +44,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	enddo	
 	
 	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	deallocate(groupmembers)
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -305,7 +306,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
     ! write(*,*) "Cascading factorizing......"
-    ! call d_HODLR_Factorization(ho_bf,option,stats,ptree)
+    ! call d_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
     ! write(*,*) "Cascading factorizing finished"
     ! write(*,*) "    "	
 
@@ -317,7 +318,15 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
 
-    write(*,*) "-------------------------------program end-------------------------------------"
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_delete_HOBF(ho_bf)
+	
+    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
+	
+	call blacs_exit(1)
 	call MPI_Finalize(ierr)
     ! ! ! ! pause
 
