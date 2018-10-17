@@ -8,7 +8,7 @@ rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
-	-DCMAKE_Fortran_FLAGS="-cpp -DIntel -DPRNTlevel=0 -nologo -traceback -fpe0 -debug full -O0 -check bounds" \
+	-DCMAKE_Fortran_FLAGS="-cpp -DIntel -DPRNTlevel=2 -nologo -traceback -fpe0 -debug full -O0 -check bounds" \
 	-DCMAKE_CXX_FLAGS="-std=c++11 -O3 -qopenmp -qopt-matmul -lifcore -I/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/include " \
 	-DTPL_LAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_lp64.a;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_thread.a;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_core.a;/opt/intel/compilers_and_libraries_2018.1.163/linux/compiler/lib/intel64/libiomp5.a" \
 	-DTPL_SCALAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.a;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_scalapack_lp64.a" \

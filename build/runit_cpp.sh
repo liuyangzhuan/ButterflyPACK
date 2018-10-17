@@ -11,15 +11,16 @@ DATA=../EXAMPLE/SUSY/susy_10Kn
 # DATA=/project/projectdirs/m2957/liuyangz/my_research/ML/SUSY_Origin/susy_10Kn
 Ndim=8
 ker=1
-h=0.2
+h=0.1
 lambda=10.
 Nmin=200
-tol=1e-4
+tol=1e-2
 com_opt=3
-checkerr=1
+checkerr=0
 batch=100
 
-mpirun -n $nmpi valgrind --leak-check=yes --track-origins=yes --error-limit=no $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
+#mpirun -n $nmpi valgrind --leak-check=yes --track-origins=yes --error-limit=no $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
+mpirun -n $nmpi $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
 #srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
 
 
