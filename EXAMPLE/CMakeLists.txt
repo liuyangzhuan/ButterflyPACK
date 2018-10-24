@@ -16,9 +16,9 @@ set(FZEXM2 EMSURF_Driver.f90)
 add_executable(fem3d ${FZEXM2})
 target_link_libraries(fem3d ${all_link_libs_z})
 
-# set(FZEXM3 HODLR_Randconst.f90)
-# add_executable(frandh ${FZEXM3})
-# target_link_libraries(frandh ${all_link_libs_z})
+set(FZEXM3 HODLR_Randconst.f90)
+add_executable(frandh ${FZEXM3})
+target_link_libraries(frandh ${all_link_libs_z})
 
 # else()
 set(CDEXM InterfaceTest.cpp)

@@ -7,7 +7,7 @@ contains
  
 
 
-subroutine delete_blocks(blocks)
+subroutine delete_blocks(blocks,allflag)
 
     use HODLR_DEFS
     implicit none
@@ -16,7 +16,7 @@ subroutine delete_blocks(blocks)
     integer i, j, mm, nn, rank, num_blocks, level, level_butterfly,index_i_m,index_j_m,levelm
     real(kind=8) memory_butterfly, rtemp
     type(matrixblock)::blocks
-	
+	integer allflag
 
         level_butterfly=blocks%level_butterfly
 		
@@ -77,13 +77,14 @@ subroutine delete_blocks(blocks)
 		blocks%rankmax = -1000
 		blocks%rankmin = 1000
         
-
-        if(allocated(blocks%fullmat))deallocate (blocks%fullmat)
-    
-		if(associated(blocks%N_p))deallocate(blocks%N_p)
-		if(associated(blocks%M_p))deallocate(blocks%M_p)
-		if(associated(blocks%M_p_db))deallocate(blocks%M_p_db)
-		if(associated(blocks%N_p_db))deallocate(blocks%N_p_db)
+		if(allocated(blocks%fullmat))deallocate (blocks%fullmat)
+		
+		if(allflag==1)then
+			if(associated(blocks%N_p))deallocate(blocks%N_p)
+			if(associated(blocks%M_p))deallocate(blocks%M_p)
+			if(associated(blocks%M_p_db))deallocate(blocks%M_p_db)
+			if(associated(blocks%N_p_db))deallocate(blocks%N_p_db)
+		endif
     return
 
 end subroutine delete_blocks
@@ -109,7 +110,7 @@ do ll=1,LplusMax
 		if(associated(bplus%LL(ll)%matrices_block))then
 		do bb=1,bplus%LL(ll)%Nbound
 			! write(*,*)ll,bplus%Lplus,bb,bplus%LL(ll)%Nbound,'fff'
-			call delete_blocks(bplus%LL(ll)%matrices_block(bb))
+			call delete_blocks(bplus%LL(ll)%matrices_block(bb),1)
 		end do		
 		deallocate(bplus%LL(ll)%matrices_block)
 		endif
@@ -161,18 +162,22 @@ if(trans=='N')then
 
 
 	if(associated(block_i%N_p))then
+		if(associated(block_o%N_p))deallocate(block_o%N_p)
 		allocate(block_o%N_p(size(block_i%N_p,1),2))
 		block_o%N_p = block_i%N_p
 	endif
 	if(associated(block_i%M_p))then
+		if(associated(block_o%M_p))deallocate(block_o%M_p)
 		allocate(block_o%M_p(size(block_i%M_p,1),2))
 		block_o%M_p = block_i%M_p
 	endif
 	if(associated(block_i%N_p_db))then
+		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
 		allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
 		block_o%N_p_db = block_i%N_p_db
 	endif
 	if(associated(block_i%M_p_db))then
+		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
 		allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
 		block_o%M_p_db = block_i%M_p_db
 	endif
@@ -287,18 +292,22 @@ else if(trans=='T')then
 
 
 	if(associated(block_i%N_p))then
+		if(associated(block_o%M_p))deallocate(block_o%M_p)
 		allocate(block_o%M_p(size(block_i%N_p,1),2))
 		block_o%M_p = block_i%N_p
 	endif
 	if(associated(block_i%M_p))then
+		if(associated(block_o%N_p))deallocate(block_o%N_p)
 		allocate(block_o%N_p(size(block_i%M_p,1),2))
 		block_o%N_p = block_i%M_p
 	endif
 	if(associated(block_i%N_p_db))then
+		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
 		allocate(block_o%M_p_db(size(block_i%N_p_db,1),2))
 		block_o%M_p_db = block_i%N_p_db
 	endif
 	if(associated(block_i%M_p_db))then
+		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
 		allocate(block_o%N_p_db(size(block_i%M_p_db,1),2))
 		block_o%N_p_db = block_i%M_p_db
 	endif
@@ -3437,6 +3446,9 @@ subroutine SetDefaultOptions(option)
 	option%nogeo=0
 	option%ErrSol=0
 	option%LR_BLK_NUM=1
+	option%rank0=32
+	option%rankrate=1.2d0
+	option%itermax=10
 
 end subroutine SetDefaultOptions	
 
@@ -3458,8 +3470,7 @@ implicit none
 	
 	call assert(Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),'too many process sharing this group')
 	
-	! if(ptree%myid>=ptree%pgrp(pgno)%head .and. ptree%myid<=ptree%pgrp(pgno)%tail)then
-	
+	! if(IOwnPgrp(ptree,pgno))then	
 	
 		! level_butterfly = block%level_butterfly
 		level_p = ptree%nlevel-GetTreelevel(pgno)
@@ -3504,7 +3515,7 @@ implicit none
 			N_p(proc+1,2) = max(N_p(proc+1,2),msh%basis_group(gg)%tail-msh%basis_group(block%col_group)%head+1)				
 		enddo
 
-		if(ptree%myid>=ptree%pgrp(pgno)%head .and. ptree%myid<=ptree%pgrp(pgno)%tail)then
+		if(IOwnPgrp(ptree,pgno))then	
 			ii = ptree%myid-ptree%pgrp(pgno)%head+1
 			if(flag==0)block%M_loc = M_p(ii,2)-M_p(ii,1)+1  
 			if(flag==1)block%M_loc_db = M_p(ii,2)-M_p(ii,1)+1  

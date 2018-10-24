@@ -908,37 +908,63 @@ end subroutine unmqrf90
 	
 	
 
-subroutine un_or_gqrf90(Matrix,tau,flop)
+subroutine un_or_gqrf90(Matrix,tau,m,n,k,flop)
 class(*) Matrix(:,:),tau(:)
 real(kind=8),optional::flop
+integer m,n,k
 
 select type(Matrix)
 type is (real(kind=8))
 	select type(tau)
 	type is (real(kind=8))
-		call orgqrf90(Matrix,tau,flop)
+		call orgqrf90(Matrix,tau,m,n,k,flop)
 	end select
 	
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
-		call ungqrf90(Matrix,tau,flop)
+		call ungqrf90(Matrix,tau,m,n,k,flop)
 	end select
 end select
 
 
 end subroutine un_or_gqrf90
 
+
+
+subroutine pun_or_gqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+class(*) Matrix(:,:),tau(:)
+real(kind=8),optional::flop
+integer m,n,k,ia,ja
+integer desca(9)
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+		call porgqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+	end select
+	
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+		call pungqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+	end select
+end select
+
+
+end subroutine pun_or_gqrf90
+
 	
 	
 
-subroutine orgqrf90(Matrix,tau,flop)	
+subroutine orgqrf90(Matrix,tau,m,n,k,flop)	
 
 ! 
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
-integer m,n,mn_min
+integer m,n,k,lda
 
 integer LWORK,INFO
 real(kind=8):: TEMP(1)
@@ -946,23 +972,16 @@ real(kind=8):: TEMP(1)
 real(kind=8),allocatable:: WORK(:)
 real(kind=8),optional::flop
 
-m=size(Matrix,1)
-n=size(Matrix,2)
-
-if(m<n)then
-	write(*,*)'size of Matrix incorrect'
-	stop
-endif
-mn_min = min(m,n)
+lda=size(Matrix,1)
 
 
 LWORK=-1
-call DORGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
+call DORGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))     
 WORK=0
-call DORGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
+call DORGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
 
 if(INFO/=0)then
@@ -974,40 +993,72 @@ deallocate(WORK)
 
 
 ! call ungqr(Matrix,tau)
-if(present(flop))flop = flops_dungqr(m,n,mn_min)
+if(present(flop))flop = flops_dungqr(m,n,k)
 end subroutine orgqrf90	
 	
 
+
+subroutine porgqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+
+! 
+
+implicit none
+real(kind=8) Matrix(:,:),tau(:)
+integer m,n,k,lda
+
+integer LWORK,INFO
+real(kind=8):: TEMP(1)
+integer desca(9)
+integer ia,ja
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+
+LWORK=-1
+call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+
+if(INFO/=0)then
+	write(*,*)'porgqrf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+
+! call ungqr(Matrix,tau)
+if(present(flop))flop = flops_dungqr(m,n,k)
+end subroutine porgqrf90		
 	
-subroutine ungqrf90(Matrix,tau,flop)	
+	
+	
+subroutine ungqrf90(Matrix,tau,m,n,k,flop)	
 
 ! 
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
-integer m,n,mn_min
+integer m,n,k,lda
 real(kind=8),optional::flop
 integer LWORK,INFO
 complex(kind=8):: TEMP(1)
 
 complex(kind=8),allocatable:: WORK(:)
 
-m=size(Matrix,1)
-n=size(Matrix,2)
-if(m<n)then
-	write(*,*)'size of Matrix incorrect'
-	stop
-endif
-mn_min = min(m,n)
-
+lda=size(Matrix,1)
 
 LWORK=-1
-call ZUNGQR(m, n, n, Matrix, m, tau, TEMP, LWORK, INFO)
+call ZUNGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))     
 WORK=0
-call ZUNGQR(m, n, n, Matrix, m, tau, WORK, LWORK, INFO)
+call ZUNGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
 
 if(INFO/=0)then
@@ -1017,11 +1068,47 @@ endif
 
 deallocate(WORK)
 
-if(present(flop))flop = flops_zungqr(m,n,mn_min)
+if(present(flop))flop = flops_zungqr(m,n,k)
 ! call ungqr(Matrix,tau)
 
 end subroutine ungqrf90	
 	
+
+	
+subroutine pungqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)	
+
+! 
+
+implicit none
+complex(kind=8)Matrix(:,:),tau(:)
+integer m,n,k,lda
+real(kind=8),optional::flop
+integer LWORK,INFO
+complex(kind=8):: TEMP(1)
+integer desca(9)
+integer ia,ja
+complex(kind=8),allocatable:: WORK(:)
+
+LWORK=-1
+call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+LWORK=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(LWORK))     
+WORK=0
+call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+
+if(INFO/=0)then
+	write(*,*)'pungqrf90 failed!!',INFO
+	stop
+endif
+
+deallocate(WORK)
+
+if(present(flop))flop = flops_zungqr(m,n,k)
+! call ungqr(Matrix,tau)
+
+end subroutine pungqrf90	
 	
 	
 

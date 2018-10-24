@@ -269,6 +269,9 @@ module HODLR_DEFS
 		real(kind=8) tol_rand     ! tolerance for randomized contruction 
 		integer::schulzorder ! order (2 or 3) of schultz iteration 
 		integer::schulzlevel ! (I+B)^-1 is computed by schultz iteration for butterfly with more than schulzlevel levels 
+		integer::rank0 ! intial guess of ranks
+		real(kind=8)::rankrate ! increasing rate of rank estimates per iteration
+		integer::itermax ! max number of iteration in randomized schemes
 		
 		! options for solve 
 		real(kind=8) tol_itersol  ! tolerance for iterative solvers 
@@ -315,6 +318,7 @@ module HODLR_DEFS
 		
 		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Z_elem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_MatVec),nopass,pointer :: FuncMatVec ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 		
 		type(c_ptr),pointer :: C_QuantZmn ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
 		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
@@ -322,15 +326,15 @@ module HODLR_DEFS
 	
 	
 	abstract interface
-		subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,msh,operand)
-			import::mesh
-			implicit none
-			character trans
-			integer M, N, num_vect_sub
-			DT :: Vin(:,:), Vout(:,:)
-			type(mesh)::msh
-			class(*)::operand
-		end subroutine HOBF_MVP_blk
+		! subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,msh,operand)
+			! import::mesh
+			! implicit none
+			! character trans
+			! integer, INTENT(in):: N, num_vect_sub
+			! DT :: Vin(:,:), Vout(:,:)
+			! type(mesh)::msh
+			! class(*)::operand
+		! end subroutine HOBF_MVP_blk
 
 		subroutine BF_MVP_blk(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 			import :: matrixblock,proctree,Hstat
@@ -354,6 +358,7 @@ module HODLR_DEFS
 			type(kernelquant)::ker
 		end subroutine Z_elem
 		
+		
 		subroutine F_Z_elem(m,n,val,quant) ! m,n represents indices in natural order
 		  import::mesh,kernelquant
 		  class(*),pointer :: quant
@@ -367,6 +372,32 @@ module HODLR_DEFS
 		  integer(kind=C_INT), INTENT(IN):: m,n
 		  CBIND_DT::val 
 		end subroutine C_Z_elem		
+
+
+		subroutine MatVec(trans,N,num_vect,Vin,Vout,msh,ptree,stats,ker)
+			import::mesh,kernelquant,proctree,Hstat
+			implicit none
+		    integer, INTENT(IN):: N,num_vect
+		    DT::Vin(:,:),Vout(:,:) 
+		    type(mesh)::msh
+			type(proctree)::ptree
+			type(Hstat)::stats
+			type(kernelquant)::ker
+		    character trans
+		end subroutine MatVec		
+		
+		
+		subroutine F_MatVec(trans,N,num_vect,Vin,Vout,msh,ptree,stats,quant) ! m,n represents indices in natural order
+		  import::mesh,proctree,Hstat
+		  class(*),pointer :: quant
+		  integer, INTENT(IN):: N,num_vect
+		  DT::Vin(:,:),Vout(:,:) 
+		  type(mesh)::msh
+		  type(proctree)::ptree
+		  type(Hstat)::stats
+		  character trans
+		end subroutine F_MatVec
+		
 		
 		
 	end interface
@@ -376,5 +407,5 @@ module HODLR_DEFS
 	 real(kind=8)::time_tmp
 	 integer vecCNT
 	 
-	 integer,allocatable:: basis_group_pre(:,:)
+	 ! integer,allocatable:: basis_group_pre(:,:)
 end module HODLR_DEFS

@@ -80,8 +80,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 		do rowblock_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
 		do rowblock=rowblock_inv*2-1,rowblock_inv*2
 		
-		if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(rowblock)%pgno)%tail)then			
-			
+		if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(rowblock)%pgno))then	
 			call Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,ptree,msh) 
 			
 			call ComputeMemory_Bplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock),rtemp)
@@ -107,8 +106,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 		do rowblock = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
 			
 			pgno =  ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno		
-			if((ptree%MyID >=ptree%pgrp(pgno)%head .and. ptree%MyID <=ptree%pgrp(pgno)%tail))then	
-				
+			if(IOwnPgrp(ptree,pgno))then	
 				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree)
 				call DoubleDistributeBplus(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2),stats,ptree)
 				

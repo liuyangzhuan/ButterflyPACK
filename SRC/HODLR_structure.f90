@@ -15,7 +15,8 @@ real(kind=8) function euclidean_distance(node1,node2,msh)
     integer Dimn
 	type(mesh)::msh
 	
-	Dimn = size(msh%xyz,1)
+	Dimn = 0
+	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
 	
     dis=0d0
     do i=1,Dimn
@@ -187,7 +188,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	
 	
 	!**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
-	dimn=size(msh%xyz,1) 
+	dimn=0
+	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
 	if(dimn>0)then
 	allocate(xyzrange(dimn))
 	allocate(xyzmin(dimn))
@@ -564,12 +566,12 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 	! enddo	
 	
 	
-	Dimn = size(msh%xyz,1)
+	Dimn = 0
+	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
 	
 	do level_c = 1,ho_bf1%Maxlevel+1
 		do ii =1,ho_bf1%levels(level_c)%N_block_forward
-            ! if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%tail)then
-			
+			! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(ii)%pgno))then	
 			if(level_c==ho_bf1%Maxlevel+1)then
 			
 				! bottom level dense blocks 

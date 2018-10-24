@@ -154,7 +154,6 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	integer pgno,pgno1,pgno2
 	integer descBUold(9),descBVold(9),descCUold(9),descCVold(9), descBU(9),descBV(9),descCU(9),descCV(9),descBVCU(9),descBUBVCU(9)
 	integer ctxt1,ctxt2,ctxt,ctxtall,info,myrow,mycol,myArows,myAcols 
-	integer :: numroc   ! blacs routine
 	type(Hstat)::stats
 	
 	ctemp1=1.0d0 ; ctemp2=0.0d0
@@ -181,7 +180,7 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	! endif
 	
 	block_o =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
-	call delete_blocks(block_o)	
+	call delete_blocks(block_o,1)	
 	
 	block_o%level_butterfly = 0
 	allocate(block_o%ButterflyU%blocks(1))
@@ -333,11 +332,11 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 		stop
 	else
 		! write(*,*)'Schulz Iteration Time:',n2-n1
-		call delete_blocks(block_o)
+		call delete_blocks(block_o,1)
 		call get_butterfly_minmaxrank(block_Xn)
 		rank_new_max = block_Xn%rankmax
 		call copy_delete_butterfly(block_Xn,block_o,Memory) 
-		call delete_blocks(schulz_op%matrices_block)	
+		call delete_blocks(schulz_op%matrices_block,1)	
 		if(allocated(schulz_op%diags))deallocate(schulz_op%diags)
 	endif
 	
@@ -596,7 +595,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 								
 							err_max = max(err_max, error)						
 								
-							call delete_blocks(agent_block)
+							call delete_blocks(agent_block,1)
 							! deallocate(agent_block)	
 							call delete_Bplus(agent_bplus)
 							! deallocate(agent_bplus)	
@@ -669,7 +668,7 @@ subroutine MultiL_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,optio
 								
 							err_max = max(err_max, error)															
 								
-							call delete_blocks(agent_block)
+							call delete_blocks(agent_block,1)
 							! deallocate(agent_block)	
 							call delete_Bplus(agent_bplus)
 							! deallocate(agent_bplus)								
@@ -869,10 +868,10 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 #if PRNTlevel >= 2		
 		if(level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' SchurI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
 #endif			
-		call delete_blocks(blocks_A)
-		call delete_blocks(blocks_B)
-		call delete_blocks(blocks_C)
-		call delete_blocks(blocks_D)
+		call delete_blocks(blocks_A,1)
+		call delete_blocks(blocks_B,1)
+		call delete_blocks(blocks_C,1)
+		call delete_blocks(blocks_D,1)
 		
 		return
 	
@@ -1601,7 +1600,6 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 
 	integer lwork,liwork,lcmrc,ierr
 	DT,allocatable:: work(:)	
-	integer :: numroc   ! blacs routine
 	type(Hstat)::stats
 
 	ctxt = ptree%pgrp(pgno)%ctxt
@@ -1654,7 +1652,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		if(myrow/=-1 .and. mycol/=-1)then
 			if(ptree%MyID==ptree%pgrp(pgno)%head)then
 				call blacs_gridinfo(ctxt_head, nprow, npcol, myrow, mycol)
-				myArows = numroc(rank, nbslpk, myrow, 0, nprow)
+				myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
 				call descinit( desctemp, rank, rank, nbslpk, nbslpk, 0, 0, ctxt_head, max(myArows,1), info )
 				call assert(info==0,'descinit fail for desctemp')
 			else
@@ -1662,8 +1660,8 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			endif
 			
 			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-			myArows = numroc(rank, nbslpk, myrow, 0, nprow)
-			myAcols = numroc(rank, nbslpk, mycol, 0, npcol)	
+			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)	
 			allocate(matrix_small(myArows,myAcols))
 			matrix_small=0
 			

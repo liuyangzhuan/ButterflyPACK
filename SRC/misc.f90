@@ -345,7 +345,8 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	ldaU = size(matU,1)
 	ldaV = size(matV,1)
  
-
+	call assert(rmax<=min(M,N),'rmax too big in LR_ReCompression')
+	
 	allocate(QQ1(M,rmax))
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	QQ1 = matU(1:M,1:rmax)
@@ -365,7 +366,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau_Q,flop=flop)
+	call un_or_gqrf90(QQ1,tau_Q,M,rmax,rmax,flop=flop)
 	deallocate(tau_Q)
 	! deallocate(jpvt1)
 	if(present(Flops))Flops = Flops + flop
@@ -390,7 +391,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	enddo
 	! !$omp end parallel do	
 
-	call un_or_gqrf90(QQ2,tau_Q,flop=flop)
+	call un_or_gqrf90(QQ2,tau_Q,N,rmax,rmax,flop=flop)
 	! deallocate(jpvt2)
 	deallocate(tau_Q)
 	if(present(Flops))Flops = Flops + flop
@@ -606,7 +607,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! enddo
 		! ! !$omp end parallel do	
 
-		! call un_or_gqrf90(QQ1,tau_Q,flop=flop)
+		! call un_or_gqrf90(QQ1,tau_Q,M,rmax,rmax,flop=flop)
 		! if(present(Flops))Flops= Flops + flop
 
 		! allocate(QQ2(rmax,N))
@@ -745,10 +746,119 @@ end subroutine GetRank
 
 
 
+subroutine PComputeRange(M_p,N,mat,rank,eps,ptree,pgno)
+
+implicit none 
+integer M,N,M_loc,rank,mn,i,mnl,ii,jj,rrflag
+DT::mat(:,:)
+real(kind=8) eps
+DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:),mat1D(:,:),mat2D(:,:)
+real(kind=8),allocatable :: Singular(:)
+integer,allocatable :: jpvt(:)
+integer, allocatable :: ipiv(:),jpiv(:),JPERM(:)
+integer:: M_p(:,:)
+integer,allocatable:: M_p_1D(:,:)
+type(proctree)::ptree
+integer pgno,proc,nproc,nb1Dc,nb1Dr,ctxt1D,ctxt,idxs_o,idxe_o
+integer myArows,myAcols,info,nprow,npcol,myrow,mycol
+integer::descsMat1D(9),descsMat2D(9)
+
+	
+	proc = ptree%MyID - ptree%pgrp(pgno)%head
+	nproc = ptree%pgrp(pgno)%nproc
+	M_loc = M_p(proc+1,2)-M_p(proc+1,1)+1
+	M = M_p(nproc,2)
+		
+	if(nproc==1)then	
+		call ComputeRange(M,N,mat,rank,1,eps)
+	else
+
+		mn=min(M,N)	
+
+		nb1Dc=N
+		nb1Dr=ceiling_safe(M/dble(nproc))
+		allocate(M_p_1D(nproc,2))
+		do ii=1,nproc
+			M_p_1D(ii,1) = (ii-1)*nb1Dr+1
+			M_p_1D(ii,2) = ii*nb1Dr
+		enddo	
+		M_p_1D(nproc,2) = M	
+		
+		
+		
+		!!!!**** generate 1D grid blacs quantities
+		ctxt1D = ptree%pgrp(pgno)%ctxt1D
+		jj = ptree%myid-ptree%pgrp(pgno)%head+1
+		idxs_o=M_p_1D(jj,1) 
+		idxe_o=M_p_1D(jj,2)			
+		myArows = idxe_o-idxs_o+1
+		myAcols = N	
+		allocate(mat1D(myArows,myAcols))
+		mat1D=0
+		call descinit( descsMat1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )			
+
+		
+		!!!!**** generate 2D grid blacs quantities
+		ctxt = ptree%pgrp(pgno)%ctxt		
+		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+		if(myrow/=-1 .and. mycol/=-1)then
+			myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+			call descinit( descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			allocate(mat2D(myArows,myAcols))
+			mat2D=0			
+		else 
+			descsMat2D(2)=-1
+		endif
+
+
+		!!!!**** redistribution of input matrix
+		call Redistribute1Dto1D(mat,M_p,0,pgno,mat1D,M_p_1D,0,pgno,N,ptree)
+		call pgemr2df90(M, N, mat1D, 1, 1, descsMat1D, mat2D, 1, 1, descsMat2D, ctxt1D)		
+		
+
+		! Compute RRQR 
+		if(myrow/=-1 .and. mycol/=-1)then
+			allocate(ipiv(myAcols))
+			ipiv=0
+			allocate(tau(myAcols))
+			tau=0
+			allocate(jpiv(N))
+			jpiv=0
+			allocate(JPERM(N))
+			JPERM=0
+			call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank,eps, SafeUnderflow)
+			call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1)
+			
+			deallocate(ipiv)
+			deallocate(tau)
+			deallocate(jpiv)
+			deallocate(JPERM)
+			
+			if(isnan(fnorm(mat2D,myArows,myAcols)))then
+				write(*,*)'Q or R has NAN in PComputeRange'
+				stop
+			end if			
+		endif
+		
+		!!!!**** redistribution of output matrix
+		call pgemr2df90(M, N, mat2D, 1, 1, descsMat2D, mat1D, 1, 1, descsMat1D, ctxt1D)	
+		call Redistribute1Dto1D(mat1D,M_p_1D,0,pgno,mat,M_p,0,pgno,N,ptree)
+				
+		
+		if(myrow/=-1 .and. mycol/=-1)then
+			deallocate(mat2D)
+		endif
+		deallocate(M_p_1D)
+		deallocate(mat1D)	
+	endif	
+	
+end subroutine PComputeRange		
+		
+		
+
 
 subroutine ComputeRange(M,N,mat,rank,rrflag,eps)
-
-
 
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj,rrflag
@@ -758,68 +868,33 @@ DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:)
 real(kind=8),allocatable :: Singular(:)
 integer,allocatable :: jpvt(:)
 
-mn=min(M,N)
-mnl=max(M,N)
-
-if(isnan(fnorm(mat,M,N)))then
-	write(*,*)'input matrix NAN in ComputeRange'
-	stop
-end if
-
-
-	allocate(Atmp(mnl,mn))
-	allocate(A_tmp(mn,mn))
-	
-	if(M>=N)then
-		Atmp = mat
-	else 
-		call copymatT(mat,Atmp,M,N)
+	mn=min(M,N)
+	if(isnan(fnorm(mat,M,N)))then
+		write(*,*)'input matrix NAN in ComputeRange'
+		stop
 	end if
-			
-	allocate(jpvt(mn))
-	allocate(tau(mn))
-	
-	
-	! RRQR
+
+
+	allocate(jpvt(N))
 	jpvt = 0
-	call geqp3f90(Atmp,jpvt,tau)
-	if(isnan(fnorm(Atmp,mnl,mn)))then
+	allocate(tau(mn))
+	if(rrflag==1)then
+		! RRQR	
+		call geqp3modf90(mat,jpvt,tau,eps,SafeUnderflow,rank)
+		call un_or_gqrf90(mat,tau,M,rank,rank)
+	else
+		call geqp3f90(mat,jpvt,tau)
+		call un_or_gqrf90(mat,tau,M,N,mn)
+		rank=mn
+	endif	
+	if(isnan(fnorm(mat,M,N)))then
 		write(*,*)'Q or R has NAN in ComputeRange'
 		stop
 	end if		
-	A_tmp = 0
-	!$omp parallel do default(shared) private(ii,jj)
-	do ii=1, mn
-		do jj=ii, mn
-			A_tmp(ii,jj)=Atmp(ii,jj)
-		enddo
-	enddo
-	!$omp end parallel do
 	
-	call un_or_gqrf90(Atmp,tau)
-	
-	if(M>=N)then
-		mat = Atmp
-	else 
-		call copymatT(Atmp,mat,N,M)
-	end if	
-	
-	rank = mn
-	
-	if(rrflag==1)then
-		do i=1,mn
-			if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/mnl<=eps) then
-				rank=i
-				if(abs(A_tmp(i,i))<SafeUnderflow)rank = i -1
-				exit
-			end if
-		end do
-	endif
 	
 	deallocate(jpvt)
 	deallocate(tau)
-	deallocate(Atmp)
-	deallocate(A_tmp)
 
 end subroutine ComputeRange
 
@@ -1797,7 +1872,7 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau,flop=flop)
+	call un_or_gqrf90(QQ1,tau,rankmax_r,rmax,rmax,flop=flop)
 	if(present(Flops))Flops=Flops+flop
 	
 	! write(*,*)fnorm(QQ1,rankmax_r,rmax),rankmax_r,rmax,fnorm(RR1,rmax,rmax),rmax,rmax,'really'
@@ -1830,7 +1905,7 @@ end subroutine GeneralInverse
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ2,tau,flop=flop)
+	call un_or_gqrf90(QQ2,tau,rankmax_c,rmax,rmax,flop=flop)
 	if(present(Flops))Flops=Flops+flop
 	
 	if(abs(RR2(1,1))<SafeUnderflow)then
@@ -2490,7 +2565,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ1,tau_Q)
+	call un_or_gqrf90(QQ1,tau_Q,rankmax_r,rank,rank)
 	deallocate(tau_Q)
 
 
@@ -2508,7 +2583,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 		enddo
 	enddo
 	! !$omp end parallel do	
-	call un_or_gqrf90(QQ2tmp,tau_Q)
+	call un_or_gqrf90(QQ2tmp,tau_Q,rankmax_c,rank,rank)
 	deallocate(tau_Q)
 	
 	allocate(QQ2(rank,rankmax_c))
@@ -2600,6 +2675,44 @@ deallocate(mat0)
 
 end subroutine SVD_Truncate
 
+
+
+
+subroutine PSVD_Truncate(mm,nn,mat,descMat,UU,VV,descUU,descVV,Singular,tolerance,rank,ctxt,flop)
+implicit none 
+integer mm,nn,mnmin,rank,ii,jj
+real(kind=8):: tolerance
+DT::mat(:,:),UU(:,:),VV(:,:)
+DT,allocatable::mat0(:,:)					 
+real(kind=8):: Singular(:)
+integer::i,flag
+real(kind=8),optional::flop
+integer::descMat(9),descUU(9),descVV(9)
+integer::ctxt,nprow, npcol, myrow, mycol,iproc,myi
+
+call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+mnmin = min(mm,nn)
+
+call pgesvdf90('V', 'V', mm, nn, mat, 1, 1, descMat, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop=flop)
+
+rank = mnmin
+if(Singular(1)>SafeUnderflow)then	
+	rank = mnmin
+	do i=1,mnmin
+		if (Singular(i)/Singular(1)<=tolerance) then
+			rank=i
+			if(Singular(i)<Singular(1)*tolerance/10)rank = i -1
+			exit
+		end if
+	end do			
+else
+	rank=1
+	Singular(1)=0
+	VV=0
+	UU=0
+endif
+
+end subroutine PSVD_Truncate
 
 
 ! sort the first dimension of the array
@@ -2915,7 +3028,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			ptree%pgrp(group)%Comm=MPI_COMM_NULL
 
 			
-			! if(ptree%MyID>=ptree%pgrp(group)%head .and. ptree%MyID<=ptree%pgrp(group)%tail)then
+			! if(IOwnPgrp(ptree,group))then	
 				! create the blacs grid for this tree node
 				
 				allocate(pmap(nprow,npcol))
@@ -3156,7 +3269,7 @@ else
 		recvquant(ii)%size=0
 	enddo
 
-	if(ptree%MyID>=ptree%pgrp(pgno_i)%head .and. ptree%MyID<=ptree%pgrp(pgno_i)%tail)then
+	if(IOwnPgrp(ptree,pgno_i))then	
 		ii = ptree%myid-ptree%pgrp(pgno_i)%head+1
 		idxs_i=M_p_i(ii,1)+head_i
 		idxe_i=M_p_i(ii,2)+head_i
@@ -3173,7 +3286,7 @@ else
 		enddo
 	endif
 
-	if(ptree%MyID>=ptree%pgrp(pgno_o)%head .and. ptree%MyID<=ptree%pgrp(pgno_o)%tail)then
+	if(IOwnPgrp(ptree,pgno_o))then
 		jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
 		idxs_o=M_p_o(jj,1) + head_o
 		idxe_o=M_p_o(jj,2) + head_o
@@ -3252,6 +3365,118 @@ endif
 end subroutine Redistribute1Dto1D
 
 
+
+! redistribute 1D block array dat_i distributed among process group pgno_i to 2D block array dat_o distributed among process group pgno_o
+subroutine Redistribute1Dto2D(dat_i,M_p_i,head_i,pgno_i,dat_o,M,head_o,pgno_o,N,ptree)
+implicit none
+DT::dat_i(:,:),dat_o(:,:)
+DT,allocatable::dat_1D(:,:)
+integer pgno_i,pgno_o,N,M
+integer M_p_i(:,:)
+integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
+type(proctree)::ptree
+type(commquant1D),allocatable::sendquant(:),recvquant(:)
+integer,allocatable::S_req(:),R_req(:)
+integer,allocatable:: statuss(:,:),statusr(:,:)
+integer,allocatable:: M_p_1D(:,:)
+integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
+integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
+integer::desc1D(9),desc2D(9)
+integer::ctxt,info 
+
+ctxt1D = ptree%pgrp(pgno_o)%ctxt1D
+nproc = ptree%pgrp(pgno_o)%nproc
+nb1Dc=N
+nb1Dr=ceiling_safe(M/dble(nproc))
+allocate(M_p_1D(nproc,2))
+do ii=1,nproc
+	M_p_1D(ii,1) = (ii-1)*nb1Dr+1
+	M_p_1D(ii,2) = ii*nb1Dr
+enddo	
+M_p_1D(nproc,2) = M	
+jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
+myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
+myAcols = N
+call descinit( desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )
+allocate(dat_1D(myArows,myAcols))
+
+ctxt = ptree%pgrp(pgno_o)%ctxt		
+call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+if(myrow/=-1 .and. mycol/=-1)then
+	myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+	myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+	call descinit( desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+else
+	desc2D(2)=-1
+endif
+
+
+call Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_1D,M_p_1D,head_o,pgno_o,N,ptree)
+call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1D)
+
+deallocate(M_p_1D)
+deallocate(dat_1D)
+
+end subroutine Redistribute1Dto2D
+
+
+
+! redistribute 2D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o
+subroutine Redistribute2Dto1D(dat_i,M,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
+implicit none
+DT::dat_i(:,:),dat_o(:,:)
+DT,allocatable::dat_1D(:,:)
+integer pgno_i,pgno_o,N,M
+integer M_p_o(:,:)
+integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
+type(proctree)::ptree
+type(commquant1D),allocatable::sendquant(:),recvquant(:)
+integer,allocatable::S_req(:),R_req(:)
+integer,allocatable:: statuss(:,:),statusr(:,:)
+integer,allocatable:: M_p_1D(:,:)
+integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
+integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
+integer::desc1D(9),desc2D(9)
+integer::ctxt,info 
+
+ctxt1D = ptree%pgrp(pgno_i)%ctxt1D
+nproc = ptree%pgrp(pgno_i)%nproc
+nb1Dc=N
+nb1Dr=ceiling_safe(M/dble(nproc))
+allocate(M_p_1D(nproc,2))
+do ii=1,nproc
+	M_p_1D(ii,1) = (ii-1)*nb1Dr+1
+	M_p_1D(ii,2) = ii*nb1Dr
+enddo	
+M_p_1D(nproc,2) = M	
+jj = ptree%myid-ptree%pgrp(pgno_i)%head+1
+myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
+myAcols = N
+call descinit( desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )
+allocate(dat_1D(myArows,myAcols))
+
+ctxt = ptree%pgrp(pgno_i)%ctxt		
+call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+if(myrow/=-1 .and. mycol/=-1)then
+	myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+	myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+	call descinit( desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+else
+	desc2D(2)=-1
+endif
+
+
+call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
+call Redistribute1Dto1D(dat_1D,M_p_1D,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
+
+deallocate(M_p_1D)
+deallocate(dat_1D)
+
+end subroutine Redistribute2Dto1D
+
+
+
+
 ! get the level of a node in a tree. gno is the node number starting from root (1)
 integer function GetTreelevel(gno) 
 	implicit none 
@@ -3324,5 +3549,12 @@ integer :: a,b,t,as,bs
 	end do
 	gcd = abs(as)
 end function gcd
+
+
+integer function numroc_wp(n, nb, iproc, isrcproc, nprocs)
+integer :: n, nb, iproc, isrcproc, nprocs
+integer :: numroc ! blacs routine
+numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
+end function numroc_wp
 
 end module misc

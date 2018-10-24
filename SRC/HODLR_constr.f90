@@ -86,8 +86,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 		
 		do ii =Bidxs,Bidxe
 		! do ii =Bidxs,Bidxs
-
-			if(ptree%MyID >=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%head .and. ptree%MyID <=ptree%pgrp(ho_bf1%levels(level_c)%BP(ii)%pgno)%tail)then
+			if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(ii)%pgno))then
 				if (level_c/=ho_bf1%Maxlevel+1) then
 					if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
 						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
@@ -98,7 +97,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 					! if(mod(ii,2)==1)then
 						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn,ptree)				
 					! else
-						! call delete_blocks(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+						! call delete_blocks(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),1)
 						! call copy_butterfly('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 					! endif
 					
@@ -289,7 +288,8 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 			allocate(distance_n(blocks%N))
 			distance_n=Bigvalue
 
-			Dimn = size(msh%xyz,1)
+			Dimn = 0
+			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
 			allocate(center(Dimn))
 			center = 0
 			head_n = blocks%headn
@@ -307,7 +307,8 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 			call quick_sort(distance_m,order_m,blocks%M)     
 			deallocate(distance_m)
 
-			Dimn = size(msh%xyz,1)
+			Dimn = 0
+			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
 			allocate(center(Dimn))
 			center = 0
 			head_m = blocks%headm

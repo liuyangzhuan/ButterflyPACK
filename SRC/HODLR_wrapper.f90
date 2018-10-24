@@ -207,6 +207,16 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	call c_f_pointer(val_Cptr, val_i)
 	option%LR_BLK_NUM=val_i
 	valid_opt=1
+	endif	
+	if(trim(str)=='rank0')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%rank0=val_i
+	valid_opt=1
+	endif	
+	if(trim(str)=='itermax')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%itermax=val_i
+	valid_opt=1
 	endif
 	
 !**** double parameters 
@@ -238,6 +248,11 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	if(trim(str)=='touch_para')then
 	call c_f_pointer(val_Cptr, val_d)
 	option%touch_para=val_d
+	valid_opt=1
+	endif	
+	if(trim(str)=='rankrate')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%rankrate=val_d
 	valid_opt=1
 	endif	
     
