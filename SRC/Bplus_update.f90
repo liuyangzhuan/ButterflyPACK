@@ -132,6 +132,9 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 	
 	block_o =>  ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1) 
 	  
+	! write(*,*)block_o%row_group,block_o%col_group,isnanMat(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),'dfdU1',ptree%MyID
+	! write(*,*)block_o%row_group,block_o%col_group,isnanMat(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),'dfdV1',ptree%MyID	  
+	  
     level_butterfly=block_o%level_butterfly
     call assert(level_butterfly==0,'Butterfly_Sblock_LowRank only works with LowRank blocks')
 		
@@ -179,6 +182,7 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 			else 
 				call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
 			endif	
+			
 			endif
 			endif
 		end do		
@@ -190,6 +194,8 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 	end do
 	! ! write(*,*)vec_new(1,1),RandomVectors_InOutput(2)%vector(1,1)
 	block_o%ButterflyU%blocks(1)%matrix = vec_new
+	! write(*,*)block_o%row_group,block_o%col_group,isnanMat(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),'dfdU',ptree%MyID
+	! write(*,*)block_o%row_group,block_o%col_group,isnanMat(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),'dfdV',ptree%MyID
 	deallocate(vec_old)
 	deallocate(vec_new)
 

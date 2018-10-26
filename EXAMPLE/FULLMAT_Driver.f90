@@ -204,8 +204,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	ker%QuantZmn=>quant
  
     !**** Get matrix size and rank and create the matrix
-	msh%Nunk = 1000
-	quant%rank = 10
+	msh%Nunk = 10000
+	quant%rank = 2
 	quant%lambda = 1d5
 	allocate(quant%matU_glo(msh%Nunk,quant%rank))
 	call d_RandomMat(msh%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
@@ -267,7 +267,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=1
+	option%ErrFillFull=0
 	option%ErrSol=1
 	option%RecLR_leaf=ACA
 	option%rank0 = 64
@@ -323,7 +323,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
     if(ptree%MyID==Main_ID)write(*,*) "    "	
 	
-	
+	call d_PrintStat(stats,ptree)
 	
 	
 	
@@ -360,6 +360,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	t2 = OMP_get_wtime()  
 	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
 	
+	call d_PrintStat(stats1,ptree1)
 	call d_delete_proctree(ptree1)
 	call d_delete_Hstat(stats1)
 	call d_delete_mesh(msh1)	

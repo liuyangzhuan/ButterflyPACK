@@ -32,7 +32,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 	
     use HODLR_DEFS
     implicit none
-	real(kind=8):: n1,n2,Memory,error_inout,error_lastiter,Memtmp,tmpfact,error,tmp1,tmp2,norm1,norm2
+	real(kind=8):: n1,n2,n3,n4,Memory,error_inout,error_lastiter,Memtmp,tmpfact,error,tmp1,tmp2,norm1,norm2
 	integer level_c,level_butterfly,bb,rank_new_max,ii,groupm,groupn,Nloc,rank_max_lastiter,rank_max_lastlevel,rank_pre_max,converged
 	type(matrixblock),pointer::block_o,block_ref
 	DT,allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:)
@@ -53,7 +53,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 	rank_max_lastlevel = option%rank0
 	
 	
-	
+	n3 = OMP_get_wtime()
 	Memory = 0
 	do level_c = 1,ho_bf1%Maxlevel+1
 		if(level_c==ho_bf1%Maxlevel+1)then
@@ -78,24 +78,36 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 			rank_max_lastiter = rank_max_lastlevel
 			error_lastiter=Bigvalue
 			do tt = 1,option%itermax
-				rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt-1))
-			
-				n1 = OMP_get_wtime()
-				allocate (block_rand(Bidxe-Bidxs+1))
-				do bb = Bidxs,Bidxe
-				! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
-					groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
-					groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here  
-					call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh)						
-				! endif
-				enddo
-				n2 = OMP_get_wtime()
-				stats%Time_random(1) = stats%Time_random(1) + n2-n1
-				
+				rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt-1))+3
+							
 				if(level_butterfly==0)then
+					n1 = OMP_get_wtime()
+					allocate (block_rand(Bidxe-Bidxs+1))
+					do bb = Bidxs,Bidxe
+					! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
+						groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
+						groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here  
+						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,1)						
+					! endif
+					enddo
+					n2 = OMP_get_wtime()
+					stats%Time_random(1) = stats%Time_random(1) + n2-n1				
+
 					call HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,rank_pre_max,option,ker,ptree,stats,msh)
 				else 
 
+					n1 = OMP_get_wtime()
+					allocate (block_rand(Bidxe-Bidxs+1))
+					do bb = Bidxs,Bidxe
+					! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
+						groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here   
+						groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here  
+						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,0)						
+					! endif
+					enddo
+					n2 = OMP_get_wtime()
+					stats%Time_random(1) = stats%Time_random(1) + n2-n1				
+				
 					n1 = OMP_get_wtime()
 					call HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,option,stats,ker,ptree,msh)
 					n2 = OMP_get_wtime()
@@ -160,6 +172,9 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 		end if
 	end do
 
+	stats%Mem_Comp_for=stats%Mem_Comp_for+Memory
+	n4 = OMP_get_wtime()
+	stats%Time_Fill = stats%Time_Fill + n4-n3 		
 	if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
 	
 	allocate(Vin(Nloc,1))
@@ -481,7 +496,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 				call blackbox_HODLR_MVP('N',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
 				call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut			
-				
+				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 
 				do bb =Bidxs,Bidxe
 					if(mod(bb,2)==1)then
@@ -517,7 +532,8 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 				
 				call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut			
-					
+				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
+				
 				do bb =Bidxs,Bidxe
 					if(mod(bb,2)==0)then
 					if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then			
@@ -566,7 +582,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 				
 				call MVM_Z_forward('T',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut		
-			
+				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 
 				do bb =Bidxs,Bidxe
 					if(mod(bb,2)==1)then
@@ -599,6 +615,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 			
 				call blackbox_HODLR_MVP('T',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
 				call MVM_Z_forward('T',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
+				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 				RandVectOut = RandVectTmp-RandVectOut		
 			
 				do bb =Bidxs,Bidxe
@@ -632,6 +649,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 			call blackbox_HODLR_MVP('N',Nloc,num_vect,VectIn,RandVectTmp,msh,ptree,stats,ker)
 			call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,VectIn,VectOut,ho_bf1,ptree,stats)
 			VectOut = RandVectTmp-VectOut		
+			stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 			deallocate(RandVectTmp)
 		endif
 		
@@ -1400,7 +1418,7 @@ subroutine PComputeRange_twoforward(ho_bf1,level,Bidxs,ii,ranks,AR,eps,ptree,sta
    type(hobf)::ho_bf1
    type(proctree)::ptree
    type(Hstat)::stats
-   real(kind=8)::n1,n2,eps
+   real(kind=8)::n1,n2,eps,flop
    integer,pointer::M_p(:,:)
    integer Bidxs
 	
@@ -1445,13 +1463,16 @@ subroutine PComputeRange_twoforward(ho_bf1,level,Bidxs,ii,ranks,AR,eps,ptree,sta
 		if(bb==2)matrixtemp=>matrixtemp2
 			
 		if(mm(bb)>0)then
-			call PComputeRange(M_p,ranks(ii*2-1+bb-1-Bidxs+1),matrixtemp,rank,eps,ptree,block_off%pgno)
+			call PComputeRange(M_p,ranks(ii*2-1+bb-1-Bidxs+1),matrixtemp,rank,eps,ptree,block_off%pgno,flop)
+			! write(*,*)ptree%MyID,ranks(ii*2-1+bb-1-Bidxs+1),rank,'aha'
 			ranks(ii*2-1+bb-1-Bidxs+1) = rank
+			stats%Flop_Fill = stats%Flop_Fill + flop
 		endif
 	enddo
+	
 	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-1-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
 	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
-	
+	! write(*,*)'wonima',ii*2-1-Bidxs+1,ranks(ii*2-1-Bidxs+1),ii*2-Bidxs+1,ranks(ii*2-Bidxs+1),ptree%MyID,mm(1)
 	
 	
 	
@@ -1489,14 +1510,14 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
    type(hobf)::ho_bf1
    type(proctree)::ptree
    type(Hstat)::stats
-   real(kind=8)::n1,n2,eps
+   real(kind=8)::n1,n2,eps,flop
    integer,pointer::M_p(:,:),N_p(:,:)
    real(kind=8),pointer::Singular(:)
    integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
    integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
    type(matrixblock)::block_rand(:)
    integer Bidxs
-   
+   stats%Flop_Tmp=0
 	block_off1 => ho_bf1%levels(level)%BP(bb_inv*2-1)%LL(1)%matrices_block(1)	
 	block_off2 => ho_bf1%levels(level)%BP(bb_inv*2)%LL(1)%matrices_block(1)
 	block_inv => ho_bf1%levels(level)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)	
@@ -1564,13 +1585,17 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 			if(myrow/=-1 .and. mycol/=-1)then
 				myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 				myAcols = numroc_wp(ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, mycol, 0, npcol)
+				! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
 				call descinit( descQ2D, M, ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+				call assert(info==0,'descinit fail for descQ2D')
 				allocate(matQ2D(myArows,myAcols))
 				matQ2D=0			
 				
 				myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
 				myAcols = numroc_wp(ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, mycol, 0, npcol)
+				! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
 				call descinit( descQcA_trans2D, N, ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+				call assert(info==0,'descinit fail for descQcA_trans2D')
 				allocate(MatQcA_trans2D(myArows,myAcols))
 				MatQcA_trans2D=0				
 				
@@ -1579,6 +1604,7 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 				myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
 				myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)		
 				allocate(UU(myArows,myAcols))
+				! write(*,*)ptree%MyID,'descUU',N, mnmin
 				call descinit( descUU, N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
 				call assert(info==0,'descinit fail for descUU')
 				UU=0
@@ -1586,6 +1612,7 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 				myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
 				myAcols = numroc_wp(ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, mycol, 0, npcol)		
 				allocate(VV(myArows,myAcols))
+				! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
 				call descinit( descVV, mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1), nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
 				call assert(info==0,'descinit fail for descVV')
 				VV=0
@@ -1598,6 +1625,14 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 				descQcA_trans2D(2)=-1
 				descUU(2)=-1
 				descVV(2)=-1
+				allocate(matQ2D(1,1))   ! required for Redistribute1Dto2D
+				matQ2D=0
+				allocate(matQcA_trans2D(1,1)) ! required for Redistribute1Dto2D
+				matQcA_trans2D=0
+				allocate(UU(1,1))  ! required for Redistribute2Dto1D
+				UU=0
+				allocate(VV(1,1))  
+				VV=0
 			endif
 			
 			!!!!**** redistribution into 2D grid
@@ -1611,7 +1646,8 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 			!!!!**** compute B^T=V^TS^TU^T
 			rank=0
 			if(myrow/=-1 .and. mycol/=-1)then
-				call PSVD_Truncate(N, ranks(bb_inv*2-1+bb-1-Bidxs+1),matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,eps,rank,ctxt)
+				call PSVD_Truncate(N, ranks(bb_inv*2-1+bb-1-Bidxs+1),matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,eps,rank,ctxt,flop=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol) 
 				do ii=1,rank
 					call g2l(ii,rank,npcol,nbslpk,jproc,myj)
 					if(jproc==mycol)then
@@ -1623,11 +1659,15 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 				myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 				myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
 				allocate(matQUt2D(myArows,myAcols))
+				! write(*,*)'descQUt2D', M, rank
 				call descinit( descQUt2D, M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
 				call assert(info==0,'descinit fail for descQUt2D')
 				matQUt2D=0				
 				
-				call pgemmf90('N','T',M,rank,ranks(bb_inv*2-1+bb-1-Bidxs+1),cone, matQ2D,1,1,descQ2D,VV,1,1,descVV,czero,matQUt2D,1,1,descQUt2D)				
+				call pgemmf90('N','T',M,rank,ranks(bb_inv*2-1+bb-1-Bidxs+1),cone, matQ2D,1,1,descQ2D,VV,1,1,descVV,czero,matQUt2D,1,1,descQUt2D,flop=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)				
+			else 
+				allocate(matQUt2D(1,1)) ! required for Redistribute2Dto1D
 			endif
 			
 			!!!!**** copy results to block_rand
@@ -1660,13 +1700,20 @@ subroutine PSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,b
 			! deallocate(mattemp)
 			
 			if(myrow/=-1 .and. mycol/=-1)then
+				! deallocate(matQ2D)
+				! deallocate(MatQcA_trans2D)
+				! deallocate(UU)
+				! deallocate(VV)
+				deallocate(Singular)
+				
+			endif
 				deallocate(matQ2D)
 				deallocate(MatQcA_trans2D)
 				deallocate(UU)
 				deallocate(VV)
-				deallocate(Singular)
 				deallocate(matQUt2D)
-			endif
+				! deallocate(Singular)
+				! deallocate(matQUt2D)			
 			deallocate(matQcA_trans)
 			deallocate(matQ)
 		endif

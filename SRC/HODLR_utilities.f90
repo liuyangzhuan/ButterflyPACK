@@ -164,21 +164,25 @@ if(trans=='N')then
 	if(associated(block_i%N_p))then
 		if(associated(block_o%N_p))deallocate(block_o%N_p)
 		allocate(block_o%N_p(size(block_i%N_p,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%N_p)/1024.0d3
 		block_o%N_p = block_i%N_p
 	endif
 	if(associated(block_i%M_p))then
 		if(associated(block_o%M_p))deallocate(block_o%M_p)
 		allocate(block_o%M_p(size(block_i%M_p,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%M_p)/1024.0d3
 		block_o%M_p = block_i%M_p
 	endif
 	if(associated(block_i%N_p_db))then
 		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
 		allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%N_p_db)/1024.0d3
 		block_o%N_p_db = block_i%N_p_db
 	endif
 	if(associated(block_i%M_p_db))then
 		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
 		allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%M_p_db)/1024.0d3
 		block_o%M_p_db = block_i%M_p_db
 	endif
 
@@ -262,6 +266,7 @@ if(trans=='N')then
 			nn = size(block_i%fullmat,2)
 			allocate (block_o%fullmat(mm,nn))
 			block_o%fullmat = block_i%fullmat
+			if(present(memory))memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
 		endif	
 	else 
 		! write(*,*)'block style not implemented'
@@ -294,21 +299,25 @@ else if(trans=='T')then
 	if(associated(block_i%N_p))then
 		if(associated(block_o%M_p))deallocate(block_o%M_p)
 		allocate(block_o%M_p(size(block_i%N_p,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%M_p)/1024.0d3
 		block_o%M_p = block_i%N_p
 	endif
 	if(associated(block_i%M_p))then
 		if(associated(block_o%N_p))deallocate(block_o%N_p)
 		allocate(block_o%N_p(size(block_i%M_p,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%N_p)/1024.0d3
 		block_o%N_p = block_i%M_p
 	endif
 	if(associated(block_i%N_p_db))then
 		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
 		allocate(block_o%M_p_db(size(block_i%N_p_db,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%N_p_db)/1024.0d3
 		block_o%M_p_db = block_i%N_p_db
 	endif
 	if(associated(block_i%M_p_db))then
 		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
 		allocate(block_o%N_p_db(size(block_i%M_p_db,1),2))
+		if(present(memory))memory = memory + SIZEOF(block_o%M_p_db)/1024.0d3
 		block_o%N_p_db = block_i%M_p_db
 	endif
 
@@ -392,6 +401,7 @@ else if(trans=='T')then
 			nn = size(block_i%fullmat,2)
 			allocate (block_o%fullmat(nn,mm))
 			call copymatT(block_i%fullmat,block_o%fullmat,mm,nn) 
+			if(present(memory))memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
 		endif	
 	else 
 		! write(*,*)'block style not implemented'

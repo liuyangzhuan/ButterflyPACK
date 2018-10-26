@@ -307,6 +307,20 @@ end subroutine linspaceI
  end subroutine copymatT
  
 
+function isnanMat(A,m,n)
+	implicit none 
+	logical:: isnanMat 
+	DT::A(:,:)
+	integer m,n,ii,jj
+	isnanMat = .false.
+	do ii =1,m
+	do jj =1,n
+		isnanMat = isnanMat .or. isnan(abs(A(ii,jj)))
+	end do
+	end do
+ end function isnanMat 
+ 
+ 
 ! function fnorm(A,m,n)
 	! implicit none 
 	! real(kind=8):: fnorm 
@@ -746,7 +760,7 @@ end subroutine GetRank
 
 
 
-subroutine PComputeRange(M_p,N,mat,rank,eps,ptree,pgno)
+subroutine PComputeRange(M_p,N,mat,rank,eps,ptree,pgno,Flops)
 
 implicit none 
 integer M,N,M_loc,rank,mn,i,mnl,ii,jj,rrflag
@@ -754,15 +768,20 @@ DT::mat(:,:)
 real(kind=8) eps
 DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:),mat1D(:,:),mat2D(:,:)
 real(kind=8),allocatable :: Singular(:)
+real(kind=8) :: flop
 integer,allocatable :: jpvt(:)
 integer, allocatable :: ipiv(:),jpiv(:),JPERM(:)
 integer:: M_p(:,:)
 integer,allocatable:: M_p_1D(:,:)
 type(proctree)::ptree
-integer pgno,proc,nproc,nb1Dc,nb1Dr,ctxt1D,ctxt,idxs_o,idxe_o
+integer pgno,proc,nproc,nb1Dc,nb1Dr,ctxt1D,ctxt,idxs_o,idxe_o,ierr
 integer myArows,myAcols,info,nprow,npcol,myrow,mycol
 integer::descsMat1D(9),descsMat2D(9)
+real(kind=8),optional:: Flops
 
+rank=0
+
+if(present(Flops))Flops=0d0
 	
 	proc = ptree%MyID - ptree%pgrp(pgno)%head
 	nproc = ptree%pgrp(pgno)%nproc
@@ -770,7 +789,8 @@ integer::descsMat1D(9),descsMat2D(9)
 	M = M_p(nproc,2)
 		
 	if(nproc==1)then	
-		call ComputeRange(M,N,mat,rank,1,eps)
+		call ComputeRange(M,N,mat,rank,1,eps,Flops=flop)
+		if(present(Flops))Flops = Flops + flop 
 	else
 
 		mn=min(M,N)	
@@ -827,8 +847,10 @@ integer::descsMat1D(9),descsMat2D(9)
 			jpiv=0
 			allocate(JPERM(N))
 			JPERM=0
-			call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank,eps, SafeUnderflow)
-			call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1)
+			call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank,eps, SafeUnderflow,flop=flop)
+			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
+			call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1,flop=flop)
+			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol) 
 			
 			deallocate(ipiv)
 			deallocate(tau)
@@ -840,6 +862,8 @@ integer::descsMat1D(9),descsMat2D(9)
 				stop
 			end if			
 		endif
+		
+		call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm,ierr)
 		
 		!!!!**** redistribution of output matrix
 		call pgemr2df90(M, N, mat2D, 1, 1, descsMat2D, mat1D, 1, 1, descsMat1D, ctxt1D)	
@@ -858,7 +882,7 @@ end subroutine PComputeRange
 		
 
 
-subroutine ComputeRange(M,N,mat,rank,rrflag,eps)
+subroutine ComputeRange(M,N,mat,rank,rrflag,eps,Flops)
 
 implicit none 
 integer M,N,rank,mn,i,mnl,ii,jj,rrflag
@@ -867,6 +891,9 @@ real(kind=8) eps
 DT, allocatable :: UU(:,:), VV(:,:),Atmp(:,:),A_tmp(:,:),tau(:)
 real(kind=8),allocatable :: Singular(:)
 integer,allocatable :: jpvt(:)
+real(kind=8),optional:: Flops
+real(kind=8):: flop
+if(present(Flops))Flops=0d0
 
 	mn=min(M,N)
 	if(isnan(fnorm(mat,M,N)))then
@@ -880,11 +907,15 @@ integer,allocatable :: jpvt(:)
 	allocate(tau(mn))
 	if(rrflag==1)then
 		! RRQR	
-		call geqp3modf90(mat,jpvt,tau,eps,SafeUnderflow,rank)
-		call un_or_gqrf90(mat,tau,M,rank,rank)
+		call geqp3modf90(mat,jpvt,tau,eps,SafeUnderflow,rank,flop=flop)
+		if(present(Flops))Flops = Flops + flop
+		call un_or_gqrf90(mat,tau,M,rank,rank,flop=flop)
+		if(present(Flops))Flops = Flops + flop
 	else
-		call geqp3f90(mat,jpvt,tau)
-		call un_or_gqrf90(mat,tau,M,N,mn)
+		call geqp3f90(mat,jpvt,tau,flop=flop)
+		if(present(Flops))Flops = Flops + flop
+		call un_or_gqrf90(mat,tau,M,N,mn,flop=flop)
+		if(present(Flops))Flops = Flops + flop
 		rank=mn
 	endif	
 	if(isnan(fnorm(mat,M,N)))then
@@ -1758,7 +1789,6 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 	Singular=0	
 	UU=0
 	VV=0
-	! write(*,*)fnorm(Atmp,m,n),'ggg'
 	
     call gesvd_robust(Atmp,Singular,UU,VV,m,n,mn_min,flop=flop)
 	if(present(Flops))Flops=Flops+flop
@@ -3011,13 +3041,19 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 		do group=1,Maxgrp
 			nproc=ptree%pgrp(group)%nproc	
 			
-			! ! the following needs to be changed to 2D
+			
+			! ! ! the following needs to be changed to 2D
 			! nprow=ptree%pgrp(group)%nproc
 			! npcol=1
 
-			! create the 2D grids as square as possible
-			nprow = INT(sqrt(dble(nproc)))
-			npcol = INT(nproc/dble(nprow))
+			! ! create the 2D grids as square as possible
+			nprow = floor_safe(sqrt(dble(nproc)))
+			npcol = floor_safe(nproc/dble(nprow))
+			
+			! ! trail to power of 2 grids, the following two lines can be removed  
+			! nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))
+			! nprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))			
+			! npcol = floor_safe(nproc/dble(nprow))
 			
 			
 			ptree%pgrp(group)%nprow=nprow
@@ -3072,17 +3108,10 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				call MPI_Group_Free(MPI_Group_H_sml,ierr)			
 				
 				! create the hierarchical process grids used for parallel ACA
+			
+				nsprow = ptree%pgrp(group)%nprow
+				nspcol = ptree%pgrp(group)%npcol
 				
-				nproc_tmp = nproc
-				nsprow = floor_safe(sqrt(dble(nproc_tmp)))
-				
-				! trail to power of 2 grids, the following two lines can be removed  
-				nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))
-				nsprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))
-				
-				
-				
-				nspcol = floor_safe(nproc_tmp/dble(nsprow))
 
 				! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
 				nlevelrow = ceiling_safe(log(dble(nsprow)) / log(2d0))+1
@@ -3398,8 +3427,11 @@ jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
 myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
 myAcols = N
 call descinit( desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
+if(myArows>0 .and. myAcols>0)then
 allocate(dat_1D(myArows,myAcols))
-
+dat_1D=0
+endif
 ctxt = ptree%pgrp(pgno_o)%ctxt		
 call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
 if(myrow/=-1 .and. mycol/=-1)then
@@ -3412,6 +3444,8 @@ endif
 
 
 call Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_1D,M_p_1D,head_o,pgno_o,N,ptree)
+
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'2D'
 call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1D)
 
 deallocate(M_p_1D)
@@ -3453,7 +3487,11 @@ jj = ptree%myid-ptree%pgrp(pgno_i)%head+1
 myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
 myAcols = N
 call descinit( desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
+if(myArows>0 .and. myAcols>0)then
 allocate(dat_1D(myArows,myAcols))
+dat_1D=0
+endif
 
 ctxt = ptree%pgrp(pgno_i)%ctxt		
 call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
@@ -3462,11 +3500,14 @@ if(myrow/=-1 .and. mycol/=-1)then
 	myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
 	call descinit( desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 else
+	myArows=0
+	myAcols=0
 	desc2D(2)=-1
 endif
 
-
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2))
 call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'1D1D',isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),isnanMat(dat_o,size(dat_o,1),size(dat_o,2)),myrow,mycol
 call Redistribute1Dto1D(dat_1D,M_p_1D,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
 
 deallocate(M_p_1D)

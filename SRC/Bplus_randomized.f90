@@ -292,7 +292,7 @@ end subroutine BF_Init_RandVect_Empty
 
 
 
-subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand,msh)
+subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand,msh,nodataflag)
 
     use HODLR_DEFS
     implicit none
@@ -308,6 +308,7 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	integer rankmax
     type(partitionedblocks)::partitioned_block
 	type(mesh)::msh
+	integer nodataflag
 	
 	! allocate (butterfly_block_randomized(1))
 
@@ -355,95 +356,97 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	endif	
 	
 	
+	if(nodataflag==0)then
 	
-	groupm_start=groupm*2**level_butterfly
-	groupn_start=groupn*2**level_butterfly
+		groupm_start=groupm*2**level_butterfly
+		groupn_start=groupn*2**level_butterfly
 
+		
+		allocate (block_rand%ButterflyU%blocks(2**level_butterfly))
+		allocate (block_rand%ButterflyV%blocks(2**level_butterfly))
+
+		dimension_max = 2*dimension_rank
+		do blocks=1, num_blocks	
+			
+			if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
+				! write(*,*)size(block%ButterflyU),num_blocks,allocated(block%ButterflyU)
+				dimension_m=size(block%ButterflyU%blocks(blocks)%matrix,1)
+				dimension_n=size(block%ButterflyV%blocks(blocks)%matrix,1)
+			else 	
+				dimension_m=msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
+				dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
+			endif
+
+			dimension_max = max(dimension_max,dimension_m)	
+			dimension_max = max(dimension_max,dimension_n)
+			block_rand%ButterflyU%blocks(blocks)%mdim=dimension_m
+			block_rand%ButterflyV%blocks(blocks)%mdim=dimension_n
+		end do	
+		allocate(block_rand%KerInv(dimension_max,2*dimension_rank))
+		call RandomMat(dimension_max,2*dimension_rank,min(dimension_max,2*dimension_rank),block_rand%KerInv,3)	
+		
+		do blocks=1, num_blocks
+			
+			if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
+				dimension_m=size(block%ButterflyU%blocks(blocks)%matrix,1)
+			else
+				dimension_m= msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
+			endif
+			
+			allocate (block_rand%ButterflyU%blocks(blocks)%matrix(dimension_m,dimension_rank))
+
+			allocate(matrixtemp1(dimension_rank,dimension_m))
+			call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
+			
+			! !$omp parallel do default(shared) private(i,j)		
+			do j=1, dimension_rank
+				do i=1, dimension_m
+					block_rand%ButterflyU%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
+				end do
+			end do
+			! !$omp end parallel do
+			
+			deallocate(matrixtemp1)		
+			
+			if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
+				dimension_n=size(block%ButterflyV%blocks(blocks)%matrix,1)
+			else
+				dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
+			endif
+			
+			allocate (block_rand%ButterflyV%blocks(blocks)%matrix(dimension_n,dimension_rank))
+
+			allocate(matrixtemp1(dimension_rank,dimension_n))
+			call RandomMat(dimension_rank,dimension_n,min(dimension_n,dimension_rank),matrixtemp1,0)
+			
+			! !$omp parallel do default(shared) private(i,j)		
+			do j=1, dimension_rank
+				do i=1, dimension_n
+					block_rand%ButterflyV%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
+				end do
+			end do
+			! !$omp end parallel do
+			
+			deallocate(matrixtemp1)		
+			
+		enddo
+
+		if (level_butterfly/=0) then
+			allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
+			allocate (block_rand%ButterflyKerl(level_butterfly))
+
+			do level=1, level_butterfly
+				num_row=2**level
+				num_col=2**(level_butterfly-level+1)
+				block_rand%ButterflyKerl(level)%num_row=num_row
+				block_rand%ButterflyKerl(level)%num_col=num_col
+				allocate (block_rand%ButterflyKerl(level)%blocks(num_row,num_col))
+
+			enddo
+			deallocate (matrixtemp1)
+		endif	
+    endif
 	
-    allocate (block_rand%ButterflyU%blocks(2**level_butterfly))
-    allocate (block_rand%ButterflyV%blocks(2**level_butterfly))
-
-	dimension_max = 2*dimension_rank
-	do blocks=1, num_blocks	
-		
-		if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
-			! write(*,*)size(block%ButterflyU),num_blocks,allocated(block%ButterflyU)
-			dimension_m=size(block%ButterflyU%blocks(blocks)%matrix,1)
-			dimension_n=size(block%ButterflyV%blocks(blocks)%matrix,1)
-		else 	
-			dimension_m=msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
-			dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
-		endif
-
-		dimension_max = max(dimension_max,dimension_m)	
-		dimension_max = max(dimension_max,dimension_n)
-		block_rand%ButterflyU%blocks(blocks)%mdim=dimension_m
-		block_rand%ButterflyV%blocks(blocks)%mdim=dimension_n
-	end do	
-	allocate(block_rand%KerInv(dimension_max,dimension_max))
-	call RandomMat(dimension_max,dimension_max,dimension_max,block_rand%KerInv,3)	
-    
-    do blocks=1, num_blocks
-		
-		if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
-			dimension_m=size(block%ButterflyU%blocks(blocks)%matrix,1)
-		else
-			dimension_m= msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
-        endif
-		
-		allocate (block_rand%ButterflyU%blocks(blocks)%matrix(dimension_m,dimension_rank))
-
-		allocate(matrixtemp1(dimension_rank,dimension_m))
-		call RandomMat(dimension_rank,dimension_m,min(dimension_m,dimension_rank),matrixtemp1,0)
-        
-		! !$omp parallel do default(shared) private(i,j)		
-		do j=1, dimension_rank
-            do i=1, dimension_m
-				block_rand%ButterflyU%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
-			end do
-		end do
-		! !$omp end parallel do
-		
-		deallocate(matrixtemp1)		
-		
-		if(allocated(block%ButterflyU%blocks) .and. size(block%ButterflyU%blocks)==num_blocks)then
-			dimension_n=size(block%ButterflyV%blocks(blocks)%matrix,1)
-		else
-			dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
-        endif
-		
-		allocate (block_rand%ButterflyV%blocks(blocks)%matrix(dimension_n,dimension_rank))
-
-		allocate(matrixtemp1(dimension_rank,dimension_n))
-		call RandomMat(dimension_rank,dimension_n,min(dimension_n,dimension_rank),matrixtemp1,0)
-		
-		! !$omp parallel do default(shared) private(i,j)		
-        do j=1, dimension_rank
-            do i=1, dimension_n
-				block_rand%ButterflyV%blocks(blocks)%matrix(i,j) = matrixtemp1(j,i)
-			end do
-		end do
-		! !$omp end parallel do
-		
-		deallocate(matrixtemp1)		
-		
-    enddo
-
-    if (level_butterfly/=0) then
-        allocate (matrixtemp1(2*dimension_rank,2*dimension_rank))
-        allocate (block_rand%ButterflyKerl(level_butterfly))
-
-        do level=1, level_butterfly
-            num_row=2**level
-            num_col=2**(level_butterfly-level+1)
-            block_rand%ButterflyKerl(level)%num_row=num_row
-            block_rand%ButterflyKerl(level)%num_col=num_col
-            allocate (block_rand%ButterflyKerl(level)%blocks(num_row,num_col))
-
-        enddo
-        deallocate (matrixtemp1)
-    endif	
-    
     return
 
 end subroutine BF_Init_randomized
@@ -573,7 +576,7 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   
 	   allocate(matC(rank,dimension_nn),matA(mm,rank),matinv(dimension_nn,rank))
 	   ! call copymatT(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
-	   call copymatT(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																		   
+	   matinv = blocks%KerInv(1:dimension_nn,1:rank)																		   
 	   if(isnan(fnorm(matB,mm,dimension_nn)) .or. isnan(fnorm(matinv,dimension_nn,rank)))then
 		write(*,*)shape(matB),fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei',fnorm(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix,dimension_nn,mm)
 		stop
@@ -592,7 +595,7 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   allocate(matB(mm,dimension_nn),matA(mm,rank),matinv(dimension_nn,rank))
 	   call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
 	   ! call copymatT(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
-	   call copymatT(blocks%KerInv(1:rank,1:dimension_nn),matinv,rank,dimension_nn)																					   
+		matinv = blocks%KerInv(1:dimension_nn,1:rank)																					   
 	   if(isnan(fnorm(matB,mm,dimension_nn)) .or. isnan(fnorm(matinv,dimension_nn,rank)))then
 		write(*,*)fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei1'
 		stop
@@ -843,7 +846,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			blocks%ButterflyU%blocks(i)%ndim=rank
 			allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 			allocate(matC(rank,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
-			call copymatT(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
+			matinv = blocks%KerInv(1:dimension_mm,1:rank)																					 
 			if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
 			 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee'
 			 stop
@@ -877,7 +880,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 		rank=size(blocks%ButterflyU%blocks(i)%matrix,2)						
 		allocate(matB(mm,dimension_mm),matA(mm,rank),matinv(dimension_mm,rank))	
 		call copymatT(vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_mm,mm)
-		call copymatT(blocks%KerInv(1:rank,1:dimension_mm),matinv,rank,dimension_mm)																					 
+		matinv = blocks%KerInv(1:dimension_mm,1:rank)																					 
 		if(isnan(fnorm(matB,mm,dimension_mm)) .or. isnan(fnorm(matinv,dimension_mm,rank)))then
 		 write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),i,'heee1'
 		 stop
@@ -986,7 +989,7 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			allocate(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(rank,mm))
 			
 			allocate(matC(rank,nn1+nn2),matA(mm,rank),matinv(nn1+nn2,rank))
-			call copymatT(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)															   
+			matinv = blocks%KerInv(rs:re,1:nn1+nn2)			
 
 			if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 			 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
@@ -1019,7 +1022,7 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 		call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i,index_j)%matrix(1:nn1,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1:nn1),nn1,mm)
 		call copymatT(vec_rand%RandomVectorRR(level_left+1)%blocks(i+1,index_j)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB(1:mm,1+nn1:nn2+nn1),nn2,mm)								
 		
-		call copymatT(blocks%KerInv(rs:re,1:nn1+nn2),matinv,rank,nn1+nn2)																		  
+		matinv = blocks%KerInv(rs:re,1:nn1+nn2)																		  
 
 		if(isnan(fnorm(matB,mm,nn1+nn2)) .or. isnan(fnorm(matinv,nn1+nn2,rank)))then
 		 write(*,*)fnorm(matB,mm,nn1+nn2),fnorm(matinv,nn1+nn2,rank),i,j,'helo'
@@ -1091,7 +1094,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 		
 		allocate (block_rand(1))
 		
-		call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh)
+		call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,0)
 		n2 = OMP_get_wtime()
 		stats%Time_random(1) = stats%Time_random(1) + n2-n1
 		

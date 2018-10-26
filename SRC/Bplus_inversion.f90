@@ -421,8 +421,8 @@ subroutine compute_schulz_init(schulz_op,option,ptree,stats)
 
 	
 	! computation of range Q of AR
-	call ComputeRange(mm,num_vect,RandVectOut,ranktmp,0,option%tol_comp)	
-	
+	call ComputeRange(mm,num_vect,RandVectOut,ranktmp,0,option%tol_comp,Flops=flop)	
+	stats%Flop_tmp = stats%Flop_tmp + flop	
 	
 	! computation of B = Q^c*A
 	RandVectOut=conjg(cmplx(RandVectOut,kind=8))
@@ -1614,7 +1614,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	allocate(matU(block_o%M_loc,rank))
 	matU = block_o%ButterflyU%blocks(1)%matrix
 	
-	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp)
+	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp),isnanMat(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),isnanMat(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2))
 	
 	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop=flop)	
 	stats%Flop_Factor = stats%Flop_Factor + flop
@@ -1627,6 +1627,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		matrixtemp1(ii,ii) = matrixtemp1(ii,ii)+1
 	enddo
 	
+	! write(*,*)abs(matrixtemp1),rank,'gggddd'
 	
 	if(rank<=nbslpk)then
 	

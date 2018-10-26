@@ -2592,28 +2592,42 @@ implicit none
 		! write(*,*)ptree%MyID,cridx,rank,'hei',blocks%M,blocks%N
 		
 		if(cridx==0)then
-		
+
+			!! the following is needed when there is idle procs in the process grids
+			ranktmp=rank
+			call MPI_ALLREDUCE(ranktmp,rank,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+			blocks%rankmax = rank
+			blocks%rankmin = rank	
+			blocks%ButterflyV%blocks(1)%mdim=blocks%N;blocks%ButterflyV%blocks(1)%ndim=rank
+			blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank
+			
 			! !!!!!!! check error
 			call CheckLRError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
 			! !!!!!!! check error
 				
 			! distribute UV factor into 1D grid
-			ranktmp=rank
-			call MPI_ALLREDUCE(ranktmp,rank,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+			! write(*,*)rank,'wocanide',ptree%MyID
+			call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
+			if(myrow/=-1 .and. mycol/=-1)then
+				myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+				myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+				! if(myArows>0 .and. myAcols>0)then
+					allocate(matU2D(myArows,myAcols))
+					matU2D = blocks%ButterflyU%blocks(1)%matrix
+				! endif
+				myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
+				myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+				! if(myArows>0 .and. myAcols>0)then
+					allocate(matV2D(myArows,myAcols))
+					matV2D = blocks%ButterflyV%blocks(1)%matrix
+				! endif
+			else 
+				allocate(matU2D(1,1))  ! required for Redistribute2Dto1D
+				matU2D=0
+				allocate(matV2D(1,1))  ! required for Redistribute2Dto1D
+				matV2D=0
+			endif
 			
-			myArows=size(blocks%ButterflyU%blocks(1)%matrix,1)
-			myAcols=size(blocks%ButterflyU%blocks(1)%matrix,2)
-			if(myArows>0 .and. myAcols>0)then
-				allocate(matU2D(myArows,myAcols))
-				matU2D = blocks%ButterflyU%blocks(1)%matrix
-			endif
-			myArows=size(blocks%ButterflyV%blocks(1)%matrix,1)
-			myAcols=size(blocks%ButterflyV%blocks(1)%matrix,2)
-			if(myArows>0 .and. myAcols>0)then
-				allocate(matV2D(myArows,myAcols))
-				matV2D = blocks%ButterflyV%blocks(1)%matrix
-			endif
-
 			if(allocated(blocks%ButterflyU%blocks(1)%matrix))deallocate(blocks%ButterflyU%blocks(1)%matrix)
 			allocate(blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc,rank))
 			blocks%ButterflyU%blocks(1)%matrix=0
@@ -2621,10 +2635,14 @@ implicit none
 			if(allocated(blocks%ButterflyV%blocks(1)%matrix))deallocate(blocks%ButterflyV%blocks(1)%matrix)
 			allocate(blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc,rank))
 			blocks%ButterflyV%blocks(1)%matrix=0
-
-			
+! write(*,*) blocks%row_group,blocks%col_group,isnanMat(matU2D,size(matU2D,1),size(matU2D,2)),isnanMat(matV2D,size(matV2D,1),size(matV2D,2)),'nima222bi',ptree%MyID
+			! write(*,*)size(matU2D,1),size(matU2D,2),ptree%MyID,'dddddddd',myrow,mycol,myArows,myAcols
 			call Redistribute2Dto1D(matU2D,blocks%M,0,pgno,blocks%ButterflyU%blocks(1)%matrix,blocks%M_p,0,pgno,rank,ptree)			
 			call Redistribute2Dto1D(matV2D,blocks%N,0,pgno,blocks%ButterflyV%blocks(1)%matrix,blocks%N_p,0,pgno,rank,ptree)	
+			
+			! write(*,*) fnorm(blocks%ButterflyU%blocks(1)%matrix,blocks%M_loc,rank),fnorm(blocks%ButterflyV%blocks(1)%matrix,blocks%N_loc,rank),isnanMat(blocks%ButterflyU%blocks(1)%matrix,blocks%M_loc,rank),'nimabi'
+			! write(*,*) blocks%row_group,blocks%col_group,isnanMat(blocks%ButterflyU%blocks(1)%matrix,blocks%M_loc,rank),'nimabi',ptree%MyID
+			
 			
 			if(allocated(matU2D))deallocate(matU2D)
 			if(allocated(matV2D))deallocate(matV2D)
@@ -3621,9 +3639,10 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 			blocks%rankmax = max(blocks%rankmax,rank)
 			blocks%rankmin = min(blocks%rankmin,rank)
 				
-
+			if(.not. allocated(matU2D))allocate(matU2D(1,1))  ! Required for Redistribute2Dto1D
+			if(.not. allocated(matV2D))allocate(matV2D(1,1))
+			
 			call Redistribute2Dto1D(matU2D,M,0,pgno,blocks%ButterflyU%blocks(1)%matrix,blocks%M_p,0,pgno,rank,ptree)
-
 			call Redistribute2Dto1D(matV2D,N,0,pgno,blocks%ButterflyV%blocks(1)%matrix,blocks%N_p,0,pgno,rank,ptree)
 			
 			if(allocated(matU2D))deallocate(matU2D)	
@@ -3914,7 +3933,7 @@ implicit none
 	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)	
 	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
 	integer edge_n,edge_m, rank
-	real(kind=8):: fnorm1,fnorm0,rtemp1,rtemp0
+	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
 	
 	
 	if(option%ErrFillFull==1)then
@@ -3922,75 +3941,78 @@ implicit none
 		Ntest=32
 		! Ntest=blocks%N/2
 		call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
-		rank = blocks%rankmax
+		if(myrow/=-1 .and. mycol/=-1)then
+		
+			rank = blocks%rankmax
+			! write(*,*)'aha',descButterflyV, blocks%N, rank, nbslpk, nbslpk, gd%ctxt
+			
+			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
+			call descinit( descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
+			call assert(info==0,'descinit fail for descButterflyV')		
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
+			call descinit( descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
+			call assert(info==0,'descinit fail for descButterflyU')	
 
-		
-		myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
-		call descinit( descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
-		call assert(info==0,'descinit fail for descButterflyV')		
-		
-		myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
-		call descinit( descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
-		call assert(info==0,'descinit fail for descButterflyU')	
+			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)	
+			call descinit( descVin, blocks%N, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
+			allocate(Vin(myArows,myAcols))
+			do ii=1,myArows
+			do jj=1,myAcols
+				call random_dp_number(Vin(ii,jj))
+			end do
+			end do
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)			
+			call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
+			allocate(Fullmat(myArows,myAcols))
+			do myi=1,myArows
+				call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
+				do myj=1,myAcols
+					call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
+					edge_m = blocks%headm + ii - 1 
+					edge_n = blocks%headn + jj - 1 
+					call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,ker)					
+				enddo
+			enddo			
 
-		myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)	
-		call descinit( descVin, blocks%N, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-		allocate(Vin(myArows,myAcols))
-		do ii=1,myArows
-		do jj=1,myAcols
-			call random_dp_number(Vin(ii,jj))
-		end do
-		end do
-		
-		myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)			
-		call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-		allocate(Fullmat(myArows,myAcols))
-		do myi=1,myArows
-			call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
-			do myj=1,myAcols
-				call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
-				edge_m = blocks%headm + ii - 1 
-				edge_n = blocks%headn + jj - 1 
-				call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,ker)					
-			enddo
-		enddo			
-
-		! compute the exact results
-		myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-		call descinit( descVout, blocks%M, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
-		allocate(Vout1(myArows,myAcols))
-		allocate(Vout2(myArows,myAcols))
-		Vout1=0
-		Vout2=0
-		call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
-		
-		! compute the approximate results
-		myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-		call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
-		allocate(Vinter(myArows,myAcols))			
-		Vinter=0
-		call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
-		call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
-		
-		myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-		Vout2 = Vout2-Vout1
-		rtemp1 = fnorm(Vout2,myArows,myAcols)**2d0
-		rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
-		
+			! compute the exact results
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			call descinit( descVout, blocks%M, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
+			allocate(Vout1(myArows,myAcols))
+			allocate(Vout2(myArows,myAcols))
+			Vout1=0
+			Vout2=0
+			call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
+			
+			! compute the approximate results
+			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
+			allocate(Vinter(myArows,myAcols))			
+			Vinter=0
+			call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
+			call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			Vout2 = Vout2-Vout1
+			rtemp1 = fnorm(Vout2,myArows,myAcols)**2d0
+			rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
+			deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
+		endif
 		 
 		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 		call MPI_ALLREDUCE(rtemp1,fnorm1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 
 		call MPI_Comm_rank(ptree%pgrp(pgno)%Comm,MyID,ierr)
 		 
-		deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
+		
 		
 		if(MyID==0)then
 			write(*,*)blocks%row_group,blocks%col_group,'BlockLR error:',sqrt(fnorm1/fnorm0)
