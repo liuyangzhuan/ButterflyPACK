@@ -3449,7 +3449,7 @@ call Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_1D,M_p_1D,head_o,pgno_o,N,
 call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1D)
 
 deallocate(M_p_1D)
-deallocate(dat_1D)
+if(allocated(dat_1D))deallocate(dat_1D)
 
 end subroutine Redistribute1Dto2D
 
@@ -3511,7 +3511,7 @@ call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
 call Redistribute1Dto1D(dat_1D,M_p_1D,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
 
 deallocate(M_p_1D)
-deallocate(dat_1D)
+if(allocated(dat_1D))deallocate(dat_1D)
 
 end subroutine Redistribute2Dto1D
 

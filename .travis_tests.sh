@@ -16,6 +16,6 @@ case "${TEST_NUMBER}" in
 4) mpirun "-n" "2" "$EXAMPLE_FOLDER/ctest" "1" "$DATA_FOLDER/SUSY/susy_10Kn" "8" "1" "0.1" "10.0" "200" "1e-2" "3" "0" "100";;
 5) mpirun "-n" "7" "$EXAMPLE_FOLDER/ctest" "2" "1000" "8" "1" "0.1" "10.0" "100" "1e-4" "2" "0" "100";;
 6) mpirun "-n" "1" "$EXAMPLE_FOLDER/ctest" "3" "5000" "20" "100" "1e-4" "2" "0" "100";;  # seems to have a bug when nmpi>1
-7) mpirun "-n" "11" "$EXAMPLE_FOLDER/ffull";;
+7) mpirun "-n" "5" "$EXAMPLE_FOLDER/ffull";;
 *) printf "${RED} ###GC: Unknown test\n" ;;
 esac
