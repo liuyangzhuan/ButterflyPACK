@@ -108,7 +108,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	stats%Time_SMW=stats%Time_SMW + n2-n1	
 	! write(*,*)'I+B Inversion Time:',n2-n1	
 #if PRNTlevel >= 1
-	write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
+	if(ptree%MyID==Main_ID)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
 #endif		
 
 

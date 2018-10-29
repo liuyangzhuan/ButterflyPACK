@@ -43,6 +43,8 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 	type(proctree)::ptree
 	type(mesh)::msh
 	
+	error_inout=0
+	
 	call copy_Bplus(ho_bf1%levels(level_c)%BP(rowblock),ho_bf1%levels(level_c)%BP_inverse_update(rowblock))
 	!!!!!!! the forward block BP can be deleted if not used in solution phase
 	
@@ -61,10 +63,11 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			rank0 = block_o%rankmax
 			rate = 1.2d0
 			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh,msh)			
-#if PRNTlevel >= 1
-			write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
-#endif
 		end if
+#if PRNTlevel >= 1
+		if(ptree%MyID==Main_ID)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout	
+#endif
+		
 	else 
 
 		ho_bf1%ind_lv=level_c

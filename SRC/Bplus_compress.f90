@@ -3211,30 +3211,37 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 		
 		
 		!**** Compute the skeleton matrix in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
 		do i=1,r_est
-		do j=1,r_est
-			edge_m = header_m + select_row(i) - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,core(i,j),msh,ker)
+			core(i,:)=column_R(select_row(i),:)
 		enddo
-		enddo
-		!$omp end parallel do	
-		if(rank>0)then
-			allocate(matUtmp(r_est,rank))
-			allocate(matVtmp(rank,r_est))
-			do i=1,r_est
-			matUtmp(i,1:rank) = matU(select_row(i),1:rank)
-			enddo
-			do j=1,r_est
-			matVtmp(1:rank,j) = matV(1:rank,select_column(j))
-			enddo		
-			! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
-			call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop=flop)
-			stats%Flop_Fill = stats%Flop_Fill + flop
-			deallocate(matUtmp)
-			deallocate(matVtmp)
-		endif	
+		
+		
+		
+		! !**** Compute the skeleton matrix in CUR
+		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do i=1,r_est
+		! do j=1,r_est
+			! edge_m = header_m + select_row(i) - 1
+			! edge_n = header_n + select_column(j) - 1
+			! call element_Zmn(edge_m,edge_n,core(i,j),msh,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do	
+		! if(rank>0)then
+			! allocate(matUtmp(r_est,rank))
+			! allocate(matVtmp(rank,r_est))
+			! do i=1,r_est
+			! matUtmp(i,1:rank) = matU(select_row(i),1:rank)
+			! enddo
+			! do j=1,r_est
+			! matVtmp(1:rank,j) = matV(1:rank,select_column(j))
+			! enddo		
+			! ! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
+			! call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop=flop)
+			! stats%Flop_Fill = stats%Flop_Fill + flop
+			! deallocate(matUtmp)
+			! deallocate(matVtmp)
+		! endif	
 			
 			
 		!**** generate column indices for the next iteration	
