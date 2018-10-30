@@ -199,6 +199,7 @@
      $                      JPVT( J ), TAU( J ), WORK( J ), WORK( N+J ),
      $                      WORK( 2*N+1 ), WORK( 2*N+JB+1 ), N-J+1 )
                DO C=J,J+FJB-1
+				 PRINT *, C, ABS(A(C,C))/ABS(A(1,1))
                  IF(ABS(A(1,1))<ATOL) THEN
                    GOTO 99
                  ELSEIF(ABS(A(C,C))/ABS(A(1,1))<RTOL)THEN

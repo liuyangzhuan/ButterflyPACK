@@ -3014,6 +3014,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 		if(norm_Z<0)exit
 		
 		! write(*,*)sqrt((sum(norm_UVavrbynorm_Z)/Navr)),sqrt(norm_U*norm_V),sqrt(norm_Z),rank,rankmax_min,tolerance**2<(sum(norm_UVavrbynorm_Z)/Navr)		
+		write(*,*)rank,sqrt((sum(norm_UVavrbynorm_Z)/Navr))
 		
 	enddo
 	! write(*,*)sqrt((sum(norm_UVavrbynorm_Z)/Navr)),sqrt(norm_U*norm_V),sqrt(norm_Z),rank,rankmax_min,tolerance**2<(sum(norm_UVavrbynorm_Z)/Navr)
@@ -4092,6 +4093,20 @@ implicit none
 			enddo
 		enddo			
 
+		! if(ptree%MyID==Main_ID)then
+			! do myi=1,myArows
+				! call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
+				! do myj=1,myAcols
+					! call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
+					! edge_m = blocks%headm + ii - 1 
+					! edge_n = blocks%headn + jj - 1 
+					! write(777,*)Fullmat(myi,myj)				
+				! enddo
+			! enddo			
+		! endif
+		
+		
+		
 		! compute the exact results
 		myArows = numroc(blocks%M, nbslpk, myrow, 0, nprow)
 		myAcols = numroc(Ntest, nbslpk, mycol, 0, npcol)			

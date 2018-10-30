@@ -1,16 +1,16 @@
-for cluster in 0 2 3
+for cluster in 0 
 do
 
-# export EXEC=./EXAMPLE/fkerreg
-# export DATA=/project/projectdirs/m2957/liuyangz/my_research/ML/SUSY_Origin/susy_10Kn
-# export OMP_NUM_THREADS=1
-# export OMP_PLACES=threads
-# export OMP_PROC_BIND=spread
-# h=0.1
-# lambda=10.0
-# com_opt=2
+export EXEC=./EXAMPLE/fkerreg
+export DATA=/project/projectdirs/m2957/liuyangz/my_research/ML/SUSY_Origin/susy_10Kn
+export OMP_NUM_THREADS=1
+export OMP_PLACES=threads
+export OMP_PROC_BIND=spread
+h=0.1
+lambda=10.0
+com_opt=2
 
-# srun -N 2 -n 2 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 10000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel10K_clus_${cluster}.out
+srun -N 2 -n 2 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 10000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel10K_clus_${cluster}.out
 
 
 # export EXEC=./EXAMPLE/fkerreg
@@ -69,15 +69,15 @@ do
 # srun -N 32 -n 128 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 54 490000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_covtype_kernel500K_clus_${cluster}.out  
 
 
-export EXEC=./EXAMPLE/fkerreg
-export DATA=/project/projectdirs/m2957/liuyangz/my_research/ML/SUSY_Origin/susy_1Mn
-export OMP_NUM_THREADS=1
-export OMP_PLACES=threads
-export OMP_PROC_BIND=spread
-h=0.1
-lambda=10.0
-com_opt=3
-srun -N 32 -n 128 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 1000000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel1M_clus_${cluster}.out  
+# export EXEC=./EXAMPLE/fkerreg
+# export DATA=/project/projectdirs/m2957/liuyangz/my_research/ML/SUSY_Origin/susy_1Mn
+# export OMP_NUM_THREADS=1
+# export OMP_PLACES=threads
+# export OMP_PROC_BIND=spread
+# h=0.1
+# lambda=10.0
+# com_opt=3
+# srun -N 32 -n 128 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 1000000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel1M_clus_${cluster}.out  
 
 done
 
