@@ -8,7 +8,10 @@ implicit none
 		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files		
 		integer:: rank
 		real(kind=8):: lambda
-		type(d_hobf),pointer::ho_bf ! Use this precomputed hodbf as matvec
+		type(d_hobf),pointer::ho_bf ! Use this metadata in matvec
+		type(d_mesh),pointer::msh   ! Use this metadata in matvec
+		type(d_proctree),pointer::ptree ! Use this metadata in matvec
+		type(d_Hstat),pointer::stats ! Use this metadata in matvec
 	end type quant_app
 
 contains
@@ -66,7 +69,7 @@ contains
 		end select	
 	end subroutine Z_elem_FULL
 	
-	subroutine HODLR_MVP_OneHODLR(trans,Nloc,num_vect,Vin,Vout,msh,ptree,stats,quant)
+	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use d_HODLR_DEFS
 		use d_DenseLA
 		use d_misc
@@ -77,24 +80,23 @@ contains
 		real(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
 		real(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
-		integer, INTENT(in)::Nloc,num_vect
+		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
-		type(d_mesh)::msh
-		type(d_proctree)::ptree
+		! type(d_mesh)::msh
+		! type(d_proctree)::ptree
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
 		type(d_hobf),pointer::ho_bf
-		type(d_Hstat)::stats
-		
-		pgno=1
-		nproc = ptree%pgrp(pgno)%nproc
-		
+		! type(d_Hstat)::stats
+
 		select TYPE(quant)   
-		type is (quant_app)
+		type is (quant_app)		
+			pgno=1
+			nproc = quant%ptree%pgrp(pgno)%nproc
 			ho_bf=>quant%ho_bf
-			call d_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,ptree,stats)	
+			call d_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR	
@@ -137,16 +139,16 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(d_Hoption)::option	
-	type(d_Hstat)::stats,stats1	
-	type(d_mesh)::msh,msh1
-	type(d_kernelquant)::ker
-	type(quant_app),target::quant
+	type(d_Hoption),target::option,option1	
+	type(d_Hstat),target::stats,stats1	
+	type(d_mesh),target::msh,msh1
+	type(d_kernelquant),target::ker,ker1
+	type(quant_app),target::quant,quant1
 	type(d_hobf),target::ho_bf,ho_bf1
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	integer level,Maxlevel,N_unk_loc
-	type(d_proctree)::ptree,ptree1
+	type(d_proctree),target::ptree,ptree1
 	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
@@ -201,7 +203,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_LR
-	ker%QuantZmn=>quant
+	ker%QuantApp=>quant
  
     !**** Get matrix size and rank and create the matrix
 	msh%Nunk = 10000
@@ -230,7 +232,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	! !**** register the user-defined function and type in ker 
 	! ker%FuncZmn=>Z_elem_FULL
-	! ker%QuantZmn=>quant
+	! ker%QuantApp=>quant
 
     ! !**** Get matrix size and rank and create the matrix
 	! msh%Nunk = 4096
@@ -328,13 +330,19 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	
 	
-	
-	
-	option%nogeo=1
-	option%xyzsort=NATURAL
+
+	call d_CopyOptions(option,option1)
+	option1%nogeo=1
+	option1%xyzsort=NATURAL
+	ker1%FuncMatVec=>HODLR_MVP_OneHODLR
+	ker1%QuantApp=>quant1	
+	quant1%ho_bf=>ho_bf
+	quant1%msh=>msh
+	quant1%ptree=>ptree
+	quant1%stats=>stats
+
 	msh1%Nunk = msh%Nunk
-	ker%FuncMatVec=>HODLR_MVP_OneHODLR
-	quant%ho_bf=>ho_bf
+	
 	
 	call d_initstat(stats1)
 	
@@ -350,20 +358,21 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 		msh1%pretree(ii)=msh%basis_group(2**ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**ho_bf%Maxlevel+ii-1)%head+1
 	enddo
 	
-    call d_HODLR_structuring(ho_bf1,option,msh1,ker,d_element_Zmn_user,ptree1)
-	call d_BPlus_structuring(ho_bf1,option,msh1,ptree1)	
+    call d_HODLR_structuring(ho_bf1,option1,msh1,ker1,d_element_Zmn_user,ptree1)
+	call d_BPlus_structuring(ho_bf1,option1,msh1,ptree1)	
 	
 	N_unk_loc = msh1%idxe-msh1%idxs+1
 	t1 = OMP_get_wtime()	
 	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"		
-	call d_HODLR_randomized(ho_bf1,d_matvec_user,N_unk_loc,Memory,error,option,stats1,ker,ptree1,msh1)
+	call d_HODLR_randomized(ho_bf1,d_matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	t2 = OMP_get_wtime()  
 	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
 	
 	call d_PrintStat(stats1,ptree1)
 	call d_delete_proctree(ptree1)
 	call d_delete_Hstat(stats1)
-	call d_delete_mesh(msh1)	
+	call d_delete_mesh(msh1)
+	call d_delete_kernelquant(ker1)	
 	call d_delete_HOBF(ho_bf1)	
 		
 	

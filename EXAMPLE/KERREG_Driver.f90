@@ -169,7 +169,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_RBF
-	ker%QuantZmn=>quant
+	ker%QuantApp=>quant
  
 
     !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters

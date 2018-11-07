@@ -80,7 +80,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	
  	! register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_EMSURF
-	ker%QuantZmn=>quant	
+	ker%QuantApp=>quant	
 	
     quant%integral_points=6
     allocate (quant%ng1(quant%integral_points), quant%ng2(quant%integral_points), quant%ng3(quant%integral_points), quant%gauss_w(quant%integral_points))

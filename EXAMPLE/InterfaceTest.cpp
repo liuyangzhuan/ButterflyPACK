@@ -106,7 +106,7 @@ inline double K10_kernel(double *x, double *y, int d, double h) {
 
 
 // The object handling kernel parameters and sampling function
-class C_QuantZmn {
+class C_QuantApp {
 public:
   vector<double> _data;
   int _d = 0;
@@ -123,16 +123,23 @@ public:
   std::vector<int> _Hperm;
   std::vector<int> _iHperm;
   int _nloc = 0;
-
-  C_QuantZmn() = default;
   
-  C_QuantZmn(vector<double> data, int d, double h, double l, int ker)
+  F2Cptr* ho_bf;  //HODLR returned by Fortran code 
+  F2Cptr* stats;      //statistics structure returned by Fortran code
+  F2Cptr* msh;		   //mesh structure returned by Fortran code
+  F2Cptr* ptree;      //process tree returned by Fortran code
+  F2Cptr* option;      //option structure returned by Fortran code
+  
+
+  C_QuantApp() = default;
+  
+  C_QuantApp(vector<double> data, int d, double h, double l, int ker)
     : _data(move(data)), _d(d), _n(_data.size() / _d),
       _h(h), _l(l),_ker(ker){
     assert(size_t(_n * _d) == _data.size());
 	}
   
-  C_QuantZmn(int n_rand, int rank_rand, int ker, vector<double> MatU, vector<double> MatV)
+  C_QuantApp(int n_rand, int rank_rand, int ker, vector<double> MatU, vector<double> MatV)
     : _n_rand(n_rand), _rank_rand(rank_rand), _ker(ker), _MatU(move(MatU)), _MatV(move(MatV)){
 	// cout<<_n_rand<<_rank_rand<<_MatU.size()<<endl;
     assert(size_t(_n_rand * _rank_rand) == _MatU.size());
@@ -172,9 +179,16 @@ public:
 // The sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 	
-  C_QuantZmn* Q = (C_QuantZmn*) quant;	
+  C_QuantApp* Q = (C_QuantApp*) quant;	
   Q->Sample(*m,*n,val);
 }
+
+// The matvec sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncMatVec(char const *trans, int *nin, int *nout, int *nvec, double *xin, double *xout, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;	
+  d_c_hodlr_mult(trans, xin, xout, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+}
+
 
 // Read a data file into a vector
 vector<double> write_from_file(string filename) {
@@ -220,7 +234,7 @@ int main(int argc, char* argv[])
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
 	string filename("smalltest.dat");
-	C_QuantZmn* quant_ptr;
+	C_QuantApp *quant_ptr, *quant_ptr1;
 	
 	
     int tst = stoi(argv[1]);
@@ -246,7 +260,7 @@ if(tst==1){
     vector<double> data_train = write_from_file(filename + "_train.csv");
 	Npo = data_train.size() / Ndim;
 
-	quant_ptr=new C_QuantZmn(data_train, Ndim, h, lambda,ker);	
+	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);	
 	// dat_ptr = data_train.data();
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
@@ -280,7 +294,7 @@ if(tst==2){
 	data_train[i] = (double)rand() / RAND_MAX;
 	MPI_Bcast(data_train.data(), Npo*Ndim, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-	quant_ptr=new C_QuantZmn(data_train, Ndim, h, lambda,ker);	
+	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);	
 	// dat_ptr = data_train.data();
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
@@ -314,7 +328,7 @@ if(tst==3){
 	matV[i] = (double)rand() / RAND_MAX;
 	MPI_Bcast(matV.data(), Npo*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
-	quant_ptr=new C_QuantZmn(Npo, rank_rand, ker, matU, matV);	
+	quant_ptr=new C_QuantApp(Npo, rank_rand, ker, matU, matV);	
 	nogeo=1;
 	sort_opt=0;
 }	
@@ -327,17 +341,27 @@ if(tst==3){
 	int* perms = new int[Npo]; //permutation vector returned by HODLR
 	int nlevel = 0; // 0: tree level, nonzero if a tree is provided 
 	int* tree = new int[(int)pow(2,nlevel)]; //user provided array containing size of each leaf node, not used if nlevel=0
+	tree[0] = Npo;
 	int* groups = new int[size];
 	int i_opt;
 	double d_opt;
 	
-	
+	//quantities for the first holdr
 	F2Cptr ho_bf;  //HODLR returned by Fortran code 
 	F2Cptr option;     //option structure returned by Fortran code 
 	F2Cptr stats;      //statistics structure returned by Fortran code
 	F2Cptr msh;		   //d_mesh structure returned by Fortran code
 	F2Cptr kerquant;   //kernel quantities structure returned by Fortran code
 	F2Cptr ptree;      //process tree returned by Fortran code
+
+	// quantities for the second holdr
+	F2Cptr ho_bf1;  //HODLR returned by Fortran code 
+	F2Cptr option1;     //option structure returned by Fortran code 
+	F2Cptr stats1;      //statistics structure returned by Fortran code
+	F2Cptr msh1;		   //d_mesh structure returned by Fortran code
+	F2Cptr kerquant1;   //kernel quantities structure returned by Fortran code
+	F2Cptr ptree1;      //process tree returned by Fortran code
+
 	
 	
 	MPI_Fint Fcomm;  // the fortran MPI communicator
@@ -376,6 +400,42 @@ if(tst==3){
 	d_c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
 	
+	// use resulting hodlr as matvec to create a new holdr
+	
+	quant_ptr1=new C_QuantApp();	
+	quant_ptr1->ho_bf=&ho_bf;
+	quant_ptr1->msh=&msh;
+	quant_ptr1->ptree=&ptree;
+	quant_ptr1->stats=&stats;
+	quant_ptr1->option=&option;
+	
+	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree1);
+	d_c_hodlr_copyoption(&option,&option1);	
+	d_c_hodlr_createstats(&stats1);	
+	
+	d_c_hodlr_set_I_option(&option1, "nogeo", 1); // no geometrical information
+	d_c_hodlr_set_I_option(&option1, "xyzsort", 0);// natural ordering	
+	
+	
+	int Npo1 = Npo; 
+	int myseg1=0;     // local number of unknowns
+	int* perms1 = new int[Npo1]; //permutation vector returned by HODLR
+	//tree1 and nlevel1 should be provided by the caller, otherwise natural ordering is used
+	int nlevel1 = 0; // 0: tree level, nonzero if a tree is provided 
+	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
+	tree1[0] = Npo1;
+	// construct hodlr from blackbox matvec
+	d_c_hodlr_construct_matvec(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncMatVec, quant_ptr1, &Fcomm);
+
+	
+	d_c_hodlr_deletestats(&stats1);
+	d_c_hodlr_deleteproctree(&ptree1);
+	d_c_hodlr_deletemesh(&msh1);
+	d_c_hodlr_deletekernelquant(&kerquant1);
+	d_c_hodlr_deletehobf(&ho_bf1);
+	d_c_hodlr_deleteoption(&option1);
+	
+	
 	
 	d_c_hodlr_deletestats(&stats);
 	d_c_hodlr_deleteproctree(&ptree);
@@ -385,6 +445,12 @@ if(tst==3){
 	d_c_hodlr_deleteoption(&option);
 	
 	delete quant_ptr;
+	delete quant_ptr1;
+	delete perms;
+	delete perms1;
+	delete tree;
+	delete tree1;
+	
 	
 	Cblacs_exit(1);
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called

@@ -817,12 +817,12 @@ subroutine C_EMCURV_Sample(m,n,value,quant_emcurv_Cptr) bind(c, name="c_emcurv_s
 	complex(kind=8) value
 	type(c_ptr),value :: quant_emcurv_Cptr
 	type(quant_EMCURV),pointer::quant
-	class(*),pointer :: QuantZmn
+	class(*),pointer :: QuantApp
 
 	call c_f_pointer(quant_emcurv_Cptr, quant)
-	QuantZmn=>quant
+	QuantApp=>quant
 	!!!!!  m,n changed to m+1,n+1 because Z_elem_EMCURV assumes indices staring from 1
-	call Z_elem_EMCURV(m+1,n+1,value,QuantZmn)
+	call Z_elem_EMCURV(m+1,n+1,value,QuantApp)
 end subroutine C_EMCURV_Sample
 
 	

@@ -3463,6 +3463,40 @@ subroutine SetDefaultOptions(option)
 end subroutine SetDefaultOptions	
 
 
+
+subroutine CopyOptions(option,option1)
+	implicit none 
+	type(Hoption)::option,option1	
+
+	option1%Nmin_leaf = option%Nmin_leaf
+	option1%tol_comp = option%tol_comp
+	option1%tol_Rdetect = option%tol_Rdetect	
+	option1%tol_LS = option%tol_LS
+	option1%tol_itersol = option%tol_itersol
+	option1%n_iter = option%n_iter
+	option1%tol_rand = option%tol_rand
+	option1%level_check = option%level_check
+	option1%precon = option%precon
+	option1%xyzsort = option%xyzsort
+	option1%lnoBP = option%lnoBP
+	option1%TwoLayerOnly = option%TwoLayerOnly
+	option1%touch_para = option%touch_para
+    option1%schulzorder = option%schulzorder
+    option1%schulzlevel = option%schulzlevel
+	option1%LRlevel = option%LRlevel
+	option1%ErrFillFull = option%ErrFillFull
+	option1%BACA_Batch = option%BACA_Batch
+	option1%RecLR_leaf = option%RecLR_leaf
+	option1%nogeo = option%nogeo
+	option1%ErrSol = option%ErrSol
+	option1%LR_BLK_NUM = option%LR_BLK_NUM
+	option1%rank0 = option%rank0
+	option1%rankrate = option%rankrate
+	option1%itermax = option%itermax
+
+end subroutine CopyOptions	
+
+
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
 
 subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,msh,flag)

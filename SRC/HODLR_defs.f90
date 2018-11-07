@@ -316,12 +316,13 @@ module HODLR_DEFS
 
 		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
-		class(*),pointer :: QuantZmn ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
+		class(*),pointer :: QuantApp ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Z_elem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_MatVec),nopass,pointer :: FuncMatVec ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 		
-		type(c_ptr),pointer :: C_QuantZmn ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
+		type(c_ptr),pointer :: C_QuantApp ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
 		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
+		type(c_funptr),pointer :: C_FuncMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
 	end type kernelquant
 	
 	
@@ -374,29 +375,35 @@ module HODLR_DEFS
 		end subroutine C_Z_elem		
 
 
-		subroutine MatVec(trans,N,num_vect,Vin,Vout,msh,ptree,stats,ker)
+		subroutine MatVec(trans,M,N,num_vect,Vin,Vout,ker)
 			import::mesh,kernelquant,proctree,Hstat
 			implicit none
-		    integer, INTENT(IN):: N,num_vect
+		    integer, INTENT(IN):: M,N,num_vect
 		    DT::Vin(:,:),Vout(:,:) 
-		    type(mesh)::msh
-			type(proctree)::ptree
-			type(Hstat)::stats
 			type(kernelquant)::ker
 		    character trans
 		end subroutine MatVec		
 		
 		
-		subroutine F_MatVec(trans,N,num_vect,Vin,Vout,msh,ptree,stats,quant) ! m,n represents indices in natural order
+		subroutine F_MatVec(trans,M,N,num_vect,Vin,Vout,quant) 
 		  import::mesh,proctree,Hstat
 		  class(*),pointer :: quant
-		  integer, INTENT(IN):: N,num_vect
+		  integer, INTENT(IN):: M,N,num_vect
 		  DT::Vin(:,:),Vout(:,:) 
+		  character trans
+		end subroutine F_MatVec
+
+		subroutine C_MatVec(trans,Nin,Nout,num_vect,Vin,Vout,quant) 
+		  USE, INTRINSIC :: ISO_C_BINDING
+		  import::mesh,proctree,Hstat
+		  type(c_ptr) :: quant
+		  integer(kind=C_INT), INTENT(IN):: Nin,Nout,num_vect
+		  CBIND_DT::Vin(Nin,num_vect),Vout(Nout,num_vect) 
 		  type(mesh)::msh
 		  type(proctree)::ptree
 		  type(Hstat)::stats
-		  character trans
-		end subroutine F_MatVec
+		  character(kind=c_char,len=1) :: trans(*)
+		end subroutine C_MatVec
 		
 		
 		

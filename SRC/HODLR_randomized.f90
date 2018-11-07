@@ -7,20 +7,20 @@ use Bplus_compress
 
 contains
 
-subroutine matvec_user(trans,N,num_vect,Vin,Vout,msh,ptree,stats,ker)
+subroutine matvec_user(trans,M,N,num_vect,Vin,Vout,ker)
 	
 	class(*),pointer :: quant
-	integer, INTENT(IN):: N,num_vect
+	integer, INTENT(IN):: M,N,num_vect
 	DT::Vin(:,:),Vout(:,:) 
-	type(mesh)::msh
-	type(proctree)::ptree
+	! type(mesh)::msh
+	! type(proctree)::ptree
 	type(kernelquant)::ker
-	type(Hstat)::stats
+	! type(Hstat)::stats
 	character trans
 	
 	procedure(F_MatVec), POINTER :: proc
 	proc => ker%FuncMatvec
-	call proc(trans,N,num_vect,Vin,Vout,msh,ptree,stats,ker%QuantZmn)
+	call proc(trans,M,N,num_vect,Vin,Vout,ker%QuantApp)
 
 	return
 	
@@ -93,7 +93,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 					n2 = OMP_get_wtime()
 					stats%Time_random(1) = stats%Time_random(1) + n2-n1				
 
-					call HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,rank_pre_max,option,ker,ptree,stats,msh)
+					call HODLR_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,rank_pre_max,option,ker,ptree,stats,msh)
 				else 
 
 					n1 = OMP_get_wtime()
@@ -137,8 +137,11 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 				! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing	
 				! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. ((rank_new_max>rank_max_lastiter .and. tt>1).or.tt==1))then
 				
-				!!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank smaller than num_vec					
-				if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. rank_new_max==rank_pre_max)then
+				! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank smaller than num_vec					
+				! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. rank_new_max==rank_pre_max)then
+				
+				!!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec					
+				if(error_inout>option%tol_rand .and. rank_new_max==rank_pre_max)then				
 					do bb = Bidxs,Bidxe
 						call delete_blocks(block_rand(bb-Bidxs+1),1)
 					end do
@@ -184,7 +187,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 		call random_dp_number(Vin(ii,1))
 	end do
 
-	call blackbox_HODLR_MVP('N',Nloc,1,Vin,Vout1,msh,ptree,stats,ker)
+	call blackbox_HODLR_MVP('N',Nloc,Nloc,1,Vin,Vout1,ker)
 	call MVM_Z_forward('N',Nloc,1,1,ho_bf1%Maxlevel+1,Vin,Vout2,ho_bf1,ptree,stats)
 	
 	tmp1 = fnorm(Vout2-Vout1,Nloc,1)**2d0
@@ -199,7 +202,7 @@ end subroutine HODLR_randomized
 
 
 
-subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,rmax,option,ker,ptree,stats,msh)
+subroutine HODLR_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,rmax,option,ker,ptree,stats,msh)
 	
 	
     use HODLR_DEFS
@@ -431,7 +434,7 @@ subroutine HODLR_MVP_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MV
 	deallocate(RandVectOutR,RandVectInR,ranks)
 
 
-end subroutine HODLR_MVP_randomized_OneL_Lowrank
+end subroutine HODLR_randomized_OneL_Lowrank
 
 
 subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, VectOut, Nloc,level_c,num_vect,ker,ptree,stats,msh)
@@ -493,7 +496,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 					endif				
 				end do	
 				
-				call blackbox_HODLR_MVP('N',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
+				call blackbox_HODLR_MVP('N',Nloc,Nloc,num_vect,RandVectIn,RandVectTmp,ker)
 				call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut			
 				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
@@ -528,7 +531,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 					endif				
 				end do
 				
-				call blackbox_HODLR_MVP('N',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
+				call blackbox_HODLR_MVP('N',Nloc,Nloc,num_vect,RandVectIn,RandVectTmp,ker)
 				
 				call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut			
@@ -578,7 +581,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 					endif
 				end do	
 			
-				call blackbox_HODLR_MVP('T',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
+				call blackbox_HODLR_MVP('T',Nloc,Nloc,num_vect,RandVectIn,RandVectTmp,ker)
 				
 				call MVM_Z_forward('T',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				RandVectOut = RandVectTmp-RandVectOut		
@@ -613,7 +616,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 					endif
 				end do	
 			
-				call blackbox_HODLR_MVP('T',Nloc,num_vect,RandVectIn,RandVectTmp,msh,ptree,stats,ker)
+				call blackbox_HODLR_MVP('T',Nloc,Nloc,num_vect,RandVectIn,RandVectTmp,ker)
 				call MVM_Z_forward('T',Nloc,num_vect,1,level_c-1,RandVectIn,RandVectOut,ho_bf1,ptree,stats)
 				stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 				RandVectOut = RandVectTmp-RandVectOut		
@@ -646,7 +649,7 @@ subroutine HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans, VectIn, Ve
 			VectOut=0
 			allocate(RandVectTmp(Nloc,num_vect))
 			! Compute the odd block MVP first
-			call blackbox_HODLR_MVP('N',Nloc,num_vect,VectIn,RandVectTmp,msh,ptree,stats,ker)
+			call blackbox_HODLR_MVP('N',Nloc,Nloc,num_vect,VectIn,RandVectTmp,ker)
 			call MVM_Z_forward('N',Nloc,num_vect,1,level_c-1,VectIn,VectOut,ho_bf1,ptree,stats)
 			VectOut = RandVectTmp-VectOut		
 			stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp

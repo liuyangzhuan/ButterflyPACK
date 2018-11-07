@@ -7,7 +7,10 @@ implicit none
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files	
 		complex(kind=8), allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid	
 		integer,pointer :: N_p(:,:) ! column sizes of all processes sharing this hodlr
-		type(z_hobf),pointer::ho_bf ! Use this precomputed hodbf as matvec
+		type(z_hobf),pointer::ho_bf ! Use this metadata in matvec
+		type(z_mesh),pointer::msh   ! Use this metadata in matvec
+		type(z_proctree),pointer::ptree ! Use this metadata in matvec
+		type(z_Hstat),pointer::stats ! Use this metadata in matvec
 	end type quant_app
 
 contains
@@ -35,7 +38,7 @@ contains
 
 	
 
-	subroutine HODLR_MVP_OneHODLR(trans,Nloc,num_vect,Vin,Vout,msh,ptree,stats,quant)
+	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use z_HODLR_DEFS
 		use z_DenseLA
 		use z_misc
@@ -46,24 +49,24 @@ contains
 		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
 		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
-		integer, INTENT(in)::Nloc,num_vect
+		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
-		type(z_mesh)::msh
-		type(z_proctree)::ptree
+		! type(z_mesh)::msh
+		! type(z_proctree)::ptree
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
 		type(z_hobf),pointer::ho_bf
-		type(z_Hstat)::stats
-		
-		pgno=1
-		nproc = ptree%pgrp(pgno)%nproc
-		
+		! type(z_Hstat)::stats
+	
 		select TYPE(quant)   
 		type is (quant_app)
+			pgno=1
+			nproc = quant%ptree%pgrp(pgno)%nproc
+	
 			ho_bf=>quant%ho_bf
-			call z_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,ptree,stats)	
+			call z_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR
@@ -72,7 +75,7 @@ contains
 
 
 	
-	subroutine HODLR_MVP_Fullmat(trans,Nloc,num_vect,Vin,Vout,msh,ptree,stats,quant)
+	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use z_HODLR_DEFS
 		use z_DenseLA
 		use z_misc
@@ -82,28 +85,26 @@ contains
 		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
 		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
-		integer, INTENT(in)::Nloc,num_vect
+		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
-		type(z_mesh)::msh
-		type(z_proctree)::ptree
-		type(z_Hstat)::stats
+		! type(z_mesh)::msh
+		! type(z_proctree)::ptree
+		! type(z_Hstat)::stats
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
 
-		pgno=1
-		nproc = ptree%pgrp(pgno)%nproc
-		
-		
 		select TYPE(quant)   
-		type is (quant_app)
+		type is (quant_app)		
 		
+		pgno=1
+		nproc = quant%ptree%pgrp(pgno)%nproc	
 		N = quant%N_p(nproc,2)
 		
 					
 		!!!!**** generate 2D grid blacs quantities
-		ctxt = ptree%pgrp(pgno)%ctxt		
+		ctxt = quant%ptree%pgrp(pgno)%ctxt		
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
 		if(myrow/=-1 .and. mycol/=-1)then
 			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
@@ -124,7 +125,7 @@ contains
 
 		
 		!!!!**** redistribution of input vectors
-		call z_Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,ptree)	
+		call z_Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,quant%ptree)	
 			
 
 		!!!!**** perform gemm on 2d grid
@@ -134,7 +135,7 @@ contains
 		
 	
 		!!!!**** redistribution of output vectors
-		call z_Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,ptree)	
+		call z_Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,quant%ptree)	
 		
 		
 		!!!!**** deallocation buffers
@@ -234,19 +235,19 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Ntunnel,kk,black_step,rank0
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
-	type(z_Hoption):: option
-	type(z_Hstat)::stats,stats1	
-	type(z_mesh)::msh,msh1	
-	type(z_kernelquant)::ker
+	type(z_Hoption):: option,option1
+	type(z_Hstat),target::stats,stats1	
+	type(z_mesh),target::msh,msh1	
+	type(z_kernelquant),target::ker,ker1
 	integer:: explicitflag
 	type(z_hobf),target::ho_bf,ho_bf1
 	integer Nin1,Nout1,Nin2,Nout2	
-	type(z_proctree)::ptree,ptree1
+	type(z_proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)	
 	integer :: ierr
 	integer :: nmpi
 	CHARACTER (LEN=1000) DATA_DIR	
-	type(quant_app),target::quant
+	type(quant_app),target::quant,quant1
 	integer N_unk_loc
 	
 	! nmpi and groupmembers should be provided by the user 
@@ -335,7 +336,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Z_elem_FULL
 	ker%FuncMatVec=>HODLR_MVP_Fullmat
-	ker%QuantZmn=>quant	
+	ker%QuantApp=>quant	
+	quant%ptree=>ptree
 	
 	Ntunnel = 15600
 	msh%Nunk = 3720
@@ -428,7 +430,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		
 		call z_MVM_Z_forward('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,stats)
 	
-		call z_matvec_user('N',N_unk_loc,1,Vin,Vout2,msh,ptree,stats,ker)
+		call z_matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
 		
 		
 		tmp1 = z_fnorm(Vout2-Vout1,N_unk_loc,1)**2d0
@@ -453,16 +455,22 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 	end if	
 	
-	
+	 
 	
 
-
-	option%nogeo=1
-	option%xyzsort=NATURAL
+	call z_CopyOptions(option,option1)
+	option1%nogeo=1
+	option1%xyzsort=NATURAL
+	ker1%FuncZmn=>Z_elem_FULL
+	ker1%FuncMatVec=>HODLR_MVP_OneHODLR
+	ker1%QuantApp=>quant1	
+	quant1%ho_bf=>ho_bf
+	quant1%msh=>msh
+	quant1%ptree=>ptree
+	quant1%stats=>stats
+	
+	
 	msh1%Nunk = msh%Nunk
-	ker%FuncMatVec=>HODLR_MVP_OneHODLR
-	quant%ho_bf=>ho_bf
-	
 	call z_initstat(stats1)
 	
 	allocate(groupmembers(nmpi))
@@ -477,13 +485,13 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		msh1%pretree(ii)=msh%basis_group(2**ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**ho_bf%Maxlevel+ii-1)%head+1
 	enddo
 	
-    call z_HODLR_structuring(ho_bf1,option,msh1,ker,z_element_Zmn_user,ptree1)
-	call z_BPlus_structuring(ho_bf1,option,msh1,ptree1)	
+    call z_HODLR_structuring(ho_bf1,option1,msh1,ker1,z_element_Zmn_user,ptree1)
+	call z_BPlus_structuring(ho_bf1,option1,msh1,ptree1)	
 	
 	N_unk_loc = msh1%idxe-msh1%idxs+1
 	t1 = OMP_get_wtime()	
 	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"		
-	call z_HODLR_randomized(ho_bf1,z_matvec_user,N_unk_loc,Memory,error,option,stats1,ker,ptree1,msh1)
+	call z_HODLR_randomized(ho_bf1,z_matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	t2 = OMP_get_wtime()  
 	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
 	
@@ -500,7 +508,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	call z_delete_proctree(ptree1)
 	call z_delete_Hstat(stats1)
-	call z_delete_mesh(msh1)	
+	call z_delete_mesh(msh1)
+	call z_delete_kernelquant(ker1)	
 	call z_delete_HOBF(ho_bf1)
 	
 	
