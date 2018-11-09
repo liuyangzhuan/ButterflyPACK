@@ -84,7 +84,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 	
  	! register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_EMCURV
+	ker%FuncZmn=>Zelem_EMCURV
 	ker%QuantApp=>quant
 
      !*************************input******************************

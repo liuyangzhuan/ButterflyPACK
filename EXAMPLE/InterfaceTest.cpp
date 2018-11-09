@@ -184,9 +184,23 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 }
 
 // The matvec sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncMatVec(char const *trans, int *nin, int *nout, int *nvec, double *xin, double *xout, C2Fptr quant) {
+inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;	
   d_c_hodlr_mult(trans, xin, xout, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+}
+
+// The matvec sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant, double *a, double *b) {
+  C_QuantApp* Q = (C_QuantApp*) quant;	
+  int cnt = (*nvec)*(*nout);
+  double* xout1 = new double[cnt];
+     
+  d_c_hodlr_mult(trans, xin, xout1, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+  
+  for (int ii=0; ii<cnt; ii++){
+	xout[ii] = *b*xout[ii] + *a*xout1[ii];
+  }
+  delete xout1;
 }
 
 
@@ -234,7 +248,7 @@ int main(int argc, char* argv[])
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
 	string filename("smalltest.dat");
-	C_QuantApp *quant_ptr, *quant_ptr1;
+	C_QuantApp *quant_ptr;
 	
 	
     int tst = stoi(argv[1]);
@@ -353,15 +367,6 @@ if(tst==3){
 	F2Cptr msh;		   //d_mesh structure returned by Fortran code
 	F2Cptr kerquant;   //kernel quantities structure returned by Fortran code
 	F2Cptr ptree;      //process tree returned by Fortran code
-
-	// quantities for the second holdr
-	F2Cptr ho_bf1;  //HODLR returned by Fortran code 
-	F2Cptr option1;     //option structure returned by Fortran code 
-	F2Cptr stats1;      //statistics structure returned by Fortran code
-	F2Cptr msh1;		   //d_mesh structure returned by Fortran code
-	F2Cptr kerquant1;   //kernel quantities structure returned by Fortran code
-	F2Cptr ptree1;      //process tree returned by Fortran code
-
 	
 	
 	MPI_Fint Fcomm;  // the fortran MPI communicator
@@ -400,7 +405,19 @@ if(tst==3){
 	d_c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
 	
-	// use resulting hodlr as matvec to create a new holdr
+	
+	
+	
+	//////////////////// use resulting hodlr as matvec to create a new holdr
+	
+	// quantities for the second holdr
+	F2Cptr ho_bf1;  //HODLR returned by Fortran code 
+	F2Cptr option1;     //option structure returned by Fortran code 
+	F2Cptr stats1;      //statistics structure returned by Fortran code
+	F2Cptr msh1;		   //d_mesh structure returned by Fortran code
+	F2Cptr kerquant1;   //kernel quantities structure returned by Fortran code
+	F2Cptr ptree1;      //process tree returned by Fortran code
+	C_QuantApp *quant_ptr1; //user-defined object
 	
 	quant_ptr1=new C_QuantApp();	
 	quant_ptr1->ho_bf=&ho_bf;
@@ -416,7 +433,6 @@ if(tst==3){
 	d_c_hodlr_set_I_option(&option1, "nogeo", 1); // no geometrical information
 	d_c_hodlr_set_I_option(&option1, "xyzsort", 0);// natural ordering	
 	
-	
 	int Npo1 = Npo; 
 	int myseg1=0;     // local number of unknowns
 	int* perms1 = new int[Npo1]; //permutation vector returned by HODLR
@@ -424,17 +440,68 @@ if(tst==3){
 	int nlevel1 = 0; // 0: tree level, nonzero if a tree is provided 
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
-	// construct hodlr from blackbox matvec
-	d_c_hodlr_construct_matvec(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncMatVec, quant_ptr1, &Fcomm);
-
 	
+	d_c_hodlr_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_hodlr_construct_matvec_compute(&ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+
 	d_c_hodlr_deletestats(&stats1);
 	d_c_hodlr_deleteproctree(&ptree1);
 	d_c_hodlr_deletemesh(&msh1);
 	d_c_hodlr_deletekernelquant(&kerquant1);
 	d_c_hodlr_deletehobf(&ho_bf1);
 	d_c_hodlr_deleteoption(&option1);
+	delete quant_ptr1;
+	delete perms1;
+	delete tree1;	
 	
+	
+	
+	
+if(tst==3){	
+	//////////////////// use resulting hodlr as matvec to create a new bf
+	
+	// quantities for the second holdr
+	F2Cptr bf;  //BF returned by Fortran code 
+	F2Cptr option2;     //option structure returned by Fortran code 
+	F2Cptr stats2;      //statistics structure returned by Fortran code
+	F2Cptr msh2;		   //d_mesh structure returned by Fortran code
+	F2Cptr kerquant2;   //kernel quantities structure returned by Fortran code
+	F2Cptr ptree2;      //process tree returned by Fortran code
+	C_QuantApp *quant_ptr2; //user-defined object
+	
+	quant_ptr2=new C_QuantApp();	
+	quant_ptr2->ho_bf=&ho_bf;
+	quant_ptr2->msh=&msh;
+	quant_ptr2->ptree=&ptree;
+	quant_ptr2->stats=&stats;
+	quant_ptr2->option=&option;
+	
+	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree2);
+	d_c_hodlr_copyoption(&option,&option2);	
+	d_c_hodlr_createstats(&stats2);	
+	
+	d_c_hodlr_set_I_option(&option2, "nogeo", 1); // no geometrical information
+	d_c_hodlr_set_I_option(&option2, "xyzsort", 0);// natural ordering	
+	
+	int M = Npo; 
+	int N = Npo; 
+	int myrow=0;     // local number of rows
+	int mycol=0;     // local number of columns
+	
+	d_c_bf_construct_matvec_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
+
+	d_c_hodlr_deletestats(&stats2);
+	d_c_hodlr_deleteproctree(&ptree2);
+	d_c_hodlr_deletemesh(&msh2);
+	d_c_hodlr_deletekernelquant(&kerquant2);
+	d_c_bf_deletebf(&bf);
+	d_c_hodlr_deleteoption(&option2);
+
+	delete quant_ptr2;
+	
+}	
+
 	
 	
 	d_c_hodlr_deletestats(&stats);
@@ -445,11 +512,9 @@ if(tst==3){
 	d_c_hodlr_deleteoption(&option);
 	
 	delete quant_ptr;
-	delete quant_ptr1;
 	delete perms;
-	delete perms1;
 	delete tree;
-	delete tree1;
+
 	
 	
 	Cblacs_exit(1);

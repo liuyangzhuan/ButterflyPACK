@@ -50,7 +50,7 @@ if(allocated(quant%node_of_patch))deallocate(quant%node_of_patch)
 end subroutine delete_quant_EMSURF 
 
 !**** user-defined subroutine to sample Z_mn
-subroutine Z_elem_EMSURF(m,n,value_e,quant)
+subroutine Zelem_EMSURF(m,n,value_e,quant)
 	
     use z_HODLR_DEFS
     implicit none
@@ -182,7 +182,7 @@ subroutine Z_elem_EMSURF(m,n,value_e,quant)
 			
     return
     
-end subroutine Z_elem_EMSURF
+end subroutine Zelem_EMSURF
 
 
 

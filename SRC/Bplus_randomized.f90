@@ -1076,32 +1076,40 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 	type(matrixblock),allocatable::block_rand(:)
 	type(Hoption)::option
 	type(Hstat)::stats
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
+	procedure(BMatVec)::blackbox_MVP_dat
 	type(proctree)::ptree
 	type(mesh)::msh
+	integer converged
+	
+	
 	ctemp1 = 1d0; ctemp2 = 0d0
 	Memory = 0
 	
 	stats%Flop_Tmp=0
+	converged=0
 	
-	do tt = 1,10
+	do tt = 1,option%itermax
 	
-		rank_pre_max = ceiling_safe(rank0*rankrate**(tt-1))
+		rank_pre_max = ceiling_safe(option%rank0*option%rankrate**(tt-1))+3
 	
 		n1 = OMP_get_wtime()
 		groupm=blocks_o%row_group
 		groupn=blocks_o%col_group
 		
-		allocate (block_rand(1))
+		if(level_butterfly==0)then
+			allocate (block_rand(1))			
+			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,1)
+			call BF_Reconstruction_Lowrank(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+		else
+			allocate (block_rand(1))			
+			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,0)
+			n2 = OMP_get_wtime()
+			stats%Time_random(1) = stats%Time_random(1) + n2-n1
+			n1 = OMP_get_wtime()
+			call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)	
+			call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+		endif
 		
-		call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,0)
-		n2 = OMP_get_wtime()
-		stats%Time_random(1) = stats%Time_random(1) + n2-n1
-		
-		n1 = OMP_get_wtime()
-
-		call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)	
-		call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
 		call BF_Test_Reconstruction_Error(block_rand(1),blocks_o,operand,blackbox_MVP_dat,error_inout,ptree,stats,operand1)
 		n2 = OMP_get_wtime()	
 		
@@ -1109,7 +1117,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 		call get_butterfly_minmaxrank(block_rand(1))
 		
 #if PRNTlevel >= 2			
-		write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout
+		if(ptree%MyID==Main_ID)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
 #endif	
 
 		if(error_inout>option%tol_rand)then
@@ -1126,11 +1134,15 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			deallocate(block_rand)
 			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 			stats%Flop_Tmp=0
-			return			
+			converged=1	
+			exit
 		end if		
 	end do
-	write(*,*)'randomized scheme not converged in '//TRIM(strings)//'. level: ',blocks_o%level_butterfly,error_inout,rank_new_max
-	stop
+	
+	if(converged==0)then
+		write(*,*)'randomized scheme not converged in '//TRIM(strings)//'. level: ',blocks_o%level_butterfly,error_inout,rank_new_max
+		stop
+	endif
 
     return
 
@@ -1138,7 +1150,231 @@ end subroutine BF_randomized
 
 
 
+subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+    
+    use HODLR_DEFS
+    implicit none
+	
+    integer level_c,rowblock
+    integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    integer ranks,rank,i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
 
+    real(kind=8)::n1,n2,flop
+
+
+	class(*):: operand	
+	class(*),optional:: operand1	
+	
+	type(proctree)::ptree
+	type(mesh)::msh
+	
+	type(matrixblock)::blocks_o,block_rand
+	
+	
+	type(Hoption)::option
+	type(Hstat)::stats
+	procedure(BMatVec)::blackbox_MVP_dat
+	DT::ctemp1,ctemp2
+	integer num_vect,level_butterfly,rmax
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	integer mm,nn,q,qq,Nloc,pp
+	DT,pointer :: matQ2D(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:)
+	integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
+	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
+	
+	level_butterfly=0
+	num_vect = block_rand%dimension_rank
+	rmax = num_vect
+	
+	allocate(RandVectInR(block_rand%N_loc,num_vect))
+	RandVectInR=0
+	allocate(RandVectOutR(block_rand%M_loc,num_vect))	
+	RandVectOutR=0	
+	
+	mm=blocks_o%M_loc	
+	nn=blocks_o%N_loc
+	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectInR(1:nn,1:num_vect),1)
+	
+	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect,RandVectInR,RandVectOutR,cone,czero,ptree,stats,operand1)	
+
+	! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
+	do qq=1,option%powiter
+		RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
+		call blackbox_MVP_dat(operand,blocks_o,'T',mm,nn,num_vect,RandVectOutR,RandVectInR,cone,czero,ptree,stats,operand1)	
+		RandVectInR=conjg(cmplx(RandVectInR,kind=8))
+		call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect,RandVectInR,RandVectOutR,cone,czero,ptree,stats,operand1)	
+	enddo
+	
+	! computation of range Q
+	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_comp*1D-1,ptree,block_rand%pgno,flop)
+	
+	! computation of B^T = (Q^c*A)^T
+	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
+	call blackbox_MVP_dat(operand,blocks_o,'T',mm,nn,num_vect,RandVectOutR,RandVectInR,cone,czero,ptree,stats,operand1)	
+	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
+	
+	! computation of SVD B=USV and output A = (QU)*(SV)
+	call PQxSVDTruncate(block_rand,RandVectOutR,RandVectInR,ranks,rank,option,stats,ptree)
+
+	deallocate(RandVectOutR,RandVectInR)
+	
+end subroutine BF_Reconstruction_Lowrank	
+	
+
+
+	
+	
+
+subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,ptree)
+    
+    use HODLR_DEFS
+    implicit none
+	
+    integer level_c,rowblock
+    integer rank,rmax,group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+
+    real(kind=8)::n1,n2,flop
+	type(proctree)::ptree
+	type(matrixblock)::block_rand
+	type(Hoption)::option
+	type(Hstat)::stats
+	DT::matQ(:,:),matQcA_trans(:,:)
+	integer num_vect,level_butterfly
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	integer q,qq,Nloc,pp
+	DT,pointer :: matQ2D(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:)
+	integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
+	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
+	
+
+	!!!!**** generate 2D grid blacs quantities	
+	ctxt = ptree%pgrp(block_rand%pgno)%ctxt		
+	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+	if(myrow/=-1 .and. mycol/=-1)then
+		myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+		! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+		call descinit( descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call assert(info==0,'descinit fail for descQ2D')
+		allocate(matQ2D(myArows,myAcols))
+		matQ2D=0			
+		
+		myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+		! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+		call descinit( descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call assert(info==0,'descinit fail for descQcA_trans2D')
+		allocate(MatQcA_trans2D(myArows,myAcols))
+		MatQcA_trans2D=0				
+		
+		mnmin=min(block_rand%N,rmax)
+
+		myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)		
+		allocate(UU(myArows,myAcols))
+		! write(*,*)ptree%MyID,'descUU',N, mnmin
+		call descinit( descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
+		call assert(info==0,'descinit fail for descUU')
+		UU=0
+		
+		myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)		
+		allocate(VV(myArows,myAcols))
+		! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+		call descinit( descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
+		call assert(info==0,'descinit fail for descVV')
+		VV=0
+		
+		allocate(Singular(mnmin))
+		Singular=0
+
+	else 
+		descQ2D(2)=-1
+		descQcA_trans2D(2)=-1
+		descUU(2)=-1
+		descVV(2)=-1
+		allocate(matQ2D(1,1))   ! required for Redistribute1Dto2D
+		matQ2D=0
+		allocate(matQcA_trans2D(1,1)) ! required for Redistribute1Dto2D
+		matQcA_trans2D=0
+		allocate(UU(1,1))  ! required for Redistribute2Dto1D
+		UU=0
+		allocate(VV(1,1))  
+		VV=0
+	endif	
+	
+	
+!!!!**** redistribution into 2D grid
+	call Redistribute1Dto2D(matQ,block_rand%M_p,0,block_rand%pgno,matQ2D,block_rand%M,0,block_rand%pgno,rmax,ptree)	
+	call Redistribute1Dto2D(matQcA_trans,block_rand%N_p,0,block_rand%pgno,matQcA_trans2D,block_rand%N,0,block_rand%pgno,rmax,ptree)		
+	
+	
+!!!!**** compute B^T=V^TS^TU^T	
+	rank=0
+	if(myrow/=-1 .and. mycol/=-1)then
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol) 
+		do ii=1,rank
+			call g2l(ii,rank,npcol,nbslpk,jproc,myj)
+			if(jproc==mycol)then
+				UU(:,myj) = UU(:,myj)*Singular(ii) 		
+			endif
+		enddo
+
+
+		myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
+		allocate(matQUt2D(myArows,myAcols))
+		! write(*,*)'descQUt2D', M, rank
+		call descinit( descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )	
+		call assert(info==0,'descinit fail for descQUt2D')
+		matQUt2D=0				
+		
+		call pgemmf90('N','T',block_rand%M,rank,rmax,cone, matQ2D,1,1,descQ2D,VV,1,1,descVV,czero,matQUt2D,1,1,descQUt2D,flop=flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)				
+	else 
+		allocate(matQUt2D(1,1)) ! required for Redistribute2Dto1D
+	endif	
+	
+
+
+	block_rand%rankmax = rank
+	block_rand%rankmin = rank
+	allocate(block_rand%ButterflyU%blocks(1))
+	allocate(block_rand%ButterflyV%blocks(1))		
+	allocate(block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc,rank))
+	allocate(block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc,rank))
+				
+	
+	!!!!**** redistribution into 1D grid conformal to leaf sizes
+	call Redistribute2Dto1D(matQUt2D,block_rand%M,0,block_rand%pgno,block_rand%ButterflyU%blocks(1)%matrix,block_rand%M_p,0,block_rand%pgno,rank,ptree)	
+	call Redistribute2Dto1D(UU,block_rand%N,0,block_rand%pgno,block_rand%ButterflyV%blocks(1)%matrix,block_rand%N_p,0,block_rand%pgno,rank,ptree)	
+
+	
+	if(myrow/=-1 .and. mycol/=-1)then
+		deallocate(Singular)
+	endif
+	deallocate(matQ2D)
+	deallocate(MatQcA_trans2D)
+	deallocate(UU)
+	deallocate(VV)
+	deallocate(matQUt2D)		
+	
+end subroutine PQxSVDTruncate		
+	
+
+
+
+
+	
+	
+
+	
+	
+	
 
 subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
     
@@ -1180,7 +1416,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	type(RandomBlock),allocatable :: vec_rand(:)
 	type(Hoption)::option
 	type(Hstat)::stats
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
+	procedure(BMatVec)::blackbox_MVP_dat
 	
 	level_butterfly=block_rand%level_butterfly
     num_blocks=2**level_butterfly
@@ -1279,7 +1515,7 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	class(*):: operand
 	class(*),optional::operand1
 	type(RandomBlock),allocatable :: vec_rand(:)
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
+	procedure(BMatVec)::blackbox_MVP_dat
 	type(proctree)::ptree
 	type(mesh)::msh
 	
@@ -1361,7 +1597,7 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
     type(RandomBlock), pointer :: random
 	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly
 	integer*8 idx_start
-	real(kind=8)::error
+	real(kind=8)::error,tmp1,tmp2,norm1,norm2
 	integer level_c,rowblock,dimension_m 
 	DT,allocatable::Vdref(:,:),Id(:,:),Vd(:,:)
 	type(proctree)::ptree
@@ -1369,8 +1605,8 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 	type(matrixblock)::block_o,block_rand
 	class(*)::operand
 	class(*),optional::operand1
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
-	
+	procedure(BMatVec)::blackbox_MVP_dat
+	integer ierr
 	
 	level_butterfly=block_rand%level_butterfly
 	num_blocks=2**level_butterfly
@@ -1398,8 +1634,11 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 
 	call BF_block_MVP_dat(block_rand,'N',mm,nn,num_vect,Id,Vd,cone,czero,ptree,stats)
 
-	error = fnorm(Vd-Vdref,mm,num_vect)/fnorm(Vdref,mm,num_vect)
-	
+	tmp1 = fnorm(Vd-Vdref,mm,num_vect)**2d0
+	call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+	tmp2 = fnorm(Vdref,mm,num_vect)**2d0
+	call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+	error = sqrt(norm1)/sqrt(norm2)		
 	
 	deallocate(Vdref)
 	deallocate(Vd)
@@ -1441,7 +1680,7 @@ subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbo
 	type(proctree)::ptree
 	type(mesh)::msh
 	type(Hstat)::stats
-	procedure(BF_MVP_blk)::blackbox_MVP_dat	
+	procedure(BMatVec)::blackbox_MVP_dat	
 	
 	
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
@@ -1593,7 +1832,7 @@ subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbo
 	type(proctree)::ptree
 	type(mesh)::msh
 	type(Hstat)::stats
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
+	procedure(BMatVec)::blackbox_MVP_dat
 	
 	
     level_butterfly=block_rand%level_butterfly
@@ -3550,7 +3789,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 	type(Hstat)::stats
 	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:),RandVectInL(:,:),RandVectOutL(:,:)
 	DT, allocatable :: matU_glo(:,:), matV_glo(:,:)
-	procedure(BF_MVP_blk)::blackbox_MVP_dat
+	procedure(BMatVec)::blackbox_MVP_dat
 	type(proctree)::ptree
 	type(mesh)::msh
 	real(kind=8)flop
@@ -3855,7 +4094,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(blockplus) :: Bplus_randomized
-	procedure(BF_MVP_blk)::blackbox_MVP_dat_inner,blackbox_MVP_dat_outter
+	procedure(BMatVec)::blackbox_MVP_dat_inner,blackbox_MVP_dat_outter
 	type(proctree)::ptree
 	type(mesh)::msh
 	error_inout=0

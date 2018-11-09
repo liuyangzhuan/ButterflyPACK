@@ -18,7 +18,7 @@ contains
 
 	
 	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_FULL(m,n,value_e,quant)
+	subroutine Zelem_FULL(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
@@ -41,7 +41,7 @@ contains
 			write(*,*)"unexpected type"
 			stop
 		end select	
-	end subroutine Z_elem_FULL
+	end subroutine Zelem_FULL
 
 end module APPLICATION_MODULE	
 
@@ -133,7 +133,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	call d_setdefaultoptions(option)
 	
 	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_FULL
+	ker%FuncZmn=>Zelem_FULL
 	ker%QuantApp=>quant
  
 

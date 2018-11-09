@@ -79,7 +79,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	time_tmp = 0
 	
  	! register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_EMSURF
+	ker%FuncZmn=>Zelem_EMSURF
 	ker%QuantApp=>quant	
 	
     quant%integral_points=6

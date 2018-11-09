@@ -20,7 +20,7 @@ contains
     ! real(kind=8) Memory
     ! DT ctemp
 	! type(matrixblock)::blocks
-	! procedure(Z_elem)::element_Zmn
+	! procedure(Zelem)::element_Zmn
 	
 	! integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
     ! Memory=0.
@@ -113,7 +113,7 @@ contains
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
 	! type(kernelquant)::ker
-	! procedure(Z_elem)::element_Zmn
+	! procedure(Zelem)::element_Zmn
 	
     ! if (level==0) then
         ! call butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn)
@@ -146,7 +146,7 @@ contains
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
 	! type(kernelquant)::ker
-    ! procedure(Z_elem)::element_Zmn
+    ! procedure(Zelem)::element_Zmn
 	
 	! group_m=blocks%row_group  ! Note: row_group and col_group interchanged here    
     ! group_n=blocks%col_group
@@ -446,7 +446,7 @@ contains
 	! type(matrixblock)::blocks
 	! type(mesh)::msh
 	! type(kernelquant)::ker
-	! procedure(Z_elem)::element_Zmn
+	! procedure(Zelem)::element_Zmn
 	
     ! level_butterfly=blocks%level_butterfly
     ! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here   
@@ -715,7 +715,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	
 	Memory = 0
@@ -784,7 +784,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row,frow
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	
 	integer cnt_tmp,rankFar,rankNear
@@ -1199,7 +1199,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
 	cnt_tmp	= 0
@@ -2064,7 +2064,7 @@ implicit none
 	type(Hoption)::option
 	type(kernelquant)::ker
 	type(matrixblock)::blocks,blockc(2)
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	integer pgno
 	type(grid),pointer::gd
@@ -2680,7 +2680,7 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:),norm_UVavrbynorm_Z(:)
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
 	real(kind=8), allocatable :: Singularsml(:)
@@ -3061,7 +3061,7 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
@@ -3390,7 +3390,7 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(matrixblock)::blocks
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(Hstat)::stats
 	
 	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),matU2D(:,:),matV2D(:,:),matU1D(:,:),matV1D(:,:)
@@ -3929,7 +3929,7 @@ implicit none
 	type(Hoption)::option
 	type(kernelquant)::ker
 	type(Hstat)::stats
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	integer pgno
 	type(grid),pointer::gd

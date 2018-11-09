@@ -23,7 +23,7 @@ subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
     DT value_e
 	type(mesh)::msh
 	type(kernelquant)::ker	
-	procedure(C_Z_elem), POINTER :: proc
+	procedure(C_Zelem), POINTER :: proc
 	
 	value_e=0
 	call c_f_procpointer(ker%C_FuncZmn, proc)
@@ -40,10 +40,10 @@ subroutine matvec_user_C(trans,M,N,num_vect,Vin,Vout,ker)
 	type(kernelquant)::ker
 	character trans
 	
-	procedure(C_MatVec), POINTER :: proc
+	procedure(C_HMatVec), POINTER :: proc
 	
-	call c_f_procpointer(ker%C_FuncMatVec, proc)
-	if(trans=='N')then  ! note that C_MatVec takes Nin Nout, instead of takes M,N, so if statement is needed here
+	call c_f_procpointer(ker%C_FuncHMatVec, proc)
+	if(trans=='N')then  ! note that C_HMatVec takes Nin Nout, instead of takes M,N, so if statement is needed here
 		call proc(trans//c_null_char,N,M,num_vect,Vin,Vout,ker%C_QuantApp)
 	else
 		call proc(trans//c_null_char,M,N,num_vect,Vin,Vout,ker%C_QuantApp)	
@@ -51,6 +51,31 @@ subroutine matvec_user_C(trans,M,N,num_vect,Vin,Vout,ker)
 	return
 	
 end subroutine matvec_user_C	
+
+
+
+subroutine Bmatvec_user_C(ker,block_o,trans,M,N,num_vect,Vin,Vout,a,b,ptree,stats,operand1)
+	implicit none
+	class(*)::ker	
+	class(*),optional::operand1	
+	type(matrixblock)::block_o
+	character trans
+	integer M, N, num_vect
+	type(proctree)::ptree
+	type(Hstat)::stats
+	DT :: Vin(:,:), Vout(:,:),a,b
+	procedure(C_BMatVec), POINTER :: proc
+	
+	select TYPE(ker)
+	type is (kernelquant)
+		call c_f_procpointer(ker%C_FuncBMatVec, proc)
+		if(trans=='N')then  ! note that C_HMatVec takes Nin Nout, instead of takes M,N, so if statement is needed here
+			call proc(trans//c_null_char,N,M,num_vect,Vin,Vout,ker%C_QuantApp,a,b)
+		else
+			call proc(trans//c_null_char,M,N,num_vect,Vin,Vout,ker%C_QuantApp,a,b)	
+		endif			
+	end select
+end subroutine Bmatvec_user_C
 
 
 
@@ -260,6 +285,11 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	call c_f_pointer(val_Cptr, val_i)
 	option%itermax=val_i
 	valid_opt=1
+	endif	
+	if(trim(str)=='powiter')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%powiter=val_i
+	valid_opt=1
 	endif
 	
 !**** double parameters 
@@ -325,7 +355,7 @@ end subroutine C_HODLR_Setoption
 	!ker_Cptr: the structure containing kernel quantities
 	!ptree_Cptr: the structure containing process tree
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
-	!C_QuantApp: the C_pointer to user-defined quantities required to sample mn^th entry of the matrix
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
 	!MPIcomm: user-provided MPI communicator
 subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_hodlr_construct")	
 	implicit none 
@@ -507,23 +537,18 @@ end subroutine C_HODLR_Construct
 
 
 !**** C interface of HODLR construction via blackbox matvec
-	!N: matrix size
-	!Nmin: leafsize in HODLR tree 
-	!tol: compression tolerance
-	!nlevel: the number of top levels that have been ordered
-	!tree: the order tree provided by the caller
-	!Permutation: return the permutation vector new2old (indexed from 1)
-	!N_loc: number of local row/column indices    
-	!ho_bf_Cptr: the structure containing HODLR         
-	!option_Cptr: the structure containing option         
-	!stats_Cptr: the structure containing statistics         
-	!msh_Cptr: the structure containing points and ordering information         
-	!ker_Cptr: the structure containing kernel quantities
-	!ptree_Cptr: the structure containing process tree
-	!C_FuncMatVec: the C_pointer to user-provided function to multiply A and A* with vectors
-	!C_QuantApp: the C_pointer to user-defined quantities required to sample mn^th entry of the matrix
-	!MPIcomm: user-provided MPI communicator
-subroutine C_HODLR_Construct_Matvec(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncMatVec,C_QuantApp,MPIcomm) bind(c, name="c_hodlr_construct_matvec")	
+	!N: matrix size (in)
+	!nlevel: the number of top levels that have been ordered (in)
+	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
+	!Permutation: return the permutation vector new2old (indexed from 1) (out)
+	!N_loc: number of local row/column indices (out)    
+	!ho_bf_Cptr: the structure containing HODLR (out)        
+	!option_Cptr: the structure containing option (in)        
+	!stats_Cptr: the structure containing statistics (inout)         
+	!msh_Cptr: the structure containing points and ordering information (out)        
+	!ker_Cptr: the structure containing kernel quantities (out)
+	!ptree_Cptr: the structure containing process tree (in)
+subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_hodlr_construct_matvec_init")	
 	implicit none 
 	integer N
 	
@@ -538,15 +563,14 @@ subroutine C_HODLR_Construct_Matvec(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,o
 	integer N_loc
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
-	integer MPIcomm
 	type(c_ptr) :: ho_bf_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: msh_Cptr
 	type(c_ptr) :: ker_Cptr
 	type(c_ptr) :: ptree_Cptr
-	type(c_ptr), intent(in),target :: C_QuantApp
-	type(c_funptr), intent(in),value,target :: C_FuncMatVec
+	! type(c_ptr), intent(in),target :: C_QuantApp
+	! type(c_funptr), intent(in),value,target :: C_FuncHMatVec
 	
 	type(Hoption),pointer::option	
 	type(Hstat),pointer::stats
@@ -598,9 +622,9 @@ subroutine C_HODLR_Construct_Matvec(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,o
     write(*,*) "   "
 	endif
 	
-	!**** register the user-defined function and type in ker 
-	ker%C_QuantApp => C_QuantApp
-	ker%C_FuncMatVec => C_FuncMatVec	
+	! !**** register the user-defined function and type in ker 
+	! ker%C_QuantApp => C_QuantApp
+	! ker%C_FuncHMatVec => C_FuncHMatVec	
 	
 
 	msh%Nunk = N
@@ -651,19 +675,6 @@ subroutine C_HODLR_Construct_Matvec(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,o
     if(ptree%MyID==Main_ID)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
-	
-
-	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"
-	N_unk_loc = msh%idxe-msh%idxs+1
-	call HODLR_randomized(ho_bf,matvec_user_C,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
-	
-    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
- 	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
-
-	
 	!**** return the permutation vector 
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
@@ -682,11 +693,283 @@ subroutine C_HODLR_Construct_Matvec(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,o
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 	
-end subroutine C_HODLR_Construct_Matvec
+end subroutine C_HODLR_Construct_Matvec_Init
+
+
+
+!**** C interface of HODLR construction via blackbox matvec
+	!ho_bf_Cptr: the structure containing HODLR (inout)        
+	!option_Cptr: the structure containing option (in)        
+	!stats_Cptr: the structure containing statistics (inout)        
+	!msh_Cptr: the structure containing points and ordering information (in)        
+	!ker_Cptr: the structure containing kernel quantities (inout)
+	!ptree_Cptr: the structure containing process tree (in)
+	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
+subroutine C_HODLR_Construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_hodlr_construct_matvec_compute")	
+	implicit none 
+
+    real(kind=8) para
+    real(kind=8) tolerance,h,lam
+    integer Primary_block, nn, mm, MyID_old,Maxlevel,give,need
+    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+	real(kind=8),parameter :: cd = 299792458d0
+	integer,allocatable:: groupmembers(:)
+	integer level
+	! type(matricesblock), pointer :: blocks_i
+	integer groupm
+	type(c_ptr) :: ho_bf_Cptr
+	type(c_ptr) :: option_Cptr
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: msh_Cptr
+	type(c_ptr) :: ker_Cptr
+	type(c_ptr) :: ptree_Cptr
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncHMatVec
+	
+	type(Hoption),pointer::option	
+	type(Hstat),pointer::stats
+	type(mesh),pointer::msh
+	type(kernelquant),pointer::ker
+	type(hobf),pointer::ho_bf
+	type(proctree),pointer::ptree	
+	integer seed_myid(50)
+	integer times(8)	
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
+	real(kind=8):: Memory=0d0,error
+	character(len=1024)  :: strings
+	integer N_unk_loc
+	
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(ho_bf_Cptr, ho_bf)
+	call c_f_pointer(msh_Cptr, msh)
+	call c_f_pointer(ker_Cptr, ker)	
+	
+	
+
+	!**** register the user-defined function and type in ker 
+	ker%C_QuantApp => C_QuantApp
+	ker%C_FuncHMatVec => C_FuncHMatVec	
+	
+
+	t1 = OMP_get_wtime()	
+    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"
+	N_unk_loc = msh%idxe-msh%idxs+1
+	call HODLR_randomized(ho_bf,matvec_user_C,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
+	
+    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished"
+    if(ptree%MyID==Main_ID)write(*,*) "    "
+ 	t2 = OMP_get_wtime()   
+	! write(*,*)t2-t1
+	
+	!**** return the C address of hodlr structures to C caller
+	ho_bf_Cptr=c_loc(ho_bf)
+	option_Cptr=c_loc(option)
+	stats_Cptr=c_loc(stats)
+	msh_Cptr=c_loc(msh)
+	ker_Cptr=c_loc(ker)
+	ptree_Cptr=c_loc(ptree)
+	
+end subroutine C_HODLR_Construct_Matvec_Compute
+
+
+!**** C interface of BF construction via blackbox matvec
+	!M,N: matrix size (in)
+	!M_loc,N_loc: number of local row/column indices (out)    
+	!bf_Cptr: the structure containing the block (out)        
+	!option_Cptr: the structure containing option (in)        
+	!stats_Cptr: the structure containing statistics (inout)        
+	!msh_Cptr: the structure containing points and ordering information combined from mshr_Cptr and mshc_Cptr (out)      
+	!mshr_Cptr: the structure containing points and ordering information for the row dimension (in)      
+	!mshc_Cptr: the structure containing points and ordering information for the column dimension (in)      
+	!ker_Cptr: the structure containing kernel quantities (out)
+	!ptree_Cptr: the structure containing process tree (in)
+subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bf_construct_matvec_init")	
+	implicit none 
+	integer M,N
+
+    integer Maxlevel
+    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+	integer,allocatable:: groupmembers(:)
+	integer level
+	integer M_loc,N_loc
+	type(c_ptr) :: bf_Cptr
+	type(c_ptr) :: option_Cptr
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: msh_Cptr,mshr_Cptr,mshc_Cptr
+	type(c_ptr) :: ker_Cptr
+	type(c_ptr) :: ptree_Cptr
+
+	type(Hoption),pointer::option	
+	type(Hstat),pointer::stats
+	type(mesh),pointer::msh,mshr,mshc
+	type(kernelquant),pointer::ker
+	type(matrixblock),pointer::blocks
+	type(proctree),pointer::ptree	
+	integer seed_myid(50)
+	integer times(8)	
+	real(kind=8) t1,t2
+	character(len=1024)  :: strings
+	
+	!**** allocate HODLR solver structures 
+	allocate(blocks)
+	allocate(msh)
+	allocate(ker)
+
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(mshr_Cptr, mshr)
+	call c_f_pointer(mshc_Cptr, mshc)
+	
+	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',ptree%nproc
+ 	
+ 	threads_num=1
+    CALL getenv("OMP_NUM_THREADS", strings)
+	strings = TRIM(strings)	
+	if(LEN_TRIM(strings)>0)then
+		read(strings , *) threads_num
+	endif
+	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	call OMP_set_num_threads(threads_num)
+	
+	!**** create a random seed		
+	call DATE_AND_TIME(values=times)     ! Get the current time 
+	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+	! seed_myid(1) = myid*1000
+	! call RANDOM_SEED(PUT=seed_myid)
+	call init_random_seed()
+	
+	! if(ptree%MyID==Main_ID)then
+    ! write(*,*) "HODLR_BUTTERFLY_SOLVER"
+    ! write(*,*) "   "
+	! endif
+	
+	! !**** register the user-defined function and type in ker 
+	! ker%C_QuantApp => C_QuantApp
+	! ker%C_FuncHMatVec => C_FuncHMatVec	
+	
+	call assert(mshr%Nunk==M,'mshr%Nunk\=M')
+	call assert(mshc%Nunk==N,'mshc%Nunk\=N')
+	call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+	
+	msh%Nunk = N+M
+	msh%Maxgroup=mshc%Maxgroup*2+1
+	allocate (msh%basis_group(msh%Maxgroup))
+	msh%basis_group(1)%head=1
+	msh%basis_group(1)%tail=N+M
+	msh%basis_group(1)%pgno=1
+	call copy_basis_group(mshr%basis_group,1,mshr%Maxgroup,msh%basis_group,2,msh%Maxgroup,0)
+	call copy_basis_group(mshc%basis_group,1,mshc%Maxgroup,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
+	
+	blocks%level=1
+	blocks%col_group=3
+	blocks%row_group=2
+	blocks%pgno=1			
+	blocks%headm=msh%basis_group(blocks%row_group)%head
+	blocks%headn=msh%basis_group(blocks%col_group)%head
+	blocks%M=M
+	blocks%N=N
+	blocks%style = 2
+	
+	
+	Maxlevel = ceiling_safe(log(dble(msh%Maxgroup)) / log(2d0))
+	if(blocks%level>option%LRlevel)then
+		blocks%level_butterfly = 0 ! low rank below LRlevel
+	else 				
+		blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly 
+	endif	
+	
+	call ComputeParallelIndices(Maxlevel,blocks,blocks%pgno,ptree,msh,0)
+		
+		
+		
+	M_loc = blocks%M_loc	
+	N_loc = blocks%N_loc	
+		
+
+	!**** return the C address of hodlr structures to C caller
+	bf_Cptr=c_loc(blocks)
+	option_Cptr=c_loc(option)
+	stats_Cptr=c_loc(stats)
+	msh_Cptr=c_loc(msh)
+	ker_Cptr=c_loc(ker)
+	ptree_Cptr=c_loc(ptree)
+	
+end subroutine C_BF_Construct_Matvec_Init
 
 
 
 
+
+!**** C interface of BF construction via blackbox matvec
+	!bf_Cptr: the structure containing the block (inout)        
+	!option_Cptr: the structure containing option (in)        
+	!stats_Cptr: the structure containing statistics (inout)        
+	!msh_Cptr: the structure containing points and ordering information (in)    
+	!ker_Cptr: the structure containing kernel quantities (inout)
+	!ptree_Cptr: the structure containing process tree (in)
+	!C_FuncBMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)	
+subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncBMatVec,C_QuantApp) bind(c, name="c_bf_construct_matvec_compute")	
+	implicit none 
+
+    integer Maxlevel
+    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+	integer,allocatable:: groupmembers(:)
+	integer level
+	type(c_ptr) :: bf_Cptr
+	type(c_ptr) :: option_Cptr
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: msh_Cptr
+	type(c_ptr) :: ker_Cptr
+	type(c_ptr) :: ptree_Cptr
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncBMatVec
+
+	type(Hoption),pointer::option	
+	type(Hstat),pointer::stats
+	type(mesh),pointer::msh
+	type(kernelquant),pointer::ker
+	type(matrixblock),pointer::blocks
+	type(proctree),pointer::ptree	
+	integer seed_myid(50)
+	integer times(8)	
+	real(kind=8) t1,t2,error
+	
+	!**** allocate HODLR solver structures 
+
+
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(msh_Cptr, msh)
+	call c_f_pointer(bf_Cptr, blocks)
+	call c_f_pointer(ker_Cptr, ker)
+	
+	
+	! !**** register the user-defined function and type in ker 
+	ker%C_QuantApp => C_QuantApp
+	ker%C_FuncBMatVec => C_FuncBMatVec	
+	
+	t1 = OMP_get_wtime()	
+    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based BF construction......"	
+	
+	call BF_randomized(blocks%level_butterfly,option%rank0,option%rankrate,blocks,ker,Bmatvec_user_C,error,'CMatVec',option,stats,ptree,msh) 
+
+	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based BF construction finished"
+	
+	!**** return the C address of hodlr structures to C caller
+	bf_Cptr=c_loc(blocks)
+	option_Cptr=c_loc(option)
+	stats_Cptr=c_loc(stats)
+	msh_Cptr=c_loc(msh)
+	ker_Cptr=c_loc(ker)
+	ptree_Cptr=c_loc(ptree)
+	
+end subroutine C_BF_Construct_Matvec_Compute
 
 
 
@@ -795,6 +1078,68 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 end subroutine C_HODLR_Solve
 
 
+	
+
+!**** C interface of butterfly-vector multiplication
+	!xin: input vector  
+    !Ninloc:size of local input vectors	
+	!xout: output vector        
+	!Noutloc:size of local output vectors	
+	!Ncol: number of vectors     
+	!bf_for_Cptr: the structure containing butterfly                
+	!stats_Cptr: the structure containing statistics         
+	!ptree_Cptr: the structure containing process tree
+subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,stats_Cptr,ptree_Cptr,a,b) bind(c, name="c_bf_mult")	
+	implicit none 
+	real(kind=8) t1,t2
+	integer Ninloc,Noutloc,Ncol
+	DT::xin(Ninloc,Ncol),xout(Noutloc,Ncol),a,b
+	
+	character(kind=c_char,len=1) :: trans(*)
+	type(c_ptr), intent(in) :: bf_for_Cptr
+	type(c_ptr), intent(in) :: ptree_Cptr	
+	type(c_ptr), intent(in) :: stats_Cptr
+	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
+	
+	integer strlen
+	character(len=:),allocatable :: str
+	type(Hstat),pointer::stats
+	type(matrixblock),pointer::blocks
+	! type(hobf),pointer::ho_bf_inv
+	type(proctree),pointer::ptree	
+
+	t1 = OMP_get_wtime()
+
+	strlen=1
+	do while(trans(strlen) /= c_null_char)
+		strlen = strlen + 1
+	enddo
+	strlen = strlen -1
+	allocate(character(len=strlen) :: str)
+	str = transfer(trans(1:strlen), str)	
+	
+	call c_f_pointer(bf_for_Cptr, blocks)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	
+	if(trim(str)=='N')then
+		call BF_block_MVP_dat(blocks,trim(str),Noutloc,Ninloc,Ncol,xin,xout,a,b,ptree,stats)	
+	else
+		call BF_block_MVP_dat(blocks,trim(str),Ninloc,Noutloc,Ncol,xin,xout,a,b,ptree,stats)
+	endif
+	
+	t2 = OMP_get_wtime() 
+	
+	stats%Time_C_Mult = stats%Time_C_Mult + t2-t1
+	stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+	
+	! write(*,*)t2-t1	
+	deallocate(str)
+end subroutine C_BF_Mult	
+	
+	
+	
+	
 
 !**** C interface of HODLR-vector multiplication
 	!xin: input vector  
@@ -936,6 +1281,20 @@ subroutine C_HODLR_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_hodlr_deletehobf")
 	ho_bf_Cptr=c_null_ptr
 	
 end subroutine C_HODLR_DeleteHOBF
+
+
+!**** C interface of deleting a BF 
+	!bf_Cptr: the structure containing BF
+subroutine C_BF_DeleteBF(bf_Cptr) bind(c, name="c_bf_deletebf")	
+	implicit none 
+	type(c_ptr), intent(inout) :: bf_Cptr
+	type(matrixblock),pointer::blocks
+
+	call c_f_pointer(bf_Cptr, blocks)
+	call delete_blocks(blocks,1)
+	deallocate(blocks)
+	bf_Cptr=c_null_ptr
+end subroutine C_BF_DeleteBF
 
 
 

@@ -918,9 +918,9 @@ if(allocated(msh%new2old))deallocate(msh%new2old)
 if(allocated(msh%old2new))deallocate(msh%old2new)
 if(allocated(msh%pretree))deallocate(msh%pretree)
 if(allocated(msh%basis_group))then
-do ii=1,msh%Maxgroup
-	if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
-enddo
+! do ii=1,msh%Maxgroup
+	! if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
+! enddo
 deallocate(msh%basis_group)
 endif
 
@@ -985,6 +985,24 @@ if(allocated(stats%rankmin_of_level))deallocate(stats%rankmin_of_level)
 if(allocated(stats%rankmax_of_level_global))deallocate(stats%rankmax_of_level_global)
 
 end subroutine delete_Hstat
+
+recursive subroutine copy_basis_group(basis_group1,node1,Maxgroup1,basis_group2,node2,Maxgroup2,offset)
+implicit none 
+type(basisgroup):: basis_group1(:),basis_group2(:)
+integer node1,node2,Maxgroup1,Maxgroup2,offset
+if(node2<=Maxgroup2 .and. node1<=Maxgroup1)then
+
+	basis_group2(node2)%head =basis_group1(node1)%head+offset 
+	basis_group2(node2)%tail =basis_group1(node1)%tail+offset 
+	basis_group2(node2)%pgno =basis_group1(node1)%pgno
+	 
+	call copy_basis_group(basis_group1,node1*2,Maxgroup1,basis_group2,node2*2,Maxgroup2,offset)
+	call copy_basis_group(basis_group1,node1*2+1,Maxgroup1,basis_group2,node2*2+1,Maxgroup2,offset)
+endif
+
+end subroutine copy_basis_group
+
+
 
 subroutine print_butterfly_size_rank(block_i,tolerance)
 use HODLR_DEFS
@@ -3459,6 +3477,7 @@ subroutine SetDefaultOptions(option)
 	option%rank0=32
 	option%rankrate=1.2d0
 	option%itermax=10
+	option%powiter=0
 
 end subroutine SetDefaultOptions	
 
@@ -3493,6 +3512,7 @@ subroutine CopyOptions(option,option1)
 	option1%rank0 = option%rank0
 	option1%rankrate = option%rankrate
 	option1%itermax = option%itermax
+	option1%powiter = option%powiter
 
 end subroutine CopyOptions	
 

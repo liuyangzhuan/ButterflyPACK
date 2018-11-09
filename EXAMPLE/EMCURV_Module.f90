@@ -44,7 +44,7 @@ contains
 
 
 	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_EMCURV(m,n,value_e,quant)
+	subroutine Zelem_EMCURV(m,n,value_e,quant)
 		
 		use z_HODLR_DEFS
 		implicit none
@@ -98,7 +98,7 @@ contains
 			
 		return
 		
-	end subroutine Z_elem_EMCURV	
+	end subroutine Zelem_EMCURV	
 	
 
 	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
@@ -821,8 +821,8 @@ subroutine C_EMCURV_Sample(m,n,value,quant_emcurv_Cptr) bind(c, name="c_emcurv_s
 
 	call c_f_pointer(quant_emcurv_Cptr, quant)
 	QuantApp=>quant
-	!!!!!  m,n changed to m+1,n+1 because Z_elem_EMCURV assumes indices staring from 1
-	call Z_elem_EMCURV(m+1,n+1,value,QuantApp)
+	!!!!!  m,n changed to m+1,n+1 because Zelem_EMCURV assumes indices staring from 1
+	call Zelem_EMCURV(m+1,n+1,value,QuantApp)
 end subroutine C_EMCURV_Sample
 
 	

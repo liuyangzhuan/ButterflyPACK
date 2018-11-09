@@ -19,7 +19,7 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	type(mesh)::msh
 	type(kernelquant)::ker	
 	
-	procedure(F_Z_elem), POINTER :: proc
+	procedure(F_Zelem), POINTER :: proc
 	value_e=0
 	proc => ker%FuncZmn
 	call proc(msh%new2old(edge_m),msh%new2old(edge_n),value_e,ker%QuantApp)
@@ -51,7 +51,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	
 	
     ! Memory_direct_forward=0
@@ -179,7 +179,7 @@ subroutine full_construction(blocks,msh,ker,element_Zmn)
 	type(matrixblock)::blocks
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	
     mm=blocks%M 
 	head_m=blocks%headm
@@ -219,7 +219,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
 	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
     type(kernelquant)::ker
     type(mesh)::msh
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	type(proctree)::ptree
 	type(Hstat)::stats
 	integer,allocatable::order_m(:),order_n(:)

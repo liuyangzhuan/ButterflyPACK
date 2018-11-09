@@ -17,7 +17,7 @@ implicit none
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as two LR products
-	subroutine Z_elem_LR(m,n,value_e,quant)
+	subroutine Zelem_LR(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
@@ -44,11 +44,11 @@ contains
 			write(*,*)"unexpected type"
 			stop
 		end select	
-	end subroutine Z_elem_LR
+	end subroutine Zelem_LR
 
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
-	subroutine Z_elem_FULL(m,n,value_e,quant)
+	subroutine Zelem_FULL(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
@@ -67,7 +67,7 @@ contains
 			write(*,*)"unexpected type"
 			stop
 		end select	
-	end subroutine Z_elem_FULL
+	end subroutine Zelem_FULL
 	
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use d_HODLR_DEFS
@@ -202,7 +202,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	
 	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_LR
+	ker%FuncZmn=>Zelem_LR
 	ker%QuantApp=>quant
  
     !**** Get matrix size and rank and create the matrix
@@ -231,7 +231,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	
 	
 	! !**** register the user-defined function and type in ker 
-	! ker%FuncZmn=>Z_elem_FULL
+	! ker%FuncZmn=>Zelem_FULL
 	! ker%QuantApp=>quant
 
     ! !**** Get matrix size and rank and create the matrix
@@ -334,7 +334,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	call d_CopyOptions(option,option1)
 	option1%nogeo=1
 	option1%xyzsort=NATURAL
-	ker1%FuncMatVec=>HODLR_MVP_OneHODLR
+	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1	
 	quant1%ho_bf=>ho_bf
 	quant1%msh=>msh

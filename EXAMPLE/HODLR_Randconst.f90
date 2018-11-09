@@ -16,7 +16,7 @@ implicit none
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as full matrix
-	subroutine Z_elem_FULL(m,n,value_e,quant)
+	subroutine Zelem_FULL(m,n,value_e,quant)
 		use z_HODLR_DEFS
 		implicit none 
 		
@@ -32,7 +32,7 @@ contains
 			write(*,*)"unexpected type"
 			stop
 		end select	
-	end subroutine Z_elem_FULL
+	end subroutine Zelem_FULL
 	
 
 
@@ -334,8 +334,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     ! ker%wavenum=2*pi/ker%wavelength
 
 	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_FULL
-	ker%FuncMatVec=>HODLR_MVP_Fullmat
+	ker%FuncZmn=>Zelem_FULL
+	ker%FuncHMatVec=>HODLR_MVP_Fullmat
 	ker%QuantApp=>quant	
 	quant%ptree=>ptree
 	
@@ -461,8 +461,8 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	call z_CopyOptions(option,option1)
 	option1%nogeo=1
 	option1%xyzsort=NATURAL
-	ker1%FuncZmn=>Z_elem_FULL
-	ker1%FuncMatVec=>HODLR_MVP_OneHODLR
+	ker1%FuncZmn=>Zelem_FULL
+	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1	
 	quant1%ho_bf=>ho_bf
 	quant1%msh=>msh

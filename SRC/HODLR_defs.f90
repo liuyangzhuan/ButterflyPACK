@@ -94,10 +94,10 @@ module HODLR_DEFS
 		 integer pgno ! process group number of this cluster
          integer head ! head index
          integer tail ! tail index
-         integer level ! level of this cluster group 
-         real(kind=8):: radius=0 ! geomerical radius of this group 
+         ! integer level ! level of this cluster group 
+         ! real(kind=8):: radius=0 ! geomerical radius of this group 
 		 real(kind=8):: boundary(2)=0 ! seperators used to split this group into children group
-         real(kind=8),allocatable:: center(:) ! geometrical center of this group
+         ! real(kind=8),allocatable:: center(:) ! geometrical center of this group
      end type basisgroup
 
 	 
@@ -267,6 +267,7 @@ module HODLR_DEFS
 		real(kind=8) tol_LS       ! tolerance in pseudo inverse
 		real(kind=8) tol_Rdetect  ! tolerance to detect numerical ranks
 		real(kind=8) tol_rand     ! tolerance for randomized contruction 
+		integer powiter     ! order of power iteration in randomized LR
 		integer::schulzorder ! order (2 or 3) of schultz iteration 
 		integer::schulzlevel ! (I+B)^-1 is computed by schultz iteration for butterfly with more than schulzlevel levels 
 		integer::rank0 ! intial guess of ranks
@@ -317,27 +318,19 @@ module HODLR_DEFS
 		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 		
 		class(*),pointer :: QuantApp ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Z_elem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_MatVec),nopass,pointer :: FuncMatVec ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
+		procedure(F_Zelem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 		
 		type(c_ptr),pointer :: C_QuantApp ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z 
 		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
-		type(c_funptr),pointer :: C_FuncMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+		type(c_funptr),pointer :: C_FuncHMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+		type(c_funptr),pointer :: C_FuncBMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block		
 	end type kernelquant
 	
 	
 	abstract interface
-		! subroutine HOBF_MVP_blk(trans,N,num_vect_sub,Vin,Vout,msh,operand)
-			! import::mesh
-			! implicit none
-			! character trans
-			! integer, INTENT(in):: N, num_vect_sub
-			! DT :: Vin(:,:), Vout(:,:)
-			! type(mesh)::msh
-			! class(*)::operand
-		! end subroutine HOBF_MVP_blk
 
-		subroutine BF_MVP_blk(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
+		subroutine BMatVec(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 			import :: matrixblock,proctree,Hstat
 			implicit none
 			class(*)::operand	
@@ -348,52 +341,52 @@ module HODLR_DEFS
 			type(proctree)::ptree
 			type(Hstat)::stats
 			DT :: Vin(:,:), Vout(:,:),a,b
-		end subroutine BF_MVP_blk
+		end subroutine BMatVec
 
-		subroutine Z_elem(edge_m,edge_n,value,msh,ker)
+		subroutine Zelem(edge_m,edge_n,value,msh,ker)
 			import::mesh,kernelquant
 			implicit none
 			integer edge_m, edge_n
 			DT value
 			type(mesh)::msh
 			type(kernelquant)::ker
-		end subroutine Z_elem
+		end subroutine Zelem
 		
 		
-		subroutine F_Z_elem(m,n,val,quant) ! m,n represents indices in natural order
+		subroutine F_Zelem(m,n,val,quant) ! interface of user-defined element evaluation routine in Fortran. m,n represents indices in natural order
 		  import::mesh,kernelquant
 		  class(*),pointer :: quant
 		  integer, INTENT(IN):: m,n
 		  DT::val 
-		end subroutine F_Z_elem
+		end subroutine F_Zelem
 
-		subroutine C_Z_elem (m,n,val,quant) ! m,n represents indices in natural order
+		subroutine C_Zelem (m,n,val,quant) ! interface of user-defined element evaluation routine in C. m,n represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
 		  integer(kind=C_INT), INTENT(IN):: m,n
 		  CBIND_DT::val 
-		end subroutine C_Z_elem		
+		end subroutine C_Zelem		
 
 
-		subroutine MatVec(trans,M,N,num_vect,Vin,Vout,ker)
+		subroutine HMatVec(trans,M,N,num_vect,Vin,Vout,ker)
 			import::mesh,kernelquant,proctree,Hstat
 			implicit none
 		    integer, INTENT(IN):: M,N,num_vect
 		    DT::Vin(:,:),Vout(:,:) 
 			type(kernelquant)::ker
 		    character trans
-		end subroutine MatVec		
+		end subroutine HMatVec		
 		
 		
-		subroutine F_MatVec(trans,M,N,num_vect,Vin,Vout,quant) 
+		subroutine F_HMatVec(trans,M,N,num_vect,Vin,Vout,quant) ! interface of user-defined HODLR MatVec routine in Fortran. 
 		  import::mesh,proctree,Hstat
 		  class(*),pointer :: quant
 		  integer, INTENT(IN):: M,N,num_vect
 		  DT::Vin(:,:),Vout(:,:) 
 		  character trans
-		end subroutine F_MatVec
+		end subroutine F_HMatVec
 
-		subroutine C_MatVec(trans,Nin,Nout,num_vect,Vin,Vout,quant) 
+		subroutine C_HMatVec(trans,Nin,Nout,num_vect,Vin,Vout,quant) ! interface of user-defined HODLR MatVec routine in C. 
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  import::mesh,proctree,Hstat
 		  type(c_ptr) :: quant
@@ -403,7 +396,17 @@ module HODLR_DEFS
 		  type(proctree)::ptree
 		  type(Hstat)::stats
 		  character(kind=c_char,len=1) :: trans(*)
-		end subroutine C_MatVec
+		end subroutine C_HMatVec
+		
+		
+		subroutine C_BMatVec(trans,Nin,Nout,num_vect,Vin,Vout,quant,a,b) ! interface of user-defined Block MatVec routine in C.
+			USE, INTRINSIC :: ISO_C_BINDING
+			type(c_ptr) :: quant	
+			character(kind=c_char,len=1) :: trans(*)
+			integer(kind=C_INT), INTENT(IN):: Nin, Nout, num_vect
+			CBIND_DT :: Vin(Nin,num_vect),Vout(Nout,num_vect),a,b
+		end subroutine C_BMatVec
+		
 		
 		
 		

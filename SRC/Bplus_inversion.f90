@@ -732,7 +732,7 @@ end do
 agent_bplus%Lplus = bplus_i%Lplus - ll_s + 1
 agent_bplus%row_group = 	row_group
 agent_bplus%col_group = 	row_group
-agent_bplus%level = msh%basis_group(row_group)%level
+agent_bplus%level = GetTreelevel(row_group)-1
 
 do ll=1,agent_bplus%Lplus
 	agent_bplus%LL(ll)%Nbound = 0

@@ -45,7 +45,7 @@ real(kind=8) function gram_distance(edgem,edgen,ker,msh,element_Zmn)
     integer edgem, edgen
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Z_elem)::element_Zmn
+	procedure(Zelem)::element_Zmn
 	DT r1,r2,r3,r4
 ! l2 distance	
 #if 0	
@@ -96,7 +96,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-    procedure(Z_elem)::element_Zmn
+    procedure(Zelem)::element_Zmn
 	integer,allocatable:: perms(:)
 	
 	
@@ -167,7 +167,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	do level=nlevel_pre,0,-1
 		idxstart=1
 		do group=2**level, 2**(level+1)-1
-			msh%basis_group(group)%level=level
+			! msh%basis_group(group)%level=level
 
 			if(level==nlevel_pre)then
 				if(nlevel_pre==0)then
@@ -200,7 +200,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 
 	do level=nlevel_pre, Maxlevel
 		do group=2**level, 2**(level+1)-1
-			msh%basis_group(group)%level=level
+			! msh%basis_group(group)%level=level
 								
 			if(option%xyzsort==NATURAL)then !natural ordering		 
 				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
@@ -825,7 +825,7 @@ subroutine BPlus_structuring(ho_bf1,option,msh,ptree)
 									blocks => ho_bf1%levels(level_c)%BP(ii)%LL(ll+1)%matrices_block(cnt)
 									blocks%row_group = group_m
 									blocks%col_group = group_n
-									blocks%level = msh%basis_group(group_m)%level
+									blocks%level = GetTreelevel(group_m)-1
 
 									blocks%pgno = msh%basis_group(group_m)%pgno										
 									blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1

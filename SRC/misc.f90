@@ -795,28 +795,6 @@ if(present(Flops))Flops=0d0
 
 		mn=min(M,N)	
 
-		nb1Dc=N
-		nb1Dr=ceiling_safe(M/dble(nproc))
-		allocate(M_p_1D(nproc,2))
-		do ii=1,nproc
-			M_p_1D(ii,1) = (ii-1)*nb1Dr+1
-			M_p_1D(ii,2) = ii*nb1Dr
-		enddo	
-		M_p_1D(nproc,2) = M	
-		
-		
-		
-		!!!!**** generate 1D grid blacs quantities
-		ctxt1D = ptree%pgrp(pgno)%ctxt1D
-		jj = ptree%myid-ptree%pgrp(pgno)%head+1
-		idxs_o=M_p_1D(jj,1) 
-		idxe_o=M_p_1D(jj,2)			
-		myArows = idxe_o-idxs_o+1
-		myAcols = N	
-		allocate(mat1D(myArows,myAcols))
-		mat1D=0
-		call descinit( descsMat1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows,1), info )			
-
 		
 		!!!!**** generate 2D grid blacs quantities
 		ctxt = ptree%pgrp(pgno)%ctxt		
@@ -829,12 +807,13 @@ if(present(Flops))Flops=0d0
 			mat2D=0			
 		else 
 			descsMat2D(2)=-1
+			allocate(mat2D(1,1))
+			mat2D=0	
 		endif
 
 
 		!!!!**** redistribution of input matrix
-		call Redistribute1Dto1D(mat,M_p,0,pgno,mat1D,M_p_1D,0,pgno,N,ptree)
-		call pgemr2df90(M, N, mat1D, 1, 1, descsMat1D, mat2D, 1, 1, descsMat2D, ctxt1D)		
+		call Redistribute1Dto2D(mat,M_p,0,pgno,mat2D,M,0,pgno,N,ptree)	
 		
 
 		! Compute RRQR 
@@ -866,15 +845,10 @@ if(present(Flops))Flops=0d0
 		call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm,ierr)
 		
 		!!!!**** redistribution of output matrix
-		call pgemr2df90(M, N, mat2D, 1, 1, descsMat2D, mat1D, 1, 1, descsMat1D, ctxt1D)	
-		call Redistribute1Dto1D(mat1D,M_p_1D,0,pgno,mat,M_p,0,pgno,N,ptree)
-				
+		call Redistribute2Dto1D(mat2D,M,0,pgno,mat,M_p,0,pgno,N,ptree)		
 		
-		if(myrow/=-1 .and. mycol/=-1)then
-			deallocate(mat2D)
-		endif
-		deallocate(M_p_1D)
-		deallocate(mat1D)	
+		
+		deallocate(mat2D)
 	endif	
 	
 end subroutine PComputeRange		
@@ -3518,7 +3492,7 @@ end subroutine Redistribute2Dto1D
 
 
 
-! get the level of a node in a tree. gno is the node number starting from root (1)
+! get the level (indexed from 1) of a node in a tree. gno is the node number starting from root (1). Note that the process tree levels are indexed from 1, the basis_group levels are indexed from 0  
 integer function GetTreelevel(gno) 
 	implicit none 
 	integer gno,ii,level

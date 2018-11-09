@@ -29,7 +29,7 @@ contains
 
 	
 	!**** user-defined subroutine to sample Z_mn
-	subroutine Z_elem_RBF(m,n,value_e,quant)
+	subroutine Zelem_RBF(m,n,value_e,quant)
 		use d_HODLR_DEFS
 		implicit none 
 		
@@ -53,7 +53,7 @@ contains
 			write(*,*)"unexpected type"
 			stop
 		end select	
-	end subroutine Z_elem_RBF
+	end subroutine Zelem_RBF
 
 end module APPLICATION_MODULE	
 
@@ -168,7 +168,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	call d_setdefaultoptions(option)
 	
 	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Z_elem_RBF
+	ker%FuncZmn=>Zelem_RBF
 	ker%QuantApp=>quant
  
 
