@@ -1347,7 +1347,10 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	allocate(block_rand%ButterflyV%blocks(1))		
 	allocate(block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc,rank))
 	allocate(block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc,rank))
-				
+	block_rand%ButterflyU%blocks(1)%mdim=block_rand%M_loc
+	block_rand%ButterflyU%blocks(1)%ndim=rank
+	block_rand%ButterflyV%blocks(1)%mdim=block_rand%N_loc
+	block_rand%ButterflyV%blocks(1)%ndim=rank
 	
 	!!!!**** redistribution into 1D grid conformal to leaf sizes
 	call Redistribute2Dto1D(matQUt2D,block_rand%M,0,block_rand%pgno,block_rand%ButterflyU%blocks(1)%matrix,block_rand%M_p,0,block_rand%pgno,rank,ptree)	
