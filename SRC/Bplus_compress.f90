@@ -3309,7 +3309,11 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 			!**** update fnorm of UV and matUmatV 
 			call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)	
 			stats%Flop_Fill = stats%Flop_Fill + flop		
-			call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
+			if(rankup<8)then
+				call LR_FnormUp(matU,matV,M,N,rank-rankup,rankup,normA,normUV,tolerance*1e-2,Flops=flop)
+			else 
+				call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
+			endif
 			stats%Flop_Fill = stats%Flop_Fill + flop
 			
 			if(normA>SafeUnderflow)then

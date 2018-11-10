@@ -437,7 +437,44 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 
 end subroutine LR_ReCompression		
 	
+
+subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 	
+	
+    use HODLR_DEFS
+    implicit none
+	
+	integer N,M,ruv,rup
+	real(kind=8) normUVupdate,normUV,inner_UV
+	real(kind=8),optional:: Flops
+	real(kind=8):: flop
+	real(kind=8) tolerance
+	integer i, j, k, ii, jj, indx, rank_1, rank_2
+	integer rank, ranknew,mn, ranknew1, ranknew2
+	DT::ctemp,inner_V,inner_U
+	DT::matU(:,:),matV(:,:)	
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
+	real(kind=8), allocatable :: Singularsml(:),Singular(:)
+	integer,allocatable :: jpvt(:),jpvt1(:),jpvt2(:)
+
+	if(present(Flops))Flops=0	
+	
+		inner_UV=0
+		!$omp parallel do default(shared) private(j,i,k,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+		do j=1,ruv
+			do k=1,rup
+			inner_U = dot_product(matU(:,j),matU(:,ruv+k))
+			inner_V = dot_product(matV(j,:),matV(ruv+k,:))
+			inner_UV=inner_UV+2*dble(inner_U*inner_V)
+			enddo
+		enddo
+		!$omp end parallel do	
+	
+		normUV = sqrt(normUV**2d0+normUVupdate**2d0+inner_UV)
+	
+		if(present(Flops))Flops= Flops + (M+N)*ruv*rup
+	
+end subroutine LR_FnormUp	
 
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
