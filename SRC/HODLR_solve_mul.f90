@@ -43,7 +43,7 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
 		
 		deallocate(r0_initial)
 	else 			
-		call MVM_Z_factorized(Ns_loc,num_vectors,b,x,hobf_inverse,ptree,stats)
+		call MVM_Z_factorized('N',Ns_loc,num_vectors,b,x,hobf_inverse,ptree,stats)
 	end if	
  
  
@@ -256,7 +256,7 @@ end subroutine HODLR_Solution
 	if(precond==NOPRECON)then
 		y=x
 	else if (precond==HODLRPRECON)then 
-		call MVM_Z_factorized(nn_loc,1,x,y,hobf_inverse,ptree,stats)	 
+		call MVM_Z_factorized('N',nn_loc,1,x,y,hobf_inverse,ptree,stats)	 
 	endif
 	end subroutine HODLR_ApplyPrecon
 
@@ -340,7 +340,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 end subroutine HODLR_Test_Solve_error
 	
 
-subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
+subroutine MVM_Z_factorized(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 
     use HODLR_DEFS
     
@@ -350,7 +350,7 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	integer level_c,rowblock,head,tail
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors,pp
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
-    character chara
+    character trans,trans_tmp
     real(kind=8) a,b,c,d
     DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
@@ -368,7 +368,13 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	type(Hstat)::stats
 		
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)	 
-	   		
+	  
+	trans_tmp = trans
+	if(trans=='C')then
+		trans_tmp = 'T'
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+	  
 	! get the right multiplied vectors
 	ctemp1=1.0d0 ; ctemp2=0.0d0
 	! allocate(vec_old(Ns,num_vectors))
@@ -387,12 +393,12 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 			idx_end_loc = tail-idx_start_glo+1					
 		
 			if(level==ho_bf1%Maxlevel+1)then	
-				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vectors,&
+				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				stats%Flop_Sol = stats%Flop_Sol + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)
 			else 
 				stats%Flop_Tmp=0
-				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
+				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
 				stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 				
 			endif
@@ -402,7 +408,12 @@ subroutine MVM_Z_factorized(Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	! Vout = vec_new(1:Ns,1)
 	! deallocate(vec_old)
 	deallocate(vec_new)	
-	 
+
+	if(trans=='C')then
+		Vout=conjg(cmplx(Vout,kind=8))
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+	
     return                
 
 end subroutine MVM_Z_factorized

@@ -1208,6 +1208,74 @@ end subroutine C_HODLR_Mult
 
 
 
+
+!**** C interface of HODLR(inverse)-vector multiplication
+	!xin: input vector  
+    !Ninloc:size of local input vectors	
+	!xout: output vector        
+	!Noutloc:size of local output vectors	
+	!Ncol: number of vectors     
+	!ho_bf_for_Cptr: the structure containing HODLR         
+	!option_Cptr: the structure containing option         
+	!stats_Cptr: the structure containing statistics         
+	!ptree_Cptr: the structure containing process tree
+subroutine C_HODLR_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_inv_mult")	
+	implicit none 
+	real(kind=8) t1,t2
+	integer Ninloc,Noutloc,Ncol
+	DT::xin(Ninloc,Ncol),xout(Noutloc,Ncol)
+	
+	character(kind=c_char,len=1) :: trans(*)
+	type(c_ptr), intent(in) :: ho_bf_for_Cptr
+	type(c_ptr), intent(in) :: ptree_Cptr	
+	type(c_ptr), intent(in) :: option_Cptr
+	type(c_ptr), intent(in) :: stats_Cptr
+	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
+	
+	integer strlen
+	character(len=:),allocatable :: str
+	type(Hoption),pointer::option	
+	type(Hstat),pointer::stats
+	type(hobf),pointer::ho_bf1
+	! type(hobf),pointer::ho_bf_inv
+	type(proctree),pointer::ptree	
+
+	t1 = OMP_get_wtime()
+
+	strlen=1
+	do while(trans(strlen) /= c_null_char)
+		strlen = strlen + 1
+	enddo
+	strlen = strlen -1
+	allocate(character(len=strlen) :: str)
+	str = transfer(trans(1:strlen), str)	
+	
+	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	
+    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply ......"
+	
+	call assert(Noutloc==Ninloc,"not square Z")
+	call MVM_Z_factorized(trim(str),Noutloc,Ncol,xin,xout,ho_bf1,ptree,stats)
+	! need to use another Flop counter for this operation in future
+
+    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply finished"
+    ! if(ptree%MyID==Main_ID)write(*,*) "    "	
+	
+	t2 = OMP_get_wtime() 
+	
+	stats%Time_C_Mult = stats%Time_C_Mult + t2-t1
+	stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+	
+	! write(*,*)t2-t1	
+	deallocate(str)
+end subroutine C_HODLR_Inv_Mult
+
+
+
 !**** C interface of deleting statistics
 	!stats_Cptr: the structure containing statistics
 subroutine C_HODLR_Deletestats(stats_Cptr) bind(c, name="c_hodlr_deletestats")	
