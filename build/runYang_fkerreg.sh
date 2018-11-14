@@ -10,7 +10,7 @@ h=0.1
 lambda=10.0
 com_opt=2
 
-srun -N 2 -n 2 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 10000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel10K_clus_${cluster}.out
+srun -N 1 -n 2 -c 2 --cpu_bind=cores ${EXEC} ${DATA} 8 10000 1000 ${h} ${lambda} ${cluster} ${com_opt} | tee hodlr_susy_kernel10K_clus_${cluster}.out
 
 
 # export EXEC=./EXAMPLE/fkerreg

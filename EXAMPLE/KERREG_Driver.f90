@@ -174,7 +174,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
 	option%nogeo=0
 	option%Nmin_leaf=200
-	option%tol_comp=1d-2
+	option%tol_comp=1d-6
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
@@ -188,7 +188,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=0
-	option%ErrFillFull=0
+	option%ErrFillFull=1
 	option%ErrSol=1
 	! option%RecLR_leaf=RRQR
 
