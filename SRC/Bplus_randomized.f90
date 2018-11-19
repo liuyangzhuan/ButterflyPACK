@@ -1120,7 +1120,8 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 		if(ptree%MyID==Main_ID)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
 #endif	
 
-		if(error_inout>option%tol_rand)then
+	        !!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec					
+	        if(error_inout>option%tol_rand .and. block_rand(1)%rankmax==rank_pre_max)then				
 		! if(0)then
 			call get_butterfly_minmaxrank(block_rand(1))
 			rank_new_max = block_rand(1)%rankmax
