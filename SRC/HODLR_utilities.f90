@@ -3452,6 +3452,7 @@ subroutine SetDefaultOptions(option)
 	implicit none 
 	type(Hoption)::option	
 
+	option%verbosity=1
 	option%Nmin_leaf=200
 	option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
@@ -3487,6 +3488,7 @@ subroutine CopyOptions(option,option1)
 	implicit none 
 	type(Hoption)::option,option1	
 
+	option1%verbosity = option%verbosity
 	option1%Nmin_leaf = option%Nmin_leaf
 	option1%tol_comp = option%tol_comp
 	option1%tol_Rdetect = option%tol_Rdetect	

@@ -132,7 +132,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 				call MPI_ALLREDUCE(MPI_IN_PLACE ,rank_new_max,1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)	
 				
 				
-				if(ptree%MyID==Main_ID)write(*,'(A10,I5,A6,I3,A8,I3, A8,I3,A7,Es14.7,A9,I5)')' Level ',level_c,' rank:',rank_new_max,' Ntrial:',tt,' L_butt:',level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
+				if(ptree%MyID==Main_ID .and. option%verbosity>0)write(*,'(A10,I5,A6,I3,A8,I3, A8,I3,A7,Es14.7,A9,I5)')' Level ',level_c,' rank:',rank_new_max,' Ntrial:',tt,' L_butt:',level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
 					
 				! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing	
 				! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. ((rank_new_max>rank_max_lastiter .and. tt>1).or.tt==1))then
@@ -178,7 +178,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 	stats%Mem_Comp_for=stats%Mem_Comp_for+Memory
 	n4 = OMP_get_wtime()
 	stats%Time_Fill = stats%Time_Fill + n4-n3 		
-	if(ptree%MyID==Main_ID)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
+	if(ptree%MyID==Main_ID .and. option%verbosity>0)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
 	
 	allocate(Vin(Nloc,1))
 	allocate(Vout1(Nloc,1))
@@ -640,7 +640,7 @@ subroutine HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP,N,level_c,Mem
 	deallocate(RandVectInR,RandVectOutR,RandVectTmp)
 	
 	
-	if(ptree%MyID==Main_ID)write(*,'(A10,I5,A13)')' Level ',level_c,' fullmat done'
+	! if(ptree%MyID==Main_ID)write(*,'(A10,I5,A13)')' Level ',level_c,' fullmat done'
 	
 	
 end subroutine HODLR_randomized_OneL_Fullmat

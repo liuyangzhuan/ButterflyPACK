@@ -247,7 +247,8 @@ module HODLR_DEFS
 	 
 	 !**** HODLR solver options
 	 type Hoption
-		
+		integer::verbosity
+     
 		! options for Bplus, Butterfly or LR
 		integer::LRlevel  ! The top LRlevel level blocks are butterfly or Bplus		
 		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus  		

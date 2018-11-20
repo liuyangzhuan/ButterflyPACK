@@ -155,12 +155,13 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,element_Zmn,ptree)
 	Maxgroup=2**(Maxlevel+1)-1
 	msh%Maxgroup = Maxgroup
 	allocate (msh%basis_group(Maxgroup))
-	
-	if(ptree%MyID==Main_ID)write (*,*) ''
-	if(ptree%MyID==Main_ID)write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
-	if(ptree%MyID==Main_ID)write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
-	if(ptree%MyID==Main_ID)write (*,*) ''
-	if(ptree%MyID==Main_ID)write (*,*) 'Constructing basis groups...'	
+	if (ptree%MyID==Main_ID .and. option%verbosity>0)then
+		write (*,*) ''
+		write (*,*) 'Maxlevel_for_blocks:',ho_bf1%Maxlevel
+		write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
+		write (*,*) ''
+		write (*,*) 'Constructing basis groups...'
+	endif
 	
 	!**** construct the top few levels whose ordering is provided by the user
 	msh%basis_group(1)%head=1 ; msh%basis_group(1)%tail=msh%Nunk; msh%basis_group(1)%pgno=1
