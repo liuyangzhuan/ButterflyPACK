@@ -36,10 +36,10 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 	type(mesh)::msh
 
 
-    if(ptree%MyID==Main_ID)write (*,*) ''
+    if(ptree%MyID==Main_ID .and. option%verbosity>0)write (*,*) ''
 	
 	call MPI_barrier(ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
+    if(ptree%MyID==Main_ID .and. option%verbosity>0)write (*,*) 'Computing block inverse at level Maxlevel_for_blocks+1...'	
 	level_c = ho_bf1%Maxlevel+1
 	do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
 			
@@ -69,12 +69,12 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 
 
 	call MPI_barrier(ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) 'Computing block inverse at higher levels...'
+	if(ptree%MyID==Main_ID .and. option%verbosity>0)write (*,*) 'Computing block inverse at higher levels...'
 	do level_c = ho_bf1%Maxlevel,1,-1
 
 		!!!***** update the forward off-diagonal block by left multiplication of inverse of diagonal blocks in Z: Z_ij^l -> Z_ii^-1*Z_ij^l
 		call MPI_barrier(ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)write(*,*)'update forward blocks at level:',level_c
+		if(ptree%MyID==Main_ID .and. option%verbosity>0)write(*,*)'update forward blocks at level:',level_c
 					
 		n1 = OMP_get_wtime()
 		do rowblock_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
@@ -101,7 +101,7 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 
 		!!!***** compute the inverse of each block 2x2 submatrices whose two off-diagonal blocks are butterflies 
 		call MPI_barrier(ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)write(*,*)'compute block inverse at level:',level_c
+		if(ptree%MyID==Main_ID .and. option%verbosity>0)write(*,*)'compute block inverse at level:',level_c
 		n1 = OMP_get_wtime()
 		do rowblock = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
 			
@@ -119,42 +119,42 @@ subroutine HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
 		n2 = OMP_get_wtime()		
 		stats%Time_Inv=stats%Time_Inv + n2-n1	
 	end do
-	
-	call MPI_ALLREDUCE(stats%Time_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,*) 'computing updated forward block time:',rtemp,'Seconds'		
-	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,*) 'computing inverse block time:',rtemp,'Seconds'	
-	call MPI_ALLREDUCE(stats%Time_random(1),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_Init:', rtemp
-	call MPI_ALLREDUCE(stats%Time_random(2),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_MVP:', rtemp
-	call MPI_ALLREDUCE(stats%Time_random(3),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_Reconstruct:', rtemp
-	call MPI_ALLREDUCE(stats%Time_random(4),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_Onesub:', rtemp
-	call MPI_ALLREDUCE(stats%Time_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_SMW:', rtemp
-	call MPI_ALLREDUCE(stats%Time_RedistB,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistB:', rtemp	
-	call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistV:', rtemp		
-	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,*)'time_tmp',time_tmp
-	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,'(A21Es14.2)') 'Factorization flops:',rtemp	
-	
-    if(ptree%MyID==Main_ID)write(*,*)''
-	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly inverse blocks'
-	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly Sblocks'
-	call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct inverse blocks'
-	call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for storing intermidiate vectors'
-    if(ptree%MyID==Main_ID)write(*,*)''	
+	if(option%verbosity>0) then
+		call MPI_ALLREDUCE(stats%Time_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) 'computing updated forward block time:',rtemp,'Seconds'
+		call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) 'computing inverse block time:',rtemp,'Seconds'
+		call MPI_ALLREDUCE(stats%Time_random(1),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_Init:', rtemp
+		call MPI_ALLREDUCE(stats%Time_random(2),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_MVP:', rtemp
+		call MPI_ALLREDUCE(stats%Time_random(3),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_Reconstruct:', rtemp
+		call MPI_ALLREDUCE(stats%Time_random(4),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_Onesub:', rtemp
+		call MPI_ALLREDUCE(stats%Time_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_SMW:', rtemp
+		call MPI_ALLREDUCE(stats%Time_RedistB,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistB:', rtemp
+		call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistV:', rtemp
+		call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,*)'time_tmp',time_tmp
+		call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write (*,'(A21Es14.2)') 'Factorization flops:',rtemp
 
-	
+		if(ptree%MyID==Main_ID)write(*,*)''
+		call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly inverse blocks'
+		call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for butterfly Sblocks'
+		call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for direct inverse blocks'
+		call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)write(*,*)rtemp,'MB costed for storing intermidiate vectors'
+		if(ptree%MyID==Main_ID)write(*,*)''
+	end if
+
     return
 
 end subroutine HODLR_Factorization
