@@ -812,6 +812,7 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	integer times(8)	
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
+	integer Maxgroup_rc				
 	
 	!**** allocate HODLR solver structures 
 	allocate(blocks)
@@ -853,16 +854,17 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	
 	call assert(mshr%Nunk==M,'mshr%Nunk\=M')
 	call assert(mshc%Nunk==N,'mshc%Nunk\=N')
-	call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+	Maxgroup_rc = min(mshc%Maxgroup,mshr%Maxgroup)
+	! call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
 	
 	msh%Nunk = N+M
-	msh%Maxgroup=mshc%Maxgroup*2+1
+	msh%Maxgroup=Maxgroup_rc*2+1
 	allocate (msh%basis_group(msh%Maxgroup))
 	msh%basis_group(1)%head=1
 	msh%basis_group(1)%tail=N+M
 	msh%basis_group(1)%pgno=1
-	call copy_basis_group(mshr%basis_group,1,mshr%Maxgroup,msh%basis_group,2,msh%Maxgroup,0)
-	call copy_basis_group(mshc%basis_group,1,mshc%Maxgroup,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
+	call copy_basis_group(mshr%basis_group,1,Maxgroup_rc,msh%basis_group,2,msh%Maxgroup,0)
+	call copy_basis_group(mshc%basis_group,1,Maxgroup_rc,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
 	
 	blocks%level=1
 	blocks%col_group=3
