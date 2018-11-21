@@ -57,7 +57,8 @@ extern "C" {
 	
 	void c_bf_deletebf(F2Cptr* bf);
 	
-	void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree, C_DT *a, C_DT* b);		
+	// void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree, C_DT *a, C_DT* b);
+	void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* stats,F2Cptr* ptree, C_DT *a, C_DT* b);
 	
 	
 }
