@@ -10,19 +10,20 @@ zgeqp3mod.f
 SCALAPACK_pdgeqpfmod.f
 SCALAPACK_pzgeqpfmod.f
 DenseLA.f90
-HODLR_defs.f90
+BPACK_defs.f90
 misc.f90
-HODLR_utilities.f90
-HODLR_structure.f90
+Bplus_utilities.f90
+BPACK_utilities.f90
+blocks_pack_unpack_for_MPI.f90
+BPACK_structure.f90
 Bplus_randomized.f90
 Bplus_compress.f90
-Bplus_update.f90
-Bplus_inversion.f90
-HODLR_solve_mul.f90
-HODLR_constr.f90
-HODLR_randomized.f90
-HODLR_factor.f90
-HODLR_wrapper.f90
+Bplus_factor.f90
+BPACK_solve_mul.f90
+BPACK_constr.f90
+BPACK_randomized.f90
+BPACK_factor.f90
+BPACK_wrapper.f90
 )
 
 

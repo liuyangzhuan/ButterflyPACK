@@ -1,14 +1,14 @@
 #include "HODLR_config.fi"
 module Bplus_compress 
 use Bplus_randomized 
-use HODLR_structure
+use BPACK_structure
 ! use element_Z 
 
 
 contains 
-! subroutine Butterfly_compress(blocks,Memory,msh,element_Zmn,ker)
+! subroutine BF_compress(blocks,Memory,msh,element_Zmn,ker)
 
-   ! use HODLR_DEFS
+   ! use BPACK_DEFS
    ! implicit none
 	! type(mesh)::msh
 	! type(kernelquant)::ker
@@ -100,11 +100,11 @@ contains
 
     ! return
 
-! end subroutine butterfly_compress
+! end subroutine BF_compress
 
 ! subroutine decomposition_UkerlV(index_i,index_j,level,blocks,tolerance,msh,element_Zmn,ker)
 
-    ! use HODLR_DEFS
+    ! use BPACK_DEFS
     ! implicit none
 
     ! integer mm, nn, level, level_butterfly
@@ -116,18 +116,18 @@ contains
 	! procedure(Zelem)::element_Zmn
 	
     ! if (level==0) then
-        ! call butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn)
+        ! call BF_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn)
     ! else
-        ! call butterfly_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn)
+        ! call BF_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn)
     ! endif
 
     ! return
 
 ! end subroutine decomposition_UkerlV
 
-! subroutine butterfly_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn,ker)
+! subroutine BF_recomposition_FastSampling_initial(index_j,blocks,msh,element_Zmn,ker)
 
-    ! use HODLR_DEFS
+    ! use BPACK_DEFS
     ! 
     ! implicit none
 
@@ -424,11 +424,11 @@ contains
 
     ! return
 
-! end subroutine butterfly_recomposition_FastSampling_initial
+! end subroutine BF_recomposition_FastSampling_initial
  
-! subroutine butterfly_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn,ker)
+! subroutine BF_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn,ker)
 
-    ! use HODLR_DEFS
+    ! use BPACK_DEFS
     ! 
     ! implicit none
 
@@ -695,13 +695,13 @@ contains
 
     ! return
 
-! end subroutine butterfly_recomposition_FastSampling
+! end subroutine BF_recomposition_FastSampling
 
 
 
 subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    use misc
@@ -729,8 +729,8 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 				
 				! bplus%LL(ll)%matrices_block(bb)%level_butterfly = int((Maxlevel_for_blocks-bplus%LL(ll)%matrices_block(bb)%level)/2)*2
 				! if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
-				call Butterfly_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
-				call Butterfly_sym2asym(bplus%LL(ll)%matrices_block(bb))
+				call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
+				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				Memory = Memory + rtemp
 			else 		
 				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
@@ -738,8 +738,8 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 				levelm = ceiling_safe(dble(level_butterfly)/2d0)						
 				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm		
 				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)			
-				call Butterfly_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn,ptree)
-				call Butterfly_sym2asym(bplus%LL(ll)%matrices_block(bb))
+				call BF_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn,ptree)
+				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				Memory = Memory + rtemp
 			end if	
 			bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)			
@@ -753,9 +753,9 @@ end subroutine Bplus_compress_N15
 
 
 
-subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    use misc
@@ -870,7 +870,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 			allocate(matV(rmax,nn))
 			allocate(Singular(rmax))
 			frow=1
-			! call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ptree)					
+			! call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ptree)					
 			! rank = min(rank,37)
 			
 			
@@ -903,7 +903,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 				end do	
 			else 
 				frow=1
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
 				! if(rank==53)then
 					! write(*,*)group_m,group_n,boundary_map(group_m-groupm_start+1)
 					! stop
@@ -1050,7 +1050,7 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 				! if(blocks==342)write(111,*)Singular(1:rank)
 			else 
 				frow=1
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
 			end if
 			
 			
@@ -1166,12 +1166,12 @@ subroutine Butterfly_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall,
 
     return
 
-end subroutine Butterfly_compress_N15_withoutBoundary
+end subroutine BF_compress_N15_withoutBoundary
 
 
-subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    use misc
@@ -1211,7 +1211,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
     Memory=0
 
 	
-	! write(*,*)blocks%row_group,blocks%col_group,'In Butterfly_compress_N15'
+	! write(*,*)blocks%row_group,blocks%col_group,'In BF_compress_N15'
 	
     level_blocks=blocks%level
     !level_butterfly=Maxlevel-level_blocks
@@ -1279,7 +1279,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		! allocate(VV(rmax,nn))
 		! allocate(Singular(rmax))
 		! frow=1
-		! call ACA_CompressionForward(UU,VV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,element_Zmn,ptree)		
+		! call LR_ACA(UU,VV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,element_Zmn,ptree)		
 		
 		
 		
@@ -1327,7 +1327,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 		! leafsize = 2502
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))deallocate(blocks%ButterflyU%blocks(1)%matrix)
 		if(allocated(blocks%ButterflyV%blocks(1)%matrix))deallocate(blocks%ButterflyV%blocks(1)%matrix)
-		call BlockLR(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)		
+		call LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)		
 		! enddo
 		
 		rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
@@ -1337,8 +1337,8 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 
 		!!!! pseudo skeleton
 
-		! ! ! call SeudoSkeleton_CompressionForward(blocks,blocks%headm,blocks%headn,mm,nn,min(min(mm,nn),1000),min(min(mm,nn),1000),rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,ptree%pgrp(blocks%pgno)%ctxt,blocks%pgno)
-		! call SeudoSkeleton_CompressionForward(blocks,blocks%headm,blocks%headn,mm,nn,min(mm,nn),min(mm,nn),rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,ptree%pgrp(blocks%pgno)%ctxt,blocks%pgno)
+		! ! ! call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,mm,nn,min(min(mm,nn),1000),min(min(mm,nn),1000),rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,ptree%pgrp(blocks%pgno)%ctxt,blocks%pgno)
+		! call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,mm,nn,min(mm,nn),min(mm,nn),rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,ptree%pgrp(blocks%pgno)%ctxt,blocks%pgno)
 		! rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
 		! rankmin_for_butterfly(0)=min(blocks%rankmin,rankmin_for_butterfly(0))
 
@@ -1619,7 +1619,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				allocate(Singular(rmax))
 				
 				frow=1
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)					
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)					
 				! rank = min(rank,37)
 				
 				
@@ -1803,7 +1803,7 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
 				frow=1
-				call ACA_CompressionForward(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
 				! rank = min(rank,37)
 				
 
@@ -2050,12 +2050,173 @@ subroutine Butterfly_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn
 
     return
 
-end subroutine Butterfly_compress_N15
+end subroutine BF_compress_N15
 
 
 
-recursive subroutine BlockLR(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gd,cridx)
-use HODLR_DEFS
+subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,stats)
+
+    use BPACK_DEFS
+	use BPACK_Utilities	
+    implicit none
+    
+    type(matrixblock) :: blocks
+    real(kind=8) a, b, error,v1,v2
+    integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n,Dimn,edge_m,edge_n
+    DT value1, value2, ctemp1, ctemp2
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
+    type(kernelquant)::ker
+    type(mesh)::msh
+	procedure(Zelem)::element_Zmn
+	type(proctree)::ptree
+	type(Hstat)::stats
+	integer,allocatable::order_m(:),order_n(:)
+	real(kind=8),allocatable::distance_m(:),distance_n(:),center(:)
+	
+	ctemp1=1.0d0 ; ctemp2=0.0d0
+	
+	! write(*,*)'h1'
+
+	head_m = blocks%headm
+	mm = blocks%M
+	
+	head_n = blocks%headn
+	nn = blocks%N	
+	
+
+
+	! allocate(Vin(nn,1))
+	! allocate(Vout1(mm,1))
+	! allocate(Vout2(mm,1))
+	! do ii=1,nn
+		! Vin(ii,1) = random_complex_number()
+	! end do
+	
+	
+	! ! write(*,*)'h2'
+	! ! write(*,*)blocks%level,h_mat%Maxlevel
+	! ! write(*,*)'h22'
+	
+	! if(allocated(blocks%fullmat))then
+		! ! write(*,*)'h3'
+		! call Full_block_MVP_dat(blocks,'N',mm,1,Vin,Vout1,ctemp1,ctemp2)
+		! ! write(*,*)'h4'
+	! else 
+		! call BF_block_MVP_dat(blocks,'N',mm,nn,1,Vin,Vout1,ctemp1,ctemp2,ptree,stats)
+	! end if	
+	
+	! do ii=1,mm
+		! ctemp1 = 0d0
+		! do jj=1,nn
+			! ctemp1 = ctemp1 + ker%matZ_glo(msh%new2old(ii+head_m-1),msh%new2old(jj+head_n-1))*Vin(jj,1)
+		! end do
+		! Vout2(ii,1) = ctemp1
+	! end do
+	
+	! write(*,*)fnorm(Vout2,mm,1), fnorm(Vout2-Vout1,mm,1)/fnorm(Vout2,mm,1)
+	
+	
+	
+	allocate(order_m(blocks%M))
+	allocate(order_n(blocks%N))
+	do ii=1,min(blocks%M,blocks%N)
+		call random_number(a)
+        call random_number(b)
+        order_m(ii)=floor_safe(a*(mm-1))+1
+        order_n(ii)=floor_safe(b*(nn-1))+1
+		
+		! order_m(ii)=ii
+		! order_n(ii)=ii		
+	enddo
+	
+	
+	!!!!! The following picks the close points first, can be commented out if geometry info is not available
+			allocate(distance_m(blocks%M))
+			distance_m=Bigvalue
+			allocate(distance_n(blocks%N))
+			distance_n=Bigvalue
+
+			Dimn = 0
+			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
+			allocate(center(Dimn))
+			center = 0
+			head_n = blocks%headn
+			do j=1,blocks%N
+			  edge_n = head_n-1+j
+			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_n))
+			enddo
+			center = center/blocks%N
+			head_m = blocks%headm
+			do i=1,blocks%M
+				edge_m=head_m-1+i
+				distance_m(i) = sum((msh%xyz(1:Dimn,msh%new2old(edge_m))-center(1:Dimn))**2d0)
+			enddo		
+			deallocate(center)
+			call quick_sort(distance_m,order_m,blocks%M)     
+			deallocate(distance_m)
+
+			Dimn = 0
+			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
+			allocate(center(Dimn))
+			center = 0
+			head_m = blocks%headm
+			do i=1,blocks%M
+			  edge_m = head_m-1+i
+			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_m))
+			enddo
+			center = center/blocks%M
+			head_n = blocks%headn
+			do j=1,blocks%N
+				edge_n=head_n-1+j
+				distance_n(j) = sum((msh%xyz(1:Dimn,msh%new2old(edge_n))-center(1:Dimn))**2d0)
+			enddo		
+			deallocate(center)
+			call quick_sort(distance_n,order_n,blocks%N)     
+			deallocate(distance_n)	
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	
+	
+	
+	
+	v1=0
+	v2=0
+    ! do i=1,min(mm,nn)
+    do i=1,100
+		do j=1,100
+		
+		mi = order_m(i)
+		nj = order_n(j)
+		
+		
+        ! iii=int((mi+1)/2)+msh%basis_group(group_m)%head-1
+        ! jjj=int((nj+1)/2)+msh%basis_group(group_n)%head-1
+        ! ii=2-mod(mi,2)
+        ! jj=2-mod(nj,2)
+		! call element_Zmn(iii,jjj,ii,jj,value1)
+
+		call element_Zmn(mi+head_m-1,nj+head_n-1,value1,msh,ker)
+		
+        call BF_value(mi,nj,blocks,value2)
+        v1 =v1+abs(value1)**2d0
+        v2 =v2+abs(value2)**2d0
+		! if(abs(value1)>SafeUnderflow)write (*,*) abs(value1), abs(value2) !, abs(value1-value2)/abs(value1)
+		enddo
+    enddo
+	
+	deallocate(order_m)
+	deallocate(order_n)
+	
+	write(*,*)'partial fnorm:',v1,v2,blocks%rankmax
+    
+    return
+
+end subroutine BF_compress_test
+
+
+
+recursive subroutine LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gd,cridx)
+use BPACK_DEFS
 implicit none 
     integer rank,ranktmp,leafsize
     integer header_m, header_n
@@ -2096,7 +2257,7 @@ implicit none
 			rmaxc = blocks%N
 			rmaxr = blocks%M
 			
-			call SeudoSkeleton_CompressionForward(blocks,blocks%headm,blocks%headn,blocks%M,blocks%N,rmaxc,rmaxr,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,gd%ctxt)
+			call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,blocks%M,blocks%N,rmaxc,rmaxr,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,gd%ctxt)
 			
 		else if(option%RecLR_leaf==ACA)then 
 			!!!!! ACA-SVD
@@ -2130,7 +2291,7 @@ implicit none
 			! deallocate(center)
 			! !!!!!!!!!!!! 
 			
-			call ACA_CompressionForward(UU,VV,Singular,blocks%headm,blocks%headn,blocks%M,blocks%N,frow,rmax,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
+			call LR_ACA(UU,VV,Singular,blocks%headm,blocks%headn,blocks%M,blocks%N,frow,rmax,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,error)	
 
 			! if(error>option%tol_comp)then
 				! write(*,*)'niam',error
@@ -2169,7 +2330,7 @@ implicit none
 			allocate(UU(blocks%M,rmax))
 			allocate(VV(rmax,blocks%N))
 		
-			call BatchACA_CompressionForward(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,error)	
+			call LR_BACA(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,error)	
 					
 			blocks%rankmax = rank
 			blocks%rankmin = rank
@@ -2252,7 +2413,7 @@ implicit none
 		
 		! !!!!!!! check error
 		if(cridx==0)then
-		call CheckLRError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+		call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
 		endif
 		! !!!!!!! check error
 	else
@@ -2293,7 +2454,7 @@ implicit none
 				allocate (blockc(1)%ButterflyU%blocks(1))
 				allocate (blockc(1)%ButterflyV%blocks(1))
 
-				call BlockLR(blockc(1),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc1,cridx+1)
+				call LR_HBACA(blockc(1),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc1,cridx+1)
 				dims_tmp(1)=blockc(1)%M
 				dims_tmp(2)=blockc(1)%N
 				dims_tmp(3)=blockc(1)%rankmax
@@ -2321,7 +2482,7 @@ implicit none
 				! write(*,*)blockc(2)%M,blockc(2)%N,'ha2'
 				allocate (blockc(2)%ButterflyU%blocks(1))
 				allocate (blockc(2)%ButterflyV%blocks(1))							
-				call BlockLR(blockc(2),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc2,cridx+1)
+				call LR_HBACA(blockc(2),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc2,cridx+1)
 				dims_tmp(4)=blockc(2)%M
 				dims_tmp(5)=blockc(2)%N
 				dims_tmp(6)=blockc(2)%rankmax
@@ -2602,7 +2763,7 @@ implicit none
 			blocks%ButterflyU%blocks(1)%mdim=blocks%M;blocks%ButterflyU%blocks(1)%ndim=rank
 			
 			! !!!!!!! check error
-			call CheckLRError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+			call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
 			! !!!!!!! check error
 				
 			! distribute UV factor into 1D grid
@@ -2652,15 +2813,15 @@ implicit none
 	endif
 	
 
-end subroutine BlockLR
+end subroutine LR_HBACA
 
 
 
 
-subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,error)
+subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,error)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -3034,15 +3195,15 @@ subroutine ACA_CompressionForward(matU,matV,Singular,header_m,header_n,rankmax_r
 	
     return
 
-end subroutine ACA_CompressionForward
+end subroutine LR_ACA
 
 
 
 
-subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,error)
+subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,error)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
 	integer rank, rankup, ranknew, row, column, rankmax,N,M,rmax
@@ -3364,17 +3525,17 @@ subroutine BatchACA_CompressionForward(matU,matV,header_m,header_n,M,N,rmax,rank
 	
     return
 
-end subroutine BatchACA_CompressionForward
+end subroutine LR_BACA
 
 
 
 
 
 
-subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,ctxt,pgno)
+subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,ctxt,pgno)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2, rank
@@ -3667,7 +3828,118 @@ subroutine SeudoSkeleton_CompressionForward(blocks,header_m,header_n,M,N,rmaxc,r
 	
     return
 
-end subroutine SeudoSkeleton_CompressionForward
+end subroutine LR_SeudoSkeleton
+
+
+
+!!!!!!! check error of LR compression of blocks by comparing the full block, assuming 2D block-cyclic distribution   
+subroutine LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+use BPACK_DEFS
+implicit none 
+
+	type(matrixblock)::blocks
+	type(mesh)::msh
+	type(Hoption)::option
+	type(kernelquant)::ker
+	type(Hstat)::stats
+	procedure(Zelem)::element_Zmn
+	type(proctree)::ptree
+	integer pgno
+	type(grid),pointer::gd
+	integer Ntest
+	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr,MyID	
+	integer:: cridx,info
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:)
+	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)	
+	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
+	integer edge_n,edge_m, rank
+	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
+	
+	
+	if(option%ErrFillFull==1)then
+	
+		Ntest=32
+		! Ntest=blocks%N/2
+		call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
+		if(myrow/=-1 .and. mycol/=-1)then
+		
+			rank = blocks%rankmax
+			! write(*,*)'aha',descButterflyV, blocks%N, rank, nbslpk, nbslpk, gd%ctxt
+			
+			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
+			call descinit( descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
+			call assert(info==0,'descinit fail for descButterflyV')		
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
+			call descinit( descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
+			call assert(info==0,'descinit fail for descButterflyU')	
+
+			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)	
+			call descinit( descVin, blocks%N, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
+			allocate(Vin(myArows,myAcols))
+			do ii=1,myArows
+			do jj=1,myAcols
+				call random_dp_number(Vin(ii,jj))
+			end do
+			end do
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)			
+			call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
+			allocate(Fullmat(myArows,myAcols))
+			do myi=1,myArows
+				call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
+				do myj=1,myAcols
+					call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
+					edge_m = blocks%headm + ii - 1 
+					edge_n = blocks%headn + jj - 1 
+					call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,ker)					
+				enddo
+			enddo			
+
+			! compute the exact results
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			call descinit( descVout, blocks%M, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
+			allocate(Vout1(myArows,myAcols))
+			allocate(Vout2(myArows,myAcols))
+			Vout1=0
+			Vout2=0
+			call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
+			
+			! compute the approximate results
+			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
+			allocate(Vinter(myArows,myAcols))			
+			Vinter=0
+			call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
+			call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
+			
+			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
+			Vout2 = Vout2-Vout1
+			rtemp1 = fnorm(Vout2,myArows,myAcols)**2d0
+			rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
+			deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
+		endif
+		 
+		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
+		call MPI_ALLREDUCE(rtemp1,fnorm1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
+
+		call MPI_Comm_rank(ptree%pgrp(pgno)%Comm,MyID,ierr)
+		 
+		
+		
+		if(MyID==0)then
+			write(*,*)blocks%row_group,blocks%col_group,'LR_HBACA error:',sqrt(fnorm1/fnorm0)
+		endif	
+	endif
+	
+end subroutine LR_CheckError
 
 
 subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)
@@ -3921,158 +4193,6 @@ type(mesh)::msh
 	! endif
 
 end subroutine LocalButterflySVD_Right
-
-
-!!!!!!! check error of LR compression of blocks by comparing the full block, assuming 2D block-cyclic distribution   
-subroutine CheckLRError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
-use HODLR_DEFS
-implicit none 
-
-	type(matrixblock)::blocks
-	type(mesh)::msh
-	type(Hoption)::option
-	type(kernelquant)::ker
-	type(Hstat)::stats
-	procedure(Zelem)::element_Zmn
-	type(proctree)::ptree
-	integer pgno
-	type(grid),pointer::gd
-	integer Ntest
-	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr,MyID	
-	integer:: cridx,info
-	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:)
-	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)	
-	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
-	integer edge_n,edge_m, rank
-	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
-	
-	
-	if(option%ErrFillFull==1)then
-	
-		Ntest=32
-		! Ntest=blocks%N/2
-		call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
-		if(myrow/=-1 .and. mycol/=-1)then
-		
-			rank = blocks%rankmax
-			! write(*,*)'aha',descButterflyV, blocks%N, rank, nbslpk, nbslpk, gd%ctxt
-			
-			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
-			call descinit( descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
-			call assert(info==0,'descinit fail for descButterflyV')		
-			
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		
-			call descinit( descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )	
-			call assert(info==0,'descinit fail for descButterflyU')	
-
-			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)	
-			call descinit( descVin, blocks%N, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Vin(myArows,myAcols))
-			do ii=1,myArows
-			do jj=1,myAcols
-				call random_dp_number(Vin(ii,jj))
-			end do
-			end do
-			
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)			
-			call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Fullmat(myArows,myAcols))
-			do myi=1,myArows
-				call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
-				do myj=1,myAcols
-					call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
-					edge_m = blocks%headm + ii - 1 
-					edge_n = blocks%headn + jj - 1 
-					call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,ker)					
-				enddo
-			enddo			
-
-			! compute the exact results
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-			call descinit( descVout, blocks%M, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
-			allocate(Vout1(myArows,myAcols))
-			allocate(Vout2(myArows,myAcols))
-			Vout1=0
-			Vout2=0
-			call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
-			
-			! compute the approximate results
-			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-			call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )			
-			allocate(Vinter(myArows,myAcols))			
-			Vinter=0
-			call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)	
-			call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)				
-			
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)			
-			Vout2 = Vout2-Vout1
-			rtemp1 = fnorm(Vout2,myArows,myAcols)**2d0
-			rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
-			deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
-		endif
-		 
-		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
-		call MPI_ALLREDUCE(rtemp1,fnorm1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
-
-		call MPI_Comm_rank(ptree%pgrp(pgno)%Comm,MyID,ierr)
-		 
-		
-		
-		if(MyID==0)then
-			write(*,*)blocks%row_group,blocks%col_group,'BlockLR error:',sqrt(fnorm1/fnorm0)
-		endif	
-	endif
-	
-end subroutine CheckLRError
-
-
-
-
-! integer function rank_approximate_func(group_m, group_n, flag,ker)
-
-    ! use HODLR_DEFS
-    ! implicit none
-
-    ! integer i, j, k, mm, nn, edge_head, edge_tail, rank, group_m, group_n, flag
-    ! real(kind=8) a, b, c, aa(2), bb(2), cc(2), angle, distance
-	! type(kernelquant)::ker
-	
-	! if(group_m/=group_n)then
-		
-		! distance=group_dist(group_m,group_n)
-		! distance=distance**2d0
-		! ! distance=(msh%basis_group(group_m)%center(1)-msh%basis_group(group_n)%center(1))**2+(msh%basis_group(group_m)%center(2)-msh%basis_group(group_n)%center(2))**2+(msh%basis_group(group_m)%center(3)-msh%basis_group(group_n)%center(3))**2
-		! ! ! distance=sqrt(distance)
-		! angle=4*pi*(msh%basis_group(group_m)%radius)**2/distance
-		! rank=int(4*pi*(msh%basis_group(group_n)%radius)**2*angle/ker%wavelength**2)+1
-		! ! if(group_m==4 .and. group_n==24)write(*,*)int(rank*ker%rank_approximate_para1),rank,msh%basis_group(group_n)%radius,msh%basis_group(group_n)%radius,angle,distance
-		! if (flag==1) then
-			! rank_approximate_func=int(rank*ker%rank_approximate_para1**2)
-		! elseif (flag==2) then
-			! rank_approximate_func=int(rank*ker%rank_approximate_para2**2)
-		! elseif (flag==3) then
-			! rank_approximate_func=int(rank*ker%rank_approximate_para3**2)
-		! endif
-	! else 
-		! rank_approximate_func = 100000
-	! end if
-    ! !if (rank==0) then
-    ! !    pause
-    ! !    continue
-    ! !endif
-
-    ! return
-
-! end function rank_approximate_func
-
-
 
 
 

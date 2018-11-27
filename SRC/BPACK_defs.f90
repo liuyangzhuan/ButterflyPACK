@@ -1,10 +1,8 @@
 #include "HODLR_config.fi"
-module HODLR_DEFS
+module BPACK_DEFS
 	use iso_c_binding    
 	implicit none
     INCLUDE 'mpif.h'   
-	
-
 	
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)
@@ -17,7 +15,9 @@ module HODLR_DEFS
 	DT,parameter :: czero=0d0
     integer,parameter :: Main_ID = 0 ! Head MPI rank
 	integer,parameter :: nbslpk=16 ! blacs/scalapack block size
-	
+	integer,parameter :: Rows_per_processor=1 ! depreciated
+	integer,parameter :: MPI_Header=11 ! number of integers in the MPI header
+	integer,parameter:: msg_chunk=100000 ! used to determine message tag and hence the massage size
 	
 	!**** parameters for CEM
 	real(kind=8),parameter :: cd = 299792458d0 ! free-space speed of light
@@ -32,6 +32,10 @@ module HODLR_DEFS
 	integer,parameter:: NOPRECON=2  ! use compressed HODLR as fast matvec 
 	integer,parameter:: HODLRPRECON=3	! use factored HODLR as preconditioner 
 	integer,parameter:: LplusMax=3
+	
+	integer,parameter:: HODLR=1  ! use hodlr solver 
+	integer,parameter:: HMAT=2  ! use H matrix solver 
+	
 
 	!**** construction parameters
 	integer,parameter:: SVD=1   
@@ -76,6 +80,8 @@ module HODLR_DEFS
 		integer :: nproc=0 ! # of processes in this tree
 		integer :: MyID=0 ! MPI Rank in Comm
 		type(procgroup),allocatable::pgrp(:) ! tree nodes 
+		
+		DT,allocatable:: send_buff_dat(:),recv_buff_dat(:)		
 	end type proctree
 	
 	
@@ -95,9 +101,9 @@ module HODLR_DEFS
          integer head ! head index
          integer tail ! tail index
          ! integer level ! level of this cluster group 
-         ! real(kind=8):: radius=0 ! geomerical radius of this group 
+         real(kind=8):: radius=0 ! geomerical radius of this group 
 		 real(kind=8):: boundary(2)=0 ! seperators used to split this group into children group
-         ! real(kind=8),allocatable:: center(:) ! geometrical center of this group
+         real(kind=8),allocatable:: center(:) ! geometrical center of this group
      end type basisgroup
 
 	 
@@ -143,7 +149,6 @@ module HODLR_DEFS
          integer num_blk
          type(butterflymatrix),allocatable :: blocks(:)
      end type butterfly_UV
-     
 	 
 	 !**** butterfly or LR structure 
      type matrixblock
@@ -152,7 +157,7 @@ module HODLR_DEFS
          integer level ! level in HODLR
          integer col_group ! column group number 
          integer row_group ! row group number 
-         integer style ! 1: full block 2: compressed block 
+         integer style ! 1: full block 2: compressed block 4: hierarchical block
          integer level_butterfly ! butterfly levels 
 		 integer rankmax,rankmin ! maximum and minimum butterfly ranks
 		 integer dimension_rank ! estimated maximum rank
@@ -170,7 +175,21 @@ module HODLR_DEFS
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:) ! middle factor 		 
          type(butterfly_Kerl),allocatable :: ButterflyKerl(:) ! interior factors 
          type(butterfly_col_select),allocatable :: ButterflyColSelect(:,:) ! keep track of skeleton columns
-     end type matrixblock
+     
+		 ! the following is for blocks in H matrix solver
+         type(matrixblock),pointer :: father=>null() ! pointer to its fater 
+         type(matrixblock),pointer :: sons(:,:)=>null() ! pointer to its children
+         ! integer prestyle   ! the block style before the split operation 1: full block 2: compressed block 4: hierarchical block
+         ! integer data_type  ! the block data_type, need better documentation later
+		 ! integer nested_num ! depreciated
+		 integer,allocatable :: ipiv(:)	! permutation of the LU of the dense diagonal blocks
+		 integer blockinfo_MPI(MPI_Header) ! high-level data extracted from the index message: 1. level 2. row_group 3. col_group 4. nested_num(depreciated) 5. style 6. prestyle(depreciated) 7. data_type(depreciated) 8. level_butterfly 9. length_Butterfly_index_MPI 10. length_Butterfly_data_MPI 11. memory (depreciated) 		 
+         integer length_Butterfly_index_MPI ! length of the index message
+         integer length_Butterfly_data_MPI ! length of the value message		 
+         DT,allocatable :: fullmat_MPI(:) ! massage for the dense blocks 
+         integer,allocatable :: Butterfly_index_MPI(:) ! index message the first 4 entries are: 1. depreciated 2. depreciated 3. level_butterfly 4. num_blocks 
+         DT,allocatable :: Butterfly_data_MPI(:) ! value message	 
+	 end type matrixblock
 	 
 	 
 	 !**** one layer in a Bplus
@@ -225,6 +244,30 @@ module HODLR_DEFS
 		integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
 		type(cascadingfactors),allocatable::levels(:) ! 	 
 	end type hobf
+
+	
+     type global_matricesblock
+         type(global_matricesblock),pointer :: father=>null()
+         type(global_matricesblock),pointer :: sons(:,:)=>null()
+         integer level
+         integer row_group
+         integer col_group
+     end type global_matricesblock	
+	
+	
+	!**** Hmatrix structure  
+	type Hmat
+		integer Maxlevel,N ! HODLR levels and sizes 
+		integer Dist_level ! used in Hmatrix solver, the level at which parallelization is performed
+		type(global_matricesblock),pointer :: blocks_root=>null(), First_block_eachlevel(:)=>null()
+		type(matrixblock), pointer :: Local_blocks(:,:)=>null()
+		type(matrixblock), pointer :: Local_blocks_copy(:,:)=>null() ! copy of the forward matrix 
+		type(matrixblock), pointer :: Computing_matricesblock_m(:,:)=>null(), Computing_matricesblock_l(:,:)=>null(), Computing_matricesblock_u(:,:)=>null()
+		type(matrixblock),pointer:: blocks_1=>null(),blocks_2=>null()
+	end type Hmat
+
+	
+	
 	
 	 
 	!**** partitioned blocks for reursive computing (I+B)^-1
@@ -248,6 +291,9 @@ module HODLR_DEFS
 	 !**** HODLR solver options
 	 type Hoption
 		
+		integer::format ! HODLR or HMAT or format
+		integer::verbosity ! printlevel -1: no printing except error and warning. 0: default printing. 1: print info for each high-level operation 2: print information for each low-level operation
+		
 		! options for Bplus, Butterfly or LR
 		integer::LRlevel  ! The top LRlevel level blocks are butterfly or Bplus		
 		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus  		
@@ -260,7 +306,7 @@ module HODLR_DEFS
 		integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering	0: geometrical points are available for TM or CKD clustering	
 		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
 		integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
-		
+		real(kind=8):: near_para ! parameters used to determine whether two groups are nearfield or farfield pair
 	
 		
 		! options for inversion
@@ -293,16 +339,21 @@ module HODLR_DEFS
 	type Hstat
 		real(kind=8) Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock 
 		real(kind=8) Time_Sblock,Time_Inv,Time_SMW,Time_Fill,Time_RedistB,Time_RedistV,Time_Sol, Time_C_Mult
-		real(kind=8) Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct_inv,Mem_Direct_for,Mem_int_vec,Mem_Comp_for
+		real(kind=8) Time_Direct_LU,Time_Add_Multiply,Time_Multiply,Time_XLUM,Time_Split,Time_Comm,Time_Idle,Time_Factor		
+		real(kind=8) Mem_peak,Mem_Sblock,Mem_SMW,Mem_Direct_inv,Mem_Direct_for,Mem_int_vec,Mem_Comp_for,Mem_Fill,Mem_Factor
 		real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_Tmp
 		integer, allocatable:: rankmax_of_level(:),rankmin_of_level(:) ! maximum and minimum ranks observed at each level of HODLR during matrix fill and factorization
 		integer, allocatable:: rankmax_of_level_global(:) ! maximum ranks among all processes observed at each level of HODLR during matrix fill and factorization
+		integer, allocatable:: Add_random_CNT(:),Mul_random_CNT(:),XLUM_random_CNT(:) ! record number of randomized operations
+		real(kind=8), allocatable:: Add_random_Time(:),Mul_random_Time(:),XLUM_random_Time(:) ! record number of randomized operations
+		integer, allocatable:: leafs_of_level(:) ! number of compressed blocks at each level
 	 end type Hstat	
 
 	 
 	!**** quantities related to geometries, meshes, unknowns and points 
 	type mesh	
 		integer Nunk ! size of the matrix 
+		integer Dist_level ! used in Hmatrix solver, the level at which parallelization is performed
 		integer Maxgroup ! number of nodes in the partition tree
 		integer idxs,idxe  ! range of local row/column indices after reordering
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
@@ -418,4 +469,4 @@ module HODLR_DEFS
 	 integer vecCNT
 	 
 	 ! integer,allocatable:: basis_group_pre(:,:)
-end module HODLR_DEFS
+end module BPACK_DEFS

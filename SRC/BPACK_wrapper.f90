@@ -1,15 +1,14 @@
 #include "HODLR_config.fi"
-module HODLR_wrapper
-    use HODLR_DEFS
-	
-	use HODLR_structure
-	use HODLR_factor
-	use HODLR_constr
-	use HODLR_randomMVP
-	use omp_lib
-	use misc
-	use HODLR_Solve_Mul
-    use iso_c_binding    
+module BPACK_wrapper
+use BPACK_DEFS
+use BPACK_structure
+use BPACK_factor
+use BPACK_constr
+use BPACK_randomMVP
+use omp_lib
+use misc
+use BPACK_Solve_Mul
+use iso_c_binding    
 	
 
 contains 
@@ -17,7 +16,7 @@ contains
 
 
 subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,ker)
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     integer edge_m, edge_n
     DT value_e
@@ -116,6 +115,141 @@ subroutine C_HODLR_Createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")
 	
 end subroutine C_HODLR_Createstats
 
+
+
+
+
+!**** C interface of getting one entry in stats
+	!stats_Cptr: the structure containing stats       
+subroutine C_HODLR_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_hodlr_getstats")	
+	implicit none 
+	real(kind=8)::val_d
+	character(kind=c_char,len=1) :: nam(*)
+	type(c_ptr) :: stats_Cptr
+	type(Hstat),pointer::stats	
+	! character::nam(:)	
+	! type(c_ptr),value :: val_Cptr
+	! integer,pointer::val_i
+	! real(kind=8),pointer::val_d
+	integer strlen
+	character(len=:),allocatable :: str
+	integer valid_opt
+	
+	
+	
+	valid_opt = 0
+	strlen=1
+	do while(nam(strlen) /= c_null_char)
+		strlen = strlen + 1
+	enddo
+	strlen = strlen -1
+	allocate(character(len=strlen) :: str)
+	str = transfer(nam(1:strlen), str)
+	
+	call c_f_pointer(stats_Cptr, stats)
+	
+
+	if(trim(str)=='Time_Fill')then
+		val_d = stats%Time_Fill
+	endif	
+	if(trim(str)=='Time_Factor')then
+		val_d = stats%Time_Factor
+	endif
+	if(trim(str)=='Time_Solve')then
+		val_d = stats%Time_Sol
+	endif	
+	if(trim(str)=='Time_Sblock')then
+		val_d = stats%Time_Sblock
+	endif
+	if(trim(str)=='Time_Inv')then
+		val_d = stats%Time_Inv
+	endif	
+	if(trim(str)=='Time_SMW')then
+		val_d = stats%Time_SMW
+	endif		
+	if(trim(str)=='Time_RedistB')then
+		val_d = stats%Time_RedistB
+	endif	
+	if(trim(str)=='Time_RedistV')then
+		val_d = stats%Time_RedistV
+	endif	
+	if(trim(str)=='Time_C_Mult')then
+		val_d = stats%Time_C_Mult
+	endif
+	if(trim(str)=='Time_Direct_LU')then
+		val_d = stats%Time_Direct_LU
+	endif
+	if(trim(str)=='Time_Add_Multiply')then
+		val_d = stats%Time_Add_Multiply
+	endif	
+	if(trim(str)=='Time_Multiply')then
+		val_d = stats%Time_Multiply
+	endif	
+	if(trim(str)=='Time_XLUM')then
+		val_d = stats%Time_XLUM
+	endif	
+	if(trim(str)=='Time_Split')then
+		val_d = stats%Time_Split
+	endif	
+	if(trim(str)=='Time_Comm')then
+		val_d = stats%Time_Comm
+	endif	
+	if(trim(str)=='Time_Idle')then
+		val_d = stats%Time_Idle
+	endif
+	
+	
+	if(trim(str)=='Flop_Fill')then
+		val_d = stats%Flop_Fill
+	endif	
+	if(trim(str)=='Flop_Factor')then
+		val_d = stats%Flop_Factor
+	endif	
+	if(trim(str)=='Flop_Solve')then
+		val_d = stats%Flop_Sol
+	endif	
+	if(trim(str)=='Flop_C_Mult')then
+		val_d = stats%Flop_C_Mult
+	endif		
+	
+	
+	if(trim(str)=='Mem_Factor')then
+		val_d = stats%Mem_Factor
+	endif	
+	if(trim(str)=='Mem_Fill')then
+		val_d = stats%Mem_Fill
+	endif		
+	if(trim(str)=='Mem_Sblock')then
+		val_d = stats%Mem_Sblock
+	endif	
+	if(trim(str)=='Mem_SMW')then
+		val_d = stats%Mem_SMW
+	endif		
+	if(trim(str)=='Mem_Direct_inv')then
+		val_d = stats%Mem_Direct_inv
+	endif	
+	if(trim(str)=='Mem_Direct_for')then
+		val_d = stats%Mem_Direct_for
+	endif		
+	if(trim(str)=='Mem_int_vec')then
+		val_d = stats%Mem_int_vec
+	endif	
+	if(trim(str)=='Mem_Comp_for')then
+		val_d = stats%Mem_Comp_for
+	endif
+
+
+	if(trim(str)=='Rank_max')then
+		val_d = maxval(stats%rankmax_of_level_global)
+	endif	
+	
+	
+	if(valid_opt==0)write(*,*)'invalid HODLR stats: '//trim(str)
+	
+	deallocate(str)
+	
+	
+end subroutine C_HODLR_Getstats
 
 
 !**** C interface of printing statistics
@@ -291,6 +425,18 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	option%powiter=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='format')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%format=val_i
+	valid_opt=1
+	endif		
+	if(trim(str)=='verbosity')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%verbosity=val_i
+	valid_opt=1
+	endif	
+	
+	
 	
 !**** double parameters 
 	if(trim(str)=='tol_comp')then
@@ -326,6 +472,11 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	if(trim(str)=='rankrate')then
 	call c_f_pointer(val_Cptr, val_d)
 	option%rankrate=val_d
+	valid_opt=1
+	endif	
+	if(trim(str)=='near_para')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%near_para=val_d
 	valid_opt=1
 	endif	
     
@@ -408,7 +559,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',ptree%nproc
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
  	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -416,7 +567,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 	
 	!**** create a random seed		
@@ -442,7 +593,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	t1 = OMP_get_wtime()
 
 	
-	if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel:"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel:"
 	Maxlevel=nlevel
 	allocate(msh%pretree(2**Maxlevel))
 	
@@ -475,7 +626,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	
 	!**** the geometry points are provided by user 
 	if(option%nogeo==0)then 
-		if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel requiring reorder:"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder:"
 		Dimn = Ndim 
 		allocate (msh%xyz(Dimn,0:msh%Nunk))
 		ii=0
@@ -486,25 +637,25 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	endif
 	
 	
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting......"
-    call HODLR_structuring(ho_bf,option,msh,ker,element_Zmn_user_C,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting......"
+    call Cluster_partition(ho_bf,option,msh,ker,element_Zmn_user_C,ptree)
+	call HODLR_structuring(ho_bf,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
 	
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
-    call HODLR_construction(ho_bf,option,stats,msh,ker,element_Zmn_user_C,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+    call BPACK_construction(ho_bf,option,stats,msh,ker,element_Zmn_user_C,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 
@@ -513,7 +664,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
 	Npo_loc = msh%idxe-msh%idxs+1		
-	if (ptree%MyID==Main_ID) then	
+	if(ptree%MyID==Main_ID)then	
 		do edge=1,Npo
 			Permutation(edge) = msh%new2old(edge)
 		enddo
@@ -548,7 +699,7 @@ end subroutine C_HODLR_Construct
 	!msh_Cptr: the structure containing points and ordering information (out)        
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_hodlr_construct_matvec_init")	
+subroutine c_hodlr_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_hodlr_construct_matvec_init")	
 	implicit none 
 	integer N
 	
@@ -599,7 +750,7 @@ subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 
 
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',ptree%nproc
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
  	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -607,7 +758,7 @@ subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 	
 	!**** create a random seed		
@@ -633,7 +784,7 @@ subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	t1 = OMP_get_wtime()
 
 	
-	if(ptree%MyID==Main_ID)write(*,*) "User-supplied kernel:"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel:"
 	Maxlevel=nlevel
 	allocate(msh%pretree(2**Maxlevel))
 	
@@ -663,23 +814,23 @@ subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	! write(*,*)'after adjustment:',msh%pretree
 	tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel) 
 	
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting......"
-    call HODLR_structuring(ho_bf,option,msh,ker,element_Zmn_user_C,ptree)
-	call BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting......"
+    call Cluster_partition(ho_bf,option,msh,ker,element_Zmn_user_C,ptree)
+	call HODLR_structuring(ho_bf,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
 	!**** return the permutation vector 
 	msh%idxs = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 	msh%idxe = ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)		
 	N_loc = msh%idxe-msh%idxs+1		
-	if (ptree%MyID==Main_ID) then	
+	if(ptree%MyID==Main_ID)then	
 		do edge=1,N
 			Permutation(edge) = msh%new2old(edge)
 		enddo
@@ -693,7 +844,7 @@ subroutine C_HODLR_Construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 	
-end subroutine C_HODLR_Construct_Matvec_Init
+end subroutine c_hodlr_construct_Matvec_Init
 
 
 
@@ -706,7 +857,7 @@ end subroutine C_HODLR_Construct_Matvec_Init
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
-subroutine C_HODLR_Construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_hodlr_construct_matvec_compute")	
+subroutine c_hodlr_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_hodlr_construct_matvec_compute")	
 	implicit none 
 
     real(kind=8) para
@@ -755,12 +906,12 @@ subroutine C_HODLR_Construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction......"
 	N_unk_loc = msh%idxe-msh%idxs+1
 	call HODLR_randomized(ho_bf,matvec_user_C,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
 	
-    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
@@ -772,7 +923,7 @@ subroutine C_HODLR_Construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 	
-end subroutine C_HODLR_Construct_Matvec_Compute
+end subroutine c_hodlr_construct_Matvec_Compute
 
 
 !**** C interface of BF construction via blackbox matvec
@@ -812,6 +963,7 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	integer times(8)	
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
+	integer Maxgroup_rc
 	
 	!**** allocate HODLR solver structures 
 	allocate(blocks)
@@ -824,7 +976,7 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	call c_f_pointer(mshr_Cptr, mshr)
 	call c_f_pointer(mshc_Cptr, mshc)
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',ptree%nproc
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
  	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -832,7 +984,7 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 	
 	!**** create a random seed		
@@ -853,16 +1005,19 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	
 	call assert(mshr%Nunk==M,'mshr%Nunk\=M')
 	call assert(mshc%Nunk==N,'mshc%Nunk\=N')
-	call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+	
+	
+	Maxgroup_rc = min(mshc%Maxgroup,mshr%Maxgroup)
+	! call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
 	
 	msh%Nunk = N+M
-	msh%Maxgroup=mshc%Maxgroup*2+1
+	msh%Maxgroup=Maxgroup_rc*2+1
 	allocate (msh%basis_group(msh%Maxgroup))
 	msh%basis_group(1)%head=1
 	msh%basis_group(1)%tail=N+M
 	msh%basis_group(1)%pgno=1
-	call copy_basis_group(mshr%basis_group,1,mshr%Maxgroup,msh%basis_group,2,msh%Maxgroup,0)
-	call copy_basis_group(mshc%basis_group,1,mshc%Maxgroup,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
+	call copy_basis_group(mshr%basis_group,1,Maxgroup_rc,msh%basis_group,2,msh%Maxgroup,0)
+	call copy_basis_group(mshc%basis_group,1,Maxgroup_rc,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
 	
 	blocks%level=1
 	blocks%col_group=3
@@ -874,15 +1029,15 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	blocks%N=N
 	blocks%style = 2
 	
+	Maxlevel = GetTreelevel(msh%Maxgroup)-1
 	
-	Maxlevel = ceiling_safe(log(dble(msh%Maxgroup)) / log(2d0))
 	if(blocks%level>option%LRlevel)then
 		blocks%level_butterfly = 0 ! low rank below LRlevel
 	else 				
 		blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly 
 	endif	
 	
-	call ComputeParallelIndices(Maxlevel,blocks,blocks%pgno,ptree,msh,0)
+	call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
 		
 		
 		
@@ -955,11 +1110,11 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 	ker%C_FuncBMatVec => C_FuncBMatVec	
 	
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based BF construction......"	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based BF construction......"	
 	
 	call BF_randomized(blocks%level_butterfly,option%rank0,option%rankrate,blocks,ker,Bmatvec_user_C,error,'CMatVec',option,stats,ptree,msh) 
 
-	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based BF construction finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based BF construction finished"
 	
 	!**** return the C address of hodlr structures to C caller
 	bf_Cptr=c_loc(blocks)
@@ -1011,10 +1166,10 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_C
 	
 	
 	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call HODLR_Factorization(ho_bf1,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
+    call BPACK_factorization(ho_bf1,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 	
 	! return the C address of hodlr structures to C caller
@@ -1059,16 +1214,16 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-    if(ptree%MyID==Main_ID)write(*,*) "Solve ......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve ......"
 	
 	if(option%ErrSol==1)then
-		call HODLR_Test_Solve_error(ho_bf1,option,ptree,stats)
+		call BPACK_Test_Solve_error(ho_bf1,Nloc,option,ptree,stats)
 	endif		
 	
-	call HODLR_Solution(ho_bf1,x,b,Nloc,Nrhs,option,ptree,stats)
+	call BPACK_Solution(ho_bf1,x,b,Nloc,Nrhs,option,ptree,stats)
 
-    if(ptree%MyID==Main_ID)write(*,*) "Solve finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	! return the C address of hodlr structures to C caller
 	
@@ -1087,9 +1242,10 @@ end subroutine C_HODLR_Solve
 	!Noutloc:size of local output vectors	
 	!Ncol: number of vectors     
 	!bf_for_Cptr: the structure containing butterfly                
+	!option_Cptr: the structure containing options                
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,stats_Cptr,ptree_Cptr,a,b) bind(c, name="c_bf_mult")	
+subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,a,b) bind(c, name="c_bf_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Ninloc,Noutloc,Ncol
@@ -1099,11 +1255,13 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,stats_Cptr,p
 	type(c_ptr), intent(in) :: bf_for_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: stats_Cptr
+	type(c_ptr), intent(in) :: option_Cptr
 	! type(c_ptr), intent(in) :: ho_bf_inv_Cptr
 	
 	integer strlen
 	character(len=:),allocatable :: str
 	type(Hstat),pointer::stats
+	type(Hoption),pointer::option
 	type(matrixblock),pointer::blocks
 	! type(hobf),pointer::ho_bf_inv
 	type(proctree),pointer::ptree	
@@ -1120,6 +1278,7 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,stats_Cptr,p
 	
 	call c_f_pointer(bf_for_Cptr, blocks)
 	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
 	if(trim(str)=='N')then
@@ -1188,14 +1347,14 @@ subroutine C_HODLR_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply ......"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 	
 	call assert(Noutloc==Ninloc,"not square Z")
-	call MVM_Z_forward(trim(str),Noutloc,Ncol,1,ho_bf1%Maxlevel+1,xin,xout,ho_bf1,ptree,stats)
+	call HODLR_Mult(trim(str),Noutloc,Ncol,1,ho_bf1%Maxlevel+1,xin,xout,ho_bf1,ptree,stats)
 	! need to use another Flop counter for this operation in future
 
-    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply finished"
-    ! if(ptree%MyID==Main_ID)write(*,*) "    "	
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply finished"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	t2 = OMP_get_wtime() 
 	
@@ -1256,14 +1415,14 @@ subroutine C_HODLR_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,op
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply ......"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 	
 	call assert(Noutloc==Ninloc,"not square Z")
-	call MVM_Z_factorized(trim(str),Noutloc,Ncol,xin,xout,ho_bf1,ptree,stats)
+	call HODLR_Inv_Mult(trim(str),Noutloc,Ncol,xin,xout,ho_bf1,ptree,stats)
 	! need to use another Flop counter for this operation in future
 
-    ! if(ptree%MyID==Main_ID)write(*,*) "Multiply finished"
-    ! if(ptree%MyID==Main_ID)write(*,*) "    "	
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply finished"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	t2 = OMP_get_wtime() 
 	
@@ -1344,7 +1503,7 @@ subroutine C_HODLR_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_hodlr_deletehobf")
 	type(hobf),pointer::ho_bf
 
 	call c_f_pointer(ho_bf_Cptr, ho_bf)
-	call delete_HOBF(ho_bf)
+	call HODLR_delete(ho_bf)
 	deallocate(ho_bf)
 	ho_bf_Cptr=c_null_ptr
 	
@@ -1359,7 +1518,7 @@ subroutine C_BF_DeleteBF(bf_Cptr) bind(c, name="c_bf_deletebf")
 	type(matrixblock),pointer::blocks
 
 	call c_f_pointer(bf_Cptr, blocks)
-	call delete_blocks(blocks,1)
+	call BF_delete(blocks,1)
 	deallocate(blocks)
 	bf_Cptr=c_null_ptr
 end subroutine C_BF_DeleteBF
@@ -1380,4 +1539,4 @@ subroutine C_HODLR_Deleteoption(option_Cptr) bind(c, name="c_hodlr_deleteoption"
 end subroutine C_HODLR_Deleteoption
 
 
-end module HODLR_wrapper
+end module BPACK_wrapper

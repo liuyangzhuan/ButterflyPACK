@@ -4,7 +4,7 @@ include "mkl_vsl.f90"
 #endif
 
 module misc
-use HODLR_DEFS
+use BPACK_DEFS
 #ifdef Intel
 USE IFPORT    
 #endif  
@@ -47,241 +47,6 @@ end subroutine linspaceI
 
 
 
- ! subroutine gemm_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	
-	! allocate(A1(m,n))
-	! allocate(B1(n,k))
-	
-	! ! n1 = OMP_get_wtime()	
-
-	! if(isnan(fnorm(A,m,n)) .or. isnan(fnorm(B,n,k)))then
-		! write(*,*)fnorm(A,m,n),fnorm(B,n,k),'diaod'
-		! stop
-	! end if
-	
-	! A1 = A
-	! B1 = B
-	
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do ii =1,m	
-	! do jj =1,k	
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	 
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-							 
- 
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	
-	! deallocate(A1)
-	! deallocate(B1)
- ! end subroutine gemm_omp
- 
- ! subroutine gemmHN_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(n,m),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)	
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	! allocate(A1(n,m))
-	! allocate(B1(n,k))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + conjg(cmplx(A1(kk,ii),kind=8))*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	
-	! deallocate(A1)
-	! deallocate(B1)	
- ! end subroutine gemmHN_omp
- 
-
- ! subroutine gemmNH_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(k,n),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)	
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	
-	! allocate(A1(m,n))
-	! allocate(B1(k,n))
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*conjg(cmplx(B1(jj,kk),kind=8))	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	! deallocate(A1)
-	! deallocate(B1)		
- ! end subroutine gemmNH_omp
- 
- 
- 
- ! subroutine gemmTN_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(n,m),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)		
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-
-	! allocate(A1(n,m))
-	! allocate(B1(n,k))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(kk,ii)*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	! deallocate(A1)
-	! deallocate(B1)		
- ! end subroutine gemmTN_omp
- 
- 
-
- ! subroutine gemmNT_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(k,n),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)		
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	! allocate(A1(m,n))
-	! allocate(B1(k,n))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*B1(jj,kk)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-
-	! deallocate(A1)
-	! deallocate(B1)		
-! end subroutine gemmNT_omp
-
-! subroutine copymatN(A,B,m,n)
-	! implicit none 
-	! integer m,n
-	! DT::A(:,:),B(:,:)
-	! character:: chara
-	! real(kind=8)::n1,n2
-	! integer ii,jj,ijind
-	
-	! ! n1 = OMP_get_wtime()
-	
-
-	! ! !$omp parallel do default(shared) private(ii,jj)	
-		! do ii =1,m
-		! do jj =1,n
-			! B(ii,jj) = A(ii,jj)
-		! end do
-		! end do
-	! ! !$omp end parallel do	
-	
-
-	! ! n2 = OMP_get_wtime()
-	! ! time_memcopy = time_memcopy + n2-n1
-	
- ! end subroutine copymatN
- 
  
   subroutine copymatT(A,B,m,n)
 	implicit none 
@@ -339,7 +104,7 @@ function isnanMat(A,m,n)
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -441,7 +206,7 @@ end subroutine LR_ReCompression
 subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,ruv,rup
@@ -479,7 +244,7 @@ end subroutine LR_FnormUp
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -1853,7 +1618,7 @@ end subroutine GeneralInverse
 	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,Flops)
 	! 
 	! 
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2242,7 +2007,7 @@ end subroutine RandomMat
 
 subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2415,7 +2180,7 @@ end subroutine ACA_SubsetSelection
 subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2912,7 +2677,7 @@ end subroutine Cart2Sph
 
 complex(kind=8) function Hankel02_Func(x)
 
-use HODLR_DEFS    
+use BPACK_DEFS    
 implicit none
     
     real(kind=8) x
@@ -3115,6 +2880,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				
 				call MPI_Group_incl(MPI_Group_H, ptree%pgrp(group)%nproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 				call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,ptree%pgrp(group)%Comm,ierr)
+				
 				deallocate(groupmembers_sml)
 				call MPI_Group_Free(MPI_Group_H_sml,ierr)			
 				

@@ -1,5 +1,5 @@
 module EMCURV_MODULE
-use z_HODLR_DEFS
+use z_BPACK_DEFS
 use z_misc
 implicit none
 
@@ -46,7 +46,7 @@ contains
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_EMCURV(m,n,value_e,quant)
 		
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		implicit none
 		
 		integer edge_m, edge_n, i, j, flag
@@ -103,7 +103,7 @@ contains
 
 	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
 		
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		complex(kind=8)::curr
@@ -122,7 +122,7 @@ contains
 
 	subroutine RCS_bistatic_CURV(curr,msh,quant,ptree)
 		!integer flag
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		complex(kind=8)::curr(:)
@@ -169,7 +169,7 @@ contains
 
 	subroutine RCS_monostatic_VV_CURV(dphi,rcs,curr,msh,quant,ptree)
 
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		
@@ -203,7 +203,7 @@ contains
 
 	subroutine element_Vinc_VV_CURV(phi,edge,value,msh,quant)
 
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		
@@ -225,7 +225,7 @@ contains
 
 subroutine geo_modeling_CURV(quant,MPIcomm)
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     ! type(z_mesh)::msh
 	type(quant_EMCURV)::quant
@@ -725,6 +725,152 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     return
     
 end subroutine geo_modeling_CURV
+	
+	
+	
+subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+    
+    use z_BPACK_DEFS
+	use z_BPACK_Solve_Mul	
+    
+    implicit none
+    
+    integer i, j, ii, jj, iii, jjj, ierr
+    integer level, blocks, edge, patch, node, group
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+    real T0
+    real(kind=8) n1,n2,rtemp	
+    complex(kind=8) value_Z
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
+	real(kind=8):: rel_error
+	type(z_Hoption)::option
+	type(z_mesh)::msh
+	type(quant_EMCURV)::quant
+	type(z_proctree)::ptree
+	class(*)::bmat
+	type(z_Hstat)::stats	
+	complex(kind=8),allocatable:: current(:),voltage(:)
+	
+	N_unk_loc = msh%idxe-msh%idxs+1
+	
+	if(option%ErrSol==1)then
+		call z_bpack_test_solve_error(bmat,N_unk_loc,option,ptree,stats)
+	endif
+	
+    if (quant%RCS_static==2) then
+    
+        phi=180d0
+        
+        allocate (current(N_unk_loc))
+		Current=0
+        allocate (voltage(N_unk_loc))
+								  
+        !$omp parallel do default(shared) private(edge,value_Z)
+        do edge=msh%idxs, msh%idxe
+            call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
+            voltage(edge-msh%idxs+1)=value_Z
+        enddo    
+        !$omp end parallel do
+        
+        n1 = OMP_get_wtime()
+        
+		call z_bpack_solution(bmat,Current,Voltage,N_unk_loc,1,option,ptree,stats)
+		
+		n2 = OMP_get_wtime()
+		stats%Time_Sol = stats%Time_Sol + n2-n1
+		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID)then
+			write (*,*) ''
+			write (*,*) 'Solving:',rtemp,'Seconds'
+			write (*,*) ''
+		endif
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
+		
+		T0=secnds(0.0)
+        call RCS_bistatic_CURV(Current,msh,quant,ptree)
+
+		if(ptree%MyID==Main_ID)then
+			write (*,*) ''
+			write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+			write (*,*) ''
+		endif
+    
+		deallocate(current)
+		deallocate(voltage)
+	
+    elseif (quant%RCS_static==1) then
+    
+        allocate (current(N_unk_loc))
+        num_sample=quant%RCS_Nsample
+        dphi=180./num_sample
+        
+		allocate (b(N_unk_loc,num_sample+1))
+		allocate (x(N_unk_loc,num_sample+1))
+		x=0
+		
+        if(ptree%MyID==Main_ID)open (100, file='RCS_monostatic.txt')
+
+        n1=OMP_get_wtime()       
+        do j=0, num_sample 
+            phi=j*dphi
+			!$omp parallel do default(shared) private(edge,value_Z)
+			do edge=msh%idxs, msh%idxe
+				call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
+				b(edge-msh%idxs+1,j+1)=value_Z
+			enddo    
+			!$omp end parallel do
+		enddo
+		
+		call z_bpack_solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+			
+			
+		do j=0, num_sample 	
+			phi=j*dphi
+			Current=x(:,j+1)
+            call RCS_monostatic_VV_CURV(phi,rcs_V,Current,msh,quant,ptree)
+!             !$omp parallel do default(shared) private(i)
+!             do i=1, N_unk
+!                 current(i)=vectors_block(0)%vector(i,2)
+!             enddo
+!             !$omp end parallel do
+!             call RCS_monostatic_HH(theta,phi,rcs_H)
+            
+            if(ptree%MyID==Main_ID)write (100,*) j,phi,rcs_V !,rcs_H
+            
+            ! deallocate (vectors_block)
+            
+        enddo
+        
+		n2 = OMP_get_wtime()
+		stats%Time_Sol = stats%Time_Sol + n2-n1
+		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)		
+		
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
+			close(100)
+			write (*,*) ''
+			write (*,*) 'Solving:',rtemp,'Seconds'
+			write (*,*) ''     
+		endif
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
+		
+	! call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_RedistV:', rtemp			
+		
+		deallocate(b)
+		deallocate(x)
+		deallocate(Current)
+		
+    endif
+        
+    return
+    
+end subroutine EM_solve_CURV	
+	
+	
+	
 	
 	
 

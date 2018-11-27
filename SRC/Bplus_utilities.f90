@@ -1,15 +1,474 @@
 #include "HODLR_config.fi"
-module HODLR_Utilities
+module Bplus_Utilities
 use misc
-
-
 contains
+
+
+subroutine Bplus_delete(bplus)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block
+type(blockplus)::bplus
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8)::rtemp
+
+if(associated(bplus%LL))then
+do ll=1,LplusMax
+	if(bplus%LL(ll)%Nbound>0)then
+		if(associated(bplus%LL(ll)%matrices_block))then
+		do bb=1,bplus%LL(ll)%Nbound
+			! write(*,*)ll,bplus%Lplus,bb,bplus%LL(ll)%Nbound,'fff'
+			call BF_delete(bplus%LL(ll)%matrices_block(bb),1)
+		end do		
+		deallocate(bplus%LL(ll)%matrices_block)
+		endif
+		if(allocated(bplus%LL(ll)%boundary_map))deallocate(bplus%LL(ll)%boundary_map)
+	end if
+end do
+deallocate(bplus%LL)
+endif
+
+end subroutine Bplus_delete
+
+
+subroutine Bplus_copy(bplus_i,bplus_o,memory)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block_i,block_o
+type(blockplus)::bplus_i,bplus_o
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8),optional::memory
+real(kind=8)::rtemp
+
+call Bplus_delete(bplus_o)
+
+if(present(memory))memory=0
+
+allocate(bplus_o%LL(LplusMax))
+bplus_o%Lplus = bplus_i%Lplus
+bplus_o%boundary = bplus_i%boundary
+bplus_o%level = bplus_i%level
+bplus_o%col_group = bplus_i%col_group
+bplus_o%row_group = bplus_i%row_group
+bplus_o%pgno = bplus_i%pgno
+
+
+do ll=1,LplusMax
+	bplus_o%LL(ll)%Nbound=bplus_i%LL(ll)%Nbound
+	bplus_o%LL(ll)%rankmax=bplus_i%LL(ll)%rankmax
+	
+
+	
+	if(bplus_i%LL(ll)%Nbound>0)then
+		allocate(bplus_o%LL(ll)%matrices_block(bplus_i%LL(ll)%Nbound))	
+		do bb=1,bplus_i%LL(ll)%Nbound
+			call BF_copy('N',bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
+			if(present(memory))memory=memory+rtemp
+		end do
+		if(allocated(bplus_i%LL(ll)%boundary_map))then
+			Nboundall=size(bplus_i%LL(ll)%boundary_map)
+			allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
+			if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
+			bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
+		endif
+	end if
+end do
+
+end subroutine Bplus_copy
+
+
+subroutine Bplus_copy_delete(bplus_i,bplus_o,memory)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block_i,block_o
+type(blockplus)::bplus_i,bplus_o
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8),optional::memory
+real(kind=8)::rtemp
+
+if(present(memory))memory=0
+
+allocate(bplus_o%LL(LplusMax))
+bplus_o%Lplus = bplus_i%Lplus
+bplus_o%boundary = bplus_i%boundary
+bplus_o%level = bplus_i%level
+bplus_o%col_group = bplus_i%col_group
+bplus_o%row_group = bplus_i%row_group
+
+
+do ll=1,LplusMax
+	bplus_o%LL(ll)%Nbound=bplus_i%LL(ll)%Nbound
+	bplus_o%LL(ll)%rankmax=bplus_i%LL(ll)%rankmax
+	if(bplus_i%LL(ll)%Nbound>0)then
+		allocate(bplus_o%LL(ll)%matrices_block(bplus_i%LL(ll)%Nbound))
+		do bb=1,bplus_i%LL(ll)%Nbound
+			call BF_copy_delete(bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
+			if(present(memory))memory=memory+rtemp
+		end do
+		deallocate(bplus_i%LL(ll)%matrices_block)
+		Nboundall=size(bplus_i%LL(ll)%boundary_map)
+		allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
+		if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
+		bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
+		deallocate(bplus_i%LL(ll)%boundary_map)
+	end if
+end do
+
+deallocate(bplus_i%LL)
+end subroutine Bplus_copy_delete
+
+
+
+subroutine Bplus_extract_partial(bplus_i,ll_s,row_group,agent_bplus,msh)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block_i,block_o
+type(blockplus)::bplus_i,agent_bplus
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb,bb_o
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8)::rtemp
+integer row_group,ll_s,idx_s,idx_e
+type(mesh)::msh
+
+call assert(bplus_i%row_group==bplus_i%col_group,'only works for square matrix')
+
+idx_s = msh%basis_group(row_group)%head
+idx_e = msh%basis_group(row_group)%tail
+
+! allocate(agent_bplus)
+allocate(agent_bplus%LL(LplusMax))
+do ll=1,LplusMax
+agent_bplus%LL(ll)%Nbound = 0
+end do
+
+agent_bplus%Lplus = bplus_i%Lplus - ll_s + 1
+agent_bplus%row_group = 	row_group
+agent_bplus%col_group = 	row_group
+agent_bplus%level = GetTreelevel(row_group)-1
+
+do ll=1,agent_bplus%Lplus
+	agent_bplus%LL(ll)%Nbound = 0
+	agent_bplus%LL(ll)%rankmax=bplus_i%LL(ll+ll_s-1)%rankmax
+	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
+		if(msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
+			agent_bplus%LL(ll)%Nbound = agent_bplus%LL(ll)%Nbound + 1
+		end if
+	end do
+	if(agent_bplus%LL(ll)%Nbound>0)then
+		allocate(agent_bplus%LL(ll)%matrices_block(agent_bplus%LL(ll)%Nbound))
+	end if
+end do
+
+
+do ll=1,agent_bplus%Lplus
+	bb_o = 0
+	do bb=1,bplus_i%LL(ll+ll_s-1)%Nbound
+		if(msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%head>=idx_s .and. msh%basis_group(bplus_i%LL(ll+ll_s-1)%matrices_block(bb)%row_group)%tail<=idx_e)then
+			bb_o = bb_o + 1
+			call BF_copy('N',bplus_i%LL(ll+ll_s-1)%matrices_block(bb),agent_bplus%LL(ll)%matrices_block(bb_o))
+		end if
+	end do
+end do
+
+
+
+end subroutine Bplus_extract_partial
+
+
+
+subroutine Bplus_ComputeMemory(bplus_i,memory)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block_i,block_o
+type(blockplus)::bplus_i,bplus_o
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8)::memory
+real(kind=8)::rtemp
+
+memory=0
+
+do ll=1,LplusMax
+	if(bplus_i%LL(ll)%Nbound>0)then
+		do bb=1,bplus_i%LL(ll)%Nbound
+			call BF_ComputeMemory(bplus_i%LL(ll)%matrices_block(bb),rtemp)
+			memory=memory+rtemp
+		end do
+	end if
+end do
+
+end subroutine Bplus_ComputeMemory
+
+
+
+
+logical function Bplus_checkNAN(bplus_i)
+use BPACK_DEFS
+use misc
+implicit none 
+type(matrixblock),pointer::block_i,block_o
+type(blockplus)::bplus_i,bplus_o
+
+integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
+integer level, blocks, edge, patch, node, group,level_c
+integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
+real(kind=8)::rtemp
+Bplus_checkNAN = .false.
+
+do ll=1,LplusMax
+	if(bplus_i%LL(ll)%Nbound>0)then
+		do bb=1,bplus_i%LL(ll)%Nbound
+			if(BF_checkNAN(bplus_i%LL(ll)%matrices_block(bb)))then
+				Bplus_checkNAN = .true.
+				return
+			end if
+		end do
+	end if
+end do
+
+end function Bplus_checkNAN
+
+subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats,level_start,level_end)
+    
+    use BPACK_DEFS
+	use misc
+    implicit none
+    
+    integer M,N, Nrnd,index_i, index_j, na, nb, index_start, num_vectors
+    integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
+    integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
+    integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+    integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
+    DT ctemp, a, b,ctemp1,ctemp2
+    character chara
+	type(matrixblock),pointer::blocks,blocks_1
+    integer:: middleflag
+	type(blockplus)::bplus
+	integer ll,bb
+	integer,optional:: level_start,level_end
+	integer:: level_s,level_e
+	type(proctree)::ptree
+	type(Hstat)::stats
+	
+    type(butterfly_Kerl),allocatable :: ButterflyVector(:)
+    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
+        DT :: random1(:,:), random2(:,:)
+        DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
+	!  write(*,*)'nima-1'
+	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
+	
+	integer idx_start_m,idx_start_n, idx_start_n_loc,idx_start_m_loc, idx_end_n_loc,idx_end_m_loc,idx_start_i_loc,idx_start_o_loc,idx_end_i_loc,idx_end_o_loc
+	
+	level_s=1
+	level_e=bplus%Lplus
+	if(present(level_start))level_s=level_start
+	if(present(level_end))level_e=level_end
+	
+	
+	if (chara=='N')allocate(Vout(M,Nrnd))
+	if (chara=='T')allocate(Vout(N,Nrnd))
+	Vout = 0
+	idx_start_n = bplus%LL(1)%matrices_block(1)%headn
+	idx_start_m = bplus%LL(1)%matrices_block(1)%headm	
+	
+
+	ctemp1=1.0d0 ; ctemp2=1.0d0
+
+	blocks_1 => bplus%LL(1)%matrices_block(1)
+	
+	do ll=level_s,level_e
+		do bb = 1,bplus%LL(ll)%Nbound
+			blocks => bplus%LL(ll)%matrices_block(bb)
+
+			if (chara=='N')then
+
+				if(blocks%M_loc>0)allocate(Vout_loc(blocks%M_loc,Nrnd))
+				if(blocks%N_loc>0)allocate(Vin_loc(blocks%N_loc,Nrnd))
+				call Redistribute1Dto1D(random1,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Vin_loc,blocks%N_p,blocks%headn,blocks%pgno,Nrnd,ptree)
+				call Redistribute1Dto1D(Vout,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Vout_loc,blocks%M_p,blocks%headm,blocks%pgno,Nrnd,ptree)	
+			else
+	
+				if(blocks%N_loc>0)allocate(Vout_loc(blocks%N_loc,Nrnd))
+				if(blocks%M_loc>0)allocate(Vin_loc(blocks%M_loc,Nrnd))
+				call Redistribute1Dto1D(random1,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Vin_loc,blocks%M_p,blocks%headm,blocks%pgno,Nrnd,ptree)
+				call Redistribute1Dto1D(Vout,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Vout_loc,blocks%N_p,blocks%headn,blocks%pgno,Nrnd,ptree)					
+				
+			endif
+			
+			if(blocks%N_loc>0 .or. blocks%M_loc>0)then
+				if(blocks%style==1)then
+					write(*,*)'style 1 not implemented'
+					stop
+				else 
+					! write(*,*)'ddd1',ll,bb
+					call BF_block_MVP_dat(blocks,chara,blocks%M_loc,blocks%N_loc,Nrnd,&
+					&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree,stats)					
+					! write(*,*)'ddd2'
+				end if
+			endif
+			
+			if (chara=='N')then
+				call Redistribute1Dto1D(Vout_loc,blocks%M_p,blocks%headm,blocks%pgno,Vout,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Nrnd,ptree)
+				if(blocks%M_loc>0)deallocate(Vout_loc)
+				if(blocks%N_loc>0)deallocate(Vin_loc)
+			else
+				call Redistribute1Dto1D(Vout_loc,blocks%N_p,blocks%headn,blocks%pgno,Vout,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Nrnd,ptree)
+				if(blocks%N_loc>0)deallocate(Vout_loc)
+				if(blocks%M_loc>0)deallocate(Vin_loc)
+			endif			
+			
+		end do
+	end do			
+	
+	random2 = random2*b + Vout*a
+	deallocate(Vout)
+
+end subroutine Bplus_block_MVP_dat
+
  
 
+! redistribute Bplus 
+subroutine Bplus_DoubleDistribute(bplus_o,stats,ptree)
+implicit none
 
-subroutine delete_blocks(blocks,allflag)
+integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
+type(proctree)::ptree
+type(commquant1D),allocatable::sendquant(:),recvquant(:)
+integer,allocatable::S_req(:),R_req(:)
+integer,allocatable:: statuss(:,:),statusr(:,:)
+integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax
+type(blockplus)::bplus_o
+type(matrixblock),pointer::blocks
+DT,pointer::dat_new(:,:),dat_old(:,:)
+real(kind=8)::n1,n2
+type(Hstat)::stats
 
-    use HODLR_DEFS
+dat_new=>null()
+dat_old=>null()
+
+if(bplus_o%Lplus==1)then
+	blocks => bplus_o%LL(1)%matrices_block(1)
+	! call MPI_barrier(ptree%pgrp(blocks%pgno_db)%Comm,ierr)
+	n1 = OMP_get_wtime()
+	
+	if(blocks%level_butterfly==0)then
+		
+		if(blocks%pgno/=blocks%pgno_db)then
+			! communicate block sizes first
+			if(blocks%M_loc>0)then
+				rank = blocks%rankmax
+			else
+				rank = 0
+			endif
+			call assert(MPI_COMM_NULL/=ptree%pgrp(blocks%pgno_db)%Comm,'communicator should not be null 4')
+			rankmax=0
+			call MPI_ALLREDUCE(rank,rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(blocks%pgno_db)%Comm,ierr)
+			rank=rankmax
+			
+			! redistribute U
+			if(blocks%M_loc>0)then
+				allocate(dat_old(blocks%M_loc,rank))
+				dat_old=blocks%ButterflyU%blocks(1)%matrix
+			endif
+			if(blocks%M_loc_db>0)then
+				allocate(dat_new(blocks%M_loc_db,rank))
+				dat_new=0
+			endif
+			call Redistribute1Dto1D(dat_old,blocks%M_p,0,blocks%pgno,dat_new,blocks%M_p_db,0,blocks%pgno_db,rank,ptree)
+			if(blocks%M_loc>0)then
+				deallocate(blocks%ButterflyU%blocks(1)%matrix)
+				deallocate(dat_old)
+				deallocate(blocks%M_p)
+			endif
+			if(blocks%M_loc_db>0)then
+				if(.not.allocated(blocks%ButterflyU%blocks))allocate(blocks%ButterflyU%blocks(1))
+				if(.not.allocated(blocks%ButterflyU%blocks(1)%matrix))allocate(blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc_db,rank))
+				blocks%ButterflyU%blocks(1)%matrix = dat_new
+				blocks%ButterflyU%blocks(1)%mdim = blocks%M
+				blocks%ButterflyU%blocks(1)%ndim = rank
+				deallocate(dat_new)
+				blocks%M_loc =blocks%M_loc_db
+				blocks%M_p=>blocks%M_p_db
+				blocks%M_p_db=>NULL()
+			endif
+			
+
+
+			! redistribute V
+			if(blocks%N_loc>0)then
+				allocate(dat_old(blocks%N_loc,rank))
+				dat_old=blocks%ButterflyV%blocks(1)%matrix
+			endif
+			if(blocks%N_loc_db>0)then
+				allocate(dat_new(blocks%N_loc_db,rank))
+				dat_new=0
+			endif
+			call Redistribute1Dto1D(dat_old,blocks%N_p,0,blocks%pgno,dat_new,blocks%N_p_db,0,blocks%pgno_db,rank,ptree)
+			if(blocks%N_loc>0)then
+				deallocate(blocks%ButterflyV%blocks(1)%matrix)
+				deallocate(dat_old)
+				deallocate(blocks%N_p)
+			endif
+			
+			! write(*,*)blocks%N_loc,blocks%N_loc_db,'nima'
+			
+			if(blocks%N_loc_db>0)then
+				if(.not.allocated(blocks%ButterflyV%blocks))allocate(blocks%ButterflyV%blocks(1))
+				if(.not.allocated(blocks%ButterflyV%blocks(1)%matrix))allocate(blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc_db,rank))
+				blocks%ButterflyV%blocks(1)%matrix = dat_new
+				blocks%ButterflyV%blocks(1)%mdim = blocks%N
+				blocks%ButterflyV%blocks(1)%ndim = rank				
+				deallocate(dat_new)
+				blocks%N_loc =blocks%N_loc_db
+				blocks%N_p=>blocks%N_p_db
+				blocks%N_p_db=>NULL()
+				blocks%rankmax = rank
+				blocks%pgno=blocks%pgno_db				
+			endif
+		endif
+	else
+		write(*,*)'redistribution of butterfly not implemented'
+				! write(*,*)blocks%N_p,blocks%N_loc,blocks%N_p_db,blocks%rankmax,blocks%pgno
+				! call assert(blocks%N_p(1,2)-blocks%N_p(1,1)+1==blocks%N_loc,'not good')
+				! call assert(blocks%M_p(1,2)-blocks%M_p(1,1)+1==blocks%M_loc,'not good')
+		! stop	
+	endif
+	
+	n2 = OMP_get_wtime()
+	stats%Time_RedistB=stats%Time_RedistB + n2-n1
+			
+else 
+	write(*,*)'redistribution of bplus not implemented'
+	! stop
+endif
+
+
+end subroutine Bplus_DoubleDistribute 
+ 
+ 
+ 
+subroutine BF_delete(blocks,allflag)
+
+    use BPACK_DEFS
     implicit none
     
     integer butterflyB_inuse, level_actual, num_col, num_row
@@ -78,6 +537,10 @@ subroutine delete_blocks(blocks,allflag)
 		blocks%rankmin = 1000
         
 		if(allocated(blocks%fullmat))deallocate (blocks%fullmat)
+		if(allocated(blocks%fullmat_MPI))deallocate (blocks%fullmat_MPI)
+		if(allocated(blocks%ipiv))deallocate (blocks%ipiv)
+        if (allocated(blocks%Butterfly_data_MPI))deallocate (blocks%Butterfly_data_MPI)
+        if (allocated(blocks%Butterfly_index_MPI))deallocate (blocks%Butterfly_index_MPI)
 		
 		if(allflag==1)then
 			if(associated(blocks%N_p))deallocate(blocks%N_p)
@@ -87,44 +550,11 @@ subroutine delete_blocks(blocks,allflag)
 		endif
     return
 
-end subroutine delete_blocks
+end subroutine BF_delete
 
 
-
-
-subroutine delete_Bplus(bplus)
-use HODLR_DEFS
-use misc
-implicit none 
-type(matrixblock),pointer::block
-type(blockplus)::bplus
-
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real(kind=8)::rtemp
-
-if(associated(bplus%LL))then
-do ll=1,LplusMax
-	if(bplus%LL(ll)%Nbound>0)then
-		if(associated(bplus%LL(ll)%matrices_block))then
-		do bb=1,bplus%LL(ll)%Nbound
-			! write(*,*)ll,bplus%Lplus,bb,bplus%LL(ll)%Nbound,'fff'
-			call delete_blocks(bplus%LL(ll)%matrices_block(bb),1)
-		end do		
-		deallocate(bplus%LL(ll)%matrices_block)
-		endif
-		if(allocated(bplus%LL(ll)%boundary_map))deallocate(bplus%LL(ll)%boundary_map)
-	end if
-end do
-deallocate(bplus%LL)
-endif
-
-end subroutine delete_Bplus
-
-
-subroutine copy_butterfly(trans,block_i,block_o,memory)
-use HODLR_DEFS
+subroutine BF_copy(trans,block_i,block_o,memory)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i,block_o
@@ -410,10 +840,10 @@ else if(trans=='T')then
 endif
 
 
-end subroutine copy_butterfly
+end subroutine BF_copy
 
-subroutine copy_delete_butterfly(block_i,block_o,memory)
-use HODLR_DEFS
+subroutine BF_copy_delete(block_i,block_o,memory)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i,block_o
@@ -556,10 +986,10 @@ end if
 
 							 
 
-end subroutine copy_delete_butterfly
+end subroutine BF_copy_delete
 
-subroutine ComputeMemory_butterfly(block_i,memory)
-use HODLR_DEFS
+subroutine BF_ComputeMemory(block_i,memory)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i
@@ -600,15 +1030,12 @@ else
 	stop
 end if
 
-end subroutine ComputeMemory_butterfly
+end subroutine BF_ComputeMemory
 
 
 
-
-
-
-logical function CheckNAN_butterfly(block_i)
-use HODLR_DEFS
+logical function BF_checkNAN(block_i)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i
@@ -660,352 +1087,14 @@ else
 	stop
 end if
 
-CheckNAN_butterfly = isnan(temp)
+BF_checkNAN = isnan(temp)
 
-end function CheckNAN_butterfly
+end function BF_checkNAN
 
 
 
-
-
-
-
-subroutine copy_Bplus(bplus_i,bplus_o,memory)
-use HODLR_DEFS
-use misc
-implicit none 
-type(matrixblock),pointer::block_i,block_o
-type(blockplus)::bplus_i,bplus_o
-
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real(kind=8),optional::memory
-real(kind=8)::rtemp
-
-call delete_Bplus(bplus_o)
-
-if(present(memory))memory=0
-
-allocate(bplus_o%LL(LplusMax))
-bplus_o%Lplus = bplus_i%Lplus
-bplus_o%boundary = bplus_i%boundary
-bplus_o%level = bplus_i%level
-bplus_o%col_group = bplus_i%col_group
-bplus_o%row_group = bplus_i%row_group
-bplus_o%pgno = bplus_i%pgno
-
-
-do ll=1,LplusMax
-	bplus_o%LL(ll)%Nbound=bplus_i%LL(ll)%Nbound
-	bplus_o%LL(ll)%rankmax=bplus_i%LL(ll)%rankmax
-	
-
-	
-	if(bplus_i%LL(ll)%Nbound>0)then
-		allocate(bplus_o%LL(ll)%matrices_block(bplus_i%LL(ll)%Nbound))	
-		do bb=1,bplus_i%LL(ll)%Nbound
-			call copy_butterfly('N',bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
-			if(present(memory))memory=memory+rtemp
-		end do
-		if(allocated(bplus_i%LL(ll)%boundary_map))then
-			Nboundall=size(bplus_i%LL(ll)%boundary_map)
-			allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
-			if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
-			bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
-		endif
-	end if
-end do
-
-end subroutine copy_Bplus
-
-
-subroutine copy_delete_Bplus(bplus_i,bplus_o,memory)
-use HODLR_DEFS
-use misc
-implicit none 
-type(matrixblock),pointer::block_i,block_o
-type(blockplus)::bplus_i,bplus_o
-
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real(kind=8),optional::memory
-real(kind=8)::rtemp
-
-if(present(memory))memory=0
-
-allocate(bplus_o%LL(LplusMax))
-bplus_o%Lplus = bplus_i%Lplus
-bplus_o%boundary = bplus_i%boundary
-bplus_o%level = bplus_i%level
-bplus_o%col_group = bplus_i%col_group
-bplus_o%row_group = bplus_i%row_group
-
-
-do ll=1,LplusMax
-	bplus_o%LL(ll)%Nbound=bplus_i%LL(ll)%Nbound
-	bplus_o%LL(ll)%rankmax=bplus_i%LL(ll)%rankmax
-	if(bplus_i%LL(ll)%Nbound>0)then
-		allocate(bplus_o%LL(ll)%matrices_block(bplus_i%LL(ll)%Nbound))
-		do bb=1,bplus_i%LL(ll)%Nbound
-			call copy_delete_butterfly(bplus_i%LL(ll)%matrices_block(bb),bplus_o%LL(ll)%matrices_block(bb),rtemp)
-			if(present(memory))memory=memory+rtemp
-		end do
-		deallocate(bplus_i%LL(ll)%matrices_block)
-		Nboundall=size(bplus_i%LL(ll)%boundary_map)
-		allocate(bplus_o%LL(ll)%boundary_map(Nboundall))
-		if(present(memory))memory=memory+ SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
-		bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
-		deallocate(bplus_i%LL(ll)%boundary_map)
-	end if
-end do
-
-deallocate(bplus_i%LL)
-end subroutine copy_delete_Bplus
-
-
-subroutine ComputeMemory_Bplus(bplus_i,memory)
-use HODLR_DEFS
-use misc
-implicit none 
-type(matrixblock),pointer::block_i,block_o
-type(blockplus)::bplus_i,bplus_o
-
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real(kind=8)::memory
-real(kind=8)::rtemp
-
-memory=0
-
-do ll=1,LplusMax
-	if(bplus_i%LL(ll)%Nbound>0)then
-		do bb=1,bplus_i%LL(ll)%Nbound
-			call ComputeMemory_butterfly(bplus_i%LL(ll)%matrices_block(bb),rtemp)
-			memory=memory+rtemp
-		end do
-	end if
-end do
-
-end subroutine ComputeMemory_Bplus
-
-
-
-
-logical function CheckNAN_Bplus(bplus_i)
-use HODLR_DEFS
-use misc
-implicit none 
-type(matrixblock),pointer::block_i,block_o
-type(blockplus)::bplus_i,bplus_o
-
-integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m,ll,bb
-integer level, blocks, edge, patch, node, group,level_c
-integer::block_num,block_num_new,num_blocks,level_butterfly,Nboundall	
-real(kind=8)::rtemp
-CheckNAN_Bplus = .false.
-
-do ll=1,LplusMax
-	if(bplus_i%LL(ll)%Nbound>0)then
-		do bb=1,bplus_i%LL(ll)%Nbound
-			if(CheckNAN_butterfly(bplus_i%LL(ll)%matrices_block(bb)))then
-				CheckNAN_Bplus = .true.
-				return
-			end if
-		end do
-	end if
-end do
-
-end function CheckNAN_Bplus
-
-
-
-subroutine copy_HOBF(ho_bf_i,ho_bf_o)
-use HODLR_DEFS
-use misc
-implicit none 
-
-type(hobf)::ho_bf_i,ho_bf_o
-
-integer ii
-integer level_c
-
-! real(kind=8),optional::memory
-! real(kind=8)::rtemp
-
-
-ho_bf_o%Maxlevel = ho_bf_i%Maxlevel
-ho_bf_o%N = ho_bf_i%N
-
-
-allocate(ho_bf_o%levels(ho_bf_o%Maxlevel+1))
-do level_c = 1,ho_bf_o%Maxlevel+1
-	ho_bf_o%levels(level_c)%level = ho_bf_i%levels(level_c)%level
-	ho_bf_o%levels(level_c)%N_block_forward = ho_bf_i%levels(level_c)%N_block_forward
-	ho_bf_o%levels(level_c)%N_block_inverse = ho_bf_i%levels(level_c)%N_block_inverse
-	ho_bf_o%levels(level_c)%Bidxs = ho_bf_i%levels(level_c)%Bidxs
-	ho_bf_o%levels(level_c)%Bidxe = ho_bf_i%levels(level_c)%Bidxe
-	
-	allocate(ho_bf_o%levels(level_c)%BP(ho_bf_o%levels(level_c)%N_block_forward)) 
-	! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g'
-	allocate(ho_bf_o%levels(level_c)%BP_inverse(ho_bf_o%levels(level_c)%N_block_inverse))
-	! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g1'	
-	do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
-		call copy_Bplus(ho_bf_i%levels(level_c)%BP(ii),ho_bf_o%levels(level_c)%BP(ii))
-	end do
-	! if(level_c/=ho_bf_o%Maxlevel+1)then
-		do ii = 1, ho_bf_o%levels(level_c)%N_block_inverse
-			! write(*,*)ii,'6642'
-			call copy_Bplus(ho_bf_i%levels(level_c)%BP_inverse(ii),ho_bf_o%levels(level_c)%BP_inverse(ii))
-		end do	
-	! end if
-end do		
-
-end subroutine copy_HOBF
-
-
-
-subroutine delete_HOBF(ho_bf_o)
-use HODLR_DEFS
-use misc
-implicit none 
-
-type(hobf)::ho_bf_o
-
-integer ii
-integer level_c
-
-do level_c = 1,ho_bf_o%Maxlevel+1
-	do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
-		call delete_Bplus(ho_bf_o%levels(level_c)%BP(ii))
-		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse_update(ii))
-	end do
-	do ii = 1, ho_bf_o%levels(level_c)%N_block_inverse
-		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse(ii))
-		call delete_Bplus(ho_bf_o%levels(level_c)%BP_inverse_schur(ii))
-	end do	
-	deallocate(ho_bf_o%levels(level_c)%BP) 
-	deallocate(ho_bf_o%levels(level_c)%BP_inverse_update) 
-	deallocate(ho_bf_o%levels(level_c)%BP_inverse)	
-	deallocate(ho_bf_o%levels(level_c)%BP_inverse_schur)	
-end do		
-deallocate(ho_bf_o%levels)
-
-end subroutine delete_HOBF
-
-
-
-subroutine delete_kernelquant(ker)
-use HODLR_DEFS
-use misc
-implicit none 
-type(kernelquant)::ker
-if(allocated(ker%matZ_glo))deallocate(ker%matZ_glo)
-end subroutine delete_kernelquant
-
-
-subroutine delete_mesh(msh)
-use HODLR_DEFS
-use misc
-implicit none 
-type(mesh)::msh
-integer ii
-
-if(allocated(msh%xyz))deallocate(msh%xyz)
-if(allocated(msh%new2old))deallocate(msh%new2old)
-if(allocated(msh%old2new))deallocate(msh%old2new)
-if(allocated(msh%pretree))deallocate(msh%pretree)
-if(allocated(msh%basis_group))then
-! do ii=1,msh%Maxgroup
-	! if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
-! enddo
-deallocate(msh%basis_group)
-endif
-
-end subroutine delete_mesh
-
-subroutine delete_proctree(ptree)
-use HODLR_DEFS
-use misc
-implicit none 
-type(proctree)::ptree
-integer ii,Maxgrp
-integer ierr
-
-if(allocated(ptree%pgrp))then
-Maxgrp=2**(ptree%nlevel)-1		
-do ii=1,Maxgrp
-	if(associated(ptree%pgrp(ii)%gd))then
-		call delete_grid(ptree%pgrp(ii)%gd)
-		deallocate(ptree%pgrp(ii)%gd)
-		ptree%pgrp(ii)%gd=>null()
-	endif
-	if(ptree%pgrp(ii)%ctxt/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt)
-	if(ptree%pgrp(ii)%ctxt1D/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1D)
-	if(ptree%pgrp(ii)%ctxt_head/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt_head)
-	if(ptree%pgrp(ii)%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%pgrp(ii)%Comm,ierr)
-enddo
-deallocate(ptree%pgrp)
-endif
-if(ptree%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%Comm,ierr)
-
-end subroutine delete_proctree
-
-
-recursive subroutine delete_grid(gd)
-use HODLR_DEFS
-use misc
-implicit none 
-type(grid)::gd
-integer ierr
-
-if(.not. associated(gd%gdc))then
-	if(gd%ctxt/=-1)call blacs_gridexit(gd%ctxt)
-	if(gd%Comm/=MPI_COMM_NULL)call MPI_Comm_free(gd%Comm,ierr)
-	return
-else
-	call delete_grid(gd%gdc(1))
-	call delete_grid(gd%gdc(2))
-	deallocate(gd%gdc)
-	gd%gdc=>null()
-endif
-end subroutine delete_grid
-
-
-subroutine delete_Hstat(stats)
-use HODLR_DEFS
-use misc
-implicit none 
-type(Hstat)::stats
-
-if(allocated(stats%rankmax_of_level))deallocate(stats%rankmax_of_level)
-if(allocated(stats%rankmin_of_level))deallocate(stats%rankmin_of_level)
-if(allocated(stats%rankmax_of_level_global))deallocate(stats%rankmax_of_level_global)
-
-end subroutine delete_Hstat
-
-recursive subroutine copy_basis_group(basis_group1,node1,Maxgroup1,basis_group2,node2,Maxgroup2,offset)
-implicit none 
-type(basisgroup):: basis_group1(:),basis_group2(:)
-integer node1,node2,Maxgroup1,Maxgroup2,offset
-if(node2<=Maxgroup2 .and. node1<=Maxgroup1)then
-
-	basis_group2(node2)%head =basis_group1(node1)%head+offset 
-	basis_group2(node2)%tail =basis_group1(node1)%tail+offset 
-	basis_group2(node2)%pgno =basis_group1(node1)%pgno
-	 
-	call copy_basis_group(basis_group1,node1*2,Maxgroup1,basis_group2,node2*2,Maxgroup2,offset)
-	call copy_basis_group(basis_group1,node1*2+1,Maxgroup1,basis_group2,node2*2+1,Maxgroup2,offset)
-endif
-
-end subroutine copy_basis_group
-
-
-
-subroutine print_butterfly_size_rank(block_i,tolerance)
-use HODLR_DEFS
+subroutine BF_print_size_rank(block_i,tolerance)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i
@@ -1079,13 +1168,13 @@ do level=0, level_butterfly+1
 
 enddo
 
-end subroutine print_butterfly_size_rank
+end subroutine BF_print_size_rank
 
 
 
-subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR,agent_block)
+subroutine BF_extract_partial(block_o,level_butterfly_loc,ij_loc,LR,agent_block)
 	use misc
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	type(matrixblock)::block_o,agent_block
@@ -1222,11 +1311,11 @@ subroutine Extract_partial_butterfly(block_o,level_butterfly_loc,ij_loc,LR,agent
 		enddo
 	
 	end if	
-end subroutine Extract_partial_butterfly
+end subroutine BF_extract_partial
 
 
-subroutine Copy_butterfly_partial(block_i,block_o,level_butterfly_loc,ij_loc,LR,memory)
-use HODLR_DEFS
+subroutine BF_copy_partial(block_i,block_o,level_butterfly_loc,ij_loc,LR,memory)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_o,block_i
@@ -1416,14 +1505,14 @@ else if(LR=='R')then
 					
 end if	
 
-end subroutine Copy_butterfly_partial
+end subroutine BF_copy_partial
 
 
 
 
-subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,random,num_vect_sub,nth_s,nth_e,Ng)
+subroutine BF_Partial_MVP_Half(block_rand,chara,level_start,level_end,random,num_vect_sub,nth_s,nth_e,Ng)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
@@ -1646,12 +1735,12 @@ subroutine Butterfly_Partial_MVP_Half(block_rand,chara,level_start,level_end,ran
        ! write(*,*)'out '
     return
     
-end subroutine Butterfly_Partial_MVP_Half
+end subroutine BF_Partial_MVP_Half
 
 
 subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
 	use misc
     implicit none
     
@@ -1745,7 +1834,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 		num_vectors=Nrnd
 		! write(*,*)num_vectors
 		! stop
-		if(CheckNAN_butterfly(blocks))then
+		if(BF_checkNAN(blocks))then
 			write(*,*)'NAN in 0 BF_block_MVP_dat'
 			stop
 		end if
@@ -2205,362 +2294,12 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 end subroutine BF_block_MVP_dat
 
 
-subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats,level_start,level_end)
-    
-    use HODLR_DEFS
-	use misc
-    implicit none
-    
-    integer M,N, Nrnd,index_i, index_j, na, nb, index_start, num_vectors
-    integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
-    integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
-    integer vector_a, vector_b, nn1, nn2, mm1, mm2,levelm
-    DT ctemp, a, b,ctemp1,ctemp2
-    character chara
-	type(matrixblock),pointer::blocks,blocks_1
-    integer:: middleflag
-	type(blockplus)::bplus
-	integer ll,bb
-	integer,optional:: level_start,level_end
-	integer:: level_s,level_e
-	type(proctree)::ptree
-	type(Hstat)::stats
-	
-    type(butterfly_Kerl),allocatable :: ButterflyVector(:)
-    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
-        DT :: random1(:,:), random2(:,:)
-        DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
-	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
-	!  write(*,*)'nima-1'
-	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
-	
-	integer idx_start_m,idx_start_n, idx_start_n_loc,idx_start_m_loc, idx_end_n_loc,idx_end_m_loc,idx_start_i_loc,idx_start_o_loc,idx_end_i_loc,idx_end_o_loc
-	
-	level_s=1
-	level_e=bplus%Lplus
-	if(present(level_start))level_s=level_start
-	if(present(level_end))level_e=level_end
-	
-	
-	if (chara=='N')allocate(Vout(M,Nrnd))
-	if (chara=='T')allocate(Vout(N,Nrnd))
-	Vout = 0
-	idx_start_n = bplus%LL(1)%matrices_block(1)%headn
-	idx_start_m = bplus%LL(1)%matrices_block(1)%headm	
-	
-
-	ctemp1=1.0d0 ; ctemp2=1.0d0
-
-	blocks_1 => bplus%LL(1)%matrices_block(1)
-	
-	do ll=level_s,level_e
-		do bb = 1,bplus%LL(ll)%Nbound
-			blocks => bplus%LL(ll)%matrices_block(bb)
-
-			if (chara=='N')then
-
-				if(blocks%M_loc>0)allocate(Vout_loc(blocks%M_loc,Nrnd))
-				if(blocks%N_loc>0)allocate(Vin_loc(blocks%N_loc,Nrnd))
-				call Redistribute1Dto1D(random1,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Vin_loc,blocks%N_p,blocks%headn,blocks%pgno,Nrnd,ptree)
-				call Redistribute1Dto1D(Vout,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Vout_loc,blocks%M_p,blocks%headm,blocks%pgno,Nrnd,ptree)	
-			else
-	
-				if(blocks%N_loc>0)allocate(Vout_loc(blocks%N_loc,Nrnd))
-				if(blocks%M_loc>0)allocate(Vin_loc(blocks%M_loc,Nrnd))
-				call Redistribute1Dto1D(random1,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Vin_loc,blocks%M_p,blocks%headm,blocks%pgno,Nrnd,ptree)
-				call Redistribute1Dto1D(Vout,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Vout_loc,blocks%N_p,blocks%headn,blocks%pgno,Nrnd,ptree)					
-				
-			endif
-			
-			if(blocks%N_loc>0 .or. blocks%M_loc>0)then
-				if(blocks%style==1)then
-					write(*,*)'style 1 not implemented'
-					stop
-				else 
-					! write(*,*)'ddd1',ll,bb
-					call BF_block_MVP_dat(blocks,chara,blocks%M_loc,blocks%N_loc,Nrnd,&
-					&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree,stats)					
-					! write(*,*)'ddd2'
-				end if
-			endif
-			
-			if (chara=='N')then
-				call Redistribute1Dto1D(Vout_loc,blocks%M_p,blocks%headm,blocks%pgno,Vout,blocks_1%M_p,blocks_1%headm,blocks_1%pgno,Nrnd,ptree)
-				if(blocks%M_loc>0)deallocate(Vout_loc)
-				if(blocks%N_loc>0)deallocate(Vin_loc)
-			else
-				call Redistribute1Dto1D(Vout_loc,blocks%N_p,blocks%headn,blocks%pgno,Vout,blocks_1%N_p,blocks_1%headn,blocks_1%pgno,Nrnd,ptree)
-				if(blocks%N_loc>0)deallocate(Vout_loc)
-				if(blocks%M_loc>0)deallocate(Vin_loc)
-			endif			
-			
-		end do
-	end do			
-	
-	random2 = random2*b + Vout*a
-	deallocate(Vout)
-
-end subroutine Bplus_block_MVP_dat
 
 
 
+subroutine BF_value(mi,nj,blocks,value)
 
-! subroutine ComputeRandVectIndexArray(blocks,chara,level,IndexArray)
-    
-    ! use HODLR_DEFS
-    ! implicit none
-    
-    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
-    ! integer::IndexArray(:,:,:)
-	! integer::level_butterfly
-	! DT ctemp, a, b
-    ! character chara
-
-	! type(matrixblock)::blocks
-    
-	! level_butterfly = blocks%level_butterfly
-	
-    ! if (chara=='N') then
-        ! num_blocks=2**level_butterfly
-		
-		! Dimtmp = 0
-		! if(level==0)then
-			! num_groupn=num_blocks
-			! do j=1, num_groupn
-				! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-				! Dimtmp = Dimtmp + nn
-				! IndexArray(1,j,1) = Dimtmp-nn+1
-				! IndexArray(1,j,2) = Dimtmp
-			! end do
-		! else if(level==1)then
-			! num_groupn=num_blocks
-			! do j=1, num_groupn
-				! rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-				! Dimtmp = Dimtmp + rank
-				! IndexArray(1,j,1) = Dimtmp-rank+1
-				! IndexArray(1,j,2) = Dimtmp
-			! end do
-		! else if(level<=level_butterfly+1)then
-			! num_groupm=blocks%ButterflyKerl(level-1)%num_row
-			! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-			! if(num_groupn/=1)then
-				! do i=1, num_groupm
-					! index_i=int((i+1)/2)
-					! do j=1, num_groupn, 2
-						! index_j=int((j+1)/2)
-						! mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
-						! Dimtmp = Dimtmp + mm
-						! IndexArray(i,index_j,1) = Dimtmp-mm+1
-						! IndexArray(i,index_j,2) = Dimtmp
-					! end do
-				! end do
-			! else 
-				! write(*,*)'not implemented'
-				! stop
-			! end if
-		! else if(level==level_butterfly+2)then
-			! num_groupm = num_blocks
-			! do i=1, num_groupm
-				! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-				! Dimtmp = Dimtmp + mm
-				! IndexArray(i,1,1) = Dimtmp-mm+1
-				! IndexArray(i,1,2) = Dimtmp
-			! end do	
-		! end if
-
-			
-	! else if (chara=='T') then
-        ! num_blocks=2**level_butterfly
-
-		! Dimtmp = 0
-		! if(level==0)then
-			! num_groupm=num_blocks
-			! do i=1, num_groupm
-				! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-				! Dimtmp = Dimtmp + mm
-				! IndexArray(i,1,1) = Dimtmp - mm +1
-				! IndexArray(i,1,2) = Dimtmp
-			! end do		
-		! else if(level==1)then
-			! num_groupm=num_blocks
-			! do i=1, num_groupm
-				! rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
-				! Dimtmp = Dimtmp + rank
-				! IndexArray(i,1,1) = Dimtmp - rank +1
-				! IndexArray(i,1,2) = Dimtmp
-			! end do	
-		! else if(level<=level_butterfly+1)then
-			! num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
-			! num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col
-			! if (num_groupm/=1) then    
-				! do j=1, num_groupn
-					! index_j=int((j+1)/2)
-					! do i=1, num_groupm, 2
-						! index_i=int((i+1)/2)
-						! nn=size(blocks%ButterflyKerl(level_butterfly-level+2)%blocks(i,j)%matrix,2)
-						! Dimtmp = Dimtmp + nn
-						! IndexArray(index_i,j,1)=Dimtmp-nn+1
-						! IndexArray(index_i,j,2)=Dimtmp
-					! end do
-				! end do
-			! else 
-				! write(*,*)'not implemented'
-				! stop
-			! end if 
-		! else if(level==level_butterfly+2)then
-			! num_groupn = num_blocks
-			! do j=1, num_groupn
-				! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-				! Dimtmp = Dimtmp + nn
-				! IndexArray(1,j,1) = Dimtmp-nn+1					
-				! IndexArray(1,j,2) = Dimtmp					
-			! end do		
-		! end if
-
-	! end if		
-! end subroutine ComputeRandVectIndexArray
-
-
-
-
-! subroutine CountMaxIntermidiateVector(blocks,Nmax)
-    
-    ! use HODLR_DEFS
-    ! implicit none
-    
-    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start,Nmax
-    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_start,level_end,DimMax,Dimtmp
-	! integer::level_butterfly
-	! DT ctemp, a, b
-    ! character chara
-
-	! type(matrixblock)::blocks
-    
-	! level_butterfly = blocks%level_butterfly
-	
-		! Nmax = 0
-        ! num_blocks=2**level_butterfly
-		
-		! do level = 0,level_butterfly+2
-			! Dimtmp = 0
-			! if(level==0)then
-				! num_groupn=num_blocks
-				! do j=1, num_groupn
-					! nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-					! Dimtmp = Dimtmp + nn
-				! end do
-			! else if(level==1)then
-				! num_groupn=num_blocks
-				! do j=1, num_groupn
-					! rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-					! Dimtmp = Dimtmp + rank
-				! end do
-			! else if(level<=level_butterfly+1)then
-				! num_groupm=blocks%ButterflyKerl(level-1)%num_row
-				! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-				! if(num_groupn/=1)then
-					! do i=1, num_groupm
-						! index_i=int((i+1)/2)
-						! do j=1, num_groupn, 2
-							! index_j=int((j+1)/2)
-							! mm=size(blocks%ButterflyKerl(level-1)%blocks(i,j)%matrix,1)
-							! Dimtmp = Dimtmp + mm
-						! end do
-					! end do
-				! else 
-					! write(*,*)'not implemented'
-					! stop
-				! end if
-			! else if(level==level_butterfly+2)then
-				! num_groupm = num_blocks
-				! do i=1, num_groupm
-					! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-					! Dimtmp = Dimtmp + mm
-				! end do	
-			! end if
-			! Nmax = max(Nmax,Dimtmp)
-		! end do
-		
-		
-			
-		
-! end subroutine CountMaxIntermidiateVector
-
-
-
-! subroutine CountIndexArrayShape(blocks,chara,level,Ni,Nj)
-    
-    ! use HODLR_DEFS
-    ! implicit none
-    
-    ! integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    ! integer i, j, ii, jj, level, Ni,Nj, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,level_butterfly
-    ! DT ctemp, a, b
-    ! character chara
-    
-	! type(matrixblock)::blocks
-
-
-	! level_butterfly = blocks%level_butterfly
-    
-    ! if (chara=='N') then
-        ! num_blocks=2**level_butterfly
-		! if(level==0 .or. level==1)then
-			! Ni=1
-			! Nj=num_blocks
-		! else if(level<=level_butterfly+1)then
-            ! num_groupm=blocks%ButterflyKerl(level-1)%num_row
-            ! num_groupn=blocks%ButterflyKerl(level-1)%num_col			
-			! if(num_groupn/=1)then
-				! Ni = num_groupm
-				! Nj = int(num_groupn/2)
-			! else 
-				! Ni = num_groupm
-				! Nj = 1			
-			! end if
-		! else if(level==level_butterfly+2)then
-			! Ni=num_blocks
-			! Nj=1			
-		! end if
-		
-	! else if (chara=='T') then
-        ! num_blocks=2**level_butterfly
-		! ! write(*,*)level,level_butterfly+2
-		! if(level==0 .or. level==1)then
-			! Ni=num_blocks
-			! Nj=1
-		! else if(level<=level_butterfly+1)then
-            ! num_groupm=blocks%ButterflyKerl(level_butterfly-level+2)%num_row
-            ! num_groupn=blocks%ButterflyKerl(level_butterfly-level+2)%num_col			
-			! if(num_groupm/=1)then
-				! Ni = int(num_groupm/2)
-				! Nj = num_groupn
-			! else 
-				! Ni = 1
-				! Nj = num_groupn			
-			! end if
-		! else if(level==level_butterfly+2)then
-			! Ni=1
-			! Nj=num_blocks			
-		! end if	
-	! end if	
-! end subroutine CountIndexArrayShape
- 
-
-subroutine Butterfly_value(mi,nj,blocks,value)
-
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer mm, nn, mi, nj, groupm_start, groupn_start, level_butterfly, flag
@@ -2615,7 +2354,7 @@ subroutine Butterfly_value(mi,nj,blocks,value)
     endif
     
 !     if (group_index_mm(0)/=group_m .or. group_index_nn(0)/=group_n) then
-!         write (*,*) 'Butterfly_value_func error1!'
+!         write (*,*) 'BF_value_func error1!'
 !         pause
 !         continue
 !     endif
@@ -2666,68 +2405,11 @@ subroutine Butterfly_value(mi,nj,blocks,value)
      
     return
 
-end subroutine Butterfly_value
+end subroutine BF_value
 
 
-
-subroutine fullmat_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)		
-	use HODLR_DEFS
-    
-    	
-	use misc
-    implicit none
-    
-    integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start, num_vectors
-    integer i, j, ii, jj, level, level_butterfly, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
-    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2
-    DT ctemp, a, b
-    character chara
-	type(matrixblock)::blocks
-	integer M,N
-    DT :: random1(M,N), random2(M,N)
-	DT:: al,be
-	DT,allocatable :: random2tmp(:,:)
-	allocate(random2tmp(M,N))
-	
-	al=1d0
-	be=0d0
-	
-	num_vectors=size(random1,2)
-
-	
-	random2tmp = random2
-	call assert(size(blocks%fullmat,1)==size(blocks%fullmat,2) ,'M not square')
-	if(size(blocks%fullmat,1)/=M)write(*,*)M,N,shape(blocks%fullmat),blocks%row_group,blocks%col_group,'niao'
-	call assert(size(blocks%fullmat,1)==M,'M not equal fullmat dim')
-	
-	if (chara=='N') then
-        group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
-        group_n=blocks%col_group
-		call assert(group_m==group_n,'fullmat not square')
-        ! level_blocks=blocks%level
-		! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
-		                 
-		! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)    
-		call gemmf90(blocks%fullmat,M, random1,M, random2,M,'N','N',M,N,M,cone,czero)  		
-    elseif (chara=='T') then
-        group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
-        group_n=blocks%col_group
-		call assert(group_m==group_n,'fullmat not square')
-        ! level_blocks=blocks%level  
-		! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
-		call gemmf90(blocks%fullmat,M, random1,M, random2,M, 'T','N',M,N,M,al,be)  
-	end if
-	
-	random2 = a*random2+ b*random2tmp
-	! write(*,*)'wo cao ni ma'
-	deallocate(random2tmp)
-end subroutine fullmat_block_MVP_dat
-
-
-subroutine get_butterfly_minmaxrank(block_i)
-use HODLR_DEFS
+subroutine BF_get_rank(block_i)
+use BPACK_DEFS
 use misc
 implicit none 
 type(matrixblock)::block_i
@@ -2770,7 +2452,7 @@ do level=0, level_butterfly
 	enddo
 enddo
 
-end subroutine get_butterfly_minmaxrank
+end subroutine BF_get_rank
 
 
 
@@ -2778,9 +2460,9 @@ end subroutine get_butterfly_minmaxrank
 
 
 
-subroutine Butterfly_sym2asym(blocks)
+subroutine BF_sym2asym(blocks)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
 	use misc
 	
     	
@@ -2975,14 +2657,14 @@ subroutine Butterfly_sym2asym(blocks)
 
 	end if        
     
-end subroutine Butterfly_sym2asym
+end subroutine BF_sym2asym
 
 
 
 
-subroutine Butterfly_MoveSingulartoLeft(blocks)
+subroutine BF_MoveSingulartoLeft(blocks)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
 	use misc
 	
     	
@@ -3153,15 +2835,15 @@ subroutine Butterfly_MoveSingulartoLeft(blocks)
 	end do		
        
     
-end subroutine Butterfly_MoveSingulartoLeft
+end subroutine BF_MoveSingulartoLeft
 
 
 
 
 
-subroutine Butterfly_MoveSingulartoRight(blocks)
+subroutine BF_MoveSingulartoRight(blocks)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
 	use misc
 	
     	
@@ -3349,177 +3031,349 @@ subroutine Butterfly_MoveSingulartoRight(blocks)
 	end do		
        
     
-end subroutine Butterfly_MoveSingulartoRight
+end subroutine BF_MoveSingulartoRight
 
 
 
-subroutine InitStat(stats)
-	implicit none 
-	type(Hstat)::stats	
+recursive subroutine Hmat_block_copy(trans,block2,block1,memory)
+
+    use BPACK_DEFS
+    implicit none
+    
+    integer blocks, flag_recv, count1, count2, recv_count, mm, nn, length
+    integer i, ii, j, jj, style, send_ID, group_m, group_n, indices, requests
+    character chara
+    
+    type(matrixblock), pointer :: block1, block2, blocks_son1, blocks_son2
+	character::trans
+	real(kind=8),optional::memory	
+	real(kind=8)::memory_tmp	
 	
-	stats%Time_random=0  ! Intialization, MVP, Reconstruction 
-	stats%Time_Sblock=0
-	stats%Time_Sol=0
-	stats%Time_C_Mult=0
-	stats%Time_Inv=0
-	stats%Time_RedistB=0
-	stats%Time_RedistV=0
-	stats%Time_SMW=0
-	stats%Time_Fill=0
-	stats%Mem_peak=0
-	stats%Mem_Sblock=0
-	stats%Mem_SMW=0
-	stats%Mem_Direct_for=0
-	stats%Mem_Direct_inv=0
-	stats%Mem_int_vec=0
-	stats%Mem_Comp_for=0
-	stats%Flop_Fill=0
-	stats%Flop_Factor=0
-	stats%Flop_Sol=0
-	stats%Flop_C_Mult=0
-	time_tmp = 0
-end subroutine InitStat
+	block2%style = block1%style
+
+	block2%level=block1%level
+	block2%row_group=block1%row_group
+	block2%col_group=block1%col_group
+	block2%level_butterfly=0
+	group_m = block2%row_group
+	group_n = block2%col_group
+	block2%pgno = block1%pgno
+	block2%M = block1%M
+	block2%N = block1%N
+	block2%headm = block1%headm
+	block2%headn = block1%headn
+	
+	if(associated(block1%N_p))then
+		if(associated(block2%N_p))deallocate(block2%N_p)
+		allocate(block2%N_p(size(block1%N_p,1),2))
+		block2%N_p = block1%N_p
+	endif
+	if(associated(block1%M_p))then
+		if(associated(block2%M_p))deallocate(block2%M_p)
+		allocate(block2%M_p(size(block1%M_p,1),2))
+		block2%M_p = block1%M_p
+	endif	
+	
+	
+    style=block2%style    
+    if (style==4) then
+        allocate(block2%sons(2,2))
+        do j=1,2
+            do i=1,2
+                block2%sons(i,j)%father=>block2
+            enddo
+        enddo
+
+		blocks_son1=>block1%sons(1,1)
+		blocks_son2=>block2%sons(1,1)
+		call Hmat_block_copy(trans,blocks_son2,blocks_son1,memory)
+		blocks_son1=>block1%sons(2,1)
+		blocks_son2=>block2%sons(2,1)
+		call Hmat_block_copy(trans,blocks_son2,blocks_son1,memory)
+		 blocks_son1=>block1%sons(1,2)
+		blocks_son2=>block2%sons(1,2)
+		call Hmat_block_copy(trans,blocks_son2,blocks_son1,memory)
+		 blocks_son1=>block1%sons(2,2)
+		blocks_son2=>block2%sons(2,2)
+		call Hmat_block_copy(trans,blocks_son2,blocks_son1,memory)
+
+    else
+		call BF_copy(trans,block1,block2,memory_tmp)
+		if(present(memory))memory = memory + memory_tmp
+    endif
+    
+    return
+
+end subroutine Hmat_block_copy
 
 
+recursive subroutine Hmat_block_delete(blocks)
 
-subroutine PrintStat(stats,ptree)
-	implicit none 
-	type(Hstat)::stats	
+    
+    implicit none
+    
+    integer level_actual, num_col, num_row
+    integer i, j, mm, nn, rank, num_blocks, level, level_butterfly
+    real*8 memory_butterfly, rtemp
+    type(matrixblock) :: blocks
+    type(matrixblock), pointer :: blocks_son
+    
+    if (blocks%style==4) then
+        
+		blocks_son=>blocks%sons(1,1)       
+		call Hmat_block_delete(blocks_son)
+		blocks_son=>blocks%sons(2,1)       
+		call Hmat_block_delete(blocks_son)
+		blocks_son=>blocks%sons(1,2)       
+		call Hmat_block_delete(blocks_son)
+		blocks_son=>blocks%sons(2,2)       
+		call Hmat_block_delete(blocks_son)
+
+        deallocate (blocks%sons)
+        
+    else
+        call BF_delete(blocks,1)
+    endif
+    
+    return
+
+end subroutine Hmat_block_delete
+ 
+
+
+recursive subroutine Hmat_Lsolve(blocks_l,trans,idx_start,nvec,Vinout,ptree,stats)
+    implicit none
+    
+    ! integer vectors_y
+    integer style(3)
+    integer i, j, k, ii
+    integer mm, nn, nvec,idxs_m, idx_start ! idx_start means the global indice of the first element of Vinout
+    integer head, tail
+    DT ctemp
+    DT:: Vinout(:,:)
+    type(matrixblock) :: blocks_l !!!! modified by Yang Liu. passing pointer is dangerous, blocks_u row/row_group becomes different once in this subroutine
+	character trans ! 'N' means multiple L^-1 from left, 'T' means multiple L^-1 from right   
 	type(proctree)::ptree
-	real(kind=8)::rtemp,rtemp1,rtemp2
-	integer ierr
+	type(Hstat)::stats
+    
+    if (blocks_l%style==4) then
+		if(trans=='N')then
+			call Hmat_Lsolve(blocks_l%sons(1,1),trans,idx_start,nvec,Vinout,ptree,stats)
+			call Hmat_block_MVP_dat(blocks_l%sons(2,1),trans,idx_start,idx_start,nvec,Vinout,Vinout,-cone,ptree,stats)			
+			call Hmat_Lsolve(blocks_l%sons(2,2),trans,idx_start,nvec,Vinout,ptree,stats)
+		else 
+			call Hmat_Lsolve(blocks_l%sons(2,2),trans,idx_start,nvec,Vinout,ptree,stats)
+			call Hmat_block_MVP_dat(blocks_l%sons(2,1),trans,idx_start,idx_start,nvec,Vinout,Vinout,-cone,ptree,stats)				
+			call Hmat_Lsolve(blocks_l%sons(1,1),trans,idx_start,nvec,Vinout,ptree,stats)
+		end if
+    else
+		mm = blocks_l%M
+		idxs_m = blocks_l%headm - idx_start + 1	
+
+		if(trans=='N')then
+			do i=1, mm
+				ii=blocks_l%ipiv(i)
+				if (ii/=i) then
+					!$omp parallel do default(shared) private(j,ctemp)
+					do j=1, nvec
+						ctemp=Vinout(idxs_m+i-1,j)   
+						Vinout(idxs_m+i-1,j)=Vinout(idxs_m+ii-1,j)     
+						Vinout(idxs_m+ii-1,j)=ctemp
+					enddo
+					!$omp end parallel do
+				endif
+			enddo		
+		endif
+		! write(*,*)blocks_l%level,blocks_l%pgno,ptree%MyID,blocks_l%headm,mm,idx_start,'daha'
+		call trsmf90(blocks_l%fullmat,Vinout(idxs_m:idxs_m+mm-1,1:nvec),'L','L',trans,'U',mm,nvec)
+		if(trans/='N')then 
+			do i=mm,1,-1
+				ii=blocks_l%ipiv(i)
+				if (ii/=i) then
+					!$omp parallel do default(shared) private(j,ctemp)
+					do j=1, nvec
+						ctemp=Vinout(idxs_m+i-1,j)   
+						Vinout(idxs_m+i-1,j)=Vinout(idxs_m+ii-1,j)     
+						Vinout(idxs_m+ii-1,j)=ctemp
+					enddo
+					!$omp end parallel do
+				endif
+			enddo	
+		end if		
+    endif
+    
+    return
+    
+end subroutine Hmat_Lsolve
+
+
+recursive subroutine Hmat_Usolve(blocks_u,trans,idx_start,nvec,Vinout,ptree,stats)
+    implicit none
+    
+    
+	type(proctree)::ptree
+	type(Hstat)::stats
+	
+	integer vectors_x, vectors_y
+    integer style(3), mark
+    integer i, j, k,ii
+    integer mm, nn, nvec
+    integer head, tail
+    DT Vinout(:,:)
+    type(matrixblock) :: blocks_u, blocks !!!! modified by Yang Liu. passing pointer is dangerous, blocks_u row/row_group becomes different once in this subroutine
+	character trans
+    integer idx_start,idxs_m
+    
+    mark=0
+    if (blocks_u%style==4) then
+		if(trans=='N')then
+			call Hmat_Usolve(blocks_u%sons(2,2),trans,idx_start,nvec,Vinout,ptree,stats)
+			call Hmat_block_MVP_dat(blocks_u%sons(1,2),trans,idx_start,idx_start,nvec,Vinout,Vinout,-cone,ptree,stats)	
+			call Hmat_Usolve(blocks_u%sons(1,1),trans,idx_start,nvec,Vinout,ptree,stats)
+		else 
+			call Hmat_Usolve(blocks_u%sons(1,1),trans,idx_start,nvec,Vinout,ptree,stats)
+			call Hmat_block_MVP_dat(blocks_u%sons(1,2),trans,idx_start,idx_start,nvec,Vinout,Vinout,-cone,ptree,stats)	
+			call Hmat_Usolve(blocks_u%sons(2,2),trans,idx_start,nvec,Vinout,ptree,stats)
+		end if
+        
+    else
+		mm = blocks_u%M
+		idxs_m = blocks_u%headm - idx_start + 1			
+		! write(*,*)blocks_u%level,blocks_u%pgno,ptree%MyID,blocks_u%headm,mm,idx_start,'aha'
+		call trsmf90(blocks_u%fullmat,Vinout(idxs_m:idxs_m+mm-1,1:nvec),'L','U',trans,'N',mm,nvec)
+    endif
+    
+    return
+    
+end subroutine Hmat_Usolve 
+
+recursive subroutine Hmat_block_MVP_dat(blocks,trans,idx_start_m,idx_start_n,Nrnd,Vin,Vout,a,ptree,stats)
+    
+    implicit none
+	integer idx_start_m,idx_start_n
+    integer Nrnd
+    integer mm, nn, idxs_m,idxs_n
+    DT a
+    character trans
+	type(matrixblock)::blocks
+	type(matrixblock),pointer::blocks_son
+	integer:: style
+	DT,allocatable::Vintmp(:,:),Vouttmp(:,:)
+	DT::Vin(:,:),Vout(:,:)
+	type(proctree)::ptree
+	type(Hstat)::stats
 	
 	
-	! stats%Time_random=0  ! Intialization, MVP, Reconstruction 
-	! stats%Time_Sblock=0
-	! stats%Time_Sol=0
-	! stats%Time_Inv=0
-	! stats%Time_RedistB=0
-	! stats%Time_RedistV=0
-	! stats%Time_SMW=0
-	! stats%Time_Fill=0
-	! stats%Mem_peak=0
-	! stats%Mem_Sblock=0
-	! stats%Mem_SMW=0
-	! stats%Mem_Direct_for=0
-	! stats%Mem_Direct_inv=0
-	! stats%Mem_int_vec=0
-	! stats%Mem_Comp_for=0
-	! stats%Flop_Fill=0
-	! stats%Flop_Factor=0
-	! stats%Flop_Sol=0
-
+	style = blocks%style
+	mm = blocks%M
+	idxs_m = blocks%headm - idx_start_m + 1
+	nn = blocks%N
+	idxs_n = blocks%headn - idx_start_n + 1	
 	
 
-	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Construction time:',rtemp,'Seconds'
-	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(stats%Mem_Direct_for,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Construction mem:',rtemp+rtemp1,'MB'	
-	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Construction flops:',rtemp
+    if (style==4) then
+		blocks_son=>blocks%sons(1,1)
+		call Hmat_block_MVP_dat(blocks_son,trans,idx_start_m,idx_start_n,Nrnd,Vin,Vout,a,ptree,stats)
+		blocks_son=>blocks%sons(1,2)
+		call Hmat_block_MVP_dat(blocks_son,trans,idx_start_m,idx_start_n,Nrnd,Vin,Vout,a,ptree,stats)
+		blocks_son=>blocks%sons(2,1)
+		call Hmat_block_MVP_dat(blocks_son,trans,idx_start_m,idx_start_n,Nrnd,Vin,Vout,a,ptree,stats)
+		blocks_son=>blocks%sons(2,2)
+		call Hmat_block_MVP_dat(blocks_son,trans,idx_start_m,idx_start_n,Nrnd,Vin,Vout,a,ptree,stats)
+    else
+        if (style==1) then
+            if (trans=='N') then
+				allocate(Vintmp(nn,Nrnd))
+				Vintmp = Vin(idxs_n:idxs_n+nn-1,1:Nrnd)
+				allocate(Vouttmp(mm,Nrnd))
+				Vouttmp = 0
+				call gemmf90(blocks%fullmat,mm,Vintmp,nn,Vouttmp,mm,trans,'N',mm,Nrnd,nn,a,czero)
+				Vout(idxs_m:idxs_m+mm-1,1:Nrnd) = Vout(idxs_m:idxs_m+mm-1,1:Nrnd)+Vouttmp
+				deallocate(Vintmp)
+				deallocate(Vouttmp)
+			else
+				allocate(Vintmp(mm,Nrnd))
+				Vintmp = Vin(idxs_m:idxs_m+mm-1,1:Nrnd)
+				allocate(Vouttmp(nn,Nrnd))
+				Vouttmp = 0
+				call gemmf90(blocks%fullmat,mm,Vintmp,mm,Vouttmp,nn,trans,'N',nn,Nrnd,mm,a,czero)
+				Vout(idxs_n:idxs_n+nn-1,1:Nrnd) = Vout(idxs_n:idxs_n+nn-1,1:Nrnd)+Vouttmp
+				deallocate(Vintmp)
+				deallocate(Vouttmp)				
+		   endif      
+        else
+			if (trans=='N') then
+				call BF_block_MVP_dat(blocks,trans,mm,nn,Nrnd,Vin(idxs_n:idxs_n+nn-1,1:Nrnd),Vout(idxs_m:idxs_m+mm-1,1:Nrnd),a,cone,ptree,stats)
+            else
+				call BF_block_MVP_dat(blocks,trans,mm,nn,Nrnd,Vin(idxs_m:idxs_m+mm-1,1:Nrnd),Vout(idxs_n:idxs_n+nn-1,1:Nrnd),a,cone,ptree,stats)				
+            endif
+        endif
+    endif
+
+end subroutine Hmat_block_MVP_dat
 
 
 
-	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Factorization time:',rtemp,'Seconds'	
-	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)	
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Factorization mem:',rtemp+rtemp1+rtemp2,'MB'	
-	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factorization flops:',rtemp	
+subroutine Full_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)		
+	use BPACK_DEFS
+    
+    	
+	use misc
+    implicit none
+    
+    integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start, num_vectors
+    integer i, j, ii, jj, level, level_butterfly, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+    integer header_m, header_n, tailer_m, tailer_n, vector_inuse, mm, nn, num_blocks, level_define, col_vector
+    integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2
+    DT ctemp, a, b
+    character chara
+	type(matrixblock)::blocks
+	integer M,N
+    DT :: random1(M,N), random2(M,N)
+	DT:: al,be
+	DT,allocatable :: random2tmp(:,:)
+	allocate(random2tmp(M,N))
+	
+	al=1d0
+	be=0d0
+	
+	num_vectors=size(random1,2)
 
 	
+	random2tmp = random2
+	call assert(size(blocks%fullmat,1)==size(blocks%fullmat,2) ,'M not square')
+	if(size(blocks%fullmat,1)/=M)write(*,*)M,N,shape(blocks%fullmat),blocks%row_group,blocks%col_group,'niao'
+	call assert(size(blocks%fullmat,1)==M,'M not equal fullmat dim')
 	
+	if (chara=='N') then
+        group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
+        group_n=blocks%col_group
+		call assert(group_m==group_n,'fullmat not square')
+        ! level_blocks=blocks%level
+		! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
+		                 
+		! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)    
+		call gemmf90(blocks%fullmat,M, random1,M, random2,M,'N','N',M,N,M,cone,czero)  		
+    elseif (chara=='T') then
+        group_m=blocks%row_group  ! Note: row_group and col_group interchanged here   
+        group_n=blocks%col_group
+		call assert(group_m==group_n,'fullmat not square')
+        ! level_blocks=blocks%level  
+		! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
+		call gemmf90(blocks%fullmat,M, random1,M, random2,M, 'T','N',M,N,M,al,be)  
+	end if
 	
-	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Solve time:',rtemp,'Seconds'
-	call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Solve flops:',rtemp
+	random2 = a*random2+ b*random2tmp
+	! write(*,*)'wo cao ni ma'
+	deallocate(random2tmp)
+end subroutine Full_block_MVP_dat
 
 
-	call MPI_ALLREDUCE(stats%Time_C_Mult,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'C_mult time:',rtemp,'Seconds'
-	call MPI_ALLREDUCE(stats%Flop_C_Mult,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'C_mult flops:',rtemp	
-	
-end subroutine PrintStat
-
-
-
-subroutine SetDefaultOptions(option)
-	implicit none 
-	type(Hoption)::option	
-
-	option%Nmin_leaf=200
-	option%tol_comp=1d-4
-	option%tol_Rdetect=3d-5	
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
-	option%n_iter=1000
-	option%tol_rand=1d-3
-	option%level_check=10000
-	option%precon=DIRECT
-	option%xyzsort=TM
-	option%lnoBP=40000
-	option%TwoLayerOnly=1
-	option%touch_para=0d0
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=0
-	option%ErrFillFull=0
-	option%BACA_Batch=64
-	option%RecLR_leaf=BACA
-	option%nogeo=0
-	option%ErrSol=0
-	option%LR_BLK_NUM=1
-	option%rank0=32
-	option%rankrate=1.2d0
-	option%itermax=10
-	option%powiter=0
-
-end subroutine SetDefaultOptions	
-
-
-
-subroutine CopyOptions(option,option1)
-	implicit none 
-	type(Hoption)::option,option1	
-
-	option1%Nmin_leaf = option%Nmin_leaf
-	option1%tol_comp = option%tol_comp
-	option1%tol_Rdetect = option%tol_Rdetect	
-	option1%tol_LS = option%tol_LS
-	option1%tol_itersol = option%tol_itersol
-	option1%n_iter = option%n_iter
-	option1%tol_rand = option%tol_rand
-	option1%level_check = option%level_check
-	option1%precon = option%precon
-	option1%xyzsort = option%xyzsort
-	option1%lnoBP = option%lnoBP
-	option1%TwoLayerOnly = option%TwoLayerOnly
-	option1%touch_para = option%touch_para
-    option1%schulzorder = option%schulzorder
-    option1%schulzlevel = option%schulzlevel
-	option1%LRlevel = option%LRlevel
-	option1%ErrFillFull = option%ErrFillFull
-	option1%BACA_Batch = option%BACA_Batch
-	option1%RecLR_leaf = option%RecLR_leaf
-	option1%nogeo = option%nogeo
-	option1%ErrSol = option%ErrSol
-	option1%LR_BLK_NUM = option%LR_BLK_NUM
-	option1%rank0 = option%rank0
-	option1%rankrate = option%rankrate
-	option1%itermax = option%itermax
-	option1%powiter = option%powiter
-
-end subroutine CopyOptions	
 
 
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
-
-subroutine ComputeParallelIndices(Maxlevel,block,pgno,ptree,msh,flag)
+subroutine ComputeParallelIndices(block,pgno,ptree,msh,flag)
 implicit none 
 	type(matrixblock)::block
 	integer pgno,level,level_p,level_butterfly,flag,nproc,num_blocks,proc,gg,ii,ii_new,Maxlevel
@@ -3532,6 +3386,8 @@ implicit none
 	if(flag==0)block%N_loc = 0
 	if(flag==1)block%N_loc_db = 0
 	
+	Maxlevel = GetTreelevel(msh%Maxgroup)-1
+	! write(*,*)msh%Maxgroup,GetTreelevel(msh%Maxgroup),Maxlevel-block%level,block%level,ptree%nlevel-GetTreelevel(pgno),pgno
 	call assert(Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),'too many process sharing this group')
 	
 	! if(IOwnPgrp(ptree,pgno))then	
@@ -3542,11 +3398,15 @@ implicit none
 		num_blocks = 2**level_p
 		
 		if(flag==0)then
+			if(associated(block%M_p))deallocate(block%M_p)
+			if(associated(block%N_p))deallocate(block%N_p)
 			allocate(block%M_p(nproc,2))
 			allocate(block%N_p(nproc,2))
 			M_p => block%M_p
 			N_p => block%N_p
 		else
+			if(associated(block%M_p_db))deallocate(block%M_p_db)
+			if(associated(block%N_p_db))deallocate(block%N_p_db)		
 			allocate(block%M_p_db(nproc,2))
 			allocate(block%N_p_db(nproc,2))
 			M_p => block%M_p_db
@@ -3591,122 +3451,4 @@ implicit none
 end subroutine ComputeParallelIndices
 
 
-! redistribute Bplus 
-subroutine DoubleDistributeBplus(bplus_o,stats,ptree)
-implicit none
-
-integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
-type(proctree)::ptree
-type(commquant1D),allocatable::sendquant(:),recvquant(:)
-integer,allocatable::S_req(:),R_req(:)
-integer,allocatable:: statuss(:,:),statusr(:,:)
-integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax
-type(blockplus)::bplus_o
-type(matrixblock),pointer::blocks
-DT,pointer::dat_new(:,:),dat_old(:,:)
-real(kind=8)::n1,n2
-type(Hstat)::stats
-
-dat_new=>null()
-dat_old=>null()
-
-if(bplus_o%Lplus==1)then
-	blocks => bplus_o%LL(1)%matrices_block(1)
-	! call MPI_barrier(ptree%pgrp(blocks%pgno_db)%Comm,ierr)
-	n1 = OMP_get_wtime()
-	
-	if(blocks%level_butterfly==0)then
-		
-		if(blocks%pgno/=blocks%pgno_db)then
-			! communicate block sizes first
-			if(blocks%M_loc>0)then
-				rank = blocks%rankmax
-			else
-				rank = 0
-			endif
-			call assert(MPI_COMM_NULL/=ptree%pgrp(blocks%pgno_db)%Comm,'communicator should not be null 4')
-			rankmax=0
-			call MPI_ALLREDUCE(rank,rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(blocks%pgno_db)%Comm,ierr)
-			rank=rankmax
-			
-			! redistribute U
-			if(blocks%M_loc>0)then
-				allocate(dat_old(blocks%M_loc,rank))
-				dat_old=blocks%ButterflyU%blocks(1)%matrix
-			endif
-			if(blocks%M_loc_db>0)then
-				allocate(dat_new(blocks%M_loc_db,rank))
-				dat_new=0
-			endif
-			call Redistribute1Dto1D(dat_old,blocks%M_p,0,blocks%pgno,dat_new,blocks%M_p_db,0,blocks%pgno_db,rank,ptree)
-			if(blocks%M_loc>0)then
-				deallocate(blocks%ButterflyU%blocks(1)%matrix)
-				deallocate(dat_old)
-				deallocate(blocks%M_p)
-			endif
-			if(blocks%M_loc_db>0)then
-				if(.not.allocated(blocks%ButterflyU%blocks))allocate(blocks%ButterflyU%blocks(1))
-				if(.not.allocated(blocks%ButterflyU%blocks(1)%matrix))allocate(blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc_db,rank))
-				blocks%ButterflyU%blocks(1)%matrix = dat_new
-				blocks%ButterflyU%blocks(1)%mdim = blocks%M
-				blocks%ButterflyU%blocks(1)%ndim = rank
-				deallocate(dat_new)
-				blocks%M_loc =blocks%M_loc_db
-				blocks%M_p=>blocks%M_p_db
-				blocks%M_p_db=>NULL()
-			endif
-			
-
-
-			! redistribute V
-			if(blocks%N_loc>0)then
-				allocate(dat_old(blocks%N_loc,rank))
-				dat_old=blocks%ButterflyV%blocks(1)%matrix
-			endif
-			if(blocks%N_loc_db>0)then
-				allocate(dat_new(blocks%N_loc_db,rank))
-				dat_new=0
-			endif
-			call Redistribute1Dto1D(dat_old,blocks%N_p,0,blocks%pgno,dat_new,blocks%N_p_db,0,blocks%pgno_db,rank,ptree)
-			if(blocks%N_loc>0)then
-				deallocate(blocks%ButterflyV%blocks(1)%matrix)
-				deallocate(dat_old)
-				deallocate(blocks%N_p)
-			endif
-			
-			! write(*,*)blocks%N_loc,blocks%N_loc_db,'nima'
-			
-			if(blocks%N_loc_db>0)then
-				if(.not.allocated(blocks%ButterflyV%blocks))allocate(blocks%ButterflyV%blocks(1))
-				if(.not.allocated(blocks%ButterflyV%blocks(1)%matrix))allocate(blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc_db,rank))
-				blocks%ButterflyV%blocks(1)%matrix = dat_new
-				blocks%ButterflyV%blocks(1)%mdim = blocks%N
-				blocks%ButterflyV%blocks(1)%ndim = rank				
-				deallocate(dat_new)
-				blocks%N_loc =blocks%N_loc_db
-				blocks%N_p=>blocks%N_p_db
-				blocks%N_p_db=>NULL()
-				blocks%rankmax = rank
-				blocks%pgno=blocks%pgno_db				
-			endif
-		endif
-	else
-		write(*,*)'redistribution of butterfly not implemented'
-				! write(*,*)blocks%N_p,blocks%N_loc,blocks%N_p_db,blocks%rankmax,blocks%pgno
-				! call assert(blocks%N_p(1,2)-blocks%N_p(1,1)+1==blocks%N_loc,'not good')
-				! call assert(blocks%M_p(1,2)-blocks%M_p(1,1)+1==blocks%M_loc,'not good')
-		! stop	
-	endif
-	
-	n2 = OMP_get_wtime()
-	stats%Time_RedistB=stats%Time_RedistB + n2-n1
-			
-else 
-	write(*,*)'redistribution of bplus not implemented'
-	! stop
-endif
-
-
-end subroutine DoubleDistributeBplus
-
-end module HODLR_Utilities
+end module Bplus_Utilities

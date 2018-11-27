@@ -1,10 +1,10 @@
 PROGRAM HODLR_BUTTERFLY_SOLVER_3D
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
 	use EMSURF_MODULE
 	
-	use z_HODLR_structure
-	use z_HODLR_factor
-	use z_HODLR_constr
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
 	use omp_lib
 	use z_misc
     implicit none
@@ -48,7 +48,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -56,7 +56,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 	
 		
@@ -161,7 +161,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
     
 	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
 	
@@ -173,17 +173,17 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     enddo	
 	option%touch_para = 3* quant%minedgelength
 	
-    if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call z_HODLR_structuring(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-	call z_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
+    call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
+	call z_HODLR_structuring(ho_bf,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 	! stop 
@@ -192,27 +192,27 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
-    call z_HODLR_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+    call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if    
-	if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then								
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call z_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
+    call z_BPACK_factorization(ho_bf,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 
-    if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
     call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 
 	call delete_quant_EMSURF(quant)
@@ -221,9 +221,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	call z_delete_Hstat(stats)
 	call z_delete_mesh(msh)
 	call z_delete_kernelquant(ker)
-	call z_delete_HOBF(ho_bf)
+	call z_HODLR_delete(ho_bf)
 	
-    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
@@ -233,161 +233,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 
 
-subroutine EM_solve_SURF(ho_bf_inv,option,msh,quant,ptree,stats)
-    use EMSURF_MODULE
-    use z_HODLR_DEFS
-	! use RCS_Bi
-	! use RCS_Mono
-	! use element_vinc
-	use z_HODLR_Solve_Mul
-	
-    
-    implicit none
-    
-    integer i, j, ii, jj, iii, jjj,ierr
-    integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
-    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
-    real T0
-    real(kind=8) n1,n2,rtemp
-    complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
-	real(kind=8):: rel_error
-	type(z_Hoption)::option
-	type(z_hobf)::ho_bf_inv
-	type(z_mesh)::msh
-	type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
-	type(z_Hstat)::stats
-	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
-	
-	
-	if(option%ErrSol==1)then
-		call z_hodlr_test_solve_error(ho_bf_inv,option,ptree,stats)
-	endif
-	
-	
-	! if(option%PRECON==DIRECT)then
-		! msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		! msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	! else 
-		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	! endif
-	
-	! N_unk=msh%Nunk
-	N_unk_loc = msh%idxe-msh%idxs+1
-	
-    if (quant%RCS_static==2) then
-    
-        theta=90
-        phi=0
-        
-        allocate (current(N_unk_loc,2))
-		Current=0
-        allocate (voltage(N_unk_loc,2))
 
-		
-        !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=msh%idxs, msh%idxe
-            call element_Vinc_VV_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-			voltage(edge-msh%idxs+1,1)=value_Z
-			call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-            voltage(edge-msh%idxs+1,2)=value_Z
-        enddo    
-        !$omp end parallel do
-        
-        T0=secnds(0.0)
-        		
-		call z_hodlr_solution(ho_bf_inv,Current,Voltage,N_unk_loc,2,option,ptree,stats)
-					
-		
-        if(ptree%MyID==Main_ID)write (*,*) ''
-        if(ptree%MyID==Main_ID)write (*,*) 'Solving:',secnds(T0),'Seconds'
-        if(ptree%MyID==Main_ID)write (*,*) ''
-
-		T0=secnds(0.0)
-        call RCS_bistatic_SURF(Current,msh,quant,ptree)
-		
-		! call current_node_patch_mapping('V',curr(:,1),msh)    		
-		! call current_node_patch_mapping('H',curr(:,2),msh)          
-
-        if(ptree%MyID==Main_ID)write (*,*) ''
-        if(ptree%MyID==Main_ID)write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
-        if(ptree%MyID==Main_ID)write (*,*) ''
-		deallocate(Current)
-		deallocate(Voltage)
-	
-    elseif (quant%RCS_static==1) then
-    
-        allocate (current(N_unk_loc,1))
-
-        
-        num_sample=quant%RCS_Nsample
-		theta=90.
-        dphi=180./num_sample
-		allocate (b(N_unk_loc,num_sample+1))
-		allocate (x(N_unk_loc,num_sample+1))        
-		x=0
-		
-		
-        if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
-
-        n1=OMP_get_wtime()
-		
-        do j=0, num_sample 
-            phi=j*dphi
-			!$omp parallel do default(shared) private(edge,value_Z)
-			do edge=msh%idxs, msh%idxe
-				call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-				b(edge-msh%idxs+1,j+1)=value_Z
-			enddo    
-			!$omp end parallel do
-        enddo
-		
-		call z_hodlr_solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
-			
-		do j=0, num_sample 			
-			phi=j*dphi
-			
-			Current(:,1)=x(:,j+1)
-			
-            call RCS_monostatic_HH_SURF(theta,phi,rcs_H,Current(:,1),msh,quant,ptree)
-!             !$omp parallel do default(shared) private(i)
-!             do i=1, N_unk
-!                 current(i)=vectors_block(0)%vector(i,2)
-!             enddo
-!             !$omp end parallel do
-!             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
-            
-            if(ptree%MyID==Main_ID)write (100,*) phi,rcs_H !,rcs_H
-            
-            ! deallocate (vectors_block)
-            
-        enddo
-        
-		n2 = OMP_get_wtime()
-		stats%Time_Sol = stats%Time_Sol + n2-n1
-		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-		
-        if(ptree%MyID==Main_ID)then
-			close(100)
-			write (*,*) ''
-			write (*,*) 'Solving:',rtemp,'Seconds'
-			write (*,*) ''   
-		endif
-		
-		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
-	
-		
-		deallocate(Current)
-		
-    endif
-        
-    return
-    
-end subroutine EM_solve_SURF
 
 
 

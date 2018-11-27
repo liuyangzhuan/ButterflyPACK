@@ -1,5 +1,5 @@
 #include "HODLR_config.fi"
-module HODLR_Solve_Mul
+module BPACK_Solve_Mul
 
 use Bplus_compress
 
@@ -7,9 +7,9 @@ use Bplus_compress
 contains 
 
 
-subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats)
+subroutine BPACK_Solution(bmat,x,b,Ns_loc,num_vectors,option,ptree,stats)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer i, j, ii, jj, iii, jjj
@@ -22,7 +22,7 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
 	type(proctree)::ptree
 	type(Hstat)::stats
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	type(hobf)::hobf_inverse
+	class(*)::bmat
 	DT::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
 	DT,allocatable::r0_initial(:)
 	real(kind=8) n1,n2,rtemp
@@ -38,12 +38,12 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
 		do ii=1,num_vectors
 			iter = 0
 			rel_error = option%tol_itersol
-			call HODLR_Ztfqmr(option%precon,option%n_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,hobf_inverse,ptree,stats)
+			call BPACK_Ztfqmr(option%precon,option%n_iter,Ns_loc,b(:,ii),x(:,ii),rel_error,iter,r0_initial,bmat,ptree,option,stats)
 		end do
 		
 		deallocate(r0_initial)
 	else 			
-		call MVM_Z_factorized('N',Ns_loc,num_vectors,b,x,hobf_inverse,ptree,stats)
+		call BPACK_Inv_Mult('N',Ns_loc,num_vectors,b,x,bmat,ptree,stats)
 	end if	
  
  
@@ -52,10 +52,10 @@ subroutine HODLR_Solution(hobf_inverse,x,b,Ns_loc,num_vectors,option,ptree,stats
  
     return
     
-end subroutine HODLR_Solution
+end subroutine BPACK_Solution
 
 
-  subroutine HODLR_Ztfqmr(precond,ntotal,nn_loc,b,x,err,iter,r0_initial,hobf_inverse,ptree,stats)
+  subroutine BPACK_Ztfqmr(precond,ntotal,nn_loc,b,x,err,iter,r0_initial,bmat,ptree,option,stats)
     implicit none
 	integer level_c,rowblock,ierr
     integer,intent(in)::ntotal
@@ -78,14 +78,15 @@ end subroutine HODLR_Solution
 	type(Hstat)::stats
 		
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	type(hobf)::hobf_inverse
+	class(*)::bmat
 	DT::r0_initial(:)
 	integer precond
 	type(proctree)::ptree
+	type(Hoption)::option
 	
     itmax=iter
 
-	call HODLR_ApplyPrecon(precond,nn_loc,b,bb,ptree,hobf_inverse,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,b,bb,ptree,bmat,stats)	
 	
 	
     ! ! ! if (myid == main_id) then
@@ -101,9 +102,9 @@ end subroutine HODLR_Solution
     d=0d0
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
 	
     r=bb-r !residual from the initial guess
     w=r
@@ -114,9 +115,9 @@ end subroutine HODLR_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)    
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,stats)	
 	
     v=ayo
     we=0.0_dp
@@ -142,9 +143,9 @@ end subroutine HODLR_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
-	   call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,ye,ytmp,hobf_inverse,ptree,stats)
+	   call BPACK_Mult('N',nn_loc,1,ye,ytmp,bmat,ptree,stats)
 	   stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	   call HODLR_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,hobf_inverse,stats)	
+	   call BPACK_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,bmat,stats)	
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -177,9 +178,9 @@ end subroutine HODLR_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-		  call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+		  call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
 		  stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-		  call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
+		  call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
 	
           r=bb-r
           rerr_local=dot_product(r,r)
@@ -187,7 +188,7 @@ end subroutine HODLR_Solution
                ptree%Comm,ierr)
           rerr=sqrt(abs(rerr_sum))/bmag
           
-          if (ptree%MyID==Main_ID) then
+          if (ptree%MyID==Main_ID .and. option%verbosity>=0) then
              print*,'# ofiter,error:',it,rerr
              ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
           end if
@@ -212,18 +213,18 @@ end subroutine HODLR_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
-		call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,yo,ytmp,hobf_inverse,ptree,stats)
+		call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,stats)
 		stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-		call HODLR_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,hobf_inverse,stats)	
+		call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,stats)	
 	
        !MAGIC
        v=ayo+beta*( aye+beta*v )
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-    call MVM_Z_forward('N',nn_loc,1,1,hobf_inverse%Maxlevel+1,x,ytmp,hobf_inverse,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call HODLR_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,hobf_inverse,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
 	
 	
     !MAGIC
@@ -240,31 +241,31 @@ end subroutine HODLR_Solution
    stop
 	
     return
-  end subroutine HODLR_Ztfqmr
+  end subroutine BPACK_Ztfqmr
 
 
 
-  subroutine HODLR_ApplyPrecon(precond,nn_loc,x,y,ptree,hobf_inverse,stats)
+  subroutine BPACK_ApplyPrecon(precond,nn_loc,x,y,ptree,bmat,stats)
     implicit none
 	integer nn_loc
 	DT,dimension(1:nn_loc)::x,y
 	integer precond
-	type(hobf)::hobf_inverse
+	class(*)::bmat
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
 	if(precond==NOPRECON)then
 		y=x
 	else if (precond==HODLRPRECON)then 
-		call MVM_Z_factorized('N',nn_loc,1,x,y,hobf_inverse,ptree,stats)	 
+		call BPACK_Inv_Mult('N',nn_loc,1,x,y,bmat,ptree,stats)	 
 	endif
-	end subroutine HODLR_ApplyPrecon
+	end subroutine BPACK_ApplyPrecon
 
 	
 	
-subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
+subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     
     implicit none
     
@@ -281,22 +282,18 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	! type(mesh)::msh
 	! type(kernelquant)::ker
 	type(proctree)::ptree
-	type(hobf)::ho_bf_inv
+	class(*)::bmat
 	type(Hstat)::stats	
 	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
 
-	! if(option%PRECON==DIRECT)then
-		idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	! else 
-		! ! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
-		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	! endif
 	
-	! N_unk=msh%Nunk
-	N_unk_loc = idxe-idxs+1	
+	! idxs = bmat%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+	! idxe = bmat%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+	
+	
+	! ! N_unk=msh%Nunk
+	! N_unk_loc = idxe-idxs+1	
 	
 	allocate (x(N_unk_loc,1))
 	x=0		
@@ -307,10 +304,10 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	btrue=0	
 	allocate (b(N_unk_loc,1))	
 	b=0
-	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,xtrue,btrue,ho_bf_inv,ptree,stats)
+	call BPACK_Mult('N',N_unk_loc,1,xtrue,btrue,bmat,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call HODLR_Solution(ho_bf_inv,x,btrue,N_unk_loc,1,option,ptree,stats)
-	call MVM_Z_forward('N',N_unk_loc,1,1,ho_bf_inv%Maxlevel+1,x,b,ho_bf_inv,ptree,stats)
+	call BPACK_Solution(bmat,x,btrue,N_unk_loc,1,option,ptree,stats)
+	call BPACK_Mult('N',N_unk_loc,1,x,b,bmat,ptree,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	
 	rtemp1 = fnorm(xtrue-x,N_unk_loc,1)**2d0;
@@ -318,7 +315,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	
 	call MPI_ALLREDUCE(rtemp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	call MPI_ALLREDUCE(rtemp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)then
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
 		write(*,*)'||X_t-H\(H*X_t)||_F/||X_t||_F: ',sqrt(norm1/norm2)
 	endif
 	
@@ -327,7 +324,7 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	
 	call MPI_ALLREDUCE(rtemp3, norm3, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 	call MPI_ALLREDUCE(rtemp4, norm4, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)then
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
 		write(*,*)'||B-H*(H\B)||_F/||B||_F: ',sqrt(norm3/norm4)
 	endif	
 	
@@ -337,12 +334,56 @@ subroutine HODLR_Test_Solve_error(ho_bf_inv,option,ptree,stats)
 	deallocate(btrue)
 	deallocate(b)
 	
-end subroutine HODLR_Test_Solve_error
+end subroutine BPACK_Test_Solve_error
 	
 
-subroutine MVM_Z_factorized(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
+subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+    implicit none
+    
+	integer Ns
+	character trans
+	integer num_vectors
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	class(*)::bmat
+    type(proctree)::ptree
+	type(Hstat)::stats	
 
-    use HODLR_DEFS
+	select TYPE(bmat)
+    type is (hobf)
+		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+    type is (Hmat)	
+		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+	end select		
+	
+end subroutine BPACK_Inv_Mult	
+	
+
+subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+    use BPACK_DEFS
+    implicit none
+	character trans
+	integer Ns
+	integer num_vectors
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	class(*)::bmat
+	type(proctree)::ptree
+    type(Hstat)::stats
+	
+	select TYPE(bmat)
+    type is (hobf)
+		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%Maxlevel+1,Vin,Vout,bmat,ptree,stats)
+    type is (Hmat)	
+		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+	end select		
+	
+end subroutine BPACK_Mult
+
+
+
+
+subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
+
+    use BPACK_DEFS
     
     implicit none
     
@@ -393,7 +434,7 @@ subroutine MVM_Z_factorized(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 			idx_end_loc = tail-idx_start_glo+1					
 		
 			if(level==ho_bf1%Maxlevel+1)then	
-				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
+				call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				stats%Flop_Sol = stats%Flop_Sol + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)
 			else 
@@ -409,6 +450,10 @@ subroutine MVM_Z_factorized(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	! deallocate(vec_old)
 	deallocate(vec_new)	
 
+		! do ii=1,Ns
+		! write(131,*)abs(Vout(ii,1))
+		! enddo	
+	
 	if(trans=='C')then
 		Vout=conjg(cmplx(Vout,kind=8))
 		Vin=conjg(cmplx(Vin,kind=8))
@@ -416,12 +461,15 @@ subroutine MVM_Z_factorized(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	
     return                
 
-end subroutine MVM_Z_factorized
+end subroutine HODLR_Inv_Mult
 
-subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
 
-    use HODLR_DEFS
-    
+
+
+
+
+subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
+    use BPACK_DEFS
     implicit none
     
 	character trans,trans_tmp
@@ -472,7 +520,7 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 			idx_end_loc = tail-idx_start_glo+1					
 			
 			if(level==ho_bf1%Maxlevel+1)then	
-				call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
+				call Full_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vin(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)				
 			else
@@ -491,8 +539,312 @@ subroutine MVM_Z_forward(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_
 		Vin=conjg(cmplx(Vin,kind=8))
 	endif
 	
+	! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+	
+	
     return                
 
-end subroutine MVM_Z_forward
+end subroutine HODLR_Mult
+	
 
-end module HODLR_Solve_Mul
+subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
+    implicit none
+    
+	integer Ns,ii
+	character trans,trans_tmp
+	integer num_vectors
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(Hmat)::h_mat
+    type(proctree)::ptree
+	type(Hstat)::stats	
+
+	trans_tmp = trans
+	if(trans=='C')then
+		trans_tmp = 'T'
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif	
+
+	Vout = Vin
+	
+	if(trans=='N')then	
+		! write(*,*)fnorm(Vout,Ns,num_vectors),'before L solve'
+		call Hmat_Lsolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)	
+		! write(*,*)fnorm(Vout,Ns,num_vectors),'before U solve'
+		call Hmat_Usolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)	
+		! write(*,*)fnorm(Vout,Ns,num_vectors),'after LU solve'
+		! do ii=1,Ns
+		! write(130,*)abs(Vout(ii,1))
+		! enddo
+	else
+		call Hmat_Usolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)	
+		call Hmat_Lsolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)		
+	endif
+	
+	if(trans=='C')then
+		Vout=conjg(cmplx(Vout,kind=8))
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif	
+	
+end subroutine Hmat_Inv_Mult	
+	
+
+subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
+
+    use BPACK_DEFS
+    
+    implicit none
+    
+	character trans,trans_tmp
+	integer Ns
+	integer level_c,rowblock
+    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real(kind=8) vecnorm,n1,n2
+    DT ctemp, ctemp1, ctemp2
+	! type(matrixblock),pointer::block_o
+	type(blockplus),pointer::bplus_o
+	type(proctree)::ptree
+    ! type(vectorsblock), pointer :: random1, random2
+    type(Hstat)::stats
+	
+    real(kind=8),allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
+	type(matrixblock), pointer :: blocks_i,blocks_j
+	DT,allocatable::vec_old(:,:),vec_new(:,:),vin_tmp(:,:),vout_tmp(:,:)		
+		
+	! DT::Vin(:,:),Vout(:,:)
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(Hmat)::h_mat
+	integer ierr
+	
+	if(ptree%MyID/=MPI_COMM_NULL)then
+	
+		trans_tmp = trans
+		if(trans=='C')then
+			trans_tmp = 'T'
+			Vin=conjg(cmplx(Vin,kind=8))
+		endif		
+		
+		call MPI_barrier(ptree%Comm,ierr)
+		n1=OMP_get_wtime()
+
+		blocks_i=>h_mat%Local_blocks_copy(1,1)
+		groupm = blocks_i%row_group
+		
+		vout=0.0	
+		num_blocks=2**h_mat%Dist_level	
+		do j=1,num_blocks
+			blocks_i=>h_mat%Local_blocks_copy(j,1)
+			groupn = blocks_i%col_group
+			allocate(vin_tmp(blocks_i%N,num_vectors))	
+			vin_tmp=0.0			
+			if(ptree%MyID==j-1)then
+				vin_tmp = Vin			
+			endif
+			call MPI_Bcast(vin_tmp,blocks_i%N*num_vectors,MPI_DT,j-1,ptree%Comm,ierr)
+			call Hmat_block_MVP_dat(blocks_i,trans_tmp,blocks_i%headm,blocks_i%headn,num_vectors,vin_tmp,Vout,cone,ptree,stats)	
+			deallocate(vin_tmp)
+		enddo
+
+		if(trans=='C')then
+			Vout=conjg(cmplx(Vout,kind=8))
+			Vin=conjg(cmplx(Vin,kind=8))
+		endif		
+	
+		call MPI_barrier(ptree%Comm,ierr)
+		n2=OMP_get_wtime()
+		
+		vecnorm = fnorm(Vout,Ns,num_vectors)**2d0
+		call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1,MPI_double, MPI_SUM, ptree%Comm,ierr)	
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",sqrt(vecnorm)
+	endif
+	
+    return                
+
+end subroutine Hmat_Mult
+
+
+subroutine Hmat_Lsolve_Toplevel(h_mat,trans,xloc,nloc,nvec,ptree,stats)
+    implicit none
+    
+	type(Hmat)::h_mat
+	character::trans
+	type(proctree)::ptree
+	type(Hstat)::stats
+	
+    integer i, j, k, ii, jj, kk, iii, jjj, num_blocks, mm, nn,groupm,groupn
+    integer vectors_start, vectors_x, vectors_y, id_l,nvec,nloc
+    
+    type(matrixblock), pointer :: blocks_l
+    integer Nreq, Nmod, Bufsize
+	DT,allocatable::recv_buf(:),vin(:,:)
+	DT::xloc(:,:)
+    integer :: status(MPI_Status_size)
+	integer,allocatable::status_all(:,:),request_all(:)
+	integer idx_start	    
+	integer ierr
+	
+	if(trans=='N')then	
+		num_blocks=2**h_mat%Dist_level
+		vectors_start=num_blocks-1
+
+		blocks_l=>h_mat%Local_blocks(ptree%MyID+1,1)
+		groupm = blocks_l%row_group		
+		
+		vectors_x=vectors_start+ptree%MyID+1
+		
+		Bufsize = nloc*nvec
+		call MPI_ALLREDUCE(MPI_IN_PLACE, Bufsize, 1,MPI_integer, MPI_MAX, ptree%Comm,ierr)
+		allocate(recv_buf(Bufsize))
+		
+		Nmod = ptree%MyID 
+		do while(Nmod>0)
+			call MPI_Recv(recv_buf,Bufsize,MPI_DT,MPI_ANY_SOURCE,MPI_ANY_TAG,ptree%Comm,status,ierr)
+			vectors_y = status(MPI_TAG)
+			j=vectors_y-vectors_start
+			blocks_l=>h_mat%Local_blocks(j,1)		
+			groupn = blocks_l%col_group
+			nn=blocks_l%N
+			allocate(vin(nn,nvec))
+			j=0
+			do jjj=1,nvec
+			do iii=1,nn
+				j=j+1
+				vin(iii,jjj)=recv_buf(j)
+			enddo
+			enddo
+			call Hmat_block_MVP_dat(blocks_l,'N',blocks_l%headm,blocks_l%headn,nvec,vin,xloc,-cone,ptree,stats)
+			deallocate(vin)			
+			Nmod = Nmod-1
+		enddo
+		deallocate(recv_buf)
+
+		
+		blocks_l=>h_mat%Local_blocks(ptree%MyID+1,1)
+		idx_start = blocks_l%headm
+		call Hmat_Lsolve(blocks_l,'N',idx_start,nvec,xloc,ptree,stats)
+		
+		Nreq=num_blocks-1-ptree%MyID
+		if(Nreq>0)then
+			allocate(status_all(MPI_status_size,Nreq))
+			allocate(request_all(Nreq))				
+		end if
+		do i=1, Nreq 
+			call MPI_Isend(xloc,nloc*nvec,MPI_DT,i+ptree%MyID,vectors_x,ptree%Comm,request_all(i),ierr)
+		enddo
+		if(Nreq>0)then
+			call MPI_waitall(Nreq,request_all,status_all,ierr)
+			deallocate(status_all)
+			deallocate(request_all)
+		endif
+	else 
+		write(*,*)'XxL^-1 with MPI is not yet implemented'
+		stop
+	endif	
+		
+	call MPI_barrier(ptree%Comm,ierr)
+    return
+    
+end subroutine Hmat_Lsolve_Toplevel
+
+
+
+
+
+subroutine Hmat_Usolve_Toplevel(h_mat,trans,xloc,nloc,nvec,ptree,stats)
+
+    implicit none
+    
+	type(Hmat)::h_mat
+	character::trans
+	type(proctree)::ptree
+	type(Hstat)::stats	
+	
+    integer i, j, k, ii, jj, kk, iii, jjj, num_blocks, mm, nn,idx_start,nvec,nloc
+    integer vectors_start, vectors_x, vectors_y, id_u,groupm,groupn,ierr
+    
+    type(matrixblock), pointer :: blocks_u
+	integer :: status(MPI_Status_size)
+    integer Nreq, Nmod, Bufsize
+	DT,allocatable::recv_buf(:),vin(:,:)
+	DT::xloc(:,:)
+	integer,allocatable::status_all(:,:),request_all(:)
+
+	if(trans=='N')then	
+	
+		num_blocks=2**h_mat%Dist_level
+		vectors_start=num_blocks-1
+
+		Bufsize = nloc*nvec
+		call MPI_ALLREDUCE(MPI_IN_PLACE, Bufsize, 1,MPI_integer, MPI_MAX, ptree%Comm,ierr)
+		allocate(recv_buf(Bufsize))
+
+
+		vectors_x=vectors_start+ptree%MyID+1
+		Nmod = num_blocks -1 - ptree%MyID 
+
+		blocks_u=>h_mat%Local_blocks(ptree%MyID+1,1)
+		
+		do while(Nmod>0)
+			call MPI_Recv(recv_buf,Bufsize,MPI_DT,MPI_ANY_SOURCE,MPI_ANY_TAG,ptree%Comm,status,ierr)
+			vectors_y = status(MPI_TAG)
+			j=vectors_y-vectors_start
+			blocks_u=>h_mat%Local_blocks(j,1)
+			
+			nn=blocks_u%N
+			allocate(vin(nn,nvec))
+			j=0
+			do jjj=1,nvec
+			do iii=1,nn
+				j=j+1
+				vin(iii,jjj)=recv_buf(j)
+			enddo
+			enddo		
+
+			call Hmat_block_MVP_dat(blocks_u,'N',blocks_u%headm,blocks_u%headn,nvec,vin,xloc,-cone,ptree,stats)
+			
+			deallocate(vin)		
+			
+			Nmod = Nmod-1
+		enddo
+		deallocate(recv_buf)	
+		
+		blocks_u=>h_mat%Local_blocks(ptree%MyID+1,1)
+		idx_start = blocks_u%headm
+		call Hmat_Usolve(blocks_u,'N',idx_start,nvec,xloc,ptree,stats)
+		
+		Nreq=ptree%MyID
+		if(Nreq>0)then
+			allocate(status_all(MPI_status_size,Nreq))
+			allocate(request_all(Nreq))	
+		end if
+	
+		do i=Nreq,1,-1 
+			call MPI_Isend(xloc,nloc*nvec,MPI_DT,i-1,vectors_x,ptree%Comm,request_all(i),ierr)
+		enddo
+		
+		if(Nreq>0)then
+			call MPI_waitall(Nreq,request_all,status_all,ierr)
+			deallocate(status_all)
+			deallocate(request_all)
+		endif
+
+	else 
+		write(*,*)'XxU^-1 with MPI is not yet implemented'
+		stop
+	endif	
+		
+	call MPI_barrier(ptree%Comm,ierr)
+    return
+end subroutine Hmat_Usolve_Toplevel
+
+
+
+
+
+
+
+
+
+end module BPACK_Solve_Mul

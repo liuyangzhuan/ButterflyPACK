@@ -1,6 +1,6 @@
 #include "HODLR_config.fi"
 module DenseLA
-use HODLR_DEFS
+use BPACK_DEFS
 use omp_lib
 
 
@@ -156,7 +156,7 @@ end function zlangef90
 
 
 subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
-    use HODLR_DEFS
+    use BPACK_DEFS
 	implicit none 
 	integer mm,nn,mn_min
 	DT Matrix(:,:),UU(:,:),VV(:,:)
