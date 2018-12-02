@@ -1,3 +1,20 @@
+/* “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+  Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+  U.S. Dept. of Energy). All rights reserved.
+
+  If you have questions about your rights to use or distribute this software, please contact
+  Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+  NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+  U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+  granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+  worldwide license in the Software to reproduce, distribute copies to the public, prepare
+  derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+  Developers: Yang Liu, Xiaoye S. Li.
+             (Lawrence Berkeley National Lab, Computational Research Division).
+*/
+
 #ifndef HODLR_WRAP /* allow multiple inclusions */
 #define HODLR_WRAP
 
@@ -57,7 +74,7 @@ extern "C" {
 	
 	void c_bf_deletebf(F2Cptr* bf);
 	
-	void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree, C_DT *a, C_DT* b);		
+	void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);		
 	
 	
 }

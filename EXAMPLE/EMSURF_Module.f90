@@ -1,5 +1,21 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 module EMSURF_MODULE
-use z_HODLR_DEFS
+use z_BPACK_DEFS
 use z_misc
 implicit none
 
@@ -52,7 +68,7 @@ end subroutine delete_quant_EMSURF
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF(m,n,value_e,quant)
 	
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
 	
     integer, INTENT(IN):: m,n
@@ -251,7 +267,7 @@ end subroutine ccurl
 !***********************************
   subroutine gau_grobal(nn,j,x,y,z,w,quant)
   
-  use z_HODLR_DEFS
+  use z_BPACK_DEFS
   implicit none
   type(quant_EMSURF)::quant
   integer nn ,flag
@@ -300,7 +316,7 @@ end subroutine ccurl
 
   subroutine gauss_points(quant)
   
-      use z_HODLR_DEFS
+      use z_BPACK_DEFS
       implicit none
       
       real(kind=8) v1,v2,v3,v4,v5
@@ -433,7 +449,7 @@ end subroutine ccurl
 !**********************************	
 function ianalytic(mm,jj,xi,yi,zi,quant)
 
-use     z_HODLR_DEFS
+use     z_BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) xi,yi,zi
 real(kind=8)    temp,ianalytic
@@ -533,7 +549,7 @@ end function ianalytic
 !**********************************	
 function ianalytic2(mm,jj,xi,yi,zi,iii,quant)
 
-use z_HODLR_DEFS
+use z_BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) ianalytic2
 integer ii,node1,node2,node3,iii
@@ -674,7 +690,7 @@ end function ianalytic2
 
 subroutine current_node_patch_mapping(chara,curr,quant)
     
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     integer patch, edge, node_patch(3), node_edge, node
@@ -781,7 +797,7 @@ end subroutine current_node_patch_mapping
 
 real(kind=8) function triangle_area(patch,quant)
     
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     integer patch,i
@@ -802,7 +818,7 @@ end function triangle_area
 
 subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     integer edge
@@ -863,7 +879,7 @@ end subroutine element_Vinc_VV_SURF
 
 subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
 	
     type(quant_EMSURF)::quant
@@ -923,7 +939,7 @@ end subroutine element_Vinc_HH_SURF
 
 subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     !integer flag
-	use z_HODLR_DEFS
+	use z_BPACK_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -995,7 +1011,7 @@ end subroutine RCS_bistatic_SURF
 
 subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -1042,7 +1058,7 @@ end subroutine VV_polar_SURF
 
 subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -1091,7 +1107,7 @@ end subroutine HH_polar_SURF
 
 subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     complex(kind=8)::curr(:)
     real(kind=8) rcs
@@ -1123,7 +1139,7 @@ end subroutine RCS_monostatic_VV_SURF
 
 subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -1158,7 +1174,7 @@ end subroutine RCS_monostatic_HH_SURF
 
 
 subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
 	use z_misc
     implicit none
     
@@ -1319,6 +1335,149 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     return
     
 end subroutine geo_modeling_SURF
+
+
+subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
+    use z_BPACK_DEFS
+	use z_BPACK_Solve_Mul
+	
+    
+    implicit none
+    
+    integer i, j, ii, jj, iii, jjj,ierr
+    integer level, blocks, edge, patch, node, group
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+    real T0
+    real(kind=8) n1,n2,rtemp
+    complex(kind=8) value_Z
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
+	real(kind=8):: rel_error
+	type(z_Hoption)::option
+	class(*)::bmat
+	type(z_mesh)::msh
+	type(quant_EMSURF)::quant
+	type(z_proctree)::ptree
+	type(z_Hstat)::stats
+	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
+	
+	N_unk_loc = msh%idxe-msh%idxs+1
+		
+	if(option%ErrSol==1)then
+		call z_bpack_test_solve_error(bmat,N_unk_loc,option,ptree,stats)
+	endif
+
+	
+    if (quant%RCS_static==2) then
+    
+        theta=90
+        phi=0
+        
+        allocate (current(N_unk_loc,2))
+		Current=0
+        allocate (voltage(N_unk_loc,2))
+
+		
+        !$omp parallel do default(shared) private(edge,value_Z)
+        do edge=msh%idxs, msh%idxe
+            call element_Vinc_VV_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
+			voltage(edge-msh%idxs+1,1)=value_Z
+			call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
+            voltage(edge-msh%idxs+1,2)=value_Z
+        enddo    
+        !$omp end parallel do
+        
+        T0=secnds(0.0)
+        		
+		call z_bpack_solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
+					
+		
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+
+		T0=secnds(0.0)
+        call RCS_bistatic_SURF(Current,msh,quant,ptree)
+		
+		! call current_node_patch_mapping('V',curr(:,1),msh)    		
+		! call current_node_patch_mapping('H',curr(:,2),msh)          
+
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+		deallocate(Current)
+		deallocate(Voltage)
+	
+    elseif (quant%RCS_static==1) then
+    
+        allocate (current(N_unk_loc,1))
+
+        
+        num_sample=quant%RCS_Nsample
+		theta=90.
+        dphi=180./num_sample
+		allocate (b(N_unk_loc,num_sample+1))
+		allocate (x(N_unk_loc,num_sample+1))        
+		x=0
+		
+		
+        if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
+
+        n1=OMP_get_wtime()
+		
+        do j=0, num_sample 
+            phi=j*dphi
+			!$omp parallel do default(shared) private(edge,value_Z)
+			do edge=msh%idxs, msh%idxe
+				call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
+				b(edge-msh%idxs+1,j+1)=value_Z
+			enddo    
+			!$omp end parallel do
+        enddo
+		
+		call z_bpack_solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+			
+		do j=0, num_sample 			
+			phi=j*dphi
+			
+			Current(:,1)=x(:,j+1)
+			
+            call RCS_monostatic_HH_SURF(theta,phi,rcs_H,Current(:,1),msh,quant,ptree)
+!             !$omp parallel do default(shared) private(i)
+!             do i=1, N_unk
+!                 current(i)=vectors_block(0)%vector(i,2)
+!             enddo
+!             !$omp end parallel do
+!             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
+            
+            if(ptree%MyID==Main_ID)write (100,*) phi,rcs_H !,rcs_H
+            
+            ! deallocate (vectors_block)
+            
+        enddo
+        
+		n2 = OMP_get_wtime()
+		stats%Time_Sol = stats%Time_Sol + n2-n1
+		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		
+        if(ptree%MyID==Main_ID)then
+			close(100)
+			write (*,*) ''
+			write (*,*) 'Solving:',rtemp,'Seconds'
+			write (*,*) ''   
+		endif
+		
+		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
+	
+		
+		deallocate(Current)
+		
+    endif
+        
+    return
+    
+end subroutine EM_solve_SURF
 
 
 

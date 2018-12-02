@@ -1,10 +1,27 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
     use EMCURV_MODULE
 	
-	use z_HODLR_structure
-	use z_HODLR_factor
-	use z_HODLR_constr
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
+	use z_BPACK_Utilities
 	use omp_lib
 	use z_misc
     implicit none
@@ -31,7 +48,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	type(z_Hstat)::stats
 	type(z_mesh)::msh
 	type(z_kernelquant)::ker
-	type(z_hobf)::ho_bf,ho_bf_copy
+	type(z_hobf)::ho_bf
+	type(z_Hmat)::h_mat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	type(z_proctree)::ptree
@@ -50,7 +68,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
 	
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
@@ -58,7 +76,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	
 	call OMP_set_num_threads(threads_num)		
 		
@@ -95,15 +113,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! CALL getarg(1, DATA_DIR)
 	
 	
-	quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
+	! quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
 	! msh%Nunk=1280000
 	! msh%Nunk=320000
 	! msh%Nunk=80000
 	! msh%Nunk=20000
-	 msh%Nunk=5000 
+	 ! msh%Nunk=5000 
     ! msh%Nunk=40000	
 	! Refined_level=0
-	quant%Nunk = msh%Nunk
+	
 	
 	
 	
@@ -118,12 +136,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%nogeo=0 
 	! quant%wavelength=0.0006
 	!quant%wavelength=0.0003
-	quant%wavelength=0.06
+	! quant%wavelength=0.06
 
 ! quant%wavelength=0.08
 ! Discret=0.05
 	quant%RCS_static=1
-    quant%RCS_Nsample=100
+    quant%RCS_Nsample=2000
 
 	
 	
@@ -133,36 +151,55 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	
 	
 	option%Nmin_leaf=100
-	option%tol_comp=1d-4
+	! option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
+	option%tol_itersol=1d-5
 	option%n_iter=1000
 	option%tol_rand=1d-3
 	option%level_check=100
-	option%precon=DIRECT
-	option%xyzsort=TM
+	option%precon= DIRECT ! HODLRPRECON ! NOPRECON !
+	option%xyzsort=NATURAL !TM 
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
     option%schulzlevel=3000
-	!option%LRlevel=100
-	option%ErrFillFull=0 
-	option%RecLR_leaf=ACA
+	option%LRlevel=100
+	! option%ErrFillFull=0 
+	! option%RecLR_leaf=ACA
 	option%ErrSol=1
 	! option%LR_BLK_NUM=2
+	option%format= HMAT!  HODLR ! 
+	option%near_para=0.01d0
+	!option%verbosity=2
+	option%ILU=0 
+	option%forwardN15flag=0 
+	
 	call getarg(1,strings)
-	read(strings,*)option%LR_BLK_NUM
-
+	read(strings,*)option%LR_BLK_NUM		
 	call getarg(2,strings)
-	read(strings,*)option%LRlevel
+	read(strings,*)quant%model2d
+	call getarg(3,strings)
+	read(strings,*)msh%Nunk	
+	call getarg(4,strings)
+	read(strings,*)quant%wavelength	
+	call getarg(5,strings)
+	read(strings,*)option%tol_comp
+	call getarg(6,strings)
+	read(strings,*)option%ErrFillFull
+	call getarg(7,strings)
+	read(strings,*)option%RecLR_leaf		
+	call getarg(8,strings)
+	read(strings,*)option%BACA_Batch	
 
+	
+	
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
     !call OMP_set_nested(.true.)
 	
-
+	quant%Nunk = msh%Nunk
     !*********************************************************
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
@@ -178,7 +215,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID)write(*,*) "geometry modeling......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
     call geo_modeling_CURV(quant,ptree%Comm)
 	
 	! generate the list of points for clustering
@@ -188,17 +225,22 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	enddo	
     option%touch_para = 3* quant%minedgelength
 	
-	if(ptree%MyID==Main_ID)write(*,*) "modeling finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 
+	
+if(option%format==HODLR)then		
+	
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call z_HODLR_structuring(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-	call z_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+	call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
+	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
+	call z_BPACK_structuring(ho_bf,option,msh,ptree,stats)
+  
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 	! stop 
@@ -207,28 +249,30 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
-    ! call HODLR_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
-    call z_HODLR_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+    ! call BPACK_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
+    call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
 	! if(option%precon/=DIRECT)then
 		! call copy_HOBF(ho_bf,ho_bf_copy)	
 	! end if
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call z_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
+    call z_BPACK_Factorization(ho_bf,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 
-    if(ptree%MyID==Main_ID)write(*,*) "EM_solve......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
     call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
+	call z_PrintStat(stats,ptree)
 	
 	call delete_quant_EMCURV(quant)
 	
@@ -236,174 +280,57 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call z_delete_Hstat(stats)
 	call z_delete_mesh(msh)
 	call z_delete_kernelquant(ker)
-	call z_delete_HOBF(ho_bf)
+	call z_HODLR_delete(ho_bf)
 	
-    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
+elseif(option%format==HMAT)then
+
+	t1 = OMP_get_wtime()		
+	call z_Cluster_partition(h_mat,option,msh,ker,z_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing H matrix formatting......"
+	call z_BPACK_structuring(h_mat,option,msh,ptree,stats)	
+  
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	t2 = OMP_get_wtime()	
+	
+	t1 = OMP_get_wtime()	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction......"
+    call z_BPACK_construction(h_mat,option,stats,msh,ker,z_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+ 	t2 = OMP_get_wtime()   
+	
+	if(option%precon/=NOPRECON)then
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing......"
+    call z_BPACK_Factorization(h_mat,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	end if	
+	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+    call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
+	call z_PrintStat(stats,ptree)
+	
+	call delete_quant_EMCURV(quant)
+	
+	call z_delete_proctree(ptree)
+	call z_delete_Hstat(stats)
+	call z_delete_mesh(msh)
+	call z_delete_kernelquant(ker)
+	call z_Hmat_delete(h_mat)	
+	
+endif	
+	
+	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
 end PROGRAM HODLR_BUTTERFLY_SOLVER_2D
-
-
-subroutine EM_solve_CURV(ho_bf_inv,option,msh,quant,ptree,stats)
-    
-    use z_HODLR_DEFS
-	use EMCURV_MODULE
-	! use RCS_Bi
-	! use RCS_Mono
-	! use element_vinc
-	use z_HODLR_Solve_Mul	
-    
-    implicit none
-    
-    integer i, j, ii, jj, iii, jjj, ierr
-    integer level, blocks, edge, patch, node, group
-    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
-    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
-    real T0
-    real(kind=8) n1,n2,rtemp	
-    complex(kind=8) value_Z
-    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
-	real(kind=8):: rel_error
-	type(z_Hoption)::option
-	type(z_mesh)::msh
-	type(quant_EMCURV)::quant
-	type(z_proctree)::ptree
-	type(z_hobf)::ho_bf_inv
-	type(z_Hstat)::stats	
-	complex(kind=8),allocatable:: current(:),voltage(:)
-	
-	if(option%ErrSol==1)then
-		call z_hodlr_test_solve_error(ho_bf_inv,option,ptree,stats)
-	endif
-	
-	
-	! if(option%PRECON==DIRECT)then
-		! msh%idxs = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		! msh%idxe = ho_bf_inv%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	! else 
-		! ! write(*,*)associated(ho_bf_for%levels(1)%BP_inverse),'dd' !%matrices_block(1)%N_p),'nima'
-		! msh%idxs = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		! msh%idxe = ho_bf_for%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)	
-	! endif
-	
-	! N_unk=msh%Nunk
-	N_unk_loc = msh%idxe-msh%idxs+1
-	
-    if (quant%RCS_static==2) then
-    
-        phi=180d0
-        
-        allocate (current(N_unk_loc))
-		Current=0
-        allocate (voltage(N_unk_loc))
-								  
-        !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=msh%idxs, msh%idxe
-            call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
-            voltage(edge-msh%idxs+1)=value_Z
-        enddo    
-        !$omp end parallel do
-        
-        n1 = OMP_get_wtime()
-        
-		call z_hodlr_solution(ho_bf_inv,Current,Voltage,N_unk_loc,1,option,ptree,stats)
-		
-		n2 = OMP_get_wtime()
-		stats%Time_Sol = stats%Time_Sol + n2-n1
-		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)then
-			write (*,*) ''
-			write (*,*) 'Solving:',rtemp,'Seconds'
-			write (*,*) ''
-		endif
-		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
-		
-		T0=secnds(0.0)
-        call RCS_bistatic_CURV(Current,msh,quant,ptree)
-
-		if(ptree%MyID==Main_ID)then
-			write (*,*) ''
-			write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
-			write (*,*) ''
-		endif
-    
-		deallocate(current)
-		deallocate(voltage)
-	
-    elseif (quant%RCS_static==1) then
-    
-        allocate (current(N_unk_loc))
-        num_sample=quant%RCS_Nsample
-        dphi=180./num_sample
-        
-		allocate (b(N_unk_loc,num_sample+1))
-		allocate (x(N_unk_loc,num_sample+1))
-		x=0
-		
-        if(ptree%MyID==Main_ID)open (100, file='RCS_monostatic.txt')
-
-        n1=OMP_get_wtime()       
-        do j=0, num_sample 
-            phi=j*dphi
-			!$omp parallel do default(shared) private(edge,value_Z)
-			do edge=msh%idxs, msh%idxe
-				call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
-				b(edge-msh%idxs+1,j+1)=value_Z
-			enddo    
-			!$omp end parallel do
-		enddo
-		
-		call z_hodlr_solution(ho_bf_inv,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
-			
-			
-		do j=0, num_sample 	
-			phi=j*dphi
-			Current=x(:,j+1)
-            call RCS_monostatic_VV_CURV(phi,rcs_V,Current,msh,quant,ptree)
-!             !$omp parallel do default(shared) private(i)
-!             do i=1, N_unk
-!                 current(i)=vectors_block(0)%vector(i,2)
-!             enddo
-!             !$omp end parallel do
-!             call RCS_monostatic_HH(theta,phi,rcs_H)
-            
-            if(ptree%MyID==Main_ID)write (100,*) j,phi,rcs_V !,rcs_H
-            
-            ! deallocate (vectors_block)
-            
-        enddo
-        
-		n2 = OMP_get_wtime()
-		stats%Time_Sol = stats%Time_Sol + n2-n1
-		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)		
-		
-        if(ptree%MyID==Main_ID)then
-			close(100)
-			write (*,*) ''
-			write (*,*) 'Solving:',rtemp,'Seconds'
-			write (*,*) ''     
-		endif
-		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID)write (*,'(A13Es14.2)') 'Solve flops:',rtemp	
-		
-	! call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	! if(ptree%MyID==Main_ID)write (*,*) '     Time_RedistV:', rtemp			
-		
-		deallocate(b)
-		deallocate(x)
-		deallocate(Current)
-		
-    endif
-        
-    return
-    
-end subroutine EM_solve_CURV
-
-
-
 
 
 

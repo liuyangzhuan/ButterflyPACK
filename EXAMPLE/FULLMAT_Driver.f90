@@ -1,5 +1,21 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 module APPLICATION_MODULE
-use d_HODLR_DEFS
+use d_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -12,13 +28,14 @@ implicit none
 		type(d_mesh),pointer::msh   ! Use this metadata in matvec
 		type(d_proctree),pointer::ptree ! Use this metadata in matvec
 		type(d_Hstat),pointer::stats ! Use this metadata in matvec
+		type(d_Hoption),pointer::option ! Use this metadata in matvec
 	end type quant_app
 
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as two LR products
 	subroutine Zelem_LR(m,n,value_e,quant)
-		use d_HODLR_DEFS
+		use d_BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -49,7 +66,7 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use d_HODLR_DEFS
+		use d_BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -70,10 +87,10 @@ contains
 	end subroutine Zelem_FULL
 	
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use d_HODLR_DEFS
+		use d_BPACK_DEFS
 		use d_DenseLA
 		use d_misc
-		use d_HODLR_Solve_Mul
+		use d_BPACK_Solve_Mul
 		implicit none 
 		character trans
 		real(kind=8) Vin(:,:),Vout(:,:)
@@ -96,7 +113,7 @@ contains
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 			ho_bf=>quant%ho_bf
-			call d_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
+			call d_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%option,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR	
@@ -108,17 +125,17 @@ end module APPLICATION_MODULE
 
 
 PROGRAM HODLR_BUTTERFLY_SOLVER
-    use d_HODLR_DEFS
+    use d_BPACK_DEFS
     use APPLICATION_MODULE
-	use d_HODLR_Solve_Mul
+	use d_BPACK_Solve_Mul
 	
-	use d_HODLR_structure
-	use d_HODLR_factor
-	use d_HODLR_constr
+	use d_BPACK_structure
+	use d_BPACK_factor
+	use d_BPACK_constr
 	use omp_lib
 	use d_misc
-	use d_HODLR_constr
-	use d_HODLR_randomMVP
+	use d_BPACK_constr
+	use d_BPACK_randomMVP
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -164,7 +181,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
-	if(ptree%MyID==Main_ID)write(*,*)'NUMBER_MPI=',nmpi
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
 	
 	!**** set number of threads
  	threads_num=1
@@ -173,7 +190,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)		
 		
 		
@@ -291,39 +308,39 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call d_HODLR_structuring(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
-	call d_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
+    call d_Cluster_partition(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
+	call d_HODLR_structuring(ho_bf,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 
     
     !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
-    call d_HODLR_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+    call d_BPACK_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
 	! call copy_HOBF(ho_bf,ho_bf_copy)	
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing......"
-    call d_HODLR_Factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID)write(*,*) "Cascading factorizing finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
+    call d_BPACK_factorization(ho_bf,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 	
 	if(option%ErrSol==1)then
-    if(ptree%MyID==Main_ID)write(*,*) "Test Solve ......"
-		call d_HODLR_Test_Solve_error(ho_bf,option,ptree,stats)
-    if(ptree%MyID==Main_ID)write(*,*) "Test Solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve ......"
+		call d_BPACK_Test_Solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve finished"
 	endif
 	
-    if(ptree%MyID==Main_ID)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	call d_PrintStat(stats,ptree)
 	
@@ -340,6 +357,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
+	quant1%option=>option
 
 	msh1%Nunk = msh%Nunk
 	
@@ -358,22 +376,22 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 		msh1%pretree(ii)=msh%basis_group(2**ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**ho_bf%Maxlevel+ii-1)%head+1
 	enddo
 	
-    call d_HODLR_structuring(ho_bf1,option1,msh1,ker1,d_element_Zmn_user,ptree1)
-	call d_BPlus_structuring(ho_bf1,option1,msh1,ptree1)	
+    call d_Cluster_partition(ho_bf1,option1,msh1,ker1,d_element_Zmn_user,ptree1)
+	call d_HODLR_structuring(ho_bf1,option1,msh1,ptree1,stats)	
 	
 	N_unk_loc = msh1%idxe-msh1%idxs+1
 	t1 = OMP_get_wtime()	
-	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"		
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction......"		
 	call d_HODLR_randomized(ho_bf1,d_matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	t2 = OMP_get_wtime()  
-	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
 	
 	call d_PrintStat(stats1,ptree1)
 	call d_delete_proctree(ptree1)
 	call d_delete_Hstat(stats1)
 	call d_delete_mesh(msh1)
 	call d_delete_kernelquant(ker1)	
-	call d_delete_HOBF(ho_bf1)	
+	call d_HODLR_delete(ho_bf1)	
 		
 	
 	
@@ -386,9 +404,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	call d_delete_Hstat(stats)
 	call d_delete_mesh(msh)
 	call d_delete_kernelquant(ker)
-	call d_delete_HOBF(ho_bf)
+	call d_HODLR_delete(ho_bf)
 	
-    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)

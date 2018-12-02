@@ -1,10 +1,26 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 #ifdef Intel
 include "mkl_vsl.f90"
 #endif
 
 module misc
-use HODLR_DEFS
+use BPACK_DEFS
 #ifdef Intel
 USE IFPORT    
 #endif  
@@ -47,241 +63,6 @@ end subroutine linspaceI
 
 
 
- ! subroutine gemm_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	
-	! allocate(A1(m,n))
-	! allocate(B1(n,k))
-	
-	! ! n1 = OMP_get_wtime()	
-
-	! if(isnan(fnorm(A,m,n)) .or. isnan(fnorm(B,n,k)))then
-		! write(*,*)fnorm(A,m,n),fnorm(B,n,k),'diaod'
-		! stop
-	! end if
-	
-	! A1 = A
-	! B1 = B
-	
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do ii =1,m	
-	! do jj =1,k	
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	 
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-							 
- 
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	
-	! deallocate(A1)
-	! deallocate(B1)
- ! end subroutine gemm_omp
- 
- ! subroutine gemmHN_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(n,m),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)	
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	! allocate(A1(n,m))
-	! allocate(B1(n,k))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + conjg(cmplx(A1(kk,ii),kind=8))*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	
-	! deallocate(A1)
-	! deallocate(B1)	
- ! end subroutine gemmHN_omp
- 
-
- ! subroutine gemmNH_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(k,n),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)	
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	
-	! allocate(A1(m,n))
-	! allocate(B1(k,n))
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*conjg(cmplx(B1(jj,kk),kind=8))	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	! deallocate(A1)
-	! deallocate(B1)		
- ! end subroutine gemmNH_omp
- 
- 
- 
- ! subroutine gemmTN_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(n,m),B(n,k),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)		
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-
-	! allocate(A1(n,m))
-	! allocate(B1(n,k))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)	
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(kk,ii)*B1(kk,jj)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-	! deallocate(A1)
-	! deallocate(B1)		
- ! end subroutine gemmTN_omp
- 
- 
-
- ! subroutine gemmNT_omp(A,B,C,m,k,n)
- 	! ! 
-	! ! 
-	! implicit none 
-	
-	! integer m,n,k
-	! DT::A(m,n),B(k,n),C(m,k)
-	! DT,allocatable::A1(:,:),B1(:,:)		
-	! DT::ctemp
-	! real(kind=8)::n1,n2
-	! integer ii,jj,kk
-	! allocate(A1(m,n))
-	! allocate(B1(k,n))	
-	
-	! ! n1 = OMP_get_wtime()	
-	! A1 = A
-	! B1 = B
-	! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
-	! do jj =1,k	
-	! do ii =1,m
-		   
-	! ctemp = 0
-	! do kk=1,n
-		! ctemp = ctemp + A1(ii,kk)*B1(jj,kk)	
-	! end do
-	! C(ii,jj) = ctemp
-	! end do
-	! end do
-	! !$omp end parallel do
-	
-	! ! ! call gemmf90(A,B,C,'N','N')
-	
-	! ! n2 = OMP_get_wtime()
-	! ! time_gemm = time_gemm + n2-n1
-
-	! deallocate(A1)
-	! deallocate(B1)		
-! end subroutine gemmNT_omp
-
-! subroutine copymatN(A,B,m,n)
-	! implicit none 
-	! integer m,n
-	! DT::A(:,:),B(:,:)
-	! character:: chara
-	! real(kind=8)::n1,n2
-	! integer ii,jj,ijind
-	
-	! ! n1 = OMP_get_wtime()
-	
-
-	! ! !$omp parallel do default(shared) private(ii,jj)	
-		! do ii =1,m
-		! do jj =1,n
-			! B(ii,jj) = A(ii,jj)
-		! end do
-		! end do
-	! ! !$omp end parallel do	
-	
-
-	! ! n2 = OMP_get_wtime()
-	! ! time_memcopy = time_memcopy + n2-n1
-	
- ! end subroutine copymatN
- 
  
   subroutine copymatT(A,B,m,n)
 	implicit none 
@@ -339,7 +120,7 @@ function isnanMat(A,m,n)
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -441,7 +222,7 @@ end subroutine LR_ReCompression
 subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,ruv,rup
@@ -479,7 +260,7 @@ end subroutine LR_FnormUp
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
 	integer N,M,rmax
@@ -1853,7 +1634,7 @@ end subroutine GeneralInverse
 	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,Flops)
 	! 
 	! 
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2238,175 +2019,57 @@ end subroutine RandomMat
 	
 
 
+subroutine ID_Selection(Mat,select_column,select_row,m,n,rank,tolerance)
 
-
-subroutine ACA_SubsetSelection(MatrixSubselection,select_column,select_row,rankmax_r,rankmax_c,rank,tolerance)
-
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
     integer blocks, index_j, group_nn, rank_blocks
     integer group_m,group_n,size_of_groupm,size_of_groupn
-    real(kind=8) norm_Z,norm_U,norm_V,tolerance
+    real(kind=8)tolerance
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n
-    integer rank, row, column, rankmax,rankmax_c,rankmax_r,rankmax_min
-    DT value_Z,value_UV,maxvalue,MatrixSubselection(:,:)
+    integer rank, row, column, rankmax,n,m,rank_c,rank_r
+    DT value_Z,value_UV,maxvalue,Mat(m,n)
+	DT,allocatable::Mat1(:,:),Mat1T(:,:)
     DT inner_U,inner_V,ctemp
-    real(kind=8) inner_UV
-    integer select_column(rankmax_c), select_row(rankmax_r)
+    real(kind=8) inner_UV,flop
+    integer select_column(n), select_row(m)
 
-    DT,allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:)
+    DT,allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:),tau(:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
-	rankmax_min = min(rankmax_r,rankmax_c)
-    norm_Z=0
+	integer,allocatable :: jpvt(:)
+	
 	select_column = 0
 	select_row = 0
 	
-    allocate(row_R(rankmax_c),column_R(rankmax_r))
-    allocate(norm_row_R(rankmax_c),norm_column_R(rankmax_r))
-
-    select_row(1)=1
-
-    ! !$omp parallel do default(shared) private(j,value_Z)
-    do j=1, rankmax_c
-        value_Z=MatrixSubselection(select_row(1),j)
-        row_R(j)=value_Z
-        norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
-    enddo
-    ! !$omp end parallel do
-
-    select_column(1)=maxloc(norm_row_R,1)
-    maxvalue=row_R(select_column(1))
-
-    ! !$omp parallel do default(shared) private(j)
-    do j=1, rankmax_c
-        row_R(j)=row_R(j)/maxvalue
-    enddo
-    ! !$omp end parallel do
-    ! !$omp parallel do default(shared) private(j)
-    do j=1, rankmax_c
-        matrixtemp_V(j,1)=row_R(j)
-    enddo
-    ! !$omp end parallel do
-
-    ! !$omp parallel do default(shared) private(i,value_Z)
-    do i=1,rankmax_r
-        value_Z=MatrixSubselection(i,select_column(1))
-        column_R(i)=value_Z
-        norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
-    enddo
-    ! !$omp end parallel do
-
-    norm_column_R(select_row(1))=0
-
-    ! !$omp parallel do default(shared) private(i)
-    do i=1,rankmax_r
-        matrixtemp_U(i,1)=column_R(i)
-    enddo
-    ! !$omp end parallel do
-
-    norm_U=norm_vector(column_R,rankmax_r)
-    norm_V=norm_vector(row_R,rankmax_c)
-    norm_Z=norm_Z+norm_U*norm_V
-
-	! if(rankmax<2)write(*,*)'rankmax'
-    select_row(2)=maxloc(norm_column_R,1)
-
-    rank=1
-	! write(*,*)sum(column_R),sum(row_R),norm_U,norm_V,'hehe'
-    do while (norm_Z*tolerance**2<norm_U*norm_V .and. rank<rankmax_min)
-
-        ! !$omp parallel do default(shared) private(j,i,value_Z,value_UV)
-        do j=1,rankmax_c
-            value_Z=MatrixSubselection(select_row(rank+1),j)
-            value_UV=0
-            do i=1,rank
-                value_UV=value_UV+matrixtemp_U(select_row(rank+1),i)*matrixtemp_V(j,i)
-            enddo
-            row_R(j)=value_Z-value_UV
-            norm_row_R(j)=dble(row_R(j)*conjg(cmplx(row_R(j),kind=8)))
-        enddo
-        ! !$omp end parallel do
-
-        do i=1,rank
-        	norm_row_R(select_column(i))=0
-        enddo
-
-        select_column(rank+1)=maxloc(norm_row_R,1)
-        maxvalue=row_R(select_column(rank+1))
-
-        ! !$omp parallel do default(shared) private(j)
-        do j=1,rankmax_c
-    	row_R(j)=row_R(j)/maxvalue
-        enddo
-        ! !$omp end parallel do
-        ! !$omp parallel do default(shared) private(j)
-        do j=1,rankmax_c
-            matrixtemp_V(j,rank+1)=row_R(j)
-        enddo
-        ! !$omp end parallel do
-
-        ! !$omp parallel do default(shared) private(i,j,value_Z,value_UV)
-        do i=1,rankmax_r
-            value_Z=MatrixSubselection(i,select_column(rank+1))
-            value_UV=0
-            do j=1,rank
-                value_UV=value_UV+matrixtemp_U(i,j)*matrixtemp_V(select_column(rank+1),j)
-            enddo
-            column_R(i)=value_Z-value_UV
-            norm_column_R(i)=dble(column_R(i)*conjg(cmplx(column_R(i),kind=8)))
-        enddo
-        ! !$omp end parallel do
-
-        do i=1,rank+1
-            norm_column_R(select_row(i))=0
-        enddo
-
-        ! !$omp parallel do default(shared) private(i)
-        do i=1,rankmax_r
-            matrixtemp_U(i,rank+1)=column_R(i)
-        enddo
-        ! !$omp end parallel do
-
-        norm_U=norm_vector(column_R,rankmax_r)
-        norm_V=norm_vector(row_R,rankmax_c)
-        inner_UV=0
-        do j=1,rank
-            inner_U=0
-            inner_V=0
-	        ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
-            do i=1,rankmax_r
-                ctemp=matrixtemp_U(i,rank+1)*matrixtemp_U(i,j)
-                inner_U=inner_U+ctemp*conjg(cmplx(ctemp,kind=8))
-            enddo
-            ! !$omp end parallel do
-            ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
-            do i=1,rankmax_c
-                ctemp=matrixtemp_V(i,rank+1)*matrixtemp_V(i,j)
-                inner_V=inner_V+ctemp*conjg(cmplx(ctemp,kind=8))
-            enddo
-            ! !$omp end parallel do
-            inner_UV=inner_UV+dble(2*sqrt(inner_U*inner_V))
-        enddo
-        norm_Z=norm_Z+inner_UV+norm_U*norm_V
-
-        rank=rank+1
-        if (rank<rankmax_min) then
-            select_row(rank+1)=maxloc(norm_column_R,1)
-        endif
-
-    enddo
-
-	! write(*,*)select_row(1:rank),select_column(1:rank)
+	allocate(Mat1(m,n))
+	Mat1 = Mat
+	allocate(Mat1T(n,m))
+	call copymatT(Mat,Mat1T,m,n)
 	
-    deallocate(row_R,column_R)
-    deallocate(norm_row_R,norm_column_R)
-
+	allocate(jpvt(max(m,n)))
+	allocate(tau(max(m,n)))
+	
+	jpvt=0
+	call geqp3modf90(Mat1T,jpvt,tau,tolerance,SafeUnderflow,rank_r)
+	select_row(1:rank_r) = jpvt(1:rank_r)
+	
+	jpvt=0
+	call geqp3modf90(Mat1,jpvt,tau,tolerance,SafeUnderflow,rank_c)
+	select_column(1:rank_c) = jpvt(1:rank_c)	
+	
+	rank = min(rank_c,rank_r)
+	
+	deallocate(jpvt)
+	deallocate(tau)
+	deallocate(Mat1)
+	deallocate(Mat1T)
+	
     return
 
-end subroutine ACA_SubsetSelection
+end subroutine ID_Selection
 
 
 
@@ -2415,7 +2078,7 @@ end subroutine ACA_SubsetSelection
 subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
 	
 	
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 
     integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2912,7 +2575,7 @@ end subroutine Cart2Sph
 
 complex(kind=8) function Hankel02_Func(x)
 
-use HODLR_DEFS    
+use BPACK_DEFS    
 implicit none
     
     real(kind=8) x
@@ -3115,6 +2778,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				
 				call MPI_Group_incl(MPI_Group_H, ptree%pgrp(group)%nproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 				call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,ptree%pgrp(group)%Comm,ierr)
+				
 				deallocate(groupmembers_sml)
 				call MPI_Group_Free(MPI_Group_H_sml,ierr)			
 				

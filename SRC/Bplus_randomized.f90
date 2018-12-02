@@ -1,16 +1,32 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module Bplus_randomized
 ! use Utilites_randomized
 
 use misc
-use HODLR_Utilities
+use BPACK_Utilities
 
 contains 
 
 
 
 subroutine BF_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -124,7 +140,7 @@ end subroutine BF_block_MVP_inverse_dat
 
 
 subroutine BF_Delete_RandVect(chara,random,level_butterfly)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	implicit none 
     character chara
 	integer num_col,num_row,level,i,j	
@@ -161,7 +177,7 @@ end subroutine BF_Delete_RandVect
 
 subroutine BF_Init_RandVect_Empty(chara,random,num_vect_sub,block_rand,stats)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
         real(kind=8):: mem_vec
     integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
@@ -294,7 +310,7 @@ end subroutine BF_Init_RandVect_Empty
 
 subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand,msh,nodataflag)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer level_c,rowblock,kover
@@ -329,6 +345,7 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	block_rand%N = block%N
 	block_rand%headm = block%headm
 	block_rand%headn = block%headn
+	block_rand%level = block%level
 	
 	
 	block_rand%M_loc = block%M_loc
@@ -456,7 +473,7 @@ end subroutine BF_Init_randomized
 
 subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -538,7 +555,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 end subroutine BF_Resolving_Butterfly_LL_new
 
 subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none 
@@ -614,7 +631,7 @@ end subroutine BF_OneV_LL
 
 
 subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none 
@@ -730,7 +747,7 @@ end subroutine BF_OneKernel_LL
 
 subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,blocks,vec_rand,option,stats)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -771,7 +788,7 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
 	   ! random=>vec_rand
 	   if(level_left_start>0 .and. level_left_start==unique_nth)then
 			n1 = OMP_get_wtime()
-			call Butterfly_Partial_MVP_Half(blocks,'N',0,level_left_start-1,vec_rand,num_vect_sub,nth_s,nth_e,Ng)
+			call BF_Partial_MVP_Half(blocks,'N',0,level_left_start-1,vec_rand,num_vect_sub,nth_s,nth_e,Ng)
 			n2 = OMP_get_wtime()
 			! time_halfbuttermul = time_halfbuttermul + n2-n1		 
 		endif 
@@ -813,7 +830,7 @@ end subroutine BF_Resolving_Butterfly_RR_new
 
 
 subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none 
@@ -899,7 +916,7 @@ end subroutine BF_OneU_RR
 
 
 subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none 
@@ -1044,7 +1061,7 @@ end subroutine BF_OneKernel_RR
 
 subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1) 
 
-    use HODLR_DEFS
+    use BPACK_DEFS
 	use misc
     use omp_lib
 	
@@ -1066,7 +1083,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 	real(kind=8):: n1,n2,Memory
 	DT, allocatable::matrix_small(:,:),U1(:,:),V1(:,:),U2(:,:),V2(:,:),U3(:,:),V3(:,:),U3tmp(:,:),V3tmp(:,:),UUtmp(:,:),VVtmp(:,:),UU(:,:),VV(:,:),UUr(:,:),VVr(:,:)
 	real(kind=8),allocatable :: Singular(:)
-	DT, allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:)
+	DT, allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:),Vinter(:,:)
 	DT::ctemp1,ctemp2
 	DT,allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
 	integer idx_start_m_ref
@@ -1090,7 +1107,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 	
 	do tt = 1,option%itermax
 	
-		rank_pre_max = ceiling_safe(option%rank0*option%rankrate**(tt-1))+3
+		rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt-1))+3
 	
 		n1 = OMP_get_wtime()
 		groupm=blocks_o%row_group
@@ -1114,28 +1131,55 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 		n2 = OMP_get_wtime()	
 		
 		
-		call get_butterfly_minmaxrank(block_rand(1))
+		call BF_get_rank(block_rand(1))
 		
-#if PRNTlevel >= 2			
-		if(ptree%MyID==Main_ID)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
-#endif	
+		
+		if(ptree%MyID==Main_ID .and. option%verbosity>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
 
-	        !!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec					
-	        if(error_inout>option%tol_rand .and. block_rand(1)%rankmax==rank_pre_max)then				
-		! if(0)then
-			call get_butterfly_minmaxrank(block_rand(1))
+
+		!!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec					
+		if(error_inout>option%tol_rand .and. block_rand(1)%rankmax==rank_pre_max)then		
+			call BF_get_rank(block_rand(1))
 			rank_new_max = block_rand(1)%rankmax
-			call delete_blocks(block_rand(1),1)
+			call BF_delete(block_rand(1),1)
 			deallocate(block_rand)
 		else 
-			call delete_blocks(blocks_o,1)
-			call get_butterfly_minmaxrank(block_rand(1))
+			call BF_delete(blocks_o,1)
+			call BF_get_rank(block_rand(1))
 			rank_new_max = block_rand(1)%rankmax
-			call copy_delete_butterfly(block_rand(1),blocks_o,Memory) 
+			call BF_copy_delete(block_rand(1),blocks_o,Memory) 
 			deallocate(block_rand)
 			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 			stats%Flop_Tmp=0
 			converged=1	
+			
+			
+			
+			
+			! mm=size(blocks_o%ButterflyU%blocks(1)%matrix,1)
+			! rank=size(blocks_o%ButterflyU%blocks(1)%matrix,2)
+			! nn=size(blocks_o%ButterflyV%blocks(1)%matrix,1)
+			! allocate(Vin(nn,nn))
+			! Vin=0
+			! do ii=1,nn
+			! Vin(ii,ii)=1d0
+			! enddo
+			! allocate(Vinter(rank,nn))
+			! Vinter=0
+			! allocate(Vout(mm,nn))
+			! Vout=0
+	
+			! call gemmf90(blocks_o%ButterflyV%blocks(1)%matrix,nn,Vin,nn,Vinter,rank,'T','N',rank,nn,nn,cone,czero)
+			! call gemmf90(blocks_o%ButterflyU%blocks(1)%matrix,mm,Vinter,rank,Vout,mm,'N','N',mm,nn,rank,cone,czero)
+			
+			! write(*,*)fnorm(Vout,mm,nn),'butterfly norm'
+
+			! deallocate(Vin)
+			! deallocate(Vinter)
+			! deallocate(Vout)			
+			
+			
+			
 			exit
 		end if		
 	end do
@@ -1153,7 +1197,7 @@ end subroutine BF_randomized
 
 subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
     integer level_c,rowblock
@@ -1229,7 +1273,7 @@ end subroutine BF_Reconstruction_Lowrank
 
 subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,ptree)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
     integer level_c,rowblock
@@ -1382,7 +1426,7 @@ end subroutine PQxSVDTruncate
 
 subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
     integer level_c,rowblock
@@ -1485,7 +1529,7 @@ end subroutine BF_Reconstruction_LL
 
 subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
     
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
 	
     integer level_c,rowblock    
@@ -1588,7 +1632,7 @@ end subroutine BF_Reconstruction_RR
 
 subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_dat,error,ptree,stats,operand1)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     implicit none
     
 	integer nth
@@ -1657,7 +1701,7 @@ end subroutine BF_Test_Reconstruction_Error
 
 subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,msh,stats,operand1)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     
 	use misc
     implicit none
@@ -1808,7 +1852,7 @@ end subroutine BF_Randomized_Vectors_LL
 
 subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,unique_nth,ptree,msh,stats,operand1)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     
 	use misc
     implicit none
@@ -1961,7 +2005,7 @@ end subroutine BF_Randomized_Vectors_RR
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -2127,7 +2171,7 @@ end subroutine BF_block_MVP_inverse_ABCD_dat
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
 subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -2224,8 +2268,9 @@ end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
 
 
+
 subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -2300,7 +2345,7 @@ end subroutine BF_block_MVP_inverse_minusBC_dat
 
 
 subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -2474,7 +2519,7 @@ end subroutine BF_block_MVP_schulz_dat
 
 
 subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -2519,7 +2564,7 @@ subroutine BF_block_MVP_schulz_Xn_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,
 
 				
 				
-				! call copy_butterfly('N',schulz_op%matrices_block,block_o,memory)
+				! call BF_copy('N',schulz_op%matrices_block,block_o,memory)
 				! call LR_SMW(block_o,memory)
 				
 				! call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
@@ -2538,9 +2583,9 @@ end subroutine BF_block_MVP_schulz_Xn_dat
 
 
 
-subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
+subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,msh)
 
-    use HODLR_DEFS
+    use BPACK_DEFS
     
 	use misc
     implicit none
@@ -2573,14 +2618,14 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 	type(vectorsblock),pointer:: RandomVectors_InOutput_tmp(:)
 
 	class(*)::ho_bf1
-    class(*),optional::operand1	
+    class(*),optional::msh	
 	type(matrixblock)::block_o
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
-	call assert(present(operand1),'operand1 cannot be skipped')
+	call assert(present(msh),'operand1 cannot be skipped')
 
-   select TYPE(operand1)
+   select TYPE(msh)
    type is (mesh)	
    select TYPE(ho_bf1)
    type is (hobf)
@@ -2608,11 +2653,11 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 			Vbuff=0
 			
 			groupn_start=groupn*2**(level_butterfly)
-			header_nn=operand1%basis_group(groupn_start)%head
+			header_nn=msh%basis_group(groupn_start)%head
 			idx_start = 1
 
 			! get the right multiplied vectors
-			idx_start_glo = operand1%basis_group(groupm)%head
+			idx_start_glo = msh%basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 		n1 = OMP_get_wtime()  
 		  call BF_block_MVP_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
@@ -2632,10 +2677,10 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 					! write(*,*)level,ii
 					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
-					idx_start_loc = operand1%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = operand1%basis_group(groupm_diag)%tail-idx_start_glo+1
+					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
+					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
@@ -2669,7 +2714,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 			Vbuff=0 
 			 
 			groupm_start=groupm*2**(level_butterfly)
-			header_mm=operand1%basis_group(groupm_start)%head
+			header_mm=msh%basis_group(groupm_start)%head
 			idx_start = 1
 			
 			! get the left multiplied vectors
@@ -2686,10 +2731,10 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 				n1 = OMP_get_wtime()
 				do ii = idx_start_diag,idx_start_diag+N_diag-1
 					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   				
-					idx_start_loc = operand1%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = operand1%basis_group(groupm_diag)%tail-idx_start_glo+1				
+					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
+					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1				
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else 
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)					
@@ -2734,8 +2779,231 @@ end subroutine BF_block_MVP_Sblock_dat
 
 
 
+
+! chara='m': block_1 x block_2
+! chara='a': block_o + block_1
+! chara='s': block_o - block_1
+! chara='+': block_o + block_1 x block_2
+! chara='-': block_o - block_1 x block_2
+subroutine BF_block_MVP_Add_Multiply_dat(h_mat,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,chara)
+   use BPACK_DEFS
+   
+   implicit none
+   integer level, ii, M, N, num_vect_sub,mv,nv
+   character trans
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
+   type(matrixblock),pointer::block_off1,block_off2
+   integer groupn,groupm,groupk,mm,nn,kk
+   class(*)::h_mat
+   class(*),optional::chara
+   type(matrixblock)::block_o
+   type(proctree)::ptree
+   type(Hstat)::stats
+	
+   select TYPE(h_mat)
+   type is (Hmat)
+   select TYPE(chara)
+   type is(character(*))
+   
+		block_off1 => h_mat%blocks_1
+		block_off2 => h_mat%blocks_2
+				
+		mm=block_o%M 				
+		nn=block_o%N  
+		kk=block_off1%N  
+
+		mv=size(Vout,1)
+		nv=size(Vout,2)
+		allocate(Vout_tmp(mv,nv))
+		Vout_tmp = Vout		
+		allocate(Vin_tmp(N,num_vect_sub))
+		Vin_tmp = Vin
+		Vout = 0  
+
+		allocate(Vbuff(kk,num_vect_sub))
+		Vbuff = 0
+	   
+	   
+		if(trans=='N')then
+			if(chara=='a' .or. chara=='s')then  ! block_o +- block_1
+				call assert(kk==nn,'block dimensions do not match')
+				Vbuff=Vin
+			else 
+				call Hmat_block_MVP_dat(block_off2,trans,block_off2%headm,block_off2%headn,num_vect_sub,Vin,Vbuff,cone,ptree,stats)
+			endif
+			call Hmat_block_MVP_dat(block_off1,trans,block_off1%headm,block_off1%headn,num_vect_sub,Vbuff,Vout,cone,ptree,stats)
+		else if(trans=='T')then
+			call Hmat_block_MVP_dat(block_off1,trans,block_off1%headm,block_off1%headn,num_vect_sub,Vin,Vbuff,cone,ptree,stats)
+			if(chara=='a' .or. chara=='s')then  ! block_o +- block_1
+				call assert(kk==nn,'block dimensions do not match')
+				Vout = Vbuff
+			else
+				call Hmat_block_MVP_dat(block_off2,trans,block_off2%headm,block_off2%headn,num_vect_sub,Vbuff,Vout,cone,ptree,stats)
+			endif
+	    endif
+			
+		if(chara=='+' .or. chara=='a')then ! block_o + block_1 x block_2 or block_o + block_1
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,cone,cone,ptree,stats)
+		else if(chara=='-' .or. chara=='s')then ! block_o - block_1 x block_2 or block_o - block_1
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,cone,-cone,ptree,stats)
+		else if(chara=='m')then ! block_1 x block_2
+			!!!! nothing needs to be done here
+		endif
+					
+	   Vin = Vin_tmp
+	   deallocate(Vin_tmp)
+	   deallocate(Vbuff)  
+	   Vout = a*Vout + b*Vout_tmp	
+	   deallocate(Vout_tmp)
+	  
+   end select	  
+   class default
+		write(*,*)"unexpected type"
+		stop
+	   
+   end select
+   
+   
+end subroutine BF_block_MVP_Add_Multiply_dat
+
+
+
+
+
+subroutine BF_block_MVP_XLM_dat(blocks_l,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
+   use BPACK_DEFS
+   
+   implicit none
+   integer level, ii, M, N, num_vect_sub,mv,nv
+   character trans
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
+   integer groupn,groupm,groupk,mm,nn
+   class(*)::blocks_l
+   class(*),optional::operand1
+   type(matrixblock)::block_o
+   type(proctree)::ptree
+   type(Hstat)::stats
+	
+   select TYPE(blocks_l)
+   type is (matrixblock)
+   			
+		mm=block_o%M 				
+		nn=block_o%N  
+
+		mv=size(Vout,1)
+		nv=size(Vout,2)
+		allocate(Vout_tmp(mv,nv))
+		Vout_tmp = Vout		
+		allocate(Vin_tmp(N,num_vect_sub))
+		Vin_tmp = Vin
+		Vout = 0  
+
+		allocate(Vbuff(mm,num_vect_sub))
+		Vbuff = 0
+	   
+	   
+		if(trans=='N')then
+			
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vbuff,cone,czero,ptree,stats)
+			Vout = Vbuff
+			call Hmat_Lsolve(blocks_l,trans,blocks_l%headm,num_vect_sub,Vout,ptree,stats)
+			
+			
+		else if(trans=='T')then
+			Vbuff = Vin
+			call Hmat_Lsolve(blocks_l,trans,blocks_l%headm,num_vect_sub,Vbuff,ptree,stats)
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vbuff,Vout,cone,czero,ptree,stats)
+	    endif
+			
+					
+	   Vin = Vin_tmp
+	   deallocate(Vin_tmp)
+	   deallocate(Vbuff)  
+	   Vout = a*Vout + b*Vout_tmp	
+	   deallocate(Vout_tmp)
+	  	  
+   class default
+		write(*,*)"unexpected type"
+		stop
+	   
+   end select
+   
+   
+end subroutine BF_block_MVP_XLM_dat
+
+
+
+subroutine BF_block_MVP_XUM_dat(blocks_u,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
+   use BPACK_DEFS
+   
+   implicit none
+   integer level, ii, M, N, num_vect_sub,mv,nv
+   character trans
+   DT :: Vin(:,:), Vout(:,:)
+   DT,allocatable :: Vin_tmp(:,:),Vbuff(:,:),Vout_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
+   integer groupn,groupm,groupk,mm,nn
+   class(*)::blocks_u
+   class(*),optional::operand1
+   type(matrixblock)::block_o
+   type(proctree)::ptree
+   type(Hstat)::stats
+	
+   select TYPE(blocks_u)
+   type is (matrixblock)
+  
+				
+		mm=block_o%M 				
+		nn=block_o%N  
+		
+
+		mv=size(Vout,1)
+		nv=size(Vout,2)
+		allocate(Vout_tmp(mv,nv))
+		Vout_tmp = Vout		
+		allocate(Vin_tmp(N,num_vect_sub))
+		Vin_tmp = Vin
+		Vout = 0  
+
+		allocate(Vbuff(nn,num_vect_sub))
+		Vbuff = 0
+	   
+	   
+		if(trans=='N')then
+			Vbuff = Vin
+			call Hmat_Usolve(blocks_u,trans,blocks_u%headm,num_vect_sub,Vbuff,ptree,stats)
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vbuff,Vout,cone,czero,ptree,stats)
+			
+		else if(trans=='T')then
+			call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vbuff,cone,czero,ptree,stats)			
+			Vout = Vbuff
+			call Hmat_Usolve(blocks_u,trans,blocks_u%headm,num_vect_sub,Vout,ptree,stats)
+	    endif
+			
+					
+	   Vin = Vin_tmp
+	   deallocate(Vin_tmp)
+	   deallocate(Vbuff)  
+	   Vout = a*Vout + b*Vout_tmp	
+	   deallocate(Vout_tmp)
+	  	  
+   class default
+		write(*,*)"unexpected type"
+		stop
+	   
+   end select
+   
+   
+end subroutine BF_block_MVP_XUM_dat
+
+
+
 subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -2803,7 +3071,7 @@ end subroutine Bplus_block_MVP_Exact_dat
 
 
 subroutine Bplus_block_MVP_Outter_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -2857,7 +3125,7 @@ end subroutine Bplus_block_MVP_Outter_Exact_dat
 
 
 subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -2952,7 +3220,7 @@ end subroutine Bplus_block_MVP_minusBC_dat
 
 
 subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -3002,8 +3270,8 @@ subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_
 end subroutine Bplus_block_MVP_Outter_minusBC_dat
 
 
-subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,msh)
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -3030,15 +3298,15 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 	
 	class(*):: ho_bf1
 	type(matrixblock)::block_o
-	class(*),optional::operand1
+	class(*),optional::msh
 	type(proctree)::ptree
 	type(Hstat)::stats
 	
 	real(kind=8)::n2,n1 	
 
 	
-	call assert(present(operand1),'operand1 cannot be skipped')
-   select TYPE(operand1)
+	call assert(present(msh),'operand1 cannot be skipped')
+   select TYPE(msh)
    type is (mesh)		
    select TYPE(ho_bf1)
    type is (hobf)
@@ -3059,7 +3327,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 			groupm=bplus_o%row_group  ! Note: row_group and col_group interchanged here   
 			mm=bplus_o%LL(1)%matrices_block(1)%M
 			! get the right multiplied vectors
-			idx_start_glo = operand1%basis_group(groupm)%head
+			idx_start_glo = msh%basis_group(groupm)%head
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 			call Bplus_block_MVP_dat(bplus_o,'N',mm,nn,num_vect_sub,Vin,Vout,ctemp1,ctemp2,ptree,stats)
 			mm=bplus_o%LL(1)%matrices_block(1)%M
@@ -3077,11 +3345,11 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here   
 
 					
-					idx_start_loc = operand1%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = operand1%basis_group(groupm_diag)%tail-idx_start_glo+1
+					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
+					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1
 					
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%	matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%	matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else 
 						call Bplus_block_MVP_inverse_dat(ho_bf1, level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
@@ -3105,7 +3373,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 	   
 			ctemp1=1.0d0 ; ctemp2=0.0d0
 			! get the left multiplied vectors 
-			idx_start_glo = operand1%basis_group(groupm)%head		
+			idx_start_glo = msh%basis_group(groupm)%head		
 			allocate(vec_old(mm,num_vect_sub))
 			allocate(vec_new(mm,num_vect_sub))	
 			
@@ -3119,10 +3387,10 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 				do ii = idx_start_diag,idx_start_diag+N_diag-1
 					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here 
 
-					idx_start_loc = operand1%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = operand1%basis_group(groupm_diag)%tail-idx_start_glo+1				
+					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
+					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1				
 					if(level==ho_bf1%Maxlevel+1)then
-						call fullmat_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
 						&vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)							
 					else
 						call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,vec_old(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)	
@@ -3157,7 +3425,7 @@ end subroutine Bplus_block_MVP_Sblock_dat
 
 
 subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -3213,7 +3481,7 @@ end subroutine Bplus_block_MVP_Outter_Sblock_dat
 
 
 subroutine Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,ptree,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -3332,7 +3600,7 @@ end subroutine Bplus_block_MVP_inverse_dat
 
 
 subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,Vin,Vout,a,b,ptree,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -3452,7 +3720,7 @@ end subroutine Bplus_block_MVP_twoforward_dat
 
 
 subroutine BF_block_MVP_twoforward_dat(ho_bf1,level,ii,block_rand,trans,N,num_vect_sub,Vin,Vout,a,b,ptree,stats)
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    implicit none
@@ -3565,7 +3833,7 @@ end subroutine BF_block_MVP_twoforward_dat
 
 
 subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -3665,7 +3933,7 @@ end subroutine Bplus_block_MVP_BplusB_dat
 
 
 subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
-	use HODLR_DEFS
+	use BPACK_DEFS
 	
 	
 	implicit none
@@ -3766,7 +4034,7 @@ end subroutine Bplus_block_MVP_BBplus_dat
 
 subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    use misc
@@ -3998,9 +4266,9 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					deallocate(matU_glo)
 					deallocate(matV_glo)
 				else
-#if PRNTlevel >= 2				
-					write(*,'(A33,A8,I4,A8,I2,A7,Es14.7)')' Onesub ',' rank:',rank,'Ntrial:',tt,' error:',error_inout
-#endif					
+			
+					if(option%verbosity>=2)write(*,'(A33,A8,I4,A8,I2,A7,Es14.7)')' Onesub ',' rank:',rank,'Ntrial:',tt,' error:',error_inout
+				
 
 					! write(*,*)bb_o,error_inout,rmax,rank,'good'
 					exit
@@ -4077,7 +4345,7 @@ end subroutine Bplus_MultiLrandomized_Onesubblock
 
 subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,rankrate_inner,blackbox_MVP_dat_inner,rank0_outter,rankrate_outter,blackbox_MVP_dat_outter,error_inout,strings,option,stats,ptree,msh)
 
-   use HODLR_DEFS
+   use BPACK_DEFS
    
    
    use misc
@@ -4145,8 +4413,8 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 	error_inout = max(error_inout, error)
 
 	
-	call delete_Bplus(bplus_o)
-	call copy_delete_Bplus(Bplus_randomized,bplus_o,Memory)
+	call Bplus_delete(bplus_o)
+	call Bplus_copy_delete(Bplus_randomized,bplus_o,Memory)
 	! deallocate(Bplus_randomized)
 	
 
@@ -4157,9 +4425,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 	
 	
 	
-#if PRNTlevel >= 2
-	write(*,'(A20,A8,I3,A8,I3,A11,Es14.7)')strings,' rank:',rank_new_max,' L_butt:',bplus_o%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
-#endif	
+	if(option%verbosity>=2)write(*,'(A20,A8,I3,A8,I3,A11,Es14.7)')strings,' rank:',rank_new_max,' L_butt:',bplus_o%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
     return
 
 end subroutine Bplus_randomized_constr
@@ -4173,7 +4439,7 @@ end subroutine Bplus_randomized_constr
 
 subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized)
 	use misc
-    use HODLR_DEFS
+    use BPACK_DEFS
 	
 	
     implicit none

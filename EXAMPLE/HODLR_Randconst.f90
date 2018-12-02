@@ -1,5 +1,22 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
+
 module APPLICATION_MODULE
-use z_HODLR_DEFS
+use z_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -11,13 +28,14 @@ implicit none
 		type(z_mesh),pointer::msh   ! Use this metadata in matvec
 		type(z_proctree),pointer::ptree ! Use this metadata in matvec
 		type(z_Hstat),pointer::stats ! Use this metadata in matvec
+		type(z_Hoption),pointer::option ! Use this metadata in matvec
 	end type quant_app
 
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -39,10 +57,10 @@ contains
 	
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		use z_DenseLA
 		use z_misc
-		use z_HODLR_Solve_Mul
+		use z_BPACK_Solve_Mul
 		implicit none 
 		character trans
 		complex(kind=8) Vin(:,:),Vout(:,:)
@@ -66,7 +84,7 @@ contains
 			nproc = quant%ptree%pgrp(pgno)%nproc
 	
 			ho_bf=>quant%ho_bf
-			call z_MVM_Z_forward(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
+			call z_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%option,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR
@@ -76,7 +94,7 @@ contains
 
 	
 	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		use z_DenseLA
 		use z_misc
 		implicit none 
@@ -151,7 +169,7 @@ contains
 
 
 	subroutine CreateDistDenseMat(N,msh,ptree,quant)
-		use z_HODLR_DEFS
+		use z_BPACK_DEFS
 		use z_DenseLA
 		use z_misc
 		implicit none 
@@ -211,14 +229,14 @@ end module APPLICATION_MODULE
 
 PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
-    use z_HODLR_DEFS
+    use z_BPACK_DEFS
 	
-	use z_HODLR_structure
-	use z_HODLR_factor
-	use z_HODLR_constr
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
 	use omp_lib
 	use z_Bplus_compress
-	use z_HODLR_randomMVP
+	use z_BPACK_randomMVP
 	use APPLICATION_MODULE
 	
     implicit none
@@ -235,7 +253,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Ntunnel,kk,black_step,rank0
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
-	type(z_Hoption):: option,option1
+	type(z_Hoption),target:: option,option1
 	type(z_Hstat),target::stats,stats1	
 	type(z_mesh),target::msh,msh1	
 	type(z_kernelquant),target::ker,ker1
@@ -267,7 +285,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
-	if(ptree%MyID==Main_ID)write(*,*)'OMP_NUM_THREADS=',threads_num
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)	
 	
 	call DATE_AND_TIME(values=times)     ! Get the current time 
@@ -279,10 +297,10 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     !real scale
 
 
-    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------Program Start----------------------------------"
-    if(ptree%MyID==Main_ID)write(*,*) "MLMDA_DIRECT_SOLVER_3D_CFIE_NEW"
-    if(ptree%MyID==Main_ID)write(*,*) "FOR X64 COMPILER"
-    if(ptree%MyID==Main_ID)write(*,*) "   "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "MLMDA_DIRECT_SOLVER_3D_CFIE_NEW"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FOR X64 COMPILER"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
 	call z_initstat(stats)
 	call z_setdefaultoptions(option)
@@ -355,9 +373,9 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	msh%pretree(4) = Nout2
 	
 	
-	if(ptree%MyID==Main_ID)write(*,*)'Blackbox HODLR for scattering matrix compression'
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for scattering matrix compression'
 	
-	if(ptree%MyID==Main_ID)write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',msh%Nunk
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',msh%Nunk
 	
 	allocate(msh%xyz(3,msh%Nunk))
 
@@ -376,17 +394,17 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID)write(*,*) "constructing HODLR formatting......"
-    call z_HODLR_structuring(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-	call z_BPlus_structuring(ho_bf,option,msh,ptree)
-    if(ptree%MyID==Main_ID)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID)write(*,*) "    "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
+    call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
+	call z_HODLR_structuring(ho_bf,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID)write(*,*)t2-t1,'secnds'	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1,'secnds'	
 	! stop 
 
 	t1 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID)write(*,*) "Generating fullmat ......"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 	allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
 	quant%matZ_glo = 0
 	
@@ -402,20 +420,20 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	call CreateDistDenseMat(msh%Nunk,msh,ptree,quant)
 	
 	
-	if(ptree%MyID==Main_ID)write(*,*) "Generating fullmat finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
 	t2 = OMP_get_wtime()   
-	if(ptree%MyID==Main_ID)write(*,*)t2-t1, 'secnds'	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'	
 
 	
 	if(explicitflag ==1)then
 
 		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID)write(*,*) "HODLR construction......"
-		call z_HODLR_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)		
-		if(ptree%MyID==Main_ID)write(*,*) "HODLR construction finished"
-		if(ptree%MyID==Main_ID)write(*,*) "    "
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)		
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()   
-		if(ptree%MyID==Main_ID)write(*,*)t2-t1, 'secnds'			
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'			
 	
 	
 		N_unk_loc = msh%idxe-msh%idxs+1
@@ -428,7 +446,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		end do
 		
 		
-		call z_MVM_Z_forward('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,stats)
+		call z_HODLR_Mult('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,option,stats)
 	
 		call z_matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
 		
@@ -442,16 +460,16 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		
 		deallocate(Vin,Vout1,Vout2)
 		
-		if(ptree%MyID==Main_ID)write(*,*)error,'accuracy of construction'
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
 		
 	else if(explicitflag ==0)then
 		N_unk_loc = msh%idxe-msh%idxs+1
 		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID)write(*,*) "FullMATVEC-based HODLR construction......"		
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based HODLR construction......"		
 		call z_HODLR_randomized(ho_bf,z_matvec_user,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
 		t2 = OMP_get_wtime()  
-		if(ptree%MyID==Main_ID)write(*,*) "FullMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
 
 	end if	
 	
@@ -468,6 +486,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
+	quant1%option=>option
 	
 	
 	msh1%Nunk = msh%Nunk
@@ -485,15 +504,15 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		msh1%pretree(ii)=msh%basis_group(2**ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**ho_bf%Maxlevel+ii-1)%head+1
 	enddo
 	
-    call z_HODLR_structuring(ho_bf1,option1,msh1,ker1,z_element_Zmn_user,ptree1)
-	call z_BPlus_structuring(ho_bf1,option1,msh1,ptree1)	
+    call z_Cluster_partition(ho_bf1,option1,msh1,ker1,z_element_Zmn_user,ptree1)
+	call z_HODLR_structuring(ho_bf1,option1,msh1,ptree1,stats)	
 	
 	N_unk_loc = msh1%idxe-msh1%idxs+1
 	t1 = OMP_get_wtime()	
-	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction......"		
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction......"		
 	call z_HODLR_randomized(ho_bf1,z_matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	t2 = OMP_get_wtime()  
-	if(ptree%MyID==Main_ID)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
 	
 	
 	
@@ -503,17 +522,17 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	call z_delete_Hstat(stats)
 	call z_delete_mesh(msh)
 	call z_delete_kernelquant(ker)
-	call z_delete_HOBF(ho_bf)
+	call z_HODLR_delete(ho_bf)
 	
 	
 	call z_delete_proctree(ptree1)
 	call z_delete_Hstat(stats1)
 	call z_delete_mesh(msh1)
 	call z_delete_kernelquant(ker1)	
-	call z_delete_HOBF(ho_bf1)
+	call z_HODLR_delete(ho_bf1)
 	
 	
-    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------program end-------------------------------------"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
