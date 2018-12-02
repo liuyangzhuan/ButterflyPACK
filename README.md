@@ -10,14 +10,11 @@ ButterflyPACK is a mathematical software for rapidly solving large-scale dense l
 ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyPACK supports hybrid MPI/OpenMP programming models. In addition, ButterflyPACK can be readily invoked from the software STRUMPACK for solving dense and sparse linear systems. 
 
 
-## INSTALLATION
+## Installation
 
-The installation uses CMake build system. 
+The installation uses CMake build system. You may need "dos2unix" and "bash" for the build process. The software also requires LAPACK and SCALAPACK.    
 
-### Installation option 1: Using CMake build system. You may need "dos2unix" and "bash" for the build process. The code also requires LAPACK and SCALAPACK installed.    
-
-For a simple installation with GNU compiliers, do:
-(ParMETIS is needed, i.e., TPL_ENABLE_PARMETISLIB=ON)
+For an installation with GNU compiliers, do:
 ```
 export LAPACK_LIB=<Lib directory of the LAPACK installation>
 export SCALAPACK_LIB=<Lib directory of the SCALAPACK installation>
