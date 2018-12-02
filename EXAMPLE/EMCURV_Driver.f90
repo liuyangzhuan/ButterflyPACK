@@ -164,7 +164,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%TwoLayerOnly=1
     option%schulzorder=3
     option%schulzlevel=3000
-	option%LRlevel=100
+	! option%LRlevel=100
 	! option%ErrFillFull=0 
 	! option%RecLR_leaf=ACA
 	option%ErrSol=1
@@ -191,6 +191,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	read(strings,*)option%RecLR_leaf		
 	call getarg(8,strings)
 	read(strings,*)option%BACA_Batch	
+	call getarg(9,strings)
+	read(strings,*)option%LRlevel
 
 	
 	
