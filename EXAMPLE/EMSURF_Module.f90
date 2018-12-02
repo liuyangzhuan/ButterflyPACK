@@ -1193,8 +1193,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 	
-    open(11,file=trim(DATA_DIR)//'/node.geo')
-    open(111,file=trim(DATA_DIR)//'/elem.geo')
+    open(11,file=trim(DATA_DIR)//'_node.inp')
+    open(111,file=trim(DATA_DIR)//'_elem.inp')
     
     read(11,*)quant%maxnode
     read(111,*)quant%maxpatch

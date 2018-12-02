@@ -171,7 +171,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! option%LR_BLK_NUM=2
 	option%format= HMAT!  HODLR ! 
 	option%near_para=0.01d0
-	!option%verbosity=2
+	! option%verbosity=2
 	option%ILU=0 
 	option%forwardN15flag=0 
 	

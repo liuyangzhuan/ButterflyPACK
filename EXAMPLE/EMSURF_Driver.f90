@@ -123,7 +123,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! Preset_level_butterfly=0
 	option%nogeo=0
 	quant%scaling=1d0
-	quant%wavelength=1.0
+	quant%wavelength=2.0
 	! Discret=0.05
 	quant%RCS_static=2
     quant%RCS_Nsample=2000
@@ -163,9 +163,11 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! option%LR_BLK_NUM=2
 	option%format= HMAT!  HODLR ! 
 	option%near_para=2.01d0
-	! option%verbosity=-1
+	option%verbosity=2
 	option%ILU=0 	
 	option%LR_BLK_NUM=1	
+	option%forwardN15flag=0 
+	
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
@@ -187,7 +189,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
    !***********************************************************************
 	
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling for "//trim(DATA_DIR)//"......"
     
 	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
 	

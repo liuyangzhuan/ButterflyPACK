@@ -8,7 +8,7 @@ export OMP_PROC_BIND=spread
 
 
 # ######## half cyclinder
-nmpi=4
+nmpi=16
 # blknum=1
 model=10
 N=5000
@@ -18,7 +18,7 @@ wavelength=0.08
 errcheck=0
 lrcomp=4
 #bACAbatch=32
-LRlevel=0
+LRlevel=100
 
 for tol in 1d-4  
 do
@@ -28,8 +28,8 @@ do
 for blknum in 1 
 # for blknum in 1 
 do
-#srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch | tee hcylindar_N_${N}_w_${wavelength}_bnum_${blknum}_comp_${lrcomp}_tol_${tol}_mpi_${nmpi}_bsize_${bACAbatch}
-mpirun -np $nmpi $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel | tee hcylindar_N_${N}_w_${wavelength}_bnum_${blknum}_comp_${lrcomp}_tol_${tol}_mpi_${nmpi}_bsize_${bACAbatch}_LRlevel_${LRlevel} 
+srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel | tee hcylindar_N_${N}_w_${wavelength}_bnum_${blknum}_comp_${lrcomp}_tol_${tol}_mpi_${nmpi}_bsize_${bACAbatch}_LRlevel_${LRlevel} 
+#mpirun -np $nmpi $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel | tee hcylindar_N_${N}_w_${wavelength}_bnum_${blknum}_comp_${lrcomp}_tol_${tol}_mpi_${nmpi}_bsize_${bACAbatch}_LRlevel_${LRlevel} 
 done
 done
 done

@@ -67,7 +67,7 @@ subroutine HODLR_factorization(ho_bf1,option,stats,ptree,msh)
 	type(proctree)::ptree
 	type(mesh)::msh
 
-	nn2 = OMP_get_wtime()
+	nn1 = OMP_get_wtime()
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	
