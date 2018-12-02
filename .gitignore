@@ -1,0 +1,9 @@
+./build/*.cmake
+./build/CMakeFiles
+./build/SRC_DOUBLE
+./build/SRC_DOUBLECOMPLEX
+./build/EXAMPLE
+./build/Testing
+./SRC_DOUBLE
+./SRC_DOUBLECOMPLEX
+

@@ -141,7 +141,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 ! quant%wavelength=0.08
 ! Discret=0.05
 	quant%RCS_static=1
-    quant%RCS_Nsample=2000
+    quant%RCS_Nsample=100
 
 	
 	
