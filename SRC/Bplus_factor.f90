@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module Bplus_factor
 use Bplus_randomized
@@ -16,10 +32,28 @@ subroutine Full_LU(blocks,option,stats)
     integer i,j,k,ii,jj,kk
     real*8  T0,T1
     type(matrixblock) :: blocks
-    
+    real(kind=8) flop
+	
     T0=OMP_get_wtime()
     size_m=size(blocks%fullmat,1)
-    call getrff90(blocks%fullmat,blocks%ipiv)
+    if(option%ILU==0)then
+		! do ii=1,size_m
+		! do jj=1,size_m
+			! write(777,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
+		! enddo
+		! enddo
+		call getrff90(blocks%fullmat,blocks%ipiv,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		! do ii=1,size_m
+		! do jj=1,size_m
+			! write(778,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
+		! enddo
+		! enddo		
+	else
+		do ii=1,size_m
+			blocks%ipiv(ii)=ii
+		enddo
+	endif
 	T1=OMP_get_wtime()
     stats%Time_Direct_LU=stats%Time_Direct_LU+T1-T0
 	
@@ -46,6 +80,8 @@ subroutine Full_add_multiply(block3,chara,block1,block2,h_mat,option,stats,ptree
     real*8 T0, T1
     type(matrixblock) :: block1, block2, block3
     
+	stats%Flop_Tmp=0
+	
 	T0=OMP_get_wtime()	 
     style(3)=block3%style
     level_blocks=block3%level
@@ -80,6 +116,7 @@ subroutine Full_add_multiply(block3,chara,block1,block2,h_mat,option,stats,ptree
     
     T1=OMP_get_wtime()	   
     stats%Time_Add_Multiply=stats%Time_Add_Multiply+T1-T0  
+    stats%Flop_Factor = stats%Flop_Factor+stats%Flop_Tmp
    
     return
         
@@ -100,6 +137,8 @@ subroutine Full_add(block3,chara,block1,ptree,stats)
 	type(Hstat):: stats
 	type(proctree):: ptree
     DT,allocatable::fullmatrix(:,:)
+	
+	stats%Flop_Tmp=0
 	
     style(3)=block3%style
     style(1)=block1%style
@@ -136,7 +175,7 @@ subroutine Full_add(block3,chara,block1,ptree,stats)
 
     T1=OMP_get_wtime()		    
     stats%Time_Add_Multiply=stats%Time_Add_Multiply+T1-T0
-                                        
+    stats%Flop_Factor = stats%Flop_Factor+stats%Flop_Tmp                         
     return
         
 end subroutine Full_add
@@ -947,7 +986,11 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 	DT::ctemp1,ctemp2
 	type(mesh)::msh
 	type(proctree)::ptree
-
+	integer Maxgrp
+	
+	Maxgrp=2**(ptree%nlevel)-1
+	
+	
 	blocks_A%level = blocks_i%level+1
 	blocks_A%row_group = blocks_i%row_group*2	
 	blocks_A%col_group = blocks_i%col_group*2
@@ -1447,7 +1490,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		if(ii==2)blocks=>blocks_B
 		if(ii==3)blocks=>blocks_C
 		if(ii==4)blocks=>blocks_D
-		blocks%pgno=msh%basis_group(blocks%row_group)%pgno
+		if(blocks_i%pgno*2>Maxgrp)then
+			blocks%pgno=blocks_i%pgno
+		else 
+			if(ii==1 .or. ii==2)blocks%pgno=blocks_i%pgno*2
+			if(ii==3 .or. ii==4)blocks%pgno=blocks_i%pgno*2+1
+		endif
 		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)	
 		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,1)	! is this needed?
 	enddo

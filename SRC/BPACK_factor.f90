@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_factor
 use Bplus_factor
@@ -194,14 +210,13 @@ subroutine Hmat_Factorization(h_mat,option,stats,ptree,msh)
 	type(proctree)::ptree
 	type(mesh)::msh	
 	
-    integer blocks, level, flag,num_blocks
+    integer blocks, level, flag,num_blocks,level_butterfly
     integer Primary_block, kk, i, j, k, intemp, ierr
     integer systime0(8), systime1(8)
     character (len=10) :: date1, time1, zone1
     real*8 rtemp1, rtemp2, rtemp
     real*8 nn1,nn2
     real*8 Memory, Memory_near
-    type(global_matricesblock), pointer :: global_block
     type(matrixblock), pointer :: block
 	integer mypgno
     
@@ -239,9 +254,16 @@ subroutine Hmat_Factorization(h_mat,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0) then
         write (*,*) ''
 		write(*,*) 'Randomized OPs: Count and Time'
+				
         do level=0, h_mat%Maxlevel
+			if(level>option%LRlevel)then
+				level_butterfly=0 ! low rank below LRlevel
+			else 	
+				level_butterfly = h_mat%Maxlevel - level   ! butterfly 
+			endif			
+			
 			if(stats%Add_random_CNT(level)+stats%Mul_random_CNT(level)+stats%XLUM_random_CNT(level)/=0)then
-            write (*,'(A7,I5,A17,I5,A7,I8,Es10.2,A7,I8,Es10.2,A12,I8,Es10.2)') " level:",level,'level_butterfly:',max(h_mat%Maxlevel-level,0),'add:',stats%Add_random_CNT(level),stats%Add_random_Time(level),'mul:',stats%Mul_random_CNT(level),stats%Mul_random_Time(level),'XLUM:',stats%XLUM_random_CNT(level),stats%XLUM_random_time(level)
+            write (*,'(A7,I5,A17,I5,A7,I8,Es10.2,A7,I8,Es10.2,A12,I8,Es10.2)') " level:",level,'level_butterfly:',level_butterfly,'add:',stats%Add_random_CNT(level),stats%Add_random_Time(level),'mul:',stats%Mul_random_CNT(level),stats%Mul_random_Time(level),'XLUM:',stats%XLUM_random_CNT(level),stats%XLUM_random_time(level)
 			endif
 		enddo
 		! write(*,*)'max inverse butterfly rank:', butterflyrank_inverse
@@ -251,17 +273,22 @@ subroutine Hmat_Factorization(h_mat,option,stats,ptree,msh)
     if (ptree%MyID==Main_ID .and. option%verbosity>=0) then
         write (*,*) ''
         write (*,*) 'Unpacking all blocks...'
-    endif    
-  
+    endif  
+	
+    
     num_blocks=2**msh%Dist_level
     do i=1, Rows_per_processor
         do j=1, num_blocks
             block=>h_mat%Local_blocks(j,i)
+			if(option%ILU==0)then
 			mypgno = msh%basis_group(block%row_group)%pgno
             call unpack_all_blocks_one_node(block,h_mat%Maxlevel,ptree,msh,mypgno)
+			endif
+			call Hmat_block_ComputeMemory(block,stats%Mem_Factor)
         enddo
     enddo
-    call MPI_verbose_barrier('after printing',ptree%Comm)
+	
+    call MPI_verbose_barrier('after printing',ptree)
     if (ptree%MyID==Main_ID .and. option%verbosity>=0) then
         write (*,*) 'Unpacking finished'
         write (*,*) ''
@@ -301,15 +328,17 @@ recursive subroutine Hmat_LU_TopLevel(blocks,h_mat,option,stats,ptree,msh)
     if (level/=msh%Dist_level) then
         block_son1=>blocks%sons(1,1)
         call Hmat_LU_TopLevel(block_son1,h_mat,option,stats,ptree,msh)
-        block_son1=>blocks%sons(1,1)
-        block_son2=>blocks%sons(1,2)
-        block_son3=>blocks%sons(2,1)
-        call Hmat_LXM_XUM_TopLevel(block_son1,block_son2,block_son3,h_mat,option,stats,ptree,msh)
-        block_son1=>blocks%sons(2,1)
-        block_son2=>blocks%sons(1,2)
-        block_son3=>blocks%sons(2,2)
-        call Hmat_add_multiply_TopLevel(block_son3,'-',block_son1,block_son2,h_mat,option,stats,ptree,msh)
-        block_son1=>blocks%sons(2,2)
+		if(option%ILU==0)then
+			block_son1=>blocks%sons(1,1)
+			block_son2=>blocks%sons(1,2)
+			block_son3=>blocks%sons(2,1)
+			call Hmat_LXM_XUM_TopLevel(block_son1,block_son2,block_son3,h_mat,option,stats,ptree,msh)
+			block_son1=>blocks%sons(2,1)
+			block_son2=>blocks%sons(1,2)
+			block_son3=>blocks%sons(2,2)
+			call Hmat_add_multiply_TopLevel(block_son3,'-',block_son1,block_son2,h_mat,option,stats,ptree,msh)
+        endif
+		block_son1=>blocks%sons(2,2)
         call Hmat_LU_TopLevel(block_son1,h_mat,option,stats,ptree,msh)
     else
         call Hmat_LU_DistLevel(blocks,h_mat,option,stats,ptree,msh)
@@ -357,16 +386,20 @@ subroutine Hmat_LU_DistLevel(global_block,h_mat,option,stats,ptree,msh)
     if (ptree%MyID==id) then
         blocks=>h_mat%Local_blocks(j,i)
         if (associated(global_block,h_mat%First_block_eachlevel(msh%Dist_level)%father).neqv. .true.) then
+			if(option%ILU==0)then
 			mypgno = msh%basis_group(blocks%row_group)%pgno
 			call unpack_all_blocks_one_node(blocks,h_mat%Maxlevel,ptree,msh,mypgno)
+			endif
         endif
         if (blocks%row_group/=blocks%col_group) then
             write (*,*) 'Hmat_LU_DistLevel error1!'
         endif
         call Hmat_LU(blocks,h_mat,option,stats,ptree,msh)
+		if(option%ILU==0)then
         call pack_all_blocks_one_node(blocks,msh)
+		endif
     endif
-    call MPI_verbose_barrier('before Hmat_LU_DistLevel returns',ptree%Comm)
+    call MPI_verbose_barrier('before Hmat_LU_DistLevel returns',ptree)
     
     return
 
@@ -473,7 +506,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
         endif 
 
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('after allocate Computing_matricesblock',ptree%Comm)
+		call MPI_verbose_barrier('after allocate Computing_matricesblock',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3             
         
@@ -499,7 +532,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
 				call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)	
 
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('bcast one blocks in L21',ptree%Comm)
+				call MPI_verbose_barrier('bcast one blocks in L21',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3
 			end do
@@ -588,7 +621,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                     endif
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send 1 blocks in Z_22',ptree%Comm)
+				call MPI_verbose_barrier('p2p send 1 blocks in Z_22',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3
             enddo
@@ -609,7 +642,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
 					blocks33=>h_mat%Local_blocks(1,1)   
 					mypgno = msh%basis_group(blocks33%row_group)%pgno
                     blocks33=>h_mat%Computing_matricesblock_m(1,1)
-                    call unpack_all_blocks_one_node(blocks33,h_mat%Maxlevel,ptree,msh,mypgno)
+					call unpack_all_blocks_one_node(blocks33,h_mat%Maxlevel,ptree,msh,mypgno)
                 endif
             enddo
             
@@ -639,7 +672,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
 						if(send==1)blocks_s=>h_mat%Local_blocks(j+group_startm,ii)
 						call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
 						T3=OMP_get_wtime()
-						call MPI_verbose_barrier('bcast one blocks in U12',ptree%Comm)
+						call MPI_verbose_barrier('bcast one blocks in U12',ptree)
 						T4=OMP_get_wtime()					
 						stats%Time_idle=stats%Time_idle+T4-T3						
 						
@@ -692,9 +725,11 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                 j=cols_per_processor(iter,ptree%MyID)
                 do i=1, num_rows
 					blocks22=>h_mat%Local_blocks(1,1)   
-					mypgno = msh%basis_group(blocks22%row_group)%pgno                    
+					mypgno = msh%basis_group(blocks22%row_group)%pgno   
+					
 					blocks22=>h_mat%Computing_matricesblock_u(i,1)
-                    call unpack_all_blocks_one_node(blocks22,h_mat%Maxlevel,ptree,msh,mypgno)
+                    
+					call unpack_all_blocks_one_node(blocks22,h_mat%Maxlevel,ptree,msh,mypgno)
                 enddo
             endif
             
@@ -707,7 +742,6 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                     blocks22=>h_mat%Computing_matricesblock_u(k,1)							
                     call Hmat_add_multiply(blocks33,'-',blocks11,blocks22,h_mat,option,stats,ptree,msh)
                     call Hmat_block_delete(blocks22)
-                   
                 enddo
            
             endif
@@ -720,7 +754,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
             endif
             
 			T3=OMP_get_wtime()
-			call MPI_verbose_barrier('before send back Z22',ptree%Comm)
+			call MPI_verbose_barrier('before send back Z22',ptree)
 			T4=OMP_get_wtime()					
 			stats%Time_idle=stats%Time_idle+T4-T3
             
@@ -753,7 +787,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                     endif
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send back 1 blocks in Z_22',ptree%Comm)
+				call MPI_verbose_barrier('p2p send back 1 blocks in Z_22',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3
             enddo
@@ -785,7 +819,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
    
         deallocate (cols_per_processor)
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('before Hmat_add_multiply_TopLevel finish',ptree%Comm)
+		call MPI_verbose_barrier('before Hmat_add_multiply_TopLevel finish',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3
         
@@ -878,7 +912,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
         endif
 
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('before allocate Computing_matricesblock',ptree%Comm)
+		call MPI_verbose_barrier('before allocate Computing_matricesblock',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3     
             
@@ -892,7 +926,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
         endif
          
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('after allocate Computing_matricesblock',ptree%Comm)
+		call MPI_verbose_barrier('after allocate Computing_matricesblock',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3     
 
@@ -927,7 +961,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                     endif
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send on 1 blocks in Z_21',ptree%Comm)
+				call MPI_verbose_barrier('p2p send on 1 blocks in Z_21',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3     
             enddo
@@ -964,7 +998,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                     endif
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send on 1 blocks in Z_12',ptree%Comm)
+				call MPI_verbose_barrier('p2p send on 1 blocks in Z_12',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3     
             enddo
@@ -1004,7 +1038,8 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 					blocks_ll=>h_mat%Local_blocks(1,1)   
 					mypgno = msh%basis_group(blocks_ll%row_group)%pgno  				
                     blocks_ll=>h_mat%Computing_matricesblock_l(1,j)
-                    call unpack_all_blocks_one_node(blocks_ll,h_mat%Maxlevel,ptree,msh,mypgno)
+                    
+					call unpack_all_blocks_one_node(blocks_ll,h_mat%Maxlevel,ptree,msh,mypgno)
                 enddo
             endif
         enddo
@@ -1015,7 +1050,8 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 					blocks_uu=>h_mat%Local_blocks(1,1)   
 					mypgno = msh%basis_group(blocks_uu%row_group)%pgno  				
                     blocks_uu=>h_mat%Computing_matricesblock_u(i,1)
-                    call unpack_all_blocks_one_node(blocks_uu,h_mat%Maxlevel,ptree,msh,mypgno)
+                   
+					call unpack_all_blocks_one_node(blocks_uu,h_mat%Maxlevel,ptree,msh,mypgno)
                 enddo
             endif
         enddo
@@ -1029,7 +1065,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
             iter_end=min(iter_begin+Rows_per_processor-1,num_rows)
             
 			T3=OMP_get_wtime()
-			call MPI_verbose_barrier('before transfer one column/row in U11/L11',ptree%Comm)
+			call MPI_verbose_barrier('before transfer one column/row in U11/L11',ptree)
 			T4=OMP_get_wtime()					
 			stats%Time_idle=stats%Time_idle+T4-T3   
 			
@@ -1054,7 +1090,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 					
 					
 					T3=OMP_get_wtime()
-                    call MPI_verbose_barrier('bcast one blocks in L11',ptree%Comm)
+                    call MPI_verbose_barrier('bcast one blocks in L11',ptree)
 					T4=OMP_get_wtime()					
                     stats%Time_idle=stats%Time_idle+T4-T3
 					! T0=OMP_get_wtime()		
@@ -1108,7 +1144,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 					call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
 
 					T3=OMP_get_wtime()
-                    call MPI_verbose_barrier('bcast one blocks in U11',ptree%Comm)
+                    call MPI_verbose_barrier('bcast one blocks in U11',ptree)
 					T4=OMP_get_wtime()					
                     stats%Time_idle=stats%Time_idle+T4-T3
 					! T0=OMP_get_wtime()						
@@ -1152,7 +1188,8 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 						blocks_mm=>h_mat%Local_blocks(1,1)   
 						mypgno = msh%basis_group(blocks_mm%row_group)%pgno  	
                         blocks_mm=>h_mat%Computing_matricesblock_m(i,1)
-                        call unpack_all_blocks_one_node(blocks_mm,h_mat%Maxlevel,ptree,msh,mypgno)
+                        
+						call unpack_all_blocks_one_node(blocks_mm,h_mat%Maxlevel,ptree,msh,mypgno)
                     enddo
                 enddo
             endif
@@ -1162,7 +1199,8 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 						blocks_mm=>h_mat%Local_blocks(1,1)   
 						mypgno = msh%basis_group(blocks_mm%row_group)%pgno 
                         blocks_mm=>h_mat%Computing_matricesblock_m(1,j)
-                        call unpack_all_blocks_one_node(blocks_mm,h_mat%Maxlevel,ptree,msh,mypgno)
+                        
+						call unpack_all_blocks_one_node(blocks_mm,h_mat%Maxlevel,ptree,msh,mypgno)
                     enddo
                 enddo
             endif
@@ -1183,6 +1221,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                                 enddo
                             endif
                             blocks_mm=>h_mat%Computing_matricesblock_m(j,1)
+							
                             call Hmat_XUM(blocks_mm,blocks_ll,h_mat,option,stats,ptree,msh)
                             call Hmat_block_delete(blocks_mm)
 
@@ -1233,7 +1272,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
             endif
         enddo
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('before send back Z_12/Z_21',ptree%Comm)
+		call MPI_verbose_barrier('before send back Z_12/Z_21',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3     
         
@@ -1267,7 +1306,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                     endif   
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send back 1 blocks in Z_21',ptree%Comm)
+				call MPI_verbose_barrier('p2p send back 1 blocks in Z_21',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3     
             enddo
@@ -1301,7 +1340,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                     endif 
                 endif
 				T3=OMP_get_wtime()
-				call MPI_verbose_barrier('p2p send back 1 blocks in Z_12',ptree%Comm)
+				call MPI_verbose_barrier('p2p send back 1 blocks in Z_12',ptree)
 				T4=OMP_get_wtime()					
 				stats%Time_idle=stats%Time_idle+T4-T3     
             enddo
@@ -1339,7 +1378,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
         endif
 
 		T3=OMP_get_wtime()
-		call MPI_verbose_barrier('before Hmat_LXM_XUM_TopLevel finish',ptree%Comm)
+		call MPI_verbose_barrier('before Hmat_LXM_XUM_TopLevel finish',ptree)
 		T4=OMP_get_wtime()					
 		stats%Time_idle=stats%Time_idle+T4-T3     
                    
@@ -1380,21 +1419,22 @@ recursive subroutine Hmat_LU(blocks,h_mat,option,stats,ptree,msh)
     if (blocks%style==4) then
         block_son1=>blocks%sons(1,1)
         call Hmat_LU(block_son1,h_mat,option,stats,ptree,msh)
-        block_son1=>blocks%sons(1,1)
-        block_son2=>blocks%sons(2,1)
-        call Hmat_XUM(block_son1,block_son2,h_mat,option,stats,ptree,msh)
-
-        block_son1=>blocks%sons(1,1)
-        block_son2=>blocks%sons(1,2)
-        call Hmat_LXM(block_son1,block_son2,h_mat,option,stats,ptree,msh)
-
-        block_son1=>blocks%sons(2,1)
-
-        block_son2=>blocks%sons(1,2)
-        block_son3=>blocks%sons(2,2)
-		
-		call Hmat_add_multiply(block_son3,'-',block_son1,block_son2,h_mat,option,stats,ptree,msh)
         
+		if(option%ILU==0)then
+			block_son1=>blocks%sons(1,1)
+			block_son2=>blocks%sons(2,1)
+			call Hmat_XUM(block_son1,block_son2,h_mat,option,stats,ptree,msh)
+
+			block_son1=>blocks%sons(1,1)
+			block_son2=>blocks%sons(1,2)
+			call Hmat_LXM(block_son1,block_son2,h_mat,option,stats,ptree,msh)
+
+			block_son1=>blocks%sons(2,1)
+			block_son2=>blocks%sons(1,2)
+			block_son3=>blocks%sons(2,2)
+			call Hmat_add_multiply(block_son3,'-',block_son1,block_son2,h_mat,option,stats,ptree,msh)
+        endif
+		
         block_son1=>blocks%sons(2,2)
         call Hmat_LU(block_son1,h_mat,option,stats,ptree,msh)
     else
@@ -1427,14 +1467,6 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
     type(matrixblock),target :: block2,block1, block3
     type(matrixblock), pointer :: block1_son, block2_son, block3_son
     
-	
-	if(block3%style==2)then
-		if(msh%basis_group(block3%row_group)%tail-msh%basis_group(block3%row_group)%head+1/=size(block3%ButterflyU%blocks(1)%matrix,1))then
-			write(*,*)'before Hmat_add_multiply: LR structure is wrong ',block3%row_group, block3%col_group, msh%basis_group(block3%row_group)%tail-msh%basis_group(block3%row_group)%head+1, size(block3%ButterflyU%blocks(1)%matrix,1)
-			stop
-		end if 							
-	end if	
-	
     style(3)=block3%style
     style(1)=block1%style
     style(2)=block2%style
@@ -1507,7 +1539,7 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
 		end if
     elseif(style(3)==1)then
             call Full_add_multiply(block3,chara,block1,block2,h_mat,option,stats,ptree,msh)		
-	elseif(style(3)==2 .or. style(3)==3)then		
+	elseif(style(3)==2)then		
 		T0 = OMP_get_wtime()			
 		! call Butterfly_compress_add_multiply_randomized(block3,chara,block1,block2)
 		h_mat%blocks_1 => block1
@@ -1524,7 +1556,7 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
     
 #if 0
 	if(dumping==0)then
-	if(style(3)==2 .or. style(3)==3)then
+	if(style(3)==2)then
 	    group_m=block3%row_group
         group_n=block3%col_group
 		write(*,*)group_m,group_n,m,n
@@ -1576,8 +1608,8 @@ recursive subroutine Hmat_LXM(blocks_l,blocks_m,h_mat,option,stats,ptree,msh)
     if (blocks_m%style==4) then
 		T0 = OMP_get_wtime()
         if (blocks_l%style/=4) then
-			allocate(blocks_m%sons(2,2))
-			call BF_split(blocks_m,blocks_m%sons(1,1),blocks_m%sons(1,2),blocks_m%sons(2,1),blocks_m%sons(2,2),ptree,msh)
+			allocate(blocks_l%sons(2,2))
+			call BF_split(blocks_l,blocks_l%sons(1,1),blocks_l%sons(1,2),blocks_l%sons(2,1),blocks_l%sons(2,2),ptree,msh)
         endif
         T1 = OMP_get_wtime()
 		stats%Time_Split=stats%Time_Split+T1-T0
@@ -1604,7 +1636,7 @@ recursive subroutine Hmat_LXM(blocks_l,blocks_m,h_mat,option,stats,ptree,msh)
         call Hmat_LXM(blocks1,blocks2,h_mat,option,stats,ptree,msh)
         blocks2=>blocks_m%sons(2,2)
         call Hmat_LXM(blocks1,blocks2,h_mat,option,stats,ptree,msh)
-    else if (blocks_m%style==3 .or. blocks_m%style==2) then
+    else if (blocks_m%style==2) then
 		T0 = OMP_get_wtime()
 		rank0 = blocks_m%rankmax
 		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_l,BF_block_MVP_XLM_dat,error,'XLM',option,stats,ptree,msh)
@@ -1682,8 +1714,8 @@ recursive subroutine Hmat_XUM(blocks_u,blocks_m,h_mat,option,stats,ptree,msh)
     if (blocks_m%style==4) then
 		T0 = OMP_get_wtime()
         if (blocks_u%style/=4) then
-			allocate(blocks_m%sons(2,2))
-			call BF_split(blocks_m,blocks_m%sons(1,1),blocks_m%sons(1,2),blocks_m%sons(2,1),blocks_m%sons(2,2),ptree,msh)
+			allocate(blocks_u%sons(2,2))
+			call BF_split(blocks_u,blocks_u%sons(1,1),blocks_u%sons(1,2),blocks_u%sons(2,1),blocks_u%sons(2,2),ptree,msh)
         endif
         T1 = OMP_get_wtime()
 		stats%Time_Split=stats%Time_Split+T1-T0		
@@ -1708,7 +1740,7 @@ recursive subroutine Hmat_XUM(blocks_u,blocks_m,h_mat,option,stats,ptree,msh)
         call Hmat_XUM(blocks1,blocks2,h_mat,option,stats,ptree,msh)
         blocks2=>blocks_m%sons(2,2)
         call Hmat_XUM(blocks1,blocks2,h_mat,option,stats,ptree,msh)
-    else if (blocks_m%style==3 .or. blocks_m%style==2) then
+    else if (blocks_m%style==2) then
 		T0 = OMP_get_wtime() 
 		rank0 = blocks_m%rankmax
 		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_u,BF_block_MVP_XUM_dat,error,'XUM',option,stats,ptree,msh) 
@@ -1759,11 +1791,11 @@ subroutine Hmat_add_multiply_Hblock3(blocks,chara,block1,block2,h_mat,option,sta
 	integer rank0
     
 
-	if(block1%style==2 .or. block1%style==3)then
+	if(block1%style==2)then
 		level_butterfly=block1%level_butterfly
 		rank0 = block1%rankmax
 	endif
-	if(block2%style==2 .or. block2%style==3)then
+	if(block2%style==2)then
 		level_butterfly=block2%level_butterfly	
 		rank0 = block2%rankmax
 	endif
@@ -1845,7 +1877,7 @@ if(blocks_o%style==4)then
 	blocks_1_son => blocks_1%sons(2,2)	
 	call Hmat_BF_add(blocks_o_son,chara,blocks_1_son,h_mat,option,stats,ptree,msh)	
 	
-else if(blocks_o%style==3 .or. blocks_o%style==2)then
+else if(blocks_o%style==2)then
 	T0=OMP_get_wtime()		    
 	h_mat%blocks_1=>blocks_1
 	rank0 = blocks_o%rankmax

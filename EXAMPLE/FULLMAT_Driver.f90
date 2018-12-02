@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 module APPLICATION_MODULE
 use d_BPACK_DEFS
 implicit none
@@ -12,6 +28,7 @@ implicit none
 		type(d_mesh),pointer::msh   ! Use this metadata in matvec
 		type(d_proctree),pointer::ptree ! Use this metadata in matvec
 		type(d_Hstat),pointer::stats ! Use this metadata in matvec
+		type(d_Hoption),pointer::option ! Use this metadata in matvec
 	end type quant_app
 
 contains
@@ -96,7 +113,7 @@ contains
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 			ho_bf=>quant%ho_bf
-			call d_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
+			call d_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%option,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR	
@@ -340,6 +357,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
+	quant1%option=>option
 
 	msh1%Nunk = msh%Nunk
 	

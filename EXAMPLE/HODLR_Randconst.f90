@@ -1,3 +1,20 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
+
 module APPLICATION_MODULE
 use z_BPACK_DEFS
 implicit none
@@ -11,6 +28,7 @@ implicit none
 		type(z_mesh),pointer::msh   ! Use this metadata in matvec
 		type(z_proctree),pointer::ptree ! Use this metadata in matvec
 		type(z_Hstat),pointer::stats ! Use this metadata in matvec
+		type(z_Hoption),pointer::option ! Use this metadata in matvec
 	end type quant_app
 
 contains
@@ -66,7 +84,7 @@ contains
 			nproc = quant%ptree%pgrp(pgno)%nproc
 	
 			ho_bf=>quant%ho_bf
-			call z_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%stats)	
+			call z_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%option,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR
@@ -235,7 +253,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	integer Ntunnel,kk,black_step,rank0
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
-	type(z_Hoption):: option,option1
+	type(z_Hoption),target:: option,option1
 	type(z_Hstat),target::stats,stats1	
 	type(z_mesh),target::msh,msh1	
 	type(z_kernelquant),target::ker,ker1
@@ -428,7 +446,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		end do
 		
 		
-		call z_HODLR_Mult('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,stats)
+		call z_HODLR_Mult('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,option,stats)
 	
 		call z_matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
 		
@@ -468,6 +486,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
+	quant1%option=>option
 	
 	
 	msh1%Nunk = msh%Nunk

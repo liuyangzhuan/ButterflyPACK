@@ -1,86 +1,26 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
+
 #include "HODLR_config.fi"
 module DenseLA
 use BPACK_DEFS
 use omp_lib
 
-
-
-! interface geqrff90
-  ! module procedure dgeqrff90
-  ! module procedure zgeqrff90
-! end interface
-
-
-! interface geqp3f90
-  ! module procedure dgeqp3f90
-  ! module procedure zgeqp3f90
-! end interface
-
-
-! interface geqp3modf90
-  ! module procedure dgeqp3modf90
-  ! module procedure zgeqp3modf90
-! end interface
-
-
-! interface un_or_mqrf90
-  ! module procedure ormqrf90
-  ! module procedure unmqrf90
-! end interface
-
-
-! interface un_or_gqrf90
-  ! module procedure ungqrf90
-  ! module procedure orgqrf90
-! end interface
-
-
-! interface getrff90
-  ! module procedure dgetrff90
-  ! module procedure zgetrff90
-! end interface
-
-! interface getrsf90
-  ! module procedure dgetrsf90
-  ! module procedure zgetrsf90
-! end interface
-
-! interface getrif90
-  ! module procedure dgetrif90
-  ! module procedure zgetrif90
-! end interface
-
-! interface trsmf90
-  ! module procedure dtrsmf90
-  ! module procedure ztrsmf90
-! end interface
-
-! interface pun_or_mqrf90
-  ! module procedure pzunmqrf90
-  ! module procedure pdormqrf90
-! end interface
-
-
-! interface pgeqpfmodf90
-  ! module procedure pzgeqpfmodf90
-  ! module procedure pdgeqpfmodf90
-! end interface
-
-
-! interface pgetrif90
-  ! module procedure pzgetrif90
-  ! module procedure pdgetrif90
-! end interface
-
-
-! interface pgesvdf90
-  ! module procedure pzgesvdf90
-  ! module procedure pdgesvdf90
-! end interface
-
 contains
-
-
 
 real(kind=8) function fnorm(Matrix,M,N,norm)
 class(*) Matrix(:,:)
@@ -1452,6 +1392,7 @@ alpha=1d0
 ldb=size(B,1)
 lda=size(Matrix,1)
 
+! write(*,*)shape(Matrix),lda,shape(B),ldb
 call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
 

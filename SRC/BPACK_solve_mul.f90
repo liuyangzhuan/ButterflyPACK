@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_Solve_Mul
 
@@ -43,7 +59,7 @@ subroutine BPACK_Solution(bmat,x,b,Ns_loc,num_vectors,option,ptree,stats)
 		
 		deallocate(r0_initial)
 	else 			
-		call BPACK_Inv_Mult('N',Ns_loc,num_vectors,b,x,bmat,ptree,stats)
+		call BPACK_Inv_Mult('N',Ns_loc,num_vectors,b,x,bmat,ptree,option,stats)
 	end if	
  
  
@@ -86,7 +102,7 @@ end subroutine BPACK_Solution
 	
     itmax=iter
 
-	call BPACK_ApplyPrecon(precond,nn_loc,b,bb,ptree,bmat,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,b,bb,ptree,bmat,option,stats)	
 	
 	
     ! ! ! if (myid == main_id) then
@@ -102,9 +118,9 @@ end subroutine BPACK_Solution
     d=0d0
     ! write(*,*)'1'
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)    
-    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,option,stats)	
 	
     r=bb-r !residual from the initial guess
     w=r
@@ -115,9 +131,9 @@ end subroutine BPACK_Solution
 			! ! stop
 		! ! end if		
 	! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)    
-    call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,option,stats)	
 	
     v=ayo
     we=0.0_dp
@@ -143,9 +159,9 @@ end subroutine BPACK_Solution
        ye=yo-ahpla*v
            ! write(*,*)'3'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
-	   call BPACK_Mult('N',nn_loc,1,ye,ytmp,bmat,ptree,stats)
+	   call BPACK_Mult('N',nn_loc,1,ye,ytmp,bmat,ptree,option,stats)
 	   stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	   call BPACK_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,bmat,stats)	
+	   call BPACK_ApplyPrecon(precond,nn_loc,ytmp,aye,ptree,bmat,option,stats)	
 	
        !  start odd (2n-1) m loop
        d=yo+(we*we*etha/ahpla)*d
@@ -178,9 +194,9 @@ end subroutine BPACK_Solution
        if (mod(it,1)==0 .or. rerr<1.0_dp*err) then
     ! write(*,*)'4'
 		  ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-		  call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
+		  call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,option,stats)
 		  stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-		  call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
+		  call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,option,stats)	
 	
           r=bb-r
           rerr_local=dot_product(r,r)
@@ -213,18 +229,18 @@ end subroutine BPACK_Solution
        yo=w+beta*ye
            ! write(*,*)'5'
        ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
-		call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,stats)
+		call BPACK_Mult('N',nn_loc,1,yo,ytmp,bmat,ptree,option,stats)
 		stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-		call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,stats)	
+		call BPACK_ApplyPrecon(precond,nn_loc,ytmp,ayo,ptree,bmat,option,stats)	
 	
        !MAGIC
        v=ayo+beta*( aye+beta*v )
     enddo iters
     ! write(*,*)'6'
     ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
-    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,stats)
+    call BPACK_Mult('N',nn_loc,1,x,ytmp,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,stats)	
+	call BPACK_ApplyPrecon(precond,nn_loc,ytmp,r,ptree,bmat,option,stats)	
 	
 	
     !MAGIC
@@ -245,7 +261,7 @@ end subroutine BPACK_Solution
 
 
 
-  subroutine BPACK_ApplyPrecon(precond,nn_loc,x,y,ptree,bmat,stats)
+  subroutine BPACK_ApplyPrecon(precond,nn_loc,x,y,ptree,bmat,option,stats)
     implicit none
 	integer nn_loc
 	DT,dimension(1:nn_loc)::x,y
@@ -253,11 +269,12 @@ end subroutine BPACK_Solution
 	class(*)::bmat
 	type(proctree)::ptree
 	type(Hstat)::stats
+	type(Hoption)::option
 	
 	if(precond==NOPRECON)then
 		y=x
 	else if (precond==HODLRPRECON)then 
-		call BPACK_Inv_Mult('N',nn_loc,1,x,y,bmat,ptree,stats)	 
+		call BPACK_Inv_Mult('N',nn_loc,1,x,y,bmat,ptree,option,stats)	 
 	endif
 	end subroutine BPACK_ApplyPrecon
 
@@ -304,10 +321,10 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	btrue=0	
 	allocate (b(N_unk_loc,1))	
 	b=0
-	call BPACK_Mult('N',N_unk_loc,1,xtrue,btrue,bmat,ptree,stats)
+	call BPACK_Mult('N',N_unk_loc,1,xtrue,btrue,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	call BPACK_Solution(bmat,x,btrue,N_unk_loc,1,option,ptree,stats)
-	call BPACK_Mult('N',N_unk_loc,1,x,b,bmat,ptree,stats)
+	call BPACK_Mult('N',N_unk_loc,1,x,b,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	
 	rtemp1 = fnorm(xtrue-x,N_unk_loc,1)**2d0;
@@ -337,7 +354,7 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 end subroutine BPACK_Test_Solve_error
 	
 
-subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
     implicit none
     
 	integer Ns
@@ -347,18 +364,19 @@ subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
 	class(*)::bmat
     type(proctree)::ptree
 	type(Hstat)::stats	
+	type(Hoption)::option	
 
 	select TYPE(bmat)
     type is (hobf)
-		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
     type is (Hmat)	
-		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 	end select		
 	
 end subroutine BPACK_Inv_Mult	
 	
 
-subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
     use BPACK_DEFS
     implicit none
 	character trans
@@ -368,12 +386,13 @@ subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
 	class(*)::bmat
 	type(proctree)::ptree
     type(Hstat)::stats
+    type(Hoption)::option
 	
 	select TYPE(bmat)
     type is (hobf)
-		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%Maxlevel+1,Vin,Vout,bmat,ptree,stats)
+		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%Maxlevel+1,Vin,Vout,bmat,ptree,option,stats)
     type is (Hmat)	
-		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,stats)
+		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 	end select		
 	
 end subroutine BPACK_Mult
@@ -381,7 +400,7 @@ end subroutine BPACK_Mult
 
 
 
-subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
+subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stats)
 
     use BPACK_DEFS
     
@@ -407,6 +426,7 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 	type(hobf)::ho_bf1
     type(proctree)::ptree
 	type(Hstat)::stats
+	type(Hoption)::option
 		
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)	 
 	  
@@ -458,6 +478,7 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,stats)
 		Vout=conjg(cmplx(Vout,kind=8))
 		Vin=conjg(cmplx(Vin,kind=8))
 	endif
+	Vout = Vout*option%scale_factor
 	
     return                
 
@@ -468,7 +489,7 @@ end subroutine HODLR_Inv_Mult
 
 
 
-subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,stats)
+subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,option,stats)
     use BPACK_DEFS
     implicit none
     
@@ -485,6 +506,7 @@ subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1
 	type(proctree)::ptree
     ! type(vectorsblock), pointer :: random1, random2
     type(Hstat)::stats
+    type(Hoption)::option
 	
     real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
@@ -539,6 +561,8 @@ subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1
 		Vin=conjg(cmplx(Vin,kind=8))
 	endif
 	
+	Vout = Vout/option%scale_factor
+	
 	! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
 	
 	
@@ -547,7 +571,7 @@ subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1
 end subroutine HODLR_Mult
 	
 
-subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
+subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
     implicit none
     
 	integer Ns,ii
@@ -557,6 +581,7 @@ subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
 	type(Hmat)::h_mat
     type(proctree)::ptree
 	type(Hstat)::stats	
+	type(Hoption)::option	
 
 	trans_tmp = trans
 	if(trans=='C')then
@@ -569,7 +594,7 @@ subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
 	if(trans=='N')then	
 		! write(*,*)fnorm(Vout,Ns,num_vectors),'before L solve'
 		call Hmat_Lsolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)	
-		! write(*,*)fnorm(Vout,Ns,num_vectors),'before U solve'
+		! write(*,*)fnorm(Vout,Ns,num_vectors),'before U solve',abs(Vout)
 		call Hmat_Usolve_Toplevel(h_mat,trans_tmp,Vout,Ns,num_vectors,ptree,stats)	
 		! write(*,*)fnorm(Vout,Ns,num_vectors),'after LU solve'
 		! do ii=1,Ns
@@ -585,10 +610,12 @@ subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
 		Vin=conjg(cmplx(Vin,kind=8))
 	endif	
 	
+	Vout = Vout*option%scale_factor
+	
 end subroutine Hmat_Inv_Mult	
 	
 
-subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
+subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
 
     use BPACK_DEFS
     
@@ -607,6 +634,7 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
 	type(proctree)::ptree
     ! type(vectorsblock), pointer :: random1, random2
     type(Hstat)::stats
+    type(Hoption)::option
 	
     real(kind=8),allocatable :: Singular(:)
 	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
@@ -651,6 +679,8 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,stats)
 			Vout=conjg(cmplx(Vout,kind=8))
 			Vin=conjg(cmplx(Vin,kind=8))
 		endif		
+	
+		Vout = Vout/option%scale_factor
 	
 		call MPI_barrier(ptree%Comm,ierr)
 		n2=OMP_get_wtime()

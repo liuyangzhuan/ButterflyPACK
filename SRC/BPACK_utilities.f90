@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_Utilities
 use misc
@@ -71,8 +87,7 @@ recursive subroutine Hmat_delete_global_tree(blocks)
 		call Hmat_delete_global_tree(blocks_son)
 		blocks_son=>blocks%sons(2,2)
 		call Hmat_delete_global_tree(blocks_son)
-	else 
-		deallocate(blocks)
+		deallocate(blocks%sons)
     endif
     
     return    
@@ -89,6 +104,7 @@ type(Hmat)::h_mat
 integer bm,bn,ii,jj
 
 call Hmat_delete_global_tree(h_mat%blocks_root)
+deallocate(h_mat%blocks_root)
 
 if(associated(h_mat%Local_blocks))then
 	bm = size(h_mat%Local_blocks,1)
@@ -342,12 +358,10 @@ subroutine PrintStat(stats,ptree)
 
 
 
-	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(stats%Time_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Factorization time:',rtemp,'Seconds'	
-	call MPI_ALLREDUCE(stats%Mem_Sblock,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(stats%Mem_Direct_inv,rtemp2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)	
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Factorization mem:',rtemp+rtemp1+rtemp2,'MB'	
+	call MPI_ALLREDUCE(stats%Mem_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Factorization mem:',rtemp,'MB'	
 	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factorization flops:',rtemp	
 
@@ -399,9 +413,13 @@ subroutine SetDefaultOptions(option)
 	option%rankrate=1.2d0
 	option%itermax=10
 	option%powiter=0
+	option%ILU=0
 	option%near_para=SafeEps
 	option%format=HODLR
 	option%verbosity=0
+	option%scale_factor=1d0
+	option%rmax=3000
+	option%forwardN15flag=1
 
 end subroutine SetDefaultOptions	
 
@@ -437,9 +455,13 @@ subroutine CopyOptions(option,option1)
 	option1%rankrate = option%rankrate
 	option1%itermax = option%itermax
 	option1%powiter = option%powiter
+	option1%ILU = option%ILU
 	option1%near_para = option%near_para
 	option1%format = option%format
 	option1%verbosity = option%verbosity
+	option1%scale_factor = option%scale_factor
+	option1%rmax = option%rmax
+	option1%forwardN15flag = option%forwardN15flag
 
 end subroutine CopyOptions	
 

@@ -1,3 +1,21 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
+
+
 #include "HODLR_config.fi"
 module block_sendrecv
 use BPACK_DEFS
@@ -5,18 +23,16 @@ use BPACK_Utilities
 use misc
 contains 
 
-subroutine MPI_verbose_barrier(msg,comm)
+subroutine MPI_verbose_barrier(msg,ptree)
 	implicit none 
-	integer comm
+	type(proctree)::ptree
 	character(*)::msg
 	integer ierr
-	! write(1000+Myid,*)'waiting ',msg
-	call MPI_barrier(comm,ierr)
-	! write(1000+Myid,*)'waiting done ',msg
+	! write(1000+ptree%Myid,*)'waiting ',msg
+	call MPI_barrier(ptree%Comm,ierr)
+	! write(1000+ptree%Myid,*)'waiting done ',msg
 	
 end subroutine MPI_verbose_barrier
-
-
 
 
 subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree)
@@ -193,7 +209,7 @@ recursive subroutine blocks_structure2buff(block,send_count_ind,send_count_dat,f
             blocks_son=>block%sons(2,2)
             call blocks_structure2buff(blocks_son,send_count_ind,send_count_dat,flag,msh,ptree)
         
-    elseif (style==3 .or. style==2) then
+    elseif (style==2) then
         count1=block%length_Butterfly_index_MPI
         count2=block%length_Butterfly_data_MPI
 
@@ -295,9 +311,6 @@ subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree)
 	
 	! deallocate(recv_buff_ind)
 	deallocate(ptree%recv_buff_dat)
-	
-
-	
     
     return
     
@@ -363,7 +376,7 @@ recursive subroutine blocks_buff2structure(block,recv_count_ind,recv_count_dat,m
             blocks_son=>block%sons(2,2)
             call blocks_buff2structure(blocks_son,recv_count_ind,recv_count_dat,msh,ptree)
        
-    elseif (style==3 .or. style==2) then        
+    elseif (style==2) then        
         count1=block%length_Butterfly_index_MPI
         count2=block%length_Butterfly_data_MPI
         call assert(count1>0 .and. count1<1d9,'count1 incorrect')
@@ -458,7 +471,7 @@ recursive subroutine Hmat_block_copy_MPIdata(block2,block1,msh)
 		blocks_son2=>block2%sons(2,2)
 		call Hmat_block_copy_MPIdata(blocks_son2,blocks_son1,msh)
 
-    elseif (style==3 .or. style==2) then
+    elseif (style==2) then
         length=block2%length_Butterfly_index_MPI
         allocate(block2%Butterfly_index_MPI(length))
         block2%Butterfly_index_MPI=block1%Butterfly_index_MPI
@@ -536,11 +549,11 @@ subroutine pack_butterfly_blocks(block,msh)
     
     !block%Butterfly_index_MPI(1)=blocks
     level_blocks=block%level
-    ! block%Butterfly_index_MPI(2)=block%data_type
+    block%Butterfly_index_MPI(2)=block%rankmax
     level_butterfly=block%level_butterfly
     block%Butterfly_index_MPI(3)=level_butterfly 
     block%Butterfly_index_MPI(4)=num_blocks
-    count1=4
+    count1=INDEX_Header
     count2=0
     
     do i=1, num_blocks
@@ -650,7 +663,7 @@ subroutine unpack_butterfly_blocks(block,Maxlevel,ptree,msh,pgno)
 	type(mesh)::msh
 	integer pgno
 	
-	
+	block%rankmax=block%Butterfly_index_MPI(2)
     level_butterfly=block%Butterfly_index_MPI(3)
     block%level_butterfly=level_butterfly
     num_blocks=block%Butterfly_index_MPI(4)
@@ -826,7 +839,7 @@ recursive subroutine pack_all_blocks_one_node(block,msh)
 		call pack_all_blocks_one_node(blocks_son,msh)
 
         
-    elseif (block%style==3 .or. block%style==2) then
+    elseif (block%style==2) then
     
         call pack_butterfly_blocks(block,msh)
 		
@@ -884,7 +897,7 @@ recursive subroutine unpack_all_blocks_one_node(block,Maxlevel,ptree,msh,pgno)
 		blocks_son=>block%sons(2,2)       
 		call unpack_all_blocks_one_node(blocks_son,Maxlevel,ptree,msh,pgno2)
 
-    elseif (block%style==3 .or. block%style==2) then
+    elseif (block%style==2) then
         call unpack_butterfly_blocks(block,Maxlevel,ptree,msh,pgno)
         
     elseif (block%style==1) then

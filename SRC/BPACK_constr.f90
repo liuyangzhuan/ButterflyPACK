@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_constr
 
@@ -9,7 +25,7 @@ use Bplus_randomized
 contains 
 
 
-subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
+subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,option,ker)
 	
 	use BPACK_DEFS
 	implicit none
@@ -17,13 +33,14 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,ker)
 	integer edge_m, edge_n
 	DT:: value_e
 	type(mesh)::msh
+	type(Hoption)::option
 	type(kernelquant)::ker	
 	
 	procedure(F_Zelem), POINTER :: proc
 	value_e=0
 	proc => ker%FuncZmn
 	call proc(msh%new2old(edge_m),msh%new2old(edge_n),value_e,ker%QuantApp)
-
+	value_e =value_e*option%scale_factor
 	return
 	
 end subroutine element_Zmn_user	
@@ -68,6 +85,8 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
     real*8 rtemp
     type(matrixblock), pointer :: blocks,blocks_copy
 	integer Maxtmp
+	DT:: ctemp
+	real(kind=8):: scale_factor
 	
     
     call MPI_barrier(ptree%Comm,ierr)
@@ -85,6 +104,23 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
         write (*,*) num_blocks*Rows_per_processor, 'total blocks'
     endif
     
+	scale_factor = 0
+	! compute the largest diagonal entry as the scaling factor
+	do i=1, Rows_per_processor
+		blocks=>h_mat%Local_blocks(ptree%MyID+1,i)
+        do ii=blocks%headm,blocks%headm+blocks%M-1
+			call element_Zmn(ii,ii,ctemp,msh,option,ker)
+			scale_factor = max(scale_factor,abs(ctemp))
+			! write(*,*)ii,abs(ctemp)
+		enddo
+	enddo
+	option%scale_factor = 1d0/scale_factor
+	call MPI_ALLREDUCE(MPI_IN_PLACE,option%scale_factor,1,MPI_DOUBLE_PRECISION,MPI_MIN,ptree%Comm,ierr)
+	
+	if (ptree%MyID==Main_ID .and. option%verbosity>=0) then 
+		write(*,*)'element_Zmn is scaled by a factor of:', option%scale_factor
+	endif
+	
     do i=1, Rows_per_processor
         do j=1, num_blocks
             T3 = OMP_get_wtime()
@@ -233,12 +269,12 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
 						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'constructing level',level
 					endif
-					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn)
+					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,option,element_Zmn)
 					stats%Mem_Direct_for=stats%Mem_Direct_for+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 				endif
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
 				if(level==option%level_check)then
-					call BF_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn,ptree,stats)
+					call BF_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn,ptree,option,stats)
 					stop
 				end if
 			endif
@@ -270,7 +306,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 end subroutine HODLR_construction
 
 
-subroutine Full_construction(blocks,msh,ker,element_Zmn)
+subroutine Full_construction(blocks,msh,ker,option,element_Zmn)
 
     use BPACK_DEFS
     implicit none
@@ -281,6 +317,7 @@ subroutine Full_construction(blocks,msh,ker,element_Zmn)
     DT value_Z
 	type(matrixblock)::blocks
 	type(mesh)::msh
+	type(Hoption)::option
 	type(kernelquant)::ker
 	procedure(Zelem)::element_Zmn
 	
@@ -298,7 +335,7 @@ subroutine Full_construction(blocks,msh,ker,element_Zmn)
 	!$omp parallel do default(shared) private(j,i,value_Z)
 	do j=head_n, tail_n
 		do i=head_m, tail_m
-			call element_Zmn(i,j,value_Z,msh,ker)
+			call element_Zmn(i,j,value_Z,msh,option,ker)
 			blocks%fullmat(i-head_m+1,j-head_n+1)=value_Z
 		enddo
 	enddo
@@ -306,8 +343,6 @@ subroutine Full_construction(blocks,msh,ker,element_Zmn)
     return
 
 end subroutine Full_construction
-
-
 
 
 recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,option,stats,msh,ker,element_Zmn,ptree)
@@ -326,17 +361,15 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 	type(proctree)::ptree
 	procedure(Zelem)::element_Zmn
 	
-    if (blocks%style==3 .or. blocks%style==2) then
-		! conv=1
-		!!!! Modified by Yang Liu, use N^1.5 scheme when fast sampling is not accurate
-		! if(forwardN15flag==1)then
+    if (blocks%style==2) then
+		if(option%forwardN15flag==1)then
 			call BF_compress_N15(blocks,option,Memory_far,stats,msh,ker,element_Zmn,ptree)
 			call BF_sym2asym(blocks)				
-		! else
-			! call BF_compress(blocks,rtemp,conv)	
-		! end if				
+		else
+			call BF_compress_NlogN(blocks,option,Memory_far,stats,msh,ker,element_Zmn,ptree)
+		end if				
     elseif (blocks%style==1) then
-		call Full_construction(blocks,msh,ker,element_Zmn)
+		call Full_construction(blocks,msh,ker,option,element_Zmn)
 		Memory_near=Memory_near+SIZEOF(blocks%fullmat)/1024.0d3
     elseif (blocks%style==4) then
 		do ii=1,2

@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_structure 
 use BPACK_Utilities
@@ -79,28 +95,29 @@ end function euclidean_distance
 !     defined as 1-Z_ij^2/(Z_iiZ_jj)
 !     undefined otherwise
 !     Use with caution !!!
-real(kind=8) function gram_distance(edgem,edgen,ker,msh,element_Zmn)
+real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,element_Zmn)
     
     use BPACK_DEFS
     implicit none
 
     integer edgem, edgen
 	type(mesh)::msh
+	type(Hoption)::option
 	type(kernelquant)::ker
 	procedure(Zelem)::element_Zmn
 	DT r1,r2,r3,r4
 ! l2 distance	
 #if 0	
-	call element_Zmn(edgem,edgem,r1,msh,ker)
-	call element_Zmn(edgen,edgen,r2,msh,ker)
-	call element_Zmn(edgem,edgen,r3,msh,ker)
-	call element_Zmn(edgen,edgem,r4,msh,ker)
+	call element_Zmn(edgem,edgem,r1,msh,option,ker)
+	call element_Zmn(edgen,edgen,r2,msh,option,ker)
+	call element_Zmn(edgem,edgen,r3,msh,option,ker)
+	call element_Zmn(edgen,edgem,r4,msh,option,ker)
     gram_distance=dble(r1+r2-r3-r4)
 ! angular distance
 #else   
-	call element_Zmn(edgem,edgem,r1,msh,ker)
-	call element_Zmn(edgen,edgen,r2,msh,ker)
-	call element_Zmn(edgem,edgen,r3,msh,ker)
+	call element_Zmn(edgem,edgem,r1,msh,option,ker)
+	call element_Zmn(edgen,edgen,r2,msh,option,ker)
+	call element_Zmn(edgem,edgen,r3,msh,option,ker)
     gram_distance=dble(1d0-r3**2d0/(r1*r2))	
 #endif    
     return
@@ -151,7 +168,13 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Max
                     blocks%sons(i,j)%row_group=2*blocks%row_group+i-1
                     blocks%sons(i,j)%col_group=2*blocks%col_group+j-1
                     ! blocks%sons(i,j)%data_type=1
-                    blocks%sons(i,j)%level_butterfly=0
+                    
+					if(blocks%sons(i,j)%level>option%LRlevel)then
+						blocks%sons(i,j)%level_butterfly=0 ! low rank below LRlevel
+					else 	
+						blocks%sons(i,j)%level_butterfly = Maxlevel - blocks%sons(i,j)%level   ! butterfly 
+					endif	
+					
 					
 					group_m = blocks%sons(i,j)%row_group
 					group_n = blocks%sons(i,j)%col_group
@@ -307,10 +330,10 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 				call random_number(a)
 				ind_j =floor_safe(a*(msh%Nunk-1))+1
 			enddo
-			call element_Zmn(ind_i,ind_i,r1,msh,ker)
-			call element_Zmn(ind_j,ind_j,r2,msh,ker)
-			call element_Zmn(ind_i,ind_j,r3,msh,ker)
-			call element_Zmn(ind_j,ind_i,r4,msh,ker)
+			call element_Zmn(ind_i,ind_i,r1,msh,option,ker)
+			call element_Zmn(ind_j,ind_j,r2,msh,option,ker)
+			call element_Zmn(ind_i,ind_j,r3,msh,option,ker)
+			call element_Zmn(ind_j,ind_i,r4,msh,option,ker)
 			if(aimag(cmplx(r1,kind=8))/=0 .or. aimag(cmplx(r2,kind=8))/=0 .or. abs(r3-conjg(cmplx(r3,kind=8)))>abs(r3)*SafeEps)then
 				write(*,*)'Matrix not hermitian. The gram distance is undefined'
 			endif
@@ -460,7 +483,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius2=0
 					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center 
-						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,element_Zmn)
+						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,option,element_Zmn)
 					enddo
 					! call assert(radius2>0,'radius2<0 cannot take square root')
 					! radius2 = sqrt(radius2)
@@ -479,7 +502,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 				
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,element_Zmn)
+					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,option,element_Zmn)
 				enddo
 				!$omp end parallel do
 
@@ -1251,7 +1274,13 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
 			blocks%level=msh%Dist_level
             blocks%row_group=num_blocks+ptree%MyID*Rows_per_processor+i-1
             blocks%col_group=num_blocks+j-1
-            blocks%level_butterfly=0
+       
+			if(blocks%level>option%LRlevel)then
+				blocks%level_butterfly=0 ! low rank below LRlevel
+			else 	
+				blocks%level_butterfly = h_mat%Maxlevel - blocks%level   ! butterfly 
+			endif			
+
             nullify(blocks%father)
 			row_group = blocks%row_group
 			col_group = blocks%col_group			

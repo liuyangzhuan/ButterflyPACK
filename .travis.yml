@@ -9,6 +9,7 @@ sudo: required
 branches:
   only:
   - master
+  - hodlrHmat
 
 notifications:
   email: 

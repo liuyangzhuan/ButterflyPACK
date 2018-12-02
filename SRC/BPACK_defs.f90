@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 #include "HODLR_config.fi"
 module BPACK_DEFS
 	use iso_c_binding    
@@ -17,6 +33,7 @@ module BPACK_DEFS
 	integer,parameter :: nbslpk=16 ! blacs/scalapack block size
 	integer,parameter :: Rows_per_processor=1 ! depreciated
 	integer,parameter :: MPI_Header=11 ! number of integers in the MPI header
+	integer,parameter :: INDEX_Header=4 ! number of integers in header of Butterfly_index_MPI
 	integer,parameter:: msg_chunk=100000 ! used to determine message tag and hence the massage size
 	
 	!**** parameters for CEM
@@ -184,7 +201,7 @@ module BPACK_DEFS
 		 ! integer nested_num ! depreciated
 		 integer,allocatable :: ipiv(:)	! permutation of the LU of the dense diagonal blocks
 		 integer blockinfo_MPI(MPI_Header) ! high-level data extracted from the index message: 1. level 2. row_group 3. col_group 4. nested_num(depreciated) 5. style 6. prestyle(depreciated) 7. data_type(depreciated) 8. level_butterfly 9. length_Butterfly_index_MPI 10. length_Butterfly_data_MPI 11. memory (depreciated) 		 
-         integer length_Butterfly_index_MPI ! length of the index message
+         integer length_Butterfly_index_MPI ! length of the index message, the first INDEX_Header integers are 1. decpreciated 2. rankmax 3. level_butterfly. 4. num_blocks
          integer length_Butterfly_data_MPI ! length of the value message		 
          DT,allocatable :: fullmat_MPI(:) ! massage for the dense blocks 
          integer,allocatable :: Butterfly_index_MPI(:) ! index message the first 4 entries are: 1. depreciated 2. depreciated 3. level_butterfly 4. num_blocks 
@@ -301,13 +318,15 @@ module BPACK_DEFS
 		real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator		
 		
 		! options for matrix construction
+		integer forwardN15flag ! 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm
 		real(kind=8) tol_comp      ! matrix construction tolerance
 		integer::Nmin_leaf ! leaf sizes of HODLR tree	
 		integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering	0: geometrical points are available for TM or CKD clustering	
 		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
 		integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
 		real(kind=8):: near_para ! parameters used to determine whether two groups are nearfield or farfield pair
-	
+		real(kind=8):: scale_factor ! parameters used to scale matrix entries
+		integer::rmax ! maximum rank truncation
 		
 		! options for inversion
 		real(kind=8) tol_LS       ! tolerance in pseudo inverse
@@ -319,6 +338,7 @@ module BPACK_DEFS
 		integer::rank0 ! intial guess of ranks
 		real(kind=8)::rankrate ! increasing rate of rank estimates per iteration
 		integer::itermax ! max number of iteration in randomized schemes
+		integer::ILU ! only perform LU on dense diagonal blocks, used only in the context of H-LU  
 		
 		! options for solve 
 		real(kind=8) tol_itersol  ! tolerance for iterative solvers 
@@ -394,12 +414,13 @@ module BPACK_DEFS
 			DT :: Vin(:,:), Vout(:,:),a,b
 		end subroutine BMatVec
 
-		subroutine Zelem(edge_m,edge_n,value,msh,ker)
-			import::mesh,kernelquant
+		subroutine Zelem(edge_m,edge_n,value,msh,option,ker)
+			import::mesh,Hoption,kernelquant
 			implicit none
 			integer edge_m, edge_n
 			DT value
 			type(mesh)::msh
+			type(Hoption)::option
 			type(kernelquant)::ker
 		end subroutine Zelem
 		

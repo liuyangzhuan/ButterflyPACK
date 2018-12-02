@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     use z_BPACK_DEFS
     use EMCURV_MODULE
@@ -138,25 +154,26 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! option%tol_comp=1d-4
 	option%tol_Rdetect=3d-5	
 	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
+	option%tol_itersol=1d-5
 	option%n_iter=1000
 	option%tol_rand=1d-3
 	option%level_check=100
-	option%precon=DIRECT ! HODLRPRECON ! NOPRECON !
-	option%xyzsort=TM
+	option%precon= DIRECT ! HODLRPRECON ! NOPRECON !
+	option%xyzsort=NATURAL !TM 
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
     option%schulzlevel=3000
-	option%LRlevel=0
+	option%LRlevel=100
 	! option%ErrFillFull=0 
 	! option%RecLR_leaf=ACA
 	option%ErrSol=1
 	! option%LR_BLK_NUM=2
 	option%format= HMAT!  HODLR ! 
 	option%near_para=0.01d0
-	! option%verbosity=-1
-	
+	!option%verbosity=2
+	option%ILU=0 
+	option%forwardN15flag=0 
 	
 	call getarg(1,strings)
 	read(strings,*)option%LR_BLK_NUM		
@@ -255,6 +272,8 @@ if(option%format==HODLR)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
+	call z_PrintStat(stats,ptree)
+	
 	call delete_quant_EMCURV(quant)
 	
 	call z_delete_proctree(ptree)
@@ -292,6 +311,8 @@ elseif(option%format==HMAT)then
     call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
+	call z_PrintStat(stats,ptree)
 	
 	call delete_quant_EMCURV(quant)
 	

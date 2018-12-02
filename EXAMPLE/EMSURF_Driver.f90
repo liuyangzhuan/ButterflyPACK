@@ -1,3 +1,19 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+
+! Developers: Yang Liu, Xiaoye S. Li.
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
 PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     use z_BPACK_DEFS
 	use EMSURF_MODULE
@@ -30,6 +46,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	type(z_Hstat)::stats	
 	type(z_mesh)::msh	
 	type(z_hobf)::ho_bf,ho_bf_copy
+	type(z_Hmat)::h_mat
 	type(z_kernelquant)::ker
 	type(quant_EMSURF),target::quant
 	type(z_proctree)::ptree
@@ -129,17 +146,26 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! schurinv=1
 	! reducelevel_flag=0
 	! directschur=1
-	option%precon=DIRECT
+	option%precon=DIRECT !HODLRPRECON !  HODLRPRECON ! NOPRECON !
 	! verboselevel=2
 	option%xyzsort=TM
 	option%lnoBP=4000
-	option%TwoLayerOnly=0
+	option%TwoLayerOnly=1
 	quant%CFIE_alpha=1
     option%schulzorder=3
     option%schulzlevel=3000
 	option%LRlevel=100
 	option%ErrFillFull=0
-	option%RecLR_leaf=ACA
+	option%RecLR_leaf=BACA
+	option%BACA_Batch=32
+	
+	option%ErrSol=1
+	! option%LR_BLK_NUM=2
+	option%format= HMAT!  HODLR ! 
+	option%near_para=2.01d0
+	! option%verbosity=-1
+	option%ILU=0 	
+	option%LR_BLK_NUM=1	
 	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
 	
     ! call OMP_set_dynamic(.true.)
@@ -178,50 +204,98 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	t2 = OMP_get_wtime()
 	! write(*,*)t2-t1
 
-	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
-    call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-	call z_HODLR_structuring(ho_bf,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
-	! stop 
+if(option%format==HODLR)then		
 	
-    !pause
-    
-    !call compression_test()
-	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-    call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
-	! if(option%precon/=DIRECT)then
-		! call copy_HOBF(ho_bf,ho_bf_copy)	
-	! end if    
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
-	
-	if(option%precon/=NOPRECON)then								
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
-    call z_BPACK_factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	end if
+		t1 = OMP_get_wtime()	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
+		call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
+		call z_BPACK_structuring(ho_bf,option,msh,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+		t2 = OMP_get_wtime()
+		! write(*,*)t2-t1
+		! stop 
+		
+		!pause
+		
+		!call compression_test()
+		t1 = OMP_get_wtime()	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
+		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
+		! if(option%precon/=DIRECT)then
+			! call copy_HOBF(ho_bf,ho_bf_copy)	
+		! end if    
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+		t2 = OMP_get_wtime()   
+		! write(*,*)t2-t1
+		
+		if(option%precon/=NOPRECON)then								
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
+		call z_BPACK_factorization(ho_bf,option,stats,ptree,msh)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		end if
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-    call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		
 
-	call delete_quant_EMSURF(quant)
-	
-	call z_delete_proctree(ptree)
-	call z_delete_Hstat(stats)
-	call z_delete_mesh(msh)
-	call z_delete_kernelquant(ker)
-	call z_HODLR_delete(ho_bf)
+		call delete_quant_EMSURF(quant)
+		
+		call z_delete_proctree(ptree)
+		call z_delete_Hstat(stats)
+		call z_delete_mesh(msh)
+		call z_delete_kernelquant(ker)
+		call z_HODLR_delete(ho_bf)
+	elseif(option%format==HMAT)then
+		t1 = OMP_get_wtime()	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing H matrix formatting......"
+		call z_Cluster_partition(h_mat,option,msh,ker,z_element_Zmn_user,ptree)
+		call z_BPACK_structuring(h_mat,option,msh,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix formatting finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+		t2 = OMP_get_wtime()
+		! write(*,*)t2-t1
+		! stop 
+		
+		!pause
+		
+		!call compression_test()
+		t1 = OMP_get_wtime()	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction......"
+		call z_BPACK_construction(h_mat,option,stats,msh,ker,z_element_Zmn_user,ptree)
+		! if(option%precon/=DIRECT)then
+			! call copy_HOBF(h_mat,ho_bf_copy)	
+		! end if    
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+		t2 = OMP_get_wtime()   
+		! write(*,*)t2-t1
+		
+		if(option%precon/=NOPRECON)then								
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing......"
+		call z_BPACK_factorization(h_mat,option,stats,ptree,msh)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		end if
+
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		
+
+		call delete_quant_EMSURF(quant)
+		
+		call z_delete_proctree(ptree)
+		call z_delete_Hstat(stats)
+		call z_delete_mesh(msh)
+		call z_delete_kernelquant(ker)
+		call z_Hmat_delete(h_mat)	
+	endif	
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
