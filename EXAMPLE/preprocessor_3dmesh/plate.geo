@@ -1,0 +1,14 @@
+cl1 = 1;
+X = 2;
+Y = 2;
+Point(1) = {X/2, Y/2, 0, cl1};
+Point(2) = {-X/2, Y/2, 0, cl1};
+Point(3) = {-X/2, -Y/2, 0, cl1};
+Point(4) = {X/2, -Y/2, 0, cl1};
+Line(1) = {2, 1};
+Line(2) = {1, 4};
+Line(3) = {4, 3};
+Line(4) = {3, 2};
+Line Loop(6) = {1, 2, 3, 4}; 
+Plane Surface(6) = {6};
+Physical Surface(7) = {6};

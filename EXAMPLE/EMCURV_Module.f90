@@ -722,7 +722,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		quant%maxedgelength = max(quant%maxedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge))))**2))
 	end do	
 	
-	quant%minedgelength = 10000000
+	quant%minedgelength = BigValue
 	do edge=1,Maxedge
 		quant%minedgelength = min(quant%minedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
 	end do		

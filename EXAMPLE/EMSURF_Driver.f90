@@ -123,10 +123,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! Preset_level_butterfly=0
 	option%nogeo=0
 	quant%scaling=1d0
-	quant%wavelength=2.0
+	quant%wavelength=1.0
 	! Discret=0.05
 	quant%RCS_static=2
-    quant%RCS_Nsample=2000
+    quant%RCS_Nsample=1000
     ! Optimizing_forward=0
     ! Fast_inverse=0
     ! Add_method_of_base_level=2
@@ -135,7 +135,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! quant%rank_approximate_para3=6.0
 	option%tol_LS=1d-12
 	! tfqmr_tolerance=1d-6
-	option%tol_itersol=3d-3
+	option%tol_itersol=1d-5
 	option%n_iter=1000
 	option%tol_rand=5d-3
 	! up_tolerance=1d-4
@@ -146,7 +146,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! schurinv=1
 	! reducelevel_flag=0
 	! directschur=1
-	option%precon=DIRECT !HODLRPRECON !  HODLRPRECON ! NOPRECON !
+	option%precon=HODLRPRECON !  HODLRPRECON ! NOPRECON !
 	! verboselevel=2
 	option%xyzsort=TM
 	option%lnoBP=4000
@@ -164,7 +164,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	option%format= HMAT!  HODLR ! 
 	option%near_para=2.01d0
 	option%verbosity=2
-	option%ILU=0 	
+	option%ILU=1 	
 	option%LR_BLK_NUM=1	
 	option%forwardN15flag=0 
 	
@@ -244,7 +244,8 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
-
+		call z_PrintStat(stats,ptree)
+		
 		call delete_quant_EMSURF(quant)
 		
 		call z_delete_proctree(ptree)
@@ -289,7 +290,7 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
-
+		call z_PrintStat(stats,ptree)
 		call delete_quant_EMSURF(quant)
 		
 		call z_delete_proctree(ptree)
