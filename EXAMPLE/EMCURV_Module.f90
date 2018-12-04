@@ -770,10 +770,6 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 	
 	N_unk_loc = msh%idxe-msh%idxs+1
 	
-	if(option%ErrSol==1)then
-		call z_bpack_test_solve_error(bmat,N_unk_loc,option,ptree,stats)
-	endif
-	
     if (quant%RCS_static==2) then
     
         phi=180d0

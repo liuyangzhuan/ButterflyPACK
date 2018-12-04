@@ -19,6 +19,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     use EMCURV_MODULE
 	
 	use z_BPACK_structure
+	use z_BPACK_Solve_Mul
 	use z_BPACK_factor
 	use z_BPACK_constr
 	use z_BPACK_Utilities
@@ -140,7 +141,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 ! quant%wavelength=0.08
 ! Discret=0.05
-	quant%RCS_static=1
+	quant%RCS_static=2
     quant%RCS_Nsample=100
 
 	
@@ -158,8 +159,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%n_iter=1000
 	option%tol_rand=1d-3
 	option%level_check=100
-	option%precon= DIRECT ! HODLRPRECON ! NOPRECON !
-	option%xyzsort=NATURAL !TM 
+	! option%precon= HODLRPRECON ! DIRECT ! HODLRPRECON ! NOPRECON !
+	option%xyzsort=NATURAL !TM ! NATURAL  
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
@@ -171,8 +172,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! option%LR_BLK_NUM=2
 	option%format= HMAT!  HODLR ! 
 	option%near_para=0.01d0
-	! option%verbosity=2
-	option%ILU=0 
+	!option%verbosity=2
+	option%ILU=1  
 	option%forwardN15flag=0 
 	
 	call getarg(1,strings)
@@ -192,7 +193,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call getarg(8,strings)
 	read(strings,*)option%BACA_Batch	
 	call getarg(9,strings)
-	read(strings,*)option%LRlevel
+	read(strings,*)option%LRlevel	
+	call getarg(10,strings)
+	read(strings,*)option%precon
 
 	
 	
@@ -269,10 +272,14 @@ if(option%format==HODLR)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-    call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	if(option%ErrSol==1)then
+		call z_bpack_test_solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
+	endif	
+	
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+    ! call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	call z_PrintStat(stats,ptree)
 	
@@ -309,10 +316,14 @@ elseif(option%format==HMAT)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if	
 	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-    call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	if(option%ErrSol==1)then
+		call z_bpack_test_solve_error(h_mat,msh%idxe-msh%idxs+1,option,ptree,stats)
+	endif		
+	
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+    ! call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	call z_PrintStat(stats,ptree)
 	

@@ -21,6 +21,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	use z_BPACK_structure
 	use z_BPACK_factor
 	use z_BPACK_constr
+	use z_BPACK_Solve_Mul
 	use omp_lib
 	use z_misc
     implicit none
@@ -110,8 +111,12 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	!itmax=10000
 	
 	CALL getarg(1, DATA_DIR)
+	call getarg(2,strings)
+	read(strings,*)quant%wavelength			
+	call getarg(3,strings)
+	read(strings,*)option%precon
 
-	option%Nmin_leaf=40
+	option%Nmin_leaf=500
 	quant%mesh_normal=1
 	! Refined_level=0
 	
@@ -123,7 +128,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     ! Preset_level_butterfly=0
 	option%nogeo=0
 	quant%scaling=1d0
-	quant%wavelength=1.0
+	! quant%wavelength=0.5
 	! Discret=0.05
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
@@ -146,7 +151,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! schurinv=1
 	! reducelevel_flag=0
 	! directschur=1
-	option%precon=HODLRPRECON !  HODLRPRECON ! NOPRECON !
+	! option%precon= NOPRECON !  HODLRPRECON ! NOPRECON !
 	! verboselevel=2
 	option%xyzsort=TM
 	option%lnoBP=4000
@@ -239,10 +244,14 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		end if
 
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		if(option%ErrSol==1)then
+			call z_bpack_test_solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
+		endif		
+		
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		! call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
 		call z_PrintStat(stats,ptree)
 		
@@ -285,10 +294,14 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		end if
 
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		if(option%ErrSol==1)then
+			call z_bpack_test_solve_error(h_mat,msh%idxe-msh%idxs+1,option,ptree,stats)
+		endif				
+		
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		! call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
 		call z_PrintStat(stats,ptree)
 		call delete_quant_EMSURF(quant)
