@@ -26,7 +26,6 @@ use misc
 use BPACK_Solve_Mul
 use iso_c_binding    
 	
-
 contains 
 
 
@@ -102,7 +101,7 @@ end subroutine Bmatvec_user_C
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_hodlr_createptree")	
+subroutine C_BPACK_Createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, name="c_bpack_createptree")	
 	implicit none 
 	integer nmpi
 	integer MPIcomm
@@ -113,7 +112,7 @@ subroutine C_HODLR_Createptree(nmpi,groupmembers,MPIcomm,ptree_Cptr) bind(c, nam
 	allocate(ptree)
 	call CreatePtree(nmpi,groupmembers,MPIcomm,ptree)
 	ptree_Cptr=c_loc(ptree)
-end subroutine C_HODLR_Createptree
+end subroutine C_BPACK_Createptree
 
 
 !**** C interface of initializing statistics
@@ -121,7 +120,7 @@ end subroutine C_HODLR_Createptree
 	!MPIcomm: MPI communicator from C caller
 	!groupmembers: MPI ranks in MPIcomm for one hodlr
 	!stats_Cptr: the structure containing statistics
-subroutine C_HODLR_Createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")	
+subroutine C_BPACK_Createstats(stats_Cptr) bind(c, name="c_bpack_createstats")	
 	implicit none 
 	type(c_ptr), intent(out) :: stats_Cptr
 	type(Hstat),pointer::stats
@@ -131,7 +130,7 @@ subroutine C_HODLR_Createstats(stats_Cptr) bind(c, name="c_hodlr_createstats")
 	call InitStat(stats)	
 	stats_Cptr=c_loc(stats)
 	
-end subroutine C_HODLR_Createstats
+end subroutine C_BPACK_Createstats
 
 
 
@@ -139,7 +138,7 @@ end subroutine C_HODLR_Createstats
 
 !**** C interface of getting one entry in stats
 	!stats_Cptr: the structure containing stats       
-subroutine C_HODLR_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_hodlr_getstats")	
+subroutine C_BPACK_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_bpack_getstats")	
 	implicit none 
 	real(kind=8)::val_d
 	character(kind=c_char,len=1) :: nam(*)
@@ -267,13 +266,13 @@ subroutine C_HODLR_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_hodlr_getstats
 	deallocate(str)
 	
 	
-end subroutine C_HODLR_Getstats
+end subroutine C_BPACK_Getstats
 
 
 !**** C interface of printing statistics
 	!stats_Cptr: the structure containing statistics
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_printstats")	
+subroutine C_BPACK_Printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_printstats")	
 	implicit none 
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: ptree_Cptr
@@ -285,12 +284,12 @@ subroutine C_HODLR_Printstats(stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_print
 	!**** print statistics variables  	
 	call PrintStat(stats,ptree)	
 	
-end subroutine C_HODLR_Printstats
+end subroutine C_BPACK_Printstats
 
-
+	
 !**** C interface of initializing option
 	!option_Cptr: the structure containing option       
-subroutine C_HODLR_Createoption(option_Cptr) bind(c, name="c_hodlr_createoption")	
+subroutine C_BPACK_Createoption(option_Cptr) bind(c, name="c_bpack_createoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	type(Hoption),pointer::option	
@@ -301,13 +300,13 @@ subroutine C_HODLR_Createoption(option_Cptr) bind(c, name="c_hodlr_createoption"
 	
 	option_Cptr=c_loc(option)
 	
-end subroutine C_HODLR_Createoption
+end subroutine C_BPACK_Createoption
 
 
 !**** C interface of copy option
 	!option_Cptr: the structure containing option       
 	!option_Cptr1: the structure containing option       
-subroutine C_HODLR_Copyoption(option_Cptr,option_Cptr1) bind(c, name="c_hodlr_copyoption")	
+subroutine C_BPACK_Copyoption(option_Cptr,option_Cptr1) bind(c, name="c_bpack_copyoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr,option_Cptr1
 	type(Hoption),pointer::option,option1	
@@ -321,13 +320,13 @@ subroutine C_HODLR_Copyoption(option_Cptr,option_Cptr1) bind(c, name="c_hodlr_co
 	
 	option_Cptr1=c_loc(option1)
 	
-end subroutine C_HODLR_Copyoption
+end subroutine C_BPACK_Copyoption
 
 
 
 !**** C interface of set one entry in option
 	!option_Cptr: the structure containing option       
-subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_setoption")	
+subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_setoption")	
 	implicit none 
 	type(c_ptr) :: option_Cptr
 	character(kind=c_char,len=1) :: nam(*)
@@ -518,7 +517,7 @@ subroutine C_HODLR_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_hodlr_set
 	deallocate(str)
 	option_Cptr=c_loc(option)
 	
-end subroutine C_HODLR_Setoption
+end subroutine C_BPACK_Setoption
 
 
 
@@ -541,7 +540,7 @@ end subroutine C_HODLR_Setoption
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
 	!MPIcomm: user-provided MPI communicator
-subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_hodlr_construct")	
+subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct")	
 	implicit none 
 	integer Npo,Ndim
 	real(kind=8) Locations(*)
@@ -713,7 +712,7 @@ subroutine C_HODLR_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 
 	
-end subroutine C_HODLR_Construct
+end subroutine C_BPACK_Construct
 
 
 
@@ -732,7 +731,7 @@ end subroutine C_HODLR_Construct
 	!msh_Cptr: the structure containing points and ordering information (out)        
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine c_hodlr_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_hodlr_construct_matvec_init")	
+subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_matvec_init")	
 	implicit none 
 	integer N
 	
@@ -877,7 +876,7 @@ subroutine c_hodlr_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 	
-end subroutine c_hodlr_construct_Matvec_Init
+end subroutine c_bpack_construct_Matvec_Init
 
 
 
@@ -890,7 +889,7 @@ end subroutine c_hodlr_construct_Matvec_Init
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
-subroutine c_hodlr_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_hodlr_construct_matvec_compute")	
+subroutine c_bpack_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")	
 	implicit none 
 
     real(kind=8) para
@@ -956,7 +955,7 @@ subroutine c_hodlr_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 	
-end subroutine c_hodlr_construct_Matvec_Compute
+end subroutine c_bpack_construct_Matvec_Compute
 
 
 !**** C interface of BF construction via blackbox matvec
@@ -1164,7 +1163,7 @@ end subroutine C_BF_Construct_Matvec_Compute
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) bind(c, name="c_hodlr_factor")	
+subroutine C_BPACK_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) bind(c, name="c_bpack_factor")	
 	implicit none 
 
 	type(c_ptr), intent(inout) :: ho_bf_for_Cptr
@@ -1207,7 +1206,7 @@ subroutine C_HODLR_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_C
 	! ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
 	ho_bf_for_Cptr=c_loc(ho_bf1)	
 
-end subroutine C_HODLR_Factor
+end subroutine C_BPACK_Factor
 
 
 !**** C interface of HODLR solve
@@ -1219,7 +1218,7 @@ end subroutine C_HODLR_Factor
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_solve")	
+subroutine C_BPACK_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_solve")	
 	implicit none 
 
 	integer Nloc,Nrhs
@@ -1261,7 +1260,7 @@ subroutine C_HODLR_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 	! ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
 	! ho_bf_for_Cptr=c_loc(ho_bf_for)	
 
-end subroutine C_HODLR_Solve
+end subroutine C_BPACK_Solve
 
 
 	
@@ -1343,7 +1342,7 @@ end subroutine C_BF_Mult
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_mult")	
+subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Ninloc,Noutloc,Ncol
@@ -1396,7 +1395,7 @@ subroutine C_HODLR_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option
 	
 	! write(*,*)t2-t1	
 	deallocate(str)
-end subroutine C_HODLR_Mult
+end subroutine C_BPACK_Mult
 
 
 
@@ -1411,7 +1410,7 @@ end subroutine C_HODLR_Mult
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_hodlr_inv_mult")	
+subroutine C_BPACK_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_inv_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Ninloc,Noutloc,Ncol
@@ -1464,13 +1463,13 @@ subroutine C_HODLR_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,op
 	
 	! write(*,*)t2-t1	
 	deallocate(str)
-end subroutine C_HODLR_Inv_Mult
+end subroutine C_BPACK_Inv_Mult
 
 
 
 !**** C interface of deleting statistics
 	!stats_Cptr: the structure containing statistics
-subroutine C_HODLR_Deletestats(stats_Cptr) bind(c, name="c_hodlr_deletestats")	
+subroutine C_BPACK_Deletestats(stats_Cptr) bind(c, name="c_bpack_deletestats")	
 	implicit none 
 	type(c_ptr), intent(inout) :: stats_Cptr
 	type(Hstat),pointer::stats
@@ -1480,12 +1479,12 @@ subroutine C_HODLR_Deletestats(stats_Cptr) bind(c, name="c_hodlr_deletestats")
 	deallocate(stats)
 	stats_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_Deletestats
+end subroutine C_BPACK_Deletestats
 
 
 !**** C interface of deleting process tree
 	!ptree_Cptr: the structure containing process tree
-subroutine C_HODLR_Deleteproctree(ptree_Cptr) bind(c, name="c_hodlr_deleteproctree")	
+subroutine C_BPACK_Deleteproctree(ptree_Cptr) bind(c, name="c_bpack_deleteproctree")	
 	implicit none 
 	type(c_ptr), intent(inout) :: ptree_Cptr
 	type(proctree),pointer::ptree
@@ -1495,12 +1494,12 @@ subroutine C_HODLR_Deleteproctree(ptree_Cptr) bind(c, name="c_hodlr_deleteproctr
 	deallocate(ptree)
 	ptree_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_Deleteproctree
+end subroutine C_BPACK_Deleteproctree
 
 
 !**** C interface of deleting mesh 
 	!msh_Cptr: the structure containing mesh
-subroutine C_HODLR_Deletemesh(msh_Cptr) bind(c, name="c_hodlr_deletemesh")	
+subroutine C_BPACK_Deletemesh(msh_Cptr) bind(c, name="c_bpack_deletemesh")	
 	implicit none 
 	type(c_ptr), intent(inout) :: msh_Cptr
 	type(mesh),pointer::msh
@@ -1510,12 +1509,12 @@ subroutine C_HODLR_Deletemesh(msh_Cptr) bind(c, name="c_hodlr_deletemesh")
 	deallocate(msh)
 	msh_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_Deletemesh
+end subroutine C_BPACK_Deletemesh
 
 
 !**** C interface of deleting kernelquant 
 	!ker_Cptr: the structure containing kernelquant
-subroutine C_HODLR_Deletekernelquant(ker_Cptr) bind(c, name="c_hodlr_deletekernelquant")	
+subroutine C_BPACK_Deletekernelquant(ker_Cptr) bind(c, name="c_bpack_deletekernelquant")	
 	implicit none 
 	type(c_ptr), intent(inout) :: ker_Cptr
 	type(kernelquant),pointer::ker
@@ -1525,12 +1524,12 @@ subroutine C_HODLR_Deletekernelquant(ker_Cptr) bind(c, name="c_hodlr_deletekerne
 	deallocate(ker)
 	ker_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_Deletekernelquant
+end subroutine C_BPACK_Deletekernelquant
 
 
 !**** C interface of deleting HOBF 
 	!ho_bf_Cptr: the structure containing HOBF
-subroutine C_HODLR_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_hodlr_deletehobf")	
+subroutine C_BPACK_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_bpack_deletehobf")	
 	implicit none 
 	type(c_ptr), intent(inout) :: ho_bf_Cptr
 	type(hobf),pointer::ho_bf
@@ -1540,7 +1539,7 @@ subroutine C_HODLR_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_hodlr_deletehobf")
 	deallocate(ho_bf)
 	ho_bf_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_DeleteHOBF
+end subroutine C_BPACK_DeleteHOBF
 
 
 !**** C interface of deleting a BF 
@@ -1560,7 +1559,7 @@ end subroutine C_BF_DeleteBF
 
 !**** C interface of deleting Hoption 
 	!option_Cptr: the structure containing Hoption
-subroutine C_HODLR_Deleteoption(option_Cptr) bind(c, name="c_hodlr_deleteoption")	
+subroutine C_BPACK_Deleteoption(option_Cptr) bind(c, name="c_bpack_deleteoption")	
 	implicit none 
 	type(c_ptr), intent(inout) :: option_Cptr
 	type(Hoption),pointer::option
@@ -1569,7 +1568,7 @@ subroutine C_HODLR_Deleteoption(option_Cptr) bind(c, name="c_hodlr_deleteoption"
 	deallocate(option)
 	option_Cptr=c_null_ptr
 	
-end subroutine C_HODLR_Deleteoption
+end subroutine C_BPACK_Deleteoption
 
 
 end module BPACK_wrapper

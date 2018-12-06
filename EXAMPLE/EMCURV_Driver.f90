@@ -56,7 +56,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	type(z_proctree)::ptree
 	type(quant_EMCURV),target::quant
 	CHARACTER (LEN=1000) DATA_DIR	
-	
+	integer:: randsize=50
 	
 	! nmpi and groupmembers should be provided by the user 
 	call MPI_Init(ierr)
@@ -82,10 +82,11 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call OMP_set_num_threads(threads_num)		
 		
 		
-	call DATE_AND_TIME(values=times)     ! Get the current time 
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+	!call DATE_AND_TIME(values=times)     ! Get the current time 
+	!seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
 	
-	! seed_myid(1) = myid*1000
+	call RANDOM_SEED(size = randsize)
+	seed_myid(1) = ptree%myid*1000
 	call RANDOM_SEED(PUT=seed_myid)
 	
 	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
@@ -141,8 +142,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 
 ! quant%wavelength=0.08
 ! Discret=0.05
-	quant%RCS_static=2
-    quant%RCS_Nsample=100
+	quant%RCS_static=1
+    quant%RCS_Nsample=2000
 
 	
 	
@@ -160,7 +161,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%tol_rand=1d-3
 	option%level_check=100
 	! option%precon= HODLRPRECON ! DIRECT ! HODLRPRECON ! NOPRECON !
-	option%xyzsort=NATURAL !TM ! NATURAL  
+	option%xyzsort=TM !TM ! NATURAL  
 	option%lnoBP=40000
 	option%TwoLayerOnly=1
     option%schulzorder=3
@@ -170,10 +171,10 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	! option%RecLR_leaf=ACA
 	option%ErrSol=1
 	! option%LR_BLK_NUM=2
-	option%format= HMAT!  HODLR ! 
+	option%format= HODLR! HMAT!  HODLR ! 
 	option%near_para=0.01d0
-	!option%verbosity=2
-	option%ILU=1  
+	option%verbosity=2
+	option%ILU=0  
 	option%forwardN15flag=0 
 	
 	call getarg(1,strings)

@@ -340,7 +340,8 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	
 	! write(*,*)abs(matrixtemp1),rank,'gggddd'
 	
-	if(rank<=nbslpk)then
+	! if(rank<=nbslpk)then
+	if(.true.)then
 	
 #if 0	
 		allocate(ipiv(rank))
@@ -361,6 +362,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		!!!!!! the SVD-based pseudo inverse needs to be implemented later
 	
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		write(*,*)myrow,mycol,'nima',ptree%MyID
 		if(myrow/=-1 .and. mycol/=-1)then
 			if(ptree%MyID==ptree%pgrp(pgno)%head)then
 				call blacs_gridinfo(ctxt_head, nprow, npcol, myrow, mycol)
@@ -374,6 +376,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)	
+			
 			allocate(matrix_small(myArows,myAcols))
 			matrix_small=0
 			
@@ -387,7 +390,9 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
+			write(*,*)myArows,myAcols,rank,'r,c before'
 			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop=flop)
+			write(*,*)myArows,myAcols,rank,'r,c after'
 			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 			
 			call pgetrif90(rank,matrix_small,1,1,descsmall,ipiv,flop=flop)

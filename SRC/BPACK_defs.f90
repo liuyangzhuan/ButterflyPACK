@@ -48,6 +48,7 @@ module BPACK_DEFS
 	integer,parameter:: DIRECT=1	 ! use factored HODLR as direct solver
 	integer,parameter:: NOPRECON=2  ! use compressed HODLR as fast matvec 
 	integer,parameter:: HODLRPRECON=3	! use factored HODLR as preconditioner 
+	
 	integer,parameter:: LplusMax=3
 	
 	integer,parameter:: HODLR=1  ! use hodlr solver 

@@ -36,7 +36,7 @@
 #include <atomic>
 #include <mpi.h>
 
-#include "dC_HODLR_wrapper.h"
+#include "dC_BPACK_wrapper.h"
 
 
 
@@ -203,7 +203,7 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 // The matvec sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;	
-  d_c_hodlr_mult(trans, xin, xout, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+  d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
 }
 
 // The matvec sampling function wrapper required by the Fortran HODLR code
@@ -212,7 +212,7 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
   int cnt = (*nvec)*(*nout);
   double* xout1 = new double[cnt];
      
-  d_c_hodlr_mult(trans, xin, xout1, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+  d_c_bpack_mult(trans, xin, xout1, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
   
   for (int ii=0; ii<cnt; ii++){
 	xout[ii] = *b*xout[ii] + *a*xout1[ii];
@@ -391,25 +391,25 @@ if(tst==3){
 	
 	for (int i = 0; i < size; i++)groups[i]=i;
 	// create hodlr data structures
-	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree);
-	d_c_hodlr_createoption(&option);	
-	d_c_hodlr_createstats(&stats);		
+	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree);
+	d_c_bpack_createoption(&option);	
+	d_c_bpack_createstats(&stats);		
 	
 	// set hodlr options
-	d_c_hodlr_set_D_option(&option, "tol_comp", tol);
-	d_c_hodlr_set_I_option(&option, "nogeo", nogeo);
-	d_c_hodlr_set_I_option(&option, "Nmin_leaf", Nmin); 
-	d_c_hodlr_set_I_option(&option, "RecLR_leaf", com_opt); 
-	d_c_hodlr_set_I_option(&option, "xyzsort", sort_opt); 
-	d_c_hodlr_set_I_option(&option, "ErrFillFull", checkerr); 
-	d_c_hodlr_set_I_option(&option, "BACA_Batch", batch); 
+	d_c_bpack_set_D_option(&option, "tol_comp", tol);
+	d_c_bpack_set_I_option(&option, "nogeo", nogeo);
+	d_c_bpack_set_I_option(&option, "Nmin_leaf", Nmin); 
+	d_c_bpack_set_I_option(&option, "RecLR_leaf", com_opt); 
+	d_c_bpack_set_I_option(&option, "xyzsort", sort_opt); 
+	d_c_bpack_set_I_option(&option, "ErrFillFull", checkerr); 
+	d_c_bpack_set_I_option(&option, "BACA_Batch", batch); 
 	
 
     // construct hodlr with geometrical points	
-	d_c_hodlr_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
+	d_c_bpack_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
 	
 	// factor hodlr
-	d_c_hodlr_factor(&ho_bf,&option,&stats,&ptree,&msh);
+	d_c_bpack_factor(&ho_bf,&option,&stats,&ptree,&msh);
 
 	// solve the system 
 	int nrhs=1;
@@ -419,7 +419,7 @@ if(tst==3){
 	for (int i = 0; i < nrhs*myseg; i++){
 		b[i]=1;
 	}	
-	d_c_hodlr_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
+	d_c_bpack_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
 
 	
 	
@@ -443,12 +443,12 @@ if(tst==3){
 	quant_ptr1->stats=&stats;
 	quant_ptr1->option=&option;
 	
-	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree1);
-	d_c_hodlr_copyoption(&option,&option1);	
-	d_c_hodlr_createstats(&stats1);	
+	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
+	d_c_bpack_copyoption(&option,&option1);	
+	d_c_bpack_createstats(&stats1);	
 	
-	d_c_hodlr_set_I_option(&option1, "nogeo", 1); // no geometrical information
-	d_c_hodlr_set_I_option(&option1, "xyzsort", 0);// natural ordering	
+	d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
+	d_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering	
 	
 	int Npo1 = Npo; 
 	int myseg1=0;     // local number of unknowns
@@ -458,15 +458,15 @@ if(tst==3){
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
 	
-	d_c_hodlr_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
-	d_c_hodlr_construct_matvec_compute(&ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+	d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_matvec_compute(&ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
-	d_c_hodlr_deletestats(&stats1);
-	d_c_hodlr_deleteproctree(&ptree1);
-	d_c_hodlr_deletemesh(&msh1);
-	d_c_hodlr_deletekernelquant(&kerquant1);
-	d_c_hodlr_deletehobf(&ho_bf1);
-	d_c_hodlr_deleteoption(&option1);
+	d_c_bpack_deletestats(&stats1);
+	d_c_bpack_deleteproctree(&ptree1);
+	d_c_bpack_deletemesh(&msh1);
+	d_c_bpack_deletekernelquant(&kerquant1);
+	d_c_bpack_deletehobf(&ho_bf1);
+	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
 	delete perms1;
 	delete tree1;	
@@ -493,12 +493,12 @@ if(tst==3){
 	quant_ptr2->stats=&stats;
 	quant_ptr2->option=&option;
 	
-	d_c_hodlr_createptree(&size, groups, &Fcomm, &ptree2);
-	d_c_hodlr_copyoption(&option,&option2);	
-	d_c_hodlr_createstats(&stats2);	
+	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree2);
+	d_c_bpack_copyoption(&option,&option2);	
+	d_c_bpack_createstats(&stats2);	
 	
-	d_c_hodlr_set_I_option(&option2, "nogeo", 1); // no geometrical information
-	d_c_hodlr_set_I_option(&option2, "xyzsort", 0);// natural ordering	
+	d_c_bpack_set_I_option(&option2, "nogeo", 1); // no geometrical information
+	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering	
 	
 	int M = Npo; 
 	int N = Npo; 
@@ -508,12 +508,12 @@ if(tst==3){
 	d_c_bf_construct_matvec_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
-	d_c_hodlr_deletestats(&stats2);
-	d_c_hodlr_deleteproctree(&ptree2);
-	d_c_hodlr_deletemesh(&msh2);
-	d_c_hodlr_deletekernelquant(&kerquant2);
+	d_c_bpack_deletestats(&stats2);
+	d_c_bpack_deleteproctree(&ptree2);
+	d_c_bpack_deletemesh(&msh2);
+	d_c_bpack_deletekernelquant(&kerquant2);
 	d_c_bf_deletebf(&bf);
-	d_c_hodlr_deleteoption(&option2);
+	d_c_bpack_deleteoption(&option2);
 
 	delete quant_ptr2;
 	
@@ -521,12 +521,12 @@ if(tst==3){
 
 	
 	
-	d_c_hodlr_deletestats(&stats);
-	d_c_hodlr_deleteproctree(&ptree);
-	d_c_hodlr_deletemesh(&msh);
-	d_c_hodlr_deletekernelquant(&kerquant);
-	d_c_hodlr_deletehobf(&ho_bf);
-	d_c_hodlr_deleteoption(&option);
+	d_c_bpack_deletestats(&stats);
+	d_c_bpack_deleteproctree(&ptree);
+	d_c_bpack_deletemesh(&msh);
+	d_c_bpack_deletekernelquant(&kerquant);
+	d_c_bpack_deletehobf(&ho_bf);
+	d_c_bpack_deleteoption(&option);
 	
 	delete quant_ptr;
 	delete perms;

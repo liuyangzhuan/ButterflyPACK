@@ -949,8 +949,8 @@ if (t == 0) then
 	   + dt(8)
 end if
 
-pid = getpid()
-! pid = 0
+! pid = getpid()
+pid = 0
 
 t = ieor(t, int(pid, kind(t)))
 do i = 1, n
@@ -1402,7 +1402,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 			! write(*,*)'Q or R has NAN in LeastSquare'
 			! stop
 		! end if		
-		! call unmqrf90(Atmp,tau,b,'L','C')
+		! call un_or_mqrf90(Atmp,tau,b,'L','C',m,n,n)
 		! A_tmp = 0
 		! ! !$omp parallel do default(shared) private(ii,jj)
 		! do ii=1, n
@@ -1446,7 +1446,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 		! end do
 		
 		
-		! call trsmf90(A_tmp_rank,xtmp_rank,'L','U','N','N')	
+		! call trsmf90(A_tmp_rank,xtmp_rank,'L','U','N','N',rank,rank)	
 		
 		! xtmp = 0
 		
@@ -1981,6 +1981,8 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	end do
 
 
+! select type(A)
+	! type is (complex(kind=8))	
 	
 	! mn_min = min(m,n)
 	! allocate(Singular(mn_min))
@@ -1988,13 +1990,15 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	! allocate(VV(mn_min,n))	
 	
 	! call gesvd_robust(A,Singular,UU,VV,m,n,mn_min)
-	! ! Singular = Singular + 1d0  ! this is to make sure the singular values are not the same
-	! Singular = 1d0  ! this is to make sure the singular values are not the same
+	! Singular = Singular + 1d0  ! this is to make sure the singular values are not the same
+	! ! Singular = 1d0  ! this is to make sure the singular values are not the same
 	
-	! if(Oflag==1)then
+
+	
+	! ! if(Oflag==1)then
 		! ! call assert(mn_min==n,'mn_min not correct')
-		! A = UU(1:m,1:mn_min)
-	! else 
+		! ! A = UU(1:m,1:mn_min)
+	! ! else 
 		! ! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 		! do jj=1, n
 			! do ii=1, m
@@ -2006,12 +2010,13 @@ subroutine RandomMat(m,n,k,A,Oflag)
 			! enddo
 		! enddo
 		! ! !$omp end parallel do	
-	! end if
+	! ! end if
 	
 	! deallocate(Singular)
 	! deallocate(UU)
 	! deallocate(VV)
-			 
+! end select			 
+
 #endif	
 
 
@@ -2695,6 +2700,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 	integer :: nprow,npcol,myrow,mycol,nproc,nproc_tmp,nproc_tmp1,nsprow,nsprow1,nspcol,nlevelrow,nlevelcol
 	integer,allocatable::pmap(:,:),groupmembers_sml(:)
 	
+	integer,external :: sys2blacs_handle
 	
 	call MPI_Comm_rank(MPI_Comm_base,MyID_old,ierr)	
 	call MPI_Comm_group(MPI_Comm_base,MPI_Group_base,ierr)
@@ -2715,15 +2721,18 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 		do group=1,Maxgrp
 			nproc=ptree%pgrp(group)%nproc	
 			
-			
-			! ! ! the following needs to be changed to 2D
-			! nprow=ptree%pgrp(group)%nproc
-			! npcol=1
-
+		
 			! ! create the 2D grids as square as possible
 			nprow = floor_safe(sqrt(dble(nproc)))
 			npcol = floor_safe(nproc/dble(nprow))
 			
+			! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
+			nlevelrow = ceiling_safe(log(dble(nprow)) / log(2d0))+1
+			nlevelcol = ceiling_safe(log(dble(npcol)) / log(2d0))+1
+			if(nlevelcol>nlevelrow+1)then
+				npcol = 2**nprow
+			endif			
+				
 			! ! trail to power of 2 grids, the following two lines can be removed  
 			! nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))
 			! nprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))			
@@ -2739,36 +2748,6 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 
 			
 			! if(IOwnPgrp(ptree,group))then	
-				! create the blacs grid for this tree node
-				
-				allocate(pmap(nprow,npcol))
-				do jj=1,npcol				
-				do ii=1,nprow   ! 'row major here'
-					kk=npcol*(ii-1)+jj
-					pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
-				enddo
-				enddo
-				
-				
-				! the context involving 2D grids
-				call blacs_get(0, 0, ptree%pgrp(group)%ctxt)
-				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
-				deallocate(pmap)
-				
-				allocate(pmap(nproc,1))
-				do kk=1,nproc
-					pmap(kk,1)=groupmembers(kk+ptree%pgrp(group)%head)
-				enddo
-				
-				! the context involving 1D grids non-cyclic
-				call blacs_get(0, 0, ptree%pgrp(group)%ctxt1D)
-				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )				
-				
-				! the context involving head proc only
-				call blacs_get(0, 0, ptree%pgrp(group)%ctxt_head)
-				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, groupmembers(1+ptree%pgrp(group)%head), 1, 1, 1 )				
-				deallocate(pmap)
-				
 				
 				! create the local communicator for this tree node
 				allocate(groupmembers_sml(ptree%pgrp(group)%nproc))
@@ -2780,22 +2759,42 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,ptree%pgrp(group)%Comm,ierr)
 				
 				deallocate(groupmembers_sml)
-				call MPI_Group_Free(MPI_Group_H_sml,ierr)			
+				call MPI_Group_Free(MPI_Group_H_sml,ierr)							
+				
+				
+				allocate(pmap(nprow,npcol))
+				do jj=1,npcol				
+				do ii=1,nprow   ! 'row major here'
+					kk=npcol*(ii-1)+jj
+					pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
+				enddo
+				enddo
+				
+				
+				! the context involving 2D grids
+				ptree%pgrp(group)%ctxt = sys2blacs_handle(MPI_Comm_base)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
+				deallocate(pmap)
+
+				
+				allocate(pmap(nproc,1))
+				do kk=1,nproc
+					pmap(kk,1)=groupmembers(kk+ptree%pgrp(group)%head)
+				enddo
+				
+				! the context involving 1D grids non-cyclic
+				ptree%pgrp(group)%ctxt1D = sys2blacs_handle(MPI_Comm_base)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )				
+				
+				! the context involving head proc only
+				ptree%pgrp(group)%ctxt_head = sys2blacs_handle(MPI_Comm_base)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, groupmembers(1+ptree%pgrp(group)%head), 1, 1, 1 )				
+				deallocate(pmap)
+
 				
 				! create the hierarchical process grids used for parallel ACA
-			
 				nsprow = ptree%pgrp(group)%nprow
 				nspcol = ptree%pgrp(group)%npcol
-				
-
-				! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
-				nlevelrow = ceiling_safe(log(dble(nsprow)) / log(2d0))+1
-				nlevelcol = ceiling_safe(log(dble(nspcol)) / log(2d0))+1
-				if(nlevelcol>nlevelrow+1)then
-					nspcol = 2**nlevelrow
-				endif
-				
-				
 				
 				
 				call MPI_barrier(ptree%Comm,ierr)
@@ -2818,7 +2817,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				ptree%pgrp(group)%gd%hpcol=0
 				ptree%pgrp(group)%gd%gprow=1
 				ptree%pgrp(group)%gd%gpcol=1
-				call CreateNewGrid(ptree%pgrp(group)%gd,0,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+				call CreateNewGrid(ptree%pgrp(group)%gd,0,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H,MPI_Comm_base)
 
 				deallocate(ptreecol%pgrp)
 				deallocate(ptreerow%pgrp)
@@ -2850,16 +2849,17 @@ end subroutine CreatePtree
 
 
 ! create a new square grid gd  
-recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H,MPI_Comm_base)
 	implicit none 
 	integer::groupmembers(:)
 	type(grid)::gd
 	integer cridx,Iown
 	type(proctree)::ptree,ptreerow,ptreecol
 	integer group,ii,jj,kk,nsproc
-	integer MPI_Group_H,MPI_Group_H_sml,ierr
+	integer MPI_Group_H,MPI_Group_H_sml,ierr,MPI_Comm_base
 	integer,allocatable::pmap(:,:),groupmembers_sml(:)	
-	
+	integer,external :: sys2blacs_handle
+
 	allocate(pmap(gd%nsprow,gd%nspcol))
 	do jj=1,gd%nspcol				
 	do ii=1,gd%nsprow   ! 'row major here'
@@ -2868,15 +2868,16 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 	enddo
 	enddo
 	
-	nsproc = gd%nsprow*gd%nspcol
+	
 	! the context involving 2D grids
 	gd%ctxt=-1
-	call blacs_get(0, 0, gd%ctxt)
+	gd%ctxt = sys2blacs_handle(MPI_Comm_base)
 	call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
 	deallocate(pmap)
 
-
+	
 	! create the local communicator for this grid
+	nsproc = gd%nsprow*gd%nspcol
 	Iown=0
 	allocate(groupmembers_sml(nsproc))
 	do jj=1,gd%nspcol				
@@ -2890,8 +2891,8 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 	call MPI_Group_incl(MPI_Group_H, nsproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 	call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,gd%Comm,ierr)
 	deallocate(groupmembers_sml)
-	call MPI_Group_Free(MPI_Group_H_sml,ierr)		
-
+	call MPI_Group_Free(MPI_Group_H_sml,ierr)			
+	
 	
 	if(cridx<ptreerow%nlevel+ptreecol%nlevel-2)then
 		allocate(gd%gdc(2))
@@ -2916,7 +2917,7 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 		endif
 		
 		do ii=1,2
-			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H)
+			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H,MPI_Comm_base)
 		enddo	
 	else
 		return
@@ -3180,7 +3181,7 @@ else
 	desc2D(2)=-1
 endif
 
-! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2))
+! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),myrow,mycol,pgno_i,ctxt
 call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'1D1D',isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),isnanMat(dat_o,size(dat_o,1),size(dat_o,2)),myrow,mycol
 call Redistribute1Dto1D(dat_1D,M_p_1D,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)

@@ -564,7 +564,10 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	do ii=1,msh%Nunk
 		msh%old2new(msh%new2old(ii)) = ii
 	end do		
-		
+	
+	! do ii=1,msh%Nunk
+		! write(110,*)msh%old2new(ii)
+	! enddo
 	
 	!**********Dump the ordering into a file********************************
 	

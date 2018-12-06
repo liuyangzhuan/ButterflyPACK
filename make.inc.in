@@ -1,6 +1,6 @@
 ############################################################################
 #
-#  Program:         HODLRBF
+#  Program:         ButterflyPACK
 #
 #  Module:          make.inc
 #
@@ -15,10 +15,10 @@
 #
 #  The name of the libraries to be created/linked to
 #
-HODLRBFroot	= /home/administrator/Desktop/research/hod-lr-bf/build
-DHODLRBFLIB   	= $(HODLRBFroot)/SRC_DOUBLE/libdhodlrbf.a $(HODLRBFroot)/SRC_DOUBLECOMPLEX/libzhodlrbf.a
+ButterflyPACKroot	= /home/administrator/Desktop/research/hod-lr-bf/build
+DButterflyPACKLIB   	= $(ButterflyPACKroot)/SRC_DOUBLE/libdbutterflypack.a $(ButterflyPACKroot)/SRC_DOUBLECOMPLEX/libzbutterflypack.a
 
-LIBS		= $(DHODLRBFLIB) ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
+LIBS		= $(DButterflyPACKLIB) ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
 
 #
 #  The archiver and the flag(s) to use when building archive (library)

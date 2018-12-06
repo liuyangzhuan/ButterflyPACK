@@ -1,6 +1,6 @@
 ######################################################################
 #
-# CMakeLists.txt for HODLRBF
+# CMakeLists.txt for ButterflyPACK
 #
 ######################################################################
 
@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
 # SET(CMAKE_INSTALL_PREFIX < install_path >)
 
 # Project version numbers
-project(HODLRBF C CXX Fortran)
+project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "1")
 set(VERSION_MINOR "0")
 set(VERSION_BugFix "0")
@@ -25,13 +25,6 @@ INCLUDE("cmake/XSDKDefaults.cmake")
 INCLUDE(CTest)
 
 ######################################################################
-
-
-# include(FortranCInterface)
-# FortranCInterface_HEADER("${PROJECT_BINARY_DIR}/hodlrbf_config.h"
-  # MACRO_NAMESPACE "FC_")
-# include_directories(${PROJECT_BINARY_DIR} ${CMAKE_SOURCE_DIR}/SRC ${CMAKE_SOURCE_DIR}/EXAMPLE)
-# FortranCInterface_VERIFY(CXX)
 
 
 ######################################################################
@@ -60,11 +53,9 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 #----
 
 if (BUILD_SHARED_LIBS)
-  message("-- HOD-LR-BF will be built as a shared library.")
-  # set(PROJECT_NAME_LIB_EXPORT libhodlrbf.so)
+  message("-- ButterflyPACK will be built as a shared library.")
 else()
-  message("-- HOD-LR-BF will be built as a static library.")
-  # set(PROJECT_NAME_LIB_EXPORT libhodlrbf.a)
+  message("-- ButterflyPACK will be built as a static library.")
 endif()
 
 enable_language (C)
@@ -87,10 +78,10 @@ endif()
 
 
 # if (enable_complex)
-  # message("-- HOD-LR-BF will be built for double-complex data type only.")
+  # message("-- ButterflyPACK will be built for double-complex data type only.")
   # set(CMAKE_Fortran_FLAGS "-DDAT=0 ${CMAKE_Fortran_FLAGS}")
 # else()
-  # message("-- HOD-LR-BF will be built for double data type only.")
+  # message("-- ButterflyPACK will be built for double data type only.")
   # set(CMAKE_Fortran_FLAGS "-DDAT=1 ${CMAKE_Fortran_FLAGS}")
 # endif()
 
@@ -249,11 +240,11 @@ endif()
 
 # file(WRITE "make.defs" "# can be exposed to users" ${CMAKE_C_COMPILER})
 # configure_file(${CMAKE_SOURCE_DIR}/make.inc.in ${CMAKE_BINARY_DIR}/make.inc)
-configure_file(${HODLRBF_SOURCE_DIR}/make.inc.in ${HODLRBF_SOURCE_DIR}/make.inc)
+configure_file(${ButterflyPACK_SOURCE_DIR}/make.inc.in ${ButterflyPACK_SOURCE_DIR}/make.inc)
 
 # Add pkg-config support
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/hodlrbf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/hodlrbf.pc @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/hodlrbf.pc
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/butterflypack.pc.in ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 	
 	

@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_LIBDIR@
+includedir=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: @CMAKE_PROJECT_NAME@
+Description: Distributed-memory ButterflyPACK solver
+Version: @PROJECT_VERSION@
+
+Libs: -L${libdir} -lzbutterflypack -ldbutterflypack
+Cflags: -I${includedir}

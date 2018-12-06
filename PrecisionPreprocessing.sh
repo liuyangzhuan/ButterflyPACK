@@ -62,10 +62,10 @@ while IFS= read -r line; do
     eval sed -i -e 's/$line/z_$line/g' $ZSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/_Complex double /g' $ZSRCDIR/*.h
-sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.h
+sed -i -e 's/c_bpack_/z_c_bpack_/g' $ZSRCDIR/*.h
 sed -i -e 's/c_bf_/z_c_bf_/g' $ZSRCDIR/*.h
 sed -i -e 's/HODLR_WRAP/z_HODLR_WRAP/g' $ZSRCDIR/*.h
-sed -i -e 's/c_hodlr_/z_c_hodlr_/g' $ZSRCDIR/*.f90
+sed -i -e 's/c_bpack_/z_c_bpack_/g' $ZSRCDIR/*.f90
 sed -i -e 's/c_bf_/z_c_bf_/g' $ZSRCDIR/*.f90
 
 rm -rf $DSRCDIR
@@ -76,10 +76,10 @@ while IFS= read -r line; do
 	eval sed -i -e 's/$line/d_$line/g' $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/double/g' $DSRCDIR/*.h
-sed -i -e 's/c_hodlr_/d_c_hodlr_/g' $DSRCDIR/*.h
+sed -i -e 's/c_bpack_/d_c_bpack_/g' $DSRCDIR/*.h
 sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.h
 sed -i -e 's/HODLR_WRAP/d_HODLR_WRAP/g' $DSRCDIR/*.h
-sed -i -e 's/c_hodlr_/d_c_hodlr_/g' $DSRCDIR/*.f90
+sed -i -e 's/c_bpack_/d_c_bpack_/g' $DSRCDIR/*.f90
 sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.f90
 
 
@@ -93,7 +93,7 @@ for file in *; do
 		mv "$file" "z${file}"
 	fi
 done
-sed -i -e 's/\<hodlrbf\>/zhodlrbf/g' $ZSRCDIR/CMakeLists.txt
+sed -i -e 's/\<butterflypack\>/zbutterflypack/g' $ZSRCDIR/CMakeLists.txt
 sed -i -e 's/-DDAT/-DDAT=0/g' $ZSRCDIR/CMakeLists.txt
 
 sed -i -e '/set(sources/a\../EXAMPLE/EMCURV_Module.f90\n../EXAMPLE/EMSURF_Module.f90' $ZSRCDIR/CMakeLists.txt
@@ -106,7 +106,7 @@ for file in *; do
 		eval sed -i -e 's/$file/d$file/g' $DSRCDIR/CMakeLists.txt
 	fi
 done
-sed -i -e 's/\<hodlrbf\>/dhodlrbf/g' $DSRCDIR/CMakeLists.txt
+sed -i -e 's/\<butterflypack\>/dbutterflypack/g' $DSRCDIR/CMakeLists.txt
 sed -i -e 's/-DDAT/-DDAT=1/g' $DSRCDIR/CMakeLists.txt
 cd $ROOTDIR
 rm -rf $TMP_FILE

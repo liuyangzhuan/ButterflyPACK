@@ -577,6 +577,9 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   allocate(matB(mm,dimension_nn))
 	   call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
 	   call GetRank(mm,dimension_nn,matB,rank,option%tol_Rdetect,flop=flop)
+	   
+	   ! write(*,*)mm,dimension_nn,fnorm(matB,mm,dimension_nn),rank,'rank matB'
+	   
 	   Flops = Flops + flop
 	   if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 							   
@@ -605,6 +608,8 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   call LeastSquare(mm,rank,dimension_nn,matA,matB,matC,option%tol_LS,Flops=flop)
 	   Flops = Flops + flop
 	   call copymatT(matC,blocks%ButterflyV%blocks(j)%matrix,rank,dimension_nn)						   
+	   
+	   ! write(*,*)fnorm(matC,rank,dimension_nn),rank,'V'
 	   deallocate(matB,matC,matA,matinv)						   
    else 
 	   rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
@@ -628,6 +633,70 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
    stats%Flop_Tmp = stats%Flop_Tmp + Flops
    
 end subroutine BF_OneV_LL
+
+
+! subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
+   ! use BPACK_DEFS
+   
+   
+   ! implicit none 
+   ! type(matrixblock) :: blocks
+   ! DT, allocatable :: matA(:,:),matB(:,:),matC(:,:),matinv(:,:)
+   ! integer j,level_right,unique_nth,dimension_nn,mm,rank,num_vect_sub,nth,nth_s,level_butterfly
+   ! type(RandomBlock) :: vec_rand
+   ! type(Hoption):: option
+   ! type(Hstat)::stats
+   ! real(kind=8)::flop
+   ! real(kind=8)::Flops
+	! Flops=0
+   
+   ! ! blocks => butterfly_block_randomized(1)   
+   ! level_butterfly=blocks%level_butterfly 
+   
+   ! if(level_right==unique_nth)then
+	   ! dimension_nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+	   ! allocate(matB(dimension_nn,mm))
+	   ! matB = vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
+	   ! call ComputeRange(mm,dimension_nn,matB,rank,1,option%tol_Rdetect,Flops=flop)
+	   
+	   ! write(*,*)mm,dimension_nn,fnorm(matB(1:dimension_nn,1:rank),dimension_nn,rank),rank,'rank matB'
+	   
+	   ! Flops = Flops + flop
+	   ! if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+							   
+	   ! if(allocated(blocks%ButterflyV%blocks(j)%matrix))deallocate(blocks%ButterflyV%blocks(j)%matrix)
+	   ! ! if(allocated(blocks%ButterflyVInv(j)%matrix))deallocate(blocks%ButterflyVInv(j)%matrix)
+	   ! if(allocated(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix))deallocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix)
+	   ! allocate(blocks%ButterflyV%blocks(j)%matrix(dimension_nn,rank))
+	   ! blocks%ButterflyV%blocks(j)%mdim=dimension_nn
+	   ! blocks%ButterflyV%blocks(j)%ndim=rank
+	   
+	   ! blocks%ButterflyV%blocks(j)%matrix = matB(1:dimension_nn,1:rank)
+	   ! allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
+	   ! deallocate(matB)						   
+   ! else 
+	   ! rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
+	   ! dimension_nn=size(blocks%ButterflyV%blocks(j)%matrix,1)									
+	   ! allocate(matB(mm,dimension_nn),matA(mm,rank),matinv(dimension_nn,rank))
+	   ! call copymatT(vec_rand%RandomVectorLL(level_butterfly+2)%blocks(1,j)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matB,dimension_nn,mm)
+	   ! ! call copymatT(blocks%ButterflyVInv(j)%matrix,matinv,rank,dimension_nn)
+		! matinv = conjg(cmplx(blocks%ButterflyV%blocks(j)%matrix))																		   
+	   ! if(isnan(fnorm(matB,mm,dimension_nn)) .or. isnan(fnorm(matinv,dimension_nn,rank)))then
+		! write(*,*)fnorm(matB,mm,dimension_nn),fnorm(matinv,dimension_nn,rank),j,'hei1'
+		! stop
+	   ! end if
+	   ! ! call gemm_omp(matB,matinv,matA,mm,rank,dimension_nn)
+	   ! call gemmf90(matB,mm,matinv,dimension_nn,matA,mm,'N','N',mm,rank,dimension_nn,cone,czero,flop=flop)
+	   ! Flops = Flops + flop
+	   ! if(.not. allocated(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix))allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
+	   ! call copymatT(matA,vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)					   
+	   ! deallocate(matB,matA,matinv)	
+   ! end if   
+   
+   ! stats%Flop_Tmp = stats%Flop_Tmp + Flops
+   
+! end subroutine BF_OneV_LL
+
 
 
 subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,vec_rand,option,stats)
@@ -701,6 +770,9 @@ subroutine BF_OneKernel_LL(index_i, index_j,noe,level_right,unique_nth,num_vect_
 		Flops = Flops + flop
 		call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
 		Flops = Flops + flop
+		
+		! write(*,*)fnorm(matC,rank,nn1+nn2),rank,'LKer'
+		
 		! call copymatN(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix,rank,nn1)
 		blocks%ButterflyKerl(level_right)%blocks(ieo,j)%matrix = matC(1:rank,1:nn1)
 		! call copymatN(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_right)%blocks(ieo,j+1)%matrix,rank,nn2)	
@@ -872,6 +944,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero,flop=flop)
 			Flops = Flops + flop
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS,Flops=flop)
+			! write(*,*)fnorm(matC,rank,dimension_mm),rank,'U'
 			Flops = Flops + flop
 			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA,matinv)
@@ -889,6 +962,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS,Flops=flop)
 			Flops = Flops + flop
 			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
+			
 			call copymatT(matC,blocks%ButterflyU%blocks(i)%matrix,rank,dimension_mm)							
 			deallocate(matB,matC,matA)			
 		endif			
@@ -970,6 +1044,7 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			allocate(matC(rank,nn1+nn2),matA(mm,rank))
 			call copymatT(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
+			! write(*,*)fnorm(matC,rank,nn1+nn2),rank,'RKer'
 			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
 			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
@@ -1018,7 +1093,10 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
 			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
-			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
+			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)
+
+			
+			
 			deallocate(matB,matC,matA,matinv)
 			
 		end if
@@ -1152,34 +1230,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 			stats%Flop_Tmp=0
 			converged=1	
-			
-			
-			
-			
-			! mm=size(blocks_o%ButterflyU%blocks(1)%matrix,1)
-			! rank=size(blocks_o%ButterflyU%blocks(1)%matrix,2)
-			! nn=size(blocks_o%ButterflyV%blocks(1)%matrix,1)
-			! allocate(Vin(nn,nn))
-			! Vin=0
-			! do ii=1,nn
-			! Vin(ii,ii)=1d0
-			! enddo
-			! allocate(Vinter(rank,nn))
-			! Vinter=0
-			! allocate(Vout(mm,nn))
-			! Vout=0
-	
-			! call gemmf90(blocks_o%ButterflyV%blocks(1)%matrix,nn,Vin,nn,Vinter,rank,'T','N',rank,nn,nn,cone,czero)
-			! call gemmf90(blocks_o%ButterflyU%blocks(1)%matrix,mm,Vinter,rank,Vout,mm,'N','N',mm,nn,rank,cone,czero)
-			
-			! write(*,*)fnorm(Vout,mm,nn),'butterfly norm'
-
-			! deallocate(Vin)
-			! deallocate(Vinter)
-			! deallocate(Vout)			
-			
-			
-			
+			! stop
 			exit
 		end if		
 	end do

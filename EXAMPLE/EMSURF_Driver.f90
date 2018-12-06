@@ -114,7 +114,9 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	call getarg(2,strings)
 	read(strings,*)quant%wavelength			
 	call getarg(3,strings)
-	read(strings,*)option%precon
+	read(strings,*)option%precon	
+	call getarg(4,strings)
+	read(strings,*)option%xyzsort
 
 	option%Nmin_leaf=500
 	quant%mesh_normal=1
@@ -153,7 +155,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! directschur=1
 	! option%precon= NOPRECON !  HODLRPRECON ! NOPRECON !
 	! verboselevel=2
-	option%xyzsort=TM
+	! option%xyzsort=NATURAL !CKD !TM
 	option%lnoBP=4000
 	option%TwoLayerOnly=1
 	quant%CFIE_alpha=1

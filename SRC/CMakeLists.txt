@@ -1,5 +1,5 @@
 set(headers
-    C_HODLR_wrapper.h
+    C_BPACK_wrapper.h
     # HODLR_config.fi
     # ${PROJECT_BINARY_DIR}/HODLR_config.h
 )
@@ -28,10 +28,10 @@ BPACK_wrapper.f90
 
 
 
-add_library(hodlrbf ${sources} ${HEADERS})
-target_link_libraries(hodlrbf
+add_library(butterflypack ${sources} ${HEADERS})
+target_link_libraries(butterflypack
                       ${MPI_Fortran_LIBRARIES} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
-set_target_properties(hodlrbf PROPERTIES
+set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
 
@@ -39,7 +39,7 @@ set_target_properties(hodlrbf PROPERTIES
 # Define GNU standard installation directories
 include(GNUInstallDirs)
 
-install(TARGETS hodlrbf
+install(TARGETS butterflypack
 # DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
      DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
