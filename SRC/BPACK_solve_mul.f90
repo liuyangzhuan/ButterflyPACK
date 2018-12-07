@@ -429,7 +429,9 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 	type(Hoption)::option
 		
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)	 
-	  
+		
+	stats%Flop_Tmp=0
+	
 	trans_tmp = trans
 	if(trans=='C')then
 		trans_tmp = 'T'
@@ -458,10 +460,8 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 				&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
 				stats%Flop_Sol = stats%Flop_Sol + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)
 			else 
-				stats%Flop_Tmp=0
 				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
-				stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-				
+
 			endif
 		end do
 		Vout = vec_new
@@ -470,6 +470,8 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 	! deallocate(vec_old)
 	deallocate(vec_new)	
 
+    stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+	
 		! do ii=1,Ns
 		! write(131,*)abs(Vout(ii,1))
 		! enddo	

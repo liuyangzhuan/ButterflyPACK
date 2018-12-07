@@ -1344,7 +1344,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	DT,pointer :: matQ2D(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:)
 	integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
 	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
-	
+	integer ierr
 
 	!!!!**** generate 2D grid blacs quantities	
 	ctxt = ptree%pgrp(block_rand%pgno)%ctxt		
@@ -1435,7 +1435,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 		allocate(matQUt2D(1,1)) ! required for Redistribute2Dto1D
 	endif	
 	
-
+	call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1,MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm,ierr)
 
 	block_rand%rankmax = rank
 	block_rand%rankmin = rank

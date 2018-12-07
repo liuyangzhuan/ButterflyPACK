@@ -531,7 +531,7 @@ end subroutine C_BPACK_Setoption
 	!tree: the order tree provided by the caller
 	!Permutation: return the permutation vector new2old (indexed from 1)
 	!Npo_loc: number of local row/column indices    
-	!ho_bf_Cptr: the structure containing HODLR         
+	!bmat_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!msh_Cptr: the structure containing points and ordering information         
@@ -540,7 +540,7 @@ end subroutine C_BPACK_Setoption
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
 	!MPIcomm: user-provided MPI communicator
-subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct")	
+subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct")	
 	implicit none 
 	integer Npo,Ndim
 	real(kind=8) Locations(*)
@@ -557,7 +557,7 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
 	integer MPIcomm
-	type(c_ptr) :: ho_bf_Cptr
+	type(c_ptr) :: bmat_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: msh_Cptr
@@ -588,7 +588,8 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-
+	stats%Flop_Fill=0
+	stats%Time_Fill=0
 
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
@@ -703,7 +704,7 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 	endif	
 	
 	!**** return the C address of hodlr structures to C caller
-	ho_bf_Cptr=c_loc(ho_bf)
+	bmat_Cptr=c_loc(ho_bf)
 	option_Cptr=c_loc(option)
 	stats_Cptr=c_loc(stats)
 	msh_Cptr=c_loc(msh)
@@ -725,13 +726,13 @@ end subroutine C_BPACK_Construct
 	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
 	!Permutation: return the permutation vector new2old (indexed from 1) (out)
 	!N_loc: number of local row/column indices (out)    
-	!ho_bf_Cptr: the structure containing HODLR (out)        
+	!bmat_Cptr: the structure containing HODLR (out)        
 	!option_Cptr: the structure containing option (in)        
 	!stats_Cptr: the structure containing statistics (inout)         
 	!msh_Cptr: the structure containing points and ordering information (out)        
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_matvec_init")	
+subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_matvec_init")	
 	implicit none 
 	integer N
 	
@@ -746,7 +747,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	integer N_loc
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
-	type(c_ptr) :: ho_bf_Cptr
+	type(c_ptr) :: bmat_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: msh_Cptr
@@ -779,7 +780,8 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	
-
+	stats%Flop_Fill=0
+	stats%Time_Fill=0
 
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
@@ -869,7 +871,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,ho_bf_C
 	endif	
 	
 	!**** return the C address of hodlr structures to C caller
-	ho_bf_Cptr=c_loc(ho_bf)
+	bmat_Cptr=c_loc(ho_bf)
 	option_Cptr=c_loc(option)
 	stats_Cptr=c_loc(stats)
 	msh_Cptr=c_loc(msh)
@@ -881,7 +883,7 @@ end subroutine c_bpack_construct_Matvec_Init
 
 
 !**** C interface of HODLR construction via blackbox matvec
-	!ho_bf_Cptr: the structure containing HODLR (inout)        
+	!bmat_Cptr: the structure containing HODLR (inout)        
 	!option_Cptr: the structure containing option (in)        
 	!stats_Cptr: the structure containing statistics (inout)        
 	!msh_Cptr: the structure containing points and ordering information (in)        
@@ -889,7 +891,7 @@ end subroutine c_bpack_construct_Matvec_Init
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
-subroutine c_bpack_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")	
+subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")	
 	implicit none 
 
     real(kind=8) para
@@ -901,7 +903,7 @@ subroutine c_bpack_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	integer level
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
-	type(c_ptr) :: ho_bf_Cptr
+	type(c_ptr) :: bmat_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
 	type(c_ptr) :: msh_Cptr
@@ -926,7 +928,7 @@ subroutine c_bpack_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
-	call c_f_pointer(ho_bf_Cptr, ho_bf)
+	call c_f_pointer(bmat_Cptr, ho_bf)
 	call c_f_pointer(msh_Cptr, msh)
 	call c_f_pointer(ker_Cptr, ker)	
 	
@@ -948,7 +950,7 @@ subroutine c_bpack_construct_Matvec_Compute(ho_bf_Cptr,option_Cptr,stats_Cptr,ms
 	! write(*,*)t2-t1
 	
 	!**** return the C address of hodlr structures to C caller
-	ho_bf_Cptr=c_loc(ho_bf)
+	bmat_Cptr=c_loc(ho_bf)
 	option_Cptr=c_loc(option)
 	stats_Cptr=c_loc(stats)
 	msh_Cptr=c_loc(msh)
@@ -1159,14 +1161,14 @@ end subroutine C_BF_Construct_Matvec_Compute
 
 
 !**** C interface of HODLR factorization
-	!ho_bf_for_Cptr: the structure containing HODLR                  
+	!bmat_Cptr: the structure containing HODLR                  
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_BPACK_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) bind(c, name="c_bpack_factor")	
+subroutine C_BPACK_Factor(bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) bind(c, name="c_bpack_factor")	
 	implicit none 
 
-	type(c_ptr), intent(inout) :: ho_bf_for_Cptr
+	type(c_ptr), intent(inout) :: bmat_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: msh_Cptr	
 	type(c_ptr) :: option_Cptr
@@ -1183,11 +1185,14 @@ subroutine C_BPACK_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_C
 
 	! real(kind=8):: tol_fact
 	
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	call c_f_pointer(bmat_Cptr, ho_bf1)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	call c_f_pointer(msh_Cptr, msh)
+	
+	stats%Flop_Factor=0
+	stats%Time_Factor=0	
 	
 	! allocate(ho_bf_tmp)
 	! call copy_HOBF(ho_bf1,ho_bf_tmp)	! currently this subroutine only copies forward components 
@@ -1204,7 +1209,7 @@ subroutine C_BPACK_Factor(ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_C
 	
 	! return the C address of hodlr structures to C caller
 	! ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
-	ho_bf_for_Cptr=c_loc(ho_bf1)	
+	bmat_Cptr=c_loc(ho_bf1)	
 
 end subroutine C_BPACK_Factor
 
@@ -1214,17 +1219,17 @@ end subroutine C_BPACK_Factor
 	!b: local RHS        
 	!Nloc: size of local RHS     
 	!Nrhs: number of RHSs     
-	!ho_bf_for_Cptr: the structure containing HODLR         
+	!bmat_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_BPACK_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_solve")	
+subroutine C_BPACK_Solve(x,b,Nloc,Nrhs,bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_solve")	
 	implicit none 
 
 	integer Nloc,Nrhs
 	DT::x(Nloc,Nrhs),b(Nloc,Nrhs)
 	
-	type(c_ptr), intent(in) :: ho_bf_for_Cptr
+	type(c_ptr), intent(in) :: bmat_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: option_Cptr
 	type(c_ptr), intent(in) :: stats_Cptr
@@ -1238,11 +1243,14 @@ subroutine C_BPACK_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 	type(proctree),pointer::ptree	
 
 
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	call c_f_pointer(bmat_Cptr, ho_bf1)
 	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
+	
+	stats%Flop_Sol=0
+	stats%Time_Sol=0		
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve ......"
 	
@@ -1258,7 +1266,7 @@ subroutine C_BPACK_Solve(x,b,Nloc,Nrhs,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptr
 	! return the C address of hodlr structures to C caller
 	
 	! ho_bf_inv_Cptr=c_loc(ho_bf_inv)	
-	! ho_bf_for_Cptr=c_loc(ho_bf_for)	
+	! bmat_Cptr=c_loc(ho_bf_for)	
 
 end subroutine C_BPACK_Solve
 
@@ -1295,7 +1303,7 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,
 	type(matrixblock),pointer::blocks
 	! type(hobf),pointer::ho_bf_inv
 	type(proctree),pointer::ptree	
-
+	
 	t1 = OMP_get_wtime()
 
 	strlen=1
@@ -1310,6 +1318,9 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(ptree_Cptr, ptree)
+
+	stats%Flop_C_Mult=0
+	stats%Time_C_Mult=0
 	
 	if(trim(str)=='N')then
 		call BF_block_MVP_dat(blocks,trim(str),Noutloc,Ninloc,Ncol,xin,xout,cone,czero,ptree,stats)	
@@ -1338,18 +1349,18 @@ end subroutine C_BF_Mult
 	!xout: output vector        
 	!Noutloc:size of local output vectors	
 	!Ncol: number of vectors     
-	!ho_bf_for_Cptr: the structure containing HODLR         
+	!bmat_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_mult")	
+subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Ninloc,Noutloc,Ncol
 	DT::xin(Ninloc,Ncol),xout(Noutloc,Ncol)
 	
 	character(kind=c_char,len=1) :: trans(*)
-	type(c_ptr), intent(in) :: ho_bf_for_Cptr
+	type(c_ptr), intent(in) :: bmat_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: option_Cptr
 	type(c_ptr), intent(in) :: stats_Cptr
@@ -1373,11 +1384,14 @@ subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option
 	allocate(character(len=strlen) :: str)
 	str = transfer(trans(1:strlen), str)	
 	
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	call c_f_pointer(bmat_Cptr, ho_bf1)
 	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
+	
+	stats%Flop_C_Mult=0
+	stats%Time_C_Mult=0	
 	
     ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 	
@@ -1406,18 +1420,18 @@ end subroutine C_BPACK_Mult
 	!xout: output vector        
 	!Noutloc:size of local output vectors	
 	!Ncol: number of vectors     
-	!ho_bf_for_Cptr: the structure containing HODLR         
+	!bmat_Cptr: the structure containing HODLR         
 	!option_Cptr: the structure containing option         
 	!stats_Cptr: the structure containing statistics         
 	!ptree_Cptr: the structure containing process tree
-subroutine C_BPACK_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_inv_mult")	
+subroutine C_BPACK_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr) bind(c, name="c_bpack_inv_mult")	
 	implicit none 
 	real(kind=8) t1,t2
 	integer Ninloc,Noutloc,Ncol
 	DT::xin(Ninloc,Ncol),xout(Noutloc,Ncol)
 	
 	character(kind=c_char,len=1) :: trans(*)
-	type(c_ptr), intent(in) :: ho_bf_for_Cptr
+	type(c_ptr), intent(in) :: bmat_Cptr
 	type(c_ptr), intent(in) :: ptree_Cptr	
 	type(c_ptr), intent(in) :: option_Cptr
 	type(c_ptr), intent(in) :: stats_Cptr
@@ -1441,11 +1455,14 @@ subroutine C_BPACK_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,ho_bf_for_Cptr,op
 	allocate(character(len=strlen) :: str)
 	str = transfer(trans(1:strlen), str)	
 	
-	call c_f_pointer(ho_bf_for_Cptr, ho_bf1)
+	call c_f_pointer(bmat_Cptr, ho_bf1)
 	! call c_f_pointer(ho_bf_inv_Cptr, ho_bf_inv)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
+	
+	stats%Flop_C_Mult=0
+	stats%Time_C_Mult=0	
 	
     ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 	
@@ -1528,16 +1545,16 @@ end subroutine C_BPACK_Deletekernelquant
 
 
 !**** C interface of deleting HOBF 
-	!ho_bf_Cptr: the structure containing HOBF
-subroutine C_BPACK_DeleteHOBF(ho_bf_Cptr) bind(c, name="c_bpack_deletehobf")	
+	!bmat_Cptr: the structure containing HOBF
+subroutine C_BPACK_DeleteHOBF(bmat_Cptr) bind(c, name="c_bpack_deletehobf")	
 	implicit none 
-	type(c_ptr), intent(inout) :: ho_bf_Cptr
+	type(c_ptr), intent(inout) :: bmat_Cptr
 	type(hobf),pointer::ho_bf
 
-	call c_f_pointer(ho_bf_Cptr, ho_bf)
+	call c_f_pointer(bmat_Cptr, ho_bf)
 	call HODLR_delete(ho_bf)
 	deallocate(ho_bf)
-	ho_bf_Cptr=c_null_ptr
+	bmat_Cptr=c_null_ptr
 	
 end subroutine C_BPACK_DeleteHOBF
 
