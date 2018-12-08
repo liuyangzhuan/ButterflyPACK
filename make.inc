@@ -18,7 +18,7 @@
 ButterflyPACKroot	= /home/administrator/Desktop/research/hod-lr-bf/build
 DButterflyPACKLIB   	= $(ButterflyPACKroot)/SRC_DOUBLE/libdbutterflypack.a $(ButterflyPACKroot)/SRC_DOUBLECOMPLEX/libzbutterflypack.a
 
-LIBS		= $(DButterflyPACKLIB) ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
+LIBS		= $(DButterflyPACKLIB) /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_gf_lp64.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_gnu_thread.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_core.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.so /opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_scalapack_lp64.so
 
 #
 #  The archiver and the flag(s) to use when building archive (library)
