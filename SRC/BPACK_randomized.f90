@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module BPACK_randomMVP
 use Bplus_randomized 
 use BPACK_Solve_Mul
@@ -1377,7 +1377,7 @@ subroutine PComputeRange_twoforward(ho_bf1,level,Bidxs,ii,ranks,AR,eps,ptree,sta
 			
 		if(mm(bb)>0)then
 			call PComputeRange(M_p,ranks(ii*2-1+bb-1-Bidxs+1),matrixtemp,rank,eps,ptree,block_off%pgno,flop)
-			! write(*,*)ptree%MyID,ranks(ii*2-1+bb-1-Bidxs+1),rank,'aha'
+			
 			ranks(ii*2-1+bb-1-Bidxs+1) = rank
 			stats%Flop_Fill = stats%Flop_Fill + flop
 		endif

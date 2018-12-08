@@ -32,16 +32,16 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release
 make	
-( see example cmake script: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build.sh)
+( see example cmake script: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
 ```
 
 ## Current developers
  - Yang Liu - liuyangzhuan@lbl.gov (Lawrence Berkeley National Laboratory)
- - Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory)
 
 ## Other contributors
  - Wissam Sid-Lakhdar - wissam@lbl.gov (Lawrence Berkeley National Laboratory)
  - Pieter Ghysels - pghysels@lbl.gov (Lawrence Berkeley National Laboratory)
+ - Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory) 
  - Han Guo - hanguo@umich.edu (University of Michigan)
  - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
 

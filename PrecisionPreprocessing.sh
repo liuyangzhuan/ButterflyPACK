@@ -4,7 +4,7 @@ SRCDIR=$ROOTDIR/SRC
 DSRCDIR=$ROOTDIR/SRC_DOUBLE
 ZSRCDIR=$ROOTDIR/SRC_DOUBLECOMPLEX
 
-MACRO_FILE=$SRCDIR/HODLR_config.fi
+MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
 TMP_FILE=$PWD/tmp.txt
 
 dos2unix  -q */* 
@@ -87,7 +87,7 @@ sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.f90
 echo "-- copy and modify CMakeLists.txt ..."
 cd $ZSRCDIR
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != HODLR_config.fi ] ;
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] ;
 	then
 		eval sed -i -e 's/$file/z$file/g' $ZSRCDIR/CMakeLists.txt
 		mv "$file" "z${file}"
@@ -100,7 +100,7 @@ sed -i -e '/set(sources/a\../EXAMPLE/EMCURV_Module.f90\n../EXAMPLE/EMSURF_Module
 
 cd $DSRCDIR
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != HODLR_config.fi ] ;
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] ;
 	then
 		mv "$file" "d${file}"
 		eval sed -i -e 's/$file/d$file/g' $DSRCDIR/CMakeLists.txt

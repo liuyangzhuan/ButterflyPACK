@@ -11,7 +11,7 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 module APPLICATION_MODULE
@@ -118,31 +118,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	integer MPI_thread
 	
 	call MPI_Init(ierr)
-	
-	
-	do iii=1,1
-	! iii=0
-	! do while(iii==0)
-		
-	
-	!**** nmpi and groupmembers should be provided by the user 
-	
-	! call MPI_Init_thread( MPI_THREAD_SINGLE, MPI_thread,ierr); 
-	
-	call MPI_Query_thread(MPI_thread,ierr);
-	select case (MPI_thread)
-	case (MPI_THREAD_SINGLE)
-		write(*,*)"MPI_Query_thread with MPI_THREAD_SINGLE"
-	case (MPI_THREAD_SERIALIZED)
-		write(*,*)"MPI_Query_thread with MPI_THREAD_SERIALIZED"
-	case (MPI_THREAD_MULTIPLE)
-		write(*,*)"MPI_Query_thread with MPI_THREAD_MULTIPLE"
-	case (MPI_THREAD_FUNNELED)
-		write(*,*)"MPI_Query_thread with MPI_THREAD_FUNNELED"
-	end select
-	
-
-	
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
@@ -165,14 +140,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)		
 		
-		
-	!**** create a random seed	
-	call DATE_AND_TIME(values=times)     ! Get the current time 
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	! seed_myid(1) = myid*1000
-	call RANDOM_SEED(PUT=seed_myid)
-	
-
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "HODLR_BUTTERFLY_SOLVER_RBF"
@@ -188,51 +155,56 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	ker%QuantApp=>quant
  
 
-    !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters
-	CALL getarg(1, DATA_DIR)
+	DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
+    quant%dimn=8
+    quant%ntrain=10000
+    quant%ntest=1000
+	quant%sigma=0.1
+	quant%lambda=10.0
+ 
+ 
+    !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters and solver parameters
+	if(iargc()>=1)then
+		CALL getarg(1, DATA_DIR)
+	endif
+	if(iargc()>=2)then
+		call getarg(2,strings)
+		read(strings,*)quant%dimn
+	endif
+	if(iargc()>=3)then
+		call getarg(3,strings)
+		read(strings,*)quant%ntrain
+	endif
+	if(iargc()>=4)then
+		call getarg(4,strings)
+		read(strings,*)quant%ntest
+	endif
+	if(iargc()>=5)then
+		call getarg(5,strings)
+		read(strings,*)quant%sigma
+	endif	
+	if(iargc()>=6)then
+		call getarg(6,strings)
+		read(strings,*)quant%lambda	
+	endif	
+	if(iargc()>=7)then
+		call getarg(7,strings)
+		read(strings,*)option%xyzsort
+	endif	
+	if(iargc()>=8)then
+		call getarg(8,strings)
+		read(strings,*)option%RecLR_leaf	
+	endif
+
+    
 	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'			
 	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'		
 	quant%testfile_p=trim(DATA_DIR)//'_test.csv'			
-	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'		
-	call getarg(2,strings)
-	read(strings,*)quant%dimn
-	call getarg(3,strings)
-	read(strings,*)quant%ntrain
+	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
-	call getarg(4,strings)
-	read(strings,*)quant%ntest
-	call getarg(5,strings)
-	read(strings,*)quant%sigma
-	call getarg(6,strings)
-	read(strings,*)quant%lambda	
-	call getarg(7,strings)
-	read(strings,*)option%xyzsort
-	call getarg(8,strings)
-	read(strings,*)option%RecLR_leaf	
+	write(*,*)'training set: ',quant%trainfile_p
+		
 	
-
-    !**** set solver parameters	
-	
-	option%nogeo=0
-	option%Nmin_leaf=200
-	option%tol_comp=1d-2
-	option%tol_Rdetect=3d-5	
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
-	option%n_iter=1000
-	option%tol_rand=1d-3
-	option%level_check=10000
-	option%precon=DIRECT
-	! option%xyzsort=TM
-	option%lnoBP=40000
-	option%TwoLayerOnly=1
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=0
-	option%ErrFillFull=0
-	option%ErrSol=1
-	! option%RecLR_leaf=RRQR
-
 
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
@@ -253,7 +225,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
@@ -262,18 +233,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
 
-    
-    !call compression_test()
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
     call d_BPACK_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
-	! call copy_HOBF(ho_bf,ho_bf_copy)	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
@@ -296,7 +262,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
-	end do
+
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	

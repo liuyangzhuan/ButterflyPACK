@@ -11,7 +11,7 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 PROGRAM HODLR_BUTTERFLY_SOLVER_2D
@@ -66,11 +66,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
+	! generate the process tree
 	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
 	
+	! set up and print MPI and thread number 
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
 	strings = TRIM(strings)	
@@ -78,16 +80,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 		read(strings , *) threads_num
 	endif
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	
 	call OMP_set_num_threads(threads_num)		
-		
-		
-	!call DATE_AND_TIME(values=times)     ! Get the current time 
-	!seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	
-	call RANDOM_SEED(size = randsize)
-	seed_myid(1) = ptree%myid*1000
-	call RANDOM_SEED(PUT=seed_myid)
 	
 	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
 	! call vmlsetmode(VML_FTZDAZ_ON)
@@ -100,110 +93,72 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	call z_InitStat(stats)
 	call z_SetDefaultOptions(option)
 	
-	time_tmp = 0
-
-	
  	! register the user-defined function and type in ker 
 	ker%FuncZmn=>Zelem_EMCURV
 	ker%QuantApp=>quant
 
-     !*************************input******************************
-
-    !tol=0.000001
-	!itmax=10000
-	
-	! CALL getarg(1, DATA_DIR)
-	
-	
-	! quant%model2d=10 ! Model type (1=strip; 2=corner reflector; 3=two opposite strips; 4=CR with RRS; 5=cylinder; 6=Rectangle Cavity); 7=half cylinder; 8=corrugated half cylinder; 9=corrugated corner reflector; 10=open polygon; 11=taller open polygon 
-	! msh%Nunk=1280000
-	! msh%Nunk=320000
-	! msh%Nunk=80000
-	! msh%Nunk=20000
-	 ! msh%Nunk=5000 
-    ! msh%Nunk=40000	
-	! Refined_level=0
-	
-	
-	
-	
-	! ker%Kernel = FULL	
-	! allocate(ker%matZ_glo(msh%Nunk,msh%Nunk))
-	! call RandomMat(msh%Nunk,msh%Nunk,msh%Nunk,ker%matZ_glo,0)
-	! call MPI_Bcast(ker%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_COMPLEX,0,MPI_Comm_World,ierr)
-	
-	
-	
-	
-	option%nogeo=0 
-	! quant%wavelength=0.0006
-	!quant%wavelength=0.0003
-	! quant%wavelength=0.06
-
-! quant%wavelength=0.08
-! Discret=0.05
 	quant%RCS_static=1
     quant%RCS_Nsample=2000
-
+	quant%model2d=10
+	quant%wavelength=0.08
 	
+	msh%Nunk=5000	
 	
-	! quant%rank_approximate_para1=6.0
-    ! quant%rank_approximate_para2=6.0
-    ! quant%rank_approximate_para3=6.0
-	
-	
-	option%Nmin_leaf=100
-	! option%tol_comp=1d-4
-	option%tol_Rdetect=3d-5	
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-5
-	option%n_iter=1000
-	option%tol_rand=1d-3
-	option%level_check=100
-	! option%precon= HODLRPRECON ! DIRECT ! HODLRPRECON ! NOPRECON !
-	option%xyzsort=TM !TM ! NATURAL  
-	option%lnoBP=40000
-	option%TwoLayerOnly=1
-    option%schulzorder=3
-    option%schulzlevel=3000
-	! option%LRlevel=100
-	! option%ErrFillFull=0 
-	! option%RecLR_leaf=ACA
 	option%ErrSol=1
-	! option%LR_BLK_NUM=2
 	option%format= HODLR! HMAT!  HODLR ! 
 	option%near_para=0.01d0
 	option%verbosity=2
 	option%ILU=0  
 	option%forwardN15flag=0 
 	
-	call getarg(1,strings)
-	read(strings,*)option%LR_BLK_NUM		
-	call getarg(2,strings)
-	read(strings,*)quant%model2d
-	call getarg(3,strings)
-	read(strings,*)msh%Nunk	
-	call getarg(4,strings)
-	read(strings,*)quant%wavelength	
-	call getarg(5,strings)
-	read(strings,*)option%tol_comp
-	call getarg(6,strings)
-	read(strings,*)option%ErrFillFull
-	call getarg(7,strings)
-	read(strings,*)option%RecLR_leaf		
-	call getarg(8,strings)
-	read(strings,*)option%BACA_Batch	
-	call getarg(9,strings)
-	read(strings,*)option%LRlevel	
-	call getarg(10,strings)
-	read(strings,*)option%precon
-
-	
-	
-	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
-	
-    ! call OMP_set_dynamic(.true.)
-    !call OMP_set_nested(.true.)
+	if(iargc()>=1)then
+		call getarg(1,strings)
+		read(strings,*)option%LR_BLK_NUM	
+	endif
+	if(iargc()>=2)then	
+		call getarg(2,strings)
+		read(strings,*)quant%model2d
+	endif
+	if(iargc()>=3)then
+		call getarg(3,strings)
+		read(strings,*)msh%Nunk	
+	endif
+	if(iargc()>=4)then
+		call getarg(4,strings)
+		read(strings,*)quant%wavelength	
+	endif
+	if(iargc()>=5)then
+		call getarg(5,strings)
+		read(strings,*)option%tol_comp
+	endif
+	if(iargc()>=6)then
+		call getarg(6,strings)
+		read(strings,*)option%ErrFillFull
+	endif
+	if(iargc()>=7)then
+		call getarg(7,strings)
+		read(strings,*)option%RecLR_leaf		
+	endif
+	if(iargc()>=8)then
+		call getarg(8,strings)
+		read(strings,*)option%BACA_Batch	
+	endif
+	if(iargc()>=9)then
+		call getarg(9,strings)
+		read(strings,*)option%LRlevel	
+	endif
+	if(iargc()>=10)then
+		call getarg(10,strings)
+		read(strings,*)option%precon
+	endif
+	if(iargc()>=11)then
+		call getarg(11,strings)
+		read(strings,*)option%xyzsort
+	endif	
+	if(iargc()>=12)then
+		call getarg(12,strings)
+		read(strings,*)option%Nmin_leaf
+	endif		
 	
 	quant%Nunk = msh%Nunk
     !*********************************************************
@@ -224,7 +179,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
     call geo_modeling_CURV(quant,ptree%Comm)
 	
-	! generate the list of points for clustering
+	! generate the list of coordinates for clustering
 	allocate(msh%xyz(2,quant%Nunk))
 	do edge=1, quant%Nunk
 		msh%xyz(:,edge) = quant%xyz(:,edge*2-1)
@@ -234,7 +189,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
+	
 
 	
 if(option%format==HODLR)then		
@@ -248,23 +203,15 @@ if(option%format==HODLR)then
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
-	! stop 
 	
-    !pause
-    
-    !call compression_test()
+	
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-    ! call BPACK_construction(ho_bf,option,stats,msh,ker,element_Zmn_FULL,ptree)
     call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
-	! if(option%precon/=DIRECT)then
-		! call copy_HOBF(ho_bf,ho_bf_copy)	
-	! end if
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
+	
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
@@ -277,10 +224,10 @@ if(option%format==HODLR)then
 		call z_bpack_test_solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
 	endif	
 	
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-    ! call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+    call EM_solve_CURV(ho_bf,option,msh,quant,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	call z_PrintStat(stats,ptree)
 	
@@ -321,10 +268,10 @@ elseif(option%format==HMAT)then
 		call z_bpack_test_solve_error(h_mat,msh%idxe-msh%idxs+1,option,ptree,stats)
 	endif		
 	
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-    ! call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+    call EM_solve_CURV(h_mat,option,msh,quant,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	call z_PrintStat(stats,ptree)
 	

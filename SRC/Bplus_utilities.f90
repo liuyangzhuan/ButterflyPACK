@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module Bplus_Utilities
 use misc
 contains
@@ -289,7 +289,7 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
         DT :: random1(:,:), random2(:,:)
         DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
-	!  write(*,*)'nima-1'
+	
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
 	
 	integer idx_start_m,idx_start_n, idx_start_n_loc,idx_start_m_loc, idx_end_n_loc,idx_end_m_loc,idx_start_i_loc,idx_start_o_loc,idx_end_i_loc,idx_end_o_loc
@@ -445,7 +445,6 @@ if(bplus_o%Lplus==1)then
 				deallocate(blocks%N_p)
 			endif
 			
-			! write(*,*)blocks%N_loc,blocks%N_loc_db,'nima'
 			
 			if(blocks%N_loc_db>0)then
 				if(.not.allocated(blocks%ButterflyV%blocks))allocate(blocks%ButterflyV%blocks(1))
@@ -1777,7 +1776,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
     !  DT :: random1(N,Nrnd), random2(M,Nrnd)
         DT :: random1(:,:), random2(:,:)
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
-	!  write(*,*)'nima-1'
+	
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
 	
 	level_butterfly=blocks%level_butterfly
@@ -1787,7 +1786,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 	if(comm==MPI_COMM_NULL)then
 		write(*,*)'ninin',pgno,comm==MPI_COMM_NULL,ptree%MyID
 	endif
-	! write(*,*)ptree%MyID,ptree%pgrp(pgno)%head,ptree%pgrp(pgno)%tail,'nima'
+
 	call assert(IOwnPgrp(ptree,pgno),'I do not share this block!')
 	
 	if(level_butterfly==0)then
@@ -2493,7 +2492,6 @@ subroutine BF_sym2asym(blocks)
     integer:: middleflag,dimension_n,num_row,num_col,mn_min
 	
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
-	!  write(*,*)'nima-1'
 
     real(kind=8), allocatable :: Singular(:)
     DT, allocatable :: UU(:,:),VV(:,:)
@@ -2695,7 +2693,6 @@ subroutine BF_MoveSingulartoLeft(blocks)
     integer:: middleflag,dimension_n,dimension_m,num_row,num_col,mn_min
 	
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
-	!  write(*,*)'nima-1'
 
     real(kind=8), allocatable :: Singular(:)
     DT, allocatable :: UU(:,:),VV(:,:)
@@ -2874,7 +2871,6 @@ subroutine BF_MoveSingulartoRight(blocks)
     integer:: middleflag,dimension_n,dimension_m,num_row,num_col,mn_min
 	
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
-	!  write(*,*)'nima-1'
 
     real(kind=8), allocatable :: Singular(:)
     DT, allocatable :: UU(:,:),VV(:,:)
@@ -3287,7 +3283,6 @@ recursive subroutine Hmat_Usolve(blocks_u,trans,idx_start,nvec,Vinout,ptree,stat
     else
 		mm = blocks_u%M
 		idxs_m = blocks_u%headm - idx_start + 1			
-		! write(*,*)blocks_u%level,blocks_u%pgno,ptree%MyID,blocks_u%headm,mm,idx_start,'aha'
 		call trsmf90(blocks_u%fullmat,Vinout(idxs_m:idxs_m+mm-1,1:nvec),'L','U',trans,'N',mm,nvec)
     endif
     

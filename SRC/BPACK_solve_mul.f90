@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module BPACK_Solve_Mul
 
 use Bplus_compress

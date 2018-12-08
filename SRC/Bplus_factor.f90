@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module Bplus_factor
 use Bplus_randomized
 
@@ -340,8 +340,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	
 	! write(*,*)abs(matrixtemp1),rank,'gggddd'
 	
-	! if(rank<=nbslpk)then
-	if(.true.)then
+	if(rank<=nbslpk)then
 	
 #if 0	
 		allocate(ipiv(rank))
@@ -362,7 +361,6 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		!!!!!! the SVD-based pseudo inverse needs to be implemented later
 	
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-		write(*,*)myrow,mycol,'nima',ptree%MyID
 		if(myrow/=-1 .and. mycol/=-1)then
 			if(ptree%MyID==ptree%pgrp(pgno)%head)then
 				call blacs_gridinfo(ctxt_head, nprow, npcol, myrow, mycol)
@@ -390,9 +388,7 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
-			write(*,*)myArows,myAcols,rank,'r,c before'
 			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop=flop)
-			write(*,*)myArows,myAcols,rank,'r,c after'
 			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 			
 			call pgetrif90(rank,matrix_small,1,1,descsmall,ipiv,flop=flop)
@@ -581,7 +577,6 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 		
 	Memory = 0
 	
-	! write(*,*)ptree%myid,level_c,rowblock,'nima'
 	if(block_off1%level_butterfly==0 .or. block_off2%level_butterfly==0)then
 		call LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	else
@@ -592,9 +587,9 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree,msh) 	
 		error_inout = max(error_inout, error)	
 	endif
-! write(*,*)ptree%myid,level_c,rowblock,'niddma'
+
 	pgno = block_o%pgno
-	! write(*,*)'wosss',pgno
+	
 	n1 = OMP_get_wtime()
 	! if(block_o%level==3)then
 	if(level_butterfly>=option%schulzlevel)then
@@ -602,7 +597,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	else
 		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,msh,pgno)
 	endif
-! write(*,*)ptree%myid,level_c,rowblock,'neeidddma'
+
 	error_inout = max(error_inout, error)	
 
 	n2 = OMP_get_wtime()		

@@ -11,7 +11,7 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 module APPLICATION_MODULE
@@ -138,8 +138,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	use d_BPACK_randomMVP
     implicit none
 
-	! include "mkl_vml.fi"	 
-	
     real(kind=8) para
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
@@ -167,7 +165,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	integer level,Maxlevel,N_unk_loc
 	type(d_proctree),target::ptree,ptree1
 	CHARACTER (LEN=1000) DATA_DIR	
-	
+	integer:: tst=1
 	
 	!**** nmpi and groupmembers should be provided by the user 
 	call MPI_Init(ierr)
@@ -192,14 +190,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	endif
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)		
-		
-		
-	!**** create a random seed	
-	call DATE_AND_TIME(values=times)     ! Get the current time 
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	! seed_myid(1) = myid*1000
-	call RANDOM_SEED(PUT=seed_myid)
-	
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
@@ -211,102 +201,85 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	call d_initstat(stats)
 	call d_setdefaultoptions(option)
 	
+
+	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file 
+	if(iargc()>=1)then
+		call getarg(1,strings)
+		read(strings,*)tst
+	endif
 	
 	
 !******************************************************************************!
 ! generate a LR matrix as two matrix product	
-	
-	
-	
-	!**** register the user-defined function and type in ker 
-	ker%FuncZmn=>Zelem_LR
-	ker%QuantApp=>quant
- 
-    !**** Get matrix size and rank and create the matrix
-	msh%Nunk = 10000
-	quant%rank = 2
-	quant%lambda = 1d5
-	allocate(quant%matU_glo(msh%Nunk,quant%rank))
-	call d_RandomMat(msh%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
-	call MPI_Bcast(quant%matU_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
-	
-	allocate(quant%matV_glo(quant%rank,msh%Nunk))
-	call d_RandomMat(quant%rank,msh%Nunk,quant%rank,quant%matV_glo,0)	
-	call MPI_Bcast(quant%matV_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)	
-	
+	if(tst==1)then
+		!**** register the user-defined function and type in ker 
+		ker%FuncZmn=>Zelem_LR
+		ker%QuantApp=>quant
+	 
+		!**** Get matrix size and rank and create the matrix
+		msh%Nunk = 10000
+		quant%rank = 2
+		quant%lambda = 1d5
+		allocate(quant%matU_glo(msh%Nunk,quant%rank))
+		call d_RandomMat(msh%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
+		call MPI_Bcast(quant%matU_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		
+		allocate(quant%matV_glo(quant%rank,msh%Nunk))
+		call d_RandomMat(quant%rank,msh%Nunk,quant%rank,quant%matV_glo,0)	
+		call MPI_Bcast(quant%matV_glo,msh%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)	
+	   !***********************************************************************
+	   if(ptree%MyID==Main_ID)then
+	   write (*,*) ''
+	   write (*,*) 'FullMat computing'
+	   write (*,*) ''
+	   endif
+	   !***********************************************************************		
+	endif	
 
 	
 	
 !******************************************************************************!
 ! generate a LR matrix stored in a files
-	
-	! CALL getarg(1, strings)
-	! strings = TRIM(strings)	
-	! if(LEN_TRIM(strings)==0)then
-		! strings = './EXAMPLE/K05N4096.csv'	
-	! endif
-	
-	
-	! !**** register the user-defined function and type in ker 
-	! ker%FuncZmn=>Zelem_FULL
-	! ker%QuantApp=>quant
+	if(tst==2)then
+		strings = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'	
+		if(iargc()>=2)then
+			call getarg(2,strings)
+		endif	
 
-    ! !**** Get matrix size and rank and create the matrix
-	! msh%Nunk = 4096
-	! allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
-	! allocate(datain(msh%Nunk))
-	! open(10, file=strings)
-	! do ii=1,msh%Nunk
-		! read(10,*) datain(:)
-		! quant%matZ_glo(:,ii)=datain
-	! enddo
-	! close(10)
-	! call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
-	
+		!**** register the user-defined function and type in ker 
+		ker%FuncZmn=>Zelem_FULL
+		ker%QuantApp=>quant
+
+		!**** Get matrix size and rank and create the matrix
+		msh%Nunk = 4096
+		allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
+		allocate(datain(msh%Nunk))
+		open(10, file=strings)
+		do ii=1,msh%Nunk
+			read(10,*) datain(:)
+			quant%matZ_glo(:,ii)=datain
+		enddo
+		close(10)
+		call MPI_Bcast(quant%matZ_glo,msh%Nunk*msh%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+	   !***********************************************************************
+	   if(ptree%MyID==Main_ID)then
+	   write (*,*) ''
+	   write (*,*) 'Random LR Kernel computing'
+	   write (*,*) ''
+	   endif
+	   !***********************************************************************		
+	endif	
 		
 !******************************************************************************!	
 	
-	
-	
     !**** set solver parameters	
-	
-	option%nogeo=1
-	option%Nmin_leaf=200
-	option%tol_comp=1d-4
-	option%tol_Rdetect=3d-5	
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
-	option%n_iter=1000
-	option%tol_rand=option%tol_comp
-	option%level_check=10000
-	option%precon=DIRECT
-	option%xyzsort=NATURAL !TM_GRAM !NATURAL
-	option%lnoBP=40000
-	option%TwoLayerOnly=1
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=0
-	option%ErrFillFull=0
-	option%ErrSol=1
-	option%RecLR_leaf=ACA
-	option%rank0 = 64
-	option%rankrate = 1.5d0		
+	option%nogeo=1  ! no geometry points available
+	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
 	
 	
-	CALL getarg(2, strings)
-	strings = TRIM(strings)	
-	if(LEN_TRIM(strings)>0)then
-		read(strings,*)option%RecLR_leaf
-	endif	
 	
-   !***********************************************************************
-   if(ptree%MyID==Main_ID)then
-   write (*,*) ''
-   write (*,*) 'Random LR Kernel computing'
-   write (*,*) ''
-   endif
-   !***********************************************************************
 	
+	!**** construct the first HODLR with entry evaluation
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
     call d_Cluster_partition(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
@@ -314,18 +287,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
-
-    
-    !call compression_test()
+	
 	t1 = OMP_get_wtime()	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
     call d_BPACK_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
-	! call copy_HOBF(ho_bf,ho_bf_copy)	
+	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
+	
 	
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
@@ -345,9 +315,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	call d_PrintStat(stats,ptree)
 	
 	
-	
-	
-
+	!**** construct the second HODLR using the first HODLR as matvec
 	call d_CopyOptions(option,option1)
 	option1%nogeo=1
 	option1%xyzsort=NATURAL
@@ -358,7 +326,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
-
 	msh1%Nunk = msh%Nunk
 	
 	

@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module BPACK_factor
 use Bplus_factor
 use BPACK_DEFS
@@ -1414,8 +1414,6 @@ recursive subroutine Hmat_LU(blocks,h_mat,option,stats,ptree,msh)
     
  
 	
-	! write(*,*)'In Hmat_LU'
-	
     if (blocks%style==4) then
         block_son1=>blocks%sons(1,1)
         call Hmat_LU(block_son1,h_mat,option,stats,ptree,msh)
@@ -1499,49 +1497,41 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
             block1_son=>block1%sons(1,1)
             block2_son=>block2%sons(1,1)
             block3_son=>block3%sons(1,1)
-			! write(*,*)'1a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(1,2)
             block2_son=>block2%sons(2,1)
-            block3_son=>block3%sons(1,1)
-			! write(*,*)'2a',block1_son%style,block2_son%style,block3_son%style			
+            block3_son=>block3%sons(1,1)	
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(1,1)
             block2_son=>block2%sons(1,2)
             block3_son=>block3%sons(1,2)
-			! write(*,*)'3a',block1_son%style,block2_son%style,block3_son%style			
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(1,2)
             block2_son=>block2%sons(2,2)
             block3_son=>block3%sons(1,2)
-			! write(*,*)'4a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(2,1)
             block2_son=>block2%sons(1,1)
             block3_son=>block3%sons(2,1)
-			! write(*,*)'5a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(2,2)
             block2_son=>block2%sons(2,1)
             block3_son=>block3%sons(2,1)
-			! write(*,*)'6a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(2,1)
             block2_son=>block2%sons(1,2)
             block3_son=>block3%sons(2,2)
-			! write(*,*)'7a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
             block1_son=>block1%sons(2,2)
             block2_son=>block2%sons(2,2)
             block3_son=>block3%sons(2,2)
-			! write(*,*)'8a',block1_son%style,block2_son%style,block3_son%style
             call Hmat_add_multiply(block3_son,chara,block1_son,block2_son,h_mat,option,stats,ptree,msh)
 		end if
     elseif(style(3)==1)then
             call Full_add_multiply(block3,chara,block1,block2,h_mat,option,stats,ptree,msh)		
 	elseif(style(3)==2)then		
 		T0 = OMP_get_wtime()			
-		! call Butterfly_compress_add_multiply_randomized(block3,chara,block1,block2)
+
 		h_mat%blocks_1 => block1
 		h_mat%blocks_2 => block2
 		rank0 = block3%rankmax
@@ -1566,7 +1556,6 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
 			n = msh%basis_group(group_n)%tail -msh%basis_group(group_n)%head + 1
 			allocate(matrixtemp(m,n))
 			call butterfly_block_fullextract(block3,matrixtemp)
-			! write(*,*)fnorm(matrixtemp,m,n),m,n,'aha'
 			write(*,*)'dumping:', group_m,group_n,m,n
 			do ii=1,m
 			do jj=1,n

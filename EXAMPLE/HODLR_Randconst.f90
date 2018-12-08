@@ -11,7 +11,7 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 
@@ -53,9 +53,6 @@ contains
 	end subroutine Zelem_FULL
 	
 
-
-	
-
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use z_BPACK_DEFS
 		use z_DenseLA
@@ -69,14 +66,11 @@ contains
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
-		! type(z_mesh)::msh
-		! type(z_proctree)::ptree
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
 		type(z_hobf),pointer::ho_bf
-		! type(z_Hstat)::stats
 	
 		select TYPE(quant)   
 		type is (quant_app)
@@ -89,10 +83,6 @@ contains
 		
 	end subroutine HODLR_MVP_OneHODLR
 
-
-
-
-	
 	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use z_BPACK_DEFS
 		use z_DenseLA
@@ -105,9 +95,6 @@ contains
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
-		! type(z_mesh)::msh
-		! type(z_proctree)::ptree
-		! type(z_Hstat)::stats
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
@@ -227,7 +214,7 @@ contains
 end module APPLICATION_MODULE	
 
 
-PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
+PROGRAM Randomized_HODLR_3D
 
     use z_BPACK_DEFS
 	
@@ -250,7 +237,7 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
 	complex(kind=8),allocatable:: InputVec(:)
 	complex(kind=8):: ctemp
-	integer Ntunnel,kk,black_step,rank0
+	integer kk,black_step,rank0
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
 	type(z_Hoption),target:: option,option1
@@ -288,18 +275,9 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)	
 	
-	call DATE_AND_TIME(values=times)     ! Get the current time 
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	
-	! seed_myid(1) = myid*1000
-	call RANDOM_SEED(PUT=seed_myid)
-	
-    !real scale
-
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "MLMDA_DIRECT_SOLVER_3D_CFIE_NEW"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FOR X64 COMPILER"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Randomized_HODLR_3D"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
 	call z_initstat(stats)
@@ -307,49 +285,18 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
      !*************************input******************************
 
-    !tol=0.000001
-	!itmax=10000
 	
-	CALL getarg(1, DATA_DIR)
 	
-
-	option%Nmin_leaf=100
-	option%tol_comp=1d-4
-	option%tol_Rdetect=1d-4 !3d-5
+	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation 
+	DATA_DIR='../EXAMPLE/FULLMAT_DATA'
+	if(iargc()>=1)then
+		CALL getarg(1, DATA_DIR)
+	endif
+	
 	option%nogeo=0
-	option%tol_LS=1d-10
-	option%tol_itersol=3d-3
-	option%n_iter=1000
-	option%tol_rand=option%tol_comp !1d-4
-	option%level_check=100
-	option%precon=DIRECT
 	option%xyzsort=CKD
-	option%lnoBP=600
-	option%TwoLayerOnly=1
-	option%LRlevel=0
-	option%RecLR_leaf=BACA
-	option%rank0 = 64
-	option%rankrate = 1.5d0	
 	
-	explicitflag=0
-
-
-
-	
-	
-	!Nmin_leaf=250
-	!para=0.01
-	!tolerance=0.001
-	!alpha=0.5
-    !ker%wavelength=2.
-    ! tolerance=ACA_tolerance_forward
-    ! call OMP_set_dynamic(.true.)
-    !call OMP_set_nested(.true.)
-
-    !*********************************************************
-
-    ! ker%omiga=2*pi/ker%wavelength/sqrt(mu0*eps0)
-    ! ker%wavenum=2*pi/ker%wavelength
+	explicitflag=0  
 
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Zelem_FULL
@@ -357,15 +304,14 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	ker%QuantApp=>quant	
 	quant%ptree=>ptree
 	
-	Ntunnel = 15600
+	
+	! predefine the first three levels of tree due to the physical meanings
 	msh%Nunk = 3720
 	Nin1 = 320*2 
 	Nout1 = 610*2
 	Nin2 = 320*2 
 	Nout2 = 610*2	
 	call z_assert(Nin1+Nout1+Nin2+Nout2==msh%Nunk,'The two surfaces have mismatched number of unknowns')
-	
-	! predefine the first three levels of tree due to the physical meanings
 	allocate(msh%pretree(4))
 	msh%pretree(1) = Nin1
 	msh%pretree(2) = Nout1
@@ -374,17 +320,11 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for scattering matrix compression'
-	
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A10,I9,A11,I9)')' Ntunnel: ',Ntunnel,' Nsurface: ',msh%Nunk
-	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A11,I9)')' Nsurface: ',msh%Nunk
 	allocate(msh%xyz(3,msh%Nunk))
 
-	!!!!!! for simplicity, I'm duplicating locations of each point
-
-	open(unit=521,file=trim(DATA_DIR)//'/edge_cen.out',status='old')
-	do kk=1,Ntunnel/2
-		read(521,*) tmp(1),tmp(2),tmp(3)
-	end do          
+	!!!!!! for simplicity, duplicate locations of each point
+	open(unit=521,file=trim(DATA_DIR)//'/Smatrix.geo',status='old')         
 	do kk=1,msh%Nunk/2
 		read(521,*) msh%xyz(1,2*kk-1),msh%xyz(2,2*kk-1),msh%xyz(3,2*kk-1)
 		msh%xyz(:,2*kk) = msh%xyz(:,2*kk-1)
@@ -400,15 +340,14 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1,'secnds'	
-	! stop 
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1,'secnds'	 
 
 	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 	allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
 	quant%matZ_glo = 0
 	
-	open(unit=888,file=trim(DATA_DIR)//'/fullmat.out',status='old')
+	open(unit=888,file=trim(DATA_DIR)//'/Smatrix.mat',status='old')
 	do ii=1,msh%Nunk
 	do kk=1,msh%Nunk
 		read(888,*)tmp(1),tmp(2)
@@ -426,7 +365,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 
 	
 	if(explicitflag ==1)then
-
 		t1 = OMP_get_wtime()	
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
 		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)		
@@ -434,7 +372,6 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()   
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'			
-	
 	
 		N_unk_loc = msh%idxe-msh%idxs+1
 		allocate(Vin(N_unk_loc,1))
@@ -444,25 +381,16 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 		do ii=1,N_unk_loc
 			call z_random_dp_number(Vin(ii,1))
 		end do
-		
-		
 		call z_HODLR_Mult('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,option,stats)
-	
 		call z_matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
-		
-		
 		tmp1 = z_fnorm(Vout2-Vout1,N_unk_loc,1)**2d0
 		call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 		tmp2 = z_fnorm(Vout2,N_unk_loc,1)**2d0
 		call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 		error = sqrt(norm1)/sqrt(norm2)
-		
-		
 		deallocate(Vin,Vout1,Vout2)
-		
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
-		
 	else if(explicitflag ==0)then
 		N_unk_loc = msh%idxe-msh%idxs+1
 		t1 = OMP_get_wtime()	
@@ -475,13 +403,17 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	 
 	
-
+	!*********** Construct the second HODLR by using the first HODLR as a matvec  
+	
 	call z_CopyOptions(option,option1)
-	option1%nogeo=1
-	option1%xyzsort=NATURAL
+	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
+	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
+	
+	!**** register the user-defined function and type in ker 
 	ker1%FuncZmn=>Zelem_FULL
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1	
+	
 	quant1%ho_bf=>ho_bf
 	quant1%msh=>msh
 	quant1%ptree=>ptree
@@ -536,9 +468,9 @@ PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
-    ! ! ! ! pause
+   
 
-end PROGRAM MLMDA_DIRECT_SOLVER_3D_CFIE
+end PROGRAM Randomized_HODLR_3D
 
 
 

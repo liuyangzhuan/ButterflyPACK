@@ -1,3 +1,4 @@
+module swap PrgEnv-gnu PrgEnv-intel 
 cd ..
 sh PrecisionPreprocessing.sh
 cd build

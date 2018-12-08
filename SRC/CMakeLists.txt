@@ -1,7 +1,7 @@
 set(headers
     C_BPACK_wrapper.h
-    # HODLR_config.fi
-    # ${PROJECT_BINARY_DIR}/HODLR_config.h
+    # ButterflyPACK_config.fi
+    # ${PROJECT_BINARY_DIR}/ButterflyPACK_config.h
 )
 
 set(sources

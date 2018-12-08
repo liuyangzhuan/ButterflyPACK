@@ -1,5 +1,5 @@
 export EXEC=./EXAMPLE/fem2d
-export OMP_NUM_THREADS=8
+export OMP_NUM_THREADS=1
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
 
@@ -7,19 +7,19 @@ THREADS_PER_RANK=`expr 2 \* $OMP_NUM_THREADS`
 
 
 
-for precon in 2 
+for precon in 1  #1: direct 2: no preconditioner 3: LU preconditioner
 do
 
 
 # ######## cavity
-Ns=(5000 50000 500000)
-wavelengths=(0.05 0.005 0.0005)
+Ns=(5000  )
+wavelengths=(0.05 )
  
 for ((i = 0; i < ${#Ns[@]}; i++)); do
 N=${Ns[i]}
 wavelength=${wavelengths[i]}
 
-nmpi=16
+nmpi=1
 blknum=1
 model=10
 # N=5000

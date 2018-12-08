@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module BPACK_Utilities
 use misc
 use Bplus_Utilities
@@ -393,7 +393,7 @@ subroutine SetDefaultOptions(option)
 	option%tol_LS=1d-12
 	option%tol_itersol=1d-6
 	option%n_iter=1000
-	option%tol_rand=1d-3
+	option%tol_rand=option%tol_comp
 	option%level_check=10000
 	option%precon=DIRECT
 	option%xyzsort=TM
@@ -410,7 +410,7 @@ subroutine SetDefaultOptions(option)
 	option%ErrSol=0
 	option%LR_BLK_NUM=1
 	option%rank0=32
-	option%rankrate=1.2d0
+	option%rankrate=1.5d0
 	option%itermax=10
 	option%powiter=0
 	option%ILU=0

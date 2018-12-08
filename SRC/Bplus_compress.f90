@@ -11,10 +11,10 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-#include "HODLR_config.fi"
+#include "ButterflyPACK_config.fi"
 module Bplus_compress 
 use Bplus_randomized 
 use BPACK_structure
@@ -2777,7 +2777,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 		norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
 		stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c
 		
-		! write(*,*)'aha',rank
+		
 		do i=1,rank
 			norm_row_R(select_column(i))=0
 		enddo
@@ -3649,7 +3649,7 @@ implicit none
 		if(myrow/=-1 .and. mycol/=-1)then
 		
 			rank = blocks%rankmax
-			! write(*,*)'aha',descButterflyV, blocks%N, rank, nbslpk, nbslpk, gd%ctxt
+			
 			
 			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)		

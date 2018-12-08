@@ -11,7 +11,7 @@
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
 ! derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-! Developers: Yang Liu, Xiaoye S. Li.
+! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 PROGRAM HODLR_BUTTERFLY_SOLVER_3D
@@ -77,12 +77,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 	
-		
-	call DATE_AND_TIME(values=times)     ! Get the current time 
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	
-	! seed_myid(1) = myid*1000
-	call RANDOM_SEED(PUT=seed_myid)
 	
 	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
 	! call vmlsetmode(VML_FTZDAZ_ON)
@@ -100,85 +94,48 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	ker%FuncZmn=>Zelem_EMSURF
 	ker%QuantApp=>quant	
 	
+	! compute the quadrature rules 
     quant%integral_points=6
     allocate (quant%ng1(quant%integral_points), quant%ng2(quant%integral_points), quant%ng3(quant%integral_points), quant%gauss_w(quant%integral_points))
     call gauss_points(quant)
 
 	
      !*************************input******************************
-
-    !tol=0.000001
-	!itmax=10000
+	DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
 	
-	CALL getarg(1, DATA_DIR)
-	call getarg(2,strings)
-	read(strings,*)quant%wavelength			
-	call getarg(3,strings)
-	read(strings,*)option%precon	
-	call getarg(4,strings)
-	read(strings,*)option%xyzsort
-
-	option%Nmin_leaf=500
 	quant%mesh_normal=1
-	! Refined_level=0
-	
-	! levelpara_control=0
-	! ACA_tolerance_forward=1d-4
-	option%tol_comp=1d-4
-	! SVD_tolerance_factor=1d-4
-	option%tol_Rdetect=3d-5
-    ! Preset_level_butterfly=0
-	option%nogeo=0
 	quant%scaling=1d0
-	! quant%wavelength=0.5
-	! Discret=0.05
+	quant%wavelength=2.0
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
-    ! Optimizing_forward=0
-    ! Fast_inverse=0
-    ! Add_method_of_base_level=2
-    ! quant%rank_approximate_para1=6.0
-    ! quant%rank_approximate_para2=6.0
-    ! quant%rank_approximate_para3=6.0
-	option%tol_LS=1d-12
-	! tfqmr_tolerance=1d-6
-	option%tol_itersol=1d-5
-	option%n_iter=1000
-	option%tol_rand=5d-3
-	! up_tolerance=1d-4
-	! relax_lamda=1d0
-	! SolvingMethod=1
-	option%level_check=100
-	! rank_tmp=7
-	! schurinv=1
-	! reducelevel_flag=0
-	! directschur=1
-	! option%precon= NOPRECON !  HODLRPRECON ! NOPRECON !
-	! verboselevel=2
-	! option%xyzsort=NATURAL !CKD !TM
-	option%lnoBP=4000
-	option%TwoLayerOnly=1
 	quant%CFIE_alpha=1
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=100
-	option%ErrFillFull=0
-	option%RecLR_leaf=BACA
-	option%BACA_Batch=32
 	
-	option%ErrSol=1
-	! option%LR_BLK_NUM=2
+
 	option%format= HMAT!  HODLR ! 
 	option%near_para=2.01d0
 	option%verbosity=2
-	option%ILU=1 	
-	option%LR_BLK_NUM=1	
+	option%ILU=0 	
 	option%forwardN15flag=0 
-	
-	! call MKL_set_num_threads(NUM_Threads)    ! this overwrites omp_set_num_threads for MKL functions 
-	
-    ! call OMP_set_dynamic(.true.)
-    !call OMP_set_nested(.true.)
+
+	if(iargc()>=1)then
+		CALL getarg(1, DATA_DIR)
+	endif
+	if(iargc()>=2)then
+		call getarg(2,strings)
+		read(strings,*)quant%wavelength	
+	endif	
+	if(iargc()>=3)then
+		call getarg(3,strings)
+		read(strings,*)option%precon
+	endif	
+	if(iargc()>=4)then
+		call getarg(4,strings)
+		read(strings,*)option%xyzsort	
+	endif	
+	if(iargc()>=5)then
+		call getarg(5,strings)
+		read(strings,*)option%Nmin_leaf		
+	endif
 	
 
     !*********************************************************
@@ -211,7 +168,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
+
 
 if(option%format==HODLR)then		
 	
@@ -222,22 +179,15 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()
-		! write(*,*)t2-t1
-		! stop 
-		
-		!pause
-		
-		!call compression_test()
+
 		t1 = OMP_get_wtime()	
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
 		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
-		! if(option%precon/=DIRECT)then
-			! call copy_HOBF(ho_bf,ho_bf_copy)	
-		! end if    
+   
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()   
-		! write(*,*)t2-t1
+		
 		
 		if(option%precon/=NOPRECON)then								
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
@@ -250,10 +200,10 @@ if(option%format==HODLR)then
 			call z_bpack_test_solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
 		endif		
 		
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		! call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
 		call z_PrintStat(stats,ptree)
 		
@@ -272,22 +222,13 @@ if(option%format==HODLR)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix formatting finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()
-		! write(*,*)t2-t1
-		! stop 
-		
-		!pause
-		
-		!call compression_test()
+
 		t1 = OMP_get_wtime()	
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction......"
-		call z_BPACK_construction(h_mat,option,stats,msh,ker,z_element_Zmn_user,ptree)
-		! if(option%precon/=DIRECT)then
-			! call copy_HOBF(h_mat,ho_bf_copy)	
-		! end if    
+		call z_BPACK_construction(h_mat,option,stats,msh,ker,z_element_Zmn_user,ptree)   
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()   
-		! write(*,*)t2-t1
 		
 		if(option%precon/=NOPRECON)then								
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing......"
@@ -300,10 +241,10 @@ if(option%format==HODLR)then
 			call z_bpack_test_solve_error(h_mat,msh%idxe-msh%idxs+1,option,ptree,stats)
 		endif				
 		
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		! call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+		call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 		
 		call z_PrintStat(stats,ptree)
 		call delete_quant_EMSURF(quant)

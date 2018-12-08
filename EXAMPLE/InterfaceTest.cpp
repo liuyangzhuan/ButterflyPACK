@@ -11,7 +11,7 @@
   worldwide license in the Software to reproduce, distribute copies to the public, prepare
   derivative works, and perform publicly and display publicly, and to permit other to do so. 
 
-  Developers: Yang Liu, Xiaoye S. Li.
+  Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
 
@@ -48,11 +48,6 @@ extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
-      // void Cblacs_get(int, int, int *);
-      // void Cblacs_gridinit(int *, const char *, int, int);
-      // void Cblacs_gridmap(int *, int *, int, int, int);
-      // void Cblacs_gridinfo(int, int *, int *, int *, int *);
-      // void Cblacs_gridexit(int);
       void Cblacs_exit(int);
 }
 
@@ -248,10 +243,10 @@ int main(int argc, char* argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
     MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
     MPI_Op op;
-	double h; //kernel parameter
-	double lambda ; //kernel parameter 
-	int ker ; // kernel choice 
-	int Npo;   // matrix size
+	double h=0.1; //kernel parameter
+	double lambda=10.0 ; //kernel parameter 
+	int ker=1 ; // kernel choice 
+	int Npo=5000;   // matrix size
 	int Ndim=1; //data dimension
 	double starttime, endtime;
 	double* dat_ptr; 
@@ -264,35 +259,33 @@ int main(int argc, char* argv[])
 	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
 	int checkerr = 1; //1: check compression quality 
 	int batch = 100; //batch size for BACA
-	string filename("smalltest.dat");
+	
 	C_QuantApp *quant_ptr;
 	
 	
-    int tst = stoi(argv[1]);
+    int tst = 1;
+	if(argc>1)tst = stoi(argv[1]);
+	
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
 if(tst==1){
-	filename = string(argv[2]);
-	Ndim = stoi(argv[3]);
-	ker = stoi(argv[4]);
-	h = stof(argv[5]);
-	lambda = stof(argv[6]);
-	Nmin = stoi(argv[7]);
-	tol = stof(argv[8]);
-	com_opt = stoi(argv[9]);
-	checkerr = stoi(argv[10]);
-	batch = stoi(argv[11]);
-	
-	// Ndim = 8;
-	// h = 0.2;
-	// lambda = 10.;
-	// ker = 1;
+	string filename("../EXAMPLE/KRR_DATA/susy_10Kn");
+	Ndim=8;
+	if(argc>2)filename = string(argv[2]);
+	if(argc>3)Ndim = stoi(argv[3]);
+	if(argc>4)ker = stoi(argv[4]);
+	if(argc>5)h = stof(argv[5]);
+	if(argc>6)lambda = stof(argv[6]);
+	if(argc>7)Nmin = stoi(argv[7]);
+	if(argc>8)tol = stof(argv[8]);
+	if(argc>9)com_opt = stoi(argv[9]);
+	if(argc>10)checkerr = stoi(argv[10]);
+	if(argc>11)batch = stoi(argv[11]);
 	
     vector<double> data_train = write_from_file(filename + "_train.csv");
 	Npo = data_train.size() / Ndim;
 
 	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);	
-	// dat_ptr = data_train.data();
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];
@@ -302,23 +295,17 @@ if(tst==1){
 	/*****************************************************************/
 	/* Test Kernels for Random point clouds */
 if(tst==2){	
-	// h = 3.267; //0.47;
-	// lambda = 10.;
-	// ker = 1;
-	// Ndim = 6;
-	// Npo = 4096;
-	
-	
-	Npo = stoi(argv[2]);
-	Ndim = stoi(argv[3]);
-	ker = stoi(argv[4]);
-	h = stof(argv[5]);
-	lambda = stof(argv[6]);
-	Nmin = stoi(argv[7]);
-	tol = stof(argv[8]);
-	com_opt = stoi(argv[9]);
-	checkerr = stoi(argv[10]);
-	batch = stoi(argv[11]);
+	Ndim=6;
+	if(argc>2)Npo = stoi(argv[2]);
+	if(argc>3)Ndim = stoi(argv[3]);
+	if(argc>4)ker = stoi(argv[4]);
+	if(argc>5)h = stof(argv[5]);
+	if(argc>6)lambda = stof(argv[6]);
+	if(argc>7)Nmin = stoi(argv[7]);
+	if(argc>8)tol = stof(argv[8]);
+	if(argc>9)com_opt = stoi(argv[9]);
+	if(argc>10)checkerr = stoi(argv[10]);
+	if(argc>11)batch = stoi(argv[11]);
 	
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
@@ -326,7 +313,6 @@ if(tst==2){
 	MPI_Bcast(data_train.data(), Npo*Ndim, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	
 	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);	
-	// dat_ptr = data_train.data();
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];	
@@ -340,13 +326,13 @@ if(tst==3){
 	int rank_rand = 10;
 	Npo = 10000;
 	
-	Npo = stoi(argv[2]);
-	rank_rand = stoi(argv[3]);
-	Nmin = stoi(argv[4]);
-	tol = stof(argv[5]);
-	com_opt = stoi(argv[6]);
-	checkerr = stoi(argv[7]);
-	batch = stoi(argv[8]);		
+	if(argc>2)Npo = stoi(argv[2]);
+	if(argc>3)rank_rand = stoi(argv[3]);
+	if(argc>4)Nmin = stoi(argv[4]);
+	if(argc>5)tol = stof(argv[5]);
+	if(argc>6)com_opt = stoi(argv[6]);
+	if(argc>7)checkerr = stoi(argv[7]);
+	if(argc>8)batch = stoi(argv[8]);		
 	
 	
 	vector<double> matU(Npo*rank_rand);
