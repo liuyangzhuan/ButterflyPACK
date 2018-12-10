@@ -1894,6 +1894,27 @@ end subroutine GeneralInverse
 
 end subroutine RandomizedSVD
 	
+
+
+
+subroutine RandomSubMat(ms,me,ns,ne,k,A,Oflag)
+	implicit none
+	integer ms,me,ns,ne,k,m,n
+	DT:: A(:,:)
+	DT,allocatable::matrix_small(:,:)
+	integer:: Oflag
+	
+	m=me-ms+1
+	n=ne-ns+1
+	call assert(m>0,'m<=0 in RandomSubMat')
+	call assert(n>0,'n<=0 in RandomSubMat')
+	
+	allocate(matrix_small(m,n))
+	call RandomMat(m,n,k,matrix_small,Oflag)
+	A(ms:me,ns:ne)=matrix_small
+	deallocate(matrix_small)
+	
+end subroutine RandomSubMat
 	
 
 subroutine RandomMat(m,n,k,A,Oflag)
@@ -1909,7 +1930,7 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	implicit none
 	
 	integer m,n,k,mn_min,ktmp
-	class(*):: A(m,n)
+	class(*):: A(:,:)
 	real(kind=8):: c			 
 	real(kind=8),allocatable::Singular(:),Ar(:,:),Ai(:,:)
 	complex(kind=8):: ctemp

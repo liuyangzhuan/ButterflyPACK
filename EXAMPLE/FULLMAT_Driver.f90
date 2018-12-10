@@ -275,7 +275,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER
     !**** set solver parameters	
 	option%nogeo=1  ! no geometry points available
 	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
-	
+    ! option%verbosity=2
+    ! option%LRlevel=100
 	
 	
 	

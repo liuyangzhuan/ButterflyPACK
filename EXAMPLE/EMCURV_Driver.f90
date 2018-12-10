@@ -110,7 +110,8 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_2D
 	option%verbosity=2
 	option%ILU=0  
 	option%forwardN15flag=0 
-	
+    ! option%LRlevel=100
+
 	if(iargc()>=1)then
 		call getarg(1,strings)
 		read(strings,*)option%LR_BLK_NUM	

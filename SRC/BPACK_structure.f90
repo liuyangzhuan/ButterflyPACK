@@ -298,6 +298,12 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	Maxlevel=level
 	if(Maxlevel<nlevel_pre)Maxlevel=nlevel_pre
 	
+	if(Maxlevel<ptree%nlevel-1)then
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'too many processes for paralleling leaf boxes, keep refining the tree ...'
+		Maxlevel = ptree%nlevel-1
+	endif		
+	
+	
 	
 	select TYPE(bmat)   
 	type is (hobf)	
@@ -535,6 +541,9 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 			
 			
 			if (level<Maxlevel) then
+				
+				call assert(msh%basis_group(group)%tail/=msh%basis_group(group)%head,'detected zero-sized group, try larger leafsizes or smaller MPI counts')
+				
 				msh%basis_group(2*group)%head=msh%basis_group(group)%head
 				msh%basis_group(2*group)%tail=int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)
 				msh%basis_group(2*group+1)%head=msh%basis_group(2*group)%tail+1
@@ -655,11 +664,6 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 	ho_bf1%N=msh%Nunk
 	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
 
-	
-	if(2**ho_bf1%Maxlevel<2**(ptree%nlevel-1))then
-		write(*,*)'too many processes for paralleling leaf boxes!'
-		stop
-	endif	
 	
 	do level_c = 1,ho_bf1%Maxlevel+1
 		ho_bf1%levels(level_c)%level = level_c

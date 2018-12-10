@@ -669,6 +669,7 @@ subroutine BF_OneV_LL(j,level_right,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,
 	   blocks%ButterflyV%blocks(j)%mdim=dimension_nn
 	   blocks%ButterflyV%blocks(j)%ndim=rank
 	   
+	   ! write(*,*)matB(1:dimension_nn,1:rank),'V'
 	   blocks%ButterflyV%blocks(j)%matrix = matB(1:dimension_nn,1:rank)
 	   allocate(vec_rand%RandomVectorLL(level_butterfly+1)%blocks(1,j)%matrix(rank,num_vect_sub))
 	   deallocate(matB)						   
@@ -1102,6 +1103,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			dimension_mm=size(blocks%ButterflyU%blocks(i)%matrix,1)	
 			allocate(matB(dimension_mm,mm))
 			matB = vec_rand%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
+			! write(*,*)fnorm(matB,dimension_mm,mm),'Ubeforerange',dimension_mm,mm
 			call ComputeRange(dimension_mm,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 			Flops = Flops + flop
 			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
@@ -1112,6 +1114,7 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 			blocks%ButterflyU%blocks(i)%mdim=dimension_mm
 			blocks%ButterflyU%blocks(i)%ndim=rank
 			blocks%ButterflyU%blocks(i)%matrix=matB(1:dimension_mm,1:rank)
+			! write(*,*)fnorm(matB(1:dimension_mm,1:rank),dimension_mm,rank),'U'
 			allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 			deallocate(matB)
 		else 
@@ -1146,6 +1149,9 @@ subroutine BF_OneU_RR(i,level_left,unique_nth,num_vect_sub,mm,nth,nth_s,blocks,v
 	    end if			
 		! call gemm_omp(matB,matinv,matA,mm,rank,dimension_mm)
 		call gemmf90(matB,mm,matinv,dimension_mm,matA,mm,'N','N',mm,rank,dimension_mm,cone,czero,flop=flop)
+		
+		! write(*,*)fnorm(matB,mm,dimension_mm),fnorm(matinv,dimension_mm,rank),fnorm(matA,mm,rank),'retrieve',mm,dimension_mm,rank
+		
 		Flops = Flops + flop
 		if(.not. allocated(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix))allocate(vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(rank,num_vect_sub))
 		call copymatT(matA,vec_rand%RandomVectorRR(level_butterfly+1)%blocks(i,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),mm,rank)
@@ -1352,8 +1358,10 @@ subroutine BF_OneKernel_RR(index_i, index_j,noe,level_left,level_left_start,uniq
 			
 			allocate(matC(rank,nn1+nn2),matA(mm,rank))
 			call copymatT(vec_rand%RandomVectorRR(level_left)%blocks(index_i,jeo)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
+			
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
-			! write(*,*)fnorm(matC,rank,nn1+nn2),rank,'RKer'
+			! write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,nn1+nn2),fnorm(matC,rank,nn1+nn2),'Rker'
+			
 			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level_left)%blocks(i,jeo)%matrix,rank,nn1)
 			call copymatT(matC(1:rank,nn1+1:nn1+nn2),blocks%ButterflyKerl(level_left)%blocks(i+1,jeo)%matrix,rank,nn2)										
@@ -1510,7 +1518,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			deallocate(block_rand)
 			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 			stats%Flop_Tmp=0
-			converged=1	
+			converged=1
 			exit
 		end if		
 	end do
@@ -1570,7 +1578,7 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 	
 	mm=blocks_o%M_loc	
 	nn=blocks_o%N_loc
-	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectInR(1:nn,1:num_vect),1)
+	call RandomMat(nn,num_vect,min(nn,num_vect),RandVectInR,1)
 	
 	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect,RandVectInR,RandVectOutR,cone,czero,ptree,stats,operand1)	
 
@@ -2052,6 +2060,7 @@ subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbo
 	integer Nsub,Ng
 	integer,allocatable:: mm_end(:),nn_end(:)
 	
+	DT,allocatable::matrix_small(:,:)
 	class(*):: operand
 	class(*),optional::operand1		
 	type(matrixblock)::blocks_o,block_rand	
@@ -2112,17 +2121,14 @@ subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbo
 	! idx_start = 1
 	
 	do nth= nth_s,nth_e
-		!$omp parallel do default(shared) private(i)	
+		!$omp parallel do default(shared) private(i,mm1)	
 		do i=(nth-1)*Ng+1, nth*Ng
 		! do i=1, num_blocks
 			! if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then	
-				! header_m=msh%basis_group(groupm_start+i-1)%head
-				! tailer_m=msh%basis_group(groupm_start+i-1)%tail
-				! mm=tailer_m-header_m+1
-				! k=header_m-header_mm	
 
-				! allocate(matrixtemp1(num_vect_subsub,mm))
-				call RandomMat(mm_end(i)-mm_end(i-1),num_vect_subsub,min(mm_end(i)-mm_end(i-1),num_vect_subsub),RandomVectors_InOutput(1)%vector(mm_end(i-1)+1:mm_end(i),(nth-nth_s)*num_vect_subsub+1:(nth-nth_s)*num_vect_subsub+num_vect_subsub),0)
+				mm1 = mm_end(i)-mm_end(i-1)
+				call RandomSubMat(mm_end(i-1)+1,mm_end(i),(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(mm1,num_vect_subsub),RandomVectors_InOutput(1)%vector,0)
+				
 				
 			 ! end if
 		end do
@@ -2195,6 +2201,7 @@ subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbo
     ! integer header_mm, header_nn
 	! integer header_m, header_n, tailer_m, tailer_n
 	
+	DT,allocatable::matrix_small(:,:)
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_left_start
 	! type(RandomBlock), pointer :: random
 	type(RandomBlock) :: vec_rand
@@ -2261,16 +2268,13 @@ subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbo
 	! idx_start = 1
 	
 	do nth= nth_s,nth_e
-		!$omp parallel do default(shared) private(i)	
+		!$omp parallel do default(shared) private(i,nn1)	
 		do i=(nth-1)*Ng+1, nth*Ng
 		! do i=1, num_blocks
 			! if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then	
-				! header_n=msh%basis_group(groupn_start+i-1)%head
-				! tailer_n=msh%basis_group(groupn_start+i-1)%tail
-				! nn=tailer_n-header_n+1
-				! k=header_n-header_nn
+				nn1 = nn_end(i)-nn_end(i-1)				
+				call RandomSubMat(nn_end(i-1)+1,nn_end(i),(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(nn1,num_vect_subsub),RandomVectors_InOutput(1)%vector,0)
 				
-				call RandomMat(nn_end(i)-nn_end(i-1),num_vect_subsub,min(nn_end(i)-nn_end(i-1),num_vect_subsub),RandomVectors_InOutput(1)%vector(nn_end(i-1)+1:nn_end(i),(nth-nth_s)*num_vect_subsub+1:(nth-nth_s)*num_vect_subsub+num_vect_subsub),0)
 			 ! end if
 		end do
 		!$omp end parallel do
@@ -2283,7 +2287,7 @@ subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbo
 	
 	call blackbox_MVP_dat(operand,blocks_o,'N',mm,nn,num_vect_sub,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(3)%vector,cone,czero,ptree,stats,operand1)		
 
-	
+	 
 	k=0
 	! random=>random_Block(1)
 	do i=1, num_blocks
@@ -2960,8 +2964,8 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
     ! type(vectorsblock), pointer :: random1, random2
     
     real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vbuff(:,:),Vout_tmp(:,:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,rank
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vbuff(:,:),Vout_tmp(:,:),tmpU(:,:),tmpV(:,:)
 	
 	integer Nsub,Ng
 	integer*8 idx_start   
@@ -2996,6 +3000,32 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 		nv=size(Vout,2)
 		allocate(Vout_tmp(mv,nv))
 		Vout_tmp = Vout	
+			
+			
+			
+		! mm=block_o%M
+		! nn=block_o%N
+		! rank=1
+		! allocate(tmpU(mm,rank))
+		! tmpU=1d0
+		! allocate(tmpV(rank,nn))
+		! tmpV=1d0		
+		! allocate(Vbuff(rank,num_vect_sub))
+		! Vbuff=0
+		! if(trans=='N')then
+			! call gemmf90(tmpV,rank,Vin,nn,Vbuff,rank,'N','N',rank,num_vect_sub,nn,cone,czero)
+			! call gemmf90(tmpU,mm,Vbuff,rank,Vout,M,'N','N',mm,num_vect_sub,rank,cone,czero)
+		! else
+			! call gemmf90(tmpU,mm,Vin,mm,Vbuff,rank,'T','N',rank,num_vect_sub,mm,cone,czero)
+			! call gemmf90(tmpV,rank,Vbuff,rank,Vout,N,'T','N',nn,num_vect_sub,rank,cone,czero)
+		! endif
+
+		! deallocate(tmpU)
+		! deallocate(tmpV)
+		! deallocate(Vbuff)			
+			
+			
+			
 			
 		if(trans=='N')then
 
@@ -4408,7 +4438,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 	DT::ctemp1,ctemp2,Ctemp
 	type(matrixblock)::blocks
 	type(matrixblock)::block_dummy
-	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:)
+	DT, allocatable :: matRcol(:,:),matZRcol(:,:),matRrow(:,:),matZcRrow(:,:),matrix_small(:,:)
 	real(kind=8), allocatable :: Singular(:)
 	integer level_c,rowblock,Nactive
 	integer,allocatable::boxindex(:)
@@ -4493,15 +4523,11 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 					mem_vec =mem_vec + SIZEOF(RandVectOutR)/1024.0d3
 					stats%Mem_int_vec = max(stats%Mem_int_vec,mem_vec)			
 					
-					! do ii=idx_start_n_loc,idx_end_n_loc
-					! do jj=1,rmax
-						! RandVectInR(ii,jj)=random_dp_number()
-					! end do
-					! end do
+					allocate(matrix_small(nn,Nidx))
+					call RandomMat(nn,Nidx,min(nn,Nidx),matrix_small,0)	
+					RandVectInR(idx_start_n_loc:idx_end_n_loc,1:Nidx)=matrix_small
+					deallocate(matrix_small)
 					
-					call RandomMat(nn,Nidx,min(nn,Nidx),RandVectInR(idx_start_n_loc:idx_end_n_loc,1:Nidx),0)	
-
-
 					call blackbox_MVP_dat(operand,block_dummy,'N',M,N,Nidx,RandVectInR,RandVectOutR,cone,czero,ptree,stats,msh)
 					
 					
@@ -4532,9 +4558,10 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 						! RandVectInL(ii,jj)=random_dp_number()
 					! end do
 					! end do
-					
-					call RandomMat(mm,Nidx,min(mm,Nidx),RandVectInL(idx_start_m_loc:idx_end_m_loc,1:Nidx),0)		
-							
+					allocate(matrix_small(mm,Nidx))
+					call RandomMat(mm,Nidx,min(mm,Nidx),matrix_small,0)		
+					RandVectInL(idx_start_m_loc:idx_end_m_loc,1:Nidx)=matrix_small
+					deallocate(matrix_small)
 		
 					call blackbox_MVP_dat(operand,block_dummy,'T',M,N,Nidx,RandVectInL,RandVectOutL,cone,czero,ptree,stats,msh)
 					! write(*,*)'yani 3'	

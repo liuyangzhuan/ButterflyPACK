@@ -1307,10 +1307,10 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,
 	t1 = OMP_get_wtime()
 
 	strlen=1
-	do while(trans(strlen) /= c_null_char)
-		strlen = strlen + 1
-	enddo
-	strlen = strlen -1
+	! do while(trans(strlen) /= c_null_char)
+		! strlen = strlen + 1
+	! enddo
+	! strlen = strlen -1
 	allocate(character(len=strlen) :: str)
 	str = transfer(trans(1:strlen), str)	
 	
@@ -1321,7 +1321,7 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,
 
 	stats%Flop_C_Mult=0
 	stats%Time_C_Mult=0
-	
+	xout=0
 	if(trim(str)=='N')then
 		call BF_block_MVP_dat(blocks,trim(str),Noutloc,Ninloc,Ncol,xin,xout,cone,czero,ptree,stats)	
 	else
@@ -1377,10 +1377,10 @@ subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bmat_Cptr,option_Cptr
 	t1 = OMP_get_wtime()
 
 	strlen=1
-	do while(trans(strlen) /= c_null_char)
-		strlen = strlen + 1
-	enddo
-	strlen = strlen -1
+	! do while(trans(strlen) /= c_null_char)
+		! strlen = strlen + 1
+	! enddo
+	! strlen = strlen -1
 	allocate(character(len=strlen) :: str)
 	str = transfer(trans(1:strlen), str)	
 	
@@ -1448,10 +1448,10 @@ subroutine C_BPACK_Inv_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bmat_Cptr,option_
 	t1 = OMP_get_wtime()
 
 	strlen=1
-	do while(trans(strlen) /= c_null_char)
-		strlen = strlen + 1
-	enddo
-	strlen = strlen -1
+	! do while(trans(strlen) /= c_null_char)
+		! strlen = strlen + 1
+	! enddo
+	! strlen = strlen -1
 	allocate(character(len=strlen) :: str)
 	str = transfer(trans(1:strlen), str)	
 	
