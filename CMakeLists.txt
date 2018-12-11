@@ -73,27 +73,43 @@ if (NOT CMAKE_INSTALL_PREFIX)
   set(CMAKE_INSTALL_PREFIX /usr/local)
 endif()
 
-# # setup default options
-# set(enable_complex_DEFAULT OFF)
+
+######################################################################
+#
+# Add compiler-specific compiler flags
+#
+######################################################################
+
+set(CMAKE_Fortran_FLAGS "-cpp ${CMAKE_Fortran_FLAGS}")
+include(CheckFortranCompilerFlag)
+check_fortran_compiler_flag("-ffree-line-length-none" COMPILER_GNU)
+if (COMPILER_GNU)
+set(CMAKE_Fortran_FLAGS "-ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+set(CMAKE_Fortran_FLAGS "-fbacktrace -fbounds-check -Wconversion ${CMAKE_Fortran_FLAGS}")
+endif()
+endif()
+check_fortran_compiler_flag("-no-prec-div" COMPILER_Intel)
+if (COMPILER_Intel)
+set(CMAKE_Fortran_FLAGS "-DIntel ${CMAKE_Fortran_FLAGS}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+set(CMAKE_Fortran_FLAGS "-traceback -debug full -check bounds ${CMAKE_Fortran_FLAGS}")
+endif()
+endif()
 
 
-# if (enable_complex)
-  # message("-- ButterflyPACK will be built for double-complex data type only.")
-  # set(CMAKE_Fortran_FLAGS "-DDAT=0 ${CMAKE_Fortran_FLAGS}")
-# else()
-  # message("-- ButterflyPACK will be built for double data type only.")
-  # set(CMAKE_Fortran_FLAGS "-DDAT=1 ${CMAKE_Fortran_FLAGS}")
-# endif()
+set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-qopt-matmul" qoptmatmul)
+if (qoptmatmul)
+set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
+endif()
+check_cxx_compiler_flag("-lifcore" lifcore)
+if (lifcore)
+set(CMAKE_CXX_FLAGS  "-lifcore ${CMAKE_CXX_FLAGS}")
+endif()
 
 
-# # setup required compiler defines and options.
-# ## get_directory_property( DirDefs COMPILE_DEFINITIONS )
-# # set(CMAKE_C_FLAGS "-DDEBUGlevel=0 -DPRNTlevel=0 ${CMAKE_C_FLAGS}")
-# if(XSDK_INDEX_SIZE EQUAL 64)
-    # message("-- Using 64 bit integer for index size")
-    # set(CMAKE_C_FLAGS "-D_LONGINT ${CMAKE_C_FLAGS}")
-# endif()	
-# set(CMAKE_C_FLAGS_RELEASE "-O3" CACHE STRING "")
 
 ######################################################################
 #
@@ -115,25 +131,6 @@ if(OPENMP_FOUND)
  message("-- OpenMP_EXE_LINKER_FLAGS='${OpenMP_EXE_LINKER_FLAGS}'")
  message("-- CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
 endif()
-#
-# # #--------------------- BLAS ---------------------
-# if(TPL_BLAS_LIBRARIES)
-	# set(BLAS_FOUND TRUE)
-# else()
-	# find_package(BLAS)
-	# if(BLAS_FOUND)
-	  # set(TPL_BLAS_LIBRARIES "${BLAS_LIBRARIES}" CACHE FILEPATH
-		# "Set from FindBLAS.cmake BLAS_LIBRARIES." FORCE)
-	# endif()
-# endif()
-
-# if(BLAS_FOUND)
-    # message("-- Using TPL_BLAS_LIBRARIES='${TPL_BLAS_LIBRARIES}'")
-    # set(BLAS_LIB ${TPL_BLAS_LIBRARIES})
-    # # fix up BLAS library name
-    # string (REPLACE ";" " " BLAS_LIB_STR "${BLAS_LIB}")
-    # set(BLAS_LIB_EXPORT ${BLAS_LIB_STR})
- # endif()	
 
  
  # #--------------------- LAPACK ---------------------
@@ -181,36 +178,6 @@ if(MPI_Fortran_FOUND )
     set(CMAKE_Fortran_FLAGS "${MPI_Fortran_COMPILE_FLAGS} ${CMAKE_Fortran_FLAGS}")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_C_LINK_FLAGS}" )
 endif()
-
-# #--------------------- ParMETIS ---------------------
-# if (enable_parmetislib)   ## want to use parmetis
-  # if (NOT TPL_PARMETIS_LIBRARIES)
-    # message(FATAL_ERROR "TPL_PARMETIS_LIBRARIES option should be set for PARMETIS support to be enabled.")
-  # endif()
-
-  # if (NOT TPL_PARMETIS_INCLUDE_DIRS)
-    # message(FATAL_ERROR "TPL_PARMETIS_INCLUDE_DIRS option be set for PARMETIS support to be enabled.")
-  # endif()
-  # foreach(dir ${TPL_PARMETIS_INCLUDE_DIRS})
-    # if (NOT EXISTS ${dir})
-      # message(FATAL_ERROR "PARMETIS include directory not found: ${dir}")
-    # endif()
-    # set(CMAKE_C_FLAGS "-I${dir} ${CMAKE_C_FLAGS}")
-  # endforeach()
-
-  # message("-- Enabled support for PARMETIS")
-  # set(PARMETIS_FOUND TRUE)
-
-  # set(PARMETIS_LIB ${TPL_PARMETIS_LIBRARIES})
-  # # fix up PARMETIS library names
-  # string (REPLACE ";" " " PARMETIS_LIB_STR "${PARMETIS_LIB}")
-  # set(PARMETIS_LIB_EXPORT ${PARMETIS_LIB_STR})
-
-# else()
-  # message("-- Will not link with ParMETIS.")
-# endif()
-
-
 
 
 ######################################################################
