@@ -14,9 +14,15 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+! This exmple works with double-complex precision data 
+#define DAT 0
+
+#include "ButterflyPACK_config.fi"
+
+
 module EMCURV_MODULE
-use z_BPACK_DEFS
-use z_misc
+use BPACK_DEFS
+use misc
 implicit none
 
 	!**** define your application-related variables here   
@@ -62,7 +68,7 @@ contains
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_EMCURV(m,n,value_e,quant)
 		
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		implicit none
 		
 		integer edge_m, edge_n, i, j, flag
@@ -101,7 +107,7 @@ contains
 				
 						r_mn=(quant%xyz(1,quant%info_unk(0,edge_m))-quant%xyz(1,quant%info_unk(0,edge_n)))**2+(quant%xyz(2,quant%info_unk(0,edge_m))-quant%xyz(2,quant%info_unk(0,edge_n)))**2
 						r_mn=sqrt(r_mn)
-						value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*z_Hankel02_Func(quant%wavenum*r_mn)
+						value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*Hankel02_Func(quant%wavenum*r_mn)
 					endif
 				else
 					value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*(1.0-junit*2.0/pi*(LOG(gamma*quant%wavenum*quant%Delta_ll/4.0)-1.0))
@@ -119,14 +125,14 @@ contains
 
 	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
 		
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		complex(kind=8)::curr
 		complex(kind=8) ctemp,phase,ctemp_1
 		real(kind=8) dsita,dphi    
 		integer edge
-		type(z_mesh)::msh
+		type(mesh)::msh
 		type(quant_EMCURV)::quant
 		
 		phase=junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(dphi*pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(dphi*pi/180.))
@@ -138,7 +144,7 @@ contains
 
 	subroutine RCS_bistatic_CURV(curr,msh,quant,ptree)
 		!integer flag
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		complex(kind=8)::curr(:)
@@ -148,10 +154,10 @@ contains
 		
 		integer i,j,ii,jj,iii,jjj,patch,flag
 		real(kind=8) l_edge,l_edgefine
-		type(z_mesh)::msh
+		type(mesh)::msh
 		integer edge,edge_m,edge_n,ierr
 		type(quant_EMCURV)::quant 
-		type(z_proctree)::ptree
+		type(proctree)::ptree
 		
 		if(ptree%MyID==Main_ID)open (100, file='VV_bistatic.txt')
 	  
@@ -185,7 +191,7 @@ contains
 
 	subroutine RCS_monostatic_VV_CURV(dphi,rcs,curr,msh,quant,ptree)
 
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		
@@ -194,9 +200,9 @@ contains
 		real(kind=8) dsita,dphi
 		integer edge,edge_m,edge_n,ierr
 		complex(kind=8):: curr(:)
-		type(z_mesh)::msh
+		type(mesh)::msh
 		type(quant_EMCURV)::quant
-		type(z_proctree)::ptree
+		type(proctree)::ptree
 		
 		ctemp_loc=0
 			rcs=0
@@ -219,7 +225,7 @@ contains
 
 	subroutine element_Vinc_VV_CURV(phi,edge,value,msh,quant)
 
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		! use EMCURV_MODULE
 		implicit none
 		
@@ -227,7 +233,7 @@ contains
 		complex(kind=8) value
 		real(kind=8) theta, phi
 		complex(kind=8)  phase
-		type(z_mesh)::msh
+		type(mesh)::msh
 		type(quant_EMCURV)::quant
 		
 		phase=junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(phi*pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(phi*pi/180.))
@@ -241,9 +247,9 @@ contains
 
 subroutine geo_modeling_CURV(quant,MPIcomm)
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
-    ! type(z_mesh)::msh
+    ! type(mesh)::msh
 	type(quant_EMCURV)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
@@ -257,7 +263,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
-	! type(z_proctree)::ptree
+	! type(proctree)::ptree
 	integer MPIcomm,ierr,MyID
 	
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
@@ -746,8 +752,8 @@ end subroutine geo_modeling_CURV
 	
 subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
     
-    use z_BPACK_DEFS
-	use z_BPACK_Solve_Mul	
+    use BPACK_DEFS
+	use BPACK_Solve_Mul	
     
     implicit none
     
@@ -760,12 +766,12 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(z_Hoption)::option
-	type(z_mesh)::msh
+	type(Hoption)::option
+	type(mesh)::msh
 	type(quant_EMCURV)::quant
-	type(z_proctree)::ptree
-	class(*)::bmat
-	type(z_Hstat)::stats	
+	type(proctree)::ptree
+	type(Bmatrix)::bmat
+	type(Hstat)::stats	
 	complex(kind=8),allocatable:: current(:),voltage(:)
 	
 	N_unk_loc = msh%idxe-msh%idxs+1
@@ -787,7 +793,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
         
         n1 = OMP_get_wtime()
         
-		call z_bpack_solution(bmat,Current,Voltage,N_unk_loc,1,option,ptree,stats)
+		call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,1,option,ptree,stats)
 		
 		n2 = OMP_get_wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -835,7 +841,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 			!$omp end parallel do
 		enddo
 		
-		call z_bpack_solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 			
 		do j=0, num_sample 	
@@ -900,7 +906,7 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
 	real(kind=8) Locations(*)
 	type(c_ptr) :: quant_emcurv_Cptr
 	! type(c_ptr) :: ptree_Cptr
-	! type(z_proctree),pointer::ptree	
+	! type(proctree),pointer::ptree	
 	type(quant_EMCURV),pointer::quant
 	integer model2d
 	real(kind=8) wavelength

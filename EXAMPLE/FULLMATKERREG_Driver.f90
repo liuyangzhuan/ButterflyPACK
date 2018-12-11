@@ -14,8 +14,14 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+
+! This exmple works with double precision data 
+#define DAT 1 
+
+#include "ButterflyPACK_config.fi"
+
 module APPLICATION_MODULE
-use d_BPACK_DEFS
+use BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -35,7 +41,7 @@ contains
 	
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use d_BPACK_DEFS
+		use BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -65,15 +71,15 @@ end module APPLICATION_MODULE
 
 
 
-PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
-    use d_BPACK_DEFS
+PROGRAM ButterflyPACK_FullKRR
+    use BPACK_DEFS
     use APPLICATION_MODULE
 	
-	use d_BPACK_structure
-	use d_BPACK_factor
-	use d_BPACK_constr
+	use BPACK_structure
+	use BPACK_factor
+	use BPACK_constr
 	use omp_lib
-	use d_misc
+	use misc
 
     implicit none
 
@@ -83,7 +89,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
-	integer seed_myid(50)
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	
@@ -94,15 +99,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	integer :: edge_m,edge_n
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(d_Hoption)::option	
-	type(d_Hstat)::stats
-	type(d_mesh)::msh
-	type(d_kernelquant)::ker
+	type(Hoption)::option	
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
 	type(quant_app),target::quant
-	type(d_hobf)::ho_bf,ho_bf_copy
+	type(Bmatrix)::bmat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(d_proctree)::ptree
+	type(proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR	
 	
 	
@@ -115,7 +120,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	enddo	
 	
 	!**** create the process tree
-	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
@@ -133,13 +138,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "HODLR_BUTTERFLY_SOLVER_FULLKER"
+    write(*,*) "ButterflyPACK_FullKRR"
     write(*,*) "   "
 	endif
 	
 	!**** initialize statistics variables  
-	call d_initstat(stats)
-	call d_setdefaultoptions(option)
+	call InitStat(stats)
+	call SetDefaultOptions(option)
 	
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Zelem_FULL
@@ -202,7 +207,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 		quant%perms(ii)=ii
 	enddo
 	
-	! call d_rperm(quant%ntrain+quant%ntest,quant%perms)
+	! call rperm(quant%ntrain+quant%ntest,quant%perms)
 	
 	
 	open (90,file=quant%trainfile_p)
@@ -221,60 +226,57 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
 	! write(*,*)t2-t1
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
-    call d_Cluster_partition(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
-	call d_HODLR_structuring(ho_bf,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
+    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+	call BPACK_structuring(bmat,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
 
     
-    !call compression_test()
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-    call d_BPACK_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
-	! call copy_HOBF(ho_bf,ho_bf_copy)	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
-	! write(*,*)t2-t1
+
 	
 	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
-    call d_BPACK_factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
+    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
-    call FULLKER_solve(ho_bf,option,msh,quant,ptree,stats)
+    call FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	
-	call d_delete_proctree(ptree)
-	call d_delete_Hstat(stats)
-	call d_delete_mesh(msh)
-	call d_delete_kernelquant(ker)
-	call d_HODLR_delete(ho_bf)
+	call delete_proctree(ptree)
+	call delete_Hstat(stats)
+	call delete_mesh(msh)
+	call delete_kernelquant(ker)
+	call BPACK_delete(bmat)
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
-end PROGRAM HODLR_BUTTERFLY_SOLVER_FULLKER
+end PROGRAM ButterflyPACK_FullKRR
 
 
 
-subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
+subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     
-    use d_BPACK_DEFS
+    use BPACK_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use d_BPACK_Solve_Mul
-	use d_MISC
+	use BPACK_Solve_Mul
+	use misc
     
     implicit none
     
@@ -287,12 +289,12 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:),vout_test(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp(:,:)
 	real(kind=8):: rel_error
-	type(d_Hoption)::option
-	type(d_mesh)::msh
+	type(Hoption)::option
+	type(mesh)::msh
 	type(quant_app)::quant
-	type(d_proctree)::ptree
-	type(d_hobf)::ho_bf_for
-	type(d_Hstat)::stats	
+	type(proctree)::ptree
+	type(Bmatrix)::bmat
+	type(Hstat)::stats	
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	integer, allocatable :: ipiv(:)
@@ -305,7 +307,7 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	ntest=quant%ntest
 	
 	if(option%ErrSol==1)then
-		call d_BPACK_Test_Solve_error(ho_bf_for,N_unk_loc,option,ptree,stats)
+		call BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	endif	
 	
 	
@@ -332,7 +334,7 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	
 	n1 = OMP_get_wtime()
 	
-	call d_BPACK_solution(ho_bf_for,x,b,N_unk_loc,1,option,ptree,stats)
+	call BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 	
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -361,14 +363,14 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
 		! allocate(matrixtemp2(N_unk,N_unk))
 		! allocate(matrixtemp1(N_unk,N_unk))
 		! matrixtemp2=quant%matZ_glo(msh%new2old,msh%new2old)
-		! call d_GeneralInverse(N_unk,N_unk,matrixtemp2,matrixtemp1,1d-10)
+		! call GeneralInverse(N_unk,N_unk,matrixtemp2,matrixtemp1,1d-10)
 	
 		! allocate(ipiv(N_unk))
 		! allocate(matrixtemp1(N_unk,N_unk))
 		! matrixtemp1=quant%matZ_glo(msh%new2old,msh%new2old)
 		! ipiv=0
-		! call d_getrff90(matrixtemp1,ipiv)
-		! call d_getrif90(matrixtemp1,ipiv)	
+		! call getrff90(matrixtemp1,ipiv)
+		! call getrif90(matrixtemp1,ipiv)	
 		! deallocate(ipiv)
 		
 		
@@ -376,10 +378,10 @@ subroutine FULLKER_solve(ho_bf_for,option,msh,quant,ptree,stats)
 		
 		! allocate(matrixtemp(ntest,N_unk))
 		! matrixtemp=quant%matZ_glo(quant%ntrain+1:quant%ntrain+quant%ntest,msh%new2old)
-		! call d_gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,cone,czero)
+		! call gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,cone,czero)
 		! allocate (vout(ntest,1))		
 		! vout=0
-		! call d_gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,cone,czero) 
+		! call gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,cone,czero) 
 	 
 	
 	if (ptree%MyID==Main_ID) then

@@ -148,7 +148,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 				call MPI_ALLREDUCE(MPI_IN_PLACE ,rank_new_max,1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)	
 				
 				
-				if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A10,I5,A6,I3,A8,I3, A8,I3,A7,Es14.7,A9,I5)')' Level ',level_c,' rank:',rank_new_max,' Ntrial:',tt,' L_butt:',level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
+				if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A10,I5,A6,I5,A8,I3, A8,I3,A7,Es14.7,A9,I5)')' Level ',level_c,' rank:',rank_new_max,' Ntrial:',tt,' L_butt:',level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
 					
 				! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing	
 				! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. ((rank_new_max>rank_max_lastiter .and. tt>1).or.tt==1))then
@@ -204,7 +204,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 	end do
 
 	call blackbox_HODLR_MVP('N',Nloc,Nloc,1,Vin,Vout1,ker)
-	call BPACK_Mult('N',Nloc,1,Vin,Vout2,ho_bf1,ptree,option,stats)
+	call HODLR_Mult('N',Nloc,1,1,ho_bf1%Maxlevel+1,Vin,Vout2,ho_bf1,ptree,option,stats)
 	
 	tmp1 = fnorm(Vout2-Vout1,Nloc,1)**2d0
 	call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)

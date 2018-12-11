@@ -15,8 +15,14 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 
+! This exmple works with double-complex precision data 
+#define DAT 0
+
+#include "ButterflyPACK_config.fi"
+
+
 module APPLICATION_MODULE
-use z_BPACK_DEFS
+use BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -24,18 +30,18 @@ implicit none
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files	
 		complex(kind=8), allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid	
 		integer,pointer :: N_p(:,:) ! column sizes of all processes sharing this hodlr
-		type(z_hobf),pointer::ho_bf ! Use this metadata in matvec
-		type(z_mesh),pointer::msh   ! Use this metadata in matvec
-		type(z_proctree),pointer::ptree ! Use this metadata in matvec
-		type(z_Hstat),pointer::stats ! Use this metadata in matvec
-		type(z_Hoption),pointer::option ! Use this metadata in matvec
+		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
+		type(mesh),pointer::msh   ! Use this metadata in matvec
+		type(proctree),pointer::ptree ! Use this metadata in matvec
+		type(Hstat),pointer::stats ! Use this metadata in matvec
+		type(Hoption),pointer::option ! Use this metadata in matvec
 	end type quant_app
 
 contains
 	
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use z_BPACK_DEFS
+		use BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -54,10 +60,10 @@ contains
 	
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use z_BPACK_DEFS
-		use z_DenseLA
-		use z_misc
-		use z_BPACK_Solve_Mul
+		use BPACK_DEFS
+		use DenseLA
+		use misc
+		use BPACK_Solve_Mul
 		implicit none 
 		character trans
 		complex(kind=8) Vin(:,:),Vout(:,:)
@@ -70,23 +76,23 @@ contains
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
-		type(z_hobf),pointer::ho_bf
+		type(Bmatrix),pointer::bmat
 	
 		select TYPE(quant)   
 		type is (quant_app)
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 	
-			ho_bf=>quant%ho_bf
-			call z_HODLR_Mult(trans,Nloc,num_vect,1,ho_bf%Maxlevel+1,Vin,Vout,ho_bf,quant%ptree,quant%option,quant%stats)	
+			bmat=>quant%bmat
+			call BPACK_Mult(trans,Nloc,num_vect,Vin,Vout,bmat,quant%ptree,quant%option,quant%stats)	
 		end select
 		
 	end subroutine HODLR_MVP_OneHODLR
 
 	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use z_BPACK_DEFS
-		use z_DenseLA
-		use z_misc
+		use BPACK_DEFS
+		use DenseLA
+		use misc
 		implicit none 
 		character trans
 		complex(kind=8) Vin(:,:),Vout(:,:)
@@ -112,12 +118,12 @@ contains
 		ctxt = quant%ptree%pgrp(pgno)%ctxt		
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
 		if(myrow/=-1 .and. mycol/=-1)then
-			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
-			myAcols = z_numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
+			myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
 			call descinit( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			call descinit( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
-			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
-			myAcols = z_numroc_wp(N, nbslpk, mycol, 0, npcol)			
+			myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)			
 			call descinit( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )					
 			allocate(Vin_tmp_2D(myArows,myAcols))
 			allocate(Vout_tmp_2D(myArows,myAcols))
@@ -130,17 +136,17 @@ contains
 
 		
 		!!!!**** redistribution of input vectors
-		call z_Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,quant%ptree)	
+		call Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,quant%ptree)	
 			
 
 		!!!!**** perform gemm on 2d grid
 		if(myrow/=-1 .and. mycol/=-1)then
-			call z_pgemmf90(trans,'N',N,num_vect,N,cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,czero,Vout_tmp_2D,1,1,descsVout2D)
+			call pgemmf90(trans,'N',N,num_vect,N,cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,czero,Vout_tmp_2D,1,1,descsVout2D)
 		endif
 		
 	
 		!!!!**** redistribution of output vectors
-		call z_Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,quant%ptree)	
+		call Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,quant%ptree)	
 		
 		
 		!!!!**** deallocation buffers
@@ -156,17 +162,17 @@ contains
 
 
 	subroutine CreateDistDenseMat(N,msh,ptree,quant)
-		use z_BPACK_DEFS
-		use z_DenseLA
-		use z_misc
+		use BPACK_DEFS
+		use DenseLA
+		use misc
 		implicit none 
 		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
 		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::N
 		real(kind=8) n1,n2,tmp(2)
-		type(z_mesh)::msh
-		type(z_proctree)::ptree
+		type(mesh)::msh
+		type(proctree)::ptree
 		type(quant_app) :: quant
 		integer nproc,ctxt,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol
 		
@@ -175,7 +181,7 @@ contains
 		nproc = ptree%pgrp(pgno)%nproc
 	
 		!!!!****** allocate index array for 1D HODLR layout
-		level_p = ptree%nlevel-z_GetTreelevel(pgno)
+		level_p = ptree%nlevel-GetTreelevel(pgno)
 		num_blocks = 2**level_p
 		allocate(quant%N_p(nproc,2))
 		quant%N_p(:,1) = N+1	
@@ -193,14 +199,14 @@ contains
 		ctxt = ptree%pgrp(pgno)%ctxt
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)			
 		if(myrow/=-1 .and. mycol/=-1)then
-		myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
-		myAcols = z_numroc_wp(N, nbslpk, mycol, 0, npcol)	
+		myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)	
 		allocate(quant%matZ_loc(myArows,myAcols))
 		quant%matZ_loc=0			
 		do myi=1,myArows
-			call z_l2g(myi,myrow,N,nprow,nbslpk,ii)
+			call l2g(myi,myrow,N,nprow,nbslpk,ii)
 			do myj=1,myAcols
-				call z_l2g(myj,mycol,N,npcol,nbslpk,jj)
+				call l2g(myj,mycol,N,npcol,nbslpk,jj)
 				quant%matZ_loc(myi,myj) = quant%matZ_glo(msh%new2old(ii),msh%new2old(jj))			
 			enddo
 		enddo	
@@ -214,16 +220,16 @@ contains
 end module APPLICATION_MODULE	
 
 
-PROGRAM Randomized_HODLR_3D
+PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
 	
-	use z_BPACK_structure
-	use z_BPACK_factor
-	use z_BPACK_constr
+	use BPACK_structure
+	use BPACK_factor
+	use BPACK_constr
 	use omp_lib
-	use z_Bplus_compress
-	use z_BPACK_randomMVP
+	use Bplus_compress
+	use BPACK_randomMVP
 	use APPLICATION_MODULE
 	
     implicit none
@@ -240,20 +246,20 @@ PROGRAM Randomized_HODLR_3D
 	integer kk,black_step,rank0
 	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
-	type(z_Hoption),target:: option,option1
-	type(z_Hstat),target::stats,stats1	
-	type(z_mesh),target::msh,msh1	
-	type(z_kernelquant),target::ker,ker1
+	type(Hoption),target:: option,option1
+	type(Hstat),target::stats,stats1	
+	type(mesh),target::msh,msh1	
+	type(kernelquant),target::ker,ker1
 	integer:: explicitflag
-	type(z_hobf),target::ho_bf,ho_bf1
+	type(Bmatrix),target::bmat,bmat1
 	integer Nin1,Nout1,Nin2,Nout2	
-	type(z_proctree),target::ptree,ptree1
+	type(proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)	
 	integer :: ierr
 	integer :: nmpi
 	CHARACTER (LEN=1000) DATA_DIR	
 	type(quant_app),target::quant,quant1
-	integer N_unk_loc
+	integer N_unk_loc,Maxlevel
 	
 	! nmpi and groupmembers should be provided by the user 
 	call MPI_Init(ierr)
@@ -263,7 +269,7 @@ PROGRAM Randomized_HODLR_3D
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
-	call z_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
  	threads_num=1
@@ -277,11 +283,11 @@ PROGRAM Randomized_HODLR_3D
 	
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Randomized_HODLR_3D"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_ScatteringMatrix_Matvec"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
-	call z_initstat(stats)
-	call z_setdefaultoptions(option)
+	call InitStat(stats)
+	call SetDefaultOptions(option)
 	
      !*************************input******************************
 
@@ -311,7 +317,7 @@ PROGRAM Randomized_HODLR_3D
 	Nout1 = 610*2
 	Nin2 = 320*2 
 	Nout2 = 610*2	
-	call z_assert(Nin1+Nout1+Nin2+Nout2==msh%Nunk,'The two surfaces have mismatched number of unknowns')
+	call assert(Nin1+Nout1+Nin2+Nout2==msh%Nunk,'The two surfaces have mismatched number of unknowns')
 	allocate(msh%pretree(4))
 	msh%pretree(1) = Nin1
 	msh%pretree(2) = Nout1
@@ -334,10 +340,10 @@ PROGRAM Randomized_HODLR_3D
 	
 	
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
-    call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-	call z_HODLR_structuring(ho_bf,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
+    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+	call BPACK_structuring(bmat,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1,'secnds'	 
@@ -366,9 +372,9 @@ PROGRAM Randomized_HODLR_3D
 	
 	if(explicitflag ==1)then
 		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)		
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+		call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)		
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 		t2 = OMP_get_wtime()   
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'			
@@ -379,13 +385,13 @@ PROGRAM Randomized_HODLR_3D
 		allocate(Vout2(N_unk_loc,1))
 		Vout2=0
 		do ii=1,N_unk_loc
-			call z_random_dp_number(Vin(ii,1))
+			call random_dp_number(Vin(ii,1))
 		end do
-		call z_HODLR_Mult('N',N_unk_loc,1,1,ho_bf%Maxlevel+1,Vin,Vout1,ho_bf,ptree,option,stats)
-		call z_matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
-		tmp1 = z_fnorm(Vout2-Vout1,N_unk_loc,1)**2d0
+		call BPACK_Mult('N',N_unk_loc,1,Vin,Vout1,bmat,ptree,option,stats)
+		call matvec_user('N',N_unk_loc,N_unk_loc,1,Vin,Vout2,ker)
+		tmp1 = fnorm(Vout2-Vout1,N_unk_loc,1)**2d0
 		call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
-		tmp2 = z_fnorm(Vout2,N_unk_loc,1)**2d0
+		tmp2 = fnorm(Vout2,N_unk_loc,1)**2d0
 		call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
 		error = sqrt(norm1)/sqrt(norm2)
 		deallocate(Vin,Vout1,Vout2)
@@ -394,10 +400,10 @@ PROGRAM Randomized_HODLR_3D
 	else if(explicitflag ==0)then
 		N_unk_loc = msh%idxe-msh%idxs+1
 		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based HODLR construction......"		
-		call z_HODLR_randomized(ho_bf,z_matvec_user,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based Matrix construction......"		
+		call HODLR_randomized(bmat%ho_bf,matvec_user,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
 		t2 = OMP_get_wtime()  
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error	
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error	
 
 	end if	
 	
@@ -405,7 +411,7 @@ PROGRAM Randomized_HODLR_3D
 	
 	!*********** Construct the second HODLR by using the first HODLR as a matvec  
 	
-	call z_CopyOptions(option,option1)
+	call CopyOptions(option,option1)
 	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
 	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
 	
@@ -414,7 +420,7 @@ PROGRAM Randomized_HODLR_3D
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1	
 	
-	quant1%ho_bf=>ho_bf
+	quant1%bmat=>bmat
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
@@ -422,46 +428,53 @@ PROGRAM Randomized_HODLR_3D
 	
 	
 	msh1%Nunk = msh%Nunk
-	call z_initstat(stats1)
+	call InitStat(stats1)
 	
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo	
-	call z_createptree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
 	
-	allocate (msh1%pretree(2**ho_bf%Maxlevel))	
-	do ii=1,2**ho_bf%Maxlevel
-		msh1%pretree(ii)=msh%basis_group(2**ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**ho_bf%Maxlevel+ii-1)%head+1
-	enddo
+	select case(option%format)
+	case(HODLR)
+		Maxlevel=bmat%ho_bf%Maxlevel
+	case(HMAT)
+		Maxlevel=bmat%h_mat%Maxlevel
+	end select	
+	allocate (msh1%pretree(2**Maxlevel))	
+	do ii=1,2**Maxlevel
+		msh1%pretree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+	enddo	
 	
-    call z_Cluster_partition(ho_bf1,option1,msh1,ker1,z_element_Zmn_user,ptree1)
-	call z_HODLR_structuring(ho_bf1,option1,msh1,ptree1,stats)	
+	
+    call Cluster_partition(bmat1,option1,msh1,ker1,element_Zmn_user,ptree1)
+	call BPACK_structuring(bmat1,option1,msh1,ptree1,stats)	
 	
 	N_unk_loc = msh1%idxe-msh1%idxs+1
 	t1 = OMP_get_wtime()	
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction......"		
-	call z_HODLR_randomized(ho_bf1,z_matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"		
+	call HODLR_randomized(bmat1%ho_bf,matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	t2 = OMP_get_wtime()  
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based HODLR construction finished",t2-t1, 'secnds. Error: ', error		
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error		
 	
 	
 	
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
 	
-	call z_delete_proctree(ptree)
-	call z_delete_Hstat(stats)
-	call z_delete_mesh(msh)
-	call z_delete_kernelquant(ker)
-	call z_HODLR_delete(ho_bf)
+	call delete_proctree(ptree)
+	call delete_Hstat(stats)
+	call delete_mesh(msh)
+	call delete_kernelquant(ker)
+	call BPACK_delete(bmat)
 	
 	
-	call z_delete_proctree(ptree1)
-	call z_delete_Hstat(stats1)
-	call z_delete_mesh(msh1)
-	call z_delete_kernelquant(ker1)	
-	call z_HODLR_delete(ho_bf1)
+	call delete_proctree(ptree1)
+	call delete_Hstat(stats1)
+	call delete_mesh(msh1)
+	call delete_kernelquant(ker1)	
+	call BPACK_delete(bmat1)
 	
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
@@ -470,7 +483,7 @@ PROGRAM Randomized_HODLR_3D
 	call MPI_Finalize(ierr)
    
 
-end PROGRAM Randomized_HODLR_3D
+end PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 
 

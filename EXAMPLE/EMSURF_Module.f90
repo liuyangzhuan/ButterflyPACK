@@ -14,9 +14,15 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+! This exmple works with double-complex precision data 
+#define DAT 0
+
+#include "ButterflyPACK_config.fi"
+
+
 module EMSURF_MODULE
-use z_BPACK_DEFS
-use z_misc
+use BPACK_DEFS
+use misc
 implicit none
 
 	!**** define your application-related variables here   
@@ -68,7 +74,7 @@ end subroutine delete_quant_EMSURF
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF(m,n,value_e,quant)
 	
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
 	
     integer, INTENT(IN):: m,n
@@ -202,64 +208,6 @@ end subroutine Zelem_EMSURF
 
 
 
-subroutine cscalar(a,b,c)
-	  implicit none
-	real(kind=8) b(3)
-	complex(kind=8) a(3),c
-	complex(kind=8) ax,ay,az
-	real(kind=8) bx,by,bz
-	ax=a(1);ay=a(2);az=a(3)
-	bx=b(1);by=b(2);bz=b(3)
-	c=ax*bx+ay*by+az*bz
-	  return
-end subroutine cscalar
-
-subroutine scalar(a,b,c)
-	  implicit none
-	real(kind=8) a(3),b(3),c
-	real(kind=8) ax,ay,az
-	real(kind=8) bx,by,bz
-	ax=a(1);ay=a(2);az=a(3)
-	bx=b(1);by=b(2);bz=b(3)
-	c=ax*bx+ay*by+az*bz
-	  return
-end subroutine scalar
-
-
-subroutine curl(a,b,c)
-	  implicit none
-	real(kind=8) a(3),b(3),c(3)
-	real(kind=8) ax,ay,az
-	real(kind=8) bx,by,bz
-	real(kind=8) cx,cy,cz
-	ax=a(1);ay=a(2);az=a(3)
-	bx=b(1);by=b(2);bz=b(3)
-
-	cx=ay*bz-by*az
-	cy=-ax*bz+bx*az
-	cz=ax*by-bx*ay
-	c(1)=cx;c(2)=cy;c(3)=cz
-	  return
-end subroutine curl
-	  
-	  
-subroutine ccurl(a,b,c)
-	  implicit none
-	real(kind=8) a(3)
-	complex(kind=8) b(3),c(3)
-	real(kind=8) ax,ay,az
-	complex(kind=8) bx,by,bz
-	complex(kind=8) cx,cy,cz
-	ax=a(1);ay=a(2);az=a(3)
-	bx=b(1);by=b(2);bz=b(3)
-
-	cx=ay*bz-by*az
-	cy=-ax*bz+bx*az
-	cz=ax*by-bx*ay
-	c(1)=cx;c(2)=cy;c(3)=cz
-	  return
-end subroutine ccurl
-
 
 !***********************************
 !	seven points gauss integration
@@ -267,7 +215,7 @@ end subroutine ccurl
 !***********************************
   subroutine gau_grobal(nn,j,x,y,z,w,quant)
   
-  use z_BPACK_DEFS
+  use BPACK_DEFS
   implicit none
   type(quant_EMSURF)::quant
   integer nn ,flag
@@ -316,7 +264,7 @@ end subroutine ccurl
 
   subroutine gauss_points(quant)
   
-      use z_BPACK_DEFS
+      use BPACK_DEFS
       implicit none
       
       real(kind=8) v1,v2,v3,v4,v5
@@ -449,7 +397,7 @@ end subroutine ccurl
 !**********************************	
 function ianalytic(mm,jj,xi,yi,zi,quant)
 
-use     z_BPACK_DEFS
+use     BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) xi,yi,zi
 real(kind=8)    temp,ianalytic
@@ -549,7 +497,7 @@ end function ianalytic
 !**********************************	
 function ianalytic2(mm,jj,xi,yi,zi,iii,quant)
 
-use z_BPACK_DEFS
+use BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) ianalytic2
 integer ii,node1,node2,node3,iii
@@ -690,7 +638,7 @@ end function ianalytic2
 
 subroutine current_node_patch_mapping(chara,curr,quant)
     
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer patch, edge, node_patch(3), node_edge, node
@@ -797,7 +745,7 @@ end subroutine current_node_patch_mapping
 
 real(kind=8) function triangle_area(patch,quant)
     
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer patch,i
@@ -818,7 +766,7 @@ end function triangle_area
 
 subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     integer edge
@@ -879,7 +827,7 @@ end subroutine element_Vinc_VV_SURF
 
 subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
 	
     type(quant_EMSURF)::quant
@@ -939,7 +887,7 @@ end subroutine element_Vinc_HH_SURF
 
 subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     !integer flag
-	use z_BPACK_DEFS
+	use BPACK_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -951,9 +899,9 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     real(kind=8) a(3)
     real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
     complex(kind=8):: curr(:,:)
-	type(z_mesh)::msh
+	type(mesh)::msh
 	type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
+	type(proctree)::ptree
 	
     integer edge,edge_m,edge_n,ierr
     
@@ -1011,7 +959,7 @@ end subroutine RCS_bistatic_SURF
 
 subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -1022,7 +970,7 @@ subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     real(kind=8) a(3)
     complex(kind=8)::curr
     integer edge,edge_m,edge_n
-    ! type(z_mesh)::quant
+    ! type(mesh)::quant
 	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 		
 	allocate(x(quant%integral_points))
@@ -1058,7 +1006,7 @@ end subroutine VV_polar_SURF
 
 subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -1107,16 +1055,16 @@ end subroutine HH_polar_SURF
 
 subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     complex(kind=8)::curr(:)
     real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
     real(kind=8) dsita,dphi
     integer edge,edge_m,edge_n,ierr
-	type(z_mesh)::msh
+	type(mesh)::msh
     type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
+	type(proctree)::ptree
 	
     ctemp_loc=(0.,0.)
         rcs=0
@@ -1139,7 +1087,7 @@ end subroutine RCS_monostatic_VV_SURF
 
 subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use z_BPACK_DEFS
+    use BPACK_DEFS
     implicit none
     
     real(kind=8) rcs
@@ -1147,9 +1095,9 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
     real(kind=8) dsita,dphi    
     integer edge,edge_m,edge_n,ierr
     complex(kind=8)::curr(:)
-	type(z_mesh)::msh
+	type(mesh)::msh
 	type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
+	type(proctree)::ptree
 	
     ctemp_loc=(0.,0.)
         rcs=0
@@ -1174,8 +1122,8 @@ end subroutine RCS_monostatic_HH_SURF
 
 
 subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
-    use z_BPACK_DEFS
-	use z_misc
+    use BPACK_DEFS
+	use misc
     implicit none
     
     integer i,j,ii,jj,iii,jjj
@@ -1184,9 +1132,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     integer node1, node2
     integer node_temp(2)
     real(kind=8) a(3),b(3),c(3),r0
-	! type(z_mesh)::msh
+	! type(mesh)::msh
 	type(quant_EMSURF)::quant
-	! type(z_proctree)::ptree
+	! type(proctree)::ptree
 	integer MPIcomm,MyID,ierr
 	CHARACTER (*) DATA_DIR
 	integer Maxedge
@@ -1340,8 +1288,8 @@ end subroutine geo_modeling_SURF
 
 
 subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
-    use z_BPACK_DEFS
-	use z_BPACK_Solve_Mul
+    use BPACK_DEFS
+	use BPACK_Solve_Mul
 	
     
     implicit none
@@ -1355,12 +1303,12 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(z_Hoption)::option
-	class(*)::bmat
-	type(z_mesh)::msh
+	type(Hoption)::option
+	type(Bmatrix)::bmat
+	type(mesh)::msh
 	type(quant_EMSURF)::quant
-	type(z_proctree)::ptree
-	type(z_Hstat)::stats
+	type(proctree)::ptree
+	type(Hstat)::stats
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
 	
 	N_unk_loc = msh%idxe-msh%idxs+1
@@ -1386,7 +1334,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         
         T0=secnds(0.0)
         		
-		call z_bpack_solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
+		call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
 					
 		
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
@@ -1432,7 +1380,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 			!$omp end parallel do
         enddo
 		
-		call z_bpack_solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 			
 		do j=0, num_sample 			
 			phi=j*dphi

@@ -46,26 +46,27 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,option,ker)
 end subroutine element_Zmn_user	
 	
 
-subroutine BPACK_construction(bmat,option,stats,msh,ker,element_Zmn,ptree)
+subroutine BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn,ptree)
 
     implicit none
 
 	type(Hoption)::option
 	type(Hstat)::stats
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
 	procedure(Zelem)::element_Zmn
 
-	select TYPE(bmat)
-    type is (hobf)
-		call HODLR_construction(bmat,option,stats,msh,ker,element_Zmn,ptree)
-    type is (Hmat)	
-		call Hmat_construction(bmat,option,stats,msh,ker,element_Zmn,ptree)
+	
+	select case(option%format)
+    case(HODLR)
+		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,element_Zmn,ptree)
+    case(HMAT)	
+		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,element_Zmn,ptree)
 	end select	
 	
-end subroutine BPACK_construction	
+end subroutine BPACK_construction_Element_Compute	
 	
 subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
 

@@ -160,6 +160,21 @@ deallocate(ho_bf_o%levels)
 
 end subroutine HODLR_delete
 
+subroutine BPACK_delete(bmat)
+use BPACK_DEFS
+implicit none 
+type(Bmatrix)::bmat
+if(associated(bmat%ho_bf))then
+	call HODLR_delete(bmat%ho_bf)
+	deallocate(bmat%ho_bf)
+	bmat%ho_bf=>null()
+endif
+if(associated(bmat%h_mat))then
+	call Hmat_delete(bmat%h_mat)
+	deallocate(bmat%h_mat)
+	bmat%h_mat=>null()
+endif
+end subroutine BPACK_delete
 
 
 subroutine delete_kernelquant(ker)

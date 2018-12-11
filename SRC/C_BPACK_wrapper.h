@@ -60,7 +60,7 @@ extern "C" {
 	void c_bpack_deleteproctree(F2Cptr* ptree);
 	void c_bpack_deletemesh(F2Cptr* msh);
 	void c_bpack_deletekernelquant(F2Cptr* ker);
-	void c_bpack_deletehobf(F2Cptr* ho_bf);
+	void c_bpack_delete(F2Cptr* ho_bf);
 	void c_bpack_deleteoption(F2Cptr* option);
 	
 	inline void c_bpack_set_I_option(F2Cptr* option, char const * nam, int val){

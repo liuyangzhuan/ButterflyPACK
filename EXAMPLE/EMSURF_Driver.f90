@@ -14,16 +14,22 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-PROGRAM HODLR_BUTTERFLY_SOLVER_3D
-    use z_BPACK_DEFS
+
+! This exmple works with double-complex precision data 
+#define DAT 0
+
+#include "ButterflyPACK_config.fi"
+
+PROGRAM ButterflyPACK_IE_3D
+    use BPACK_DEFS
 	use EMSURF_MODULE
 	
-	use z_BPACK_structure
-	use z_BPACK_factor
-	use z_BPACK_constr
-	use z_BPACK_Solve_Mul
+	use BPACK_structure
+	use BPACK_factor
+	use BPACK_constr
+	use BPACK_Solve_Mul
 	use omp_lib
-	use z_misc
+	use misc
     implicit none
 
 	! include "mkl_vml.fi"	 
@@ -43,14 +49,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(z_Hoption)::option	
-	type(z_Hstat)::stats	
-	type(z_mesh)::msh	
-	type(z_hobf)::ho_bf,ho_bf_copy
-	type(z_Hmat)::h_mat
-	type(z_kernelquant)::ker
+	type(Hoption)::option	
+	type(Hstat)::stats	
+	type(mesh)::msh	
+	type(Bmatrix)::bmat
+	type(kernelquant)::ker
 	type(quant_EMSURF),target::quant
-	type(z_proctree)::ptree
+	type(proctree)::ptree
 	integer,allocatable:: groupmembers(:)	
 	integer nmpi
 	CHARACTER (LEN=1000) DATA_DIR	
@@ -63,7 +68,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 		groupmembers(ii)=(ii-1)
 	enddo	
 	
-	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
@@ -82,11 +87,11 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	! call vmlsetmode(VML_FTZDAZ_ON)
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "HODLR_BUTTERFLY_SOLVER_3D"
+    write(*,*) "ButterflyPACK_IE_3D"
     write(*,*) "   "
 	endif
-	call z_InitStat(stats)
-	call z_SetDefaultOptions(option)
+	call InitStat(stats)
+	call SetDefaultOptions(option)
 	
 	time_tmp = 0
 	
@@ -170,91 +175,49 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_3D
 	t2 = OMP_get_wtime()
 
 
-if(option%format==HODLR)then		
+	t1 = OMP_get_wtime()	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
+	call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+	call BPACK_structuring(bmat,option,msh,ptree,stats)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	t2 = OMP_get_wtime()
+
+	t1 = OMP_get_wtime()	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+	call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	t2 = OMP_get_wtime()   
 	
-		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
-		call z_Cluster_partition(ho_bf,option,msh,ker,z_element_Zmn_user,ptree)
-		call z_BPACK_structuring(ho_bf,option,msh,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-		t2 = OMP_get_wtime()
+	
+	if(option%precon/=NOPRECON)then								
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
+	call BPACK_Factorization(bmat,option,stats,ptree,msh)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	end if
 
-		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-		call z_BPACK_construction(ho_bf,option,stats,msh,ker,z_element_Zmn_user,ptree)
-   
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-		t2 = OMP_get_wtime()   
-		
-		
-		if(option%precon/=NOPRECON)then								
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
-		call z_BPACK_factorization(ho_bf,option,stats,ptree,msh)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-		end if
+	if(option%ErrSol==1)then
+		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
+	endif		
+	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+	call EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
+	call PrintStat(stats,ptree)
+	
+	call delete_quant_EMSURF(quant)
+	
+	call delete_proctree(ptree)
+	call delete_Hstat(stats)
+	call delete_mesh(msh)
+	call delete_kernelquant(ker)
+	call BPACK_delete(bmat)
 
-		if(option%ErrSol==1)then
-			call z_bpack_test_solve_error(ho_bf,msh%idxe-msh%idxs+1,option,ptree,stats)
-		endif		
-		
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		call EM_solve_SURF(ho_bf,option,msh,quant,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-		
-		call z_PrintStat(stats,ptree)
-		
-		call delete_quant_EMSURF(quant)
-		
-		call z_delete_proctree(ptree)
-		call z_delete_Hstat(stats)
-		call z_delete_mesh(msh)
-		call z_delete_kernelquant(ker)
-		call z_HODLR_delete(ho_bf)
-	elseif(option%format==HMAT)then
-		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing H matrix formatting......"
-		call z_Cluster_partition(h_mat,option,msh,ker,z_element_Zmn_user,ptree)
-		call z_BPACK_structuring(h_mat,option,msh,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix formatting finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-		t2 = OMP_get_wtime()
-
-		t1 = OMP_get_wtime()	
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction......"
-		call z_BPACK_construction(h_mat,option,stats,msh,ker,z_element_Zmn_user,ptree)   
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H matrix construction finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-		t2 = OMP_get_wtime()   
-		
-		if(option%precon/=NOPRECON)then								
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing......"
-		call z_BPACK_factorization(h_mat,option,stats,ptree,msh)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "H-LU factorizing finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-		end if
-
-		if(option%ErrSol==1)then
-			call z_bpack_test_solve_error(h_mat,msh%idxe-msh%idxs+1,option,ptree,stats)
-		endif				
-		
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-		call EM_solve_SURF(h_mat,option,msh,quant,ptree,stats)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-		
-		call z_PrintStat(stats,ptree)
-		call delete_quant_EMSURF(quant)
-		
-		call z_delete_proctree(ptree)
-		call z_delete_Hstat(stats)
-		call z_delete_mesh(msh)
-		call z_delete_kernelquant(ker)
-		call z_Hmat_delete(h_mat)	
-	endif	
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
@@ -263,7 +226,7 @@ if(option%format==HODLR)then
 	
     ! ! ! ! pause
 
-end PROGRAM HODLR_BUTTERFLY_SOLVER_3D
+end PROGRAM ButterflyPACK_IE_3D
 
 
 

@@ -38,7 +38,7 @@ subroutine BPACK_Solution(bmat,x,b,Ns_loc,num_vectors,option,ptree,stats)
 	type(proctree)::ptree
 	type(Hstat)::stats
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	DT::x(Ns_loc,num_vectors),b(Ns_loc,num_vectors)
 	DT,allocatable::r0_initial(:)
 	real(kind=8) n1,n2,rtemp
@@ -94,7 +94,7 @@ end subroutine BPACK_Solution
 	type(Hstat)::stats
 		
 	! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	DT::r0_initial(:)
 	integer precond
 	type(proctree)::ptree
@@ -266,7 +266,7 @@ end subroutine BPACK_Solution
 	integer nn_loc
 	DT,dimension(1:nn_loc)::x,y
 	integer precond
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(proctree)::ptree
 	type(Hstat)::stats
 	type(Hoption)::option
@@ -299,7 +299,7 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	! type(mesh)::msh
 	! type(kernelquant)::ker
 	type(proctree)::ptree
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(Hstat)::stats	
 	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
@@ -361,18 +361,18 @@ subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 	character trans
 	integer num_vectors
 	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
-	class(*)::bmat
+	type(Bmatrix)::bmat
     type(proctree)::ptree
 	type(Hstat)::stats	
 	type(Hoption)::option	
 
-	select TYPE(bmat)
-    type is (hobf)
-		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
-    type is (Hmat)	
-		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
+	select case(option%format)
+    case(HODLR)
+		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%ho_bf,ptree,option,stats)
+    case(HMAT)	
+		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%h_mat,ptree,option,stats)
 	end select		
-	
+
 end subroutine BPACK_Inv_Mult	
 	
 
@@ -383,17 +383,19 @@ subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 	integer Ns
 	integer num_vectors
 	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(proctree)::ptree
     type(Hstat)::stats
     type(Hoption)::option
 	
-	select TYPE(bmat)
-    type is (hobf)
-		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%Maxlevel+1,Vin,Vout,bmat,ptree,option,stats)
-    type is (Hmat)	
-		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
+	
+	select case(option%format)
+    case(HODLR)
+		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,ptree,option,stats)
+    case(HMAT)	
+		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%h_mat,ptree,option,stats)
 	end select		
+	
 	
 end subroutine BPACK_Mult
 

@@ -29,16 +29,17 @@ subroutine BPACK_Factorization(bmat,option,stats,ptree,msh)
     implicit none
 	type(Hoption)::option
 	type(Hstat)::stats
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(proctree)::ptree
 	type(mesh)::msh
 
-	select TYPE(bmat)
-    type is (hobf)
-		call HODLR_factorization(bmat,option,stats,ptree,msh)
-    type is (Hmat)	
-		call Hmat_Factorization(bmat,option,stats,ptree,msh)
-	end select	
+	
+	select case(option%format)
+    case(HODLR)
+		call HODLR_factorization(bmat%ho_bf,option,stats,ptree,msh)
+    case(HMAT)	
+		call Hmat_Factorization(bmat%h_mat,option,stats,ptree,msh)
+	end select		
 
 end subroutine BPACK_Factorization
 

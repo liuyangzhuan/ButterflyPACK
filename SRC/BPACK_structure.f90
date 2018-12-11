@@ -268,7 +268,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
 	integer dimn,groupsize,idxstart,Nsmp
 	type(Hoption)::option
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	integer Maxlevel,Maxgrp
 	type(mesh)::msh
 	type(kernelquant)::ker
@@ -305,19 +305,15 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	
 	
 	
-	select TYPE(bmat)   
-	type is (hobf)	
-		bmat%Maxlevel=Maxlevel
-	type is (Hmat)	
-		bmat%Maxlevel=Maxlevel		
-	class default
-		write(*,*)"unexpected type"
-		stop
+	select case(option%format)
+    case(HODLR)
+		allocate(bmat%ho_bf)
+		bmat%ho_bf%Maxlevel=Maxlevel
+    case(HMAT)
+		allocate(bmat%h_mat)	
+		bmat%h_mat%Maxlevel=Maxlevel
 	end select	
-	
-	
-	
-	
+
 	
 	!************** check whether the sorting option is valid
 	if(Maxlevel>nlevel_pre)then
@@ -602,15 +598,16 @@ implicit none
 	type(Hoption)::option
 	type(mesh)::msh
 	type(Hstat)::stats
-	class(*)::bmat
+	type(Bmatrix)::bmat
 	type(proctree)::ptree
 	
-	select TYPE(bmat)
-    type is (hobf)
-		call HODLR_structuring(bmat,option,msh,ptree,stats)
-    type is (Hmat)	
-		call Hmat_structuring(bmat,option,msh,ptree,stats)
-	end select
+	select case(option%format)
+    case(HODLR)
+		call HODLR_structuring(bmat%ho_bf,option,msh,ptree,stats)
+    case(HMAT)	
+		call Hmat_structuring(bmat%h_mat,option,msh,ptree,stats)
+	end select		
+	
 
 end subroutine BPACK_structuring
 

@@ -284,7 +284,10 @@ module BPACK_DEFS
 		type(matrixblock),pointer:: blocks_1=>null(),blocks_2=>null()
 	end type Hmat
 
-	
+	type Bmatrix
+		type(hobf),pointer::ho_bf=>null()
+		type(Hmat),pointer::h_mat=>null()
+	end type Bmatrix
 	
 	
 	 
@@ -399,9 +402,7 @@ module BPACK_DEFS
 		type(c_funptr),pointer :: C_FuncBMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block		
 	end type kernelquant
 	
-	
 	abstract interface
-
 		subroutine BMatVec(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 			import :: matrixblock,proctree,Hstat
 			implicit none

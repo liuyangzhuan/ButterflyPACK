@@ -136,7 +136,7 @@ public:
   std::vector<int> _iHperm;
   int _nloc = 0;
   
-  F2Cptr* ho_bf;  //HODLR returned by Fortran code 
+  F2Cptr* bmat;  //hierarchical matrix returned by Fortran code 
   F2Cptr* stats;      //statistics structure returned by Fortran code
   F2Cptr* msh;		   //mesh structure returned by Fortran code
   F2Cptr* ptree;      //process tree returned by Fortran code
@@ -198,7 +198,7 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 // The matvec sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;	
-  d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+  d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);  
 }
 
 // The matvec sampling function wrapper required by the Fortran HODLR code
@@ -207,7 +207,7 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
   int cnt = (*nvec)*(*nout);
   double* xout1 = new double[cnt];
      
-  d_c_bpack_mult(trans, xin, xout1, nin, nout, nvec, Q->ho_bf,Q->option,Q->stats,Q->ptree);  
+  d_c_bpack_mult(trans, xin, xout1, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);  
   
   for (int ii=0; ii<cnt; ii++){
 	xout[ii] = *b*xout[ii] + *a*xout1[ii];
@@ -364,7 +364,7 @@ if(tst==3){
 	double d_opt;
 	
 	//quantities for the first holdr
-	F2Cptr ho_bf;  //HODLR returned by Fortran code 
+	F2Cptr bmat;  //hierarchical matrix returned by Fortran code 
 	F2Cptr option;     //option structure returned by Fortran code 
 	F2Cptr stats;      //statistics structure returned by Fortran code
 	F2Cptr msh;		   //d_mesh structure returned by Fortran code
@@ -392,10 +392,10 @@ if(tst==3){
 	
 
     // construct hodlr with geometrical points	
-	d_c_bpack_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &ho_bf, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
+	d_c_bpack_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);	
 	
 	// factor hodlr
-	d_c_bpack_factor(&ho_bf,&option,&stats,&ptree,&msh);
+	d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
 
 	// solve the system 
 	int nrhs=1;
@@ -405,7 +405,7 @@ if(tst==3){
 	for (int i = 0; i < nrhs*myseg; i++){
 		b[i]=1;
 	}	
-	d_c_bpack_solve(x,b,&myseg,&nrhs,&ho_bf,&option,&stats,&ptree);
+	d_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
 
 	
 	
@@ -414,7 +414,7 @@ if(tst==3){
 	//////////////////// use resulting hodlr as matvec to create a new holdr
 	
 	// quantities for the second holdr
-	F2Cptr ho_bf1;  //HODLR returned by Fortran code 
+	F2Cptr bmat1;  //hierarchical matrix returned by Fortran code 
 	F2Cptr option1;     //option structure returned by Fortran code 
 	F2Cptr stats1;      //statistics structure returned by Fortran code
 	F2Cptr msh1;		   //d_mesh structure returned by Fortran code
@@ -423,7 +423,7 @@ if(tst==3){
 	C_QuantApp *quant_ptr1; //user-defined object
 	
 	quant_ptr1=new C_QuantApp();	
-	quant_ptr1->ho_bf=&ho_bf;
+	quant_ptr1->bmat=&bmat;
 	quant_ptr1->msh=&msh;
 	quant_ptr1->ptree=&ptree;
 	quant_ptr1->stats=&stats;
@@ -435,6 +435,7 @@ if(tst==3){
 	
 	d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
 	d_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering	
+	d_c_bpack_set_I_option(&option1, "format", 1);// HODLR format
 	
 	int Npo1 = Npo; 
 	int myseg1=0;     // local number of unknowns
@@ -444,14 +445,14 @@ if(tst==3){
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
 	
-	d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
-	d_c_bpack_construct_matvec_compute(&ho_bf1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+	d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 	d_c_bpack_deletestats(&stats1);
 	d_c_bpack_deleteproctree(&ptree1);
 	d_c_bpack_deletemesh(&msh1);
 	d_c_bpack_deletekernelquant(&kerquant1);
-	d_c_bpack_deletehobf(&ho_bf1);
+	d_c_bpack_delete(&bmat1);
 	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
 	delete perms1;
@@ -473,7 +474,7 @@ if(tst==3){
 	C_QuantApp *quant_ptr2; //user-defined object
 	
 	quant_ptr2=new C_QuantApp();	
-	quant_ptr2->ho_bf=&ho_bf;
+	quant_ptr2->bmat=&bmat;
 	quant_ptr2->msh=&msh;
 	quant_ptr2->ptree=&ptree;
 	quant_ptr2->stats=&stats;
@@ -511,7 +512,7 @@ if(tst==3){
 	d_c_bpack_deleteproctree(&ptree);
 	d_c_bpack_deletemesh(&msh);
 	d_c_bpack_deletekernelquant(&kerquant);
-	d_c_bpack_deletehobf(&ho_bf);
+	d_c_bpack_delete(&bmat);
 	d_c_bpack_deleteoption(&option);
 	
 	delete quant_ptr;

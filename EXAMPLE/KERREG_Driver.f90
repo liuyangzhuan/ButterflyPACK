@@ -14,8 +14,14 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+
+! This exmple works with double precision data 
+#define DAT 1 
+
+#include "ButterflyPACK_config.fi"
+
 module APPLICATION_MODULE
-use d_BPACK_DEFS
+use BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here   
@@ -35,7 +41,7 @@ contains
 
 	!**** cutoff distance for gaussian kernel 
 	real(kind=8) function arg_thresh_Zmn(quant)
-		use d_BPACK_DEFS
+		use BPACK_DEFS
 		implicit none 
 		
 		type(quant_app)::quant
@@ -46,7 +52,7 @@ contains
 	
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_RBF(m,n,value_e,quant)
-		use d_BPACK_DEFS
+		use BPACK_DEFS
 		implicit none 
 		
 		class(*),pointer :: quant
@@ -77,15 +83,15 @@ end module APPLICATION_MODULE
 
 
 
-PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
-    use d_BPACK_DEFS
+PROGRAM ButterflyPACK_KRR
+    use BPACK_DEFS
     use APPLICATION_MODULE
 	
-	use d_BPACK_structure
-	use d_BPACK_factor
-	use d_BPACK_constr
+	use BPACK_structure
+	use BPACK_factor
+	use BPACK_constr
 	use omp_lib
-	use d_misc
+	use misc
 
     implicit none
 
@@ -95,7 +101,6 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num,iii
-	integer seed_myid(50)
 	integer times(8)	
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	
@@ -105,15 +110,15 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(d_Hoption)::option	
-	type(d_Hstat)::stats
-	type(d_mesh)::msh
-	type(d_kernelquant)::ker
+	type(Hoption)::option	
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
 	type(quant_app),target::quant
-	type(d_hobf)::ho_bf,ho_bf_copy
+	type(Bmatrix)::bmat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(d_proctree)::ptree
+	type(proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR	
 	integer MPI_thread
 	
@@ -125,7 +130,7 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	enddo	
 	
 	!**** create the process tree
-	call d_createptree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
@@ -142,13 +147,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 		
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "HODLR_BUTTERFLY_SOLVER_RBF"
+    write(*,*) "ButterflyPACK_KRR"
     write(*,*) "   "
 	endif
 	
 	!**** initialize statistics variables  
-	call d_initstat(stats)
-	call d_setdefaultoptions(option)
+	call InitStat(stats)
+	call SetDefaultOptions(option)
 	
 	!**** register the user-defined function and type in ker 
 	ker%FuncZmn=>Zelem_RBF
@@ -227,38 +232,38 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	t2 = OMP_get_wtime()
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HODLR formatting......"
-    call d_Cluster_partition(ho_bf,option,msh,ker,d_element_Zmn_user,ptree)
-	call d_HODLR_structuring(ho_bf,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR formatting finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
+    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+	call BPACK_structuring(bmat,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
 	t1 = OMP_get_wtime()	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction......"
-    call d_BPACK_construction(ho_bf,option,stats,msh,ker,d_element_Zmn_user,ptree)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "HODLR construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()   
 	
 	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing......"
-    call d_BPACK_factorization(ho_bf,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Cascading factorizing finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
+    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	end if
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
-    call RBF_solve(ho_bf,option,msh,quant,ptree,stats)
+    call RBF_solve(bmat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
 	
 	if(allocated(quant%xyz))deallocate(quant%xyz)
-	call d_delete_proctree(ptree)
-	call d_delete_Hstat(stats)
-	call d_delete_mesh(msh)
-	call d_delete_kernelquant(ker)
-	call d_HODLR_delete(ho_bf)
+	call delete_proctree(ptree)
+	call delete_Hstat(stats)
+	call delete_mesh(msh)
+	call delete_kernelquant(ker)
+	call BPACK_delete(bmat)
 	
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 	
@@ -266,13 +271,13 @@ PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 	
-end PROGRAM HODLR_BUTTERFLY_SOLVER_RBF
+end PROGRAM ButterflyPACK_KRR
 
 
 !**** read training sets 
 subroutine geo_modeling_RBF(quant,MPIcomm)
 
-    use d_BPACK_DEFS
+    use BPACK_DEFS
 	use APPLICATION_MODULE
     implicit none
 	type(quant_app)::quant
@@ -287,7 +292,7 @@ subroutine geo_modeling_RBF(quant,MPIcomm)
     integer,allocatable :: num_edge_of_node(:)
     
     real(kind=8) a(3),b(3),c(3),r0, phi_start
-	! type(d_proctree)::ptree
+	! type(proctree)::ptree
 	integer MPIcomm,MyID,ierr
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 	
@@ -304,12 +309,12 @@ subroutine geo_modeling_RBF(quant,MPIcomm)
 end subroutine geo_modeling_RBF
 
 
-subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
+subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
     
-    use d_BPACK_DEFS
+    use BPACK_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use d_BPACK_Solve_Mul
+	use BPACK_Solve_Mul
     
     implicit none
     
@@ -322,12 +327,12 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
 	real(kind=8):: rel_error
-	type(d_Hoption)::option
-	type(d_mesh)::msh
+	type(Hoption)::option
+	type(mesh)::msh
 	type(quant_app)::quant
-	type(d_proctree)::ptree
-	type(d_hobf)::ho_bf_for
-	type(d_Hstat)::stats	
+	type(proctree)::ptree
+	type(Bmatrix)::bmat
+	type(Hstat)::stats	
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	real(kind=8),allocatable:: xyz_test(:,:)
@@ -340,7 +345,7 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	
 
 	if(option%ErrSol==1)then
-		call d_BPACK_Test_Solve_error(ho_bf_for,N_unk_loc,option,ptree,stats)
+		call BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	endif	
 	
 	
@@ -366,7 +371,7 @@ subroutine RBF_solve(ho_bf_for,option,msh,quant,ptree,stats)
 	
 	n1 = OMP_get_wtime()
 	
-	call d_BPACK_solution(ho_bf_for,x,b,N_unk_loc,1,option,ptree,stats)
+	call BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 	
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
