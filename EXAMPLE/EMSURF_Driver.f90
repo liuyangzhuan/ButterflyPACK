@@ -61,8 +61,8 @@ PROGRAM ButterflyPACK_IE_3D
 	CHARACTER (LEN=1000) DATA_DIR
 	real(kind=8),allocatable::xyz(:,:)
 	integer,allocatable::Permutation(:)
-	integer Nunk_loc	
-	
+	integer Nunk_loc
+
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -80,8 +80,8 @@ PROGRAM ButterflyPACK_IE_3D
     write(*,*) "ButterflyPACK_IE_3D"
     write(*,*) "   "
 	endif
-	
-	!**** initialize stats and option	
+
+	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
 
@@ -127,11 +127,11 @@ PROGRAM ButterflyPACK_IE_3D
 		call getarg(5,strings)
 		read(strings,*)option%Nmin_leaf
 	endif
-	
+
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength
-	
+
    !***********************************************************************
 	if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -141,16 +141,16 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
    !***********************************************************************
 
-   
-	!**** geometry generalization and discretization 
+
+	!**** geometry generalization and discretization
 	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
 
 
 
-	!**** register the user-defined function and type in ker 
+	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
-	ker%FuncZmn => Zelem_EMSURF	
-	
+	ker%FuncZmn => Zelem_EMSURF
+
 	!**** initialization of the construction phase
 	t1 = OMP_get_wtime()
 	allocate(xyz(3,quant%Nunk))
@@ -159,12 +159,12 @@ PROGRAM ButterflyPACK_IE_3D
 	enddo
     allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 	
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
-	t2 = OMP_get_wtime()	
-	
-	
-	
+	t2 = OMP_get_wtime()
+
+
+
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
@@ -177,11 +177,11 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** solve phase
 	call EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
-	
+
 	!**** print statistics
 	call PrintStat(stats,ptree)
 
-	
+
 	!**** deletion of quantities
 	call delete_quant_EMSURF(quant)
 	call delete_proctree(ptree)

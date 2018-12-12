@@ -174,7 +174,8 @@ PROGRAM ButterflyPACK_FULL
 	integer:: tst=1
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
-	
+	integer,allocatable::tree(:)
+
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -197,13 +198,13 @@ PROGRAM ButterflyPACK_FULL
 	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-    
+
 	!**** set solver parameters
 	option%nogeo=1  ! no geometry points available
 	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
     ! option%verbosity=2
     ! option%LRlevel=100
-	
+
 
 	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file
 	if(iargc()>=1)then
@@ -232,16 +233,16 @@ PROGRAM ButterflyPACK_FULL
 	   write (*,*) ''
 	   endif
 	   !***********************************************************************
-	   
-		!**** register the user-defined function and type in ker 
+
+		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
-		ker%FuncZmn => Zelem_LR	
-	
+		ker%FuncZmn => Zelem_LR
+
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
-		deallocate(Permutation) ! caller can use this permutation vector if needed 		   
-	   
+		deallocate(Permutation) ! caller can use this permutation vector if needed
+
 	endif
 
 
@@ -272,16 +273,16 @@ PROGRAM ButterflyPACK_FULL
 	   write (*,*) ''
 	   endif
 	   !***********************************************************************
-	   
-		!**** register the user-defined function and type in ker 
+
+		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
-		ker%FuncZmn => Zelem_FULL		   
-	   
+		ker%FuncZmn => Zelem_FULL
+
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
-		deallocate(Permutation) ! caller can use this permutation vector if needed 		
-	   
+		deallocate(Permutation) ! caller can use this permutation vector if needed
+
 	endif
 
 !******************************************************************************!
@@ -302,7 +303,7 @@ PROGRAM ButterflyPACK_FULL
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve finished"
 	endif
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	
+
 	!**** print statistics
 	call PrintStat(stats,ptree)
 
@@ -322,7 +323,7 @@ PROGRAM ButterflyPACK_FULL
 	msh1%Nunk = msh%Nunk
 
 
-	
+
 	!**** initialize stats and option
 	call InitStat(stats1)
 
@@ -335,7 +336,7 @@ PROGRAM ButterflyPACK_FULL
 	deallocate(groupmembers)
 
 
-	
+
 	!**** use the clustering tree from the first HODLR
 	select case(option%format)
 	case(HODLR)
@@ -346,23 +347,23 @@ PROGRAM ButterflyPACK_FULL
 	allocate (tree(2**Maxlevel))
 	do ii=1,2**Maxlevel
 		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
-	enddo	
-	
+	enddo
+
 
 	!**** initialization of the construction phase
 	allocate(Permutation(quant1%Nunk))
 	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 		
-	deallocate(tree)	
-	
- 
+	deallocate(Permutation) ! caller can use this permutation vector if needed
+	deallocate(tree)
+
+
 	!**** computation of the construction phase
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 	!**** print statistics
 	call PrintStat(stats1,ptree1)
-	
-	
+
+
 	!**** deletion of quantities
 	call delete_proctree(ptree1)
 	call delete_Hstat(stats1)

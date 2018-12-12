@@ -683,7 +683,7 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
-	
+
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user_C,ptree)
 

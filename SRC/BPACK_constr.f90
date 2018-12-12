@@ -70,18 +70,18 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 	type(kernelquant)::ker
 	type(Bmatrix)::bmat
 	type(proctree)::ptree
-	
+
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
 	integer threads_num
-	
+
 	call assert(associated(ker%QuantApp),'ker%QuantApp is not assigned')
-	call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec),'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')	
-	
+	call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec),'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')
+
 	stats%Flop_Fill=0
 	stats%Time_Fill=0
-	
-	
+
+
 	!**** set thread number here
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
  	threads_num=1
@@ -93,18 +93,18 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
 
-	
+
 	msh%Nunk = Nunk
 
 
 	t1 = OMP_get_wtime()
 	nlevel=0
 	if(present(tree))then
-		nlevel = ceiling_safe(log(dble(size(tree,1))) / log(2d0))	
+		nlevel = ceiling_safe(log(dble(size(tree,1))) / log(2d0))
 		Maxlevel=nlevel
 		allocate(msh%pretree(2**Maxlevel))
 		msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
-		
+
 		!**** make 0-element node a 1-element node
 
 		! write(*,*)'before adjustment:',msh%pretree
@@ -128,12 +128,12 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 		! write(*,*)'after adjustment:',msh%pretree
 		tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 	endif
-	
-	!**** copy geometry points if present 
+
+	!**** copy geometry points if present
 	if(option%nogeo==0)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder"
 		call assert(present(Coordinates),'geometry points should be provided if option%nogeo==0')
-		Ndim = size(Coordinates,1)		
+		Ndim = size(Coordinates,1)
 		Dimn = Ndim
 		allocate (msh%xyz(Dimn,1:msh%Nunk))
 		msh%xyz=Coordinates
@@ -150,8 +150,8 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	
-	
+
+
 	!**** return the permutation vector
 	select case(option%format)
 	case(HODLR)
@@ -168,7 +168,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 			Permutation(edge) = msh%new2old(edge)
 		enddo
 	endif
-	
+
 
 end subroutine BPACK_construction_Init
 
@@ -193,14 +193,14 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn,ptre
 	procedure(Zelem)::element_Zmn
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-	
+
 	select case(option%format)
     case(HODLR)
 		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,element_Zmn,ptree)
     case(HMAT)
 		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,element_Zmn,ptree)
 	end select
-	
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 
 end subroutine BPACK_construction_Element

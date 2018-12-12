@@ -123,7 +123,7 @@ PROGRAM ButterflyPACK_KRR
 	integer MPI_thread
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
-	
+
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
@@ -145,7 +145,7 @@ PROGRAM ButterflyPACK_KRR
 	call InitStat(stats)
 	call SetDefaultOptions(option)
 
-	
+
 	!**** intialize the user-defined derived type quant
 	DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
     quant%dimn=8
@@ -194,9 +194,9 @@ PROGRAM ButterflyPACK_KRR
 	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
 	write(*,*)'training set: ',quant%trainfile_p
-	
+
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
 	open (90,file=quant%trainfile_p)
 	allocate (quant%xyz(quant%dimn,1:quant%Nunk))
 	do ii=1,quant%Nunk
@@ -205,19 +205,19 @@ PROGRAM ButterflyPACK_KRR
     close(90)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()	
+	t2 = OMP_get_wtime()
 
-	
-	!**** register the user-defined function and type in ker 
+
+	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
-	ker%FuncZmn => Zelem_RBF	
-	
+	ker%FuncZmn => Zelem_RBF
+
     !**** initialization of the construction phase
     allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%xyz)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 	
-	
-	
+	deallocate(Permutation) ! caller can use this permutation vector if needed
+
+
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
@@ -228,7 +228,7 @@ PROGRAM ButterflyPACK_KRR
 	!**** solve phase
     call RBF_solve(bmat,option,msh,quant,ptree,stats)
 
-	
+
 	!**** deletion of quantities
 	if(allocated(quant%xyz))deallocate(quant%xyz)
 	call delete_proctree(ptree)
@@ -276,8 +276,8 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	real(kind=8) r_mn
 	integer label
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"	
-	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
+
 	N_unk=msh%Nunk
 	Dimn=quant%dimn
 	N_unk_loc = msh%idxe-msh%idxs+1
@@ -386,8 +386,8 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	call MPI_barrier(ptree%Comm,ierr)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
     return
 
 end subroutine RBF_solve

@@ -42,11 +42,11 @@ subroutine BPACK_Factorization(bmat,option,stats,ptree,msh)
 		call Hmat_Factorization(bmat%h_mat,option,stats,ptree,msh)
 	end select
 	endif
-	
+
 	if(option%ErrSol==1)then
 		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
-	endif		
-	
+	endif
+
 end subroutine BPACK_Factorization
 
 

@@ -157,7 +157,7 @@ PROGRAM ButterflyPACK_FullKRR
 	option%ErrFillFull=1
 	option%ErrSol=1
 
-	
+
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -184,17 +184,17 @@ PROGRAM ButterflyPACK_FullKRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	
-	!**** register the user-defined function and type in ker 
+
+	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
-	ker%FuncZmn => Zelem_FULL		
-	
+	ker%FuncZmn => Zelem_FULL
+
 	!**** initialization of the construction phase
 	allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 		    
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 
-	
+
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
@@ -256,8 +256,8 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	real(kind=8) label
 
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
+
 	N_unk=msh%Nunk
 	N_unk_loc = msh%idxe-msh%idxs+1
 	ntest=quant%ntest
@@ -369,8 +369,8 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	call MPI_barrier(ptree%Comm,ierr)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
     return
 
 end subroutine FULLKER_solve

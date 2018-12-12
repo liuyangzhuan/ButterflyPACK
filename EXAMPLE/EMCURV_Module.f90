@@ -775,7 +775,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 	complex(kind=8),allocatable:: current(:),voltage(:)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-	
+
 	N_unk_loc = msh%idxe-msh%idxs+1
 
     if (quant%RCS_static==2) then
@@ -886,8 +886,8 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
     endif
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
     return
 
 end subroutine EM_solve_CURV

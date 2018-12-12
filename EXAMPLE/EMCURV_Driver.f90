@@ -65,8 +65,8 @@ PROGRAM ButterflyPACK_IE_2D
 	integer:: randsize=50
 	real(kind=8),allocatable::xyz(:,:)
 	integer,allocatable::Permutation(:)
-	integer Nunk_loc	
-	
+	integer Nunk_loc
+
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -79,7 +79,7 @@ PROGRAM ButterflyPACK_IE_2D
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-	
+
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_2D"
@@ -157,7 +157,7 @@ PROGRAM ButterflyPACK_IE_2D
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength
-	
+
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -167,13 +167,13 @@ PROGRAM ButterflyPACK_IE_2D
    endif
    !***********************************************************************
 
-	!**** geometry generalization and discretization 
-    call geo_modeling_CURV(quant,ptree%Comm)	
+	!**** geometry generalization and discretization
+    call geo_modeling_CURV(quant,ptree%Comm)
 
-	!**** register the user-defined function and type in ker 
+	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
-	ker%FuncZmn => Zelem_EMCURV	
-	
+	ker%FuncZmn => Zelem_EMCURV
+
 	!**** initialization of the construction phase
 	allocate(xyz(2,quant%Nunk))
 	do edge=1, quant%Nunk
@@ -181,7 +181,7 @@ PROGRAM ButterflyPACK_IE_2D
 	enddo
     allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 	
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
 
 
@@ -196,11 +196,11 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** solve phase
     call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
-	
+
 	!**** print statistics
 	call PrintStat(stats,ptree)
 
-	
+
 	!**** deletion of quantities
 	call delete_quant_EMCURV(quant)
 	call delete_proctree(ptree)

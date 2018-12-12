@@ -646,15 +646,15 @@ if(present(Flops))Flops=0d0
 			JPERM=0
 			call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank,eps, SafeUnderflow,flop=flop)
 			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
-			
+
 			if(rank>0)then
 				call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1,flop=flop)
 				if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
-			else 
+			else
 				rank=1
 				mat2D(1:M,1)=0d0
 			endif
-			
+
 			deallocate(ipiv)
 			deallocate(tau)
 			deallocate(jpiv)
@@ -707,11 +707,11 @@ if(present(Flops))Flops=0d0
 		! RRQR
 		call geqp3modf90(mat,jpvt,tau,eps,SafeUnderflow,rank,flop=flop)
 		if(present(Flops))Flops = Flops + flop
-		
+
 		if(rank>0)then
 			call un_or_gqrf90(mat,tau,M,rank,rank,flop=flop)
 			if(present(Flops))Flops = Flops + flop
-		else 
+		else
 			rank=1
 			mat(1:M,1)=0d0
 		endif
@@ -2097,18 +2097,18 @@ subroutine ID_Selection(Mat,select_column,select_row,m,n,rank,tolerance)
 		rank_r=1
 		select_row(1)=1
 	endif
-	
-	
+
+
 	jpvt=0
 	call geqp3modf90(Mat1,jpvt,tau,tolerance,SafeUnderflow,rank_c)
 	select_column(1:rank_c) = jpvt(1:rank_c)
 	if(rank_c==0)then
 		rank_c=1
 		select_column(1)=1
-	endif	
-	
+	endif
+
 	rank = min(rank_c,rank_r)
-	
+
 
 	deallocate(jpvt)
 	deallocate(tau)

@@ -55,7 +55,7 @@ subroutine BPACK_construction_Matvec(bmat,blackbox_BMAT_MVP,Memory,error,option,
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	
+
 
 	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"

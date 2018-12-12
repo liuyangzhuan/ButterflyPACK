@@ -263,7 +263,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
 	real(kind=8),allocatable::xyz(:,:)
-	integer Nunk_loc	
+	integer Nunk_loc
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -272,7 +272,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo
-	
+
 	! generate the process tree
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
@@ -284,7 +284,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-	
+
 	!**** intialize the user-defined derived type quant
 	option%nogeo=0
 	option%xyzsort=CKD
@@ -316,7 +316,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for scattering matrix compression'
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A11,I9)')' Nsurface: ',quant%Nunk
-	
+
 
 	!**** generate the list of confidantes for clustering. For simplicity, duplicate locations of each point
 	allocate(xyz(3,quant%Nunk))
@@ -327,7 +327,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	end do
 	close(521)
 
-	
+
 	!**** generate the full matrix used for entry evaluation function Zelem_FULL
 	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
@@ -346,29 +346,29 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
 
-	
-	
+
+
 	if(explicitflag ==1)then
-	
-		!**** register the user-defined function and type in ker 
+
+		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
-		ker%FuncZmn => Zelem_FULL	
-		
+		ker%FuncZmn => Zelem_FULL
+
 		!**** initialization of the construction phase
 	    allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
-		deallocate(Permutation) ! caller can use this permutation vector if needed 	
+		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
 		deallocate(tree)
-	
+
 		!**** define other quantities in quant using information returned by BPACK_construction_Init
 		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
-		
+
 		!**** computation of the construction phase
 		call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
 
-		
+
 		!**** check error of the entire construction
 		N_unk_loc = msh%idxe-msh%idxs+1
 		allocate(Vin(N_unk_loc,1))
@@ -389,23 +389,23 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
 	else if(explicitflag ==0)then
-	
-		!**** register the user-defined function and type in ker 
+
+		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
 		ker%FuncHMatVec=>HODLR_MVP_Fullmat
-		
+
 		!**** initialization of the construction phase
 	    allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
-		deallocate(Permutation) ! caller can use this permutation vector if needed 	
+		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
 		deallocate(tree)
 
-	
+
 		!**** define other quantities in quant using information returned by BPACK_construction_Init
 		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
-	
-	
+
+
 		!**** computation of the construction phase
 		call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
 
@@ -435,7 +435,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	msh1%Nunk = msh%Nunk
 	call InitStat(stats1)
 
-	
+
 	!**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
@@ -443,8 +443,8 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	enddo
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
-	
-	
+
+
 	!**** use the clustering tree from the first HODLR
 	select case(option%format)
 	case(HODLR)
@@ -457,13 +457,13 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
 	enddo
 
-	
+
 	!**** initialization of the construction phase
 	allocate(Permutation(quant1%Nunk))
 	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
-	deallocate(Permutation) ! caller can use this permutation vector if needed 		
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(tree)
-	
+
 
 	!**** computation of the construction phase
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
@@ -473,13 +473,13 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
 	if(allocated(quant%matZ_loc))deallocate(quant%matZ_loc)
 	if(associated(quant%N_p))deallocate(quant%N_p)
-	
+
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
-	
+
 	call delete_proctree(ptree1)
 	call delete_Hstat(stats1)
 	call delete_mesh(msh1)
