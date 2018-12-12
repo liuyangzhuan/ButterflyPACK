@@ -23,6 +23,7 @@ use omp_lib
 use block_sendrecv
 use BPACK_Utilities
 use Bplus_randomized
+use BPACK_Solve_Mul
 contains
 
 subroutine BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -33,14 +34,19 @@ subroutine BPACK_Factorization(bmat,option,stats,ptree,msh)
 	type(proctree)::ptree
 	type(mesh)::msh
 
-
+	if(option%precon/=NOPRECON)then
 	select case(option%format)
     case(HODLR)
 		call HODLR_factorization(bmat%ho_bf,option,stats,ptree,msh)
     case(HMAT)
 		call Hmat_Factorization(bmat%h_mat,option,stats,ptree,msh)
 	end select
-
+	endif
+	
+	if(option%ErrSol==1)then
+		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
+	endif		
+	
 end subroutine BPACK_Factorization
 
 

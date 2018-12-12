@@ -392,14 +392,14 @@ module BPACK_DEFS
 
 		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: the full matrix to sample its entries
 
-		class(*),pointer :: QuantApp ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Zelem),nopass,pointer :: FuncZmn ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
+		class(*),pointer :: QuantApp=>null() ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_Zelem),nopass,pointer :: FuncZmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
-		type(c_ptr),pointer :: C_QuantApp ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
-		type(c_funptr),pointer :: C_FuncZmn ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
-		type(c_funptr),pointer :: C_FuncHMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
-		type(c_funptr),pointer :: C_FuncBMatVec ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
+		type(c_ptr),pointer :: C_QuantApp=>null() ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
+		type(c_funptr),pointer :: C_FuncZmn=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
+		type(c_funptr),pointer :: C_FuncHMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+		type(c_funptr),pointer :: C_FuncBMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
 	end type kernelquant
 
 	abstract interface

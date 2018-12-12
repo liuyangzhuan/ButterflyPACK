@@ -48,7 +48,7 @@ end subroutine element_Zmn_user
 
 
 
-subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,FuncZmn,QuantApp,Coordinates,tree)
+subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates,tree)
 	implicit none
 	integer Nunk,Ndim
 	real(kind=8),optional:: Coordinates(:,:)
@@ -62,8 +62,7 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 	integer,optional:: tree(:)
 	integer Nunk_loc
 	integer groupm
-	class(*),target :: QuantApp
-	procedure(F_Zelem) :: FuncZmn
+
 
 	type(Hoption)::option
 	type(Hstat)::stats
@@ -75,6 +74,9 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
 	integer threads_num
+	
+	call assert(associated(ker%QuantApp),'ker%QuantApp is not assigned')
+	call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec),'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')	
 	
 	stats%Flop_Fill=0
 	stats%Time_Fill=0
@@ -92,9 +94,6 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 	call OMP_set_num_threads(threads_num)
 
 	
-	!**** register the user-defined function and type in ker
-	ker%QuantApp => QuantApp
-	ker%FuncZmn => FuncZmn
 	msh%Nunk = Nunk
 
 
@@ -132,7 +131,7 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 	
 	!**** copy geometry points if present 
 	if(option%nogeo==0)then
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder:"
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder"
 		call assert(present(Coordinates),'geometry points should be provided if option%nogeo==0')
 		Ndim = size(Coordinates,1)		
 		Dimn = Ndim
@@ -143,7 +142,6 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
@@ -172,7 +170,7 @@ subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option
 	endif
 	
 
-end subroutine BPACK_construction_Element_Init
+end subroutine BPACK_construction_Init
 
 
 
@@ -182,7 +180,7 @@ end subroutine BPACK_construction_Element_Init
 
 
 
-subroutine BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn,ptree)
+subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn,ptree)
 
     implicit none
 
@@ -194,15 +192,18 @@ subroutine BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_
 	type(proctree)::ptree
 	procedure(Zelem)::element_Zmn
 
-
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+	
 	select case(option%format)
     case(HODLR)
 		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,element_Zmn,ptree)
     case(HMAT)
 		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,element_Zmn,ptree)
 	end select
+	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 
-end subroutine BPACK_construction_Element_Compute
+end subroutine BPACK_construction_Element
 
 subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
 

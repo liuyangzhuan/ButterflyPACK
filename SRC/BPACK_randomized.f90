@@ -43,7 +43,37 @@ subroutine matvec_user(trans,M,N,num_vect,Vin,Vout,ker)
 end subroutine matvec_user
 
 
-subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,stats,ker,ptree,msh)
+
+subroutine BPACK_construction_Matvec(bmat,blackbox_BMAT_MVP,Memory,error,option,stats,ker,ptree,msh)
+    implicit none
+
+	real(kind=8):: Memory,error,t1,t2
+	procedure(HMatVec)::blackbox_BMAT_MVP
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(Bmatrix)::bmat
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	
+
+	t1 = OMP_get_wtime()
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"
+	select case(option%format)
+    case(HODLR)
+		call HODLR_randomized(bmat%ho_bf,blackbox_BMAT_MVP,Memory,error,option,stats,ker,ptree,msh)
+    case(HMAT)
+		write(*,*)'FastMATVEC-based Matrix construction is not yet supported for Hmatrix'
+		stop
+	end select
+	t2 = OMP_get_wtime()
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
+
+end subroutine BPACK_construction_Matvec
+
+
+
+subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,ker,ptree,msh)
 
 
     use BPACK_DEFS
@@ -67,7 +97,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Nloc,Memory,error,option,s
 	stats%rankmax_of_level = 0
 
 	rank_max_lastlevel = option%rank0
-
+	Nloc = msh%idxe-msh%idxs+1
 
 	n3 = OMP_get_wtime()
 	Memory = 0

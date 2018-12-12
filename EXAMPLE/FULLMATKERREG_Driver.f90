@@ -185,36 +185,27 @@ PROGRAM ButterflyPACK_FullKRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 	
-	
+	!**** register the user-defined function and type in ker 
+	ker%QuantApp => quant
+	ker%FuncZmn => Zelem_FULL		
 	
 	!**** initialization of the construction phase
-	t1 = OMP_get_wtime()
 	allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_FULL,quant)
+	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed 		    
-	t2 = OMP_get_wtime()
+
 	
 	!**** computation of the construction phase
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+
 
 	!**** factorization phase
-	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	end if
+
 
 	!**** solve phase
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
     call FULLKER_solve(bmat,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
 
 
 	!**** deletion of quantities
@@ -265,6 +256,8 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	real(kind=8) label
 
 
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"	
+	
 	N_unk=msh%Nunk
 	N_unk_loc = msh%idxe-msh%idxs+1
 	ntest=quant%ntest
@@ -375,6 +368,9 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 	call MPI_barrier(ptree%Comm,ierr)
 
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
     return
 
 end subroutine FULLKER_solve

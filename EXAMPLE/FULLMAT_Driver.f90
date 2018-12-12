@@ -168,7 +168,7 @@ PROGRAM ButterflyPACK_FULL
 	type(Bmatrix),target::bmat,bmat1
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	integer level,Maxlevel,N_unk_loc
+	integer level,Maxlevel
 	type(proctree),target::ptree,ptree1
 	CHARACTER (LEN=1000) DATA_DIR
 	integer:: tst=1
@@ -233,9 +233,13 @@ PROGRAM ButterflyPACK_FULL
 	   endif
 	   !***********************************************************************
 	   
+		!**** register the user-defined function and type in ker 
+		ker%QuantApp => quant
+		ker%FuncZmn => Zelem_LR	
+	
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_LR,quant)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed 		   
 	   
 	endif
@@ -269,9 +273,13 @@ PROGRAM ButterflyPACK_FULL
 	   endif
 	   !***********************************************************************
 	   
+		!**** register the user-defined function and type in ker 
+		ker%QuantApp => quant
+		ker%FuncZmn => Zelem_FULL		   
+	   
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_FULL,quant)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed 		
 	   
 	endif
@@ -280,22 +288,12 @@ PROGRAM ButterflyPACK_FULL
 
 
 	!**** computation of the construction phase
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
 
 	!**** factorization phase
-	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor ......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	end if
+
 
 	!**** solve phase
 	if(option%ErrSol==1)then
@@ -320,11 +318,15 @@ PROGRAM ButterflyPACK_FULL
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
+	quant1%Nunk=quant%Nunk
 	msh1%Nunk = msh%Nunk
 
 
+	
+	!**** initialize stats and option
 	call InitStat(stats1)
 
+	!**** create the process tree, can use larger number of mpis if needed
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
@@ -333,28 +335,29 @@ PROGRAM ButterflyPACK_FULL
 	deallocate(groupmembers)
 
 
+	
+	!**** use the clustering tree from the first HODLR
 	select case(option%format)
 	case(HODLR)
-		allocate (msh1%pretree(2**bmat%ho_bf%Maxlevel))
-		do ii=1,2**bmat%ho_bf%Maxlevel
-			msh1%pretree(ii)=msh%basis_group(2**bmat%ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**bmat%ho_bf%Maxlevel+ii-1)%head+1
-		enddo
+		Maxlevel=bmat%ho_bf%Maxlevel
 	case(HMAT)
-		allocate (msh1%pretree(2**bmat%h_mat%Maxlevel))
-		do ii=1,2**bmat%h_mat%Maxlevel
-			msh1%pretree(ii)=msh%basis_group(2**bmat%h_mat%Maxlevel+ii-1)%tail-msh%basis_group(2**bmat%h_mat%Maxlevel+ii-1)%head+1
-		enddo
+		Maxlevel=bmat%h_mat%Maxlevel
 	end select
+	allocate (tree(2**Maxlevel))
+	do ii=1,2**Maxlevel
+		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+	enddo	
+	
 
-    call Cluster_partition(bmat1,option1,msh1,ker1,element_Zmn_user,ptree1)
-	call BPACK_structuring(bmat1,option1,msh1,ptree1,stats)
-
-	N_unk_loc = msh1%idxe-msh1%idxs+1
-	t1 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"
-	call HODLR_randomized(bmat1%ho_bf,matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
-	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
+	!**** initialization of the construction phase
+	allocate(Permutation(quant1%Nunk))
+	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	deallocate(Permutation) ! caller can use this permutation vector if needed 		
+	deallocate(tree)	
+	
+ 
+	!**** computation of the construction phase
+	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 	!**** print statistics
 	call PrintStat(stats1,ptree1)

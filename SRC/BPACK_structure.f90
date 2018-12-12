@@ -298,6 +298,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	Maxlevel=level
 	if(Maxlevel<nlevel_pre)Maxlevel=nlevel_pre
 
+	
 	if(Maxlevel<ptree%nlevel-1)then
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'too many processes for paralleling leaf boxes, keep refining the tree ...'
 		Maxlevel = ptree%nlevel-1

@@ -206,36 +206,27 @@ PROGRAM ButterflyPACK_KRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()	
+
 	
-
+	!**** register the user-defined function and type in ker 
+	ker%QuantApp => quant
+	ker%FuncZmn => Zelem_RBF	
+	
     !**** initialization of the construction phase
-	t1 = OMP_get_wtime()
     allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_RBF,quant,Coordinates=quant%xyz)
+	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed 	
-	t2 = OMP_get_wtime()
-
+	
+	
 	!**** computation of the construction phase
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
 	!**** factorization phase
-	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	end if
+
 
 	!**** solve phase
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
     call RBF_solve(bmat,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
 	
 	!**** deletion of quantities
@@ -253,41 +244,6 @@ PROGRAM ButterflyPACK_KRR
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_KRR
-
-
-!**** read training sets
-subroutine geo_modeling_RBF(quant,MPIcomm)
-
-    use BPACK_DEFS
-	use APPLICATION_MODULE
-    implicit none
-	type(quant_app)::quant
-    integer i,j,ii,jj,iii,jjj
-    integer intemp
-    integer node, patch, edge, flag
-    integer node1, node2, num_node,Dimn
-    integer node_temp(2)
-    real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
-
-    real(kind=8),allocatable :: node_xy_original(:,:)
-    integer,allocatable :: num_edge_of_node(:)
-
-    real(kind=8) a(3),b(3),c(3),r0, phi_start
-	! type(proctree)::ptree
-	integer MPIcomm,MyID,ierr
-	call MPI_Comm_rank(MPIcomm,MyID,ierr)
-
-	Dimn = quant%dimn
-
-	open (90,file=quant%trainfile_p)
-	allocate (quant%xyz(Dimn,1:quant%Nunk))
-	do edge=1,quant%Nunk
-		read (90,*) quant%xyz(1:Dimn,edge)
-	enddo
-    close(90)
-    return
-
-end subroutine geo_modeling_RBF
 
 
 subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
@@ -320,6 +276,8 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	real(kind=8) r_mn
 	integer label
 
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"	
+	
 	N_unk=msh%Nunk
 	Dimn=quant%dimn
 	N_unk_loc = msh%idxe-msh%idxs+1
@@ -427,6 +385,9 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
 	call MPI_barrier(ptree%Comm,ierr)
 
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
     return
 
 end subroutine RBF_solve

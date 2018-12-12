@@ -27,9 +27,10 @@ implicit none
 
 	!**** define your application-related variables here
 	type quant_app
+		integer::Nunk ! matrix size
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
 		complex(kind=8), allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid
-		integer,pointer :: N_p(:,:) ! column sizes of all processes sharing this hodlr
+		integer,pointer :: N_p(:,:)=>null() ! column sizes of all processes sharing this hodlr
 		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
 		type(mesh),pointer::msh   ! Use this metadata in matvec
 		type(proctree),pointer::ptree ! Use this metadata in matvec
@@ -260,6 +261,9 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	CHARACTER (LEN=1000) DATA_DIR
 	type(quant_app),target::quant,quant1
 	integer N_unk_loc,Maxlevel
+	integer,allocatable::tree(:),Permutation(:)
+	real(kind=8),allocatable::xyz(:,:)
+	integer Nunk_loc	
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -286,89 +290,86 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	option%xyzsort=CKD
 
 
+	explicitflag=0
+	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
 	DATA_DIR='../EXAMPLE/FULLMAT_DATA'
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
 
-	explicitflag=0
 
-	!**** register the user-defined function and type in ker
-	ker%FuncZmn=>Zelem_FULL
-	ker%FuncHMatVec=>HODLR_MVP_Fullmat
-	ker%QuantApp=>quant
+	!**** predefine the first three levels of tree due to the physical meanings
 	quant%ptree=>ptree
-
-
-	! predefine the first three levels of tree due to the physical meanings
-	msh%Nunk = 3720
+	quant%Nunk = 3720
 	Nin1 = 320*2
 	Nout1 = 610*2
 	Nin2 = 320*2
 	Nout2 = 610*2
-	call assert(Nin1+Nout1+Nin2+Nout2==msh%Nunk,'The two surfaces have mismatched number of unknowns')
-	allocate(msh%pretree(4))
-	msh%pretree(1) = Nin1
-	msh%pretree(2) = Nout1
-	msh%pretree(3) = Nin2
-	msh%pretree(4) = Nout2
+	call assert(Nin1+Nout1+Nin2+Nout2==quant%Nunk,'The two surfaces have mismatched number of unknowns')
+	allocate(tree(4))
+	tree(1) = Nin1
+	tree(2) = Nout1
+	tree(3) = Nin2
+	tree(4) = Nout2
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for scattering matrix compression'
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A11,I9)')' Nsurface: ',msh%Nunk
-	allocate(msh%xyz(3,msh%Nunk))
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A11,I9)')' Nsurface: ',quant%Nunk
+	
 
-	!!!!!! for simplicity, duplicate locations of each point
+	!**** generate the list of confidantes for clustering. For simplicity, duplicate locations of each point
+	allocate(xyz(3,quant%Nunk))
 	open(unit=521,file=trim(DATA_DIR)//'/Smatrix.geo',status='old')
-	do kk=1,msh%Nunk/2
-		read(521,*) msh%xyz(1,2*kk-1),msh%xyz(2,2*kk-1),msh%xyz(3,2*kk-1)
-		msh%xyz(:,2*kk) = msh%xyz(:,2*kk-1)
+	do kk=1,quant%Nunk/2
+		read(521,*) xyz(1,2*kk-1),xyz(2,2*kk-1),xyz(3,2*kk-1)
+		xyz(:,2*kk) = xyz(:,2*kk-1)
 	end do
 	close(521)
 
-
-
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1,'secnds'
-
+	
+	!**** generate the full matrix used for entry evaluation function Zelem_FULL
 	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
-	allocate(quant%matZ_glo(msh%Nunk,msh%Nunk))
+	allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 	quant%matZ_glo = 0
-
 	open(unit=888,file=trim(DATA_DIR)//'/Smatrix.mat',status='old')
-	do ii=1,msh%Nunk
-	do kk=1,msh%Nunk
+	do ii=1,quant%Nunk
+	do kk=1,quant%Nunk
 		read(888,*)tmp(1),tmp(2)
 		quant%matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp)
 	end do
 	end do
 	close(unit=888)
-
-	call CreateDistDenseMat(msh%Nunk,msh,ptree,quant)
-
-
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
 
+	
+	
 	if(explicitflag ==1)then
-		t1 = OMP_get_wtime()
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-		call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-		t2 = OMP_get_wtime()
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
+	
+		!**** register the user-defined function and type in ker 
+		ker%QuantApp => quant
+		ker%FuncZmn => Zelem_FULL	
+		
+		!**** initialization of the construction phase
+	    allocate(Permutation(quant%Nunk))
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
+		deallocate(Permutation) ! caller can use this permutation vector if needed 	
+		deallocate(xyz)
+		deallocate(tree)
+	
+		!**** define other quantities in quant using information returned by BPACK_construction_Init
+		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
+		
+		!**** computation of the construction phase
+		call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
+
+		
+		!**** check error of the entire construction
 		N_unk_loc = msh%idxe-msh%idxs+1
 		allocate(Vin(N_unk_loc,1))
 		allocate(Vout1(N_unk_loc,1))
@@ -388,12 +389,26 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
 	else if(explicitflag ==0)then
-		N_unk_loc = msh%idxe-msh%idxs+1
-		t1 = OMP_get_wtime()
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based Matrix construction......"
-		call HODLR_randomized(bmat%ho_bf,matvec_user,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
-		t2 = OMP_get_wtime()
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FullMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
+	
+		!**** register the user-defined function and type in ker 
+		ker%QuantApp => quant
+		ker%FuncHMatVec=>HODLR_MVP_Fullmat
+		
+		!**** initialization of the construction phase
+	    allocate(Permutation(quant%Nunk))
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
+		deallocate(Permutation) ! caller can use this permutation vector if needed 	
+		deallocate(xyz)
+		deallocate(tree)
+
+	
+		!**** define other quantities in quant using information returned by BPACK_construction_Init
+		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
+	
+	
+		!**** computation of the construction phase
+		call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
+
 
 	end if
 
@@ -415,51 +430,56 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
-
+	quant1%Nunk=quant%Nunk
 
 	msh1%Nunk = msh%Nunk
 	call InitStat(stats1)
 
+	
+	!**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
-
+	
+	
+	!**** use the clustering tree from the first HODLR
 	select case(option%format)
 	case(HODLR)
 		Maxlevel=bmat%ho_bf%Maxlevel
 	case(HMAT)
 		Maxlevel=bmat%h_mat%Maxlevel
 	end select
-	allocate (msh1%pretree(2**Maxlevel))
+	allocate (tree(2**Maxlevel))
 	do ii=1,2**Maxlevel
-		msh1%pretree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
 	enddo
 
+	
+	!**** initialization of the construction phase
+	allocate(Permutation(quant1%Nunk))
+	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	deallocate(Permutation) ! caller can use this permutation vector if needed 		
+	deallocate(tree)
+	
 
-    call Cluster_partition(bmat1,option1,msh1,ker1,element_Zmn_user,ptree1)
-	call BPACK_structuring(bmat1,option1,msh1,ptree1,stats)
-
-	N_unk_loc = msh1%idxe-msh1%idxs+1
-	t1 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"
-	call HODLR_randomized(bmat1%ho_bf,matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
-	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
+	!**** computation of the construction phase
+	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 
-
+	!**** deletion of quantities
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
-
+	if(allocated(quant%matZ_loc))deallocate(quant%matZ_loc)
+	if(associated(quant%N_p))deallocate(quant%N_p)
+	
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
-
-
+	
 	call delete_proctree(ptree1)
 	call delete_Hstat(stats1)
 	call delete_mesh(msh1)

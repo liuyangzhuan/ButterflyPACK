@@ -683,15 +683,9 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
-
-    !call compression_test()
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "matrix construction......"
-    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user_C,ptree)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
+	
+	!**** computation of the construction phase
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user_C,ptree)
 
 
 	!**** return the permutation vector
@@ -775,7 +769,6 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	real(kind=8):: Memory=0d0,error
 	character(len=1024)  :: strings
-	integer N_unk_loc
 
 
 	call c_f_pointer(option_Cptr, option)
@@ -941,7 +934,7 @@ subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	real(kind=8):: Memory=0d0,error
 	character(len=1024)  :: strings
-	integer N_unk_loc
+
 
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
@@ -957,15 +950,9 @@ subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh
 	ker%C_FuncHMatVec => C_FuncHMatVec
 
 
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based matrix construction......"
-	N_unk_loc = msh%idxe-msh%idxs+1
-	call HODLR_randomized(bmat%ho_bf,matvec_user_C,N_unk_loc,Memory,error,option,stats,ker,ptree,msh)
+	!**** computation of the construction phase
+	call BPACK_construction_Matvec(bmat,matvec_user_C,Memory,error,option,stats,ker,ptree,msh)
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
 
 	!**** return the C address of hodlr structures to C caller
 	bmat_Cptr=c_loc(bmat)
@@ -1211,12 +1198,7 @@ subroutine C_BPACK_Factor(bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) 
 	stats%Time_Factor=0
 
 
-	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor ......"
     call BPACK_factorization(bmat,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	end if
 
 	! return the C address of hodlr structures to C caller
 	bmat_Cptr=c_loc(bmat)

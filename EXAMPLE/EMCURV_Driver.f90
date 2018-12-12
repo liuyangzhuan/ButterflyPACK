@@ -167,52 +167,34 @@ PROGRAM ButterflyPACK_IE_2D
    endif
    !***********************************************************************
 
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
+	!**** geometry generalization and discretization 
     call geo_modeling_CURV(quant,ptree%Comm)	
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
 
+	!**** register the user-defined function and type in ker 
+	ker%QuantApp => quant
+	ker%FuncZmn => Zelem_EMCURV	
 	
 	!**** initialization of the construction phase
-	t1 = OMP_get_wtime()
 	allocate(xyz(2,quant%Nunk))
 	do edge=1, quant%Nunk
 		xyz(:,edge) = quant%xyz(:,edge*2-1)
 	enddo
     allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_EMCURV,quant,Coordinates=xyz)
+	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed 	
 	deallocate(xyz)
-	t2 = OMP_get_wtime()
 
 
 	!**** computation of the construction phase
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+
 
 	!**** factorization phase
-	if(option%precon/=NOPRECON)then
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	if(option%ErrSol==1)then
-		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
-	endif	
-	end if
 
 
 	!**** solve phase
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
     call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
 	
 	!**** print statistics
