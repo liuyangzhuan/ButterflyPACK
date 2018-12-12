@@ -109,7 +109,8 @@ PROGRAM ButterflyPACK_FullKRR
 	integer nmpi
 	type(proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR
-
+	integer,allocatable::Permutation(:)
+	integer Nunk_loc
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -123,18 +124,6 @@ PROGRAM ButterflyPACK_FullKRR
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-
-	!**** set number of threads
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
@@ -142,13 +131,9 @@ PROGRAM ButterflyPACK_FullKRR
     write(*,*) "   "
 	endif
 
-	!**** initialize statistics variables
+	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-
-	!**** register the user-defined function and type in ker
-	ker%FuncZmn=>Zelem_FULL
-	ker%QuantApp=>quant
 
 
     !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters
@@ -169,25 +154,10 @@ PROGRAM ButterflyPACK_FullKRR
 	option%xyzsort=NATURAL
 	option%nogeo=1
 	option%Nmin_leaf=500
-	! option%tol_comp=1d-4
-	option%tol_Rdetect=3d-5
-	option%tol_LS=1d-12
-	option%tol_itersol=1d-6
-	option%n_iter=1000
-	option%tol_rand=1d-3
-	option%level_check=10000
-	option%precon=DIRECT
-	! option%xyzsort=TM
-	option%lnoBP=40000
-	option%TwoLayerOnly=1
-    option%schulzorder=3
-    option%schulzlevel=3000
-	option%LRlevel=0
 	option%ErrFillFull=1
 	option%ErrSol=1
-	! option%RecLR_leaf=RRQR
 
-
+	
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -198,18 +168,11 @@ PROGRAM ButterflyPACK_FullKRR
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix......"
-
-	msh%Nunk=quant%Nunk
-
 	allocate(quant%perms(quant%ntrain+quant%ntest))
-
 	do ii=1,quant%ntrain+quant%ntest
 		quant%perms(ii)=ii
 	enddo
-
 	! call rperm(quant%ntrain+quant%ntest,quant%perms)
-
-
 	open (90,file=quant%trainfile_p)
 	allocate (quant%matZ_glo(quant%ntrain+quant%ntest,quant%ntrain+quant%ntest))
 	do edge_m=1,quant%ntrain+quant%ntest
@@ -218,22 +181,20 @@ PROGRAM ButterflyPACK_FullKRR
 	enddo
 	enddo
 	close(90)
-
-
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	! write(*,*)t2-t1
-
+	
+	
+	
+	!**** initialization of the construction phase
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	allocate(Permutation(quant%Nunk))
+	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_FULL,quant)
+	deallocate(Permutation) ! caller can use this permutation vector if needed 		    
 	t2 = OMP_get_wtime()
-
-
+	
+	!**** computation of the construction phase
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
     call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
@@ -241,7 +202,7 @@ PROGRAM ButterflyPACK_FullKRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()
 
-
+	!**** factorization phase
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -249,12 +210,14 @@ PROGRAM ButterflyPACK_FullKRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
 
+	!**** solve phase
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
     call FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
 
+	!**** deletion of quantities
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)

@@ -172,7 +172,9 @@ PROGRAM ButterflyPACK_FULL
 	type(proctree),target::ptree,ptree1
 	CHARACTER (LEN=1000) DATA_DIR
 	integer:: tst=1
-
+	integer,allocatable::Permutation(:)
+	integer Nunk_loc
+	
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -185,28 +187,23 @@ PROGRAM ButterflyPACK_FULL
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-
-	!**** set number of threads
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "ButterflyPACK_KRR"
+    write(*,*) "ButterflyPACK_FULL"
     write(*,*) "   "
 	endif
 
-	!**** initialize statistics variables
+	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-
+    
+	!**** set solver parameters
+	option%nogeo=1  ! no geometry points available
+	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
+    ! option%verbosity=2
+    ! option%LRlevel=100
+	
 
 	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file
 	if(iargc()>=1)then
@@ -214,14 +211,9 @@ PROGRAM ButterflyPACK_FULL
 		read(strings,*)tst
 	endif
 
-
 !******************************************************************************!
 ! generate a LR matrix as two matrix product
 	if(tst==1)then
-		!**** register the user-defined function and type in ker
-		ker%FuncZmn=>Zelem_LR
-		ker%QuantApp=>quant
-
 		!**** Get matrix size and rank and create the matrix
 		quant%Nunk = 10000
 		quant%rank = 2
@@ -240,6 +232,12 @@ PROGRAM ButterflyPACK_FULL
 	   write (*,*) ''
 	   endif
 	   !***********************************************************************
+	   
+		!**** initialization of the construction phase
+		allocate(Permutation(quant%Nunk))
+		call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_LR,quant)
+		deallocate(Permutation) ! caller can use this permutation vector if needed 		   
+	   
 	endif
 
 
@@ -251,10 +249,6 @@ PROGRAM ButterflyPACK_FULL
 		if(iargc()>=2)then
 			call getarg(2,strings)
 		endif
-
-		!**** register the user-defined function and type in ker
-		ker%FuncZmn=>Zelem_FULL
-		ker%QuantApp=>quant
 
 		!**** Get matrix size and rank and create the matrix
 		quant%Nunk = 4096
@@ -274,27 +268,18 @@ PROGRAM ButterflyPACK_FULL
 	   write (*,*) ''
 	   endif
 	   !***********************************************************************
+	   
+		!**** initialization of the construction phase
+		allocate(Permutation(quant%Nunk))
+		call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_FULL,quant)
+		deallocate(Permutation) ! caller can use this permutation vector if needed 		
+	   
 	endif
 
 !******************************************************************************!
 
-    !**** set solver parameters
-	option%nogeo=1  ! no geometry points available
-	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
-    ! option%verbosity=2
-    ! option%LRlevel=100
-	msh%Nunk = quant%Nunk
 
-
-	!**** construct the first HODLR with entry evaluation
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-
+	!**** computation of the construction phase
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
     call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
@@ -304,6 +289,7 @@ PROGRAM ButterflyPACK_FULL
  	t2 = OMP_get_wtime()
 
 
+	!**** factorization phase
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor ......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -311,14 +297,15 @@ PROGRAM ButterflyPACK_FULL
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
 
+	!**** solve phase
 	if(option%ErrSol==1)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve ......"
 		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve finished"
 	endif
-
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-
+	
+	!**** print statistics
 	call PrintStat(stats,ptree)
 
 
@@ -369,19 +356,20 @@ PROGRAM ButterflyPACK_FULL
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
 
+	!**** print statistics
 	call PrintStat(stats1,ptree1)
+	
+	
+	!**** deletion of quantities
 	call delete_proctree(ptree1)
 	call delete_Hstat(stats1)
 	call delete_mesh(msh1)
 	call delete_kernelquant(ker1)
 	call BPACK_delete(bmat1)
 
-
-
 	if(allocated(quant%matU_glo))deallocate(quant%matU_glo)
 	if(allocated(quant%matV_glo))deallocate(quant%matV_glo)
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
-
 
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)

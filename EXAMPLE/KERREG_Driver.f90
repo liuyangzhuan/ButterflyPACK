@@ -121,7 +121,9 @@ PROGRAM ButterflyPACK_KRR
 	type(proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR
 	integer MPI_thread
-
+	integer,allocatable::Permutation(:)
+	integer Nunk_loc
+	
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
@@ -133,33 +135,18 @@ PROGRAM ButterflyPACK_KRR
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-
-	!**** set number of threads
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_KRR"
     write(*,*) "   "
 	endif
 
-	!**** initialize statistics variables
+	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
 
-	!**** register the user-defined function and type in ker
-	ker%FuncZmn=>Zelem_RBF
-	ker%QuantApp=>quant
-
-
+	
+	!**** intialize the user-defined derived type quant
 	DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
     quant%dimn=8
     quant%ntrain=10000
@@ -201,44 +188,34 @@ PROGRAM ButterflyPACK_KRR
 		read(strings,*)option%RecLR_leaf
 	endif
 
-
 	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'
 	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'
 	quant%testfile_p=trim(DATA_DIR)//'_test.csv'
 	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
 	write(*,*)'training set: ',quant%trainfile_p
-
-
-
-   !***********************************************************************
-   if(ptree%MyID==Main_ID)then
-   write (*,*) ''
-   write (*,*) 'RBF computing'
-   write (*,*) ''
-   endif
-   !***********************************************************************
-
+	
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
-    call geo_modeling_RBF(quant,ptree%Comm)
-
-	msh%Nunk=quant%Nunk
-	allocate(msh%xyz(quant%dimn,quant%Nunk))
-	msh%xyz=quant%xyz
-
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"	
+	open (90,file=quant%trainfile_p)
+	allocate (quant%xyz(quant%dimn,1:quant%Nunk))
+	do ii=1,quant%Nunk
+		read (90,*) quant%xyz(1:quant%dimn,ii)
+	enddo
+    close(90)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
+	t2 = OMP_get_wtime()	
+	
 
+    !**** initialization of the construction phase
 	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+    allocate(Permutation(quant%Nunk))
+	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_RBF,quant,Coordinates=quant%xyz)
+	deallocate(Permutation) ! caller can use this permutation vector if needed 	
 	t2 = OMP_get_wtime()
 
+	!**** computation of the construction phase
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
     call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
@@ -246,6 +223,7 @@ PROGRAM ButterflyPACK_KRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
  	t2 = OMP_get_wtime()
 
+	!**** factorization phase
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -253,11 +231,14 @@ PROGRAM ButterflyPACK_KRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
 
+	!**** solve phase
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
     call RBF_solve(bmat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
+	
+	!**** deletion of quantities
 	if(allocated(quant%xyz))deallocate(quant%xyz)
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
@@ -299,7 +280,7 @@ subroutine geo_modeling_RBF(quant,MPIcomm)
 	Dimn = quant%dimn
 
 	open (90,file=quant%trainfile_p)
-	allocate (quant%xyz(Dimn,0:quant%Nunk))
+	allocate (quant%xyz(Dimn,1:quant%Nunk))
 	do edge=1,quant%Nunk
 		read (90,*) quant%xyz(1:Dimn,edge)
 	enddo

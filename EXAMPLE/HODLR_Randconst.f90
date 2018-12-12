@@ -268,29 +268,22 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo
-
+	
+	! generate the process tree
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
-
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_ScatteringMatrix_Matvec"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
+	!**** initialize stats and option
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-
-     !*************************input******************************
-
+	
+	!**** intialize the user-defined derived type quant
+	option%nogeo=0
+	option%xyzsort=CKD
 
 
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
@@ -298,9 +291,6 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
-
-	option%nogeo=0
-	option%xyzsort=CKD
 
 	explicitflag=0
 

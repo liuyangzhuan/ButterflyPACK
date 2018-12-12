@@ -8,7 +8,7 @@ rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
-	-DCMAKE_CXX_FLAGS="" \
+	-DCMAKE_CXX_FLAGS="-lifcore" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=mpifort \
 	-DCMAKE_CXX_COMPILER=mpicxx \

@@ -59,7 +59,10 @@ PROGRAM ButterflyPACK_IE_3D
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	CHARACTER (LEN=1000) DATA_DIR
-
+	real(kind=8),allocatable::xyz(:,:)
+	integer,allocatable::Permutation(:)
+	integer Nunk_loc	
+	
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -71,41 +74,25 @@ PROGRAM ButterflyPACK_IE_3D
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
 
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-
-
-	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
-	! call vmlsetmode(VML_FTZDAZ_ON)
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_3D"
     write(*,*) "   "
 	endif
+	
+	!**** initialize stats and option	
 	call InitStat(stats)
 	call SetDefaultOptions(option)
 
-	time_tmp = 0
 
- 	! register the user-defined function and type in ker
-	ker%FuncZmn=>Zelem_EMSURF
-	ker%QuantApp=>quant
-
+	!**** intialize the user-defined derived type quant
 	! compute the quadrature rules
     quant%integral_points=6
     allocate (quant%ng1(quant%integral_points), quant%ng2(quant%integral_points), quant%ng3(quant%integral_points), quant%gauss_w(quant%integral_points))
     call gauss_points(quant)
 
-
-     !*************************input******************************
+    !*************************input******************************
 	DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
 
 	quant%mesh_normal=1
@@ -114,7 +101,6 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
-
 
 	option%format= HMAT!  HODLR !
 	option%near_para=2.01d0
@@ -141,13 +127,11 @@ PROGRAM ButterflyPACK_IE_3D
 		call getarg(5,strings)
 		read(strings,*)option%Nmin_leaf
 	endif
-
-
-    !*********************************************************
-
+	
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
-
+	! option%touch_para = 3* quant%minedgelength
+	
    !***********************************************************************
 	if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -157,61 +141,63 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
    !***********************************************************************
 
+   
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling for "//trim(DATA_DIR)//"......"
-
 	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
-
-	! generate the list of points for clustering
-	msh%Nunk=quant%Nunk
-	allocate(msh%xyz(3,quant%Nunk))
-    do edge=1, quant%Nunk
-		msh%xyz(:,edge) = quant%xyz(:,quant%maxnode+edge)
-    enddo
-	option%touch_para = 3* quant%minedgelength
-
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
 
+	
+	!**** initialization of the construction phase
 	t1 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
-	call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-
+	allocate(xyz(3,quant%Nunk))
+	do ii=1, quant%Nunk
+		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
+	enddo
+    allocate(Permutation(quant%Nunk))
+	call BPACK_construction_Element_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Zelem_EMSURF,quant,Coordinates=xyz)
+	deallocate(Permutation) ! caller can use this permutation vector if needed 	
+	deallocate(xyz)
+	t2 = OMP_get_wtime()	
+	
+	
+	
+	!**** computation of the construction phase
 	t1 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
-	call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
+    call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+ 	t2 = OMP_get_wtime()
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
 
-
+	!**** factorization phase
 	if(option%precon/=NOPRECON)then
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
 	call BPACK_Factorization(bmat,option,stats,ptree,msh)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	end if
-
 	if(option%ErrSol==1)then
 		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
-	endif
+	endif	
+	end if
 
+	!**** solve phase
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
 	call EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
+	
+	!**** print statistics
 	call PrintStat(stats,ptree)
 
+	
+	!**** deletion of quantities
 	call delete_quant_EMSURF(quant)
-
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)

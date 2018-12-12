@@ -579,12 +579,6 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 	!**** allocate HODLR solver structures
 	allocate(bmat)
-	select case(option%format)
-	case(HODLR)
-		allocate(bmat%ho_bf)
-	case(HMAT)
-		allocate(bmat%h_mat)
-	end select
 
 	! allocate(option)
 	! allocate(stats)
@@ -791,12 +785,6 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	!**** allocate HODLR solver structures
 	allocate(bmat)
-	select case(option%format)
-	case(HODLR)
-		allocate(bmat%ho_bf)
-	case(HMAT)
-		allocate(bmat%h_mat)
-	end select
 	! allocate(option)
 	! allocate(stats)
 	allocate(msh)

@@ -46,6 +46,142 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,option,ker)
 end subroutine element_Zmn_user
 
 
+
+
+subroutine BPACK_construction_Element_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,FuncZmn,QuantApp,Coordinates,tree)
+	implicit none
+	integer Nunk,Ndim
+	real(kind=8),optional:: Coordinates(:,:)
+
+    real(kind=8) para
+    real(kind=8) tolerance
+    integer nn, mm,Maxlevel,give,need
+    integer i,j,k,ii,edge,Dimn
+	integer nlevel,level
+	integer Permutation(Nunk)
+	integer,optional:: tree(:)
+	integer Nunk_loc
+	integer groupm
+	class(*),target :: QuantApp
+	procedure(F_Zelem) :: FuncZmn
+
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(Bmatrix)::bmat
+	type(proctree)::ptree
+	
+	real(kind=8) t1,t2
+	character(len=1024)  :: strings
+	integer threads_num
+	
+	stats%Flop_Fill=0
+	stats%Time_Fill=0
+	
+	
+	!**** set thread number here
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
+ 	threads_num=1
+    CALL getenv("OMP_NUM_THREADS", strings)
+	strings = TRIM(strings)
+	if(LEN_TRIM(strings)>0)then
+		read(strings , *) threads_num
+	endif
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
+	call OMP_set_num_threads(threads_num)
+
+	
+	!**** register the user-defined function and type in ker
+	ker%QuantApp => QuantApp
+	ker%FuncZmn => FuncZmn
+	msh%Nunk = Nunk
+
+
+	t1 = OMP_get_wtime()
+	nlevel=0
+	if(present(tree))then
+		nlevel = ceiling_safe(log(dble(size(tree,1))) / log(2d0))	
+		Maxlevel=nlevel
+		allocate(msh%pretree(2**Maxlevel))
+		msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
+		
+		!**** make 0-element node a 1-element node
+
+		! write(*,*)'before adjustment:',msh%pretree
+		need = 0
+		do ii=1,2**Maxlevel
+			if(msh%pretree(ii)==0)need=need+1
+		enddo
+		do while(need>0)
+			give = ceiling_safe(need/dble(2**Maxlevel-need))
+			do ii=1,2**Maxlevel
+				nn = msh%pretree(ii)
+				if(nn>1)then
+					msh%pretree(ii) = msh%pretree(ii) - min(min(nn-1,give),need)
+					need = need - min(min(nn-1,give),need)
+				endif
+			enddo
+		enddo
+		do ii=1,2**Maxlevel
+			if(msh%pretree(ii)==0)msh%pretree(ii)=1
+		enddo
+		! write(*,*)'after adjustment:',msh%pretree
+		tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
+	endif
+	
+	!**** copy geometry points if present 
+	if(option%nogeo==0)then
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder:"
+		call assert(present(Coordinates),'geometry points should be provided if option%nogeo==0')
+		Ndim = size(Coordinates,1)		
+		Dimn = Ndim
+		allocate (msh%xyz(Dimn,1:msh%Nunk))
+		msh%xyz=Coordinates
+	endif
+
+
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	t2 = OMP_get_wtime()
+
+
+	t1 = OMP_get_wtime()
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
+    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+	call BPACK_structuring(bmat,option,msh,ptree,stats)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	t2 = OMP_get_wtime()
+	
+	
+	!**** return the permutation vector
+	select case(option%format)
+	case(HODLR)
+		msh%idxs = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+		msh%idxe = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+	case(HMAT)
+		msh%idxs = bmat%h_mat%Local_blocks(1,1)%headm
+		msh%idxe = bmat%h_mat%Local_blocks(1,1)%headm+bmat%h_mat%Local_blocks(1,1)%M-1
+	end select
+
+	Nunk_loc = msh%idxe-msh%idxs+1
+	if(ptree%MyID==Main_ID)then
+		do edge=1,Nunk
+			Permutation(edge) = msh%new2old(edge)
+		enddo
+	endif
+	
+
+end subroutine BPACK_construction_Element_Init
+
+
+
+
+
+
+
+
+
 subroutine BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn,ptree)
 
     implicit none

@@ -104,10 +104,6 @@ check_cxx_compiler_flag("-qopt-matmul" qoptmatmul)
 if (qoptmatmul)
 set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
 endif()
-check_cxx_compiler_flag("-lifcore" lifcore)
-if (lifcore)
-set(CMAKE_CXX_FLAGS  "-lifcore ${CMAKE_CXX_FLAGS}")
-endif()
 
 
 
