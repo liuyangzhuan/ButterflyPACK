@@ -19,9 +19,9 @@ com_opt=3
 checkerr=0
 batch=100
 
-#mpirun -n $nmpi valgrind --leak-check=yes --track-origins=yes --error-limit=no $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
-mpirun -n $nmpi $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
-#srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out 
+#mpirun -n $nmpi valgrind --leak-check=yes --track-origins=yes --error-limit=no $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out
+mpirun -n $nmpi $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out
+#srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a datset_kernel.out
 
 
 
@@ -39,9 +39,9 @@ mpirun -n $nmpi $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $chec
 # batch=100
 
 # # mpirun -n 1 $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out
-# srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out  
-  
-# ######## product of Gaussian 
+# srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out
+
+# ######## product of Gaussian
 # tst=3
 # N=5000
 # rank=8
@@ -52,6 +52,6 @@ mpirun -n $nmpi $EXEC $tst $DATA $Ndim $ker $h $lambda $Nmin $tol $com_opt $chec
 # batch=100
 
 
-# # mpirun -n 1 $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out  
-# srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out  
-  
+# # mpirun -n 1 $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out
+# srun -n $nmpi -c 2 --cpu_bind=cores $EXEC $tst $N $rank $Nmin $tol $com_opt $checkerr $batch | tee -a randomproduct.out
+

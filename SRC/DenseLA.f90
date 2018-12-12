@@ -9,7 +9,7 @@
 ! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
 ! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
-! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
@@ -28,18 +28,18 @@ integer M,N
 character,optional:: norm
 select type(Matrix)
 type is (real(kind=8))
-	fnorm = dlangef90(Matrix,M,N,norm)	
+	fnorm = dlangef90(Matrix,M,N,norm)
 type is (complex(kind=8))
-	fnorm = zlangef90(Matrix,M,N,norm)	
+	fnorm = zlangef90(Matrix,M,N,norm)
 end select
 
 end function fnorm
 
 
 
-real(kind=8) function dlangef90(Matrix,M,N,norm)	
+real(kind=8) function dlangef90(Matrix,M,N,norm)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:)
@@ -63,12 +63,12 @@ if(opt=='I' .or. opt=='i')then
 deallocate(WORK)
 end if
 
-end function dlangef90	
+end function dlangef90
 
 
-real(kind=8) function zlangef90(Matrix,M,N,norm)	
+real(kind=8) function zlangef90(Matrix,M,N,norm)
 
-! 
+!
 
 implicit none
 complex(kind=8) Matrix(:,:)
@@ -92,24 +92,24 @@ if(opt=='I' .or. opt=='i')then
 deallocate(WORK)
 end if
 
-end function zlangef90	
+end function zlangef90
 
 
 subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
     use BPACK_DEFS
-	implicit none 
+	implicit none
 	integer mm,nn,mn_min
 	DT Matrix(:,:),UU(:,:),VV(:,:)
 	real(kind=8) Singular(:)
 	real(kind=8),optional::flop
-	
+
 
 	if(mm==1)then
 		UU(1,1)=1d0
 		Singular(1) = fnorm(Matrix,mm,nn)
 		if(Singular(1)<SafeUnderflow)then
 			VV = 0d0
-		else 
+		else
 			VV = Matrix/Singular(1)
 		endif
 	elseif(nn==1)then
@@ -117,35 +117,35 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
 		Singular(1) = fnorm(Matrix,mm,nn)
 		if(Singular(1)<SafeUnderflow)then
 			UU = 0d0
-		else 
+		else
 			UU = Matrix/Singular(1)
-		endif			
+		endif
 	else
 		if(fnorm(Matrix,mm,nn)<SafeUnderflow)then
 			Singular=0
 			UU=0
 			VV=0
-		else 
+		else
 			! write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
 			Singular=0
 			UU=0
 			VV=0
-			
-			
+
+
 			call gesddf90(Matrix,Singular,UU,VV,flop=flop)
-			
-			!!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC) 
-			! call gesvdf90(Matrix,Singular,UU,VV,flop=flop)  
-			
+
+			!!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC)
+			! call gesvdf90(Matrix,Singular,UU,VV,flop=flop)
+
 		endif
 	endif
-	
-	
-end subroutine gesvd_robust
-		
 
-		
-		
+
+end subroutine gesvd_robust
+
+
+
+
 
 subroutine gesvdf90(Matrix,Singular,UU,VV,flop)
 implicit none
@@ -163,7 +163,7 @@ type is (real(kind=8))
 		call dgesvdf90(Matrix,Singular,UU,VV,flop)
 	end select
 	end select
-	
+
 type is (complex(kind=8))
 	select type(UU)
 	type is (complex(kind=8))
@@ -172,16 +172,16 @@ type is (complex(kind=8))
 		call zgesvdf90(Matrix,Singular,UU,VV,flop)
 	end select
 	end select
-	
+
 end select
 
 end subroutine gesvdf90
-		
-		
-		
-subroutine zgesvdf90(Matrix,Singular,UU,VV,flop)	
 
-! 
+
+
+subroutine zgesvdf90(Matrix,Singular,UU,VV,flop)
+
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
@@ -206,7 +206,7 @@ LWORK=-1
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 
 ! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
@@ -222,12 +222,12 @@ deallocate(WORK,RWORK)
 
 if(present(flop))flop = flops_zgesvd(m,n)
 
-end subroutine zgesvdf90	
+end subroutine zgesvdf90
 
 
-subroutine dgesvdf90(Matrix,Singular,UU,VV,flop)	
+subroutine dgesvdf90(Matrix,Singular,UU,VV,flop)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
@@ -248,7 +248,7 @@ LWORK=-1
 call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 
 ! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
@@ -283,7 +283,7 @@ type is (real(kind=8))
 		call dgesddf90(Matrix,Singular,UU,VV,flop)
 	end select
 	end select
-	
+
 type is (complex(kind=8))
 	select type(UU)
 	type is (complex(kind=8))
@@ -292,15 +292,15 @@ type is (complex(kind=8))
 		call zgesddf90(Matrix,Singular,UU,VV,flop)
 	end select
 	end select
-	
+
 end select
 
 end subroutine gesddf90
 
 
-subroutine zgesddf90(Matrix,Singular,UU,VV,flop)	
+subroutine zgesddf90(Matrix,Singular,UU,VV,flop)
 
-! 
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),UU(:,:),VV(:,:)
@@ -327,7 +327,7 @@ call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWOR
 
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 
 ! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
@@ -341,13 +341,13 @@ endif
 
 deallocate(WORK,RWORK,IWORK)
 if(present(flop))flop = flops_zgesdd(m,n)
-end subroutine zgesddf90	
+end subroutine zgesddf90
 
 
 
-subroutine dgesddf90(Matrix,Singular,UU,VV,flop)	
+subroutine dgesddf90(Matrix,Singular,UU,VV,flop)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:),UU(:,:),VV(:,:)
@@ -372,7 +372,7 @@ call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, IWOR
 
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 
 ! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
@@ -386,7 +386,7 @@ endif
 
 deallocate(WORK,IWORK)
 if(present(flop))flop = flops_dgesdd(m,n)
-end subroutine dgesddf90	
+end subroutine dgesddf90
 
 
 
@@ -403,7 +403,7 @@ type is (real(kind=8))
 	type is (real(kind=8))
 		call dgeqrff90(Matrix,tau,flop)
 	end select
-	
+
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
@@ -416,9 +416,9 @@ end subroutine geqrff90
 
 
 
-subroutine zgeqrff90(Matrix,tau,flop)	
+subroutine zgeqrff90(Matrix,tau,flop)
 
-! 
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
@@ -439,7 +439,7 @@ LWORK=-1
 call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
 
@@ -459,9 +459,9 @@ end subroutine zgeqrff90
 
 
 
-subroutine dgeqrff90(Matrix,tau,flop)	
+subroutine dgeqrff90(Matrix,tau,flop)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
@@ -482,7 +482,7 @@ LWORK=-1
 call DGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call DGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
 
@@ -503,9 +503,9 @@ end subroutine dgeqrff90
 
 
 
-subroutine geqp3f90(Matrix,jpvt,tau,flop)	
+subroutine geqp3f90(Matrix,jpvt,tau,flop)
 
-! 
+!
 
 implicit none
 class(*):: Matrix(:,:),tau(:)
@@ -516,22 +516,22 @@ select type(Matrix)
 type is (real(kind=8))
 	select type(tau)
 	type is (real(kind=8))
-		call dgeqp3f90(Matrix,jpvt,tau,flop)	
+		call dgeqp3f90(Matrix,jpvt,tau,flop)
 	end select
-	
+
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
-		call zgeqp3f90(Matrix,jpvt,tau,flop)	
+		call zgeqp3f90(Matrix,jpvt,tau,flop)
 	end select
 end select
 
 end subroutine geqp3f90
 
 
-subroutine zgeqp3f90(Matrix,jpvt,tau,flop)	
+subroutine zgeqp3f90(Matrix,jpvt,tau,flop)
 
-! 
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
@@ -555,8 +555,8 @@ RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
+allocate(WORK(LWORK))
+WORK=0
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
 
 if(INFO/=0)then
@@ -570,12 +570,12 @@ deallocate(RWORK)
 ! call geqp3(Matrix,jpvt,tau)
 if(present(flop))flop = flops_zgetrf(m,n)
 end subroutine zgeqp3f90
-	
 
 
-subroutine dgeqp3f90(Matrix,jpvt,tau,flop)	
 
-! 
+subroutine dgeqp3f90(Matrix,jpvt,tau,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
@@ -595,8 +595,8 @@ mn_min = min(m,n)
 LWORK=-1
 call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
+allocate(WORK(LWORK))
+WORK=0
 call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
 
 if(INFO/=0)then
@@ -608,12 +608,12 @@ deallocate(WORK)
 
 ! call geqp3(Matrix,jpvt,tau)
 if(present(flop))flop = flops_dgetrf(m,n)
-end subroutine dgeqp3f90	
-	
-	
-subroutine geqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+end subroutine dgeqp3f90
 
-! 
+
+subroutine geqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)
+
+!
 
 implicit none
 class(*):: Matrix(:,:),tau(:)
@@ -626,23 +626,23 @@ select type(Matrix)
 type is (real(kind=8))
 	select type(tau)
 	type is (real(kind=8))
-		call dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+		call dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)
 	end select
-	
+
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
-		call zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
+		call zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)
 	end select
 end select
 
-end subroutine geqp3modf90	
-	
-	
+end subroutine geqp3modf90
 
-subroutine dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
 
-! 
+
+subroutine dgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
@@ -667,8 +667,8 @@ call DGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK,INFO, RANK, RTOL, ATOL)
 
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
+allocate(WORK(LWORK))
+WORK=0
 ! call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
 call DGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK,INFO, RANK, RTOL, ATOL)
 
@@ -682,12 +682,12 @@ deallocate(WORK)
 
 ! call geqp3(Matrix,jpvt,tau)
 if(present(flop))flop = flops_dgeqpfmod(m,n,rank)
-end subroutine dgeqp3modf90		
-	
+end subroutine dgeqp3modf90
 
-subroutine zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)	
 
-! 
+subroutine zgeqp3modf90(Matrix,jpvt,tau,rtol,atol,rank,flop)
+
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
@@ -715,8 +715,8 @@ call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK,INFO, RANK, RTOL,
 
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK)) 
-WORK=0    
+allocate(WORK(LWORK))
+WORK=0
 ! call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
 call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
 
@@ -731,12 +731,12 @@ deallocate(RWORK)
 
 ! call geqp3(Matrix,jpvt,tau)
 if(present(flop))flop = flops_zgeqpfmod(m,n,rank)
-end subroutine zgeqp3modf90	
-	
+end subroutine zgeqp3modf90
 
-subroutine un_or_mqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
-! 
+subroutine un_or_mqrf90(a,tau,c,side,trans,m,n,k,flop)
+
+!
 
 implicit none
 class(*) a(:,:),tau(:),c(:,:)
@@ -750,7 +750,7 @@ type is (real(kind=8))
 	type is (real(kind=8))
 	select type(c)
 	type is (real(kind=8))
-		call ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
+		call ormqrf90(a,tau,c,side,trans,m,n,k,flop)
 	end select
 	end select
 type is (complex(kind=8))
@@ -758,19 +758,19 @@ type is (complex(kind=8))
 	type is (complex(kind=8))
 	select type(c)
 	type is (complex(kind=8))
-		call unmqrf90(a,tau,c,side,trans,m,n,k,flop)	
+		call unmqrf90(a,tau,c,side,trans,m,n,k,flop)
 	end select
 	end select
 end select
 
 
 end	subroutine un_or_mqrf90
-	
-	
-	
-subroutine ormqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
-! 
+
+
+subroutine ormqrf90(a,tau,c,side,trans,m,n,k,flop)
+
+!
 
 implicit none
 real(kind=8) a(:,:),tau(:),c(:,:)
@@ -784,7 +784,7 @@ real(kind=8),allocatable:: WORK(:)
 real(kind=8),optional::flop
 
 trans1=trans
-if(trans1=='C')trans1='T'  
+if(trans1=='C')trans1='T'
 
 ldc=size(c,1)
 lda=size(a,1)
@@ -793,7 +793,7 @@ LWORK=-1
 call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
 LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))
-WORK=0     
+WORK=0
 call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
 if(INFO/=0)then
@@ -807,11 +807,11 @@ deallocate(WORK)
 if(present(flop))flop = flops_dunmqr(side,m,n,k)
 end subroutine ormqrf90
 
-	
-	
-subroutine unmqrf90(a,tau,c,side,trans,m,n,k,flop)	
 
-! 
+
+subroutine unmqrf90(a,tau,c,side,trans,m,n,k,flop)
+
+!
 
 implicit none
 complex(kind=8)a(:,:),tau(:),c(:,:)
@@ -831,7 +831,7 @@ LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
 LWORK=NINT(dble(TEMP(1)*2.001))
 allocate(WORK(LWORK))
-WORK=0     
+WORK=0
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
 if(INFO/=0)then
@@ -845,8 +845,8 @@ deallocate(WORK)
 if(present(flop))flop = flops_zunmqr(side,m,n,k)
 end subroutine unmqrf90
 
-	
-	
+
+
 
 subroutine un_or_gqrf90(Matrix,tau,m,n,k,flop)
 class(*) Matrix(:,:),tau(:)
@@ -859,7 +859,7 @@ type is (real(kind=8))
 	type is (real(kind=8))
 		call orgqrf90(Matrix,tau,m,n,k,flop)
 	end select
-	
+
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
@@ -884,7 +884,7 @@ type is (real(kind=8))
 	type is (real(kind=8))
 		call porgqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
 	end select
-	
+
 type is (complex(kind=8))
 	select type(tau)
 	type is (complex(kind=8))
@@ -895,12 +895,12 @@ end select
 
 end subroutine pun_or_gqrf90
 
-	
-	
 
-subroutine orgqrf90(Matrix,tau,m,n,k,flop)	
 
-! 
+
+subroutine orgqrf90(Matrix,tau,m,n,k,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
@@ -919,7 +919,7 @@ LWORK=-1
 call DORGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call DORGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
@@ -934,13 +934,13 @@ deallocate(WORK)
 
 ! call ungqr(Matrix,tau)
 if(present(flop))flop = flops_dungqr(m,n,k)
-end subroutine orgqrf90	
-	
+end subroutine orgqrf90
+
 
 
 subroutine porgqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:),tau(:)
@@ -958,7 +958,7 @@ LWORK=-1
 call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
 
@@ -973,13 +973,13 @@ deallocate(WORK)
 
 ! call ungqr(Matrix,tau)
 if(present(flop))flop = flops_dungqr(m,n,k)
-end subroutine porgqrf90		
-	
-	
-	
-subroutine ungqrf90(Matrix,tau,m,n,k,flop)	
+end subroutine porgqrf90
 
-! 
+
+
+subroutine ungqrf90(Matrix,tau,m,n,k,flop)
+
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
@@ -996,7 +996,7 @@ LWORK=-1
 call ZUNGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call ZUNGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
@@ -1011,13 +1011,13 @@ deallocate(WORK)
 if(present(flop))flop = flops_zungqr(m,n,k)
 ! call ungqr(Matrix,tau)
 
-end subroutine ungqrf90	
-	
+end subroutine ungqrf90
 
-	
-subroutine pungqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)	
 
-! 
+
+subroutine pungqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+
+!
 
 implicit none
 complex(kind=8)Matrix(:,:),tau(:)
@@ -1033,7 +1033,7 @@ LWORK=-1
 call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
 
@@ -1048,11 +1048,11 @@ deallocate(WORK)
 if(present(flop))flop = flops_zungqr(m,n,k)
 ! call ungqr(Matrix,tau)
 
-end subroutine pungqrf90	
-	
-	
+end subroutine pungqrf90
 
-subroutine getrff90(Matrix,ipiv,flop)	
+
+
+subroutine getrff90(Matrix,ipiv,flop)
 class(*) Matrix(:,:)
 integer ipiv(:)
 real(kind=8),optional::flop
@@ -1065,12 +1065,12 @@ type is (complex(kind=8))
 end select
 
 end subroutine getrff90
-	
-		
 
-subroutine dgetrff90(Matrix,ipiv,flop)	
 
-! 
+
+subroutine dgetrff90(Matrix,ipiv,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:)
@@ -1083,24 +1083,24 @@ real(kind=8),optional::flop
 m=size(Matrix,1)
 n=size(Matrix,2)
 mn_min = min(m,n)
-	
+
 call DGETRF( m, n, Matrix, m, ipiv, INFO )
-	
+
 
 if(INFO/=0)then
 	write(*,*)'getrff90 failed!!',INFO
 	stop
 endif
-	
-	
-! call getrf(Matrix,ipiv)	
-if(present(flop))flop = flops_dgeqrf(m,n)
-end subroutine dgetrff90		
-	
-	
-subroutine zgetrff90(Matrix,ipiv,flop)	
 
-! 
+
+! call getrf(Matrix,ipiv)
+if(present(flop))flop = flops_dgeqrf(m,n)
+end subroutine dgetrff90
+
+
+subroutine zgetrff90(Matrix,ipiv,flop)
+
+!
 
 implicit none
 complex(kind=8) Matrix(:,:)
@@ -1112,23 +1112,23 @@ integer INFO
 m=size(Matrix,1)
 n=size(Matrix,2)
 mn_min = min(m,n)
-	
+
 call ZGETRF( m, n, Matrix, m, ipiv, INFO )
-	
+
 
 if(INFO/=0)then
 	write(*,*)'getrff90 failed!!',INFO
 	stop
 endif
-	
-	
-! call getrf(Matrix,ipiv)	
-if(present(flop))flop = flops_zgeqrf(m,n)
-end subroutine zgetrff90	
-	
 
-	
-subroutine getrsf90(Matrix,ipiv,B,trans,flop)	
+
+! call getrf(Matrix,ipiv)
+if(present(flop))flop = flops_zgeqrf(m,n)
+end subroutine zgetrff90
+
+
+
+subroutine getrsf90(Matrix,ipiv,B,trans,flop)
 class(*) Matrix(:,:),B(:,:)
 integer ipiv(:)
 character:: trans
@@ -1138,23 +1138,23 @@ select type(Matrix)
 type is (real(kind=8))
 	select type(B)
 	type is (real(kind=8))
-	call dgetrsf90(Matrix,ipiv,B,trans,flop)		
+	call dgetrsf90(Matrix,ipiv,B,trans,flop)
 	end select
 type is (complex(kind=8))
 	select type(B)
 	type is (complex(kind=8))
-	call zgetrsf90(Matrix,ipiv,B,trans,flop)		
+	call zgetrsf90(Matrix,ipiv,B,trans,flop)
 	end select
 end select
 
 end subroutine getrsf90
-		
-	
 
 
-subroutine dgetrsf90(Matrix,ipiv,B,trans,flop)	
 
-! 
+
+subroutine dgetrsf90(Matrix,ipiv,B,trans,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:),B(:,:)
@@ -1168,7 +1168,7 @@ n=size(Matrix,1)
 nrhs=size(B,2)
 
 trans1=trans
-if(trans1=='C')trans1='T' 
+if(trans1=='C')trans1='T'
 
 call DGETRS( trans1, n, nrhs, Matrix, n, ipiv, B, n, INFO )
 
@@ -1177,15 +1177,15 @@ if(INFO/=0)then
 	write(*,*)'getrsf90 failed!!',INFO
 	stop
 endif
-	
-	
-! call getrs(Matrix,ipiv,B,trans)	
-if(present(flop))flop = flops_dgetrs(n,nrhs)	
-end subroutine dgetrsf90		
-	
-subroutine zgetrsf90(Matrix,ipiv,B,trans,flop)	
 
-! 
+
+! call getrs(Matrix,ipiv,B,trans)
+if(present(flop))flop = flops_dgetrs(n,nrhs)
+end subroutine dgetrsf90
+
+subroutine zgetrsf90(Matrix,ipiv,B,trans,flop)
+
+!
 
 implicit none
 complex(kind=8) Matrix(:,:),B(:,:)
@@ -1206,34 +1206,34 @@ if(INFO/=0)then
 	write(*,*)'getrsf90 failed!!',INFO
 	stop
 endif
-	
-	
-! call getrs(Matrix,ipiv,B,trans)	
-if(present(flop))flop = flops_zgetrs(n,nrhs)	
-end subroutine zgetrsf90		
-	
-	
-	
 
-subroutine getrif90(Matrix,ipiv,flop)	
+
+! call getrs(Matrix,ipiv,B,trans)
+if(present(flop))flop = flops_zgetrs(n,nrhs)
+end subroutine zgetrsf90
+
+
+
+
+subroutine getrif90(Matrix,ipiv,flop)
 
 implicit none
 class(*) Matrix(:,:)
 integer ipiv(:)
-real(kind=8),optional::flop	
-	
+real(kind=8),optional::flop
+
 select type(Matrix)
 type is (real(kind=8))
-	call dgetrif90(Matrix,ipiv,flop)			
+	call dgetrif90(Matrix,ipiv,flop)
 type is (complex(kind=8))
-	call zgetrif90(Matrix,ipiv,flop)		
-end select	
-	
+	call zgetrif90(Matrix,ipiv,flop)
+end select
+
 end subroutine getrif90
 
-subroutine dgetrif90(Matrix,ipiv,flop)	
+subroutine dgetrif90(Matrix,ipiv,flop)
 
-! 
+!
 
 implicit none
 real(kind=8) Matrix(:,:)
@@ -1260,7 +1260,7 @@ LWORK=-1
 call DGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call DGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
 
@@ -1273,14 +1273,14 @@ endif
 deallocate(WORK)
 
 
-! call getri(Matrix,ipiv)	
+! call getri(Matrix,ipiv)
 if(present(flop))flop = flops_dgetri(mn_min)
-end subroutine dgetrif90	
-	
-	
-subroutine zgetrif90(Matrix,ipiv,flop)	
+end subroutine dgetrif90
 
-! 
+
+subroutine zgetrif90(Matrix,ipiv,flop)
+
+!
 
 implicit none
 complex(kind=8)Matrix(:,:)
@@ -1305,7 +1305,7 @@ LWORK=-1
 call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
 LWORK=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(LWORK))     
+allocate(WORK(LWORK))
 WORK=0
 call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
 
@@ -1318,15 +1318,15 @@ endif
 deallocate(WORK)
 
 
-! call getri(Matrix,ipiv)	
+! call getri(Matrix,ipiv)
 if(present(flop))flop = flops_zgetri(mn_min)
-end subroutine zgetrif90		
-	
+end subroutine zgetrif90
 
 
-	
 
-subroutine trsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+
+
+subroutine trsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)
 
 implicit none
 class(*) Matrix(:,:),B(:,:)
@@ -1338,23 +1338,23 @@ select type(Matrix)
 type is (real(kind=8))
 	select type(B)
 	type is (real(kind=8))
-	call dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+	call dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)
 	end select
 type is (complex(kind=8))
 	select type(B)
 	type is (complex(kind=8))
-	call ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+	call ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)
 	end select
 end select
 
 
 end subroutine trsmf90
-	
 
 
-subroutine dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
 
-! 
+subroutine dtrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)
+
+!
 
 implicit none
 real(kind=8) Matrix(:,:),B(:,:),alpha
@@ -1371,14 +1371,14 @@ lda=size(Matrix,1)
 call DTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
 
-! call trsm(Matrix,B,side,uplo,transa,diag)	
+! call trsm(Matrix,B,side,uplo,transa,diag)
 if(present(flop))flop = flops_dtrsm(side,m,n)
-end subroutine dtrsmf90		
+end subroutine dtrsmf90
 
 
-subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)	
+subroutine ztrsmf90(Matrix,B,side,uplo,transa,diag,m,n,flop)
 
-! 
+!
 
 implicit none
 complex(kind=8) Matrix(:,:),B(:,:),alpha
@@ -1396,9 +1396,9 @@ lda=size(Matrix,1)
 call ZTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
 
 
-! call trsm(Matrix,B,side,uplo,transa,diag)	
+! call trsm(Matrix,B,side,uplo,transa,diag)
 if(present(flop))flop = flops_ztrsm(side,m,n)
-end subroutine ztrsmf90		
+end subroutine ztrsmf90
 
 
 
@@ -1423,7 +1423,7 @@ type is (real(kind=8))
 	type is (real(kind=8))
 	select type(MatC)
 	type is (real(kind=8))
-	
+
 	if(present(al))then
 	select type(al)
 	type is (real(kind=8))
@@ -1436,18 +1436,18 @@ type is (real(kind=8))
 	type is (real(kind=8))
 		betar=be
 	end select
-	endif	
+	endif
 	call dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alphar,betar,flop)
-	
-	end select		
+
 	end select
-	
+	end select
+
 type is (complex(kind=8))
 	select type(MatB)
 	type is (complex(kind=8))
 	select type(MatC)
 	type is (complex(kind=8))
-	
+
 	if(present(al))then
 	select type(al)
 	type is (complex(kind=8))
@@ -1460,10 +1460,10 @@ type is (complex(kind=8))
 	type is (complex(kind=8))
 		betac=be
 	end select
-	endif	
+	endif
 	call zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alphac,betac,flop)
-	
-	end select		
+
+	end select
 	end select
 end select
 
@@ -1472,9 +1472,9 @@ end subroutine gemmf90
 
 
 
-subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
+subroutine dgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)
 
-! 
+!
 
 implicit none
 integer m,n,k,lda,ldb,ldc
@@ -1485,15 +1485,15 @@ real(kind=8),optional::flop
 
 call dgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
+! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)
 if(present(flop))flop = flops_dgemm(m,n,k)
 end subroutine dgemmf90
 
 
 
-subroutine zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)	
+subroutine zgemmf90(MatA,lda,MatB,ldb,MatC,ldc,transa,transb,m,n,k,alpha,beta,flop)
 
-! 
+!
 
 implicit none
 integer m,n,k,lda,ldb,ldc
@@ -1504,8 +1504,8 @@ real(kind=8),optional::flop
 
 call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)	
-if(present(flop))flop = flops_zgemm(m,n,k)				
+! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)
+if(present(flop))flop = flops_zgemm(m,n,k)
 end subroutine zgemmf90
 
 
@@ -1526,15 +1526,15 @@ type is (real(kind=8))
 	select type(MatC)
 	type is (real(kind=8))
 	select type(tau)
-	type is (real(kind=8))	
-	call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)	
+	type is (real(kind=8))
+	call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
 	end select
 	end select
 type is (complex(kind=8))
 	select type(MatC)
 	type is (complex(kind=8))
 	select type(tau)
-	type is (complex(kind=8))	
+	type is (complex(kind=8))
 	call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc,flop)
 	end select
 	end select
@@ -1558,8 +1558,8 @@ real(kind=8),optional::flop
 LWORK=-1
 call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0		
+allocate(WORK(lwork))
+WORK=0
 call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
 deallocate(WORK)
 
@@ -1582,8 +1582,8 @@ real(kind=8),optional::flop
 LWORK=-1
 call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0		
+allocate(WORK(lwork))
+WORK=0
 call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
 
 deallocate(WORK)
@@ -1608,12 +1608,12 @@ real(kind=8),optional::flop
 select type(Matrix)
 type is (real(kind=8))
 	select type(tau)
-	type is (real(kind=8))	
-	call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)	
+	type is (real(kind=8))
+	call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
 	end select
 type is (complex(kind=8))
 	select type(tau)
-	type is (complex(kind=8))	
+	type is (complex(kind=8))
 	call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)
 	end select
 end select
@@ -1641,11 +1641,11 @@ LWORK=-1
 LRWORK=-1
 call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
+allocate(WORK(lwork))
 WORK=0
 lrwork=NINT(dble(RTEMP(1)*2.001))
-allocate(RWORK(lrwork))     
-RWORK=0		
+allocate(RWORK(lrwork))
+RWORK=0
 call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
 
 deallocate(WORK)
@@ -1672,8 +1672,8 @@ LWORK=-1
 
 call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
-WORK=0	
+allocate(WORK(lwork))
+WORK=0
 call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
 
 deallocate(WORK)
@@ -1695,7 +1695,7 @@ select type(MatA)
 type is (real(kind=8))
 	select type(MatB)
 	type is (real(kind=8))
-	call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)	
+	call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 	end select
 type is (complex(kind=8))
 	select type(MatB)
@@ -1703,7 +1703,7 @@ type is (complex(kind=8))
 	call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 	end select
 end select
-end subroutine pgemr2df90	
+end subroutine pgemr2df90
 
 
 
@@ -1722,14 +1722,14 @@ type is (real(kind=8))
 	select type(c)
 	type is (real(kind=8))
 	select type(alpha)
-	type is (real(kind=8))	
+	type is (real(kind=8))
 	select type(beta)
-	type is (real(kind=8))		
+	type is (real(kind=8))
 	call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
 	if(present(flop))flop = flops_dgemm(m,n,k)
 	end select
-	end select	
-	end select	
+	end select
+	end select
 	end select
 type is (complex(kind=8))
 	select type(b)
@@ -1739,12 +1739,12 @@ type is (complex(kind=8))
 	select type(alpha)
 	type is (complex(kind=8))
 	select type(beta)
-	type is (complex(kind=8))	
+	type is (complex(kind=8))
 	call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
 	if(present(flop))flop = flops_zgemm(m,n,k)
 	end select
-	end select	
-	end select	
+	end select
+	end select
 	end select
 end select
 end subroutine pgemmf90
@@ -1763,11 +1763,11 @@ type is (real(kind=8))
 	select type(b)
 	type is (real(kind=8))
 	select type(alpha)
-	type is (real(kind=8))	
+	type is (real(kind=8))
 	call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
 	if(present(flop))flop = flops_dtrsm(side, m,n)
 	end select
-	end select	
+	end select
 type is (complex(kind=8))
 	select type(b)
 	type is (complex(kind=8))
@@ -1776,7 +1776,7 @@ type is (complex(kind=8))
 	call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
 	if(present(flop))flop = flops_ztrsm(side, m,n)
 	end select
-	end select		
+	end select
 end select
 end subroutine ptrsmf90
 
@@ -1793,12 +1793,12 @@ real(kind=8),optional::flop
 select type(a)
 type is (real(kind=8))
 	call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
-	if(present(flop))flop = flops_dgetrf(m,n)	
+	if(present(flop))flop = flops_dgetrf(m,n)
 type is (complex(kind=8))
-	call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)	
-	if(present(flop))flop = flops_zgetrf(m,n)		
+	call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)
+	if(present(flop))flop = flops_zgetrf(m,n)
 end select
-end subroutine pgetrff90	
+end subroutine pgetrff90
 
 
 subroutine pgetrif90(n, a, ia, ja, desca, ipiv,flop)
@@ -1839,8 +1839,8 @@ allocate(work(lwork))
 work=0
 liwork=TEMPI(1)
 allocate(iwork(liwork))
-iwork=0	
-call pdgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)	
+iwork=0
+call pdgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)
 deallocate(iwork)
 deallocate(work)
 
@@ -1872,9 +1872,9 @@ allocate(work(lwork))
 work=0
 liwork=TEMPI(1)
 allocate(iwork(liwork))
-iwork=0	
+iwork=0
 call pzgetri(n,a,1,1,desca,ipiv,work,lwork,iwork,liwork,info)
-	
+
 deallocate(iwork)
 deallocate(work)
 
@@ -1900,10 +1900,10 @@ type is (real(kind=8))
 	select type(u)
 	type is (real(kind=8))
 	select type(vt)
-	type is (real(kind=8))	
+	type is (real(kind=8))
 	call pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
 	end select
-	end select	
+	end select
 type is (complex(kind=8))
 	select type(u)
 	type is (complex(kind=8))
@@ -1911,7 +1911,7 @@ type is (complex(kind=8))
 	type is (complex(kind=8))
 	call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt,flop)
 	end select
-	end select		
+	end select
 end select
 
 end subroutine pgesvdf90
@@ -1928,7 +1928,7 @@ integer desca(9),descu(9),descvt(9)
 real(kind=8):: s(:)
 real(kind=8):: TEMP(1)
 integer LWORK,mnmax,mnmin
-real(kind=8),allocatable:: WORK(:)	
+real(kind=8),allocatable:: WORK(:)
 integer info
 real(kind=8),optional::flop
 mnmax = max(m,n)
@@ -1938,11 +1938,11 @@ lwork=-1
 call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, info)
 
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
+allocate(WORK(lwork))
 WORK=0
 call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, info)
 
-deallocate(WORK)	
+deallocate(WORK)
 if(present(flop))flop = flops_dgesvd(m,n)
 
 end subroutine pdgesvdf90
@@ -1959,7 +1959,7 @@ integer desca(9),descu(9),descvt(9)
 real(kind=8):: s(:)
 complex(kind=8):: TEMP(1)
 integer LWORK,mnmax,mnmin
-complex(kind=8),allocatable:: WORK(:)	
+complex(kind=8),allocatable:: WORK(:)
 real(kind=8),allocatable::RWORK(:)
 integer info
 real(kind=8),optional::flop
@@ -1973,21 +1973,21 @@ lwork=-1
 call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, rwork, info)
 
 lwork=NINT(dble(TEMP(1)*2.001))
-allocate(WORK(lwork))     
+allocate(WORK(lwork))
 WORK=0
 call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, rwork, info)
 
 
-deallocate(WORK,rwork)	
+deallocate(WORK,rwork)
 if(present(flop))flop = flops_zgesvd(m,n)
 
 end subroutine pzgesvdf90
 
 
 real(kind=8) function flops_zgesdd(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		flops_zgesdd = 4.*(8.*m*n*n + 4./3.*n*n*n)
 	else
 		flops_zgesdd = 4.*(8.*n*m*m + 4./3.*m*m*m)
@@ -1995,9 +1995,9 @@ real(kind=8) function flops_zgesdd(m, n)
 end function flops_zgesdd
 
 real(kind=8) function flops_dgesdd(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		flops_dgesdd = 8.*m*n*n + 4./3.*n*n*n
 	else
 		flops_dgesdd = 8.*n*m*m + 4./3.*m*m*m
@@ -2006,9 +2006,9 @@ end function flops_dgesdd
 
 
 real(kind=8) function flops_zgesvd(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		flops_zgesvd = 4.*(12.*m*n*n + 16./3.*n*n*n)
 	else
 		flops_zgesvd = 4.*(12.*n*m*m + 16./3.*m*m*m)
@@ -2017,9 +2017,9 @@ end function flops_zgesvd
 
 
 real(kind=8) function flops_dgesvd(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		flops_dgesvd = 12.*m*n*n + 16./3.*n*n*n
 	else
 		flops_dgesvd = 12.*n*m*m + 16./3.*m*m*m
@@ -2028,9 +2028,9 @@ end function flops_dgesvd
 
 
 real(kind=8) function flops_dgeqpfmod(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
-	if(m>n)then	
+	if(m>n)then
 		flops_dgeqpfmod = 2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k))
 	else
 		flops_dgeqpfmod = 2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k))
@@ -2038,9 +2038,9 @@ real(kind=8) function flops_dgeqpfmod(m, n, k)
 end function flops_dgeqpfmod
 
 real(kind=8) function flops_zgeqpfmod(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
-	if(m>n)then	
+	if(m>n)then
 		flops_zgeqpfmod = 4.*(2.*m*n*n - 2./3.*n*n*n - (2.*(m-k)*(n-k)*(n-k) - 2./3.*(n-k)*(n-k)*(n-k)))
 	else
 		flops_zgeqpfmod = 4.*(2.*n*m*m - 2./3.*m*m*m - (2.*(n-k)*(m-k)*(m-k) - 2./3.*(m-k)*(m-k)*(m-k)))
@@ -2050,30 +2050,30 @@ end function flops_zgeqpfmod
 
 
 real(kind=8) function fmuls_geqrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		fmuls_geqrf = m*n*n - 1./3.*n*n*n +   m*n + 0.5*n*n + 23./6.*n
 	else
 		fmuls_geqrf = n*m*m - 1./3.*m*m*m + 2*n*m - 0.5*m*m + 23./6.*m
 	endif
 end function fmuls_geqrf
 real(kind=8) function fadds_geqrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	if(m>n)then	
+	if(m>n)then
 		fadds_geqrf = m*n*n - 1./3.*n*n*n + 0.5*n*n       + 5./6.*n
 	else
 		fadds_geqrf = n*m*m - 1./3.*m*m*m + n*m - 0.5*m*m + 5./6.*m
 	endif
 end function fadds_geqrf
 real(kind=8) function flops_zgeqrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
 	flops_zgeqrf = 6.*fmuls_geqrf(m, n) + 2.*fadds_geqrf(m, n)
 end function flops_zgeqrf
 real(kind=8) function flops_dgeqrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
 	flops_dgeqrf = fmuls_geqrf(m, n) + fadds_geqrf(m, n)
 end function flops_dgeqrf
@@ -2081,22 +2081,22 @@ end function flops_dgeqrf
 
 
 real(kind=8) function fmuls_ungqr(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
     fmuls_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + 2.*n*k - k*k - 5./3.*k
 end function fmuls_ungqr
 real(kind=8) function fadds_ungqr(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
     fadds_ungqr = 2.*m*n*k - (m + n)*k*k + 2./3.*k*k*k + n*k - m*k + 1./3.*k
 end function fadds_ungqr
 real(kind=8) function flops_zungqr(m, n,k)
-	implicit none 
+	implicit none
 	integer m,n,k
 	flops_zungqr = 6.*fmuls_ungqr(m, n,k) + 2.*fadds_ungqr(m, n,k)
 end function flops_zungqr
 real(kind=8) function flops_dungqr(m, n,k)
-	implicit none 
+	implicit none
 	integer m,n,k
 	flops_dungqr = fmuls_ungqr(m, n,k) + fadds_ungqr(m, n,k)
 end function flops_dungqr
@@ -2138,32 +2138,32 @@ end function flops_dunmqr
 
 
 real(kind=8) function fmuls_getrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	
-	if(m>n)then	
+
+	if(m>n)then
 		fmuls_getrf = 0.5*m*n*n - 1./6.*n*n*n + 0.5*m*n - 0.5*n*n + 2./3.*n
 	else
 		fmuls_getrf = 0.5*n*m*m - 1./6.*m*m*m + 0.5*n*m - 0.5*m*m + 2./3.*m
-	endif	
+	endif
 end function fmuls_getrf
 real(kind=8) function fadds_getrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
-	
-	if(m>n)then	
+
+	if(m>n)then
 		fadds_getrf = 0.5*m*n*n - 1./6.*n*n*n - 0.5*m*n + 1./6.*n
 	else
 		fadds_getrf = 0.5*n*m*m - 1./6.*m*m*m - 0.5*n*m + 1./6.*m
-	endif	
+	endif
 end function fadds_getrf
 real(kind=8) function flops_zgetrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
 	flops_zgetrf = 6.*fmuls_getrf(m, n) + 2.*fadds_getrf(m, n)
 end function flops_zgetrf
 real(kind=8) function flops_dgetrf(m, n)
-	implicit none 
+	implicit none
 	integer m,n
 	flops_dgetrf = fmuls_getrf(m, n) + fadds_getrf(m, n)
 end function flops_dgetrf
@@ -2175,19 +2175,19 @@ real(kind=8) function fmuls_getrs(n, nrhs)
 	implicit none
 	integer n,nrhs
     fmuls_getrs =  nrhs*n*n
-end function fmuls_getrs	
+end function fmuls_getrs
 real(kind=8) function fadds_getrs(n, nrhs)
 	implicit none
 	integer n,nrhs
     fadds_getrs =  nrhs*n*(n - 1)
-end function fadds_getrs	
+end function fadds_getrs
 real(kind=8) function flops_zgetrs(n, nrhs)
-	implicit none 
+	implicit none
 	integer n,nrhs
 	flops_zgetrs = 6.*fmuls_getrs(n,nrhs) + 2.*fadds_getrs(n,nrhs)
 end function flops_zgetrs
 real(kind=8) function flops_dgetrs(n, nrhs)
-	implicit none 
+	implicit none
 	integer n,nrhs
 	flops_dgetrs = fmuls_getrs(n,nrhs) + fadds_getrs(n,nrhs)
 end function flops_dgetrs
@@ -2195,22 +2195,22 @@ end function flops_dgetrs
 
 
 real(kind=8) function fmuls_getri(n)
-	implicit none 
+	implicit none
 	integer n
     fmuls_getri = 2./3.*n*n*n + 0.5*n*n + 5./6.*n
-end function fmuls_getri	
+end function fmuls_getri
 real(kind=8) function fadds_getri(n)
-	implicit none 
+	implicit none
 	integer n
     fadds_getri = 2./3.*n*n*n - 1.5*n*n + 5./6.*n
-end function fadds_getri	
+end function fadds_getri
 real(kind=8) function flops_zgetri(n)
-	implicit none 
+	implicit none
 	integer n
 	flops_zgetri = 6.*fmuls_getri(n) + 2.*fadds_getri(n)
 end function flops_zgetri
 real(kind=8) function flops_dgetri(n)
-	implicit none 
+	implicit none
 	integer n
 	flops_dgetri = fmuls_getri(n) + fadds_getri(n)
 end function flops_dgetri
@@ -2224,7 +2224,7 @@ real(kind=8) function fmuls_trsm(side, m, n)
 	elseif(side=='R')then
 		fmuls_trsm = 0.5*m*n*(n + 1)
 	endif
-end function fmuls_trsm	
+end function fmuls_trsm
 real(kind=8) function fadds_trsm(side, m, n)
 	integer m,n
 	character side
@@ -2233,7 +2233,7 @@ real(kind=8) function fadds_trsm(side, m, n)
 	elseif(side=='R')then
 		fadds_trsm = 0.5*m*n*(n - 1)
 	endif
-end function fadds_trsm	
+end function fadds_trsm
 real(kind=8) function flops_ztrsm(side, m, n)
 	integer m,n
 	character side
@@ -2247,22 +2247,22 @@ end function flops_dtrsm
 
 
 real(kind=8) function fmuls_gemm(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
     fmuls_gemm = m*n*k
 end function fmuls_gemm
 real(kind=8) function fadds_gemm(m, n, k)
-	implicit none 
+	implicit none
 	integer m,n,k
     fadds_gemm = m*n*k
 end function fadds_gemm
 real(kind=8) function flops_zgemm(m, n,k)
-	implicit none 
+	implicit none
 	integer m,n,k
 	flops_zgemm = 6.*fmuls_gemm(m, n,k) + 2.*fadds_gemm(m, n,k)
 end function flops_zgemm
 real(kind=8) function flops_dgemm(m, n,k)
-	implicit none 
+	implicit none
 	integer m,n,k
 	flops_dgemm = fmuls_gemm(m, n,k) + fadds_gemm(m, n,k)
 end function flops_dgemm

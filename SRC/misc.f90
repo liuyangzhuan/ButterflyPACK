@@ -9,7 +9,7 @@
 ! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
 ! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
-! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
@@ -22,23 +22,23 @@ include "mkl_vsl.f90"
 module misc
 use BPACK_DEFS
 #ifdef Intel
-USE IFPORT    
-#endif  
+USE IFPORT
+#endif
 use omp_lib
 use DenseLA
 
 
-integer, parameter :: int64 = selected_int_kind(18) 
+integer, parameter :: int64 = selected_int_kind(18)
 
 contains
- 
+
 ! #ifndef mymacro(x)
 ! #define mymacro(x) print *, "Now giving information about ", "x" ; \
                    ! call mysub( x, size(x,1), size(x,2) ) ; \
                    ! print *, "About to do function on ", "x"; \
                    ! call dofunction(x) ; \
                    ! print *, "x"," is a nice matrix! Huzzah!"
-! #endif		
+! #endif
 
 
 subroutine linspaceI(startI,endI,N,array)
@@ -63,34 +63,34 @@ end subroutine linspaceI
 
 
 
- 
+
   subroutine copymatT(A,B,m,n)
-	implicit none 
+	implicit none
 	integer m,n
-	DT::A(:,:),B(:,:) 
+	DT::A(:,:),B(:,:)
 	real(kind=8)::n1,n2
 	integer ii,jj,ijind
-	
+
 	! n1 = OMP_get_wtime()
-	
-	
-	! !$omp parallel do default(shared) private(ii,jj)	
+
+
+	! !$omp parallel do default(shared) private(ii,jj)
 		do ii =1,m
 		do jj =1,n
 			B(jj,ii) = A(ii,jj)
 		end do
 		end do
-	! !$omp end parallel do		
-	
+	! !$omp end parallel do
+
 	! n2 = OMP_get_wtime()
 	! time_memcopy = time_memcopy + n2-n1
-	
+
  end subroutine copymatT
- 
+
 
 function isnanMat(A,m,n)
-	implicit none 
-	logical:: isnanMat 
+	implicit none
+	logical:: isnanMat
 	DT::A(:,:)
 	integer m,n,ii,jj
 	isnanMat = .false.
@@ -99,12 +99,12 @@ function isnanMat(A,m,n)
 		isnanMat = isnanMat .or. isnan(abs(A(ii,jj)))
 	end do
 	end do
- end function isnanMat 
- 
- 
+ end function isnanMat
+
+
 ! function fnorm(A,m,n)
-	! implicit none 
-	! real(kind=8):: fnorm 
+	! implicit none
+	! real(kind=8):: fnorm
 	! DT::A(m,n)
 	! integer m,n,ii,jj
 	! fnorm = 0
@@ -115,33 +115,33 @@ function isnanMat(A,m,n)
 	! end do
 	! fnorm = sqrt(fnorm)
  ! end function fnorm
- 
+
 
 subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
-	
-	
+
+
     use BPACK_DEFS
     implicit none
-	
+
 	integer N,M,rmax
 	real(kind=8),optional:: Flops
 	real(kind=8):: flop
 	real(kind=8) SVD_tolerance
 	integer i, j, ii, jj, indx, rank_1, rank_2
 	integer rank, ranknew,ldaU,ldaV
-	
-	DT::matU(:,:),matV(:,:)	
-	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+
+	DT::matU(:,:),matV(:,:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
 	real(kind=8), allocatable :: Singularsml(:)
 	integer,allocatable :: jpvt1(:),jpvt2(:)
 
 	if(present(Flops))Flops=0d0
-	
+
 	ldaU = size(matU,1)
 	ldaV = size(matV,1)
- 
+
 	call assert(rmax<=min(M,N),'rmax too big in LR_ReCompression')
-	
+
 	allocate(QQ1(M,rmax))
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	QQ1 = matU(1:M,1:rmax)
@@ -151,7 +151,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! call geqp3f90(QQ1,jpvt1,tau_Q)
 	call geqrff90(QQ1,tau_Q,flop=flop)
 	if(present(Flops))Flops = Flops + flop
-	
+
 	allocate (RR1(rmax,rmax))
 	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -160,7 +160,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 			RR1(i,j)=QQ1(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 	call un_or_gqrf90(QQ1,tau_Q,M,rmax,rmax,flop=flop)
 	deallocate(tau_Q)
 	! deallocate(jpvt1)
@@ -175,7 +175,7 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	call geqrff90(QQ2,tau_Q,flop=flop)
 
 	if(present(Flops))Flops = Flops + flop
-	
+
 	allocate (RR2(rmax,rmax))
 	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -184,13 +184,13 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 			RR2(i,j)=QQ2(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 
 	call un_or_gqrf90(QQ2,tau_Q,N,rmax,rmax,flop=flop)
 	! deallocate(jpvt2)
 	deallocate(tau_Q)
 	if(present(Flops))Flops = Flops + flop
-	
+
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
 	! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
@@ -205,26 +205,26 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 	! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
 	call gemmf90(QQ1,M,UUsml,rmax,matU,ldaU,'N','N',M,ranknew,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops = Flops + flop
-	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV) 
+	! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV)
 	call gemmf90(VVsml,rmax,QQ2,N,matV,ldaV,'N','T',ranknew,N,rmax, cone,czero,flop=flop)
-	if(present(Flops))Flops = Flops + flop	
-	
+	if(present(Flops))Flops = Flops + flop
+
 	rank = ranknew
-	
-	
+
+
 	deallocate(mattemp,RR1,QQ1,UUsml,VVsml,Singularsml)
 	deallocate(QQ2,RR2)
 
 
-end subroutine LR_ReCompression		
-	
+end subroutine LR_ReCompression
+
 
 subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
-	
-	
+
+
     use BPACK_DEFS
     implicit none
-	
+
 	integer N,M,ruv,rup
 	real(kind=8) normUVupdate,normUV,inner_UV
 	real(kind=8),optional:: Flops
@@ -233,13 +233,13 @@ subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 	integer i, j, k, ii, jj, indx, rank_1, rank_2
 	integer rank, ranknew,mn, ranknew1, ranknew2
 	DT::ctemp,inner_V,inner_U
-	DT::matU(:,:),matV(:,:)	
-	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
+	DT::matU(:,:),matV(:,:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)
 	real(kind=8), allocatable :: Singularsml(:),Singular(:)
 	integer,allocatable :: jpvt(:),jpvt1(:),jpvt2(:)
 
-	if(present(Flops))Flops=0	
-	
+	if(present(Flops))Flops=0
+
 		inner_UV=0
 		!$omp parallel do default(shared) private(j,i,k,ctemp,inner_V,inner_U) reduction(+:inner_UV)
 		do j=1,ruv
@@ -249,20 +249,20 @@ subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 			inner_UV=inner_UV+2*dble(inner_U*inner_V)
 			enddo
 		enddo
-		!$omp end parallel do	
-	
+		!$omp end parallel do
+
 		normUV = sqrt(normUV**2d0+normUVupdate**2d0+inner_UV)
-	
+
 		if(present(Flops))Flops= Flops + (M+N)*ruv*rup
-	
-end subroutine LR_FnormUp	
+
+end subroutine LR_FnormUp
 
 subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
-	
-	
+
+
     use BPACK_DEFS
     implicit none
-	
+
 	integer N,M,rmax
 	real(kind=8) norm
 	real(kind=8),optional:: Flops
@@ -270,17 +270,17 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	real(kind=8) tolerance
 	integer i, j, ii, jj, indx, rank_1, rank_2
 	integer rank, ranknew,mn, ranknew1, ranknew2
-	
-	DT::matU(:,:),matV(:,:)	
-	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)	
+
+	DT::matU(:,:),matV(:,:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UU(:,:),VV(:,:)
 	real(kind=8), allocatable :: Singularsml(:),Singular(:)
 	integer,allocatable :: jpvt(:),jpvt1(:),jpvt2(:)
 
 	if(present(Flops))Flops=0
-	
+
 	! mn= min(M,rmax)
 
-	
+
 	! allocate(QQ1(M,rmax))
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 
@@ -292,23 +292,23 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! VV(ii,:) = VV(ii,:)*Singular(ii)
 	! enddo
 	! ! allocate(QQ2(rmax,N))
-	! ! call copymatN(matV(1:rmax,1:N),QQ2,rmax,N)	
-	
+	! ! call copymatN(matV(1:rmax,1:N),QQ2,rmax,N)
+
 	! allocate(mattemp(mn,N))
 	! mattemp=0
 	! call zgemm('N','N',mn,N,rmax, cone, VV, mn,matV,size(matV,1),czero,mattemp,mn)
 
 	! norm = fnorm(mattemp,mn,N)
-	
+
 	! deallocate(QQ1)
 	! deallocate(UU)
 	! deallocate(VV)
 	! deallocate(Singular)
 	! deallocate(mattemp)
-	
-	
-	
-	
+
+
+
+
 	allocate(QQ1(M,rmax))
 	! call copymatN(matU(1:M,1:rmax),QQ1,M,rmax)
 	QQ1 = matU(1:M,1:rmax)
@@ -325,7 +325,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 			RR1(i,j)=QQ1(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 
 	allocate(QQ2(N,rmax))
 	call copymatT(matV(1:rmax,1:N),QQ2,rmax,N)
@@ -333,7 +333,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	call geqrff90(QQ2,tau_Q,flop=flop)
 	if(present(Flops))Flops= Flops + flop
 	deallocate(tau_Q)
-	
+
 	allocate (RR2(rmax,rmax))
 	RR2=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -342,7 +342,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 			RR2(i,j)=QQ2(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 
 	allocate(mattemp(rmax,rmax))
 	mattemp=0
@@ -350,22 +350,22 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	call gemmf90(RR1,rmax,RR2,rmax,mattemp,rmax,'N','T',rmax,rmax,rmax, cone,czero,flop=flop)
 	if(present(Flops))Flops= Flops + flop
 	norm = fnorm(mattemp,rmax,rmax)
-	
+
 	deallocate(mattemp,RR1,QQ1)
 	deallocate(QQ2,RR2)
-	
 
-	
-	
+
+
+
 	! allocate(QQ1(M,rmax))
 	! QQ1 = matU(1:M,1:rmax)
 	! allocate (tau_Q(rmax))
 	! allocate (jpvt1(rmax))
 	! jpvt1=0
 	! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,SafeUnderflow,ranknew1,flop=flop)
-	! if(present(Flops))Flops= Flops + flop	
+	! if(present(Flops))Flops= Flops + flop
 	! deallocate(tau_Q)
-	
+
 
 	! allocate(QQ2(N,rmax))
 	! call copymatT(matV(1:rmax,1:N),QQ2,rmax,N)
@@ -373,9 +373,9 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! allocate (jpvt2(rmax))
 	! jpvt2=0
 	! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,SafeUnderflow,ranknew2,flop=flop)
-	! if(present(Flops))Flops= Flops + flop	
+	! if(present(Flops))Flops= Flops + flop
 	! deallocate(tau_Q)
-	
+
 	! if(ranknew1>0 .and. ranknew2>0)then
 		! allocate (RR1(ranknew1,rmax))
 		! RR1=0d0
@@ -385,8 +385,8 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 				! RR1(i,jpvt1(j))=QQ1(i,j)
 			! enddo
 		! enddo
-		! ! !$omp end parallel do		
-		
+		! ! !$omp end parallel do
+
 		! allocate (RR2(ranknew2,rmax))
 		! RR2=0d0
 		! ! !$omp parallel do default(shared) private(i,j)
@@ -395,27 +395,27 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 				! RR2(i,jpvt2(j))=QQ2(i,j)
 			! enddo
 		! enddo
-		! ! !$omp end parallel do	
-		
+		! ! !$omp end parallel do
+
 		! allocate(mattemp(ranknew1,ranknew2))
 		! mattemp=0
 		! ! call zgemm('N','T',ranknew1,ranknew2,rmax, cone, RR1, ranknew1,RR2,ranknew2,czero,mattemp,ranknew1)
 		! call gemmf90(RR1, ranknew1,RR2,ranknew2,mattemp,ranknew1,'N','T',ranknew1,ranknew2,rmax, cone,czero,flop=flop)
-		
-		
+
+
 		! norm = fnorm(mattemp,rmax,rmax)
-		
+
 		! deallocate(mattemp,RR1,QQ1)
-		! deallocate(QQ2,RR2)		
-		! deallocate(jpvt1,jpvt2)		
-		
+		! deallocate(QQ2,RR2)
+		! deallocate(jpvt1,jpvt2)
+
 	! else
 		! norm=0
-		! deallocate(QQ2,QQ1)		
-		! deallocate(jpvt1,jpvt2)				
+		! deallocate(QQ2,QQ1)
+		! deallocate(jpvt1,jpvt2)
 	! endif
 
-	
+
 
 	! allocate(QQ1(M,rmax))
 	! QQ1 = matU(1:M,1:rmax)
@@ -427,7 +427,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 	! ! call geqp3f90(QQ1,jpvt,tau_Q)
 	! ranknew=rmax
 
-	
+
 	! if(ranknew>0)then
 		! allocate (RR1(ranknew,rmax))
 		! RR1=0d0
@@ -437,7 +437,7 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 				! RR1(i,j)=QQ1(i,j)
 			! enddo
 		! enddo
-		! ! !$omp end parallel do	
+		! ! !$omp end parallel do
 
 		! call un_or_gqrf90(QQ1,tau_Q,M,rmax,rmax,flop=flop)
 		! if(present(Flops))Flops= Flops + flop
@@ -450,29 +450,29 @@ subroutine LR_Fnorm(matU,matV,M,N,rmax,norm,tolerance,Flops)
 		! mattemp=0
 		! ! call zgemm('N','N',ranknew,N,rmax, cone, RR1, ranknew,QQ2,rmax,czero,mattemp,ranknew)
 		! call gemmf90(RR1, ranknew,QQ2,rmax,mattemp,ranknew,'N','N',ranknew,N,rmax, cone,czero,flop=flop)
-		
-		! norm = fnorm(mattemp,ranknew,rmax)
-		
-		! deallocate(mattemp,RR1)
-		! deallocate(QQ2)	
-	! else 
-		! norm=0
-	! endif	
-	
-	! deallocate(tau_Q)	
-	! deallocate(jpvt)
-	! deallocate(QQ1)		
-	
 
-end subroutine LR_Fnorm		
-	
-	 
+		! norm = fnorm(mattemp,ranknew,rmax)
+
+		! deallocate(mattemp,RR1)
+		! deallocate(QQ2)
+	! else
+		! norm=0
+	! endif
+
+	! deallocate(tau_Q)
+	! deallocate(jpvt)
+	! deallocate(QQ1)
+
+
+end subroutine LR_Fnorm
+
+
 
 
 subroutine GetRank(M,N,mat,rank,eps,flop)
-! 
-! 
-implicit none 
+!
+!
+implicit none
 integer M,N,rank,mn,i,mnl,ii,jj
 DT::mat(:,:)
 real(kind=8) eps
@@ -506,28 +506,28 @@ else
 	if(isnan(sum(Singular)))then
 		deallocate(UU,VV,Singular)
 		write(*,*)'gesvd_robust wrong in GetRank, switching to QR'
-		
+
 		allocate(Atmp(mnl,mn))
 		allocate(A_tmp(mn,mn))
-		
+
 		if(M>=N)then
 			Atmp = mat
-		else 
+		else
 			call copymatT(mat,Atmp,M,N)
 		end if
-				
+
 		allocate(jpvt(mn))
 		allocate(tau(mn))
-		
-		
-		
+
+
+
 		! RRQR
 		jpvt = 0
 		call geqp3f90(Atmp,jpvt,tau,flop)
 		if(isnan(fnorm(Atmp,mnl,mn)))then
 			write(*,*)'Q or R has NAN in GetRank'
 			stop
-		end if		
+		end if
 		A_tmp = 0
 		!$omp parallel do default(shared) private(ii,jj)
 		do ii=1, mn
@@ -536,8 +536,8 @@ else
 			enddo
 		enddo
 		!$omp end parallel do
-		
-		
+
+
 		rank = mn
 		do i=1,mn
 			if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/mnl<=eps) then
@@ -551,9 +551,9 @@ else
 		deallocate(tau)
 		deallocate(Atmp)
 		deallocate(A_tmp)
-		
 
-	else 
+
+	else
 
 		! write(*,*)Singular,'hh'
 
@@ -564,7 +564,7 @@ else
 				if(Singular(i)<Singular(1)*eps/10 .or. Singular(i)<1d-60)rank = i -1
 				exit
 			end if
-		end do	
+		end do
 
 
 		deallocate(UU,VV,Singular)
@@ -580,7 +580,7 @@ end subroutine GetRank
 
 subroutine PComputeRange(M_p,N,mat,rank,eps,ptree,pgno,Flops)
 
-implicit none 
+implicit none
 integer M,N,M_loc,rank,mn,i,mnl,ii,jj,rrflag
 DT::mat(:,:)
 real(kind=8) eps
@@ -600,41 +600,41 @@ real(kind=8),optional:: Flops
 rank=0
 
 if(present(Flops))Flops=0d0
-	
+
 	proc = ptree%MyID - ptree%pgrp(pgno)%head
 	nproc = ptree%pgrp(pgno)%nproc
 	M_loc = M_p(proc+1,2)-M_p(proc+1,1)+1
 	M = M_p(nproc,2)
-		
-	if(nproc==1)then	
+
+	if(nproc==1)then
 		call ComputeRange(M,N,mat,rank,1,eps,Flops=flop)
-		if(present(Flops))Flops = Flops + flop 
+		if(present(Flops))Flops = Flops + flop
 	else
 
-		mn=min(M,N)	
+		mn=min(M,N)
 
-		
+
 		!!!!**** generate 2D grid blacs quantities
-		ctxt = ptree%pgrp(pgno)%ctxt		
-		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+		ctxt = ptree%pgrp(pgno)%ctxt
+		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 			myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
 			call descinit( descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			allocate(mat2D(myArows,myAcols))
-			mat2D=0			
-		else 
+			mat2D=0
+		else
 			descsMat2D(2)=-1
 			allocate(mat2D(1,1))
-			mat2D=0	
+			mat2D=0
 		endif
 
 
 		!!!!**** redistribution of input matrix
-		call Redistribute1Dto2D(mat,M_p,0,pgno,mat2D,M,0,pgno,N,ptree)	
-		
+		call Redistribute1Dto2D(mat,M_p,0,pgno,mat2D,M,0,pgno,N,ptree)
 
-		! Compute RRQR 
+
+		! Compute RRQR
 		if(myrow/=-1 .and. mycol/=-1)then
 			allocate(ipiv(myAcols))
 			ipiv=0
@@ -647,36 +647,36 @@ if(present(Flops))Flops=0d0
 			call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank,eps, SafeUnderflow,flop=flop)
 			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
 			call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1,flop=flop)
-			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol) 
-			
+			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
+
 			deallocate(ipiv)
 			deallocate(tau)
 			deallocate(jpiv)
 			deallocate(JPERM)
-			
+
 			if(isnan(fnorm(mat2D,myArows,myAcols)))then
 				write(*,*)'Q or R has NAN in PComputeRange'
 				stop
-			end if			
+			end if
 		endif
-		
+
 		call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm,ierr)
-		
+
 		!!!!**** redistribution of output matrix
-		call Redistribute2Dto1D(mat2D,M,0,pgno,mat,M_p,0,pgno,N,ptree)		
-		
-		
+		call Redistribute2Dto1D(mat2D,M,0,pgno,mat,M_p,0,pgno,N,ptree)
+
+
 		deallocate(mat2D)
-	endif	
-	
-end subroutine PComputeRange		
-		
-		
+	endif
+
+end subroutine PComputeRange
+
+
 
 
 subroutine ComputeRange(M,N,mat,rank,rrflag,eps,Flops)
 
-implicit none 
+implicit none
 integer M,N,rank,mn,i,mnl,ii,jj,rrflag
 DT::mat(:,:)
 real(kind=8) eps
@@ -698,7 +698,7 @@ if(present(Flops))Flops=0d0
 	jpvt = 0
 	allocate(tau(mn))
 	if(rrflag==1)then
-		! RRQR	
+		! RRQR
 		call geqp3modf90(mat,jpvt,tau,eps,SafeUnderflow,rank,flop=flop)
 		if(present(Flops))Flops = Flops + flop
 		call un_or_gqrf90(mat,tau,M,rank,rank,flop=flop)
@@ -709,13 +709,13 @@ if(present(Flops))Flops=0d0
 		call un_or_gqrf90(mat,tau,M,N,mn,flop=flop)
 		if(present(Flops))Flops = Flops + flop
 		rank=mn
-	endif	
+	endif
 	if(isnan(fnorm(mat,M,N)))then
 		write(*,*)'Q or R has NAN in ComputeRange'
 		stop
-	end if		
-	
-	
+	end if
+
+
 	deallocate(jpvt)
 	deallocate(tau)
 
@@ -726,10 +726,10 @@ end subroutine ComputeRange
 subroutine CheckRandomizedLR(M,N,mat,tolerance)
 
 
-implicit none 
+implicit none
 integer M,N,rank,mn,i,j,k,rankmax_c,rankmax_r,rankmax_min,flag0,rank_new,rmax
 DT::mat(M,N),ctemp
-DT,allocatable::mat1(:,:),mat2(:,:)								
+DT,allocatable::mat1(:,:),mat2(:,:)
 real(kind=8) tolerance,Smax
 DT, allocatable :: UU(:,:), VV(:,:),matrix_U(:,:), matrix_V(:,:),U_new(:,:),V_new(:,:),U_new1(:,:),V_new1(:,:),test_in(:,:),test_out1(:,:),test_out2(:,:),test_out3(:,:)
 real(kind=8),allocatable :: Singular(:)
@@ -737,7 +737,7 @@ integer,allocatable:: select_row(:), select_column(:)
 DT,allocatable::MatrixSubselection(:,:)
 
 allocate(mat1(M,N))
-allocate(mat2(M,N))		   
+allocate(mat2(M,N))
 call GetRank(M,N,mat,rank,tolerance)
 rankmax_r = rank*3
 write(*,*)rankmax_r,min(m,n)
@@ -758,8 +758,8 @@ rankmax_min = min(rankmax_r,rankmax_c)
 
 
 allocate(select_row(rankmax_r),select_column(rankmax_c))
-call linspaceI(1,M,rankmax_r,select_row)	
-call linspaceI(1,N,rankmax_c,select_column)	
+call linspaceI(1,M,rankmax_r,select_row)
+call linspaceI(1,N,rankmax_c,select_column)
 
 allocate (MatrixSubselection(rankmax_r,rankmax_c))
 MatrixSubselection = mat(select_row,select_column)
@@ -807,10 +807,10 @@ write(*,*)'rank=',rank,'rank_new',rank_new
 ! call gemm_omp(U_new1,V_new1,mat2,M,N,rank_new)
 ! write(*,*)Singular(1:rank_new+2)
 Smax = Singular(1)
-        
+
 allocate(U_new(M,rank_new))
 allocate(V_new(rank_new,N))
-		
+
 do j=1, rank_new
 	do i=1, M
 		ctemp=0
@@ -821,7 +821,7 @@ do j=1, rank_new
 	enddo
 enddo
 
-		
+
 do j=1, rank_new
 	do i=1, N
 		ctemp=0
@@ -884,16 +884,16 @@ call gemmf90(matrix_U,M,matrix_V,rmax,mat2,M,'N','N',M,N,rank_new,cone,czero)
 
 
 write(*,*)'F-norm residual:', fnorm(mat-mat2,M,N)/fnorm(mat,M,N),' rank:',rank_new
-		
-		
+
+
 deallocate(mat1)
-deallocate(mat2)			
-		
+deallocate(mat2)
+
 end subroutine CheckRandomizedLR
 
 
 
-! generate random permutation of 1:N  
+! generate random permutation of 1:N
 subroutine rperm(N, p)
 
 integer, intent(in):: N
@@ -921,7 +921,7 @@ do i=1,N,100
 end do
 return
 
-end subroutine rperm	
+end subroutine rperm
 
 
 
@@ -975,7 +975,7 @@ end subroutine init_random_seed
 
 
 subroutine random_dp_number(val)
-implicit none 
+implicit none
 real(kind=8):: a=0,b=0,c=0,d=0
 integer seed
 class(*) val
@@ -995,8 +995,8 @@ type is (complex(kind=8))
 		b=-b
 	endif
 	val=a+junit*b
-	
-	
+
+
 	! ! ! Normal distribution
 	! ! call random_number(a)
 	! ! seed = a*10000000
@@ -1005,7 +1005,7 @@ type is (real(kind=8))
 	! Uniform distribution
 	call random_number(a)
 	val = a*2d0-1d0
-	
+
 end select
 return
 end subroutine random_dp_number
@@ -1205,8 +1205,8 @@ real(kind=8) function r8_uniform_01(seed)
   r8_uniform_01 = real ( seed, kind = 8 ) * 4.656612875D-10
 
   return
-end function r8_uniform_01	
-	
+end function r8_uniform_01
+
 
 ! ****************************************************************************************** !
 ! ***************                          assert function                               !*********** !
@@ -1229,7 +1229,7 @@ integer input_nint
 input_nint = NINT(input)
 if(abs(input_nint-input)<1d-13)then
 	floor_safe = input_nint
-else 
+else
 	floor_safe = floor(input)
 end if
 
@@ -1242,7 +1242,7 @@ integer input_nint
 input_nint = NINT(input)
 if(abs(input_nint-input)<1d-13)then
 	ceiling_safe = input_nint
-else 
+else
 	ceiling_safe = ceiling(input)
 end if
 
@@ -1255,7 +1255,7 @@ integer input_nint
 input_nint = NINT(input)
 if(abs(input_nint-input)<1d-13)then
 	INT_safe = input_nint
-else 
+else
 	INT_safe = INT(input)
 end if
 end function INT_safe
@@ -1300,8 +1300,8 @@ subroutine curl(a,b,c)
 	c(1)=cx;c(2)=cy;c(3)=cz
 	  return
 end subroutine curl
-	  
-	  
+
+
 subroutine ccurl(a,b,c)
 	  implicit none
 	real(kind=8) a(3)
@@ -1325,23 +1325,23 @@ end subroutine ccurl
 	  DT:: vector(n)
 	  integer i
 	  real(kind=8) sum
-	  
+
 	  sum=0.0d0
       do i=1,n
 	      sum=sum+dble(vector(i)*conjg(cmplx(vector(i),kind=8)))
       enddo
-      
+
       norm_vector=sum
-      
-      return 
+
+      return
 end function norm_vector
 
 
 subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
-	! 
-	! 
+	!
+	!
 	implicit none
-	
+
 	integer m,n,k,mn_min
 	DT:: A(m,n),x(n,k),b(m,k)
 	real(kind=8),allocatable::Singular(:)
@@ -1355,7 +1355,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
-	
+
 	if(present(Flops))Flops=0
 
 	allocate(xtmp(n,k))
@@ -1366,42 +1366,42 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 	allocate(UU(m,n))
 	allocate(VV(n,n))
 	allocate(Singular(n))
-	
+
 	if(m<n)write(*,*)m,n
 	call assert(m>=n,'m should not be less than n for least square')
-	
-	
+
+
 	if(fnorm(b,m,k)<SafeUnderflow)then
 		write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k)
 		x = 0
-	else 
-	
+	else
+
 	Atmp = A
-	
-	
+
+
 	! SVD
     call gesvd_robust(Atmp,Singular,UU,VV,m,n,n,flop)
 	if(present(Flops))Flops=Flops+flop
-	
-! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow 
+
+! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow
 	! if(isnan(sum(Singular)))then
- 	
+
 		! write(*,*)'gesvd wrong in LeastSquare, switching to QR'
-		
+
 		! ! call GetRank(m,n,Atmp,rank,Rank_detection_factor)
 		! ! write(*,*)rank,'kao kao'
-		
-		! ! stop	
+
+		! ! stop
 		! Atmp = A
-		
-		
+
+
 		! ! RRQR
 		! jpvt = 0
 		! call geqp3f90(Atmp,jpvt,tau)
 		! if(isnan(fnorm(Atmp,m,n)))then
 			! write(*,*)'Q or R has NAN in LeastSquare'
 			! stop
-		! end if		
+		! end if
 		! call un_or_mqrf90(Atmp,tau,b,'L','C',m,n,n)
 		! A_tmp = 0
 		! ! !$omp parallel do default(shared) private(ii,jj)
@@ -1420,7 +1420,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 		! ! !$omp end parallel do
 
 		! flag0=0 ; i=0
-		
+
 		! rank = n
 		! do i=1,n
 			! if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/m<=eps_r) then
@@ -1430,49 +1430,49 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 				! exit
 			! end if
 		! end do
-		
+
 		! allocate(A_tmp_rank(rank,rank))
 		! do jj=1, rank
 			! do ii=1, rank
 				! A_tmp_rank(ii,jj)=A_tmp(ii,jj)
 			! enddo
-		! enddo	
-		
+		! enddo
+
 		! allocate(xtmp_rank(rank,k))
 		! do ii = 1,rank
 			! do jj =1,k
 				! xtmp_rank(ii,jj) = xtmp(ii,jj)
-			! end do 
+			! end do
 		! end do
-		
-		
-		! call trsmf90(A_tmp_rank,xtmp_rank,'L','U','N','N',rank,rank)	
-		
+
+
+		! call trsmf90(A_tmp_rank,xtmp_rank,'L','U','N','N',rank,rank)
+
 		! xtmp = 0
-		
+
 		! ! do ii = 1,n
 		! ! do jj =1,k
 			! ! xtmp(ii,jj) = random_dp_number()
 		! ! end do
-		! ! end do 
-		
+		! ! end do
+
 		! do ii = 1,rank
 			! do jj =1,k
 				! xtmp(ii,jj) = xtmp_rank(ii,jj)
-			! end do 
-		! end do	
-		
+			! end do
+		! end do
+
 		! do ii=1,n
 			! x(jpvt(ii),1:k) = xtmp(ii,1:k)
 		! end do
-		
+
 		! if(isnan(fnorm(x,n,k)))then
 			! write(*,*)'trisolve has NAN in LeastSquare'
 			! stop
-		! end if	
-		
+		! end if
+
 		! deallocate(A_tmp_rank,xtmp_rank)
-	! else 
+	! else
 		if(Singular(1)<SafeUnderflow)then
 			write(*,*)'warning: Matrix zero in least square'
 			rank=1
@@ -1485,35 +1485,35 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 					if(Singular(i)<Singular(1)*eps_r/10)rank = i -1
 					exit
 				end if
-			end do	
+			end do
 
-			
+
 			allocate(UU_h(rank,m))
 			allocate(VV_h(n,rank))
 			allocate(matrixtemp(rank,k))
-			
+
 			do ii=1,rank
 			do jj =1,m
-				UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))	
+				UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))
 			end do
 			end do
-			
+
 			do ii=1,n
 			do jj=1,rank
-				VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)	
+				VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)
 			end do
-			end do 
-			
-			call gemmf90(UU_h, rank, b,m, matrixtemp,rank,'N','N',rank,k,m,alpha,beta,flop)  
-			if(present(Flops))Flops=Flops+flop	
+			end do
+
+			call gemmf90(UU_h, rank, b,m, matrixtemp,rank,'N','N',rank,k,m,alpha,beta,flop)
+			if(present(Flops))Flops=Flops+flop
 			call gemmf90(VV_h, n, matrixtemp,rank, x,n,'N','N',n,k,rank,alpha,beta,flop)
-			if(present(Flops))Flops=Flops+flop			
-			
-			deallocate(UU_h,VV_h,matrixtemp)	
-		end if	
-	! end if	
-	
-	
+			if(present(Flops))Flops=Flops+flop
+
+			deallocate(UU_h,VV_h,matrixtemp)
+		end if
+	! end if
+
+
 	do ii = 1,k
 	if(isnan(abs(sum(x(:,ii)))))then
 		! do jj =1,rank
@@ -1521,17 +1521,17 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 		! end do
 		write(*,*)'hh',rank,Singular,fnorm(A,m,n)
 		stop
-	end if	
+	end if
 	end do
-	
+
 	! deallocate(A_tmp_rank,xtmp_rank)
-	
-	
+
+
 
 	 ! A = Atmp
-	 
+
 	 end if
-	
+
 	deallocate(Singular)
 	deallocate(xtmp)
 	deallocate(tau)
@@ -1540,35 +1540,35 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 	deallocate(Atmp)
 	deallocate(UU)
 	deallocate(VV)
-	
-end subroutine LeastSquare	
-	
-	
-	
+
+end subroutine LeastSquare
+
+
+
 
 subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
-	! 
-	! 
+	!
+	!
 	implicit none
-	
+
 	integer m,n,mn_min
 	DT:: A(:,:),A_inv(:,:)
 	real(kind=8),allocatable::Singular(:)
 	DT,allocatable:: Atmp(:,:),tau(:),UU(:,:),VV(:,:),UU_h(:,:),VV_h(:,:),matrixtemp(:,:),A_tmp_rank(:,:),xtmp_rank(:,:),xtmp_rank3(:,:),A_tmp_rank2(:,:),xtmp_rank2(:,:)
 	real(kind=8):: eps_r
 	integer ii,jj,i,j,flag0,rank
-	integer,allocatable:: jpvt(:) 
+	integer,allocatable:: jpvt(:)
 	real(kind=8),optional::Flops
 	real(kind=8)::flop
-	
+
 	DT:: alpha,beta
 	alpha=1d0
 	beta=0d0
-	
+
 	if(present(Flops))Flops=0
-	
+
 	A_inv=0
-	
+
 	allocate(Atmp(m,n))
 	Atmp=0
 	! SVD
@@ -1577,14 +1577,14 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 	allocate(Singular(mn_min))
 	allocate(UU(m,mn_min))
 	allocate(VV(mn_min,n))
-	
-	Singular=0	
+
+	Singular=0
 	UU=0
 	VV=0
-	
+
     call gesvd_robust(Atmp,Singular,UU,VV,m,n,mn_min,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	if(Singular(1)<SafeUnderflow)then
 		write(*,*)'Warning: A zero in GeneralInverse'
 		A_inv = 0
@@ -1596,44 +1596,44 @@ subroutine GeneralInverse(m,n,A,A_inv,eps_r,Flops)
 				if(Singular(i)<Singular(1)*eps_r/10)rank = i -1
 				exit
 			end if
-		end do		
-		
-		
+		end do
+
+
 		allocate(UU_h(rank,m))
 		allocate(VV_h(n,rank))
 		UU_h=0
 		VV_h=0
-		
+
 		do ii=1,rank
 		do jj =1,m
-			UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))	
+			UU_h(ii,jj) = conjg(cmplx(UU(jj,ii),kind=8))
 		end do
 		end do
-		
+
 		do ii=1,n
 		do jj=1,rank
-			VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)	
+			VV_h(ii,jj) = conjg(cmplx(VV(jj,ii),kind=8))/Singular(jj)
 		end do
-		end do 
-		
-		call gemmf90(VV_h,n, UU_h,rank, A_inv,n,'N','N',n,m,rank,alpha,beta,flop=flop)  
+		end do
+
+		call gemmf90(VV_h,n, UU_h,rank, A_inv,n,'N','N',n,m,rank,alpha,beta,flop=flop)
 		if(present(Flops))Flops=Flops+flop
-		
+
 		deallocate(UU_h,VV_h)
 	endif
-	
-	deallocate(Singular)		
-	! deallocate(jpvt)	
-	deallocate(UU)	
-	deallocate(VV)	
-	deallocate(Atmp)	
-	
-end subroutine GeneralInverse	
-	
+
+	deallocate(Singular)
+	! deallocate(jpvt)
+	deallocate(UU)
+	deallocate(VV)
+	deallocate(Atmp)
+
+end subroutine GeneralInverse
+
 
 	subroutine RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU,matV,Singular,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance,Flops)
-	! 
-	! 
+	!
+	!
     use BPACK_DEFS
     implicit none
 
@@ -1654,16 +1654,16 @@ end subroutine GeneralInverse
 	real(kind=8)::Singular(rmax)
     DT,allocatable:: row_R(:),column_R(:),matM(:,:),matrixtemp(:,:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
-	
-	DT, allocatable :: RrowcQ1(:,:),RrowcQ1inv(:,:),Q2cRcol(:,:),Q2cRcolinv(:,:), QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+
+	DT, allocatable :: RrowcQ1(:,:),RrowcQ1inv(:,:),Q2cRcol(:,:),Q2cRcolinv(:,:), QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
 	real(kind=8), allocatable :: Singularsml(:)
 	integer,allocatable:: jpvt(:)
 	real(kind=8),optional::Flops
 	real(kind=8)::flop
-	
+
 
 	if(present(Flops))Flops=0
-	
+
 	allocate(matZRcol1(rankmax_r,rmax))
 	allocate(matZcRrow1(rankmax_c,rmax))
 	allocate(tau(rmax))
@@ -1672,12 +1672,12 @@ end subroutine GeneralInverse
 	allocate(RR1(rmax,rmax))
 	allocate(QQ2(rankmax_c,rmax))
 	allocate(RR2(rmax,rmax))
-	allocate(RrowcZRcol(rmax,rmax))	
-	
-		
+	allocate(RrowcZRcol(rmax,rmax))
+
+
 	rankmax_min = min(rankmax_r,rankmax_c)
     matU = 0
-	matV = 0 
+	matV = 0
 	Singular = 0
 
 	QQ1 = matZRcol
@@ -1693,12 +1693,12 @@ end subroutine GeneralInverse
 			RR1(i,j)=QQ1(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 	call un_or_gqrf90(QQ1,tau,rankmax_r,rmax,rmax,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	! write(*,*)fnorm(QQ1,rankmax_r,rmax),rankmax_r,rmax,fnorm(RR1,rmax,rmax),rmax,rmax,'really'
-	
+
 	if(abs(RR1(1,1))<SafeUnderflow)then
 		rank1=1
 	else
@@ -1712,7 +1712,7 @@ end subroutine GeneralInverse
 		end do
 	endif
 ! write(*,*)shape(QQ2),shape(matZcRrow)
-	
+
 	QQ2 = matZcRrow
 	jpvt = 0
 	tau = 0
@@ -1726,13 +1726,13 @@ end subroutine GeneralInverse
 			RR2(i,j)=QQ2(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 	call un_or_gqrf90(QQ2,tau,rankmax_c,rmax,rmax,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	if(abs(RR2(1,1))<SafeUnderflow)then
 		rank2=1
-	else	
+	else
 		rank2 = rmax
 		do i=1,rmax
 			if (abs(RR2(i,i))/abs(RR2(1,1))/rankmax_c<=tolerance) then  ! be careful with the tolerance here
@@ -1765,45 +1765,45 @@ end subroutine GeneralInverse
 	! call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rank1,rankmax_r)
 	call gemmf90(matRrow,rankmax_r,QQ1,rankmax_r,RrowcQ1,rmax,'C','N',rmax,rank1,rankmax_r, cone,czero,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	call GeneralInverse(rmax,rank1,RrowcQ1,RrowcQ1inv,tolerance,Flops=flop)
 	if(present(Flops))Flops=Flops+flop
 	deallocate(RrowcQ1)
 
 	! allocate(ipiv(rmax))
 	! call getrff90(RrowcQ1,ipiv)
-	! call getrif90(RrowcQ1,ipiv)	
+	! call getrif90(RrowcQ1,ipiv)
 	! RrowcQ1inv = RrowcQ1
-	! deallocate(ipiv)		
+	! deallocate(ipiv)
 	! deallocate(RrowcQ1)
-	
 
-	
-	
-	
+
+
+
+
 	allocate(Q2cRcol(rank2,rmax))
 	Q2cRcol=0
 	allocate(Q2cRcolinv(rmax,rank2))
 	Q2cRcolinv=0
 	! call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rmax,rankmax_c)
 	call gemmf90(QQ2,rankmax_c,matRcol,rankmax_c,Q2cRcol,rank2,'C','N',rank2,rmax,rankmax_c, cone,czero,flop=flop)
-	if(present(Flops))Flops=Flops+flop	
+	if(present(Flops))Flops=Flops+flop
 	call GeneralInverse(rank2,rmax,Q2cRcol,Q2cRcolinv,tolerance,Flops=flop)
 	if(present(Flops))Flops=Flops+flop
 	deallocate(Q2cRcol)
 
 	! allocate(ipiv(rmax))
 	! call getrff90(Q2cRcol,ipiv)
-	! call getrif90(Q2cRcol,ipiv)	
+	! call getrif90(Q2cRcol,ipiv)
 	! Q2cRcolinv = Q2cRcol
-	! deallocate(ipiv)		
-	! deallocate(Q2cRcol)	
-	
-	
+	! deallocate(ipiv)
+	! deallocate(Q2cRcol)
+
+
 	! call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rmax,rankmax_r)
-	call gemmf90(matRrow,rankmax_r,matZRcol,rankmax_r,RrowcZRcol,rmax,'C','N',rmax,rmax,rankmax_r, cone,czero,flop=flop)	
+	call gemmf90(matRrow,rankmax_r,matZRcol,rankmax_r,RrowcZRcol,rmax,'C','N',rmax,rmax,rankmax_r, cone,czero,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	allocate(matrixtemp(rmax,rank2))
 	matrixtemp=0
 	allocate(matM(rank1,rank2))
@@ -1811,19 +1811,19 @@ end subroutine GeneralInverse
 	! call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rank2,rmax)
 	call gemmf90(RrowcZRcol,rmax,Q2cRcolinv,rmax,matrixtemp,rmax,'N','N',rmax,rank2,rmax,cone,czero,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	! call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rank2,rmax)
 	call gemmf90(RrowcQ1inv,rank1,matrixtemp,rmax,matM,rank1,'N','N',rank1,rank2,rmax,cone,czero,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)
-	
+
 	! allocate(matrixtemp(rankmax_r,rank2))
 	! allocate(matM(rank1,rank2))
 	! call gemm_omp(matZRcol,Q2cRcolinv,matrixtemp,rankmax_r,rank2,rmax)
 	! call gemmHN_omp(QQ1(1:rankmax_r,1:rank1),matrixtemp,matM,rank1,rankmax_r,rank2)
-	! deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)	
-	
+	! deallocate(matrixtemp,RrowcQ1inv,Q2cRcolinv)
+
 	rank12 = min(rank1,rank2)
 	allocate(UUsml(rank1,rank12),VVsml(rank12,rank2),Singularsml(rank12))
 	UUsml=0
@@ -1831,21 +1831,21 @@ end subroutine GeneralInverse
 	Singularsml=0
 	call SVD_Truncate(matM,rank1,rank2,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	! write(111,*)UUsml(1:rank1,1:rank)
-	! stop	
-	
+	! stop
+
 	! call gemm_omp(QQ1(1:rankmax_r,1:rank1),UUsml(1:rank1,1:rank),matU(1:rankmax_r,1:rank),rankmax_r,rank,rank1)
 	call gemmf90(QQ1,rankmax_r,UUsml,rank1,matU,rankmax_r,'N','N',rankmax_r,rank,rank1,cone,czero,flop=flop)
 	if(present(Flops))Flops=Flops+flop
-	
+
 	! call gemmNH_omp(VVsml(1:rank,1:rank2),QQ2(1:rankmax_c,1:rank2),matV(1:rank,1:rankmax_c),rank,rankmax_c,rank2)
 	call gemmf90(VVsml,rank12,QQ2,rankmax_c,matV,rmax,'N','H',rank,rankmax_c,rank2, cone,czero,flop=flop)
-	if(present(Flops))Flops=Flops+flop	
+	if(present(Flops))Flops=Flops+flop
 
 	Singular(1:rank) = Singularsml(1:rank)
 	deallocate(UUsml,VVsml,Singularsml,matM)
-	
+
 
 	deallocate(matZRcol1)
 	deallocate(matZcRrow1)
@@ -1855,14 +1855,14 @@ end subroutine GeneralInverse
 	deallocate(RR1)
 	deallocate(QQ2)
 	deallocate(RR2)
-	deallocate(RrowcZRcol)		
+	deallocate(RrowcZRcol)
 
-	
-	
+
+
 	! allocate(matM(rankmax_r,rankmax_c))
 	! if(rankmax_r==rmax)then
 	! call GetRank(rmax,rmax,matRrow,rank,tolerance)
-	! write(*,*)rmax,rank,'ga'	
+	! write(*,*)rmax,rank,'ga'
 		! call GeneralInverse(rmax,rmax,matRrow,matInv,tolerance)
 		! allocate(matrixtemp(rmax,rmax))
 		! matrixtemp = matInv
@@ -1875,25 +1875,25 @@ end subroutine GeneralInverse
 		! call gemmNH_omp(matInv,matZcRrow,matM,rmax,rankmax_c,rmax)
 	! else if(rankmax_c==rmax)then
 	! call GetRank(rmax,rmax,matRcol,rank,tolerance)
-	! write(*,*)rmax,rank,'ga'	
+	! write(*,*)rmax,rank,'ga'
 		! call GeneralInverse(rmax,rmax,matRcol,matInv,tolerance)
 		! call gemm_omp(matZRcol,matInv,matM,rankmax_r,rankmax_c,rmax)
-	! end if	
-	
+	! end if
+
 	! write(*,*)fnorm(matM,rankmax_r,rankmax_c),'woao'
-	
+
 	! rank12 = min(rankmax_r,rankmax_c)
 	! allocate(UUsml(rankmax_r,rank12),VVsml(rank12,rankmax_c),Singularsml(rank12))
-	! call SVD_Truncate(matM,rankmax_r,rankmax_c,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank)	
+	! call SVD_Truncate(matM,rankmax_r,rankmax_c,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank)
 	! matU(1:rankmax_r,1:rank) = UUsml(1:rankmax_r,1:rank)
 	! matV(1:rank,1:rankmax_c) = VVsml(1:rank,1:rankmax_c)
 	! Singular(1:rank) = Singularsml(1:rank)
 	! deallocate(UUsml,VVsml,Singularsml,matM)
-	
+
     return
 
 end subroutine RandomizedSVD
-	
+
 
 
 
@@ -1903,63 +1903,63 @@ subroutine RandomSubMat(ms,me,ns,ne,k,A,Oflag)
 	DT:: A(:,:)
 	DT,allocatable::matrix_small(:,:)
 	integer:: Oflag
-	
+
 	m=me-ms+1
 	n=ne-ns+1
 	call assert(m>0,'m<=0 in RandomSubMat')
 	call assert(n>0,'n<=0 in RandomSubMat')
-	
+
 	allocate(matrix_small(m,n))
 	call RandomMat(m,n,k,matrix_small,Oflag)
 	A(ms:me,ns:ne)=matrix_small
 	deallocate(matrix_small)
-	
+
 end subroutine RandomSubMat
-	
+
 
 subroutine RandomMat(m,n,k,A,Oflag)
 
 
-	! 
-	! 
+	!
+	!
 #ifdef Intel
 	use mkl_vsl_type
-	use mkl_vsl				 
-#endif	
+	use mkl_vsl
+#endif
 
 	implicit none
-	
+
 	integer m,n,k,mn_min,ktmp
 	class(*):: A(:,:)
-	real(kind=8):: c			 
+	real(kind=8):: c
 	real(kind=8),allocatable::Singular(:),Ar(:,:),Ai(:,:)
 	complex(kind=8):: ctemp
 	complex(kind=8),allocatable:: UU(:,:),VV(:,:)
 	integer ii,jj,kk,i,j,flag0,rank
 	integer:: Oflag
-#ifdef Intel	
+#ifdef Intel
 	type(VSL_STREAM_STATE) ::stream(2)
-#endif		
-	integer brng, method, seedd,ierror	
-	
-	
+#endif
+	integer brng, method, seedd,ierror
 
-	
+
+
+
  	ktmp = k
 	if(ktmp>min(m,n))then
 		! write(*,*)'k is not properly set in RandomMat'
 		ktmp=min(m,n)
 	end if
 	! call assert(m<=n,'m>n')
-	
+
 	call assert(k<=min(m,n),'k too large in RandomMat')
-	
+
 
 #ifdef Intel
 
 	select type(A)
 	type is (complex(kind=8))
-	
+
 		allocate(Ar(m,n))
 		allocate(Ai(m,n))
 		brng   = VSL_BRNG_MCG31
@@ -1970,16 +1970,16 @@ subroutine RandomMat(m,n,k,A,Oflag)
 		call random_number(c)
 		seedd = NINT(1000*c)
 		ierror=vslnewstream( stream(2), brng,  seedd )
-		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
-		ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0) 
-		! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0) 
-		ierror=vsldeletestream(stream(1))	
-		ierror=vsldeletestream(stream(2))	
+		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0)
+		ierror=vdrnguniform( method, stream(2), M*N, Ai, -1d0, 1d0)
+		! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0)
+		ierror=vsldeletestream(stream(1))
+		ierror=vsldeletestream(stream(2))
 		A = Ar + junit*Ai
 		deallocate(Ar)
 		deallocate(Ai)
 	type is (real(kind=8))
-	
+
 		allocate(Ar(m,n))
 		brng   = VSL_BRNG_MCG31
 		method = VSL_RNG_METHOD_UNIFORM_STD
@@ -1988,11 +1988,11 @@ subroutine RandomMat(m,n,k,A,Oflag)
 		ierror=vslnewstream( stream(1), brng,  seedd )
 		call random_number(c)
 		seedd = NINT(1000*c)
-		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0) 
-		ierror=vsldeletestream(stream(1))	
-		A = Ar 
+		ierror=vdrnguniform( method, stream(1), M*N, Ar, -1d0, 1d0)
+		ierror=vsldeletestream(stream(1))
+		A = Ar
 		deallocate(Ar)
-		
+
 	end select
 #else
 	do ii=1,m
@@ -2003,23 +2003,23 @@ subroutine RandomMat(m,n,k,A,Oflag)
 
 
 ! select type(A)
-	! type is (complex(kind=8))	
-	
+	! type is (complex(kind=8))
+
 	! mn_min = min(m,n)
 	! allocate(Singular(mn_min))
 	! allocate(UU(m,mn_min))
-	! allocate(VV(mn_min,n))	
-	
+	! allocate(VV(mn_min,n))
+
 	! call gesvd_robust(A,Singular,UU,VV,m,n,mn_min)
 	! Singular = Singular + 1d0  ! this is to make sure the singular values are not the same
 	! ! Singular = 1d0  ! this is to make sure the singular values are not the same
-	
 
-	
+
+
 	! ! if(Oflag==1)then
 		! ! call assert(mn_min==n,'mn_min not correct')
 		! ! A = UU(1:m,1:mn_min)
-	! ! else 
+	! ! else
 		! ! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
 		! do jj=1, n
 			! do ii=1, m
@@ -2030,19 +2030,19 @@ subroutine RandomMat(m,n,k,A,Oflag)
 				! A(ii,jj)=ctemp
 			! enddo
 		! enddo
-		! ! !$omp end parallel do	
+		! ! !$omp end parallel do
 	! ! end if
-	
+
 	! deallocate(Singular)
 	! deallocate(UU)
 	! deallocate(VV)
-! end select			 
+! end select
 
-#endif	
+#endif
 
 
-end subroutine RandomMat	
-	
+end subroutine RandomMat
+
 
 
 subroutine ID_Selection(Mat,select_column,select_row,m,n,rank,tolerance)
@@ -2066,33 +2066,33 @@ subroutine ID_Selection(Mat,select_column,select_row,m,n,rank,tolerance)
     DT,allocatable:: row_R(:),column_R(:),matrixtemp_V(:,:),matrixtemp_U(:,:),tau(:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	integer,allocatable :: jpvt(:)
-	
+
 	select_column = 0
 	select_row = 0
-	
+
 	allocate(Mat1(m,n))
 	Mat1 = Mat
 	allocate(Mat1T(n,m))
 	call copymatT(Mat,Mat1T,m,n)
-	
+
 	allocate(jpvt(max(m,n)))
 	allocate(tau(max(m,n)))
-	
+
 	jpvt=0
 	call geqp3modf90(Mat1T,jpvt,tau,tolerance,SafeUnderflow,rank_r)
 	select_row(1:rank_r) = jpvt(1:rank_r)
-	
+
 	jpvt=0
 	call geqp3modf90(Mat1,jpvt,tau,tolerance,SafeUnderflow,rank_c)
-	select_column(1:rank_c) = jpvt(1:rank_c)	
-	
+	select_column(1:rank_c) = jpvt(1:rank_c)
+
 	rank = min(rank_c,rank_r)
-	
+
 	deallocate(jpvt)
 	deallocate(tau)
 	deallocate(Mat1)
 	deallocate(Mat1T)
-	
+
     return
 
 end subroutine ID_Selection
@@ -2102,8 +2102,8 @@ end subroutine ID_Selection
 
 
 subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,tolerance,SVD_tolerance)
-	
-	
+
+
     use BPACK_DEFS
     implicit none
 
@@ -2119,19 +2119,19 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     real(kind=8) inner_UV
     integer,allocatable:: select_column(:), select_row(:)
 	DT::mat(rankmax_r,rankmax_c),matU(rankmax_r,rmax),matV(rmax,rankmax_c)
-	
+
     DT,allocatable:: row_R(:),column_R(:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
-	
-	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:),QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)	
+
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:),QQ2tmp(:,:), RR2tmp(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
 	real(kind=8), allocatable :: Singularsml(:)
-	
-		
+
+
 	rankmax_min = min(rankmax_r,rankmax_c)
     norm_Z=0
 	select_column = 0
 	select_row = 0
-	
+
     allocate(row_R(rankmax_c),column_R(rankmax_r))
     allocate(norm_row_R(rankmax_c),norm_column_R(rankmax_r))
 
@@ -2273,19 +2273,19 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
     enddo
 
 	! write(*,*)select_row(1:rank),select_column(1:rank)
-	
+
     deallocate(row_R,column_R)
     deallocate(norm_row_R,norm_column_R)
 
-	
-! ACA followed by SVD	
-	
+
+! ACA followed by SVD
+
 	allocate(QQ1(rankmax_r,rank))
 	! call copymatN(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
 	QQ1 = matU(1:rankmax_r,1:rank)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ1,tau_Q)
-	
+
 	allocate (RR1(rank,rank))
 	RR1=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -2294,7 +2294,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 			RR1(i,j)=QQ1(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 	call un_or_gqrf90(QQ1,tau_Q,rankmax_r,rank,rank)
 	deallocate(tau_Q)
 
@@ -2303,7 +2303,7 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 	call copymatT(matV(1:rank,1:rankmax_c),QQ2tmp,rank,rankmax_c)
 	allocate (tau_Q(rank))
 	call geqrff90(QQ2tmp,tau_Q)
-	
+
 	allocate (RR2tmp(rank,rank))
 	RR2tmp=0d0
 	! !$omp parallel do default(shared) private(i,j)
@@ -2312,65 +2312,65 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 			RR2tmp(i,j)=QQ2tmp(i,j)
 		enddo
 	enddo
-	! !$omp end parallel do	
+	! !$omp end parallel do
 	call un_or_gqrf90(QQ2tmp,tau_Q,rankmax_c,rank,rank)
 	deallocate(tau_Q)
-	
+
 	allocate(QQ2(rank,rankmax_c))
-	call copymatT(QQ2tmp,QQ2,rankmax_c,rank)	
+	call copymatT(QQ2tmp,QQ2,rankmax_c,rank)
 	allocate(RR2(rank,rank))
-	call copymatT(RR2tmp,RR2,rank,rank)	
-	
-	
-	
+	call copymatT(RR2tmp,RR2,rank,rank)
+
+
+
 	! allocate(matU1(rankmax_r,rank))
 	! allocate(matV1(rank,rankmax_c))
 	! call gemm_omp(QQ1,RR1,matU1,rankmax_r,rank,rank)
-	
+
 	! call gemm_omp(RR2,QQ2,matV1,rank,rankmax_c,rank)
-	
+
 	! write(*,*)fnorm(matU1-matU(1:rankmax_r,1:rank),rankmax_r,rank),fnorm(matV1-matV(1:rank,1:rankmax_c),rank,rankmax_c)
-	
-	
-	
+
+
+
 	deallocate(QQ2tmp,RR2tmp)
 	allocate(mattemp(rank,rank))
 	! call gemm_omp(RR1,RR2,mattemp,rank,rank,rank)
 	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','N',rank,rank,rank,cone,czero)
-	
-	
-	
+
+
+
 	allocate(UUsml(rank,rank),VVsml(rank,rank),Singularsml(rank))
 	call SVD_Truncate(mattemp,rank,rank,rank,UUsml,VVsml,Singularsml,SVD_tolerance,ranknew)
-	
+
 	! call gemm_omp(QQ1,UUsml(1:rank,1:ranknew),matU(1:rankmax_r,1:ranknew),rankmax_r,ranknew,rank)
 	call gemmf90(QQ1,rankmax_r,UUsml,rank,matU,rankmax_r,'N','N',rankmax_r,ranknew,rank,cone,czero)
 	! call gemm_omp(VVsml(1:ranknew,1:rank),QQ2,matV(1:ranknew,1:rankmax_c),ranknew,rankmax_c,rank)
 	call gemmf90(VVsml,rank,QQ2,rank,matV,rmax,'N','N',ranknew,rankmax_c,rank,cone,czero)
 	! write(*,*)'aca rank:',rank,'after svd',ranknew
-	
+
 	rank = ranknew
 	do i=1,ranknew
 		matU(1:rankmax_r,i) = matU(1:rankmax_r,i)*Singularsml(i)
 	end do
 	deallocate(mattemp,RR1,RR2,QQ1,QQ2,UUsml,VVsml,Singularsml)
-	
+
 	deallocate(select_column)
 	deallocate(select_row)
-	
+
     return
 
 end subroutine ACA_CompressionFull
 
 
 subroutine SVD_Truncate(mat,mm,nn,mn,UU,VV,Singular,tolerance,rank,flop)
-! 
-! 
-implicit none 
+!
+!
+implicit none
 integer mm,nn,mn,rank,ii,jj
 real(kind=8):: tolerance
 DT::mat(mm,nn),UU(mm,mn),VV(mn,nn)
-DT,allocatable::mat0(:,:)					 
+DT,allocatable::mat0(:,:)
 real(kind=8):: Singular(mn)
 integer::i,flag
 real(kind=8),optional::flop
@@ -2389,7 +2389,7 @@ if(Singular(1)<SafeUnderflow)then
 	UU=0
 	VV=0
 	Singular=0
-else 
+else
 	rank = mn
 	do i=1,mn
 		if (Singular(i)/Singular(1)<=tolerance) then
@@ -2397,7 +2397,7 @@ else
 			if(Singular(i)<Singular(1)*tolerance/10)rank = i -1
 			exit
 		end if
-	end do	
+	end do
 endif
 deallocate(mat0)
 
@@ -2409,11 +2409,11 @@ end subroutine SVD_Truncate
 
 
 subroutine PSVD_Truncate(mm,nn,mat,descMat,UU,VV,descUU,descVV,Singular,tolerance,rank,ctxt,flop)
-implicit none 
+implicit none
 integer mm,nn,mnmin,rank,ii,jj
 real(kind=8):: tolerance
 DT::mat(:,:),UU(:,:),VV(:,:)
-DT,allocatable::mat0(:,:)					 
+DT,allocatable::mat0(:,:)
 real(kind=8):: Singular(:)
 integer::i,flag
 real(kind=8),optional::flop
@@ -2426,7 +2426,7 @@ mnmin = min(mm,nn)
 call pgesvdf90('V', 'V', mm, nn, mat, 1, 1, descMat, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV,flop=flop)
 
 rank = mnmin
-if(Singular(1)>SafeUnderflow)then	
+if(Singular(1)>SafeUnderflow)then
 	rank = mnmin
 	do i=1,mnmin
 		if (Singular(i)/Singular(1)<=tolerance) then
@@ -2434,7 +2434,7 @@ if(Singular(1)>SafeUnderflow)then
 			if(Singular(i)<Singular(1)*tolerance/10)rank = i -1
 			exit
 		end if
-	end do			
+	end do
 else
 	rank=1
 	Singular(1)=0
@@ -2451,7 +2451,7 @@ subroutine PIKSRT_DBLE_Multi(N,M,ARR)
   integer j,i,N,M
   real(kind=8) ARR(N,M)
   real(kind=8),allocatable::a(:)
-  allocate(a(M))		   
+  allocate(a(M))
   do j=2, N
     a=ARR(j,:)
     do i=j-1,1,-1
@@ -2461,7 +2461,7 @@ subroutine PIKSRT_DBLE_Multi(N,M,ARR)
 	i=0
 10  ARR(i+1,:)=a
   end do
-  deallocate(a)		
+  deallocate(a)
   return
 end subroutine PIKSRT_DBLE_Multi
 
@@ -2559,7 +2559,7 @@ END DO
 
 END subroutine interchange_sort
 
-END subroutine quick_sort		
+END subroutine quick_sort
 
 
 subroutine Cart2Sph(xin,yin,zin,origin,r,theta,phi)
@@ -2567,17 +2567,17 @@ implicit none
 real(kind=8),intent(in)::xin,yin,zin,origin(3)
 real(kind=8),intent(out)::r,theta,phi
 real(kind=8):: x,y,z
-	
+
 	x = xin-origin(1)
 	y = yin-origin(2)
 	z = zin-origin(3)
-	
+
 	r = sqrt(x**2 + y**2 + z**2)
 	theta = acos(z/r)
 	if(r==0)theta=0
 	if(x==0 .and. y>=0)then
 		phi = pi/2
-	else if(x==0 .and. y<0)then 
+	else if(x==0 .and. y<0)then
 		phi = 3*pi/2
 
 	else
@@ -2585,7 +2585,7 @@ real(kind=8):: x,y,z
 			phi = 0
 		else if(y==0 .and. x<0)then
 			phi = pi
-		else 
+		else
 
 			phi = atan(y/x)
 			if(phi>0 .and. x<0)phi = phi+pi
@@ -2601,25 +2601,25 @@ end subroutine Cart2Sph
 
 complex(kind=8) function Hankel02_Func(x)
 
-use BPACK_DEFS    
+use BPACK_DEFS
 implicit none
-    
+
     real(kind=8) x
     complex(kind=8) y
-    
+
     Hankel02_Func=BesselJ0_func(x)-junit*BesselY0_func(x)
-    
+
     return
-    
+
 end function Hankel02_Func
 
 real(kind=8) function BesselJ0_func(x)
 
     implicit none
-    
+
     real(kind=8) x, z, ax
     real(kind=8) y, rtemp1, rtemp2, xx
-    
+
     ax=abs(x)
     if (ax<8d0) then
         y=x*x
@@ -2635,18 +2635,18 @@ real(kind=8) function BesselJ0_func(x)
         rtemp2=-0.1562499995d-1+y*(0.1430488765d-3+y*(-0.6911147651d-5+y*(0.7621095161d-6-y*0.934935152d-7)))
         BesselJ0_func=sqrt(0.636619772d0/ax)*(cos(xx)*rtemp1-z*sin(xx)*rtemp2)
     endif
-    
+
     return
-    
+
 end function BesselJ0_func
 
 real(kind=8) function BesselY0_func(x)
 
     implicit none
-    
+
     real(kind=8) x, z, ax
     real(kind=8) y, rtemp1, rtemp2, xx
-    
+
     if (x<8.0d0) then
         y=x*x
         rtemp1=-2957821389.0d0+y*(7062834065.0d0+y*(-512359803.6d0+y*(10879881.29d0+y*(-86327.92757d0+y*228.4622733d0))))
@@ -2661,14 +2661,14 @@ real(kind=8) function BesselY0_func(x)
         rtemp2=-0.1562499995d-1+y*(0.1430488765d-3+y*(-0.6911147651d-5+y*(0.7621095161d-6-y*0.934935152d-7)))
         BesselY0_func=sqrt(0.636619772d0/x)*(sin(xx)*rtemp1+z*cos(xx)*rtemp2)
     endif
-    
+
     return
-    
+
 end function BesselY0_func
 
 !**** create a array treeleaf holding size of each leaf box of a tree with nlevel levels (0<=level<=nlevel)
 recursive subroutine CreateLeaf_Natural(nlevel,level,group,idxs,idxe,treeleaf)
-implicit none 
+implicit none
 integer nlevel,level,group,idxs,idxe
 integer treeleaf(2**nlevel)
 
@@ -2682,13 +2682,13 @@ end subroutine CreateLeaf_Natural
 
 
 subroutine NumberingPtree(ptree)
-	implicit none 
+	implicit none
 	type(proctree)::ptree
 	integer :: level,group
 
 	ptree%pgrp(1)%head=0 ; ptree%pgrp(1)%tail=ptree%nproc-1; ptree%pgrp(1)%nproc=ptree%nproc
 	do level=0, ptree%nlevel-1
-		do group=2**level, 2**(level+1)-1		
+		do group=2**level, 2**(level+1)-1
 			if (level<ptree%nlevel-1) then
 				if (ptree%pgrp(group)%nproc==1) then
 					ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
@@ -2696,70 +2696,70 @@ subroutine NumberingPtree(ptree)
 					ptree%pgrp(2*group)%nproc=ptree%pgrp(group)%nproc
 					ptree%pgrp(2*group+1)%head=ptree%pgrp(group)%head
 					ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
-					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(group)%nproc						
+					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(group)%nproc
 				else
 					ptree%pgrp(2*group)%head=ptree%pgrp(group)%head
 					ptree%pgrp(2*group)%tail=int((ptree%pgrp(group)%head+ptree%pgrp(group)%tail)/2)
 					ptree%pgrp(2*group)%nproc=ptree%pgrp(2*group)%tail-ptree%pgrp(2*group)%head+1
-					
+
 					ptree%pgrp(2*group+1)%head=ptree%pgrp(2*group)%tail+1
 					ptree%pgrp(2*group+1)%tail=ptree%pgrp(group)%tail
-					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(2*group+1)%tail-ptree%pgrp(2*group+1)%head+1								
+					ptree%pgrp(2*group+1)%nproc=ptree%pgrp(2*group+1)%tail-ptree%pgrp(2*group+1)%head+1
 				endif
 			end if
 		end do
 	end do
-end subroutine NumberingPtree	
+end subroutine NumberingPtree
 
 
 
 subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
-	implicit none 
+	implicit none
 	integer nmpi,MPI_Comm_base,MPI_Group_base,MPI_Group_H,MPI_Group_H_sml,groupmembers(nmpi)
 	type(proctree)::ptree,ptreecol,ptreerow
 	integer :: ierr,Maxgrp,Maxgrpcol,Maxgrprow,MyID_old,level,group,icontxt,ii,jj,kk
 	integer :: nprow,npcol,myrow,mycol,nproc,nproc_tmp,nproc_tmp1,nsprow,nsprow1,nspcol,nlevelrow,nlevelcol
 	integer,allocatable::pmap(:,:),groupmembers_sml(:)
-	
+
 	integer,external :: sys2blacs_handle
-	
-	call MPI_Comm_rank(MPI_Comm_base,MyID_old,ierr)	
+
+	call MPI_Comm_rank(MPI_Comm_base,MyID_old,ierr)
 	call MPI_Comm_group(MPI_Comm_base,MPI_Group_base,ierr)
 	call MPI_Group_incl(MPI_Group_base, nmpi, groupmembers, MPI_Group_H, ierr)
 	call MPI_Comm_Create(MPI_Comm_base,MPI_Group_H,ptree%Comm,ierr)
-	
+
 	if(ptree%Comm/=MPI_COMM_NULL)then
 		call MPI_Comm_size(ptree%Comm,ptree%nproc,ierr)
 		call MPI_Comm_rank(ptree%Comm,ptree%MyID,ierr)
-		
+
 		call assert(groupmembers(ptree%MyID+1)==MyID_old,'it is assumed the new ID of the Ith proc in groupmembers is I-1')
-	
+
 		ptree%nlevel = ceiling_safe(log(dble(ptree%nproc)) / log(2d0))+1
-		Maxgrp=2**(ptree%nlevel)-1		
+		Maxgrp=2**(ptree%nlevel)-1
 		allocate (ptree%pgrp(Maxgrp))
 		call NumberingPtree(ptree)
-		
+
 		do group=1,Maxgrp
-			nproc=ptree%pgrp(group)%nproc	
-			
-		
+			nproc=ptree%pgrp(group)%nproc
+
+
 			! ! create the 2D grids as square as possible
 			nprow = floor_safe(sqrt(dble(nproc)))
 			npcol = floor_safe(nproc/dble(nprow))
-			
-			! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier  
+
+			! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier
 			nlevelrow = ceiling_safe(log(dble(nprow)) / log(2d0))+1
 			nlevelcol = ceiling_safe(log(dble(npcol)) / log(2d0))+1
 			if(nlevelcol>nlevelrow+1)then
 				npcol = 2**nprow
-			endif			
-				
-			! ! trail to power of 2 grids, the following two lines can be removed  
+			endif
+
+			! ! trail to power of 2 grids, the following two lines can be removed
 			! nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))
-			! nprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))			
+			! nprow  = 2**floor_safe(log10(sqrt(dble(nproc_tmp)))/log10(2d0))
 			! npcol = floor_safe(nproc/dble(nprow))
-			
-			
+
+
 			ptree%pgrp(group)%nprow=nprow
 			ptree%pgrp(group)%npcol=npcol
 			ptree%pgrp(group)%ctxt=-1
@@ -2767,70 +2767,70 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			ptree%pgrp(group)%ctxt_head=-1
 			ptree%pgrp(group)%Comm=MPI_COMM_NULL
 
-			
-			! if(IOwnPgrp(ptree,group))then	
-				
+
+			! if(IOwnPgrp(ptree,group))then
+
 				! create the local communicator for this tree node
 				allocate(groupmembers_sml(ptree%pgrp(group)%nproc))
 				do ii=1,ptree%pgrp(group)%nproc
 					groupmembers_sml(ii)=ii-1+ptree%pgrp(group)%head
 				enddo
-				
+
 				call MPI_Group_incl(MPI_Group_H, ptree%pgrp(group)%nproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 				call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,ptree%pgrp(group)%Comm,ierr)
-				
+
 				deallocate(groupmembers_sml)
-				call MPI_Group_Free(MPI_Group_H_sml,ierr)							
-				
-				
+				call MPI_Group_Free(MPI_Group_H_sml,ierr)
+
+
 				allocate(pmap(nprow,npcol))
-				do jj=1,npcol				
+				do jj=1,npcol
 				do ii=1,nprow   ! 'row major here'
 					kk=npcol*(ii-1)+jj
 					pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
 				enddo
 				enddo
-				
-				
+
+
 				! the context involving 2D grids
 				ptree%pgrp(group)%ctxt = sys2blacs_handle(MPI_Comm_base)
 				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
 				deallocate(pmap)
 
-				
+
 				allocate(pmap(nproc,1))
 				do kk=1,nproc
 					pmap(kk,1)=groupmembers(kk+ptree%pgrp(group)%head)
 				enddo
-				
+
 				! the context involving 1D grids non-cyclic
 				ptree%pgrp(group)%ctxt1D = sys2blacs_handle(MPI_Comm_base)
-				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )				
-				
+				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )
+
 				! the context involving head proc only
 				ptree%pgrp(group)%ctxt_head = sys2blacs_handle(MPI_Comm_base)
-				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, groupmembers(1+ptree%pgrp(group)%head), 1, 1, 1 )				
+				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, groupmembers(1+ptree%pgrp(group)%head), 1, 1, 1 )
 				deallocate(pmap)
 
-				
+
 				! create the hierarchical process grids used for parallel ACA
 				nsprow = ptree%pgrp(group)%nprow
 				nspcol = ptree%pgrp(group)%npcol
-				
-				
+
+
 				call MPI_barrier(ptree%Comm,ierr)
-				
+
 				ptreecol%nproc = nspcol
 				ptreecol%nlevel = ceiling_safe(log(dble(ptreecol%nproc)) / log(2d0))+1
-				Maxgrpcol=2**(ptreecol%nlevel)-1		
+				Maxgrpcol=2**(ptreecol%nlevel)-1
 				allocate (ptreecol%pgrp(Maxgrpcol))
 				call NumberingPtree(ptreecol)
 				ptreerow%nproc = nsprow
 				ptreerow%nlevel = ceiling_safe(log(dble(ptreerow%nproc)) / log(2d0))+1
-				Maxgrprow=2**(ptreerow%nlevel)-1		
+				Maxgrprow=2**(ptreerow%nlevel)-1
 				allocate (ptreerow%pgrp(Maxgrprow))
 				call NumberingPtree(ptreerow)
-				
+
 				allocate(ptree%pgrp(group)%gd)
 				ptree%pgrp(group)%gd%nsprow=nsprow
 				ptree%pgrp(group)%gd%nspcol=nspcol
@@ -2842,66 +2842,66 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 
 				deallocate(ptreecol%pgrp)
 				deallocate(ptreerow%pgrp)
-				
+
 				call MPI_barrier(ptree%Comm,ierr)
-				
-				! write(*,*)'ddd',ptree%MyID,group,ptree%pgrp(group)%Comm==MPI_COMM_NULL				
+
+				! write(*,*)'ddd',ptree%MyID,group,ptree%pgrp(group)%Comm==MPI_COMM_NULL
 			! endif
 		enddo
-		
+
 		call MPI_barrier(ptree%Comm,ierr)
-		
+
 		! if(ptree%MyID==Main_ID)then
 		! do group=1,Maxgrp
 		! write(*,'(A5,I5,A9,I5,A6,I5,A6,I5,A6,I5,A13,I5,A13,I5)')'myid',ptree%MyID,'group no',group,'nproc',ptree%pgrp(group)%nproc,'nprow',ptree%pgrp(group)%nprow,'npcol',ptree%pgrp(group)%npcol,'grid%nsprow',ptree%pgrp(group)%gd%nsprow,'grid%nspcol',ptree%pgrp(group)%gd%nspcol
 		! enddo
 		! endif
-		
+
 	end if
-	
+
 	call MPI_barrier(ptree%Comm,ierr)
-	
+
 	call MPI_Group_Free(MPI_Group_base,ierr)
-	call MPI_Group_Free(MPI_Group_H,ierr)	
-	
+	call MPI_Group_Free(MPI_Group_H,ierr)
+
 	! stop
 end subroutine CreatePtree
 
 
 
-! create a new square grid gd  
+! create a new square grid gd
 recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H,MPI_Comm_base)
-	implicit none 
+	implicit none
 	integer::groupmembers(:)
 	type(grid)::gd
 	integer cridx,Iown
 	type(proctree)::ptree,ptreerow,ptreecol
 	integer group,ii,jj,kk,nsproc
 	integer MPI_Group_H,MPI_Group_H_sml,ierr,MPI_Comm_base
-	integer,allocatable::pmap(:,:),groupmembers_sml(:)	
+	integer,allocatable::pmap(:,:),groupmembers_sml(:)
 	integer,external :: sys2blacs_handle
 
 	allocate(pmap(gd%nsprow,gd%nspcol))
-	do jj=1,gd%nspcol				
+	do jj=1,gd%nspcol
 	do ii=1,gd%nsprow   ! 'row major here'
 		kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
 		pmap(ii,jj)=groupmembers(kk+ptree%pgrp(group)%head)
 	enddo
 	enddo
-	
-	
+
+
 	! the context involving 2D grids
 	gd%ctxt=-1
 	gd%ctxt = sys2blacs_handle(MPI_Comm_base)
 	call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
 	deallocate(pmap)
 
-	
+
 	! create the local communicator for this grid
 	nsproc = gd%nsprow*gd%nspcol
 	Iown=0
 	allocate(groupmembers_sml(nsproc))
-	do jj=1,gd%nspcol				
+	do jj=1,gd%nspcol
 	do ii=1,gd%nsprow   ! 'row major here'
 		kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
 		groupmembers_sml(jj+(ii-1)*gd%nspcol)=kk+ptree%pgrp(group)%head-1
@@ -2912,9 +2912,9 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 	call MPI_Group_incl(MPI_Group_H, nsproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 	call MPI_Comm_Create(ptree%Comm,MPI_Group_H_sml,gd%Comm,ierr)
 	deallocate(groupmembers_sml)
-	call MPI_Group_Free(MPI_Group_H_sml,ierr)			
-	
-	
+	call MPI_Group_Free(MPI_Group_H_sml,ierr)
+
+
 	if(cridx<ptreerow%nlevel+ptreecol%nlevel-2)then
 		allocate(gd%gdc(2))
 		if(mod(cridx+1,2)==1)then
@@ -2924,7 +2924,7 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 				gd%gdc(ii)%nsprow=gd%nsprow
 				gd%gdc(ii)%gpcol=gd%gpcol*2+ii-1
 				gd%gdc(ii)%hpcol= ptreecol%pgrp(gd%gdc(ii)%gpcol)%head
-				gd%gdc(ii)%nspcol=ptreecol%pgrp(gd%gdc(ii)%gpcol)%nproc 
+				gd%gdc(ii)%nspcol=ptreecol%pgrp(gd%gdc(ii)%gpcol)%nproc
 			enddo
 		else
 			do ii=1,2
@@ -2933,21 +2933,21 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,groupm
 				gd%gdc(ii)%nspcol=gd%nspcol
 				gd%gdc(ii)%gprow=gd%gprow*2+ii-1
 				gd%gdc(ii)%hprow= ptreerow%pgrp(gd%gdc(ii)%gprow)%head
-				gd%gdc(ii)%nsprow=ptreerow%pgrp(gd%gdc(ii)%gprow)%nproc 
-			enddo				
+				gd%gdc(ii)%nsprow=ptreerow%pgrp(gd%gdc(ii)%gprow)%nproc
+			enddo
 		endif
-		
+
 		do ii=1,2
 			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,group,groupmembers,MPI_Group_H,MPI_Comm_base)
-		enddo	
+		enddo
 	else
 		return
 	endif
 
 end subroutine CreateNewGrid
 
-		
-! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o 
+
+! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o
 subroutine Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
 implicit none
 DT::dat_i(:,:),dat_o(:,:)
@@ -2965,15 +2965,15 @@ if(pgno_i==pgno_o .and. ptree%pgrp(pgno_i)%nproc==1)then
 	idxs_i=M_p_i(1,1)+head_i
 	idxe_i=M_p_i(1,2)+head_i
 	idxs_o=M_p_o(1,1) + head_o
-	idxe_o=M_p_o(1,2) + head_o	
+	idxe_o=M_p_o(1,2) + head_o
 	if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
 		offs=max(idxs_i,idxs_o) - idxs_i
-		sizes = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1	
+		sizes = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
 		offr=max(idxs_i,idxs_o) - idxs_o
-		sizer = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1	
+		sizer = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
 		dat_o(offr+1:offr+sizer,1:N) = dat_i(offs+1:offs+sizes,1:N)
 	endif
-else 
+else
 
 	nproc_i = ptree%pgrp(pgno_i)%nproc
 	nproc_o = ptree%pgrp(pgno_o)%nproc
@@ -2995,20 +2995,20 @@ else
 		recvquant(ii)%size=0
 	enddo
 
-	if(IOwnPgrp(ptree,pgno_i))then	
+	if(IOwnPgrp(ptree,pgno_i))then
 		ii = ptree%myid-ptree%pgrp(pgno_i)%head+1
 		idxs_i=M_p_i(ii,1)+head_i
 		idxe_i=M_p_i(ii,2)+head_i
-		
+
 		do jj=1,nproc_o
 			idxs_o=M_p_o(jj,1) + head_o
-			idxe_o=M_p_o(jj,2) + head_o		
+			idxe_o=M_p_o(jj,2) + head_o
 			if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
 				sendquant(jj)%offset=max(idxs_i,idxs_o) - idxs_i
 				sendquant(jj)%size = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
 				allocate(sendquant(jj)%dat(sendquant(jj)%size,N))
 				sendquant(jj)%dat = dat_i(sendquant(jj)%offset+1:sendquant(jj)%offset+sendquant(jj)%size,1:N)
-			endif		
+			endif
 		enddo
 	endif
 
@@ -3016,16 +3016,16 @@ else
 		jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
 		idxs_o=M_p_o(jj,1) + head_o
 		idxe_o=M_p_o(jj,2) + head_o
-		
+
 		do ii=1,nproc_i
 			idxs_i=M_p_i(ii,1)+head_i
-			idxe_i=M_p_i(ii,2)+head_i		
+			idxe_i=M_p_i(ii,2)+head_i
 			if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
 				recvquant(ii)%offset=max(idxs_i,idxs_o) - idxs_o
 				recvquant(ii)%size = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
 				allocate(recvquant(ii)%dat(recvquant(ii)%size,N))
 				recvquant(ii)%dat = 0
-			endif		
+			endif
 		enddo
 	endif
 
@@ -3069,7 +3069,7 @@ else
 	! copy data from receive buffer
 	do ii=1,nproc_i
 		if(recvquant(ii)%size>0)then
-			dat_o(recvquant(ii)%offset+1:recvquant(ii)%offset+recvquant(ii)%size,1:N) = recvquant(ii)%dat 
+			dat_o(recvquant(ii)%offset+1:recvquant(ii)%offset+recvquant(ii)%size,1:N) = recvquant(ii)%dat
 		endif
 	enddo
 
@@ -3080,11 +3080,11 @@ else
 	deallocate(statusr)
 	do jj=1,nproc_o
 		if(sendquant(jj)%size>0)deallocate(sendquant(jj)%dat)
-	enddo	
+	enddo
 	deallocate(sendquant)
 	do ii=1,nproc_i
 		if(recvquant(ii)%size>0)deallocate(recvquant(ii)%dat)
-	enddo	
+	enddo
 	deallocate(recvquant)
 endif
 
@@ -3108,7 +3108,7 @@ integer,allocatable:: M_p_1D(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
 integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
 integer::desc1D(9),desc2D(9)
-integer::ctxt,info 
+integer::ctxt,info
 
 ctxt1D = ptree%pgrp(pgno_o)%ctxt1D
 nproc = ptree%pgrp(pgno_o)%nproc
@@ -3118,8 +3118,8 @@ allocate(M_p_1D(nproc,2))
 do ii=1,nproc
 	M_p_1D(ii,1) = (ii-1)*nb1Dr+1
 	M_p_1D(ii,2) = ii*nb1Dr
-enddo	
-M_p_1D(nproc,2) = M	
+enddo
+M_p_1D(nproc,2) = M
 jj = ptree%myid-ptree%pgrp(pgno_o)%head+1
 myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
 myAcols = N
@@ -3129,8 +3129,8 @@ if(myArows>0 .and. myAcols>0)then
 allocate(dat_1D(myArows,myAcols))
 dat_1D=0
 endif
-ctxt = ptree%pgrp(pgno_o)%ctxt		
-call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+ctxt = ptree%pgrp(pgno_o)%ctxt
+call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 if(myrow/=-1 .and. mycol/=-1)then
 	myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 	myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
@@ -3168,7 +3168,7 @@ integer,allocatable:: M_p_1D(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
 integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
 integer::desc1D(9),desc2D(9)
-integer::ctxt,info 
+integer::ctxt,info
 
 ctxt1D = ptree%pgrp(pgno_i)%ctxt1D
 nproc = ptree%pgrp(pgno_i)%nproc
@@ -3178,8 +3178,8 @@ allocate(M_p_1D(nproc,2))
 do ii=1,nproc
 	M_p_1D(ii,1) = (ii-1)*nb1Dr+1
 	M_p_1D(ii,2) = ii*nb1Dr
-enddo	
-M_p_1D(nproc,2) = M	
+enddo
+M_p_1D(nproc,2) = M
 jj = ptree%myid-ptree%pgrp(pgno_i)%head+1
 myArows = M_p_1D(jj,2)-M_p_1D(jj,1)+1
 myAcols = N
@@ -3190,8 +3190,8 @@ allocate(dat_1D(myArows,myAcols))
 dat_1D=0
 endif
 
-ctxt = ptree%pgrp(pgno_i)%ctxt		
-call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)	
+ctxt = ptree%pgrp(pgno_i)%ctxt
+call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 if(myrow/=-1 .and. mycol/=-1)then
 	myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 	myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
@@ -3215,9 +3215,9 @@ end subroutine Redistribute2Dto1D
 
 
 
-! get the level (indexed from 1) of a node in a tree. gno is the node number starting from root (1). Note that the process tree levels are indexed from 1, the basis_group levels are indexed from 0  
-integer function GetTreelevel(gno) 
-	implicit none 
+! get the level (indexed from 1) of a node in a tree. gno is the node number starting from root (1). Note that the process tree levels are indexed from 1, the basis_group levels are indexed from 0
+integer function GetTreelevel(gno)
+	implicit none
 	integer gno,ii,level
 	ii=gno
 	level=0
@@ -3230,7 +3230,7 @@ end function GetTreelevel
 
 ! check if I share this process group
 logical function IOwnPgrp(ptree,pgno)
-	implicit none 
+	implicit none
 	integer pgno
 	type(proctree)::ptree
 	IOwnPgrp = ptree%MyID>=ptree%pgrp(pgno)%head .and. ptree%MyID<=ptree%pgrp(pgno)%tail
@@ -3246,7 +3246,7 @@ subroutine g2l(i,n,np,nb,p,il)
    integer :: nb   ! block size, input
    integer :: p    ! processor array index, output
    integer :: il   ! local array index, output
-   integer :: im1  
+   integer :: im1
    im1 = i-1
    p   = mod((im1/nb),np)
    il  = (im1/(np*nb))*nb + mod(im1,nb) + 1
@@ -3264,7 +3264,7 @@ subroutine l2g(il,p,n,np,nb,i)
    integer :: np   ! processor array dimension, input
    integer :: nb   ! block size, input
    integer :: i    ! global array index, output
-   integer :: ilm1  
+   integer :: ilm1
    ilm1 = il-1
    i    = (((ilm1/nb) * np) + p)*nb + mod(ilm1,nb) + 1
    return

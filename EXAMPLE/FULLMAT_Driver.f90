@@ -9,13 +9,13 @@
 ! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
 ! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
-! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
-! This exmple works with double precision data 
-#define DAT 1 
+! This exmple works with double precision data
+#define DAT 1
 
 #include "ButterflyPACK_config.fi"
 
@@ -23,10 +23,10 @@ module APPLICATION_MODULE
 use BPACK_DEFS
 implicit none
 
-	!**** define your application-related variables here   
+	!**** define your application-related variables here
 	type quant_app
 		real(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
-		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files		
+		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
 		integer:: rank
 		integer:: Nunk
 		real(kind=8):: lambda
@@ -38,20 +38,20 @@ implicit none
 	end type quant_app
 
 contains
-	
+
 	!**** user-defined subroutine to sample Z_mn as two LR products
 	subroutine Zelem_LR(m,n,value_e,quant)
 		use BPACK_DEFS
-		implicit none 
-		
+		implicit none
+
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		real(kind=8)::value_e 
+		real(kind=8)::value_e
 		integer ii
 
 		real(kind=8) r_mn
 		integer dimn
-		
+
 		select TYPE(quant)
 		type is (quant_app)
 			value_e = 0
@@ -61,43 +61,43 @@ contains
 			if(m==n)then
 				value_e = value_e + quant%lambda
 			endif
-			
-			! value_e = quant%matZ_glo(m,n)	
+
+			! value_e = quant%matZ_glo(m,n)
 		class default
 			write(*,*)"unexpected type"
 			stop
-		end select	
+		end select
 	end subroutine Zelem_LR
 
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value_e,quant)
 		use BPACK_DEFS
-		implicit none 
-		
+		implicit none
+
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		real(kind=8)::value_e 
+		real(kind=8)::value_e
 		integer ii
 
 		real(kind=8) r_mn
 		integer dimn
-		
+
 		select TYPE(quant)
 		type is (quant_app)
 			value_e = quant%matZ_glo(m,n)
 		class default
 			write(*,*)"unexpected type"
 			stop
-		end select	
+		end select
 	end subroutine Zelem_FULL
-	
+
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use BPACK_DEFS
 		use DenseLA
 		use misc
 		use BPACK_Solve_Mul
-		implicit none 
+		implicit none
 		character trans
 		real(kind=8) Vin(:,:),Vout(:,:)
 		real(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
@@ -114,17 +114,17 @@ contains
 		type(Bmatrix),pointer::bmat
 		! type(Hstat)::stats
 
-		select TYPE(quant)   
-		type is (quant_app)		
+		select TYPE(quant)
+		type is (quant_app)
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 			bmat=>quant%bmat
-			call HODLR_Mult(trans,Nloc,num_vect,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,quant%ptree,quant%option,quant%stats)	
+			call HODLR_Mult(trans,Nloc,num_vect,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,quant%ptree,quant%option,quant%stats)
 		end select
-		
-	end subroutine HODLR_MVP_OneHODLR	
-	
-end module APPLICATION_MODULE	
+
+	end subroutine HODLR_MVP_OneHODLR
+
+end module APPLICATION_MODULE
 
 
 
@@ -134,7 +134,7 @@ PROGRAM ButterflyPACK_FULL
     use BPACK_DEFS
     use APPLICATION_MODULE
 	use BPACK_Solve_Mul
-	
+
 	use BPACK_structure
 	use BPACK_factor
 	use BPACK_constr
@@ -149,19 +149,19 @@ PROGRAM ButterflyPACK_FULL
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seemyid(50)
-	integer times(8)	
+	integer times(8)
 	real(kind=8) t1,t2,x,y,z,r,theta,phi,error,memory
 	real(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 	real(kind=8),allocatable:: datain(:)
-	
+
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings	
-	character(len=6)  :: info_env	
+	character(len=1024)  :: strings
+	character(len=6)  :: info_env
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption),target::option,option1	
-	type(Hstat),target::stats,stats1	
+	type(Hoption),target::option,option1
+	type(Hstat),target::stats,stats1
 	type(mesh),target::msh,msh1
 	type(kernelquant),target::ker,ker1
 	type(quant_app),target::quant,quant1
@@ -170,58 +170,58 @@ PROGRAM ButterflyPACK_FULL
 	integer nmpi
 	integer level,Maxlevel,N_unk_loc
 	type(proctree),target::ptree,ptree1
-	CHARACTER (LEN=1000) DATA_DIR	
+	CHARACTER (LEN=1000) DATA_DIR
 	integer:: tst=1
-	
-	!**** nmpi and groupmembers should be provided by the user 
+
+	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
-	enddo	
-	
+	enddo
+
 	!**** create the process tree
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
-	
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-	
+
 	!**** set number of threads
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)	
+	strings = TRIM(strings)
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)		
+	call OMP_set_num_threads(threads_num)
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_KRR"
     write(*,*) "   "
 	endif
-	
-	!**** initialize statistics variables  
+
+	!**** initialize statistics variables
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-	
 
-	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file 
+
+	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file
 	if(iargc()>=1)then
 		call getarg(1,strings)
 		read(strings,*)tst
 	endif
-	
-	
+
+
 !******************************************************************************!
-! generate a LR matrix as two matrix product	
+! generate a LR matrix as two matrix product
 	if(tst==1)then
-		!**** register the user-defined function and type in ker 
+		!**** register the user-defined function and type in ker
 		ker%FuncZmn=>Zelem_LR
 		ker%QuantApp=>quant
-	 
+
 		!**** Get matrix size and rank and create the matrix
 		quant%Nunk = 10000
 		quant%rank = 2
@@ -229,30 +229,30 @@ PROGRAM ButterflyPACK_FULL
 		allocate(quant%matU_glo(quant%Nunk,quant%rank))
 		call RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
 		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
-		
+
 		allocate(quant%matV_glo(quant%rank,quant%Nunk))
-		call RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)	
-		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)	
+		call RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
+		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
 	   write (*,*) 'FullMat computing'
 	   write (*,*) ''
 	   endif
-	   !***********************************************************************		
-	endif	
+	   !***********************************************************************
+	endif
 
-	
-	
+
+
 !******************************************************************************!
 ! generate a LR matrix stored in a files
 	if(tst==2)then
-		strings = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'	
+		strings = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'
 		if(iargc()>=2)then
 			call getarg(2,strings)
-		endif	
+		endif
 
-		!**** register the user-defined function and type in ker 
+		!**** register the user-defined function and type in ker
 		ker%FuncZmn=>Zelem_FULL
 		ker%QuantApp=>quant
 
@@ -273,127 +273,127 @@ PROGRAM ButterflyPACK_FULL
 	   write (*,*) 'Random LR Kernel computing'
 	   write (*,*) ''
 	   endif
-	   !***********************************************************************		
-	endif	
-		
-!******************************************************************************!	
-	
-    !**** set solver parameters	
+	   !***********************************************************************
+	endif
+
+!******************************************************************************!
+
+    !**** set solver parameters
 	option%nogeo=1  ! no geometry points available
 	option%xyzsort=NATURAL ! no reordering will be perfomed (if matrix PSD, can use TM_GRAM as alternative reordering algorithm)
     ! option%verbosity=2
     ! option%LRlevel=100
 	msh%Nunk = quant%Nunk
-	
-	
+
+
 	!**** construct the first HODLR with entry evaluation
-	t1 = OMP_get_wtime()	
+	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
     call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
-	
-	t1 = OMP_get_wtime()	
+
+	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
     call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()   
-	
-	
+ 	t2 = OMP_get_wtime()
+
+
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor ......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
-	
+
 	if(option%ErrSol==1)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve ......"
 		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve finished"
 	endif
-	
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
 	call PrintStat(stats,ptree)
-	
-	
+
+
 	!**** construct the second HODLR using the first HODLR as matvec
 	call CopyOptions(option,option1)
 	option1%nogeo=1
 	option1%xyzsort=NATURAL
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
-	ker1%QuantApp=>quant1	
+	ker1%QuantApp=>quant1
 	quant1%bmat=>bmat
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
 	msh1%Nunk = msh%Nunk
-	
-	
+
+
 	call InitStat(stats1)
-	
+
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
-	enddo	
+	enddo
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
-	
-	
+
+
 	select case(option%format)
 	case(HODLR)
-		allocate (msh1%pretree(2**bmat%ho_bf%Maxlevel))	
+		allocate (msh1%pretree(2**bmat%ho_bf%Maxlevel))
 		do ii=1,2**bmat%ho_bf%Maxlevel
 			msh1%pretree(ii)=msh%basis_group(2**bmat%ho_bf%Maxlevel+ii-1)%tail-msh%basis_group(2**bmat%ho_bf%Maxlevel+ii-1)%head+1
 		enddo
 	case(HMAT)
-		allocate (msh1%pretree(2**bmat%h_mat%Maxlevel))	
+		allocate (msh1%pretree(2**bmat%h_mat%Maxlevel))
 		do ii=1,2**bmat%h_mat%Maxlevel
 			msh1%pretree(ii)=msh%basis_group(2**bmat%h_mat%Maxlevel+ii-1)%tail-msh%basis_group(2**bmat%h_mat%Maxlevel+ii-1)%head+1
-		enddo	
+		enddo
 	end select
-	
+
     call Cluster_partition(bmat1,option1,msh1,ker1,element_Zmn_user,ptree1)
-	call BPACK_structuring(bmat1,option1,msh1,ptree1,stats)	
-	
+	call BPACK_structuring(bmat1,option1,msh1,ptree1,stats)
+
 	N_unk_loc = msh1%idxe-msh1%idxs+1
-	t1 = OMP_get_wtime()	
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"		
+	t1 = OMP_get_wtime()
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction......"
 	call HODLR_randomized(bmat1%ho_bf,matvec_user,N_unk_loc,Memory,error,option1,stats1,ker1,ptree1,msh1)
-	t2 = OMP_get_wtime()  
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error		
-	
+	t2 = OMP_get_wtime()
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based Matrix construction finished",t2-t1, 'secnds. Error: ', error
+
 	call PrintStat(stats1,ptree1)
 	call delete_proctree(ptree1)
 	call delete_Hstat(stats1)
 	call delete_mesh(msh1)
-	call delete_kernelquant(ker1)	
-	call BPACK_delete(bmat1)	
-		
-	
-	
+	call delete_kernelquant(ker1)
+	call BPACK_delete(bmat1)
+
+
+
 	if(allocated(quant%matU_glo))deallocate(quant%matU_glo)
 	if(allocated(quant%matV_glo))deallocate(quant%matV_glo)
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
-	
-	
+
+
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
-	
+
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
-	
+
 end PROGRAM ButterflyPACK_FULL
 
 

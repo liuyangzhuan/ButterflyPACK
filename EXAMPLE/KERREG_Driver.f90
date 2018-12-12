@@ -9,14 +9,14 @@
 ! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
 ! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
-! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 
-! This exmple works with double precision data 
-#define DAT 1 
+! This exmple works with double precision data
+#define DAT 1
 
 #include "ButterflyPACK_config.fi"
 
@@ -24,44 +24,44 @@ module APPLICATION_MODULE
 use BPACK_DEFS
 implicit none
 
-	!**** define your application-related variables here   
+	!**** define your application-related variables here
 	type quant_app
-		real(kind=8) sigma, lambda ! Kernel Regression: RBF parameters 
+		real(kind=8) sigma, lambda ! Kernel Regression: RBF parameters
 		integer dimn  ! dimension of the data sets
 		integer ntrain,ntest ! size of training points and test points
 		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
-		
-		integer Nunk ! size of the matrix 
-		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points		
-		
+
+		integer Nunk ! size of the matrix
+		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
+
 	end type quant_app
 
 contains
 
 
-	!**** cutoff distance for gaussian kernel 
+	!**** cutoff distance for gaussian kernel
 	real(kind=8) function arg_thresh_Zmn(quant)
 		use BPACK_DEFS
-		implicit none 
-		
+		implicit none
+
 		type(quant_app)::quant
-		arg_thresh_Zmn=-log(SafeUnderflow)*2.0*quant%sigma**2 
+		arg_thresh_Zmn=-log(SafeUnderflow)*2.0*quant%sigma**2
 	end function arg_thresh_Zmn
 
 
-	
+
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_RBF(m,n,value_e,quant)
 		use BPACK_DEFS
-		implicit none 
-		
+		implicit none
+
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		real(kind=8)::value_e 
+		real(kind=8)::value_e
 
 		real(kind=8) r_mn
 		integer dimn
-		
+
 		select TYPE(quant)
 		type is (quant_app)
 			dimn = size(quant%xyz,1)
@@ -70,14 +70,14 @@ contains
 			if(r_mn<arg_thresh_Zmn(quant))then
 				value_e = exp(-r_mn/2.0/quant%sigma**2)
 			endif
-			if(r_mn==0)value_e = value_e + quant%lambda		
+			if(r_mn==0)value_e = value_e + quant%lambda
 		class default
 			write(*,*)"unexpected type"
 			stop
-		end select	
+		end select
 	end subroutine Zelem_RBF
 
-end module APPLICATION_MODULE	
+end module APPLICATION_MODULE
 
 
 
@@ -86,7 +86,7 @@ end module APPLICATION_MODULE
 PROGRAM ButterflyPACK_KRR
     use BPACK_DEFS
     use APPLICATION_MODULE
-	
+
 	use BPACK_structure
 	use BPACK_factor
 	use BPACK_constr
@@ -95,22 +95,22 @@ PROGRAM ButterflyPACK_KRR
 
     implicit none
 
-	! include "mkl_vml.fi"	 
-	
+	! include "mkl_vml.fi"
+
     real(kind=8) para
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num,iii
-	integer times(8)	
+	integer times(8)
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
-	
+
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings	
-	character(len=6)  :: info_env	
+	character(len=1024)  :: strings
+	character(len=6)  :: info_env
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
+	type(Hoption)::option
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
@@ -119,46 +119,46 @@ PROGRAM ButterflyPACK_KRR
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	type(proctree)::ptree
-	CHARACTER (LEN=1000) DATA_DIR	
+	CHARACTER (LEN=1000) DATA_DIR
 	integer MPI_thread
-	
+
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
-	enddo	
-	
+	enddo
+
 	!**** create the process tree
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
-	
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-	
+
 	!**** set number of threads
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)	
+	strings = TRIM(strings)
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)		
-		
+	call OMP_set_num_threads(threads_num)
+
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_KRR"
     write(*,*) "   "
 	endif
-	
-	!**** initialize statistics variables  
+
+	!**** initialize statistics variables
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-	
-	!**** register the user-defined function and type in ker 
+
+	!**** register the user-defined function and type in ker
 	ker%FuncZmn=>Zelem_RBF
 	ker%QuantApp=>quant
- 
+
 
 	DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
     quant%dimn=8
@@ -166,8 +166,8 @@ PROGRAM ButterflyPACK_KRR
     quant%ntest=1000
 	quant%sigma=0.1
 	quant%lambda=10.0
- 
- 
+
+
     !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters and solver parameters
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
@@ -187,29 +187,29 @@ PROGRAM ButterflyPACK_KRR
 	if(iargc()>=5)then
 		call getarg(5,strings)
 		read(strings,*)quant%sigma
-	endif	
+	endif
 	if(iargc()>=6)then
 		call getarg(6,strings)
-		read(strings,*)quant%lambda	
-	endif	
+		read(strings,*)quant%lambda
+	endif
 	if(iargc()>=7)then
 		call getarg(7,strings)
 		read(strings,*)option%xyzsort
-	endif	
+	endif
 	if(iargc()>=8)then
 		call getarg(8,strings)
-		read(strings,*)option%RecLR_leaf	
+		read(strings,*)option%RecLR_leaf
 	endif
 
-    
-	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'			
-	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'		
-	quant%testfile_p=trim(DATA_DIR)//'_test.csv'			
+
+	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'
+	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'
+	quant%testfile_p=trim(DATA_DIR)//'_test.csv'
 	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
 	write(*,*)'training set: ',quant%trainfile_p
-		
-	
+
+
 
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
@@ -218,20 +218,20 @@ PROGRAM ButterflyPACK_KRR
    write (*,*) ''
    endif
    !***********************************************************************
-	
+
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
     call geo_modeling_RBF(quant,ptree%Comm)
-	
+
 	msh%Nunk=quant%Nunk
 	allocate(msh%xyz(quant%dimn,quant%Nunk))
 	msh%xyz=quant%xyz
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
-	t1 = OMP_get_wtime()	
+	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
     call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
@@ -239,42 +239,42 @@ PROGRAM ButterflyPACK_KRR
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
-	t1 = OMP_get_wtime()	
+	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
     call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
- 	t2 = OMP_get_wtime()   
-	
+ 	t2 = OMP_get_wtime()
+
 	if(option%precon/=NOPRECON)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
     call RBF_solve(bmat,option,msh,quant,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
 	if(allocated(quant%xyz))deallocate(quant%xyz)
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
-	
+
 
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
-	
+
 end PROGRAM ButterflyPACK_KRR
 
 
-!**** read training sets 
+!**** read training sets
 subroutine geo_modeling_RBF(quant,MPIcomm)
 
     use BPACK_DEFS
@@ -287,43 +287,43 @@ subroutine geo_modeling_RBF(quant,MPIcomm)
     integer node1, node2, num_node,Dimn
     integer node_temp(2)
     real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
-    
+
     real(kind=8),allocatable :: node_xy_original(:,:)
     integer,allocatable :: num_edge_of_node(:)
-    
+
     real(kind=8) a(3),b(3),c(3),r0, phi_start
 	! type(proctree)::ptree
 	integer MPIcomm,MyID,ierr
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
-	
+
 	Dimn = quant%dimn
-	
+
 	open (90,file=quant%trainfile_p)
 	allocate (quant%xyz(Dimn,0:quant%Nunk))
 	do edge=1,quant%Nunk
 		read (90,*) quant%xyz(1:Dimn,edge)
-	enddo  			
+	enddo
     close(90)
     return
-    
+
 end subroutine geo_modeling_RBF
 
 
 subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
-    
+
     use BPACK_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
 	use BPACK_Solve_Mul
-    
+
     implicit none
-    
+
     integer i, j, ii, jj, iii, jjj, ierr, ntest,Dimn,edge_m,edge_n,ncorrect
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
     real(kind=8) theta, phi, dphi, rcs_V, rcs_H,rate
     real T0,T1
-    real(kind=8) n1,n2,rtemp	
+    real(kind=8) n1,n2,rtemp
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
 	real(kind=8):: rel_error
@@ -332,7 +332,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	type(quant_app)::quant
 	type(proctree)::ptree
 	type(Bmatrix)::bmat
-	type(Hstat)::stats	
+	type(Hstat)::stats
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	real(kind=8),allocatable:: xyz_test(:,:)
@@ -341,21 +341,21 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
 	N_unk=msh%Nunk
 	Dimn=quant%dimn
-	N_unk_loc = msh%idxe-msh%idxs+1	
-	
+	N_unk_loc = msh%idxe-msh%idxs+1
+
 
 	if(option%ErrSol==1)then
 		call BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
-	endif	
-	
-	
-	!**** read training label as local RHS and solve for the weights
-	
+	endif
 
-	
+
+	!**** read training label as local RHS and solve for the weights
+
+
+
 	allocate(labels(N_unk))
 	allocate (x(N_unk_loc,1))
-	x=0	
+	x=0
 	allocate (b(N_unk_loc,1))
 	open (91,file=quant%trainfile_l)
 	! read(91,*)N_unk,Dimn
@@ -366,44 +366,44 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	do ii=1,N_unk_loc
 		b(ii,1) = labels(msh%new2old(ii-1+msh%idxs))
 	enddo
-	deallocate(labels)	
+	deallocate(labels)
 	close(91)
-	
+
 	n1 = OMP_get_wtime()
-	
+
 	call BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
-	
+
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
 	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp		
-	
-	!**** prediction on the test sets	
-	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
+
+	!**** prediction on the test sets
+
 	ntest=quant%ntest
 	T1=secnds(0.0)
 	open (92,file=quant%testfile_p)
 	allocate (xyz_test(Dimn,ntest))
 	do edge=1,ntest
 		read (92,*) xyz_test(1:Dimn,edge)
-	enddo  		
-	close(92)	
-	
-	allocate (vout(ntest,1))		
-	allocate (vout_tmp(ntest,1))		
-	vout_tmp = 0	
-	do edge=1, N_unk_loc 
+	enddo
+	close(92)
+
+	allocate (vout(ntest,1))
+	allocate (vout_tmp(ntest,1))
+	vout_tmp = 0
+	do edge=1, N_unk_loc
 		do edge_m=1,ntest
 			r_mn=sum((xyz_test(1:dimn,edge_m)-msh%xyz(1:dimn,msh%new2old(edge+msh%idxs-1)))**2)
 			value_Z = exp(-r_mn/2.0/quant%sigma**2)
 			vout_tmp(edge_m,1) = vout_tmp(edge_m,1) + value_Z*x(edge,1)
 		enddo
-	enddo	
-	
+	enddo
+
 	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_precision, MPI_SUM, Main_ID, ptree%Comm,ierr)
-			
+
 	if (ptree%MyID==Main_ID) then
 		do ii=1,ntest
 			if(dble(vout(ii,1))>0)then
@@ -413,40 +413,40 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 			endif
 		enddo
 
-		
+
 		open (93,file=quant%testfile_l)
 		do edge=1,ntest
 			read (93,*) label
 			vout_tmp(edge,1)=label
-		enddo  		
-		close(93)		
-		
+		enddo
+		close(93)
+
 		ncorrect=0
 		do edge=1,ntest
 			if(dble(vout_tmp(edge,1))*dble(vout(edge,1))>0)then
 				ncorrect = ncorrect + 1
 			endif
-		enddo  			
-		
+		enddo
+
 		rate = dble(ncorrect)/dble(ntest)
-	
+
 		write (*,*) ''
 		write (*,*) 'Prediction time:',secnds(T1),'Seconds'
 		write (*,*) 'Success rate:',rate
 		write (*,*) ''
-		
-	endif		
+
+	endif
 
 	deallocate (vout)
 	deallocate (vout_tmp)
 
 	deallocate(x)
-	deallocate(b)	
+	deallocate(b)
 	deallocate(xyz_test)
-	
+
 	call MPI_barrier(ptree%Comm,ierr)
-	
+
     return
-    
+
 end subroutine RBF_solve
 

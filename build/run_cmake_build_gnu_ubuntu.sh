@@ -18,6 +18,6 @@ cmake .. \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Debug \
-	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON 
-	# -DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check " \	
-	
+	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+	# -DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check " \
+

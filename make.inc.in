@@ -8,8 +8,8 @@
 #
 #  Creation date:   August 19, 2018	version 1.0.0
 #
-#  Modified:	    
-#		    
+#  Modified:
+#
 #
 ############################################################################
 #
@@ -29,12 +29,12 @@ ARCHFLAGS    = cr
 RANLIB       = /usr/bin/ranlib
 
 CC           = mpicxx ##/opt/cray/pe/craype/2.5.12/bin/cc
-CFLAGS 	     = -O3 -DNDEBUG 
+CFLAGS 	     = -O3 -DNDEBUG
 # CFLAGS       += -D_LONGINT   ## 64-bit integer
 # CFLAGS       += -D
-# CFLAGS       +=  
+# CFLAGS       +=
 NOOPTS       = -O0
 FORTRAN	     = mpif90 ## /opt/cray/pe/craype/2.5.12/bin/ftn
 
 LOADER       = $(CC)
-LOADOPTS     = -Wl,-rpath,-qopenmp  -qopenmp 
+LOADOPTS     = -Wl,-rpath,-qopenmp  -qopenmp

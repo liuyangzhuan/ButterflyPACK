@@ -9,13 +9,13 @@
 ! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
 ! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
 ! worldwide license in the Software to reproduce, distribute copies to the public, prepare
-! derivative works, and perform publicly and display publicly, and to permit other to do so. 
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 
-! This exmple works with double-complex precision data 
+! This exmple works with double-complex precision data
 #define DAT 0
 
 #include "ButterflyPACK_config.fi"
@@ -23,7 +23,7 @@
 PROGRAM ButterflyPACK_IE_3D
     use BPACK_DEFS
 	use EMSURF_MODULE
-	
+
 	use BPACK_structure
 	use BPACK_factor
 	use BPACK_constr
@@ -32,57 +32,57 @@ PROGRAM ButterflyPACK_IE_3D
 	use misc
     implicit none
 
-	! include "mkl_vml.fi"	 
-	
+	! include "mkl_vml.fi"
+
     real(kind=8) para
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seed_myid(50)
-	integer times(8)	
+	integer times(8)
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
-	
+
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings	
-	character(len=6)  :: info_env	
+	character(len=1024)  :: strings
+	character(len=6)  :: info_env
 	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option	
-	type(Hstat)::stats	
-	type(mesh)::msh	
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
 	type(Bmatrix)::bmat
 	type(kernelquant)::ker
 	type(quant_EMSURF),target::quant
 	type(proctree)::ptree
-	integer,allocatable:: groupmembers(:)	
+	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	CHARACTER (LEN=1000) DATA_DIR	
-	
-	! nmpi and groupmembers should be provided by the user 
+	CHARACTER (LEN=1000) DATA_DIR
+
+	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
-	enddo	
-	
+	enddo
+
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
-	
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',nmpi
-	
+
  	threads_num=1
     CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)	
+	strings = TRIM(strings)
 	if(LEN_TRIM(strings)>0)then
 		read(strings , *) threads_num
 	endif
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
 	call OMP_set_num_threads(threads_num)
-	
-	
+
+
 	! oldmode = vmlsetmode(VML_FTZDAZ_ON)
 	! call vmlsetmode(VML_FTZDAZ_ON)
 	if(ptree%MyID==Main_ID)then
@@ -92,56 +92,56 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
 	call InitStat(stats)
 	call SetDefaultOptions(option)
-	
+
 	time_tmp = 0
-	
- 	! register the user-defined function and type in ker 
+
+ 	! register the user-defined function and type in ker
 	ker%FuncZmn=>Zelem_EMSURF
-	ker%QuantApp=>quant	
-	
-	! compute the quadrature rules 
+	ker%QuantApp=>quant
+
+	! compute the quadrature rules
     quant%integral_points=6
     allocate (quant%ng1(quant%integral_points), quant%ng2(quant%integral_points), quant%ng3(quant%integral_points), quant%gauss_w(quant%integral_points))
     call gauss_points(quant)
 
-	
+
      !*************************input******************************
 	DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
-	
+
 	quant%mesh_normal=1
 	quant%scaling=1d0
 	quant%wavelength=2.0
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
-	
 
-	option%format= HMAT!  HODLR ! 
+
+	option%format= HMAT!  HODLR !
 	option%near_para=2.01d0
 	option%verbosity=2
-	option%ILU=0 	
-	option%forwardN15flag=0 
+	option%ILU=0
+	option%forwardN15flag=0
 
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
 	if(iargc()>=2)then
 		call getarg(2,strings)
-		read(strings,*)quant%wavelength	
-	endif	
+		read(strings,*)quant%wavelength
+	endif
 	if(iargc()>=3)then
 		call getarg(3,strings)
 		read(strings,*)option%precon
-	endif	
+	endif
 	if(iargc()>=4)then
 		call getarg(4,strings)
-		read(strings,*)option%xyzsort	
-	endif	
+		read(strings,*)option%xyzsort
+	endif
 	if(iargc()>=5)then
 		call getarg(5,strings)
-		read(strings,*)option%Nmin_leaf		
+		read(strings,*)option%Nmin_leaf
 	endif
-	
+
 
     !*********************************************************
 
@@ -149,33 +149,33 @@ PROGRAM ButterflyPACK_IE_3D
     quant%wavenum=2*pi/quant%wavelength
 
    !***********************************************************************
-	if(ptree%MyID==Main_ID)then							  
+	if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
    write (*,*) 'wavelength:',quant%wavelength
    write (*,*) ''
-	endif		
+	endif
    !***********************************************************************
-	
+
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling for "//trim(DATA_DIR)//"......"
-    
+
 	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
-	
+
 	! generate the list of points for clustering
 	msh%Nunk=quant%Nunk
 	allocate(msh%xyz(3,quant%Nunk))
     do edge=1, quant%Nunk
 		msh%xyz(:,edge) = quant%xyz(:,quant%maxnode+edge)
-    enddo	
+    enddo
 	option%touch_para = 3* quant%minedgelength
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
 
-	t1 = OMP_get_wtime()	
+	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing Hierarchical format......"
 	call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
@@ -183,47 +183,47 @@ PROGRAM ButterflyPACK_IE_3D
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
-	t1 = OMP_get_wtime()	
+	t1 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
 	call BPACK_construction_Element_Compute(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()   
-	
-	
-	if(option%precon/=NOPRECON)then								
+	t2 = OMP_get_wtime()
+
+
+	if(option%precon/=NOPRECON)then
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor......"
 	call BPACK_Factorization(bmat,option,stats,ptree,msh)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Factor finished"
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	end if
 
 	if(option%ErrSol==1)then
 		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
-	endif		
-	
+	endif
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
 	call EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
 	call PrintStat(stats,ptree)
-	
+
 	call delete_quant_EMSURF(quant)
-	
+
 	call delete_proctree(ptree)
 	call delete_Hstat(stats)
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
 
-	
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
-	
+
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
-	
+
     ! ! ! ! pause
 
 end PROGRAM ButterflyPACK_IE_3D

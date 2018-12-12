@@ -42,7 +42,7 @@ SET(CMAKE_SKIP_BUILD_RPATH  FALSE)
 
 # when building, don't use the install RPATH already
 # (but later on when installing)
-SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE) 
+SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 
 # the RPATH to be used when installing
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
@@ -132,7 +132,7 @@ if(OPENMP_FOUND)
  message("-- CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
 endif()
 
- 
+
  # #--------------------- LAPACK ---------------------
 if(TPL_LAPACK_LIBRARIES)
 	set(LAPACK_FOUND TRUE)
@@ -170,7 +170,7 @@ if(SCALAPACK_FOUND)
     string (REPLACE ";" " " SCALAPACK_LIB_STR "${SCALAPACK_LIB}")
     set(SCALAPACK_LIB_EXPORT ${SCALAPACK_LIB_STR})
  endif()
- 
+
 
 #--------------------- MPI ---------------------
 find_package(MPI)
@@ -213,6 +213,6 @@ configure_file(${ButterflyPACK_SOURCE_DIR}/make.inc.in ${ButterflyPACK_SOURCE_DI
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/butterflypack.pc.in ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-	
-	
-	
+
+
+

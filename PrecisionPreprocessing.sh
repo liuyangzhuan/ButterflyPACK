@@ -7,8 +7,8 @@ ZSRCDIR=$ROOTDIR/SRC_DOUBLECOMPLEX
 MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
 TMP_FILE=$PWD/tmp.txt
 
-dos2unix  -q */* 
-dos2unix  -q */*/* 
+dos2unix  -q */*
+dos2unix  -q */*/*
 
 ############################################################################
 echo "-- generating macro definition header ..."
@@ -50,8 +50,8 @@ echo "#endif" >> $MACRO_FILE
 rm -rf $TMP_FILE
 cp $MACRO_FILE $ROOTDIR/EXAMPLE/.
 
-########################################################### 
-# note that module names and *.h headers need to be renamed without macros 
+###########################################################
+# note that module names and *.h headers need to be renamed without macros
 echo "-- copy and modify SRC dir ..."
 grep -h "end module" --include='*.f90' --include='*.f' $SRCDIR/* |sed 's/[[:blank:]]*$//' | sed 's/.* \([^ ][^ ]*\) */\1/' > $TMP_FILE
 rm -rf $ZSRCDIR
