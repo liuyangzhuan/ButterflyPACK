@@ -540,7 +540,7 @@ end subroutine C_BPACK_Setoption
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
 	!MPIcomm: user-provided MPI communicator
-subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct")
+subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct_element")
 	implicit none
 	integer Npo,Ndim
 	real(kind=8) Locations(*)
@@ -715,7 +715,7 @@ subroutine C_BPACK_Construct(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,
 
 
 
-end subroutine C_BPACK_Construct
+end subroutine C_BPACK_Construct_Element
 
 
 

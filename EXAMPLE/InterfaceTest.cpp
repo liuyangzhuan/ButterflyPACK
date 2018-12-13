@@ -392,7 +392,7 @@ if(tst==3){
 
 
     // construct hodlr with geometrical points
-	d_c_bpack_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);
+	d_c_bpack_construct_element(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);
 
 	// factor hodlr
 	d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);

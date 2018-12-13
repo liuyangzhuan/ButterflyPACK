@@ -46,8 +46,15 @@ subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,option,ker)
 end subroutine element_Zmn_user
 
 
-
-
+!**** Initialization of the construction phase
+	! N is matrix dimension
+	! P is the permutation vector returned
+	! N_loc is the local number of rows/columns
+	! bmat is the meta-data storing the compressed matrix
+	! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
+	! clustertree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
+	! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.
+	! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
 subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates,tree)
 	implicit none
 	integer Nunk,Ndim
@@ -176,10 +183,7 @@ end subroutine BPACK_construction_Init
 
 
 
-
-
-
-
+!**** Computation of the construction phase with matrix entry evaluation
 subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn,ptree)
 
     implicit none

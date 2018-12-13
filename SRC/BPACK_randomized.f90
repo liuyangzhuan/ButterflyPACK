@@ -43,7 +43,7 @@ subroutine matvec_user(trans,M,N,num_vect,Vin,Vout,ker)
 end subroutine matvec_user
 
 
-
+!**** Computation of the construction phase with matrix-vector multiplication
 subroutine BPACK_construction_Matvec(bmat,blackbox_BMAT_MVP,Memory,error,option,stats,ker,ptree,msh)
     implicit none
 
