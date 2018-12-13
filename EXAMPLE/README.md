@@ -86,16 +86,16 @@ call BPACK_Factorization(bmat,x,b,N_loc,nrhs,option,ptree,stats)
 	! x of N_loc*nrhs is the local solution vector
 ```
 
-## Fortran EXAMPLE
+## Fortran Example
 You can run several examples in this directory as follows. You can modify options in the driver or from command line. 
-EMCURV_Driver.f90 and EMCURV_Module.f90: 
 
 KERREG_Driver.f90: 
-A example for kernel ridge regression (KRR) with RBF kernel. This example constructs (with entry evaluation), factor a RBF-kernel matrix and uses it for binary classifications with UCI machine learning datasets. 
+An example for kernel ridge regression (KRR) with RBF kernel. This example constructs (with entry evaluation), factor a RBF-kernel matrix and uses it for binary classifications with UCI machine learning datasets. 
 ```
 mpirun -n nmpi ./EXAMPLE/krr 
 ```
 
+EMCURV_Driver.f90 and EMCURV_Module.f90: 
 A 2D EFIE example with several built-in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and solve it with plane-wave excitations. 
 ```
 mpirun -n nmpi ./EXAMPLE/ie2d 
@@ -109,14 +109,14 @@ mpirun -n nmpi ./EXAMPLE/ie3d [./EM3D_DATA/preprocessor_3dmesh/sphere_2300]
 ```
 
 HODLR_Randconst.f90: 
-A example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hiearchical matrix as matrix-vector multiplication to construct the second hierarchical matrix. 
+An example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix. 
 ```
 sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
 mpirun -n nmpi ./EXAMPLE/smat 
 ```
 
 FULLMAT_Driver.f90: 
-A example for compressing a randomly generated low-rank matrix (if tst=1) or a full RBF kernel matrix stored in file (if tst=2). The example first constructs a hieararchical matrix with entry evaluation, then uses the first hieararchical matrix as matrix-vector multiplication to construct a second hiearchical matrix. 
+An example for compressing a randomly generated low-rank matrix (if tst=1) or a full RBF kernel matrix stored in file (if tst=2). The example first constructs a hierarchical matrix with entry evaluation, then uses the first hierarchical matrix as matrix-vector multiplication to construct a second hierarchical matrix. 
 ```
 sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh K05N4096.csv ! this extract a full matrix stored as K05N4096.csv
 mpirun -n nmpi ./EXAMPLE/full 
@@ -147,31 +147,39 @@ Initialize ButterflyPACK metadata:
 F2Cptr bmat;  //hierarchical matrix returned by Fortran code
 F2Cptr option;     //option structure returned by Fortran code
 F2Cptr stats;      //statistics structure returned by Fortran code
-F2Cptr msh;		   //d_mesh structure returned by Fortran code
-F2Cptr kerquant;   //kernel quantities structure returned by Fortran code
+F2Cptr msh;		   //mesh structure returned by Fortran code
+F2Cptr kerregister;   //kernel register quantities structure returned by Fortran code
 F2Cptr ptree;      //process tree returned by Fortran code
-MPI_Fint Fcomm;  // the fortran MPI communicator
+MPI_Fint Fcomm;  // the Fortran MPI communicator
 Fcomm = MPI_Comm_c2f(Comm); //Comm is the C MPI communicator provided by the user 
 
 // initialize ButterflyPACK metadata
-d_c_bpack_createptree(&size, groups, &Fcomm, &ptree); //groups is a int array of size "size" holding MPI ranks used for ButterflyPACK
+d_c_bpack_createptree(&nmpi, groups, &Fcomm, &ptree); //groups is a int array of size nmpi holding MPI ranks out of communicator Fcomm used for ButterflyPACK
 d_c_bpack_createoption(&option);
 d_c_bpack_createstats(&stats);
 
 // set ButterflyPACK options other than the default ones, the double and integer options are set with different functions:
-d_c_bpack_set_D_option(&option, "name", val);
-d_c_bpack_set_I_option(&option, "name", val);
+d_c_bpack_set_D_option(&option, "name", val); //double-valued option
+d_c_bpack_set_I_option(&option, "name", val); //int-valued option
 ```
 
 Construction of the hierarchical matrix with entry evaluation:
 ```
-d_c_bpack_construct(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);
+d_c_bpack_construct(&N, &Ndim, coordinates, &nlevel, clustertree, P, &N_loc, &bmat, &option, &stats, &msh, &kerregister, &ptree, &C_FuncZmn, quant, &Fcomm);
+   //N is matrix dimension
+   //coordinates is a double array of size N*Ndim representing Cartesian coordinates x1(1),...,x1(Ndim),x2(1),...,x2(Ndim)....
+   //if Ndim=0, coordinates is not referenced 
+   //clustertree is an integer array of size 2^nlevel containing leafsizes in a user-provided cluster tree
+   //if nlevel=0, requiring tree(1)=N
+   //P is an integer array of size N, representing permutation vector returned by the ButterflyPACK clustering 
+   //N_loc is the local matrix dimension 
 ```
 
 Construction of the hierarchical matrix with matrix-vector multiplication:
 ```
-d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
-d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+d_c_bpack_construct_matvec_init(&N, &nlevel, clustertree, P, &N_loc, &bmat, &option, &stats, &msh, &kerregister, &ptree);
+//returning clustertree, P and N_loc can be used to define your matvec if needed
+d_c_bpack_construct_matvec_compute(&bmat, &option, &stats, &msh, &kerregister, &ptree, &C_FuncHMatVec, quant);
 ```
 
 Factorization of the hierarchical matrix: 
@@ -181,8 +189,22 @@ d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
 
 Solve of the hierarchical matrix: 
 ```
-d_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
+d_c_bpack_solve(x,b,&N_loc,&nrhs,&bmat,&option,&stats,&ptree);
+	// bmat is the meta-data storing the compressed and factored matrix
+	// N_loc is the local number of rows/columns
+	// nrhs is the number of right-hand sides
+	// b of N_loc*nrhs is the local right-hand sides (concatenation of nrhs vectors of length N_loc)
+	// x of N_loc*nrhs is the local solution vector (concatenation of nrhs vectors of length N_loc)
 ```
 
-In addition, ButterflyPACK can be invoked from STRUMPACK with neat C++ interfaces. See http://portal.nersc.gov/project/sparse/strumpack/ for details.   
+In addition, ButterflyPACK can be invoked from STRUMPACK with more compact C++ interfaces than the above. See http://portal.nersc.gov/project/sparse/strumpack/ for details.   
 
+## C/C++ Example
+There is one C++ example in this directory as follows. You can modify options in the driver or from command line. 
+
+InterfaceTest.cpp: 
+An example using a collection of simple kernels. The kernels are selected by the parameter "ker". ker=1: RBF, 2: R^4, 3: sqrt(R^2+h), 4: 1/sqrt(R^2+h), 5: (X^tY+h)^2, 6: product of two random matrices. The coordinates are generated as follows: tst=1 read from a UCI machine learning dataset, tst=2 generates a random collection of coordinates, tst=3 no coordinates are generated.  
+This example first constructs (with entry evaluation), factor a hierarchical matrix and then uses it as matrix-vector multiplication to construct a second hierarchical matrix. 
+```
+mpirun -n nmpi ./EXAMPLE/ctest 
+```
