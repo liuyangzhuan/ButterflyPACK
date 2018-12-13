@@ -1,9 +1,9 @@
-This directory contains sample programs to illustrate how to call functions in ButterflyPACK from your application code. ButterflyPACK provide both double and double-complex data types. ButterflyPACK provides both Fortran and C/C++ interfaces.
+This directory contains sample programs to illustrate how to call functions in ButterflyPACK from your application code. ButterflyPACK provides both double and double-complex data types. It provides both Fortran and C/C++ interfaces.
 
 ## Fortran Interface
-The following pseudo codes explain how to perform construction, factorization and solve of a linear system "Z" in Fortran
+The following pseudo codes explain how to perform construction, factorization and solve of a linear system "Z" using the Fortran interface
 
-Specify the data type of your application:
+First, specify the data type of your application:
 ```
 !**** DAT 1: double precision; DAT 0: double complex precision
 #define DAT 1
@@ -29,7 +29,7 @@ The second option requires a user-provided function to multiply the matrix Z wit
 subroutine MatVec(trans,Mloc,Nloc,num_vect,R,S,quant)
 implicit none
 	character trans ! trans='N': S=ZR; trans='T': S^t=R^tZ; trans='C': S^c=R^cZ;
-	DT:: R(:,:),S(:,:) ! specifies the input matrix R and output matrix S
+	DT:: R(:,:),S(:,:) ! represent the input matrix R and output matrix S
 	integer::Mloc,Nloc ! local row and column dimensions of Z returned by the initialization subroutine BPACK_construction_Init
 	integer:: num_vect ! column dimension of R
 	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
@@ -123,7 +123,7 @@ mpirun -n nmpi ./EXAMPLE/full
 ```
 
 ## C/C++ Interface
-Note that ButterflyPACK supports double and double-complex data types as two independent libraries. As such, all ButterflyPACK C++ interfaces are named with the prefix "x_". x=d for double precision and x=z for double complex precision. Take double precision for example, the caller needs to first define a class/object that can performs either matrix entry evaluation or matrix vector multiplication:
+Note that ButterflyPACK supports double and double-complex data types as two independent libraries. As such, all ButterflyPACK C++ interfaces are named with the prefix "x_". x=d for double precision and x=z for double complex precision. Take double precision for example, the caller needs to first define a class/object that can perform either matrix entry evaluation or matrix vector multiplication:
 ```
 #include "dC_BPACK_wrapper.h"
 //provide a user-defined class consisting all data and metadata needed for this matrix entry evaluation and/or matvec
@@ -133,12 +133,12 @@ class C_QuantApp {
 // The entry evaluation function wrapper required by the Fortran code, val returns Z(m,n), F2Cptr is an alias of void*
 inline void C_FuncZmn(int *m, int *n, double *val, F2Cptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  //call your entry evaluation function defined in C_QuantApp
+  //call your entry evaluation function defined in C_QuantApp using Q
 }
 // The matvec function wrapper required by the Fortran code, see "subroutine MatVec" above for the argument list
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  //call your matvec function defined in C_QuantApp
+  //call your matvec function defined in C_QuantApp using Q
 }
 ```
 
@@ -165,12 +165,12 @@ d_c_bpack_set_I_option(&option, "name", val); //int-valued option
 
 Construction of the hierarchical matrix with entry evaluation:
 ```
-d_c_bpack_construct(&N, &Ndim, coordinates, &nlevel, clustertree, P, &N_loc, &bmat, &option, &stats, &msh, &kerregister, &ptree, &C_FuncZmn, quant, &Fcomm);
+d_c_bpack_construct_element(&N, &Ndim, coordinates, &nlevel, clustertree, P, &N_loc, &bmat, &option, &stats, &msh, &kerregister, &ptree, &C_FuncZmn, quant, &Fcomm);
    //N is matrix dimension
    //coordinates is a double array of size N*Ndim representing Cartesian coordinates x1(1),...,x1(Ndim),x2(1),...,x2(Ndim)....
    //if Ndim=0, coordinates is not referenced
    //clustertree is an integer array of size 2^nlevel containing leafsizes in a user-provided cluster tree
-   //if nlevel=0, requiring tree(1)=N
+   //if nlevel=0, input requires tree(1)=N
    //P is an integer array of size N, representing permutation vector returned by the ButterflyPACK clustering
    //N_loc is the local matrix dimension
 ```
