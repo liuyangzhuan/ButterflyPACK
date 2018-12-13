@@ -3376,7 +3376,10 @@ subroutine Full_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)
     DT :: random1(M,N), random2(M,N)
 	DT:: al,be
 	DT,allocatable :: random2tmp(:,:)
+
 	allocate(random2tmp(M,N))
+
+
 
 	al=1d0
 	be=0d0

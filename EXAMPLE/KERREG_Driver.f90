@@ -193,7 +193,7 @@ PROGRAM ButterflyPACK_KRR
 	quant%testfile_p=trim(DATA_DIR)//'_test.csv'
 	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
-	write(*,*)'training set: ',quant%trainfile_p
+	write(*,*)'training set: ',trim(quant%trainfile_p)
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
