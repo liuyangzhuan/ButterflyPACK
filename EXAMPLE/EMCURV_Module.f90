@@ -539,7 +539,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		Am = M*sin(pi/2-2*pi/L)-M
 		quant%xyz(1,0)=-1d0/sqrt(2d0)+Am/sqrt(2d0); quant%xyz(2,0)=1d0/sqrt(2d0)+Am/sqrt(2d0)
 
-        !$omp parallel do default(shared) private(node,dx)
+        !$omp parallel do default(shared) private(node,dx,Am)
         do node=1, Maxedge/2
             dx=node*quant%Delta_ll
 			Am = M*sin(2*pi*dx/L+pi/2-2*pi/L)-M
@@ -548,7 +548,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
             quant%xyz(2,node*2)=(1d0-dx)/sqrt(2d0)+Am/sqrt(2d0)
         enddo
         !$omp end parallel do
-        !$omp parallel do default(shared) private(node,dx)
+        !$omp parallel do default(shared) private(node,dx,Am)
         do node=1, Maxedge/2
             dx=node*quant%Delta_ll
 			Am = M*sin(2*pi*(dx+1)/L+pi/2-2*pi/L)-M
