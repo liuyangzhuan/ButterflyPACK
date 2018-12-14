@@ -21,8 +21,8 @@ export SCALAPACK_LIB=<Lib directory of the SCALAPACK installation>
 sh PrecisionPreprocessing.sh
 mkdir build ; cd build;
 cmake .. \
-	-DCMAKE_Fortran_FLAGS="-DGNU -ffree-line-length-none -ffixed-line-length-none -fopenmp" \
-	-DCMAKE_CXX_FLAGS="-std=c++11 -O3 -fopenmp -lifcore" \
+	-DCMAKE_Fortran_FLAGS="" \
+	-DCMAKE_CXX_FLAGS="" \
 	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}/libmkl_gf_lp64.so;${LAPACK_LIB}/libmkl_intel_thread.so;${LAPACK_LIB}/libmkl_core.so;${LAPACK_LIB}/libiomp5.so" \
 	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}/libmkl_blacs_intelmpi_lp64.so;/${SCALAPACK_LIB}/libmkl_scalapack_lp64.so" \
 	-DBUILD_SHARED_LIBS=ON \
@@ -45,3 +45,5 @@ make
  - Han Guo - hanguo@umich.edu (University of Michigan)
  - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
 
+## Reference
+to be added ...

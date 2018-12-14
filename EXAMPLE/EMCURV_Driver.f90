@@ -91,19 +91,20 @@ PROGRAM ButterflyPACK_IE_2D
 	call SetDefaultOptions(option)
 
 	!**** intialize the user-defined derived type quant
-	quant%RCS_static=1
-    quant%RCS_Nsample=2000
+	quant%RCS_static=2
+    quant%RCS_Nsample=100
 	quant%model2d=10
 	quant%wavelength=0.08
 	quant%Nunk=5000
 
 	option%ErrSol=1
-	option%format= HODLR! HMAT!  HODLR !
+	option%format=  HMAT!  HODLR !
 	option%near_para=0.01d0
 	option%verbosity=2
-	option%ILU=0
+	option%ILU=1
 	option%forwardN15flag=0
     ! option%LRlevel=100
+    option%tol_itersol=1d-5
 
 	if(iargc()>=1)then
 		call getarg(1,strings)
@@ -193,8 +194,8 @@ PROGRAM ButterflyPACK_IE_2D
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
-	!**** solve phase
-    call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+	! !**** solve phase
+    ! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
 
 	!**** print statistics

@@ -390,11 +390,11 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 
     elseif (quant%model2d==6) then !***********cavity******************
 
-        quant%Delta_ll=11d0/3d0/Maxedge
+        quant%Delta_ll=(3d0 + 2d0/20d0)/Maxedge
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         dx=quant%Delta_ll/2d0
-        quant%xyz(1,0)=-1d0/6. ; quant%xyz(2,0)=1.0d0
+        quant%xyz(1,0)=1d0/20d0 -1d0/2d0 ; quant%xyz(2,0)=1.0d0
         node=0
         do while (flag==0)
             node=node+1
@@ -775,7 +775,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 	complex(kind=8),allocatable:: current(:),voltage(:)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-
+	
 	N_unk_loc = msh%idxe-msh%idxs+1
 
     if (quant%RCS_static==2) then
@@ -886,8 +886,8 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
     endif
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
+	
     return
 
 end subroutine EM_solve_CURV

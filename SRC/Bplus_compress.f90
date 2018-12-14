@@ -30,11 +30,11 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
    implicit none
 	type(mesh)::msh
 	type(kernelquant)::ker
-    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i, index_j, ii, jj
+    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new,rank_new1
+    integer group_m, group_n, mm, nn, index_i, index_j, ii, jj,ij
     integer level, length_1, length_2, level_blocks, index_ij
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
-    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e, flops, flops1
 	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_iijj,nnn1,num_groupn
     real(kind=8) Memory,flop
     DT ctemp
@@ -100,210 +100,22 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 				blocks%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
 				allocate (blocks%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
 			endif
-			do index_i=1, 2**level
-				do index_j=1, 2**(level_butterfly-level)
-
-					level_butterfly=blocks%level_butterfly
-					group_m=blocks%row_group    ! Note: row_group and col_group interchanged here
-					group_n=blocks%col_group
-					group_m=group_m*2**level-1+index_i
-					group_n=group_n*2**(level_butterfly-level)-1+index_j
-					mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
-					if(level==0)then
-						nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
-					else
-						index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1
-						num_groupn=2**(level_butterfly-level+1)
-						index_iijj=(index_ii-1)*num_groupn+index_jj
-						nn1=size(blocks%ButterflyColSelect(index_iijj,level-1)%select_columns,1)
-						nn2=size(blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns,1)
-						nn=nn1+nn2
-					endif
-
-
-					! select skeletons here
-					rankmax_r = min(nn,mm)
-					rankmax_c = nn
-					allocate(select_row(rankmax_r),select_column(rankmax_c))
-					select_row(1)=int(real(mm)/real(rankmax_r)/2.)
-					if (select_row(1)==0) then
-						select_row(1)=1
-					endif
-					do i=1, rankmax_c
-						select_column(i)=i
-					enddo
-
-					call linspaceI(1,mm,rankmax_r,select_row(1:rankmax_r))
-
-
-					if(level==0)then
-						index_ij = index_j
-
-						header_m=msh%basis_group(group_m)%head
-						header_n=msh%basis_group(group_n)%head
-
-						allocate (core(rankmax_r,rankmax_c))
-						!$omp parallel do default(shared) private(i,j,k,edge_m,edge_n,ctemp)
-						do j=1, rankmax_c
-							do i=1, rankmax_r
-								edge_m=header_m+select_row(i)-1
-								edge_n=header_n+select_column(j)-1
-								call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-								core(i,j)=ctemp
-							enddo
-						enddo
-						!$omp end parallel do
-
-						allocate (matrix_V(rankmax_r,nn))
-						!$omp parallel do default(shared) private(i,j,jj,edge_m,edge_n,ctemp)
-						do i=1, rankmax_r
-							jj=1
-							do j=1, nn
-								edge_m=header_m+select_row(i)-1
-								edge_n=header_n+j-1
-								call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-								matrix_V(i,j)=ctemp
-							enddo
-						enddo
-						!$omp end parallel do
-
-						allocate(jpvt(max(rankmax_c,rankmax_r)))
-						allocate(tau(max(rankmax_c,rankmax_r)))
-						jpvt=0
-						call geqp3modf90(core,jpvt,tau,option%tol_comp,SafeUnderflow,rank_new,flop=flop)
-						stats%Flop_Fill = stats%Flop_Fill + flop
-
-						if(rank_new>0)then
-							call un_or_mqrf90(core,tau,matrix_V,'L','C',rankmax_r,nn,rank_new,flop=flop)
-							stats%Flop_Fill = stats%Flop_Fill + flop
-							call trsmf90(core,matrix_V,'L','U','N','N',rank_new,nn,flop=flop)
-							stats%Flop_Fill = stats%Flop_Fill + flop
-						else
-							rank_new=1
-							matrix_V=0
-						endif
-
-						allocate (blocks%ButterflyV%blocks(index_j)%matrix(nn,rank_new))
-						call copymatT(matrix_V(1:rank_new,1:nn),blocks%ButterflyV%blocks(index_j)%matrix,rank_new,nn)
-
-						allocate (blocks%ButterflyColSelect(index_j,0)%select_columns(rank_new))
-						do j=1, rank_new
-							blocks%ButterflyColSelect(index_j,0)%select_columns(j)=select_column(jpvt(j))
-						enddo
-
-					else
-
-						header_m=msh%basis_group(group_m)%head
-						header_n1=msh%basis_group(group_n)%head
-						header_n2=msh%basis_group(2*group_n+1)%head
-						nnn1=msh%basis_group(2*group_n)%tail-msh%basis_group(2*group_n)%head+1
-
-						num_groupn=2**(level_butterfly-level)
-						index_ij=(index_i-1)*num_groupn+index_j
-
-						allocate (core(rankmax_r,rankmax_c))
-						!$omp parallel do default(shared) private(i,j,k,edge_m,edge_n,ctemp)
-						do j=1, rankmax_c
-							do i=1, rankmax_r
-								if (select_column(j)<=nn1) then
-									edge_m=select_row(i)+header_m-1
-									edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(j))+header_n1-1
-									call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-									core(i,j)=ctemp
-								else
-									edge_m=select_row(i)+header_m-1
-									edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(j)-nn1)+header_n2-1
-									call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-									core(i,j)=ctemp
-								endif
-							enddo
-						enddo
-						!$omp end parallel do
-
-						allocate (matrix_V(rankmax_r,nn))
-						!$omp parallel do default(shared) private(i,j,jj,edge_m,edge_n,ctemp)
-						do i=1, rankmax_r
-							do j=1, nn
-								if (j<=nn1) then
-									edge_m=select_row(i)+header_m-1
-									edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(j)+header_n1-1
-								else
-									edge_m=select_row(i)+header_m-1
-									edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(j-nn1)+header_n2-1
-								endif
-								call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-								matrix_V(i,j)=ctemp
-							enddo
-						enddo
-						!$omp end parallel do
-
-						allocate(jpvt(max(rankmax_c,rankmax_r)))
-						allocate(tau(max(rankmax_c,rankmax_r)))
-						jpvt=0
-						call geqp3modf90(core,jpvt,tau,option%tol_comp,SafeUnderflow,rank_new,flop=flop)
-						stats%Flop_Fill = stats%Flop_Fill + flop
-
-						if(rank_new>0)then
-							call un_or_mqrf90(core,tau,matrix_V,'L','C',rankmax_r,nn,rank_new,flop=flop)
-							stats%Flop_Fill = stats%Flop_Fill + flop
-							call trsmf90(core,matrix_V,'L','U','N','N',rank_new,nn,flop=flop)
-							stats%Flop_Fill = stats%Flop_Fill + flop
-						else
-							rank_new=1
-							matrix_V=0
-						endif
-
-
-						allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank_new,nn1))
-						allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank_new,nn2))
-
-						blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix=matrix_V(1:rank_new,1:nn1)
-						blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix=matrix_V(1:rank_new,1+nn1:nn)
-
-
-
-						allocate (blocks%ButterflyColSelect(index_ij,level)%select_columns(rank_new))
-						!$omp parallel do default(shared) private(j)
-						do j=1, rank_new
-							if (select_column(jpvt(j))<=nn1) then
-								blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(jpvt(j)))
-							else
-								blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(jpvt(j))-nn1)+nnn1
-							endif
-						enddo
-						!$omp end parallel do
-
-						if (level==level_butterfly) then
-							allocate (blocks%ButterflyU%blocks(index_ij)%matrix(mm,rank_new))
-							!$omp parallel do default(shared) private(i,j,ii,edge_m,edge_n,ctemp)
-							do j=1, rank_new
-								ii=1
-								do i=1, mm
-									edge_m=i+header_m-1
-									edge_n=blocks%ButterflyColSelect(index_ij,level)%select_columns(j)+header_n1-1
-									call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-									blocks%ButterflyU%blocks(index_ij)%matrix(i,j)=ctemp
-								enddo
-							enddo
-							!$omp end parallel do
-						endif
-
-					endif
-
-
-					if (rank_new>rankmax_for_butterfly(level)) then
-						rankmax_for_butterfly(level)=rank_new
-					endif
-					deallocate (core)
-					deallocate (tau)
-					deallocate (jpvt)
-					deallocate (matrix_V)
-					deallocate (select_row,select_column)
-
-				enddo
+			rank_new=0
+			flops=0
+			!$omp parallel do default(shared) private(index_ij,index_i,index_j,rank_new1,flops1) reduction(MAX:rank_new,flops)
+			do index_ij=1, 2**level_butterfly
+				index_j = (index_ij-1)/(2**level)+1
+				index_i= mod(index_ij-1,(2**level)) + 1
+				call BF_compress_NlogN_oneblock(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new1,flops1)
+				rank_new = MAX(rank_new,rank_new1)
+				flops = MAX(flops,flops1)
 			enddo
+			!$omp end parallel do
+			if (rank_new>rankmax_for_butterfly(level)) then
+			rankmax_for_butterfly(level)=rank_new
+			stats%Flop_Fill = stats%Flop_Fill + flops
+	endif
 		enddo
-
 	endif
 
 
@@ -331,238 +143,251 @@ end subroutine BF_compress_NlogN
 
 
 
-! subroutine BF_recomposition_FastSampling(index_i,index_j,level,blocks,msh,element_Zmn,ker)
+subroutine BF_compress_NlogN_oneblock(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new,flops)
 
-    ! use BPACK_DEFS
+   use BPACK_DEFS
+   implicit none
+	type(mesh)::msh
+	type(kernelquant)::ker
+    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i, index_j, ii, jj,ij
+    integer level, length_1, length_2, level_blocks, index_ij
+    integer rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_iijj,nnn1,num_groupn
+    real(kind=8) Memory,flop,flops
+    DT ctemp
+	type(matrixblock)::blocks
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(proctree)::ptree
+	procedure(Zelem)::element_Zmn
 
-    ! implicit none
+    integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+    integer,allocatable:: select_row_rr(:), select_column_rr(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
-    ! integer i, j, level_butterfly, level_blocks, num_groupm, num_groupn, k, ii, jj, mmm, nnn, nnn1
-    ! integer group_m, group_n, mm, nn, index_m, index_n, option, mm_start, nn1, nn2, header_m, header_n
-    ! integer level, length_1, length_2, butterflyB_inuse, index_ii, index_jj, header_n1, header_n2
-    ! integer rank, rankmax,rankmax_c,rankmax_r,rankmax_min,index_i, index_j, index_ij, index_iijj, flag, flag0, rank_new, edge_m, edge_n
-    ! real(kind=8) rate, tolerance, rtemp1, rtemp2, rtemp
-    ! DT ctemp
+	integer,allocatable::jpvt(:)
+	integer Nlayer
 
-    ! integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
-    ! integer,allocatable:: select_row_rr(:), select_column_rr(:)
-    ! DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:)
-    ! real(kind=8),allocatable:: Singular(:)
-	! type(matrixblock)::blocks
-	! type(mesh)::msh
-	! type(kernelquant)::ker
-	! procedure(Zelem)::element_Zmn
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
 
-    ! level_butterfly=blocks%level_butterfly
-    ! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here
-    ! group_n=blocks%col_group
-    ! ii=msh%basis_group(group_m)%head
-    ! jj=msh%basis_group(group_n)%head
-    ! group_m=group_m*2**level-1+index_i
-    ! group_n=group_n*2**(level_butterfly-level)-1+index_j
-    ! header_m=msh%basis_group(group_m)%head
-    ! header_n1=msh%basis_group(group_n)%head
-    ! header_n2=msh%basis_group(2*group_n+1)%head
-    ! nnn1=msh%basis_group(2*group_n)%tail-msh%basis_group(2*group_n)%head+1
-
-    ! mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
-    ! mmm=msh%basis_group(int(group_m/2))%tail-msh%basis_group(int(group_m/2))%head+1
-    ! index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1
-    ! num_groupn=2**(level_butterfly-level+1)
-    ! index_iijj=(index_ii-1)*num_groupn+index_jj
-    ! nn1=size(blocks%ButterflyColSelect(index_iijj,level-1)%select_columns,1)
-    ! nn2=size(blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns,1)
-    ! nn=nn1+nn2
-    ! num_groupn=2**(level_butterfly-level)
-    ! index_ij=(index_i-1)*num_groupn+index_j
-
-    ! rankmax=rank_approximate_func(group_m, group_n, 1,ker)
-
-    ! if (rankmax>nn) then
-        ! rankmax=nn
-    ! endif
-
-	! ! modified by Yang, this may improve accuracy as one dimension is constant
-	! rankmax=min(mm,nn)
-
-	! rankmax_r = min(rank_approximate_func(group_m, group_n, 1)*2,mm,ker)
-	! rankmax_c = nn
-	! rankmax_min = min(rankmax_r,rankmax_c)
+	flops=0
+	level_butterfly=blocks%level_butterfly
+	group_m=blocks%row_group    ! Note: row_group and col_group interchanged here
+	group_n=blocks%col_group
+	group_m=group_m*2**level-1+index_i
+	group_n=group_n*2**(level_butterfly-level)-1+index_j
+	mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+	if(level==0)then
+		nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+	else
+		index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1
+		num_groupn=2**(level_butterfly-level+1)
+		index_iijj=(index_ii-1)*num_groupn+index_jj
+		nn1=size(blocks%ButterflyColSelect(index_iijj,level-1)%select_columns,1)
+		nn2=size(blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns,1)
+		nn=nn1+nn2
+	endif
 
 
-	! ! if(rankmax==1)write(*,*)group_m,group_n,rank_approximate_func(group_m, group_n, 1,ker),mm,nn
-    ! allocate(select_row(rankmax_r),select_column(rankmax_c))
+	! select skeletons here
+	rankmax_r = min(nn,mm)
+	rankmax_c = nn
+	allocate(select_row(rankmax_r),select_column(rankmax_c))
+	select_row(1)=int(real(mm)/real(rankmax_r)/2.)
+	if (select_row(1)==0) then
+		select_row(1)=1
+	endif
+	do i=1, rankmax_c
+		select_column(i)=i
+	enddo
 
-    ! !$omp parallel do default(shared) private(i)
-    ! do i=1, rankmax_c
-        ! select_column(i)=i
-    ! enddo
-    ! !$omp end parallel do
-
-
-	! call linspaceI(1,mm,rankmax_r,select_row(1:mm))
-
-
-	! ! modified by Yang, for 2D problem this can include the touching unknowns
-	! select_row(1)=1
-	! select_row(2)=2
-	! select_row(3)=3
-
-	! select_row(rankmax_r)=mm
-	! select_row(rankmax_r-1)=mm-1
-	! select_row(rankmax_r-2)=mm-2
-	! call linspaceI(4,mm-3,rankmax_r-6,select_row(4:mm-3))
-
-    ! allocate (MatrixSubselection(rankmax_r,rankmax_c))
-
-    ! !$omp parallel do default(shared) private(i,j,k,edge_m,edge_n,ctemp)
-    ! do j=1, rankmax_c
-        ! do i=1, rankmax_r
-            ! if (select_column(j)<=nn1) then
-                ! edge_m=select_row(i)+header_m-1
-                ! edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(j))+header_n1-1
-                ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-                ! MatrixSubselection(i,j)=ctemp
-            ! else
-                ! edge_m=select_row(i)+header_m-1
-                ! edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(j)-nn1)+header_n2-1
-                ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-                ! MatrixSubselection(i,j)=ctemp
-            ! endif
-			! ! if(level==1)then
-				! ! write(*,*)nn1,nn2,j,i,edge_m-msh%basis_group(blocks%row_group)%head+1,edge_n-msh%basis_group(blocks%col_group)%head+1
-			! ! end if
-        ! enddo
-    ! enddo
-    ! !$omp end parallel do
-
-    ! allocate (matrixtemp_U(rankmax_r,rankmax_c),matrixtemp_V(rankmax_c,rankmax_r))
-    ! allocate (select_column_rr(rankmax_c),select_row_rr(rankmax_r))
-    ! call ID_Selection(MatrixSubselection,select_column_rr,select_row_rr,rankmax_r,rankmax_c,rank_new,option%tol_comp)
+	call linspaceI(1,mm,rankmax_r,select_row(1:rankmax_r))
 
 
+	if(level==0)then
+		index_ij = index_j
 
-    ! deallocate (matrixtemp_U,matrixtemp_V)
+		header_m=msh%basis_group(group_m)%head
+		header_n=msh%basis_group(group_n)%head
 
-    ! ! if (rank_control_forward/=0) then
-        ! if (rank_new>rankmax_for_butterfly(level)) then
-            ! rankmax_for_butterfly(level)=rank_new
-        ! endif
-
-		! blocks%rankmax = max(blocks%rankmax,rank_new)
-		! blocks%rankmin = min(blocks%rankmin,rank_new)
-
-    ! ! endif
-
-    ! allocate (blocks%ButterflyColSelect(index_ij,level)%select_columns(rank_new))
-    ! !$omp parallel do default(shared) private(j)
-    ! do j=1, rank_new
-        ! if (select_column(select_column_rr(j))<=nn1) then
-            ! blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(select_column_rr(j)))
-        ! else
-            ! blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(select_column_rr(j))-nn1)+nnn1
-        ! endif
-    ! enddo
-    ! !$omp end parallel do
-
-    ! allocate (matrix_little(rank_new,rank_new))
-
-    ! !$omp parallel do default(shared) private(ii,jj)
-    ! do jj=1, rank_new
-        ! do ii=1, rank_new
-            ! matrix_little(ii,jj)=MatrixSubselection(select_row_rr(ii),select_column_rr(jj))
-        ! enddo
-    ! enddo
-    ! !$omp end parallel do
-
-    ! if (level==level_butterfly) then
-        ! allocate (blocks%ButterflyU%blocks(index_ij)%matrix(mm,rank_new))
-        ! !$omp parallel do default(shared) private(i,j,ii,edge_m,edge_n,ctemp)
-        ! do j=1, rank_new
-            ! ii=1
-            ! do i=1, mm
-                ! if (i==select_row(ii)) then
-                    ! blocks%ButterflyU%blocks(index_ij)%matrix(i,j)=MatrixSubselection(ii,select_column_rr(j))
-                    ! if (ii<rankmax_r) then
-                        ! ii=ii+1
-                    ! endif
-                ! else
-                    ! edge_m=i+header_m-1
-                    ! edge_n=blocks%ButterflyColSelect(index_ij,level)%select_columns(j)+header_n1-1
-                    ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-                    ! blocks%ButterflyU%blocks(index_ij)%matrix(i,j)=ctemp
-                ! endif
-            ! enddo
-        ! enddo
-        ! !$omp end parallel do
-    ! endif
-
-    ! allocate (matrix_V(rank_new,nn))
-    ! !$omp parallel do default(shared) private(i,j,jj,edge_m,edge_n,ctemp)
-    ! do i=1, rank_new
-        ! jj=1
-        ! do j=1, nn
-            ! if (j==select_column(jj)) then
-                ! matrix_V(i,j)=MatrixSubselection(select_row_rr(i),jj)
-                ! if (jj<rankmax_c) then
-                    ! jj=jj+1
-                ! endif
-            ! else
-                ! if (j<=nn1) then
-                    ! edge_m=select_row(select_row_rr(i))+header_m-1
-                    ! edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(j)+header_n1-1
-                ! else
-                    ! edge_m=select_row(select_row_rr(i))+header_m-1
-                    ! edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(j-nn1)+header_n2-1
-                ! endif
-                ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-                ! matrix_V(i,j)=ctemp
-            ! endif
-        ! enddo
-    ! enddo
-    ! !$omp end parallel do
-
-    ! deallocate (MatrixSubselection)
-
-	! allocate(matrix_little_inv(rank_new,rank_new))
-	! allocate (matrix_V_tmp(rank_new,nn))
-	! call GeneralInverse(rank_new,rank_new,matrix_little,matrix_little_inv,ACA_tolerance_forward)
-	! call gemm_omp(matrix_little_inv,matrix_V,matrix_V_tmp,rank_new,nn,rank_new)
-	! matrix_V = matrix_V_tmp
-	! deallocate(matrix_little_inv)
-	! deallocate(matrix_V_tmp)
+		allocate (core(rankmax_r,rankmax_c))
+		! !$omp parallel
+		! !$omp single
+		!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+		do ij=1,rankmax_c*rankmax_r
+			j = (ij-1)/rankmax_r+1
+			i = mod(ij-1,rankmax_r) + 1
+			edge_m=header_m+select_row(i)-1
+			edge_n=header_n+select_column(j)-1
+			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			core(i,j)=ctemp
+		enddo
+		!$omp end taskloop
+		! !$omp end single
+		! !$omp end parallel
 
 
-    ! ! allocate (column_pivot(rank_new))
-    ! ! call getrff90(matrix_little,column_pivot)
-    ! ! call getrsf90(matrix_little,column_pivot,matrix_V,'N')
-    ! ! deallocate (column_pivot,matrix_little)
+		allocate (matrix_V(rankmax_r,nn))
+		! !$omp parallel
+		! !$omp single
+		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		do ij=1,nn*rankmax_r
+			j = (ij-1)/rankmax_r+1
+			i = mod(ij-1,rankmax_r) + 1
+
+			edge_m=header_m+select_row(i)-1
+			edge_n=header_n+j-1
+			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			matrix_V(i,j)=ctemp
+		enddo
+		!$omp end taskloop
+		! !$omp end single
+		! !$omp end parallel
+
+		allocate(jpvt(max(rankmax_c,rankmax_r)))
+		allocate(tau(max(rankmax_c,rankmax_r)))
+		jpvt=0
+		call geqp3modf90(core,jpvt,tau,option%tol_comp,SafeUnderflow,rank_new,flop=flop)
+		flops = flops + flop
+
+		if(rank_new>0)then
+			call un_or_mqrf90(core,tau,matrix_V,'L','C',rankmax_r,nn,rank_new,flop=flop)
+			flops = flops + flop
+			call trsmf90(core,matrix_V,'L','U','N','N',rank_new,nn,flop=flop)
+			flops = flops + flop
+		else
+			rank_new=1
+			matrix_V=0
+		endif
+
+		allocate (blocks%ButterflyV%blocks(index_j)%matrix(nn,rank_new))
+		call copymatT(matrix_V(1:rank_new,1:nn),blocks%ButterflyV%blocks(index_j)%matrix,rank_new,nn)
+
+		allocate (blocks%ButterflyColSelect(index_j,0)%select_columns(rank_new))
+		do j=1, rank_new
+			blocks%ButterflyColSelect(index_j,0)%select_columns(j)=select_column(jpvt(j))
+		enddo
+
+	else
+
+		header_m=msh%basis_group(group_m)%head
+		header_n1=msh%basis_group(group_n)%head
+		header_n2=msh%basis_group(2*group_n+1)%head
+		nnn1=msh%basis_group(2*group_n)%tail-msh%basis_group(2*group_n)%head+1
+
+		num_groupn=2**(level_butterfly-level)
+		index_ij=(index_i-1)*num_groupn+index_j
+
+		allocate (core(rankmax_r,rankmax_c))
+		! !$omp parallel
+		! !$omp single
+		!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+		do ij=1,rankmax_c*rankmax_r
+			j = (ij-1)/rankmax_r+1
+			i = mod(ij-1,rankmax_r) + 1
+			if (select_column(j)<=nn1) then
+				edge_m=select_row(i)+header_m-1
+				edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(j))+header_n1-1
+				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				core(i,j)=ctemp
+			else
+				edge_m=select_row(i)+header_m-1
+				edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(j)-nn1)+header_n2-1
+				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				core(i,j)=ctemp
+			endif
+		enddo
+		!$omp end taskloop
+		! !$omp end single
+		! !$omp end parallel
+
+		allocate (matrix_V(rankmax_r,nn))
+		! !$omp parallel
+		! !$omp single
+		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		do ij=1,nn*rankmax_r
+			j = (ij-1)/rankmax_r+1
+			i = mod(ij-1,rankmax_r) + 1
+			if (j<=nn1) then
+				edge_m=select_row(i)+header_m-1
+				edge_n=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(j)+header_n1-1
+			else
+				edge_m=select_row(i)+header_m-1
+				edge_n=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(j-nn1)+header_n2-1
+			endif
+			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			matrix_V(i,j)=ctemp
+		enddo
+		!$omp end taskloop
+		! !$omp end single
+		! !$omp end parallel
+
+		allocate(jpvt(max(rankmax_c,rankmax_r)))
+		allocate(tau(max(rankmax_c,rankmax_r)))
+		jpvt=0
+		call geqp3modf90(core,jpvt,tau,option%tol_comp,SafeUnderflow,rank_new,flop=flop)
+		flops = flops + flop
+
+		if(rank_new>0)then
+			call un_or_mqrf90(core,tau,matrix_V,'L','C',rankmax_r,nn,rank_new,flop=flop)
+			flops = flops + flop
+			call trsmf90(core,matrix_V,'L','U','N','N',rank_new,nn,flop=flop)
+			flops = flops + flop
+		else
+			rank_new=1
+			matrix_V=0
+		endif
 
 
-    ! allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank_new,nn1))
-    ! !$omp parallel do default(shared) private(i,j)
-     ! do j=1, nn1
-        ! do i=1, rank_new
-            ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(i,j)=matrix_V(i,j)
-        ! enddo
-    ! enddo
-    ! !$omp end parallel do
-    ! allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank_new,nn2))
-    ! !$omp parallel do default(shared) private(i,j)
-     ! do j=1, nn2
-        ! do i=1, rank_new
-            ! blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(i,j)=matrix_V(i,j+nn1)
-        ! enddo
-    ! enddo
-    ! !$omp end parallel do
-    ! deallocate (matrix_V)
+		allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix(rank_new,nn1))
+		allocate (blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix(rank_new,nn2))
 
-    ! deallocate (select_row, select_row_rr, select_column, select_column_rr)
+		blocks%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix=matrix_V(1:rank_new,1:nn1)
+		blocks%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix=matrix_V(1:rank_new,1+nn1:nn)
 
-    ! return
 
-! end subroutine BF_recomposition_FastSampling
 
+		allocate (blocks%ButterflyColSelect(index_ij,level)%select_columns(rank_new))
+		!$omp taskloop default(shared) private(j)
+		do j=1, rank_new
+			if (select_column(jpvt(j))<=nn1) then
+				blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj,level-1)%select_columns(select_column(jpvt(j)))
+			else
+				blocks%ButterflyColSelect(index_ij,level)%select_columns(j)=blocks%ButterflyColSelect(index_iijj+1,level-1)%select_columns(select_column(jpvt(j))-nn1)+nnn1
+			endif
+		enddo
+		!$omp end taskloop
+
+		if (level==level_butterfly) then
+			allocate (blocks%ButterflyU%blocks(index_ij)%matrix(mm,rank_new))
+			! !$omp parallel
+			! !$omp single
+			!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+			do ij=1,rank_new*mm
+				j = (ij-1)/mm+1
+				i = mod(ij-1,mm) + 1
+				edge_m=i+header_m-1
+				edge_n=blocks%ButterflyColSelect(index_ij,level)%select_columns(j)+header_n1-1
+				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				blocks%ButterflyU%blocks(index_ij)%matrix(i,j)=ctemp
+			enddo
+			!$omp end taskloop
+			! !$omp end single
+			! !$omp end parallel
+		endif
+
+	endif
+
+	deallocate (core)
+	deallocate (tau)
+	deallocate (jpvt)
+	deallocate (matrix_V)
+	deallocate (select_row,select_column)
+
+
+end subroutine BF_compress_NlogN_oneblock
 
 
 subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptree)
