@@ -335,7 +335,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	vout_tmp = 0
 	do edge=1, N_unk_loc
 		do edge_m=1,ntest
-			r_mn=sum((xyz_test(1:dimn,edge_m)-msh%xyz(1:dimn,msh%new2old(edge+msh%idxs-1)))**2)
+			r_mn=sum((xyz_test(1:dimn,edge_m)-quant%xyz(1:dimn,msh%new2old(edge+msh%idxs-1)))**2)
 			value_Z = exp(-r_mn/2.0/quant%sigma**2)
 			vout_tmp(edge_m,1) = vout_tmp(edge_m,1) + value_Z*x(edge,1)
 		enddo

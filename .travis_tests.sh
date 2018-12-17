@@ -5,7 +5,7 @@ export RED="\033[31;1m"
 export BLUE="\033[34;1m"
 printf "${BLUE} GC; Entered tests file:\n"
 
-export DATA_FOLDER=$TRAVIS_BUILD_DIR/EXAMPLE 
+export DATA_FOLDER=$TRAVIS_BUILD_DIR/EXAMPLE
 export EXAMPLE_FOLDER=$TRAVIS_BUILD_DIR/build/EXAMPLE
 # export TEST_FOLDER=$TRAVIS_BUILD_DIR/build/TEST
 

@@ -12,12 +12,12 @@ branches:
   - hodlrHmat
 
 notifications:
-  email: 
+  email:
     recipients:
       - liuyangzhuan@lbl.gov
     on_failure: always
-    on_success: always	  
-  slack: 
+    on_success: always
+  slack:
     rooms:
       - ecpsparsesolvers:nBWC0jcAd7B1j9whHUYcaVJO
     on_failure: never
@@ -42,7 +42,7 @@ before_install:
   - mkdir -p installDir
 
   - printf  "${BLUE} GC; Installing gcc-7 via apt\n"
-  - sudo apt-get update 
+  - sudo apt-get update
   - sudo apt-get install build-essential software-properties-common -y
   - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
   - sudo apt-get update
@@ -63,8 +63,8 @@ before_install:
 
   - printf "${BLUE} GC; Installing dos2unixfrom apt\n"
   - sudo apt-get install dos2unix
-  - printf "${BLUE} GC; Done installing dos2unixfrom apt\n"  
-  
+  - printf "${BLUE} GC; Done installing dos2unixfrom apt\n"
+
   - printf "${BLUE} GC; Installing BLASfrom apt\n"
   - sudo apt-get install libblas-dev
   - export BLAS_LIB=/usr/lib/libblas/libblas.so
@@ -74,7 +74,7 @@ before_install:
   - sudo apt-get install liblapack-dev
   - export LAPACK_LIB=/usr/lib/liblapack.so
   - printf "${BLUE} GC; Done installing LAPACKfrom apt\n"
-  
+
   - printf "${BLUE} GC; Installing ScaLAPACK from source\n"
   - cd $TRAVIS_BUILD_DIR/installDir
   - wget http://www.netlib.org/scalapack/scalapack-2.0.2.tgz
@@ -92,7 +92,7 @@ before_install:
   - make lib  > tempMakeOutput.txt 2>&1
   - export SCALAPACK_LIB=$TRAVIS_BUILD_DIR/installDir/scalapack-2.0.2/libscalapack.a
   - printf "${BLUE} GC; Done installing ScaLAPACK from source\n"
-  
+
   - printf "${BLUE} GC; Installing ParMetis-4.0 from source\n"
   - cd $TRAVIS_BUILD_DIR/installDir
   - wget http://glaros.dtc.umn.edu/gkhome/fetch/sw/parmetis/parmetis-4.0.3.tar.gz
@@ -109,8 +109,8 @@ install:
   - cd $TRAVIS_BUILD_DIR
   - rm -rf build
   - mkdir -p build
-  - sh PrecisionPreprocessing.sh  
-  - cd build 
+  - sh PrecisionPreprocessing.sh
+  - cd build
   - export CRAYPE_LINK_TYPE=dynamic
   - rm -rf CMakeCache.txt
   - rm -rf DartConfiguration.tcl
@@ -135,6 +135,6 @@ install:
   - make install
   - printf "${BLUE} GC; Done installing hodlrbf from source\n"
 
-script: 
+script:
   - cd $TRAVIS_BUILD_DIR
-  - sudo sh ./.travis_tests.sh
+  - travis_wait 30 sudo sh ./.travis_tests.sh

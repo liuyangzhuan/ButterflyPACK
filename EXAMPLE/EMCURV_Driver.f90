@@ -199,7 +199,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 	!**** solve phase
-    call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+   ! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
 
 	!**** print statistics
