@@ -161,6 +161,7 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Max
             ! blocks%prestyle=4
             ! blocks%data_type=1
             allocate(blocks%sons(2,2))
+			stats%Mem_Peak = stats%Mem_Peak + SIZEOF(blocks%sons)/1024.0d3
             do j=1,2
                 do i=1,2
                     blocks%sons(i,j)%level=blocks%level+1
@@ -206,11 +207,12 @@ end subroutine Hmat_construct_local_tree
 
 
 
-recursive subroutine Hmat_construct_global_tree(blocks,treelevel)
+recursive subroutine Hmat_construct_global_tree(blocks,treelevel,stats)
     implicit none
     integer treelevel
     type(global_matricesblock), pointer :: blocks, blocks_son
     integer group_m, group_n, i, j, k, level
+	type(Hstat)::stats
 
 
     group_m=blocks%row_group
@@ -219,6 +221,7 @@ recursive subroutine Hmat_construct_global_tree(blocks,treelevel)
 
     if (level<treelevel) then
         allocate(blocks%sons(2,2))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(blocks%sons)/1024.0d3
         do j=1,2
             do i=1,2
                 blocks%sons(i,j)%level=blocks%level+1
@@ -228,13 +231,13 @@ recursive subroutine Hmat_construct_global_tree(blocks,treelevel)
             enddo
         enddo
 		blocks_son=>blocks%sons(1,1)
-		call Hmat_construct_global_tree(blocks_son,treelevel)
+		call Hmat_construct_global_tree(blocks_son,treelevel,stats)
 		blocks_son=>blocks%sons(2,1)
-		call Hmat_construct_global_tree(blocks_son,treelevel)
+		call Hmat_construct_global_tree(blocks_son,treelevel,stats)
 		blocks_son=>blocks%sons(1,2)
-		call Hmat_construct_global_tree(blocks_son,treelevel)
+		call Hmat_construct_global_tree(blocks_son,treelevel,stats)
 		blocks_son=>blocks%sons(2,2)
-		call Hmat_construct_global_tree(blocks_son,treelevel)
+		call Hmat_construct_global_tree(blocks_son,treelevel,stats)
     endif
 
     return
@@ -243,7 +246,7 @@ end subroutine Hmat_construct_global_tree
 
 
 
-subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
+subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn,ptree)
 
     use BPACK_DEFS
 	use misc
@@ -268,6 +271,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
     integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
 	integer dimn,groupsize,idxstart,Nsmp
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(Bmatrix)::bmat
 	integer Maxlevel,Maxgrp
 	type(mesh)::msh
@@ -280,6 +284,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 
 	!*************Initialize permutation vector ********
 	allocate(msh%new2old(msh%Nunk))
+	stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%new2old)/1024.0d3
 	do ii=1,msh%Nunk
 		msh%new2old(ii) = ii
 	end do
@@ -348,6 +353,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	Maxgroup=2**(Maxlevel+1)-1
 	msh%Maxgroup = Maxgroup
 	allocate (msh%basis_group(Maxgroup))
+	stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%basis_group)/1024.0d3
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Maxlevel_for_blocks:',Maxlevel
@@ -566,10 +572,12 @@ subroutine Cluster_partition(bmat,option,msh,ker,element_Zmn,ptree)
 	deallocate(groupcenter)
 	endif
 
-	allocate(msh%old2new(msh%Nunk))
-	do ii=1,msh%Nunk
-		msh%old2new(msh%new2old(ii)) = ii
-	end do
+	! allocate(msh%old2new(msh%Nunk))
+	! do ii=1,msh%Nunk
+		! msh%old2new(msh%new2old(ii)) = ii
+	! end do
+
+
 
 	! do ii=1,msh%Nunk
 		! write(110,*)msh%old2new(ii)
@@ -608,8 +616,6 @@ implicit none
     case(HMAT)
 		call Hmat_structuring(bmat%h_mat,option,msh,ptree,stats)
 	end select
-
-
 end subroutine BPACK_structuring
 
 
@@ -661,6 +667,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 
 	ho_bf1%N=msh%Nunk
 	allocate(ho_bf1%levels(ho_bf1%Maxlevel+1))
+	stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels)/1024.0d3
 
 
 	do level_c = 1,ho_bf1%Maxlevel+1
@@ -675,9 +682,13 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 		ho_bf1%levels(level_c)%Bidxe = -2**(ho_bf1%Maxlevel+1)
 
 		allocate(ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP)/1024.0d3
 		allocate(ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse)/1024.0d3
 		allocate(ho_bf1%levels(level_c)%BP_inverse_update(ho_bf1%levels(level_c)%N_block_forward))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse_update)/1024.0d3
 		allocate(ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse_schur)/1024.0d3
 	end do
 
 
@@ -1179,7 +1190,10 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 	msh%idxe = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
 
 
-
+	if(allocated(msh%xyz))then
+	stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+	deallocate(msh%xyz)
+	endif
 
 end subroutine HODLR_structuring
 
@@ -1256,7 +1270,7 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
 	stats%XLUM_random_Time=0
 
 
-    call Hmat_construct_global_tree(h_mat%blocks_root,msh%Dist_level)
+    call Hmat_construct_global_tree(h_mat%blocks_root,msh%Dist_level,stats)
 
     allocate(h_mat%First_block_eachlevel(0:h_mat%Maxlevel))
     h_mat%First_block_eachlevel(0)%father=>h_mat%blocks_root
@@ -1313,6 +1327,12 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
     endif
 
     !***************************************************************************************
+
+
+	if(allocated(msh%xyz))then
+	stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+	deallocate(msh%xyz)
+	endif
 
     return
 

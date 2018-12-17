@@ -143,6 +143,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 		Ndim = size(Coordinates,1)
 		Dimn = Ndim
 		allocate (msh%xyz(Dimn,1:msh%Nunk))
+		stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%xyz)/1024.0d3
 		msh%xyz=Coordinates
 	endif
 
@@ -152,7 +153,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -274,6 +275,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
 			call Hmat_block_copy('N',blocks_copy,blocks)
 			stats%Mem_Comp_for=stats%Mem_Comp_for+rtemp1
 			stats%Mem_Direct_for=stats%Mem_Direct_for+rtemp2
+			stats%Mem_Peak = stats%Mem_Peak + rtemp1 + rtemp2 + rtemp1 + rtemp2
 			call MPI_barrier(ptree%Comm,ierr)
 			T4 = OMP_get_wtime()
             if (ptree%MyID==ptree%nproc-1 .and. option%verbosity>=0) then
@@ -411,7 +413,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
 						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'constructing level',level
 					endif
-					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,option,element_Zmn)
+					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,stats,option,element_Zmn)
 					stats%Mem_Direct_for=stats%Mem_Direct_for+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 				endif
 				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
@@ -426,6 +428,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	n2 = OMP_get_wtime()
 	stats%Time_Fill = stats%Time_Fill + n2-n1
 
+	stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
 
 	call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel),stats%rankmax_of_level_global(0:ho_bf1%Maxlevel),ho_bf1%Maxlevel+1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level_global
@@ -448,7 +452,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 end subroutine HODLR_construction
 
 
-subroutine Full_construction(blocks,msh,ker,option,element_Zmn)
+subroutine Full_construction(blocks,msh,ker,stats,option,element_Zmn)
 
     use BPACK_DEFS
     implicit none
@@ -460,6 +464,7 @@ subroutine Full_construction(blocks,msh,ker,option,element_Zmn)
 	type(matrixblock)::blocks
 	type(mesh)::msh
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(kernelquant)::ker
 	procedure(Zelem)::element_Zmn
 
@@ -505,13 +510,14 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 
     if (blocks%style==2) then
 		if(option%forwardN15flag==1)then
-			call BF_compress_N15(blocks,option,Memory_far,stats,msh,ker,element_Zmn,ptree)
+			call BF_compress_N15(blocks,option,Memory_tmp,stats,msh,ker,element_Zmn,ptree)
 			call BF_sym2asym(blocks)
 		else
-			call BF_compress_NlogN(blocks,option,Memory_far,stats,msh,ker,element_Zmn,ptree)
+			call BF_compress_NlogN(blocks,option,Memory_tmp,stats,msh,ker,element_Zmn,ptree)
 		end if
+		Memory_far=Memory_far+Memory_tmp
     elseif (blocks%style==1) then
-		call Full_construction(blocks,msh,ker,option,element_Zmn)
+		call Full_construction(blocks,msh,ker,stats,option,element_Zmn)
 		Memory_near=Memory_near+SIZEOF(blocks%fullmat)/1024.0d3
     elseif (blocks%style==4) then
 		do ii=1,2

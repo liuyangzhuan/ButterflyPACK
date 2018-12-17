@@ -106,7 +106,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 			do index_ij=1, 2**level_butterfly
 				index_j = (index_ij-1)/(2**level)+1
 				index_i= mod(index_ij-1,(2**level)) + 1
-				call BF_compress_NlogN_oneblock(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new1,flops1)
+				call BF_compress_NlogN_oneblock(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new1,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -143,7 +143,7 @@ end subroutine BF_compress_NlogN
 
 
 
-subroutine BF_compress_NlogN_oneblock(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new,flops)
 
    use BPACK_DEFS
    implicit none
@@ -155,7 +155,7 @@ subroutine BF_compress_NlogN_oneblock(blocks,option,Memory,stats,msh,ker,element
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
 	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_iijj,nnn1,num_groupn
-    real(kind=8) Memory,flop,flops
+    real(kind=8) flop,flops
     DT ctemp
 	type(matrixblock)::blocks
 	type(Hoption)::option
@@ -420,8 +420,13 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 
 				! bplus%LL(ll)%matrices_block(bb)%level_butterfly = int((Maxlevel_for_blocks-bplus%LL(ll)%matrices_block(bb)%level)/2)*2
 				! if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
-				call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
-				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+
+				if(option%forwardN15flag==1)then
+					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
+					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+				else
+					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
+				end if
 				Memory = Memory + rtemp
 			else
 				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
@@ -1736,53 +1741,50 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
 	enddo
 
 
-	!!!!! The following picks the close points first, can be commented out if geometry info is not available
-			allocate(distance_m(blocks%M))
-			distance_m=Bigvalue
-			allocate(distance_n(blocks%N))
-			distance_n=Bigvalue
+	! !!!!! The following picks the close points first, can be commented out if geometry info is not available
+			! allocate(distance_m(blocks%M))
+			! distance_m=Bigvalue
+			! allocate(distance_n(blocks%N))
+			! distance_n=Bigvalue
 
-			Dimn = 0
-			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
-			allocate(center(Dimn))
-			center = 0
-			head_n = blocks%headn
-			do j=1,blocks%N
-			  edge_n = head_n-1+j
-			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_n))
-			enddo
-			center = center/blocks%N
-			head_m = blocks%headm
-			do i=1,blocks%M
-				edge_m=head_m-1+i
-				distance_m(i) = sum((msh%xyz(1:Dimn,msh%new2old(edge_m))-center(1:Dimn))**2d0)
-			enddo
-			deallocate(center)
-			call quick_sort(distance_m,order_m,blocks%M)
-			deallocate(distance_m)
+			! Dimn = 0
+			! if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
+			! allocate(center(Dimn))
+			! center = 0
+			! head_n = blocks%headn
+			! do j=1,blocks%N
+			  ! edge_n = head_n-1+j
+			  ! center = center + msh%xyz(1:Dimn,msh%new2old(edge_n))
+			! enddo
+			! center = center/blocks%N
+			! head_m = blocks%headm
+			! do i=1,blocks%M
+				! edge_m=head_m-1+i
+				! distance_m(i) = sum((msh%xyz(1:Dimn,msh%new2old(edge_m))-center(1:Dimn))**2d0)
+			! enddo
+			! deallocate(center)
+			! call quick_sort(distance_m,order_m,blocks%M)
+			! deallocate(distance_m)
 
-			Dimn = 0
-			if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
-			allocate(center(Dimn))
-			center = 0
-			head_m = blocks%headm
-			do i=1,blocks%M
-			  edge_m = head_m-1+i
-			  center = center + msh%xyz(1:Dimn,msh%new2old(edge_m))
-			enddo
-			center = center/blocks%M
-			head_n = blocks%headn
-			do j=1,blocks%N
-				edge_n=head_n-1+j
-				distance_n(j) = sum((msh%xyz(1:Dimn,msh%new2old(edge_n))-center(1:Dimn))**2d0)
-			enddo
-			deallocate(center)
-			call quick_sort(distance_n,order_n,blocks%N)
-			deallocate(distance_n)
-	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-
+			! Dimn = 0
+			! if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
+			! allocate(center(Dimn))
+			! center = 0
+			! head_m = blocks%headm
+			! do i=1,blocks%M
+			  ! edge_m = head_m-1+i
+			  ! center = center + msh%xyz(1:Dimn,msh%new2old(edge_m))
+			! enddo
+			! center = center/blocks%M
+			! head_n = blocks%headn
+			! do j=1,blocks%N
+				! edge_n=head_n-1+j
+				! distance_n(j) = sum((msh%xyz(1:Dimn,msh%new2old(edge_n))-center(1:Dimn))**2d0)
+			! enddo
+			! deallocate(center)
+			! call quick_sort(distance_n,order_n,blocks%N)
+			! deallocate(distance_n)
+	! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 	v1=0

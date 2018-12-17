@@ -10,14 +10,14 @@ rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
-	-DCMAKE_Fortran_FLAGS="" \
+	-DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Debug \
+	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DTPL_LAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_intel_thread.so;${MKLROOT}/lib/intel64/libmkl_core.so" \
 	-DTPL_SCALAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_blacs_intelmpi_lp64.so;${MKLROOT}/lib/intel64/libmkl_scalapack_lp64.so"

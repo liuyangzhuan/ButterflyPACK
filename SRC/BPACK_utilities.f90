@@ -195,7 +195,7 @@ integer ii
 
 if(allocated(msh%xyz))deallocate(msh%xyz)
 if(allocated(msh%new2old))deallocate(msh%new2old)
-if(allocated(msh%old2new))deallocate(msh%old2new)
+! if(allocated(msh%old2new))deallocate(msh%old2new)
 if(allocated(msh%pretree))deallocate(msh%pretree)
 if(allocated(msh%basis_group))then
 ! do ii=1,msh%Maxgroup
@@ -380,6 +380,8 @@ subroutine PrintStat(stats,ptree)
 	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
     if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factorization flops:',rtemp
 
+	call MPI_ALLREDUCE(stats%Mem_peak,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Peak mem:',rtemp,'MB'
 
 
 

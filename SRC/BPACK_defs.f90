@@ -382,7 +382,7 @@ module BPACK_DEFS
 		integer idxs,idxe  ! range of local row/column indices after reordering
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering
-		integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering
+		! integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering
 		integer,allocatable::pretree(:) ! dimension 2**Maxlevel containing box size of each leaf node
 		type(basisgroup),allocatable:: basis_group(:)
 	end type mesh

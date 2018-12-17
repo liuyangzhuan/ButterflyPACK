@@ -677,7 +677,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_user_C,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -858,7 +858,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,element_Zmn_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_user_C,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "

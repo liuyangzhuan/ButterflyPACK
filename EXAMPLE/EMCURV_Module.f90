@@ -256,7 +256,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     integer node, patch, edge, flag
     integer node1, node2, num_node,Maxedge
     integer node_temp(2)
-    real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3
+    real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3, angle,r_st,r_ed,delta_r
 
 
     real(kind=8),allocatable :: node_xy_original(:,:)
@@ -721,6 +721,40 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		quant%corner_points(2,5) = (L3)/sqrt(2d0)
 		quant%corner_points(1,6) = (L/2-L3/sqrt(2d0))
 		quant%corner_points(2,6) = (L3)/sqrt(2d0)
+
+    elseif (quant%model2d==12) then   !************ spiral line *****************
+		angle=2*pi
+		r_st=1d0
+		r_ed=2d0
+		delta_r = (r_ed-r_st)/Maxedge
+        quant%Delta_ll=angle/Maxedge
+        quant%maxnode=2*Maxedge+1
+        allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
+
+        quant%xyz(1,0)=r_st*cos(0*pi) ; quant%xyz(2,0)=r_st*sin(0*pi)
+        !$omp parallel do default(shared) private(node,dx)
+        do node=1, Maxedge
+            dx=node*quant%Delta_ll
+            quant%xyz(1,node*2)=cos(0*pi+dx)*(r_st+node*delta_r)
+            quant%xyz(2,node*2)=sin(0*pi+dx)*(r_st+node*delta_r)
+        enddo
+        !$omp end parallel do
+
+
+        !$omp parallel do default(shared) private(node)
+        do node=1, Maxedge
+            quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
+            quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
+        enddo
+        !$omp end parallel do
+
+
+        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
+        do edge=2, Maxedge
+            quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
+            quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
+            quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
+        enddo
     endif
 
 	quant%maxedgelength = 0
@@ -775,7 +809,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 	complex(kind=8),allocatable:: current(:),voltage(:)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
-	
+
 	N_unk_loc = msh%idxe-msh%idxs+1
 
     if (quant%RCS_static==2) then
@@ -886,8 +920,8 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
     endif
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "	
-	
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
     return
 
 end subroutine EM_solve_CURV

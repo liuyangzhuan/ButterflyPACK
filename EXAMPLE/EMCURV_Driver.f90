@@ -154,6 +154,10 @@ PROGRAM ButterflyPACK_IE_2D
 		call getarg(12,strings)
 		read(strings,*)option%Nmin_leaf
 	endif
+	if(iargc()>=13)then
+		call getarg(13,strings)
+		read(strings,*)option%near_para
+	endif
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
@@ -194,8 +198,8 @@ PROGRAM ButterflyPACK_IE_2D
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
-	! !**** solve phase
-    ! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+	!**** solve phase
+    call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
 
 	!**** print statistics
