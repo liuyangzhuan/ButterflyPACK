@@ -10,130 +10,130 @@ for precon in 3  #1: direct 2: no preconditioner 3: LU preconditioner
 do
 
 
-# ######## cavity
-# Ns=(5000 50000 500000)
-# wavelengths=(0.05 0.005 0.0005)
-Ns=(5000000)
-wavelengths=(0.00005)
+# # ######## cavity
+# # Ns=(5000 50000 500000)
+# # wavelengths=(0.05 0.005 0.0005)
+# Ns=(5000000)
+# wavelengths=(0.00005)
 
-for ((i = 0; i < ${#Ns[@]}; i++)); do
-N=${Ns[i]}
-wavelength=${wavelengths[i]}
+# for ((i = 0; i < ${#Ns[@]}; i++)); do
+# N=${Ns[i]}
+# wavelength=${wavelengths[i]}
 
-blknum=1
-model=10
-# N=5000
-# wavelength=0.08
-# wavelength=0.01
-tol=1d-4
-errcheck=0
-lrcomp=4
-bACAbatch=16
-LRlevel=100
-xyzsort=0
-leafsize=200
-near=0.01d0
+# blknum=1
+# model=10
+# # N=5000
+# # wavelength=0.08
+# # wavelength=0.01
+# tol=1d-4
+# errcheck=0
+# lrcomp=4
+# bACAbatch=16
+# LRlevel=100
+# xyzsort=0
+# leafsize=200
+# near=0.01d0
 
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee cavity_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee cavity_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
 
-done
-
-
-
-# ######## half cyclinder
-# Ns=(5000 50000 500000)
-# wavelengths=(0.02 0.002 0.0002)
-Ns=(5000000)
-wavelengths=( 0.00002)
-
-
-for ((i = 0; i < ${#Ns[@]}; i++)); do
-N=${Ns[i]}
-wavelength=${wavelengths[i]}
-
-blknum=1
-model=7
-# N=5000
-# wavelength=0.08
-# wavelength=0.01
-tol=1d-4
-errcheck=0
-lrcomp=4
-bACAbatch=16
-LRlevel=100
-xyzsort=0
-leafsize=200
-near=0.01d0
-
-
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
-
-done
+# done
 
 
 
+# # ######## half cyclinder
+# # Ns=(5000 50000 500000)
+# # wavelengths=(0.02 0.002 0.0002)
+# Ns=(5000000)
+# wavelengths=( 0.00002)
 
 
-# ######## spiral line
-# Ns=(5000 50000 500000 )
-# wavelengths=(0.06 0.006 0.0006 )
-Ns=(5000000 )
-wavelengths=(0.00006 )
+# for ((i = 0; i < ${#Ns[@]}; i++)); do
+# N=${Ns[i]}
+# wavelength=${wavelengths[i]}
 
-for ((i = 0; i < ${#Ns[@]}; i++)); do
-N=${Ns[i]}
-wavelength=${wavelengths[i]}
+# blknum=1
+# model=7
+# # N=5000
+# # wavelength=0.08
+# # wavelength=0.01
+# tol=1d-4
+# errcheck=0
+# lrcomp=4
+# bACAbatch=16
+# LRlevel=100
+# xyzsort=0
+# leafsize=200
+# near=0.01d0
 
-blknum=1
-model=12
-# N=5000
-# wavelength=0.08
-# wavelength=0.01
-tol=1d-4
-errcheck=0
-lrcomp=4
-bACAbatch=16
-LRlevel=100
-xyzsort=0
-leafsize=200
-near=0.01d0
 
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee spiral_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
 
-done
+# done
 
 
 
-# ######## rectangular cup
-# Ns=(5000 50000 500000)
-# wavelengths=(0.01 0.001 0.0001)
-Ns=(5000000)
-wavelengths=(0.00001)
 
 
-for ((i = 0; i < ${#Ns[@]}; i++)); do
-N=${Ns[i]}
-wavelength=${wavelengths[i]}
+# # ######## spiral line
+# # Ns=(5000 50000 500000 )
+# # wavelengths=(0.06 0.006 0.0006 )
+# Ns=(5000000 )
+# wavelengths=(0.00006 )
 
-blknum=1
-model=6
-# N=5000
-# wavelength=0.08
-# wavelength=0.01
-tol=1d-4
-errcheck=0
-lrcomp=4
-bACAbatch=16
-LRlevel=100
-xyzsort=0
-leafsize=200
-near=0.01d0
+# for ((i = 0; i < ${#Ns[@]}; i++)); do
+# N=${Ns[i]}
+# wavelength=${wavelengths[i]}
 
-for near in 0.01d0 2.01d0
-do
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee rect_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
-done
-done
+# blknum=1
+# model=12
+# # N=5000
+# # wavelength=0.08
+# # wavelength=0.01
+# tol=1d-4
+# errcheck=0
+# lrcomp=4
+# bACAbatch=16
+# LRlevel=100
+# xyzsort=0
+# leafsize=200
+# near=0.01d0
+
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee spiral_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
+
+# done
+
+
+
+# # ######## rectangular cup
+# # Ns=(5000 50000 500000)
+# # wavelengths=(0.01 0.001 0.0001)
+# Ns=(5000000)
+# wavelengths=(0.00001)
+
+
+# for ((i = 0; i < ${#Ns[@]}; i++)); do
+# N=${Ns[i]}
+# wavelength=${wavelengths[i]}
+
+# blknum=1
+# model=6
+# # N=5000
+# # wavelength=0.08
+# # wavelength=0.01
+# tol=1d-4
+# errcheck=0
+# lrcomp=4
+# bACAbatch=16
+# LRlevel=100
+# xyzsort=0
+# leafsize=200
+# near=0.01d0
+
+# for near in 0.01d0 2.01d0
+# do
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee rect_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
+# done
+# done
 
 
 

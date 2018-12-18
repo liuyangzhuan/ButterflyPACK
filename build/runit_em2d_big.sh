@@ -3,7 +3,7 @@ export OMP_NUM_THREADS=8
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
 THREADS_PER_RANK=`expr 2 \* $OMP_NUM_THREADS`
-nmpi=8
+nmpi=16
 
 
 for precon in 3  #1: direct 2: no preconditioner 3: LU preconditioner
@@ -41,8 +41,8 @@ do
 #Ns=(5000 50000 500000 5000000 50000000)
 #wavelengths=(0.02 0.002 0.0002 0.0002 0.00002)
 
-Ns=(500000)
-wavelengths=(0.0002)
+Ns=(100000000)
+wavelengths=(0.000001)
 
 for ((i = 0; i < ${#Ns[@]}; i++)); do
 N=${Ns[i]}
@@ -60,9 +60,9 @@ bACAbatch=16
 LRlevel=100
 xyzsort=0
 leafsize=200
+near=0.01d0
 
-
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC $blknum $model $N $wavelength $tol $errcheck $lrcomp $bACAbatch $LRlevel $precon $xyzsort $leafsize $near | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_near_${near}
 
 done
 

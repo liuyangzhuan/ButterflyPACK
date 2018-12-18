@@ -276,7 +276,6 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
 			stats%Mem_Comp_for=stats%Mem_Comp_for+rtemp1
 			stats%Mem_Direct_for=stats%Mem_Direct_for+rtemp2
 			stats%Mem_Peak = stats%Mem_Peak + rtemp1 + rtemp2 + rtemp1 + rtemp2
-			call MPI_barrier(ptree%Comm,ierr)
 			T4 = OMP_get_wtime()
             if (ptree%MyID==ptree%nproc-1 .and. option%verbosity>=0) then
 				write (*,'(I6,A17,Es14.7,A8,Es14.7,A8,Es14.7)') (i-1)*num_blocks+j,'blocks finished',T4-T3,'secnds', rtemp1, 'Mbytes'
@@ -498,7 +497,7 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 
     type(matrixblock), pointer :: blocks_son
     type(matrixblock) :: blocks
-    real*8 Memory_far, Memory_near, rtemp, Memory_tmp
+    real*8 Memory_far, Memory_near, rtemp, Memory_tmp,t1,t2
     integer i, j, k, flag, conv,m,n,ii,jj
 
     type(Hoption)::option
@@ -507,7 +506,7 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 	type(kernelquant)::ker
 	type(proctree)::ptree
 	procedure(Zelem)::element_Zmn
-
+	! t1=OMP_GET_WTIME()
     if (blocks%style==2) then
 		if(option%forwardN15flag==1)then
 			call BF_compress_N15(blocks,option,Memory_tmp,stats,msh,ker,element_Zmn,ptree)
@@ -527,7 +526,8 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 		enddo
 		enddo
     endif
-
+! t2=OMP_GET_WTIME()
+! if(blocks%level==1)write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,t2-t1
     return
 
 end subroutine Hmat_block_construction

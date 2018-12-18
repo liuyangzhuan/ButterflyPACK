@@ -628,7 +628,7 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
 	character trans,trans_tmp
 	integer Ns
 	integer level_c,rowblock
-    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
+    integer j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) vecnorm,n1,n2
@@ -641,14 +641,16 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
     type(Hoption)::option
 
     real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc,Nmax,Nmsg
 	type(matrixblock), pointer :: blocks_i,blocks_j
-	DT,allocatable::vec_old(:,:),vec_new(:,:),vin_tmp(:,:),vout_tmp(:,:)
+	DT,allocatable::vec_old(:,:),vec_new(:,:),vin_tmp(:,:),vout_tmp(:,:),vec_buffer(:,:)
 
 	! DT::Vin(:,:),Vout(:,:)
 	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
 	type(Hmat)::h_mat
 	integer ierr
+	integer,allocatable::status_all(:,:),srequest_all(:)
+	integer :: status(MPI_Status_size)
 
 	if(ptree%MyID/=MPI_COMM_NULL)then
 
@@ -659,25 +661,43 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
 		endif
 
 		call MPI_barrier(ptree%Comm,ierr)
+
+
 		n1=OMP_get_wtime()
 
+
 		blocks_i=>h_mat%Local_blocks_copy(1,1)
-		groupm = blocks_i%row_group
+		num_blocks=2**h_mat%Dist_level
+
+		Nmsg=num_blocks
+
+		call MPI_ALLREDUCE(blocks_i%N, Nmax, 1,MPI_INTEGER, MPI_MAX, ptree%Comm,ierr)
+		allocate(srequest_all(Nmsg))
+		allocate(status_all(MPI_status_size,Nmsg))
+		srequest_all=MPI_request_null
+		do j=1,Nmsg
+			call MPI_Isend(Vin,blocks_i%N*num_vectors,MPI_DT,j-1,ptree%MyID,ptree%Comm,srequest_all(j),ierr)
+		enddo
+		allocate(vec_buffer(Nmax,num_vectors))
 
 		vout=0.0
-		num_blocks=2**h_mat%Dist_level
-		do j=1,num_blocks
+		do while(Nmsg>0)
+			call MPI_Recv(vec_buffer,Nmax*num_vectors,MPI_DT,MPI_ANY_SOURCE,MPI_ANY_TAG,ptree%Comm,status,ierr)
+			j = status(MPI_TAG)+1
 			blocks_i=>h_mat%Local_blocks_copy(j,1)
-			groupn = blocks_i%col_group
 			allocate(vin_tmp(blocks_i%N,num_vectors))
-			vin_tmp=0.0
-			if(ptree%MyID==j-1)then
-				vin_tmp = Vin
-			endif
-			call MPI_Bcast(vin_tmp,blocks_i%N*num_vectors,MPI_DT,j-1,ptree%Comm,ierr)
+			vin_tmp = vec_buffer(1:blocks_i%N,1:num_vectors)
 			call Hmat_block_MVP_dat(blocks_i,trans_tmp,blocks_i%headm,blocks_i%headn,num_vectors,vin_tmp,Vout,cone,ptree,stats)
 			deallocate(vin_tmp)
+
+			Nmsg = Nmsg -1
 		enddo
+
+		deallocate(vec_buffer)
+		call MPI_waitall(num_blocks,srequest_all,status_all,ierr)
+		deallocate(srequest_all)
+		deallocate(status_all)
+
 
 		if(trans=='C')then
 			Vout=conjg(cmplx(Vout,kind=8))
