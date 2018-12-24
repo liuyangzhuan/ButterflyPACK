@@ -284,7 +284,7 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
 	type(proctree)::ptree
 	type(Hstat)::stats
 
-    type(butterfly_Kerl),allocatable :: ButterflyVector(:)
+    type(butterfly_kerl),allocatable :: ButterflyVector(:)
     !  DT :: random1(N,Nrnd), random2(M,Nrnd)
         DT :: random1(:,:), random2(:,:)
         DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
@@ -1539,7 +1539,7 @@ subroutine BF_Partial_MVP_Half(block_rand,chara,level_start,level_end,random,num
 
     type(RandomBlock) :: random
 
-    type(butterfly_Kerl),allocatable :: ButterflyVector(:)
+    type(butterfly_kerl),allocatable :: ButterflyVector(:)
     type(matrixblock)::block_rand
    ! write(*,*)'in '
 
@@ -1772,7 +1772,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 	real(kind=8)::flop,flops
 
 
-    type(butterfly_Kerl),allocatable :: ButterflyVector(:)
+    type(butterfly_kerl),allocatable :: ButterflyVector(:)
     !  DT :: random1(N,Nrnd), random2(M,Nrnd)
         DT :: random1(:,:), random2(:,:)
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)

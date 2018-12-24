@@ -148,18 +148,18 @@ module BPACK_DEFS
      end type butterflymatrix
 
 
-     !**** keep track of skeleton columns
-     type butterfly_col_select
-         integer,allocatable :: select_columns(:)
-     end type butterfly_col_select
+     !**** keep track of skeleton columns and rows
+     type butterfly_skel
+         integer,allocatable :: inds(:)
+     end type butterfly_skel
 
 
 	 !**** one interior factor
-     type butterfly_Kerl
+     type butterfly_kerl
          integer num_col ! # block columns
          integer num_row ! # block rows
          type(butterflymatrix),allocatable :: blocks(:,:)
-     end type butterfly_Kerl
+     end type butterfly_kerl
 
 
 	 !**** one outter most factor
@@ -191,8 +191,8 @@ module BPACK_DEFS
 		 type(butterfly_UV) :: ButterflyU ! leftmost factor
          type(butterfly_UV) :: ButterflyV ! rightmost factor
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:) ! middle factor
-         type(butterfly_Kerl),allocatable :: ButterflyKerl(:) ! interior factors
-         type(butterfly_col_select),allocatable :: ButterflyColSelect(:,:) ! keep track of skeleton columns
+         type(butterfly_kerl),allocatable :: ButterflyKerl(:) ! interior factors
+         type(butterfly_skel),allocatable :: ButterflySkel(:,:) ! keep track of skeleton columns
 
 		 ! the following is for blocks in H matrix solver
          type(matrixblock),pointer :: father=>null() ! pointer to its fater
@@ -304,8 +304,8 @@ module BPACK_DEFS
 	 !**** intermidate vectors for applying a butterfly
      type RandomBlock
          integer level_butterfly
-         type(butterfly_Kerl), allocatable :: RandomVectorRR(:)
-         type(butterfly_Kerl), allocatable :: RandomVectorLL(:)
+         type(butterfly_kerl), allocatable :: RandomVectorRR(:)
+         type(butterfly_kerl), allocatable :: RandomVectorLL(:)
      end type RandomBlock
 
 
