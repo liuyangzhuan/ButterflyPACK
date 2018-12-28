@@ -147,10 +147,15 @@ module BPACK_DEFS
 		 integer::mdim,ndim	 ! dimensions of the block
      end type butterflymatrix
 
+	 !**** index set for one butterfly block
+     type butterflyindex
+         integer,allocatable :: array(:) ! skeleton columns or rows for one butterfly block
+     end type butterflyindex
 
-     !**** keep track of skeleton columns and rows
+
+     !**** keep track of skeleton columns and rows for one butterfly level
      type butterfly_skel
-         integer,allocatable :: inds(:)
+         type(butterflyindex),allocatable :: inds(:,:)
      end type butterfly_skel
 
 
@@ -192,7 +197,7 @@ module BPACK_DEFS
          type(butterfly_UV) :: ButterflyV ! rightmost factor
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:) ! middle factor
          type(butterfly_kerl),allocatable :: ButterflyKerl(:) ! interior factors
-         type(butterfly_skel),allocatable :: ButterflySkel(:,:) ! keep track of skeleton columns
+         type(butterfly_skel),allocatable :: ButterflySkel(:) ! keep track of skeleton columns or rows of each level
 
 		 ! the following is for blocks in H matrix solver
          type(matrixblock),pointer :: father=>null() ! pointer to its fater

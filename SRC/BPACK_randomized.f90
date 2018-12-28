@@ -710,7 +710,7 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
     DT ctemp, a, b
     character chara
-	integer level_right_start,num_col,num_row
+	integer level_right_start
 
     ! type(matricesblock), pointer :: blocks
     ! type(RandomBlock), pointer :: random
@@ -814,7 +814,7 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_
     integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
     DT ctemp, a, b
     character chara
-	integer level_right_start,num_col,num_row
+	integer level_right_start
 
     ! type(matricesblock), pointer :: blocks
     ! type(RandomBlock), pointer :: random
@@ -918,7 +918,7 @@ subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c
     implicit none
 
 	integer nth
-    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,groupm,groupn,bb,pp
+    integer i,j,k,level,ii,jj,kk,test,groupm,groupn,bb,pp
     integer Nloc,mm,nn
     real(kind=8) a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
     DT ctemp, ctemp1, ctemp2
@@ -1037,7 +1037,7 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     implicit none
 
 	integer level_c,rowblock,unique_nth
-    integer N,i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,bb
+    integer N,i,j,k,level,ii,jj,kk,test,bb
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) a,b,c,d
@@ -1047,7 +1047,7 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     type(vectorsblock), pointer :: random1, random2
 
     real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,num_blocks
 	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
 
 	integer Nsub,Ng
@@ -1199,7 +1199,7 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     implicit none
 
 	integer level_c,rowblock,unique_nth
-    integer N,i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,bb
+    integer N,i,j,k,level,num_blocks,ii,jj,kk,test,bb
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) a,b,c,d

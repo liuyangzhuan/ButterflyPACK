@@ -410,7 +410,7 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 
 	integer Ns
 	integer level_c,rowblock,head,tail
-    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors,pp
+    integer i,j,k,level,ii,jj,kk,test, num_vectors,pp
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character trans,trans_tmp
     real(kind=8) a,b,c,d
@@ -500,7 +500,7 @@ subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1
 	character trans,trans_tmp
 	integer Ns, level_start, level_end
 	integer level_c,rowblock
-    integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
+    integer i,j,k,level,ii,jj,kk,test, num_vectors
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) a,b,c,d
@@ -628,7 +628,7 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
 	character trans,trans_tmp
 	integer Ns
 	integer level_c,rowblock
-    integer j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test, num_vectors
+    integer j,k,level,num_blocks,ii,jj,kk,test, num_vectors
     integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
     character chara
     real(kind=8) vecnorm,n1,n2
