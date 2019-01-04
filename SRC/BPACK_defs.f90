@@ -108,6 +108,7 @@ module BPACK_DEFS
 	type commquant1D
 		integer offset ! offset in my local array
 		integer size ! size of the message along first dimension
+		integer active ! whether this communication pair is active
 		DT,allocatable::dat(:,:) ! communication buffer
 	end type commquant1D
 
@@ -144,7 +145,7 @@ module BPACK_DEFS
 	 !**** one rank*rank butterfly block
      type butterflymatrix
          DT,allocatable :: matrix(:,:) ! entries of the block
-		 integer::mdim,ndim	 ! dimensions of the block
+		 ! integer::mdim,ndim	 ! dimensions of the block
      end type butterflymatrix
 
 	 !**** index set for one butterfly block
@@ -155,6 +156,9 @@ module BPACK_DEFS
 
      !**** keep track of skeleton columns and rows for one butterfly level
      type butterfly_skel
+		 integer nc,nr ! # local block rows/columns
+		 integer idx_c,idx_r ! column and row number of the first local block
+		 integer inc_c,inc_r ! increment of local block row and columns
          type(butterflyindex),allocatable :: inds(:,:)
      end type butterfly_skel
 
@@ -163,6 +167,9 @@ module BPACK_DEFS
      type butterfly_kerl
          integer num_col ! # block columns
          integer num_row ! # block rows
+		 integer nc,nr ! # local block rows/columns
+		 integer idx_c,idx_r ! column and row number of the first local block
+		 integer inc_c,inc_r ! increment of local block row and columns
          type(butterflymatrix),allocatable :: blocks(:,:)
      end type butterfly_kerl
 
@@ -170,6 +177,9 @@ module BPACK_DEFS
 	 !**** one outter most factor
      type butterfly_UV
          integer num_blk
+		 integer:: nblk_loc=1 ! # local block rows/columns
+		 integer:: idx=1 ! column or row number of the first local block
+		 integer:: inc=1 ! increment of local block row or columns
          type(butterflymatrix),allocatable :: blocks(:)
      end type butterfly_UV
 
@@ -192,7 +202,6 @@ module BPACK_DEFS
          integer,pointer:: M_p_db(:,:)=>null()
          integer,pointer:: N_p_db(:,:)=>null()
 		 DT,allocatable :: fullmat(:,:) ! full matrix entries
-         DT,allocatable:: KerInv(:,:)	! a small random rank*rank block used in randomized construction
 		 type(butterfly_UV) :: ButterflyU ! leftmost factor
          type(butterfly_UV) :: ButterflyV ! rightmost factor
          type(butterflymatrix),allocatable :: ButterflyMiddle(:,:) ! middle factor

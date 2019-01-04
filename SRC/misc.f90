@@ -2734,6 +2734,136 @@ subroutine NumberingPtree(ptree)
 end subroutine NumberingPtree
 
 
+!**** computation of the local butterfly block ranges owned by this MPI rank
+	!ptree: process tree
+	!pgno: the process group number that shares this butterfly
+	!level_butterfly: number of butterfly levels
+	!level: the specified level that requires the computation 0<=level<=level_butterfly+1
+	!idx_r: starting index of local row blocks
+	!inc_r: increments of local row blocks
+	!nr: number of local row blocks
+	!idx_c: starting index of local column blocks
+	!inc_c: increments of local column blocks
+	!nc: number of local column blocks
+	!dir: 'R': row-wise ordering (2^level row blocks and 2^(level_butterfly-level) column blocks) or 'C': column-wise ordering (2^(level-1) row blocks and 2^(level_butterfly-level+1) column blocks)
+subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,dir)
+	implicit none
+	type(proctree)::ptree
+	integer :: level_p,level,ll,group,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,pgno,pgno1,found,nleaf,ith
+	character::dir
+	call assert(IOwnPgrp(ptree,pgno),'I do not own this pgrp in FindLeafRange')
+	found=0
+	level_p=0
+	pgno1=pgno
+	ith=1
+	do while(found==0)
+		if(ptree%pgrp(pgno1)%nproc==1)then
+			found=1
+			exit
+		endif
+		if(IOwnPgrp(ptree,pgno1*2))then
+			pgno1=pgno1*2
+			ith=ith*2
+		elseif(IOwnPgrp(ptree,pgno1*2+1))then
+			pgno1=pgno1*2+1
+			ith=ith*2+1
+		endif
+		level_p=level_p+1
+	enddo
+	ith = ith - 2**level_p + 1
+	nleaf = 2**(level_butterfly-level_p)
+	if(dir=='R')then
+		idx_c=(ith-1)*nleaf+1
+		nc=nleaf
+		inc_c=1
+		idx_r=1
+		nr=1
+		inc_r=1
+		do ll=1,level
+			if(ll/=level_butterfly+1)then
+				idx_r = 2*idx_r-mod(idx_c,2) ! odd/even column indices mapped to odd/even row indices
+				idx_c = floor((idx_c-1)/2d0)+1
+				if(nc>1)then ! if at previous level column blocks are contiguous, double #row and half #column
+					nc=nc/2
+					nr=nr*2
+				else         ! otherwise double row increments
+					inc_r=inc_r*2
+				endif
+			endif
+		enddo
+	elseif(dir=='C')then
+		idx_r=(ith-1)*nleaf+1
+		nr=nleaf
+		inc_r=1
+		idx_c=1
+		nc=1
+		inc_c=1
+		do ll=level_butterfly,level,-1
+			if(ll/=0)then
+				idx_c = 2*idx_c-mod(idx_r,2) ! odd/even row indices mapped to odd/even column indices
+				idx_r = floor((idx_r-1)/2d0)+1
+				if(nr>1)then ! if at previous level row blocks are contiguous, double #column and half #row
+					nr=nr/2
+					nc=nc*2
+				else
+					inc_c=inc_c*2 ! otherwise double column increments
+				endif
+			endif
+		enddo
+	endif
+
+end subroutine GetLocalBlockRange
+
+
+
+!**** computation of the local butterfly block ranges owned by this MPI rank
+	!ptree: process tree
+	!pgno: the process group number that shares this butterfly
+	!level_butterfly: number of butterfly levels
+	!level: the level where the block resides 0<=level<=level_butterfly+1
+	!index_i: row index of the block
+	!index_j: column index of the block
+	!dir: 'R': row-wise ordering (2^level row blocks and 2^(level_butterfly-level) column blocks) or 'C': column-wise ordering (2^(level-1) row blocks and 2^(level_butterfly-level+1) column blocks)
+	!pid: mpi rank that handles the target block
+subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
+	implicit none
+	type(proctree)::ptree
+	integer :: pid,level_p,num_blocks,level,ll,group,level_butterfly,idx_r,idx_c,idx,index_i,index_j,pgno,pgno1,found,nleaf,ith
+	character::dir
+
+	level_p = ptree%nlevel-GetTreelevel(pgno)
+	idx_r=index_i
+	idx_c=index_j
+
+	if(dir=='R')then
+		do ll=level,1,-1
+			if(ll/=level_butterfly+1)then
+				idx_c = 2*idx_c-mod(idx_r,2) ! odd/even row indices mapped to odd/even column indices
+				idx_r = floor((idx_r-1)/2d0)+1
+			endif
+		enddo
+		idx=idx_c
+	elseif(dir=='C')then
+		do ll=level,level_butterfly
+			if(ll/=0)then
+				idx_r = 2*idx_r-mod(idx_c,2) ! odd/even column indices mapped to odd/even row indices
+				idx_c = floor((idx_c-1)/2d0)+1
+			endif
+		enddo
+		idx=idx_r
+	endif
+	idx = idx + 2**level_butterfly -1 ! index of this leaf-level group in the corresponding level_butterfly-level tree
+	do ll=1,level_butterfly-level_p
+		idx = floor_safe(idx/2d0)
+	enddo
+	idx = idx - 2**level_p +1 ! index of this group's ancestor group in the corresponding level_p-level tree
+	pgno1 = pgno*2**level_p ! index of the first process group at pgno's level + level_p of the process tree
+	pgno1 = pgno1 + idx -1 ! index of the process group that handles group idx in the process tree
+
+	pid = ptree%pgrp(pgno1)%head
+
+end subroutine GetBlockPID
+
 
 subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 	implicit none
@@ -3123,7 +3253,6 @@ integer pgno_i,pgno_o,N,M
 integer M_p_i(:,:)
 integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
 type(proctree)::ptree
-type(commquant1D),allocatable::sendquant(:),recvquant(:)
 integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
 integer,allocatable:: M_p_1D(:,:)
@@ -3183,7 +3312,6 @@ integer pgno_i,pgno_o,N,M
 integer M_p_o(:,:)
 integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
 type(proctree)::ptree
-type(commquant1D),allocatable::sendquant(:),recvquant(:)
 integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
 integer,allocatable:: M_p_1D(:,:)
