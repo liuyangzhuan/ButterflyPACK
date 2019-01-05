@@ -356,8 +356,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	allocate (stats%rankmax_of_level_global(0:ho_bf1%Maxlevel))
 	stats%rankmax_of_level_global = 0
 
-	do level_c = 1,ho_bf1%Maxlevel+1
-	! do level_c = 1,1
+	! do level_c = 1,ho_bf1%Maxlevel+1
+	do level_c = 1,1
 		if(level_c/=ho_bf1%Maxlevel+1)then
 			Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 			Bidxe = ho_bf1%levels(level_c)%Bidxe*2
@@ -366,8 +366,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 			Bidxe = ho_bf1%levels(level_c)%Bidxe
 		endif
 
-		do ii =Bidxs,Bidxe
-		! do ii =Bidxs,Bidxs
+		! do ii =Bidxs,Bidxe
+		do ii =Bidxs,Bidxs
 			if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(ii)%pgno))then
 				if (level_c/=ho_bf1%Maxlevel+1) then
 					if (ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level/=level) then
@@ -437,6 +437,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total construction time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A26Es14.2)') 'Total construction flops:',rtemp
+	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
 	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)

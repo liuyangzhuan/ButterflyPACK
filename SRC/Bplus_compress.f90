@@ -533,7 +533,7 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
    implicit none
 	type(mesh)::msh
     integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i,index_i1, index_i_loc_k,index_i_loc_s, index_j, index_j1,index_j_loc_k,index_j_loc_s, ii,ii1, jj,jj1,ij,pp
+    integer group_m, group_n, mm, nn, index_i,index_i1, index_i_loc_k,index_i_loc_s, index_j, index_j1,index_j_loc_k,index_j_loc_s, ii,ii1, jj,jj1,ij,pp,tt
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -553,10 +553,16 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive
 	integer,allocatable::S_req(:),R_req(:)
 	integer,allocatable:: statuss(:,:),statusr(:,:)
 
 	character mode
+
+	real(kind=8)::n1,n2
+
+	n1 = OMP_get_wtime()
 
 	level_butterfly=blocks%level_butterfly
 	nproc = ptree%pgrp(blocks%pgno)%nproc
@@ -577,7 +583,10 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 		recvquant(ii)%size=0
 		recvquant(ii)%active=0
 	enddo
-
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
 
 	! calculate send buffer sizes in the first pass
 	do ii=1,blocks%ButterflySkel(level)%nr
@@ -588,7 +597,11 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
 			call assert(pid/=ptree%MyID,'pid should not equal MyID')
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-			recvquant(pp)%active=1
+			if(recvquant(pp)%active==0)then
+				recvquant(pp)%active=1
+				Nrecvactive=Nrecvactive+1
+				recvIDactive(Nrecvactive)=pp
+			endif
 
 			if(mode=='R')then
 				if(mod(index_j,2)==1)then
@@ -605,41 +618,46 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 				endif
 				jj1=jj
 			endif
-			sendquant(pp)%active=1
+			if(sendquant(pp)%active==0)then
+				sendquant(pp)%active=1
+				Nsendactive=Nsendactive+1
+				sendIDactive(Nsendactive)=pp
+			endif
 			sendquant(pp)%size=sendquant(pp)%size+3+size(blocks%ButterflySkel(level)%inds(ii1,jj1)%array)
 		endif
 	enddo
 	enddo
 
 	! communicate receive buffer sizes
-	Nreqs=0
-	Nreqr=0
-	do pp=1,nproc
-		if(sendquant(pp)%active==1)then
-			allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
-			recvid=pp-1+ptree%pgrp(blocks%pgno)%head
-			Nreqs=Nreqs+1
-			call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
-		endif
-		if(recvquant(pp)%active==1)then
-			sendid=pp-1+ptree%pgrp(blocks%pgno)%head
-			Nreqr=Nreqr+1
-			call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
-		endif
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat_i(sendquant(pp)%size,1))
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
 	enddo
-	if(Nreqs>0)then
-		call MPI_waitall(Nreqs,S_req,statuss,ierr)
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
 	endif
-	if(Nreqr>0)then
-		call MPI_waitall(Nreqr,R_req,statusr,ierr)
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
 	endif
 
-	do pp=1,nproc
-		if(recvquant(pp)%active==1)then
-			allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
-		endif
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
 		sendquant(pp)%size=0
 	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat_i(recvquant(pp)%size,1))
+	enddo
+
 
 	! pack the send buffer in the second pass
 	do ii=1,blocks%ButterflySkel(level)%nr
@@ -676,12 +694,12 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 
 			Nskel=size(blocks%ButterflySkel(level)%inds(ii1,jj1)%array)
-			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i1
-			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j1
-			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nskel
+			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i1
+			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j1
+			sendquant(pp)%dat_i(sendquant(pp)%size+3,1)=Nskel
 			sendquant(pp)%size=sendquant(pp)%size+3
 			do i=1,Nskel
-				sendquant(pp)%dat(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii1,jj1)%array(i)
+				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii1,jj1)%array(i)
 			enddo
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
 		endif
@@ -689,64 +707,65 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 	enddo
 
 
-	! communicate the data buffer, for simplicity, use MPI_DT to communicate MPI_INTEGER
-	Nreqs=0
-	Nreqr=0
-	do pp=1,nproc
-		if(sendquant(pp)%active==1)then
-			recvid=pp-1+ptree%pgrp(blocks%pgno)%head
-			Nreqs=Nreqs+1
-			call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
-		endif
-		if(recvquant(pp)%active==1)then
-			sendid=pp-1+ptree%pgrp(blocks%pgno)%head
-			Nreqr=Nreqr+1
-			call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
-		endif
+	! communicate the data buffer
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Isend(sendquant(pp)%dat_i,sendquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
 	enddo
-	if(Nreqs>0)then
-		call MPI_waitall(Nreqs,S_req,statuss,ierr)
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%dat_i,recvquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
 	endif
-	if(Nreqr>0)then
-		call MPI_waitall(Nreqr,R_req,statusr,ierr)
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
 	endif
 
 	! copy data from buffer to target
-	do pp=1,nproc
-		if(recvquant(pp)%active==1)then
-			i=0
-			do while(i<recvquant(pp)%size)
-				i=i+1
-				index_i=NINT(dble(recvquant(pp)%dat(i,1)))
-				ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
-				i=i+1
-				index_j=NINT(dble(recvquant(pp)%dat(i,1)))
-				jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
-				i=i+1
-				Nskel=NINT(dble(recvquant(pp)%dat(i,1)))
-				call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving data alreay exists locally')
-				allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
-				blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat(i+1:i+Nskel,1)))
-				i=i+Nskel
-			enddo
-		endif
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
+			i=i+1
+			Nskel=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving data alreay exists locally')
+			allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
+			blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
+			i=i+Nskel
+		enddo
 	enddo
-
 
 	! deallocation
 	deallocate(S_req)
 	deallocate(R_req)
 	deallocate(statuss)
 	deallocate(statusr)
-	do pp=1,nproc
-		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat_i))deallocate(sendquant(pp)%dat_i)
 	enddo
 	deallocate(sendquant)
-	do pp=1,nproc
-		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat_i))deallocate(recvquant(pp)%dat_i)
 	enddo
 	deallocate(recvquant)
-
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_exchange_skel
 
@@ -760,7 +779,7 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
    implicit none
 	type(mesh)::msh
     integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp
+    integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -784,6 +803,11 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 	integer,allocatable::S_req(:),R_req(:)
 	integer,allocatable:: statuss(:,:),statusr(:,:)
 	character::mode,mode_new
+	real(kind=8)::n1,n2
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive
+
+	n1 = OMP_get_wtime()
 
 	call assert(mode/=mode_new,'only row2col or col2row is supported')
 
@@ -815,49 +839,72 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 		recvquant(ii)%size=0
 		recvquant(ii)%active=0
 	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
 
 	! calculate send buffer sizes in the first pass
+	do ii=1,nr
+	do jj=1,nc
+		index_i = (ii-1)*inc_r+idx_r
+		index_j = (jj-1)*inc_c+idx_c
+		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		pp=pid-ptree%pgrp(blocks%pgno)%head+1
+		if(recvquant(pp)%active==0)then
+			recvquant(pp)%active=1
+			Nrecvactive=Nrecvactive+1
+			recvIDactive(Nrecvactive)=pp
+		endif
+	enddo
+	enddo
+
+
 	do ii=1,blocks%ButterflySkel(level)%nr
 	do jj=1,blocks%ButterflySkel(level)%nc
-
 		index_i = (ii-1)*blocks%ButterflySkel(level)%inc_r+blocks%ButterflySkel(level)%idx_r
 		index_j = (jj-1)*blocks%ButterflySkel(level)%inc_c+blocks%ButterflySkel(level)%idx_c
-
 		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
+		if(sendquant(pp)%active==0)then
+			sendquant(pp)%active=1
+			Nsendactive=Nsendactive+1
+			sendIDactive(Nsendactive)=pp
+		endif
 		sendquant(pp)%size=sendquant(pp)%size+3+size(blocks%ButterflySkel(level)%inds(ii,jj)%array)
-
 	enddo
 	enddo
 
 	! communicate receive buffer sizes
-	Nreqs=0
-	Nreqr=0
-	do pp=1,nproc
-
-		if(sendquant(pp)%size>0)allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat_i(sendquant(pp)%size,1))
 		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
-		Nreqs=Nreqs+1
-		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
-
-		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
-		Nreqr=Nreqr+1
-		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
-
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
 	enddo
 
-	if(Nreqs>0)then
-		call MPI_waitall(Nreqs,S_req,statuss,ierr)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
 	endif
-	if(Nreqr>0)then
-		call MPI_waitall(Nreqr,R_req,statusr,ierr)
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
 	endif
-	do pp=1,nproc
-		if(recvquant(pp)%size>0)then
-			allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
-		endif
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
 		sendquant(pp)%size=0
 	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat_i(recvquant(pp)%size,1))
+	enddo
+
 
 	! pack the send buffer in the second pass
 	do ii=1,blocks%ButterflySkel(level)%nr
@@ -869,12 +916,12 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 
 			Nskel=size(blocks%ButterflySkel(level)%inds(ii,jj)%array)
-			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
-			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
-			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nskel
+			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i
+			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j
+			sendquant(pp)%dat_i(sendquant(pp)%size+3,1)=Nskel
 			sendquant(pp)%size=sendquant(pp)%size+3
 			do i=1,Nskel
-				sendquant(pp)%dat(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii,jj)%array(i)
+				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii,jj)%array(i)
 			enddo
 			deallocate(blocks%ButterflySkel(level)%inds(ii,jj)%array)
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
@@ -891,28 +938,29 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 
 	allocate(blocks%ButterflySkel(level)%inds(blocks%ButterflySkel(level)%nr,blocks%ButterflySkel(level)%nc))
 
-
-	! communicate the data buffer, for simplicity, use MPI_DT to communicate MPI_INTEGER
+	! communicate the data buffer
 	Nreqs=0
-	Nreqr=0
-	do pp=1,nproc
-		if(pp-1+ptree%pgrp(blocks%pgno)%head==ptree%MyID)then
-			recvquant(pp)%dat=sendquant(pp)%dat
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		if(recvid/=ptree%MyID)then
+			Nreqs=Nreqs+1
+			call MPI_Isend(sendquant(pp)%dat_i,sendquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(Nreqs),ierr)
 		else
-			if(sendquant(pp)%size>0)then
-				recvid=pp-1+ptree%pgrp(blocks%pgno)%head
-				Nreqs=Nreqs+1
-				! write(*,*)pp,sendquant(pp)%size,'send'
-				call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,recvid,tag,ptree%Comm,S_req(Nreqs),ierr)
-			endif
-			if(recvquant(pp)%size>0)then
-				sendid=pp-1+ptree%pgrp(blocks%pgno)%head
-				Nreqr=Nreqr+1
-				! write(*,*)pp,sendquant(pp)%size,'recv'
-				call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,sendid,tag,ptree%Comm,R_req(Nreqr),ierr)
-			endif
+			if(sendquant(pp)%size>0)recvquant(pp)%dat_i=sendquant(pp)%dat_i
 		endif
 	enddo
+
+	Nreqr=0
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		if(sendid/=ptree%MyID)then
+			Nreqr=Nreqr+1
+			call MPI_Irecv(recvquant(pp)%dat_i,recvquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(Nreqr),ierr)
+		endif
+	enddo
+
 	if(Nreqs>0)then
 		call MPI_waitall(Nreqs,S_req,statuss,ierr)
 	endif
@@ -921,41 +969,45 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 	endif
 
 	! copy data from buffer to target
-	do pp=1,nproc
-		if(recvquant(pp)%size>0)then
-			i=0
-			do while(i<recvquant(pp)%size)
-				i=i+1
-				index_i=NINT(dble(recvquant(pp)%dat(i,1)))
-				ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
-				i=i+1
-				index_j=NINT(dble(recvquant(pp)%dat(i,1)))
-				jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
-				i=i+1
-				Nskel=NINT(dble(recvquant(pp)%dat(i,1)))
-				call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving data alreay exists locally')
-				allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
-				blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat(i+1:i+Nskel,1)))
-				i=i+Nskel
-			enddo
-		endif
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
+			i=i+1
+			Nskel=NINT(dble(recvquant(pp)%dat_i(i,1)))
+			call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving dat_ia alreay exists locally')
+			allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
+			blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
+			i=i+Nskel
+		enddo
 	enddo
-
 
 	! deallocation
 	deallocate(S_req)
 	deallocate(R_req)
 	deallocate(statuss)
 	deallocate(statusr)
-	do pp=1,nproc
-		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat_i))deallocate(sendquant(pp)%dat_i)
 	enddo
 	deallocate(sendquant)
-	do pp=1,nproc
-		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat_i))deallocate(recvquant(pp)%dat_i)
 	enddo
 	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
 
+	n2 = OMP_get_wtime()
+	time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_all2all_skel
 
@@ -3625,7 +3677,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	deallocate(norm_UVavrbynorm_Z)
 
 	n2 = OMP_get_wtime()
-	time_tmp = time_tmp + n2 - n1
+	! time_tmp = time_tmp + n2 - n1
 
 ! ACA followed by SVD
 
@@ -4023,7 +4075,7 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 
 	n2 = OMP_get_wtime()
-	time_tmp = time_tmp + n2 - n1
+	! time_tmp = time_tmp + n2 - n1
 
 
     return

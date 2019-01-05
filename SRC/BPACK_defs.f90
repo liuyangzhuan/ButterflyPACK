@@ -110,6 +110,7 @@ module BPACK_DEFS
 		integer size ! size of the message along first dimension
 		integer active ! whether this communication pair is active
 		DT,allocatable::dat(:,:) ! communication buffer
+		integer,allocatable::dat_i(:,:) ! communication buffer
 	end type commquant1D
 
 
