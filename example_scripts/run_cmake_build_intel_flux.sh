@@ -1,5 +1,6 @@
 cd ..
 sh PrecisionPreprocessing.sh
+mkdir -p build
 cd build
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl

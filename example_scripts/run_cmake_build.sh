@@ -1,5 +1,6 @@
 cd ..
 sh PrecisionPreprocessing.sh
+mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
 rm -rf CMakeCache.txt

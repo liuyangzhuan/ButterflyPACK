@@ -1,5 +1,6 @@
 cd ..
 sh PrecisionPreprocessing.sh
+mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
 rm -rf CMakeCache.txt
@@ -17,7 +18,7 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=mpicxx \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Debug \
+	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 	# -DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check " \
 

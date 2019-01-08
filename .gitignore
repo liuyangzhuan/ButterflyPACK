@@ -1,5 +1,6 @@
 
 make.inc
+./build
 ./SRC_DOUBLE
 ./SRC_DOUBLECOMPLEX
 ./build/*.cmake
