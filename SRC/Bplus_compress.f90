@@ -71,6 +71,13 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 
     num_blocks=2**level_butterfly
 
+	blocks%level_half = ceiling_safe(dble(level_butterfly)/2d0)
+	! blocks%level_half = level_butterfly+1 ! from right to left
+	! blocks%level_half = -1 ! from left to right
+
+	level_half=blocks%level_half
+
+
 	if(level_butterfly==0)then
 
 		allocate(blocks%ButterflyU%blocks(num_blocks))
@@ -90,11 +97,6 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 			allocate(blocks%ButterflyKerl(level_butterfly))
 			allocate(blocks%ButterflySkel(0:level_butterfly+1))
 		endif
-
-
-		! level_half = level_butterfly+1 ! from right to left
-		! level_half = -1 ! from left to right
-		level_half = floor_safe(level_butterfly/2d0)+1 ! from outer to inner
 
 	    do level=0, level_half
 			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
@@ -1371,7 +1373,8 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 			else
 				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
 				level_BP = bplus%level
-				levelm = ceiling_safe(dble(level_butterfly)/2d0)
+				bplus%LL(ll)%matrices_block(bb)%level_half = ceiling_safe(dble(bplus%LL(ll)%matrices_block(bb)%level_butterfly)/2d0)
+				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
 				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
 				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)
 				call BF_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn,ptree)
@@ -1470,7 +1473,8 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 		allocate (blocks%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
 	end do
 
-	levelm = ceiling_safe(dble(level_butterfly)/2d0)
+	blocks%level_half = ceiling_safe(dble(blocks%level_butterfly)/2d0)
+	levelm=blocks%level_half
 	level_butterflyL = level_butterfly-levelm
 	level_butterflyR = level_butterfly-level_butterflyL
 
@@ -1858,6 +1862,8 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 !     endif
 	blocks%rankmax = -100000
 	blocks%rankmin = 100000
+	blocks%level_half = ceiling_safe(dble(blocks%level_butterfly)/2d0)
+	levelm=blocks%level_half
 
     ! blocks%level_butterfly=level_butterfly
 
@@ -2130,7 +2136,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 			allocate (blocks%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
 		end do
 
-		levelm = ceiling_safe(dble(level_butterfly)/2d0)
+
 		level_butterflyL = level_butterfly-levelm
 		level_butterflyR = level_butterfly-level_butterflyL
 

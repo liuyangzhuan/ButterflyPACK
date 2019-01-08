@@ -582,6 +582,7 @@ if(trans=='N')then
 	block_o%row_group = block_i%row_group
 	block_o%style = block_i%style
 	block_o%level_butterfly = block_i%level_butterfly
+	block_o%level_half = block_i%level_half
 	block_o%rankmax = block_i%rankmax
 	block_o%rankmin = block_i%rankmin
 	block_o%dimension_rank = block_i%dimension_rank
@@ -865,6 +866,7 @@ block_o%col_group = block_i%col_group
 block_o%row_group = block_i%row_group
 block_o%style = block_i%style
 block_o%level_butterfly = block_i%level_butterfly
+block_o%level_half = block_i%level_half
 block_o%rankmax = block_i%rankmax
 block_o%rankmin = block_i%rankmin
 block_o%M = block_i%M
@@ -1901,66 +1903,42 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				else
 					num_groupm=blocks%ButterflyKerl(level)%num_row
 					num_groupn=blocks%ButterflyKerl(level)%num_col
-					if (num_groupn/=1) then
-						allocate (ButterflyVector(level+1)%blocks(num_groupm,int(num_groupn/2)))
-						ButterflyVector(level+1)%num_row=num_groupm
-						ButterflyVector(level+1)%num_col=int(num_groupn/2)
+					call assert(num_groupn/=1,'why num_groupn==1?')
+					allocate (ButterflyVector(level+1)%blocks(num_groupm,int(num_groupn/2)))
+					ButterflyVector(level+1)%num_row=num_groupm
+					ButterflyVector(level+1)%num_col=int(num_groupn/2)
 
-						flops=0
-						!$omp parallel do default(shared) private(ij,ii,jj,kk,i,j,index_i,index_j,nn1,nn2,mm,flop) reduction(+:flops)
-						do ij=1,num_groupm*(num_groupn/2)
-							i = (ij-1)/(num_groupn/2)+1
-							j = (mod(ij-1,(num_groupn/2)) + 1)*2-1
-							index_i=int((i+1)/2)
-							index_j=int((j+1)/2)
+					flops=0
+					!$omp parallel do default(shared) private(ij,ii,jj,kk,i,j,index_i,index_j,nn1,nn2,mm,flop) reduction(+:flops)
+					do ij=1,num_groupm*(num_groupn/2)
+						i = (ij-1)/(num_groupn/2)+1
+						j = (mod(ij-1,(num_groupn/2)) + 1)*2-1
+						index_i=int((i+1)/2)
+						index_j=int((j+1)/2)
 
-							nn1=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,2)
-							nn2=size(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,2)
-							mm=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,1)
-							allocate (ButterflyVector(level+1)%blocks(i,index_j)%matrix(mm,num_vectors))
-							ButterflyVector(level+1)%blocks(i,index_j)%matrix=0
-							if(size(ButterflyVector(level)%blocks(index_i,j)%matrix,1)<nn1)then
-								write(*,*)blocks%row_group,blocks%col_group,blocks%level_butterfly,level,'nimade'
-								stop
-							end if
+						nn1=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,2)
+						nn2=size(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,2)
+						mm=size(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,1)
+						allocate (ButterflyVector(level+1)%blocks(i,index_j)%matrix(mm,num_vectors))
+						ButterflyVector(level+1)%blocks(i,index_j)%matrix=0
+						if(size(ButterflyVector(level)%blocks(index_i,j)%matrix,1)<nn1)then
+							write(*,*)blocks%row_group,blocks%col_group,blocks%level_butterfly,level,'nimade'
+							stop
+						end if
 
-							call gemmf90(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,ButterflyVector(level)%blocks(index_i,j)%matrix,nn1,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,'N','N',mm,num_vectors,nn1,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,ButterflyVector(level)%blocks(index_i,j)%matrix,nn1,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,'N','N',mm,num_vectors,nn1,cone,cone,flop=flop)
+						flops = flops + flop
+
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,ButterflyVector(level)%blocks(index_i,j+1)%matrix,nn2,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,'N','N',mm,num_vectors,nn2,cone,cone,flop=flop)
+						flops = flops + flop
+
+						if(level==levelm .and. middleflag==1 .and. level_butterfly>=2)then
+							call gemmf90(blocks%ButterflyMiddle(i,index_j)%matrix,mm, ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm, ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm, 'N','N',mm,num_vectors,mm,cone,czero,flop=flop)
 							flops = flops + flop
-
-							call gemmf90(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,ButterflyVector(level)%blocks(index_i,j+1)%matrix,nn2,ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm,'N','N',mm,num_vectors,nn2,cone,cone,flop=flop)
-							flops = flops + flop
-
-							if(level==levelm .and. middleflag==1 .and. level_butterfly>=2)then
-								call gemmf90(blocks%ButterflyMiddle(i,index_j)%matrix,mm, ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm, ButterflyVector(level+1)%blocks(i,index_j)%matrix,mm, 'N','N',mm,num_vectors,mm,cone,czero,flop=flop)
-								flops = flops + flop
-							end if
-						enddo
-						!$omp end parallel do
-						stats%Flop_Tmp = stats%Flop_Tmp + flops
-					else
-						allocate (ButterflyVector(level+1)%blocks(num_groupm,1))
-						ButterflyVector(level+1)%num_row=num_groupm
-						ButterflyVector(level+1)%num_col=1
-						do i=1, num_groupm
-							index_i=int((i+1)/2)
-							nn=size(blocks%ButterflyKerl(level)%blocks(i,1)%matrix,2)
-							mm=size(blocks%ButterflyKerl(level)%blocks(i,1)%matrix,1)
-							allocate (ButterflyVector(level+1)%blocks(i,1)%matrix(mm,num_vectors))
-							ButterflyVector(level+1)%blocks(i,1)%matrix=0
-
-							call gemmf90(blocks%ButterflyKerl(level)%blocks(i,1)%matrix,mm,ButterflyVector(level)%blocks(index_i,1)%matrix,nn,ButterflyVector(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,nn,cone,czero,flop=flop)
-							stats%Flop_Tmp = stats%Flop_Tmp + flop
-
-
-						! ! if(is_nan_mat_c(blocks%ButterflyKerl(level)%blocks(i,1)%matrix,mm,nn))then
-							! ! write(*,*)'kernel2'
-							! ! stop
-						! ! end if
-
-
-
-						enddo
-					endif
+						end if
+					enddo
+					!$omp end parallel do
+					stats%Flop_Tmp = stats%Flop_Tmp + flops
 				endif
 				if (level==level_butterfly) then
 					allocate (ButterflyVector(level+2)%blocks(num_blocks,1))
@@ -2067,55 +2045,40 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				else
 					num_groupm=blocks%ButterflyKerl(level_butterfly-level+1)%num_row
 					num_groupn=blocks%ButterflyKerl(level_butterfly-level+1)%num_col
-					if (num_groupm/=1) then
-						allocate (ButterflyVector(level+1)%blocks(int(num_groupm/2),num_groupn))
-						ButterflyVector(level+1)%num_row=int(num_groupm/2)
-						ButterflyVector(level+1)%num_col=num_groupn
+					call assert(num_groupm/=1,'why num_groupm==1?')
+					allocate (ButterflyVector(level+1)%blocks(int(num_groupm/2),num_groupn))
+					ButterflyVector(level+1)%num_row=int(num_groupm/2)
+					ButterflyVector(level+1)%num_col=num_groupn
 
-						flops=0
-						!$omp parallel do default(shared) private(ij,ii,jj,kk,ctemp,i,j,index_i,index_j,mm1,mm2,nn,flop) reduction(+:flops)
-						do ij=1,num_groupn*(num_groupm/2)
-							j = (ij-1)/(num_groupm/2)+1
-							i = (mod(ij-1,(num_groupm/2)) + 1)*2-1
-							index_j=int((j+1)/2)
-							index_i=int((i+1)/2)
+					flops=0
+					!$omp parallel do default(shared) private(ij,ii,jj,kk,ctemp,i,j,index_i,index_j,mm1,mm2,nn,flop) reduction(+:flops)
+					do ij=1,num_groupn*(num_groupm/2)
+						j = (ij-1)/(num_groupm/2)+1
+						i = (mod(ij-1,(num_groupm/2)) + 1)*2-1
+						index_j=int((j+1)/2)
+						index_i=int((i+1)/2)
 
-							mm1=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,1)
-							mm2=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i+1,j)%matrix,1)
-							nn=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,2)
-							allocate (ButterflyVector(level+1)%blocks(index_i,j)%matrix(nn,num_vectors))
-							ButterflyVector(level+1)%blocks(index_i,j)%matrix=0
+						mm1=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,1)
+						mm2=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i+1,j)%matrix,1)
+						nn=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,2)
+						allocate (ButterflyVector(level+1)%blocks(index_i,j)%matrix(nn,num_vectors))
+						ButterflyVector(level+1)%blocks(index_i,j)%matrix=0
 
 
-							call gemmf90(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,mm1,ButterflyVector(level)%blocks(i,index_j)%matrix,mm1,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,mm1,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i,j)%matrix,mm1,ButterflyVector(level)%blocks(i,index_j)%matrix,mm1,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,mm1,cone,cone,flop=flop)
+						flops = flops + flop
+						call gemmf90(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i+1,j)%matrix,mm2,ButterflyVector(level)%blocks(i+1,index_j)%matrix,mm2,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,mm2,cone,cone,flop=flop)
+						flops = flops + flop
+
+						if(level_butterfly-level==levelm .and. middleflag==1 .and. level_butterfly>=2)then
+							call gemmf90(blocks%ButterflyMiddle(index_i,j)%matrix,nn,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,nn,cone,czero,flop=flop)
 							flops = flops + flop
-							call gemmf90(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(i+1,j)%matrix,mm2,ButterflyVector(level)%blocks(i+1,index_j)%matrix,mm2,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,mm2,cone,cone,flop=flop)
-							flops = flops + flop
 
-							if(level_butterfly-level==levelm .and. middleflag==1 .and. level_butterfly>=2)then
-								call gemmf90(blocks%ButterflyMiddle(index_i,j)%matrix,nn,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,ButterflyVector(level+1)%blocks(index_i,j)%matrix,nn,'T','N',nn,num_vectors,nn,cone,czero,flop=flop)
-								flops = flops + flop
+						end if
+					enddo
+					!$omp end parallel do
+					stats%Flop_Tmp = stats%Flop_Tmp + flops
 
-							end if
-						enddo
-						!$omp end parallel do
-						stats%Flop_Tmp = stats%Flop_Tmp + flops
-					else
-						allocate (ButterflyVector(level+1)%blocks(1,num_groupn))
-						ButterflyVector(level+1)%num_row=1
-						ButterflyVector(level+1)%num_col=num_groupn
-						do j=1, num_groupn
-							index_j=int((j+1)/2)
-							nn=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(1,j)%matrix,2)
-							mm=size(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(1,j)%matrix,1)
-							allocate (ButterflyVector(level+1)%blocks(1,j)%matrix(nn,num_vectors))
-							ButterflyVector(level+1)%blocks(1,j)%matrix=0
-
-							call gemmf90(blocks%ButterflyKerl(level_butterfly-level+1)%blocks(1,j)%matrix,mm,ButterflyVector(level)%blocks(1,index_j)%matrix,mm,ButterflyVector(level+1)%blocks(1,j)%matrix,nn,'T','N',nn,num_vectors,mm,cone,czero,flop=flop)
-							stats%Flop_Tmp = stats%Flop_Tmp + flop
-
-						enddo
-					endif
 				endif
 				if (level==level_butterfly) then
 					allocate (ButterflyVector(level+2)%blocks(1,num_blocks))
