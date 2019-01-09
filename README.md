@@ -12,19 +12,21 @@ ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyP
 
 ## Installation
 
-The installation uses CMake build system. You may need "dos2unix" and "bash" for the build process. The software also requires LAPACK and SCALAPACK.
+The installation uses CMake build system. You may need "dos2unix" and "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK.
 
 For an installation with GNU compiliers, do:
 ```
-export LAPACK_LIB=<Lib directory of the LAPACK installation>
-export SCALAPACK_LIB=<Lib directory of the SCALAPACK installation>
+export BLAS_LIB=<Lib of the BLAS installation>
+export LAPACK_LIB=<Lib of the LAPACK installation>
+export SCALAPACK_LIB=<Lib of the SCALAPACK installation>
 sh PrecisionPreprocessing.sh
 mkdir build ; cd build;
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
 	-DCMAKE_CXX_FLAGS="" \
-	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}/libmkl_gf_lp64.so;${LAPACK_LIB}/libmkl_intel_thread.so;${LAPACK_LIB}/libmkl_core.so;${LAPACK_LIB}/libiomp5.so" \
-	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}/libmkl_blacs_intelmpi_lp64.so;/${SCALAPACK_LIB}/libmkl_scalapack_lp64.so" \
+	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
+	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
+	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=mpif90 \
 	-DCMAKE_CXX_COMPILER=mpicxx \
@@ -32,7 +34,7 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release
 make
-( see example cmake script: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
+( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
 ```
 
 ## Current developers

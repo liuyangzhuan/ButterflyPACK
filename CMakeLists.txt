@@ -129,6 +129,27 @@ if(OPENMP_FOUND)
 endif()
 
 
+
+ # #--------------------- BLAS ---------------------
+if(TPL_BLAS_LIBRARIES)
+	set(BLAS_FOUND TRUE)
+else()
+	find_package(BLAS)
+	if(BLAS_FOUND)
+	  set(TPL_BLAS_LIBRARIES "${BLAS_LIBRARIES}" CACHE FILEPATH
+		"Set from FindBLAS.cmake BLAS_LIBRARIES." FORCE)
+	endif()
+endif()
+
+if(BLAS_FOUND)
+    message("-- Using TPL_BLAS_LIBRARIES='${TPL_BLAS_LIBRARIES}'")
+    set(BLAS_LIB ${TPL_BLAS_LIBRARIES})
+    # fix up BLAS library name
+    string (REPLACE ";" " " BLAS_LIB_STR "${BLAS_LIB}")
+    set(BLAS_LIB_EXPORT ${BLAS_LIB_STR})
+ endif()
+
+
  # #--------------------- LAPACK ---------------------
 if(TPL_LAPACK_LIBRARIES)
 	set(LAPACK_FOUND TRUE)

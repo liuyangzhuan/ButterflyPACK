@@ -18,7 +18,7 @@
 ButterflyPACKroot	= /home/administrator/Desktop/research/hod-lr-bf/build
 DButterflyPACKLIB   	= $(ButterflyPACKroot)/SRC_DOUBLE/libdbutterflypack.a $(ButterflyPACKroot)/SRC_DOUBLECOMPLEX/libzbutterflypack.a
 
-LIBS		= $(DButterflyPACKLIB) ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
+LIBS		= $(DButterflyPACKLIB) ${BLAS_LIB_EXPORT} ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
 
 #
 #  The archiver and the flag(s) to use when building archive (library)

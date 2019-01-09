@@ -4,8 +4,8 @@ include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX)
 # Libs linked to all of the examples
-set(all_link_libs_z zbutterflypack ${MPI_Fortran_LIBRARIES} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
-set(all_link_libs_d dbutterflypack ${MPI_Fortran_LIBRARIES} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
+set(all_link_libs_z zbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
+set(all_link_libs_d dbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
 
 # if (enable_complex)
 set(FZEXM1 EMCURV_Driver.f90)

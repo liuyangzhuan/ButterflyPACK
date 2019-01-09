@@ -30,7 +30,7 @@ BPACK_wrapper.f90
 
 add_library(butterflypack ${sources} ${HEADERS})
 target_link_libraries(butterflypack
-                      ${MPI_Fortran_LIBRARIES} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
+                      ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
 set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
