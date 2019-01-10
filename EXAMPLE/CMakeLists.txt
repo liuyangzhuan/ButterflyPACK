@@ -8,11 +8,11 @@ set(all_link_libs_z zbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK
 set(all_link_libs_d dbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} m)
 
 # if (enable_complex)
-set(FZEXM1 EMCURV_Driver.f90)
+set(FZEXM1 EMCURV_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2d ${FZEXM1})
 target_link_libraries(ie2d ${all_link_libs_z})
 
-set(FZEXM2 EMSURF_Driver.f90)
+set(FZEXM2 EMSURF_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3d ${FZEXM2})
 target_link_libraries(ie3d ${all_link_libs_z})
 
@@ -24,6 +24,7 @@ target_link_libraries(smat ${all_link_libs_z})
 set(CDEXM InterfaceTest.cpp)
 add_executable(ctest ${CDEXM})
 target_link_libraries(ctest ${all_link_libs_d})
+
 
 set(FDEXM1 FULLMAT_Driver.f90)
 add_executable(full ${FDEXM1})

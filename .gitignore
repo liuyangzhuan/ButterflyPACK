@@ -1,17 +1,18 @@
 
 make.inc
 ./build
-./SRC_DOUBLE
-./SRC_DOUBLECOMPLEX
-./build/*.cmake
-./build/CMakeFiles
-./build/SRC_DOUBLE
-./build/SRC_DOUBLECOMPLEX
-./build/EXAMPLE
-./build/Testing
 ./SRC/ButterflyPACK_config.fi
 ./SRC_DOUBLE
 ./SRC_DOUBLECOMPLEX
+./EXAMPLE/*.mod
+./EXAMPLE/*.o
+./EXAMPLE/ie2d 
+./EXAMPLE/ie3d 
+./EXAMPLE/smat
+./EXAMPLE/krr
+./EXAMPLE/full
+./EXAMPLE/fullkrr
+./EXAMPLE/ctest
 ./EXAMPLE/FULLMAT_DATA/*.mat
 ./EXAMPLE/FULLMAT_DATA/*.csv
 ./EXAMPLE/ButterflyPACK_config.fi

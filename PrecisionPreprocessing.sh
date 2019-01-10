@@ -90,27 +90,34 @@ sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.f90
 echo "-- copy and modify CMakeLists.txt ..."
 cd $ZSRCDIR
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] ;
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
 		eval sed -i -e 's/$file/z$file/g' $ZSRCDIR/CMakeLists.txt
+		objfile=${file%.*}.o
+		eval sed -i -e 's/$objfile/z$objfile/g' $ZSRCDIR/Makefile
 		mv "$file" "z${file}"
 	fi
 done
 sed -i -e 's/\<butterflypack\>/zbutterflypack/g' $ZSRCDIR/CMakeLists.txt
+sed -i -e 's/\<ButterflyPACKLIB\>/ZButterflyPACKLIB/g' $ZSRCDIR/Makefile
 sed -i -e 's/-DDAT/-DDAT=0/g' $ZSRCDIR/CMakeLists.txt
+sed -i -e 's/-DDAT/-DDAT=0/g' $ZSRCDIR/Makefile
 
-sed -i -e '/set(sources/a\../EXAMPLE/EMCURV_Module.f90\n../EXAMPLE/EMSURF_Module.f90' $ZSRCDIR/CMakeLists.txt
 
 cd $DSRCDIR
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] ;
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
 		mv "$file" "d${file}"
 		eval sed -i -e 's/$file/d$file/g' $DSRCDIR/CMakeLists.txt
+		objfile=${file%.*}.o
+		eval sed -i -e 's/$objfile/d$objfile/g' $DSRCDIR/Makefile
 	fi
 done
 sed -i -e 's/\<butterflypack\>/dbutterflypack/g' $DSRCDIR/CMakeLists.txt
+sed -i -e 's/\<ButterflyPACKLIB\>/DButterflyPACKLIB/g' $DSRCDIR/Makefile
 sed -i -e 's/-DDAT/-DDAT=1/g' $DSRCDIR/CMakeLists.txt
+sed -i -e 's/-DDAT/-DDAT=1/g' $DSRCDIR/Makefile
 cd $ROOTDIR
 rm -rf $TMP_FILE
 rm -rf $MACRO_FILE

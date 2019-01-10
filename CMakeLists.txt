@@ -5,7 +5,7 @@
 ######################################################################
 
 # Required version
-cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 
 # SET(CMAKE_INSTALL_PREFIX < install_path >)
 
@@ -25,7 +25,15 @@ INCLUDE("cmake/XSDKDefaults.cmake")
 INCLUDE(CTest)
 
 ######################################################################
-
+#
+# Load all macros:
+#
+FILE(GLOB _macro_files "cmake/Macros/*.cmake")
+MESSAGE(STATUS "Include ${CMAKE_SOURCE_DIR}/cmake/setup_external_macros.cmake")
+FOREACH(_file ${_macro_files})
+  MESSAGE(STATUS "Include ${_file}")
+  INCLUDE(${_file})
+ENDFOREACH()
 
 ######################################################################
 #
@@ -65,8 +73,8 @@ if (XSDK_ENABLE_Fortran)
   enable_language (Fortran)
   set(NOFORTRAN FALSE)
 endif()
-set(SUPERLU_VERSION "${PROJECT_VERSION}")
-set(SUPERLU_REV "${PROJECT_REV}")
+set(ButterflyPACK_VERSION "${PROJECT_VERSION}")
+set(ButterflyPACK_REV "${PROJECT_REV}")
 
 
 if (NOT CMAKE_INSTALL_PREFIX)
@@ -196,6 +204,15 @@ if(MPI_Fortran_FOUND )
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_C_LINK_FLAGS}" )
 endif()
 
+#---------------------- Additional Fortran linker library ---------
+SET(_fortran_libs ${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES})
+# SET_IF_EMPTY(_fortran_libs gfortran m quadmath c)
+FOREACH(_lib ${_fortran_libs})
+  # FIND_SYSTEM_LIBRARY(${_lib}_LIBRARY NAMES ${_lib})
+  set(EXTRA_LIB "-l${_lib} ${EXTRA_LIB}")
+ENDFOREACH()
+
+
 
 ######################################################################
 #
@@ -222,14 +239,10 @@ if(enable_doc)
   #implement doxygen
 endif()
 
-# file(WRITE "make.defs" "# can be exposed to users" ${CMAKE_C_COMPILER})
-# configure_file(${CMAKE_SOURCE_DIR}/make.inc.in ${CMAKE_BINARY_DIR}/make.inc)
 configure_file(${ButterflyPACK_SOURCE_DIR}/make.inc.in ${ButterflyPACK_SOURCE_DIR}/make.inc)
 
 # Add pkg-config support
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/butterflypack.pc.in ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-
 

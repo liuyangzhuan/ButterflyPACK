@@ -8,33 +8,42 @@
 #
 #  Creation date:   August 19, 2018	version 1.0.0
 #
-#  Modified:
+#  Modified:   January 9, 2019 version 1.0.0
 #
 #
 ############################################################################
 #
 #  The name of the libraries to be created/linked to
 #
-ButterflyPACKroot	= /home/administrator/Desktop/research/hod-lr-bf/build
-DButterflyPACKLIB   	= $(ButterflyPACKroot)/SRC_DOUBLE/libdbutterflypack.a $(ButterflyPACKroot)/SRC_DOUBLECOMPLEX/libzbutterflypack.a
+ButterflyPACKroot	= ${CMAKE_INSTALL_PREFIX}
+DButterflyPACKLIB   	= ${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE/libdbutterflypack.a
+ZButterflyPACKLIB   	= ${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX/libzbutterflypack.a
+INCDEF  = -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX
 
-LIBS		= $(DButterflyPACKLIB) ${BLAS_LIB_EXPORT} ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
+
+LIBS		= $(DButterflyPACKLIB) $(ZButterflyPACKLIB) ${BLAS_LIB_EXPORT} ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}
 
 #
 #  The archiver and the flag(s) to use when building archive (library)
 #  If your system has no ranlib, set RANLIB = echo.
 #
-ARCH         = /usr/bin/ar
+ARCH         = @CMAKE_AR@
 ARCHFLAGS    = cr
-RANLIB       = /usr/bin/ranlib
+RANLIB       = @CMAKE_RANLIB@
 
-CC           = mpicxx ##/opt/cray/pe/craype/2.5.12/bin/cc
-CFLAGS 	     = -O3 -DNDEBUG
-# CFLAGS       += -D_LONGINT   ## 64-bit integer
-# CFLAGS       += -D
-# CFLAGS       +=
+CC           = @CMAKE_C_COMPILER@
+CFLAGS 	     = @CMAKE_C_FLAGS_RELEASE@ @CMAKE_C_FLAGS@
+#CFLAGS      += -D${DirDefs}
+# CFLAGS     += @COMPILE_DEFINITIONS@
+CXX          = @CMAKE_CXX_COMPILER@
+CXXFLAGS     = @CMAKE_CXX_FLAGS_RELEASE@ @CMAKE_CXX_FLAGS@
+#XSDK_INDEX_SIZE=@XSDK_INDEX_SIZE@
 NOOPTS       = -O0
-FORTRAN	     = mpif90 ## /opt/cray/pe/craype/2.5.12/bin/ftn
+FORTRAN	     = @CMAKE_Fortran_COMPILER@
+FFLAGS     = @CMAKE_Fortran_FLAGS_RELEASE@ @CMAKE_Fortran_FLAGS@
 
-LOADER       = $(CC)
-LOADOPTS     = -Wl,-rpath,-qopenmp  -qopenmp
+FLOADER       = @CMAKE_Fortran_COMPILER@
+CXXLOADER       = @CMAKE_CXX_COMPILER@
+CXXLOADOPTS     = @CMAKE_EXE_LINKER_FLAGS@
+FLOADOPTS     = @CMAKE_EXE_LINKER_FLAGS@
+FIMPLICIT_LINKLIB = @EXTRA_LIB@
