@@ -416,7 +416,7 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
     real(kind=8) a,b,c,d
     DT ctemp, ctemp1, ctemp2
 	type(matrixblock),pointer::block_o
-
+	
     ! type(vectorsblock), pointer :: random1, random2
 
     real(kind=8),allocatable :: Singular(:)
@@ -429,6 +429,8 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
     type(proctree)::ptree
 	type(Hstat)::stats
 	type(Hoption)::option
+	integer istart,iend,iinc
+	
 
 	idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
 
@@ -448,7 +450,18 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 	! write(*,*)'ddddd',Ns,num_vectors
 	! write(*,*)'begin'
 
-	do level = ho_bf1%Maxlevel+1,1,-1
+	if(trans=='N')then
+		istart=ho_bf1%Maxlevel+1
+		iend=1
+		iinc=-1
+	else
+		istart=1
+		iend=ho_bf1%Maxlevel+1
+		iinc=1	
+	endif
+	
+	
+	do level = istart,iend,iinc
 		vec_new = 0
 		do ii = ho_bf1%levels(level)%Bidxs,ho_bf1%levels(level)%Bidxe
 			pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level)%BP_inverse(ii)%pgno)%head + 1
