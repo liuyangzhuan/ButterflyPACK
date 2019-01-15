@@ -336,6 +336,7 @@ module BPACK_DEFS
 		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus
 		integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
 		real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator
+		real(kind=8) sample_para   ! parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
 
 		! options for matrix construction
 		integer forwardN15flag ! 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm

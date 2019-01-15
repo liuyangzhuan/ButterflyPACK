@@ -334,6 +334,11 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
     num_blocks=2**level_butterfly
 	dimension_rank= rankmax
 
+	! level_half = level_butterfly+1 ! from right to left
+	! level_half = -1 ! from left to right
+	level_half = floor_safe(dble(level_butterfly)/2d0) ! from outer to inner
+	block_rand%level_half=level_half
+
 	! write(*,*)dimension_rank
 
 
@@ -356,6 +361,9 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	block_rand%N_loc_db = block%N_loc_db
 	block_rand%pgno = block%pgno
 	block_rand%pgno_db = block%pgno_db
+
+
+
 
 	if(associated(block%N_p))then
 		allocate(block_rand%N_p(size(block%N_p,1),2))
@@ -382,11 +390,6 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 		if (level_butterfly/=0) then
 			allocate (block_rand%ButterflyKerl(level_butterfly))
 		endif
-
-
-		! level_half = level_butterfly+1 ! from right to left
-		! level_half = -1 ! from left to right
-		level_half = floor_safe(level_butterfly/2d0)+1 ! from outer to inner
 
 		!****** row-wise ordering from right side
 	    do level=0, level_half
@@ -484,7 +487,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
    implicit none
 
    integer nth_s,nth_e,unique_nth
-   integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,mm,kk,level_left,level_right, rs,re,rank,level_right_start,level_left_start
+   integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,mm,kk,level_left,level_right, rs,re,rank
    integer index_i, index_j, iter, vector1, vector2, direction, round, flag
    real(kind=8) a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
    DT ctemp
@@ -514,14 +517,7 @@ subroutine BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
        mm=num_vect_subsub !rank
 
 
-	   level_right_start = floor_safe(level_butterfly/2d0)	!  check here later
-	   ! ! level_right_start = level_butterfly+1
-
-
-	   do level_right=0,unique_nth !level_right_start
-		   ! kmax = ceiling_safe(rank/dble(2**(level_right_start-level_right)))+1
-		   ! if(level_butterfly==9)write(*,*)level_right,kmax
-			! write(*,*)level_right,'haha'
+	   do level_right=0,unique_nth
 		   if (level_right==0) then
 			   do nth = nth_s,nth_e
 				   !$omp parallel do default(shared) private(j)
@@ -747,7 +743,7 @@ subroutine BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,
    ! if (level_butterfly/=0) then
        mm=num_vect_subsub !rank
 
-	   level_left_start= floor_safe(level_butterfly/2d0)+1    !  check here later
+	   level_left_start= blocks%level_half+1    !  check here later
 	   ! ! level_left_start = 0
 
 	   ! random=>vec_rand
@@ -1369,13 +1365,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     ! random=>vec_rand(1)
 	call BF_Init_RandVect_Empty('T',vec_rand(1),num_vect_sub,block_rand,stats)
 
-	level_right_start = floor_safe(level_butterfly/2d0) !  check here later
-	! ! level_right_start = level_butterfly+1
-
-	! call Zero_Butterfly(0,level_right_start)
-
-    ! allocate(perms(Nsub))
-	! call rperm(Nsub, perms)
+	level_right_start = block_rand%level_half !  check here later
 
 
 	do unique_nth = 0,level_right_start
@@ -1477,7 +1467,7 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     ! random=>Random_Block(1)
 	call BF_Init_RandVect_Empty('N',vec_rand(1),num_vect_sub,block_rand,stats)
 
-    level_left_start= floor_safe(level_butterfly/2d0)+1   !  check here later
+    level_left_start= block_rand%level_half+1   !  check here later
     ! level_left_start = 0
 
 	! call Zero_Butterfly(level_left_start,level_butterfly+1)
@@ -1623,7 +1613,7 @@ subroutine BF_Randomized_Vectors_LL(block_rand,vec_rand,blocks_o,operand,blackbo
 	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
 
     level_butterfly=block_rand%level_butterfly
-	level_right_start = floor_safe(level_butterfly/2d0) !  check here later
+	level_right_start = block_rand%level_half !  check here later
 
     num_blocks=2**level_butterfly
     allocate (RandomVectors_InOutput(3))
@@ -1769,7 +1759,7 @@ subroutine BF_Randomized_Vectors_RR(block_rand,vec_rand,blocks_o,operand,blackbo
 
 
     level_butterfly=block_rand%level_butterfly
-	level_left_start= floor_safe(level_butterfly/2d0)+1   !  check here later
+	level_left_start = block_rand%level_half+1 !  check here later
     num_blocks=2**level_butterfly
     allocate (RandomVectors_InOutput(3))
 

@@ -1115,7 +1115,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
 		blocks_A%rankmax = nn1
 		blocks_A%rankmin = nn1
-
+		blocks_A%ButterflyU%nblk_loc=1
+		blocks_A%ButterflyU%inc=1
+		blocks_A%ButterflyU%idx=1
+		blocks_A%ButterflyV%nblk_loc=1
+		blocks_A%ButterflyV%inc=1
+		blocks_A%ButterflyV%idx=1
 
 		allocate(blocks_B%ButterflyU%blocks(1)%matrix(M1,nn2))
 		allocate(blocks_B%ButterflyV%blocks(1)%matrix(N2,nn2))
@@ -1124,7 +1129,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix
 		blocks_B%rankmax = nn2
 		blocks_B%rankmin = nn2
-
+		blocks_B%ButterflyU%nblk_loc=1
+		blocks_B%ButterflyU%inc=1
+		blocks_B%ButterflyU%idx=1
+		blocks_B%ButterflyV%nblk_loc=1
+		blocks_B%ButterflyV%inc=1
+		blocks_B%ButterflyV%idx=1
 
 		allocate(blocks_C%ButterflyU%blocks(1)%matrix(M2,nn1))
 		allocate(blocks_C%ButterflyV%blocks(1)%matrix(N1,nn1))
@@ -1133,6 +1143,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
 		blocks_C%rankmax = nn1
 		blocks_C%rankmin = nn1
+		blocks_C%ButterflyU%nblk_loc=1
+		blocks_C%ButterflyU%inc=1
+		blocks_C%ButterflyU%idx=1
+		blocks_C%ButterflyV%nblk_loc=1
+		blocks_C%ButterflyV%inc=1
+		blocks_C%ButterflyV%idx=1
 
 		allocate(blocks_D%ButterflyU%blocks(1)%matrix(M2,nn2))
 		allocate(blocks_D%ButterflyV%blocks(1)%matrix(N2,nn2))
@@ -1141,7 +1157,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix
 		blocks_D%rankmax = nn2
 		blocks_D%rankmin = nn2
-
+		blocks_D%ButterflyU%nblk_loc=1
+		blocks_D%ButterflyU%inc=1
+		blocks_D%ButterflyU%idx=1
+		blocks_D%ButterflyV%nblk_loc=1
+		blocks_D%ButterflyV%inc=1
+		blocks_D%ButterflyV%idx=1
 
 		blocks_A%headm=blocks_i%headm
 		blocks_A%M=M1
@@ -1170,6 +1191,12 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		level_butterfly_c = blocks_i%level_butterfly-2
 		num_blocks_c = 2**level_butterfly_c
 
+		blocks_A%ButterflyU%nblk_loc=num_blocks_c
+		blocks_A%ButterflyU%inc=1
+		blocks_A%ButterflyU%idx=1
+		blocks_A%ButterflyV%nblk_loc=num_blocks_c
+		blocks_A%ButterflyV%inc=1
+		blocks_A%ButterflyV%idx=1
 		allocate(blocks_A%ButterflyU%blocks(num_blocks_c))
 		allocate(blocks_A%ButterflyV%blocks(num_blocks_c))
 		M1=0
@@ -1217,6 +1244,13 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 
 		end do
 
+
+		blocks_B%ButterflyU%nblk_loc=num_blocks_c
+		blocks_B%ButterflyU%inc=1
+		blocks_B%ButterflyU%idx=1
+		blocks_B%ButterflyV%nblk_loc=num_blocks_c
+		blocks_B%ButterflyV%inc=1
+		blocks_B%ButterflyV%idx=1
 		allocate(blocks_B%ButterflyU%blocks(num_blocks_c))
 		allocate(blocks_B%ButterflyV%blocks(num_blocks_c))
 		do ii =1,num_blocks_c
@@ -1258,6 +1292,13 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 			deallocate(matrixtemp2)
 		end do
 
+
+		blocks_C%ButterflyU%nblk_loc=num_blocks_c
+		blocks_C%ButterflyU%inc=1
+		blocks_C%ButterflyU%idx=1
+		blocks_C%ButterflyV%nblk_loc=num_blocks_c
+		blocks_C%ButterflyV%inc=1
+		blocks_C%ButterflyV%idx=1
 		allocate(blocks_C%ButterflyU%blocks(num_blocks_c))
 		allocate(blocks_C%ButterflyV%blocks(num_blocks_c))
 		do ii =1,num_blocks_c
@@ -1298,6 +1339,13 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 			deallocate(matrixtemp2)
 		end do
 
+
+		blocks_D%ButterflyU%nblk_loc=num_blocks_c
+		blocks_D%ButterflyU%inc=1
+		blocks_D%ButterflyU%idx=1
+		blocks_D%ButterflyV%nblk_loc=num_blocks_c
+		blocks_D%ButterflyV%inc=1
+		blocks_D%ButterflyV%idx=1
 		allocate(blocks_D%ButterflyU%blocks(num_blocks_c))
 		allocate(blocks_D%ButterflyV%blocks(num_blocks_c))
 		M2=0
@@ -1372,15 +1420,42 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
              num_rowson=num_row/2
 			 blocks_A%ButterflyKerl(level)%num_row=num_rowson
 			 blocks_A%ButterflyKerl(level)%num_col=num_colson
+			 blocks_A%ButterflyKerl(level)%nr=num_rowson
+			 blocks_A%ButterflyKerl(level)%inc_r=1
+			 blocks_A%ButterflyKerl(level)%idx_r=1
+			 blocks_A%ButterflyKerl(level)%nc=num_colson
+			 blocks_A%ButterflyKerl(level)%inc_c=1
+			 blocks_A%ButterflyKerl(level)%idx_c=1
 			 allocate (blocks_A%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+
 			 blocks_B%ButterflyKerl(level)%num_row=num_rowson
 			 blocks_B%ButterflyKerl(level)%num_col=num_colson
+			 blocks_B%ButterflyKerl(level)%nr=num_rowson
+			 blocks_B%ButterflyKerl(level)%inc_r=1
+			 blocks_B%ButterflyKerl(level)%idx_r=1
+			 blocks_B%ButterflyKerl(level)%nc=num_colson
+			 blocks_B%ButterflyKerl(level)%inc_c=1
+			 blocks_B%ButterflyKerl(level)%idx_c=1
 			 allocate (blocks_B%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+
 			 blocks_C%ButterflyKerl(level)%num_row=num_rowson
 			 blocks_C%ButterflyKerl(level)%num_col=num_colson
+			 blocks_C%ButterflyKerl(level)%nr=num_rowson
+			 blocks_C%ButterflyKerl(level)%inc_r=1
+			 blocks_C%ButterflyKerl(level)%idx_r=1
+			 blocks_C%ButterflyKerl(level)%nc=num_colson
+			 blocks_C%ButterflyKerl(level)%inc_c=1
+			 blocks_C%ButterflyKerl(level)%idx_c=1
 			 allocate (blocks_C%ButterflyKerl(level)%blocks(num_rowson,num_colson))
+
 			 blocks_D%ButterflyKerl(level)%num_row=num_rowson
 			 blocks_D%ButterflyKerl(level)%num_col=num_colson
+			 blocks_D%ButterflyKerl(level)%nr=num_rowson
+			 blocks_D%ButterflyKerl(level)%inc_r=1
+			 blocks_D%ButterflyKerl(level)%idx_r=1
+			 blocks_D%ButterflyKerl(level)%nc=num_colson
+			 blocks_D%ButterflyKerl(level)%inc_c=1
+			 blocks_D%ButterflyKerl(level)%idx_c=1
 			 allocate (blocks_D%ButterflyKerl(level)%blocks(num_rowson,num_colson))
 
 			do j=1, num_col

@@ -17,10 +17,10 @@ include make.inc
 all: lib install example 
 
 install:: lib
-	( mkdir -p build; cd build; mkdir -p lib)
 	( cd SRC_DOUBLE; $(MAKE) )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) )	
 	( cp $(DButterflyPACKLIB) build/lib; cp $(ZButterflyPACKLIB) build/lib)
+	( cp SRC_DOUBLE/*.h build/include; cp SRC_DOUBLECOMPLEX/*.h build/include)
 	
 example: lib
 	( cd EXAMPLE; $(MAKE) )
@@ -28,14 +28,15 @@ example: lib
 clean: cleanlib cleanex
 
 lib:
-	( sh PrecisionPreprocessing.sh)
+	( mkdir -p build; cd build; mkdir -p lib; mkdir -p include; mkdir -p SRC_DOUBLE; mkdir -p SRC_DOUBLECOMPLEX)
+	( dos2unix  -q PrecisionPreprocessing.sh; sh PrecisionPreprocessing.sh)
 	( cd SRC_DOUBLE; $(MAKE) )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) )
 	
 cleanlib:
 	( cd SRC_DOUBLE; $(MAKE) clean )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) clean )
-	( rm -rf build/lib; rm -rf build/SRC_DOUBLE; rm -rf build/SRC_DOUBLECOMPLEX)
+	( rm -rf build/lib; rm -rf build/include; rm -rf build/SRC_DOUBLE; rm -rf build/SRC_DOUBLECOMPLEX)
 
 cleanex:
 	( cd EXAMPLE; $(MAKE) clean )

@@ -103,7 +103,9 @@ PROGRAM ButterflyPACK_IE_2D
 	option%verbosity=2
 	option%ILU=0
 	option%forwardN15flag=0
-    ! option%LRlevel=100
+        ! option%schulzlevel=0
+        ! option%LRlevel=100
+        option%level_check=1
     option%tol_itersol=1d-5
 
 	if(iargc()>=1)then

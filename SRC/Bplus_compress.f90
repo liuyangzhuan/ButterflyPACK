@@ -71,7 +71,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 
     num_blocks=2**level_butterfly
 
-	blocks%level_half = ceiling_safe(dble(level_butterfly)/2d0)
+	blocks%level_half = floor_safe(dble(level_butterfly)/2d0)
 	! blocks%level_half = level_butterfly+1 ! from right to left
 	! blocks%level_half = -1 ! from left to right
 
@@ -153,9 +153,9 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 
 			if(level/=level_butterfly+1)then
 			if(level_half==level)then
-				call BF_all2all_skel(blocks,option,stats,msh,ptree,level,'R','C')
+				call BF_all2all_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'R','C')
 			else
-				call BF_exchange_skel(blocks,option,stats,msh,ptree,level,'R')
+				call BF_exchange_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'R','B')
 			endif
 			endif
 
@@ -224,7 +224,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 			!$omp end parallel do
 
 			if(level>level_final)then
-				call BF_exchange_skel(blocks,option,stats,msh,ptree,level,'C')
+				call BF_exchange_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'C','B')
 			endif
 
 			call MPI_ALLREDUCE(MPI_IN_PLACE,rank_new,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(blocks%pgno)%Comm,ierr)
@@ -328,7 +328,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,
 
 
 	! select skeletons here
-	rankmax_r = min(nn,mm)
+	rankmax_r = min(ceiling_safe(option%sample_para*nn),mm)
 	rankmax_c = nn
 	allocate(select_row(rankmax_r),select_column(rankmax_c))
 	do i=1, rankmax_c
@@ -529,13 +529,13 @@ end subroutine BF_compress_NlogN_oneblock_R
 
 
 
-subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
+subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,collect)
 
    use BPACK_DEFS
    implicit none
 	type(mesh)::msh
     integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i,index_i1, index_i_loc_k,index_i_loc_s, index_j, index_j1,index_j_loc_k,index_j_loc_s, ii,ii1, jj,jj1,ij,pp,tt
+    integer group_m, group_n, mm, nn, index_i,index_i0,index_i1, index_i_loc_k,index_i_loc_s, index_j,index_j0, index_j1,index_j_loc_k,index_j_loc_s, ii,ii1, jj,jj1,ij,pp,tt
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -546,25 +546,30 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
+	type(butterfly_skel)::skels
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
+	integer ierr,nsendrecv,pid,pid0,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
 	integer Nsendactive,Nrecvactive
+	logical::sendflag
 	integer,allocatable::S_req(:),R_req(:)
 	integer,allocatable:: statuss(:,:),statusr(:,:)
 
-	character mode
+	character mode,modetrans,collect
 
 	real(kind=8)::n1,n2
 
 	n1 = OMP_get_wtime()
+
+	if(mode=='R')modetrans='C'
+	if(mode=='C')modetrans='R'
 
 	level_butterfly=blocks%level_butterfly
 	nproc = ptree%pgrp(blocks%pgno)%nproc
@@ -591,13 +596,44 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 	Nrecvactive=0
 
 	! calculate send buffer sizes in the first pass
-	do ii=1,blocks%ButterflySkel(level)%nr
-	do jj=1,blocks%ButterflySkel(level)%nc
-		if(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array))then
-			index_i = (ii-1)*blocks%ButterflySkel(level)%inc_r+blocks%ButterflySkel(level)%idx_r
-			index_j = (jj-1)*blocks%ButterflySkel(level)%inc_c+blocks%ButterflySkel(level)%idx_c
+	do ii=1,skels%nr
+	do jj=1,skels%nc
+		index_i = (ii-1)*skels%inc_r+skels%idx_r
+		index_j = (jj-1)*skels%inc_c+skels%idx_c
+
+		if(mode=='R')then
+			jj1 = jj+2*mod(index_j,2)-1
+			index_j1 = index_j+2*mod(index_j,2)-1	! (index_i1,index_j1) and (index_i,index_j) are two row-wise pairs
+			ii1=ii
+			index_i1=index_i
+		elseif(mode=='C')then
+			ii1 = ii+2*mod(index_i,2)-1
+			index_i1 = index_i+2*mod(index_i,2)-1   ! (index_i1,index_j1) and (index_i,index_j) are two column-wise pairs
+			jj1=jj
+			index_j1=index_j
+		endif
+
+
+		sendflag=.false.
+		if(collect=='R')then ! pair-wise reduction
+			if(mode=='R')then
+				index_i0=floor_safe((index_i-1)/2d0)+1
+				index_j0=2*index_j-mod(index_i,2)
+				index_i=index_i0
+				index_j=index_j0+2*mod(index_j0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two column-wise pairs
+			elseif(mode=='C')then
+				index_i0=2*index_i-mod(index_j,2)
+				index_j0=floor_safe((index_j-1)/2d0)+1
+				index_i=index_i0+2*mod(index_i0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two row-wise pairs
+				index_j=index_j0
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,modetrans,pid)
+		elseif(collect=='B')then ! pair-wise broadcast
 			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
-			call assert(pid/=ptree%MyID,'pid should not equal MyID')
+		endif
+		sendflag = pid/=ptree%MyID
+
+		if(sendflag)then
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 			if(recvquant(pp)%active==0)then
 				recvquant(pp)%active=1
@@ -605,27 +641,12 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 				recvIDactive(Nrecvactive)=pp
 			endif
 
-			if(mode=='R')then
-				if(mod(index_j,2)==1)then
-					jj1 = jj+1
-				else
-					jj1 = jj-1
-				endif
-				ii1=ii
-			elseif(mode=='C')then
-				if(mod(index_i,2)==1)then
-					ii1 = ii+1
-				else
-					ii1 = ii-1
-				endif
-				jj1=jj
-			endif
 			if(sendquant(pp)%active==0)then
 				sendquant(pp)%active=1
 				Nsendactive=Nsendactive+1
 				sendIDactive(Nsendactive)=pp
 			endif
-			sendquant(pp)%size=sendquant(pp)%size+3+size(blocks%ButterflySkel(level)%inds(ii1,jj1)%array)
+			sendquant(pp)%size=sendquant(pp)%size+3+size(skels%inds(ii1,jj1)%array)
 		endif
 	enddo
 	enddo
@@ -662,46 +683,53 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 
 
 	! pack the send buffer in the second pass
-	do ii=1,blocks%ButterflySkel(level)%nr
-	do jj=1,blocks%ButterflySkel(level)%nc
-		if(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array))then
-			index_i = (ii-1)*blocks%ButterflySkel(level)%inc_r+blocks%ButterflySkel(level)%idx_r
-			index_j = (jj-1)*blocks%ButterflySkel(level)%inc_c+blocks%ButterflySkel(level)%idx_c
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
-			call assert(pid/=ptree%MyID,'pid should not equal MyID')
+	do ii=1,skels%nr
+	do jj=1,skels%nc
 
+		index_i = (ii-1)*skels%inc_r+skels%idx_r
+		index_j = (jj-1)*skels%inc_c+skels%idx_c
+
+		if(mode=='R')then
+			jj1 = jj+2*mod(index_j,2)-1
+			index_j1 = index_j+2*mod(index_j,2)-1	 ! (index_i1,index_j1) and (index_i,index_j) are two row-wise pairs
+			ii1=ii
+			index_i1=index_i
+		elseif(mode=='C')then
+			ii1 = ii+2*mod(index_i,2)-1
+			index_i1 = index_i+2*mod(index_i,2)-1    ! (index_i1,index_j1) and (index_i,index_j) are two column-wise pairs
+			jj1=jj
+			index_j1=index_j
+		endif
+
+
+		sendflag=.false.
+		if(collect=='R')then ! pair-wise reduction
 			if(mode=='R')then
-				if(mod(index_j,2)==1)then
-					jj1 = jj+1
-					index_j1 = index_j+1
-				else
-					jj1 = jj-1
-					index_j1 = index_j-1
-				endif
-				ii1=ii
-				index_i1=index_i
+				index_i0=floor_safe((index_i-1)/2d0)+1
+				index_j0=2*index_j-mod(index_i,2)
+				index_i=index_i0
+				index_j=index_j0+2*mod(index_j0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two column-wise pairs
 			elseif(mode=='C')then
-				if(mod(index_i,2)==1)then
-					ii1 = ii+1
-					index_i1 = index_i+1
-				else
-					ii1 = ii-1
-					index_i1 = index_i-1
-				endif
-				jj1=jj
-				index_j1=index_j
+				index_i0=2*index_i-mod(index_j,2)
+				index_j0=floor_safe((index_j-1)/2d0)+1
+				index_i=index_i0+2*mod(index_i0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two row-wise pairs
+				index_j=index_j0
 			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,modetrans,pid)
+		elseif(collect=='B')then ! pair-wise broadcast
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		endif
+		sendflag = pid/=ptree%MyID
 
-
+		if(sendflag)then
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-
-			Nskel=size(blocks%ButterflySkel(level)%inds(ii1,jj1)%array)
+			Nskel=size(skels%inds(ii1,jj1)%array)
 			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i1
 			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j1
 			sendquant(pp)%dat_i(sendquant(pp)%size+3,1)=Nskel
 			sendquant(pp)%size=sendquant(pp)%size+3
 			do i=1,Nskel
-				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii1,jj1)%array(i)
+				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = skels%inds(ii1,jj1)%array(i)
 			enddo
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
 		endif
@@ -736,15 +764,17 @@ subroutine BF_exchange_skel(blocks,option,stats,msh,ptree,level,mode)
 		do while(i<recvquant(pp)%size)
 			i=i+1
 			index_i=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
+			ii=(index_i-skels%idx_r)/skels%inc_r+1
 			i=i+1
 			index_j=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
+			jj=(index_j-skels%idx_c)/skels%inc_c+1
 			i=i+1
 			Nskel=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving data alreay exists locally')
-			allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
-			blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
+			if(.not. allocated(skels%inds(ii,jj)%array))then
+				allocate(skels%inds(ii,jj)%array(Nskel))
+				skels%inds(ii,jj)%array=0
+			endif
+			skels%inds(ii,jj)%array = skels%inds(ii,jj)%array + NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
 			i=i+Nskel
 		enddo
 	enddo
@@ -775,7 +805,7 @@ end subroutine BF_exchange_skel
 
 
 !*********** all to all communication of skeletons of one butterfly level from row-wise ordering to column-wise ordering or the reverse
-subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
+subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_new)
 
    use BPACK_DEFS
    implicit none
@@ -808,6 +838,7 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 	real(kind=8)::n1,n2
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
 	integer Nsendactive,Nrecvactive
+	type(butterfly_skel)::skels
 
 	n1 = OMP_get_wtime()
 
@@ -863,10 +894,10 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 	enddo
 
 
-	do ii=1,blocks%ButterflySkel(level)%nr
-	do jj=1,blocks%ButterflySkel(level)%nc
-		index_i = (ii-1)*blocks%ButterflySkel(level)%inc_r+blocks%ButterflySkel(level)%idx_r
-		index_j = (jj-1)*blocks%ButterflySkel(level)%inc_c+blocks%ButterflySkel(level)%idx_c
+	do ii=1,skels%nr
+	do jj=1,skels%nc
+		index_i = (ii-1)*skels%inc_r+skels%idx_r
+		index_j = (jj-1)*skels%inc_c+skels%idx_c
 		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(sendquant(pp)%active==0)then
@@ -874,7 +905,7 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 			Nsendactive=Nsendactive+1
 			sendIDactive(Nsendactive)=pp
 		endif
-		sendquant(pp)%size=sendquant(pp)%size+3+size(blocks%ButterflySkel(level)%inds(ii,jj)%array)
+		sendquant(pp)%size=sendquant(pp)%size+3+size(skels%inds(ii,jj)%array)
 	enddo
 	enddo
 
@@ -909,36 +940,36 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 
 
 	! pack the send buffer in the second pass
-	do ii=1,blocks%ButterflySkel(level)%nr
-	do jj=1,blocks%ButterflySkel(level)%nc
-			index_i = (ii-1)*blocks%ButterflySkel(level)%inc_r+blocks%ButterflySkel(level)%idx_r
-			index_j = (jj-1)*blocks%ButterflySkel(level)%inc_c+blocks%ButterflySkel(level)%idx_c
+	do ii=1,skels%nr
+	do jj=1,skels%nc
+			index_i = (ii-1)*skels%inc_r+skels%idx_r
+			index_j = (jj-1)*skels%inc_c+skels%idx_c
 			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
 
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 
-			Nskel=size(blocks%ButterflySkel(level)%inds(ii,jj)%array)
+			Nskel=size(skels%inds(ii,jj)%array)
 			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i
 			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j
 			sendquant(pp)%dat_i(sendquant(pp)%size+3,1)=Nskel
 			sendquant(pp)%size=sendquant(pp)%size+3
 			do i=1,Nskel
-				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = blocks%ButterflySkel(level)%inds(ii,jj)%array(i)
+				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = skels%inds(ii,jj)%array(i)
 			enddo
-			deallocate(blocks%ButterflySkel(level)%inds(ii,jj)%array)
+			deallocate(skels%inds(ii,jj)%array)
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
 	enddo
 	enddo
-	deallocate(blocks%ButterflySkel(level)%inds)
+	deallocate(skels%inds)
 
-	blocks%ButterflySkel(level)%idx_r=idx_r
-	blocks%ButterflySkel(level)%idx_c=idx_c
-	blocks%ButterflySkel(level)%inc_r=inc_r
-	blocks%ButterflySkel(level)%inc_c=inc_c
-	blocks%ButterflySkel(level)%nr=nr
-	blocks%ButterflySkel(level)%nc=nc
+	skels%idx_r=idx_r
+	skels%idx_c=idx_c
+	skels%inc_r=inc_r
+	skels%inc_c=inc_c
+	skels%nr=nr
+	skels%nc=nc
 
-	allocate(blocks%ButterflySkel(level)%inds(blocks%ButterflySkel(level)%nr,blocks%ButterflySkel(level)%nc))
+	allocate(skels%inds(skels%nr,skels%nc))
 
 	! communicate the data buffer
 	Nreqs=0
@@ -977,15 +1008,15 @@ subroutine BF_all2all_skel(blocks,option,stats,msh,ptree,level,mode,mode_new)
 		do while(i<recvquant(pp)%size)
 			i=i+1
 			index_i=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			ii=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
+			ii=(index_i-skels%idx_r)/skels%inc_r+1
 			i=i+1
 			index_j=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			jj=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
+			jj=(index_j-skels%idx_c)/skels%inc_c+1
 			i=i+1
 			Nskel=NINT(dble(recvquant(pp)%dat_i(i,1)))
-			call assert(.not. allocated(blocks%ButterflySkel(level)%inds(ii,jj)%array),'receiving dat_ia alreay exists locally')
-			allocate(blocks%ButterflySkel(level)%inds(ii,jj)%array(Nskel))
-			blocks%ButterflySkel(level)%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
+			call assert(.not. allocated(skels%inds(ii,jj)%array),'receiving dat_ia alreay exists locally')
+			allocate(skels%inds(ii,jj)%array(Nskel))
+			skels%inds(ii,jj)%array = NINT(dble(recvquant(pp)%dat_i(i+1:i+Nskel,1)))
 			i=i+Nskel
 		enddo
 	enddo
@@ -1076,7 +1107,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,
 
 	! select skeletons here
 	rankmax_r = mm
-	rankmax_c = min(nn,mm)
+	rankmax_c = min(nn,ceiling_safe(option%sample_para*mm))
 	allocate(select_row(rankmax_r),select_column(rankmax_c))
 	do i=1, rankmax_r
 		select_row(i)=i
@@ -1373,7 +1404,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 			else
 				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
 				level_BP = bplus%level
-				bplus%LL(ll)%matrices_block(bb)%level_half = ceiling_safe(dble(bplus%LL(ll)%matrices_block(bb)%level_butterfly)/2d0)
+				bplus%LL(ll)%matrices_block(bb)%level_half = floor_safe(dble(bplus%LL(ll)%matrices_block(bb)%level_butterfly)/2d0)
 				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
 				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
 				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)
@@ -1473,7 +1504,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 		allocate (blocks%ButterflyKerl(level)%blocks(2**level,2**(level_butterfly-level+1)))
 	end do
 
-	blocks%level_half = ceiling_safe(dble(blocks%level_butterfly)/2d0)
+	blocks%level_half = floor_safe(dble(blocks%level_butterfly)/2d0)
 	levelm=blocks%level_half
 	level_butterflyL = level_butterfly-levelm
 	level_butterflyR = level_butterfly-level_butterflyL
@@ -1862,7 +1893,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 !     endif
 	blocks%rankmax = -100000
 	blocks%rankmin = 100000
-	blocks%level_half = ceiling_safe(dble(blocks%level_butterfly)/2d0)
+	blocks%level_half = floor_safe(dble(blocks%level_butterfly)/2d0)
 	levelm=blocks%level_half
 
     ! blocks%level_butterfly=level_butterfly
@@ -2617,7 +2648,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
     implicit none
 
     type(matrixblock) :: blocks
-    real(kind=8) a, b, error,v1,v2
+    real(kind=8) a, b, error,v1,v2,v3
     integer i, j, k, ii, jj, iii,jjj,kk, group_m, group_n, mm, nn, mi, nj,head_m,head_n,Dimn,edge_m,edge_n
     DT value1, value2, ctemp1, ctemp2
 	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:)
@@ -2735,6 +2766,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
 
 	v1=0
 	v2=0
+	v3=0
     ! do i=1,min(mm,nn)
     do i=1,100
 		do j=1,100
@@ -2754,6 +2786,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
         call BF_value(mi,nj,blocks,value2)
         v1 =v1+abs(value1)**2d0
         v2 =v2+abs(value2)**2d0
+        v3 =v3+abs(value2-value1)**2d0
 		! if(abs(value1)>SafeUnderflow)write (*,*) abs(value1), abs(value2) !, abs(value1-value2)/abs(value1)
 		enddo
     enddo
@@ -2761,7 +2794,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
 	deallocate(order_m)
 	deallocate(order_n)
 
-	write(*,*)'partial fnorm:',v1,v2,blocks%rankmax
+    write(*,*)'partial fnorm:',v1,v2,sqrt(v3/v1),' rank: ', blocks%rankmax, ' level: ',blocks%level_butterfly
 
     return
 

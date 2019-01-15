@@ -15,10 +15,9 @@
 #
 #  The name of the libraries to be created/linked to
 #
-ButterflyPACKroot	= ${CMAKE_INSTALL_PREFIX}
-DButterflyPACKLIB   	= ${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE/libdbutterflypack.a
-ZButterflyPACKLIB   	= ${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX/libzbutterflypack.a
-INCDEF  = -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX
+DButterflyPACKLIB   	= ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE/libdbutterflypack.a
+ZButterflyPACKLIB   	= ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX/libzbutterflypack.a
+INCDEF  = -I${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE -I${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE -I${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX
 
 
 LIBS		= $(DButterflyPACKLIB) $(ZButterflyPACKLIB) ${BLAS_LIB_EXPORT} ${LAPACK_LIB_EXPORT} ${SCALAPACK_LIB_EXPORT}

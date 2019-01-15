@@ -512,6 +512,12 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	valid_opt=1
 	endif
 
+	if(trim(str)=='sample_para')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%sample_para=val_d
+	valid_opt=1
+	endif
+
 	if(valid_opt==0)write(*,*)'invalid HODLR option: '//trim(str)
 
 	deallocate(str)
@@ -611,7 +617,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 	! call RANDOM_SEED(PUT=seed_myid)
 	call init_random_seed()
 
-	if(ptree%MyID==Main_ID)then
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
     write(*,*) "HODLR_BUTTERFLY_SOLVER"
     write(*,*) "   "
 	endif
@@ -806,7 +812,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	! call RANDOM_SEED(PUT=seed_myid)
 	call init_random_seed()
 
-	if(ptree%MyID==Main_ID)then
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
     write(*,*) "HODLR_BUTTERFLY_SOLVER"
     write(*,*) "   "
 	endif
