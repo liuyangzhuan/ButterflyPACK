@@ -133,7 +133,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 					! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
 						groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here
 						groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here
-						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,ptree,1)
+						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,ptree,option,1)
 					! endif
 					enddo
 					n2 = OMP_get_wtime()
@@ -148,7 +148,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 					! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
 						groupm=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%row_group         ! Note: row_group and col_group interchanged here
 						groupn=ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)%col_group         ! Note: row_group and col_group interchanged here
-						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,ptree,0)
+						call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1),block_rand(bb-Bidxs+1),msh,ptree,option,0)
 					! endif
 					enddo
 					n2 = OMP_get_wtime()

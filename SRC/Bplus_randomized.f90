@@ -308,7 +308,7 @@ end subroutine BF_Init_RandVect_Empty
 
 
 
-subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand,msh,ptree,nodataflag)
+subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_rand,msh,ptree,option,nodataflag)
 
     use BPACK_DEFS
     implicit none
@@ -324,6 +324,7 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	integer rankmax
     type(partitionedblocks)::partitioned_block
 	type(mesh)::msh
+	type(Hoption)::option
 	type(proctree)::ptree
 	integer nodataflag,level_final,level_half
 	integer idx_r,inc_r,nr,idx_c,inc_c,nc
@@ -334,10 +335,12 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
     num_blocks=2**level_butterfly
 	dimension_rank= rankmax
 
-	! level_half = level_butterfly+1 ! from right to left
-	! level_half = -1 ! from left to right
+	! level_half = BF_Switchlevel(level_butterfly,option)
 	level_half = floor_safe(dble(level_butterfly)/2d0) ! from outer to inner
+
+
 	block_rand%level_half=level_half
+
 
 	! write(*,*)dimension_rank
 
@@ -1031,11 +1034,11 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 
 		if(level_butterfly==0)then
 			allocate (block_rand(1))
-			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,ptree,1)
+			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,ptree,option,1)
 			call BF_Reconstruction_Lowrank(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
 		else
 			allocate (block_rand(1))
-			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,ptree,0)
+			call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,ptree,option,0)
 			n2 = OMP_get_wtime()
 			stats%Time_random(1) = stats%Time_random(1) + n2-n1
 			n1 = OMP_get_wtime()

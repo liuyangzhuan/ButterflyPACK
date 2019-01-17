@@ -376,6 +376,34 @@ subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 end subroutine BPACK_Inv_Mult
 
 
+
+subroutine Test_BPACK_Mult(Ns,bmat,ptree,option,stats)
+    use BPACK_DEFS
+    implicit none
+	integer Ns
+	DT::Vin(Ns,1),Vout(Ns,1)
+	type(Bmatrix)::bmat
+	type(proctree)::ptree
+    type(Hstat)::stats
+    type(Hoption)::option
+	real(kind=8)::rtemp0,fnorm0
+	integer ierr
+
+	Vin=1d0
+	call BPACK_Mult('N',Ns,1,Vin,Vout,bmat,ptree,option,stats)
+	rtemp0 = fnorm(Vout,Ns,1)**2d0
+	call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write(*,*)'Test_BPACK_Mult: |Ax|_F: ', fnorm0
+
+	Vin=1d0
+	call BPACK_Mult('T',Ns,1,Vin,Vout,bmat,ptree,option,stats)
+	rtemp0 = fnorm(Vout,Ns,1)**2d0
+	call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write(*,*)'Test_BPACK_Mult: |A^Tx|_F: ', fnorm0
+
+end subroutine Test_BPACK_Mult
+
+
 subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
     use BPACK_DEFS
     implicit none
