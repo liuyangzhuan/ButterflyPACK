@@ -438,6 +438,7 @@ subroutine SetDefaultOptions(option)
 	option%rmax=3000
 	option%forwardN15flag=1
 	option%sample_para=2.0d0
+	option%pat_comp=3
 
 end subroutine SetDefaultOptions
 
@@ -481,6 +482,7 @@ subroutine CopyOptions(option,option1)
 	option1%rmax = option%rmax
 	option1%forwardN15flag = option%forwardN15flag
 	option1%sample_para = option%sample_para
+	option1%pat_comp = option%pat_comp
 
 end subroutine CopyOptions
 

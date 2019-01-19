@@ -518,6 +518,12 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	valid_opt=1
 	endif
 
+	if(trim(str)=='pat_comp')then
+	call c_f_pointer(val_Cptr, val_d)
+	option%pat_comp=val_d
+	valid_opt=1
+	endif
+
 	if(valid_opt==0)write(*,*)'invalid HODLR option: '//trim(str)
 
 	deallocate(str)

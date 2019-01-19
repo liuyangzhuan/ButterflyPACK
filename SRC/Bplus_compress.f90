@@ -533,7 +533,7 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
    implicit none
 	type(mesh)::msh
     integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i,index_i0,index_i1, index_i_loc_k,index_i_loc_s, index_j,index_j0, index_j1,index_j_loc_k,index_j_loc_s, ii,ii1, jj,jj1,ij,pp,tt
+    integer group_m, group_n, mm, nn, index_i,index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -599,35 +599,25 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 		index_i = (ii-1)*skels%inc_r+skels%idx_r
 		index_j = (jj-1)*skels%inc_c+skels%idx_c
 
-		if(mode=='R')then
-			jj1 = jj+2*mod(index_j,2)-1
-			index_j1 = index_j+2*mod(index_j,2)-1	! (index_i1,index_j1) and (index_i,index_j) are two row-wise pairs
-			ii1=ii
-			index_i1=index_i
-		elseif(mode=='C')then
-			ii1 = ii+2*mod(index_i,2)-1
-			index_i1 = index_i+2*mod(index_i,2)-1   ! (index_i1,index_j1) and (index_i,index_j) are two column-wise pairs
-			jj1=jj
-			index_j1=index_j
-		endif
-
-
 		sendflag=.false.
 		if(collect=='R')then ! pair-wise reduction
 			if(mode=='R')then
 				index_i0=floor_safe((index_i-1)/2d0)+1
 				index_j0=2*index_j-mod(index_i,2)
-				index_i=index_i0
-				index_j=index_j0+2*mod(index_j0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two column-wise pairs
 			elseif(mode=='C')then
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
-				index_i=index_i0+2*mod(index_i0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two row-wise pairs
-				index_j=index_j0
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
 		elseif(collect=='B')then ! pair-wise broadcast
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+			if(mode=='R')then
+				index_j0 = index_j+2*mod(index_j,2)-1
+				index_i0=index_i
+			elseif(mode=='C')then
+				index_i0 = index_i+2*mod(index_i,2)-1
+				index_j0=index_j
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -644,7 +634,7 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 				Nsendactive=Nsendactive+1
 				sendIDactive(Nsendactive)=pp
 			endif
-			sendquant(pp)%size=sendquant(pp)%size+3+size(skels%inds(ii1,jj1)%array)
+			sendquant(pp)%size=sendquant(pp)%size+3+size(skels%inds(ii,jj)%array)
 		endif
 	enddo
 	enddo
@@ -687,47 +677,37 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 		index_i = (ii-1)*skels%inc_r+skels%idx_r
 		index_j = (jj-1)*skels%inc_c+skels%idx_c
 
-		if(mode=='R')then
-			jj1 = jj+2*mod(index_j,2)-1
-			index_j1 = index_j+2*mod(index_j,2)-1	 ! (index_i1,index_j1) and (index_i,index_j) are two row-wise pairs
-			ii1=ii
-			index_i1=index_i
-		elseif(mode=='C')then
-			ii1 = ii+2*mod(index_i,2)-1
-			index_i1 = index_i+2*mod(index_i,2)-1    ! (index_i1,index_j1) and (index_i,index_j) are two column-wise pairs
-			jj1=jj
-			index_j1=index_j
-		endif
-
-
 		sendflag=.false.
 		if(collect=='R')then ! pair-wise reduction
 			if(mode=='R')then
 				index_i0=floor_safe((index_i-1)/2d0)+1
 				index_j0=2*index_j-mod(index_i,2)
-				index_i=index_i0
-				index_j=index_j0+2*mod(index_j0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two column-wise pairs
 			elseif(mode=='C')then
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
-				index_i=index_i0+2*mod(index_i0,2)-1   ! (index_i0,index_j0) and (index_i,index_j) are two row-wise pairs
-				index_j=index_j0
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
 		elseif(collect=='B')then ! pair-wise broadcast
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+			if(mode=='R')then
+				index_j0 = index_j+2*mod(index_j,2)-1
+				index_i0=index_i
+			elseif(mode=='C')then
+				index_i0 = index_i+2*mod(index_i,2)-1
+				index_j0=index_j
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
 		endif
 		sendflag = pid/=ptree%MyID
 
 		if(sendflag)then
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-			Nskel=size(skels%inds(ii1,jj1)%array)
-			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i1
-			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j1
+			Nskel=size(skels%inds(ii,jj)%array)
+			sendquant(pp)%dat_i(sendquant(pp)%size+1,1)=index_i
+			sendquant(pp)%dat_i(sendquant(pp)%size+2,1)=index_j
 			sendquant(pp)%dat_i(sendquant(pp)%size+3,1)=Nskel
 			sendquant(pp)%size=sendquant(pp)%size+3
 			do i=1,Nskel
-				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = skels%inds(ii1,jj1)%array(i)
+				sendquant(pp)%dat_i(sendquant(pp)%size+i,1) = skels%inds(ii,jj)%array(i)
 			enddo
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
 		endif
@@ -835,8 +815,12 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 	character::mode,mode_new
 	real(kind=8)::n1,n2
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
-	integer Nsendactive,Nrecvactive
+	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
+	logical all2all
 	type(butterfly_skel)::skels
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	integer,allocatable::sendbufall2all(:),recvbufall2all(:)
+	integer::dist
 
 	n1 = OMP_get_wtime()
 
@@ -958,8 +942,8 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 			sendquant(pp)%size=sendquant(pp)%size+Nskel
 	enddo
 	enddo
-	deallocate(skels%inds)
 
+	deallocate(skels%inds)
 	skels%idx_r=idx_r
 	skels%idx_c=idx_c
 	skels%inc_r=inc_r
@@ -969,35 +953,87 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 
 	allocate(skels%inds(skels%nr,skels%nc))
 
+
 	! communicate the data buffer
-	Nreqs=0
-	do tt=1,Nsendactive
-		pp=sendIDactive(tt)
-		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
-		if(recvid/=ptree%MyID)then
-			Nreqs=Nreqs+1
-			call MPI_Isend(sendquant(pp)%dat_i,sendquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(Nreqs),ierr)
-		else
-			if(sendquant(pp)%size>0)recvquant(pp)%dat_i=sendquant(pp)%dat_i
-		endif
-	enddo
 
-	Nreqr=0
-	do tt=1,Nrecvactive
-		pp=recvIDactive(tt)
-		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
-		if(sendid/=ptree%MyID)then
-			Nreqr=Nreqr+1
-			call MPI_Irecv(recvquant(pp)%dat_i,recvquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(Nreqr),ierr)
-		endif
-	enddo
+	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+#if 0
+	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
+#else
+	all2all=.false.
+#endif
 
-	if(Nreqs>0)then
-		call MPI_waitall(Nreqs,S_req,statuss,ierr)
+	! if(ptree%MyID==Main_ID)write(*,*)'Nactive: ',Nsendactive_min,' Nproc:', nproc
+
+	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
+		allocate(sdispls(nproc))
+		allocate(sendcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			sendcounts(pp)=sendquant(pp)%size
+			sdispls(pp)=dist
+			dist = dist + sendquant(pp)%size
+		enddo
+		allocate(sendbufall2all(dist))
+		do pp=1,nproc
+			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat_i(:,1)
+		enddo
+
+		allocate(rdispls(nproc))
+		allocate(recvcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			recvcounts(pp)=recvquant(pp)%size
+			rdispls(pp)=dist
+			dist = dist + recvquant(pp)%size
+		enddo
+		allocate(recvbufall2all(dist))
+
+		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_INTEGER, recvbufall2all, recvcounts,rdispls, MPI_INTEGER, ptree%pgrp(blocks%pgno)%Comm, ierr)
+
+		do pp=1,nproc
+			recvquant(pp)%dat_i(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+		enddo
+
+		deallocate(sdispls)
+		deallocate(sendcounts)
+		deallocate(sendbufall2all)
+		deallocate(rdispls)
+		deallocate(recvcounts)
+		deallocate(recvbufall2all)
+
+	else
+		Nreqs=0
+		do tt=1,Nsendactive
+			pp=sendIDactive(tt)
+			recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(recvid/=ptree%MyID)then
+				Nreqs=Nreqs+1
+				call MPI_Isend(sendquant(pp)%dat_i,sendquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(Nreqs),ierr)
+			else
+				if(sendquant(pp)%size>0)recvquant(pp)%dat_i=sendquant(pp)%dat_i
+			endif
+		enddo
+
+		Nreqr=0
+		do tt=1,Nrecvactive
+			pp=recvIDactive(tt)
+			sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(sendid/=ptree%MyID)then
+				Nreqr=Nreqr+1
+				call MPI_Irecv(recvquant(pp)%dat_i,recvquant(pp)%size,MPI_INTEGER,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(Nreqr),ierr)
+			endif
+		enddo
+
+		if(Nreqs>0)then
+			call MPI_waitall(Nreqs,S_req,statuss,ierr)
+		endif
+		if(Nreqr>0)then
+			call MPI_waitall(Nreqr,R_req,statusr,ierr)
+		endif
 	endif
-	if(Nreqr>0)then
-		call MPI_waitall(Nreqr,R_req,statusr,ierr)
-	endif
+
 
 	! copy data from buffer to target
 	do tt=1,Nrecvactive
@@ -1038,7 +1074,7 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 	deallocate(recvIDactive)
 
 	n2 = OMP_get_wtime()
-	time_tmp = time_tmp + n2 - n1
+	! time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_all2all_skel
 
