@@ -62,6 +62,34 @@ enddo
 end subroutine linspaceI
 
 
+  subroutine copysubmat(A,ais,ajs,B,bis,bjs,m,n,trans)
+	implicit none
+	integer ais,ajs,bis,bjs,m,n
+	DT::A(:,:),B(:,:)
+	real(kind=8)::n1,n2
+	integer ii,jj,ijind
+	character trans
+
+	! n1 = OMP_get_wtime()
+	if(trans=='N')then
+		do ii =1,m
+		do jj =1,n
+			B(ii+bis-1,jj+bjs-1) = A(ii+ais-1,jj+ajs-1)
+		end do
+		end do
+	elseif(trans=='T')then
+		do ii =1,m
+		do jj =1,n
+			B(jj+bis-1,ii+bjs-1) = A(ii+ais-1,jj+ajs-1)
+		end do
+		end do
+	endif
+	! n2 = OMP_get_wtime()
+	! time_memcopy = time_memcopy + n2-n1
+
+ end subroutine copysubmat
+
+
 
 
   subroutine copymatT(A,B,m,n)

@@ -2007,7 +2007,7 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 	deallocate(sendIDactive)
 	deallocate(recvIDactive)
 	n2 = OMP_get_wtime()
-	time_tmp = time_tmp + n2 - n1
+	! time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_exchange_matvec
 

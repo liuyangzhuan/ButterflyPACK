@@ -374,7 +374,9 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
 						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'constructing level',level
 					endif
-					if(level_c>=ho_bf1%Maxlevel)t1=OMP_GET_WTIME()
+
+
+
 
 					! if(mod(ii,2)==1)then
 						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn,ptree)
@@ -385,24 +387,35 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 
 
 
-					if(level_c>=ho_bf1%Maxlevel)then
+
+
+
+
+					if(level==option%level_check)then
+						! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
+
+						rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
+						rankrate_inner=1.2d0
+						rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
+						rankrate_outter=1.2d0
+						level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
+
+						t1=OMP_GET_WTIME()
+						call BF_randomized(level_butterfly,rank0_outter,rankrate_outter,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii),Bplus_block_MVP_Exact_dat,error,'Exact',option,stats,ptree,msh)
+
 						t2=OMP_GET_WTIME()
 						tim_tmp = tim_tmp + t2 - t1
-					end if
 
-					! if(level==option%level_check)then
-						! ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 
-						! rank0_inner=ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
-						! rankrate_inner=1.2d0
-						! rank0_outter=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
-						! rankrate_outter=1.2d0
-						! level_butterfly=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
 						! call Bplus_randomized_constr(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree,msh)
 
 
-						! stop
-					! end if
+						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp,tim_tmp,stats%Time_random
+
+
+
+						stop
+					end if
 
 
 					stats%Mem_Comp_for=stats%Mem_Comp_for+rtemp

@@ -209,7 +209,6 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
     integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 
-	type(RandomBlock), pointer :: random
 	real(kind=8)::n2,n1
 	type(hobf)::ho_bf1
 	type(matrixblock),pointer::block_off1,block_off2
@@ -447,7 +446,6 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 	integer header_m, header_n, tailer_m, tailer_n
 
 	integer nth_s,nth_e,num_vect_sub,nth
-	type(RandomBlock), pointer :: random
 	real(kind=8)::n2,n1
 	type(hobf)::ho_bf1
 	type(proctree)::ptree

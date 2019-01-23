@@ -712,8 +712,6 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_
     character chara
 	integer level_right_start
 
-    ! type(matricesblock), pointer :: blocks
-    ! type(RandomBlock), pointer :: random
     type(RandomBlock),allocatable :: vec_rand(:)
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
@@ -816,8 +814,6 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_
     character chara
 	integer level_right_start
 
-    ! type(matricesblock), pointer :: blocks
-    ! type(RandomBlock), pointer :: random
     integer Nsub,Ng,nth,nth_s,nth_e
 	integer Nbind
     real(kind=8)::n1,n2
@@ -863,11 +859,7 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_
 	end do
 
 	do unique_nth=level_butterfly+1,level_left_start,-1
-		if(mod(level_butterfly,2)==0)then
-			Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
-		else
-			Nsub = NINT(2*2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(unique_nth-level_left_start)))
-		end if
+		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
 		Ng = 2**level_butterfly/Nsub
 
 		do ii = 1,Nsub/Nbind
@@ -1058,7 +1050,6 @@ subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 	integer header_m, header_n, tailer_m, tailer_n
 
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_right_start
-	! type(RandomBlock), pointer :: random
 	real(kind=8)::n1,n2
 
 	type(hobf)::ho_bf1
@@ -1220,7 +1211,6 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
 	integer header_m, header_n, tailer_m, tailer_n
 
 	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_left_start
-	! type(RandomBlock), pointer :: random
 	real(kind=8)::n1,n2
 
 	type(hobf)::ho_bf1
@@ -1241,11 +1231,8 @@ subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR
     num_blocks=2**level_butterfly
 	level_left_start= floor_safe(level_butterfly/2d0)+1
 
-	if(mod(level_butterfly,2)==0)then
-		Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
-	else
-		Nsub = NINT(2*2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(unique_nth-level_left_start)))
-	end if
+
+	Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
 	Ng = 2**level_butterfly/Nsub
 
 	allocate (RandomVectors_InOutput(3))
