@@ -1087,8 +1087,6 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			rank_new_max = block_rand(1)%rankmax
 			call BF_copy_delete(block_rand(1),blocks_o,Memory)
 			deallocate(block_rand)
-			stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
-			stats%Flop_Tmp=0
 			converged=1
 			exit
 		end if
@@ -1138,6 +1136,8 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 	integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
 	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
 
+	stats%Flop_Tmp=0
+
 	level_butterfly=0
 	num_vect = block_rand%dimension_rank
 	rmax = num_vect
@@ -1163,6 +1163,7 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 
 	! computation of range Q
 	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_comp*1D-1,ptree,block_rand%pgno,flop)
+	stats%Flop_Tmp = stats%Flop_Tmp + flop
 
 	! computation of B^T = (Q^c*A)^T
 	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
@@ -1170,7 +1171,8 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 	RandVectOutR=conjg(cmplx(RandVectOutR,kind=8))
 
 	! computation of SVD B=USV and output A = (QU)*(SV)
-	call PQxSVDTruncate(block_rand,RandVectOutR,RandVectInR,ranks,rank,option,stats,ptree)
+	call PQxSVDTruncate(block_rand,RandVectOutR,RandVectInR,ranks,rank,option,stats,ptree,flop)
+	stats%Flop_Tmp = stats%Flop_Tmp + flop
 
 	deallocate(RandVectOutR,RandVectInR)
 
@@ -1181,7 +1183,7 @@ end subroutine BF_Reconstruction_Lowrank
 
 
 
-subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,ptree)
+subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,ptree,flops)
 
     use BPACK_DEFS
     implicit none
@@ -1191,6 +1193,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
     integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
 
     real(kind=8)::n1,n2,flop
+    real(kind=8),optional::flops
 	type(proctree)::ptree
 	type(matrixblock)::block_rand
 	type(Hoption)::option
@@ -1204,6 +1207,8 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
 	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
 	integer ierr
+
+	if(present(flops))flops = 0
 
 	!!!!**** generate 2D grid blacs quantities
 	ctxt = ptree%pgrp(block_rand%pgno)%ctxt
@@ -1271,7 +1276,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
 		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 		do ii=1,rank
 			call g2l(ii,rank,npcol,nbslpk,jproc,myj)
 			if(jproc==mycol)then
@@ -1289,7 +1294,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 		matQUt2D=0
 
 		call pgemmf90('N','T',block_rand%M,rank,rmax,cone, matQ2D,1,1,descQ2D,VV,1,1,descVV,czero,matQUt2D,1,1,descQUt2D,flop=flop)
-		stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 	else
 		allocate(matQUt2D(1,1)) ! required for Redistribute2Dto1D
 	endif
@@ -4356,7 +4361,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 	! rate_outter=1.2d0
 	call BF_randomized(level_butterfly,rank0_outter,rankrate_outter,Bplus_randomized%LL(1)%matrices_block(1),operand,blackbox_MVP_dat_outter,error,'Outter',option,stats,ptree,msh,Bplus_randomized)
 	error_inout = max(error_inout, error)
-
+	stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 
 	call Bplus_delete(bplus_o)
 	call Bplus_copy_delete(Bplus_randomized,bplus_o,Memory)

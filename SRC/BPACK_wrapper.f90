@@ -168,96 +168,125 @@ subroutine C_BPACK_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_bpack_getstats
 
 	if(trim(str)=='Time_Fill')then
 		val_d = stats%Time_Fill
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Factor')then
 		val_d = stats%Time_Factor
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Solve')then
 		val_d = stats%Time_Sol
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Sblock')then
 		val_d = stats%Time_Sblock
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Inv')then
 		val_d = stats%Time_Inv
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_SMW')then
 		val_d = stats%Time_SMW
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_RedistB')then
 		val_d = stats%Time_RedistB
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_RedistV')then
 		val_d = stats%Time_RedistV
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_C_Mult')then
 		val_d = stats%Time_C_Mult
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Direct_LU')then
 		val_d = stats%Time_Direct_LU
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Add_Multiply')then
 		val_d = stats%Time_Add_Multiply
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Multiply')then
 		val_d = stats%Time_Multiply
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_XLUM')then
 		val_d = stats%Time_XLUM
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Split')then
 		val_d = stats%Time_Split
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Comm')then
 		val_d = stats%Time_Comm
+		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Idle')then
 		val_d = stats%Time_Idle
+		valid_opt = 1
 	endif
 
 
 	if(trim(str)=='Flop_Fill')then
 		val_d = stats%Flop_Fill
+		valid_opt = 1
 	endif
 	if(trim(str)=='Flop_Factor')then
 		val_d = stats%Flop_Factor
+		valid_opt = 1
 	endif
 	if(trim(str)=='Flop_Solve')then
 		val_d = stats%Flop_Sol
+		valid_opt = 1
 	endif
 	if(trim(str)=='Flop_C_Mult')then
 		val_d = stats%Flop_C_Mult
+		valid_opt = 1
 	endif
 
 
 	if(trim(str)=='Mem_Factor')then
 		val_d = stats%Mem_Factor
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_Fill')then
 		val_d = stats%Mem_Fill
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_Sblock')then
 		val_d = stats%Mem_Sblock
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_SMW')then
 		val_d = stats%Mem_SMW
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_Direct_inv')then
 		val_d = stats%Mem_Direct_inv
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_Direct_for')then
 		val_d = stats%Mem_Direct_for
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_int_vec')then
 		val_d = stats%Mem_int_vec
+		valid_opt = 1
 	endif
 	if(trim(str)=='Mem_Comp_for')then
 		val_d = stats%Mem_Comp_for
+		valid_opt = 1
 	endif
 
 
 	if(trim(str)=='Rank_max')then
 		val_d = maxval(stats%rankmax_of_level_global)
+		valid_opt = 1
 	endif
 
 
@@ -1142,9 +1171,9 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 	integer seed_myid(50)
 	integer times(8)
 	real(kind=8) t1,t2,error
+	integer ierr
 
 	!**** allocate HODLR solver structures
-
 
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
@@ -1152,6 +1181,12 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 	call c_f_pointer(msh_Cptr, msh)
 	call c_f_pointer(bf_Cptr, blocks)
 	call c_f_pointer(ker_Cptr, ker)
+
+	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(0:0))
+	stats%rankmax_of_level(0) = 0
+	if(.not. allocated(stats%rankmax_of_level_global))allocate (stats%rankmax_of_level_global(0:0))
+	stats%rankmax_of_level_global(0) = 0
+
 
 
 	! !**** register the user-defined function and type in ker
@@ -1165,6 +1200,16 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based BF construction finished"
 
+	call BF_ComputeMemory(blocks,stats%Mem_Comp_for)
+
+	t2 = OMP_get_wtime()
+
+	stats%rankmax_of_level(0) = blocks%rankmax
+	stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+	stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+	stats%Time_Fill =stats%Time_Fill+t2-t1
+	stats%Flop_Fill=stats%Flop_Fill+stats%Flop_Tmp
 	!**** return the C address of hodlr structures to C caller
 	bf_Cptr=c_loc(blocks)
 	option_Cptr=c_loc(option)

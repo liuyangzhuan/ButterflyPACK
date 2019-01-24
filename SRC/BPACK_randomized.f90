@@ -95,6 +95,8 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 
 	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(0:ho_bf1%Maxlevel))
 	stats%rankmax_of_level = 0
+	if(.not. allocated(stats%rankmax_of_level_global))allocate (stats%rankmax_of_level_global(0:ho_bf1%Maxlevel))
+	stats%rankmax_of_level_global = 0
 
 	rank_max_lastlevel = option%rank0
 	Nloc = msh%idxe-msh%idxs+1
@@ -104,6 +106,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 	do level_c = 1,ho_bf1%Maxlevel+1
 		if(level_c==ho_bf1%Maxlevel+1)then
 			call HODLR_randomized_OneL_Fullmat(ho_bf1,blackbox_HODLR_MVP,Nloc,level_c,Memtmp,ker,ptree,option,stats,msh)
+			stats%Mem_Direct_for=stats%Mem_Direct_for+Memtmp
 		else
 			if(level_c>option%LRlevel)then
 				level_butterfly = 0
@@ -221,9 +224,14 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 		end if
 	end do
 
-	stats%Mem_Comp_for=stats%Mem_Comp_for+Memory
 	n4 = OMP_get_wtime()
 	stats%Time_Fill = stats%Time_Fill + n4-n3
+
+	stats%Mem_Comp_for=stats%Mem_Comp_for+Memory
+	call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel),stats%rankmax_of_level_global(0:ho_bf1%Maxlevel),ho_bf1%Maxlevel+1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
+	stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level
 
 	allocate(Vin(Nloc,1))
@@ -1509,7 +1517,8 @@ subroutine PQxSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans
 		if(bb==1)matQ=>matQ1
 		if(bb==2)matQ=>matQ2
 		if(mm(bb)>0)then
-			call PQxSVDTruncate(block_rand(bb_inv*2-1+bb-1-Bidxs+1),matQ,matQcA_trans,ranks(bb_inv*2-1+bb-1-Bidxs+1),rank,option,stats,ptree)
+			call PQxSVDTruncate(block_rand(bb_inv*2-1+bb-1-Bidxs+1),matQ,matQcA_trans,ranks(bb_inv*2-1+bb-1-Bidxs+1),rank,option,stats,ptree,flop)
+			stats%Flop_Fill = stats%Flop_Fill+flop
 			deallocate(matQcA_trans)
 			deallocate(matQ)
 		endif

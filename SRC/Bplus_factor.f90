@@ -578,6 +578,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 		rank0 = max(block_off1%rankmax,block_off2%rankmax)
 		rate=1.2d0
 		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree,msh)
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 	endif
 
@@ -666,6 +667,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 
 		rate=1.2d0
 		call BF_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,msh,ii)
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
 		if(schulz_op%order==3)schulz_op%scale=schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
@@ -924,6 +926,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		call BF_get_rank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
 		call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 
 		! write(*,*)'ddd1'
@@ -942,6 +945,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		call BF_get_rank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
 		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree,msh)
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 
 
@@ -1630,6 +1634,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			rank0 = block_o%rankmax
 			rate = 1.2d0
 			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh,msh)
+			stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		end if
 
 		if(ptree%MyID==Main_ID .and. option%verbosity>=1)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'OneL No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout
@@ -1787,6 +1792,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 								rate=1.2d0
 								level_butterfly = agent_block%level_butterfly
 								call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,msh,agent_block)
+								stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 								! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade'
 								call BF_copy_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)
 
@@ -1860,6 +1866,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 								rate=1.2d0
 								level_butterfly = agent_block%level_butterfly
 								call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,msh,agent_block)
+								stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 								call BF_copy_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)
 
 								err_max = max(err_max, error)

@@ -105,7 +105,7 @@ PROGRAM ButterflyPACK_IE_2D
 	option%forwardN15flag=0
         ! option%schulzlevel=0
         ! option%LRlevel=100
-        option%level_check=1
+        ! option%level_check=1
     option%tol_itersol=1d-5
 
 	if(iargc()>=1)then
@@ -195,6 +195,7 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
+	! call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
 
 	!**** factorization phase
     call BPACK_Factorization(bmat,option,stats,ptree,msh)

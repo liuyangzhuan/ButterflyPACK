@@ -188,6 +188,7 @@ subroutine HODLR_factorization(ho_bf1,option,stats,ptree,msh)
 
 
 	stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
 	call MPI_ALLREDUCE(stats%Mem_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
@@ -294,6 +295,8 @@ subroutine Hmat_Factorization(h_mat,option,stats,ptree,msh)
 			call Hmat_block_ComputeMemory(block,stats%Mem_Factor)
         enddo
     enddo
+
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
 
     call MPI_verbose_barrier('after printing',ptree)
     if (ptree%MyID==Main_ID .and. option%verbosity>=0) then
@@ -1544,6 +1547,7 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
 		rank0 = block3%rankmax
 		call BF_randomized(block3%level_butterfly,rank0,option%rankrate,block3,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add_Multiply',option,stats,ptree,msh,chara)
 		T1 = OMP_get_wtime()
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_Add_Multiply=stats%Time_Add_Multiply+T1-T0
 		stats%Add_random_Time(level_blocks)=stats%Add_random_Time(level_blocks)+T1-T0
 		stats%Add_random_CNT(level_blocks)=stats%Add_random_CNT(level_blocks)+1
@@ -1637,6 +1641,7 @@ recursive subroutine Hmat_LXM(blocks_l,blocks_m,h_mat,option,stats,ptree,msh)
 		rank0 = blocks_m%rankmax
 		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_l,BF_block_MVP_XLM_dat,error,'XLM',option,stats,ptree,msh)
 		T1 = OMP_get_wtime()
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_XLUM=stats%Time_XLUM+T1-T0
 		stats%XLUM_random_Time(blocks_m%level)=stats%XLUM_random_Time(blocks_m%level)+T1-T0
 		stats%XLUM_random_CNT(blocks_m%level)=stats%XLUM_random_CNT(blocks_m%level)+1
@@ -1741,6 +1746,7 @@ recursive subroutine Hmat_XUM(blocks_u,blocks_m,h_mat,option,stats,ptree,msh)
 		rank0 = blocks_m%rankmax
 		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_u,BF_block_MVP_XUM_dat,error,'XUM',option,stats,ptree,msh)
 		T1 = OMP_get_wtime()
+		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_XLUM=stats%Time_XLUM+T1-T0
 		stats%XLUM_random_Time(blocks_m%level)=stats%XLUM_random_Time(blocks_m%level)+T1-T0
 		stats%XLUM_random_CNT(blocks_m%level)=stats%XLUM_random_CNT(blocks_m%level)+1
@@ -1821,6 +1827,7 @@ subroutine Hmat_add_multiply_Hblock3(blocks,chara,block1,block2,h_mat,option,sta
 	T0=OMP_get_wtime()
 	call BF_randomized(level_butterfly,rank0,option%rankrate,block_agent,h_mat,BF_block_MVP_Add_Multiply_dat,error_inout,'Multiply',option,stats,ptree,msh,'m')
 	T1=OMP_get_wtime()
+	stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 	stats%Time_Multiply=stats%Time_Multiply+T1-T0
 	stats%Mul_random_Time(blocks%level)=stats%Mul_random_Time(blocks%level)+T1-T0
 	stats%Mul_random_CNT(blocks%level)=stats%Mul_random_CNT(blocks%level)+1
@@ -1877,9 +1884,13 @@ else if(blocks_o%style==2)then
 	T0=OMP_get_wtime()
 	h_mat%blocks_1=>blocks_1
 	rank0 = blocks_o%rankmax
-	if(chara=='+')call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'a')
-	if(chara=='-')call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'s')
+	if(chara=='+')then
+		call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'a')
+	elseif(chara=='-')then
+		call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'s')
+	endif
     T1=OMP_get_wtime()
+	stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
     stats%Time_Add_Multiply=stats%Time_Add_Multiply+T1-T0
 	stats%Add_random_Time(blocks_o%level)=stats%Add_random_Time(blocks_o%level)+T1-T0
 	stats%Add_random_CNT(blocks_o%level)=stats%Add_random_CNT(blocks_o%level)+1

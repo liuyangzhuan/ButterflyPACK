@@ -408,7 +408,8 @@ if(tst==3){
 	d_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
 
 
-
+	if(myrank==master_rank)std::cout<<"Printing stats of the first HODLR: "<<std::endl;
+	d_c_bpack_printstats(&stats,&ptree);
 
 
 	//////////////////// use resulting hodlr as matvec to create a new holdr
@@ -447,6 +448,10 @@ if(tst==3){
 
 	d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
 	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+
+
+	if(myrank==master_rank)std::cout<<"Printing stats of the second HODLR: "<<std::endl;
+	d_c_bpack_printstats(&stats1,&ptree1);
 
 	d_c_bpack_deletestats(&stats1);
 	d_c_bpack_deleteproctree(&ptree1);
@@ -494,6 +499,9 @@ if(tst==3){
 
 	d_c_bf_construct_matvec_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
+
+	if(myrank==master_rank)std::cout<<"Printing stats of the third BF: "<<std::endl;
+	d_c_bpack_printstats(&stats2,&ptree2);
 
 	d_c_bpack_deletestats(&stats2);
 	d_c_bpack_deleteproctree(&ptree2);

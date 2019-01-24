@@ -386,11 +386,6 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 					! endif
 
 
-
-
-
-
-
 					if(level==option%level_check)then
 						! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 
