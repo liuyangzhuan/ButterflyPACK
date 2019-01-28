@@ -324,6 +324,11 @@ module BPACK_DEFS
          type(butterfly_kerl), allocatable :: RandomVectorLL(:)
      end type RandomBlock
 
+	 !**** intermidate vectors for applying a butterfly
+     type butterfly_vec
+         type(butterfly_kerl), allocatable :: vec(:)
+     end type butterfly_vec
+
 
 	 !**** HODLR solver options
 	 type Hoption

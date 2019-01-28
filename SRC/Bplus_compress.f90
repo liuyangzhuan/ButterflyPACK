@@ -259,7 +259,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
     endif
 
 	call BF_ComputeMemory(blocks,Memory)
-	call BF_get_rank(blocks)
+	call BF_get_rank(blocks,ptree)
     return
 
 end subroutine BF_compress_NlogN

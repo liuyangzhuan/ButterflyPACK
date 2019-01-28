@@ -174,7 +174,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 				rank_new_max = 0
 				do bb = Bidxs,Bidxe
 				if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
-					call BF_get_rank(block_rand(bb-Bidxs+1))
+					call BF_get_rank(block_rand(bb-Bidxs+1),ptree)
 					rank_new_max = max(rank_new_max,block_rand(bb-Bidxs+1)%rankmax)
 				endif
 				end do

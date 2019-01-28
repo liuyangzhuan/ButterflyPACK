@@ -283,10 +283,8 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
 	type(proctree)::ptree
 	type(Hstat)::stats
 
-    type(butterfly_kerl),allocatable :: ButterflyVector(:)
-    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
-        DT :: random1(:,:), random2(:,:)
-        DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
+    DT :: random1(:,:), random2(:,:)
+    DT,allocatable :: Vout(:,:),Vin_loc(:,:),Vout_loc(:,:)
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:)
 
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
@@ -302,8 +300,6 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
 	if (chara=='N')allocate(Vout(M,Nrnd))
 	if (chara=='T')allocate(Vout(N,Nrnd))
 	Vout = 0
-	idx_start_n = bplus%LL(1)%matrices_block(1)%headn
-	idx_start_m = bplus%LL(1)%matrices_block(1)%headm
 
 
 	ctemp1=1.0d0 ; ctemp2=1.0d0
@@ -480,7 +476,7 @@ subroutine BF_delete(blocks,allflag)
     use BPACK_DEFS
     implicit none
 
-    integer butterflyB_inuse, level_actual, num_col, num_row
+    integer butterflyB_inuse, num_col, num_row
     integer i, j, mm, nn, rank, num_blocks, level, level_butterfly,index_i_m,index_j_m,levelm
     real(kind=8) memory_butterfly, rtemp
     type(matrixblock)::blocks
@@ -488,13 +484,9 @@ subroutine BF_delete(blocks,allflag)
 
         level_butterfly=blocks%level_butterfly
 
-        ! level_actual=Maxlevel_for_blocks-blocks%level
-        level_actual=level_butterfly
-
 		if(allocated(blocks%ButterflyU%blocks))then
         ! !$omp parallel do default(shared) private(i)
-        do i=1, 2**level_actual
-
+        do i=1, blocks%ButterflyU%nblk_loc
             if(allocated(blocks%ButterflyU%blocks(i)%matrix))deallocate (blocks%ButterflyU%blocks(i)%matrix)
         enddo
         ! !$omp end parallel do
@@ -503,7 +495,7 @@ subroutine BF_delete(blocks,allflag)
 
 		if(allocated(blocks%ButterflyV%blocks))then
         ! !$omp parallel do default(shared) private(i)
-        do i=1, 2**level_actual
+        do i=1, blocks%ButterflyV%nblk_loc
             if(allocated(blocks%ButterflyV%blocks(i)%matrix))deallocate (blocks%ButterflyV%blocks(i)%matrix)
         enddo
         ! !$omp end parallel do
@@ -515,14 +507,14 @@ subroutine BF_delete(blocks,allflag)
         if (level_butterfly/=0) then
             ! !$omp parallel do default(shared) private(level,i,j,num_col,num_row)
             do level=1, level_butterfly
-                num_col=blocks%ButterflyKerl(level)%num_col
-                num_row=blocks%ButterflyKerl(level)%num_row
-                do j=1, num_col
-                    do i=1, num_row
+                if(allocated(blocks%ButterflyKerl(level)%blocks))then
+                do j=1, blocks%ButterflyKerl(level)%nc
+                    do i=1, blocks%ButterflyKerl(level)%nr
                         if(allocated(blocks%ButterflyKerl(level)%blocks(i,j)%matrix))deallocate (blocks%ButterflyKerl(level)%blocks(i,j)%matrix)
                     enddo
                 enddo
                 deallocate (blocks%ButterflyKerl(level)%blocks)
+				endif
             enddo
             ! !$omp end parallel do
             deallocate (blocks%ButterflyKerl)
@@ -530,6 +522,7 @@ subroutine BF_delete(blocks,allflag)
 		end if
 
 		if(allocated(blocks%ButterflyMiddle))then
+		write(*,*)'warning: this part has not been parallelized in BF_delete'
 			levelm = ceiling_safe(dble(level_butterfly)/2d0)
 			do index_i_m=1, 2**levelm
 				do index_j_m=1, 2**(level_butterfly-levelm)
@@ -1075,31 +1068,50 @@ temp = 0
 if(block_i%style==2)then
 	do level=0, level_butterfly+1
 		if (level==0) then
+			if(allocated(block_i%ButterflyV%blocks))then
 			do index_j=1,block_i%ButterflyV%nblk_loc
+				if(allocated(block_i%ButterflyV%blocks(index_j)%matrix))then
 				mm=size(block_i%ButterflyV%blocks(index_j)%matrix,1)
 				nn=size(block_i%ButterflyV%blocks(index_j)%matrix,2)
 				temp = temp + fnorm(block_i%ButterflyV%blocks(index_j)%matrix,mm,nn)
+				! write(*,*)'V',level_butterfly,index_j,fnorm(block_i%ButterflyV%blocks(index_j)%matrix,mm,nn),mm,nn
+				endif
 			enddo
+			endif
 		elseif (level==level_butterfly+1) then
+			if(allocated(block_i%ButterflyU%blocks))then
 			do index_i=1,block_i%ButterflyU%nblk_loc
+				if(allocated(block_i%ButterflyU%blocks(index_i)%matrix))then
 				mm=size(block_i%ButterflyU%blocks(index_i)%matrix,1)
 				nn=size(block_i%ButterflyU%blocks(index_i)%matrix,2)
 				temp = temp + fnorm(block_i%ButterflyU%blocks(index_i)%matrix,mm,nn)
+				! write(*,*)'U',level_butterfly,index_i,fnorm(block_i%ButterflyU%blocks(index_i)%matrix,mm,nn),mm,nn
+				endif
 			enddo
+			endif
 		else
+			if(allocated(block_i%ButterflyKerl))then
+			if(allocated(block_i%ButterflyKerl(level)%blocks))then
 			do index_i=1, block_i%ButterflyKerl(level)%nr
 				do index_j=1, block_i%ButterflyKerl(level)%nc
+					if(allocated(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix))then
 					mm=size(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,1)
 					nn=size(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,2)
 					temp = temp + fnorm(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,mm,nn)
+					! write(*,*)'Ker',level_butterfly,level,index_i,index_j,fnorm(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,mm,nn),mm,nn
+					endif
 				enddo
 			enddo
+			endif
+			endif
 		endif
 	enddo
 else if(block_i%style==1)then
+	if(allocated(block_i%fullmat))then
 	mm=size(block_i%fullmat,1)
 	nn=size(block_i%fullmat,2)
 	temp = temp + fnorm(block_i%fullmat,mm,nn)
+	endif
 else
 	write(*,*)'block style not implemented'
 	stop
@@ -1544,7 +1556,6 @@ subroutine BF_Partial_MVP_Half(block_rand,chara,level_start,level_end,random,num
 
     type(RandomBlock) :: random
 
-    type(butterfly_kerl),allocatable :: ButterflyVector(:)
     type(matrixblock)::block_rand
    ! write(*,*)'in '
 
@@ -1577,6 +1588,7 @@ subroutine BF_Partial_MVP_Half(block_rand,chara,level_start,level_end,random,num
 							enddo
 						enddo
 						!$omp end parallel do
+
 					enddo
 					! !$omp end parallel do
                 enddo
@@ -2161,8 +2173,8 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
 
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-
 			Nskel=size(kerls%blocks(ii,jj)%matrix,1)
+
 			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
 			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
 			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nskel
@@ -2336,9 +2348,8 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 	real(kind=8)::flop,flops
 	integer index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k
 
-    type(butterfly_kerl),allocatable :: ButterflyVector(:)
-    !  DT :: random1(N,Nrnd), random2(M,Nrnd)
-        DT :: random1(:,:), random2(:,:)
+    type(butterfly_vec) :: BFvec
+    DT :: random1(:,:), random2(:,:)
 	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
 
 	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
@@ -2386,30 +2397,6 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 		deallocate(Vout_tmp)
 
 	else
-
-		! call GetLocalBlockRange(ptree,blocks%pgno,0,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
-		! allocate(arr_acc_n(nc))
-		! k1=0
-		! do jj=1,nc
-		! group_n=blocks%col_group
-		! group_n=group_n*2**level_butterfly-1+(jj-1)*inc_c+idx_c
-		! arr_acc_n(jj) = k1
-		! nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
-		! k1 =k1 +nn
-		! enddo
-
-		! call GetLocalBlockRange(ptree,blocks%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
-		! allocate(arr_acc_m(nr))
-		! k2=0
-		! do ii=1,nr
-		! group_m=blocks%row_group
-		! group_m=group_m*2**level_butterfly-1+(ii-1)*inc_r+idx_r
-		! arr_acc_m(ii) = k2
-		! mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
-		! k2 =k2 +mm
-		! enddo
-
-
 		allocate(arr_acc_n(blocks%ButterflyV%nblk_loc))
 		allocate(arr_acc_m(blocks%ButterflyU%nblk_loc))
 		k1=0
@@ -2426,22 +2413,12 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 			k2 =k2 +mm
 		enddo
 
-
-
-
-
-
-
-		! write(*,*)arr_acc_m
-		! write(*,*)arr_acc_n
-
 		num_vectors=Nrnd
-		! write(*,*)num_vectors
-		! stop
-		if(BF_checkNAN(blocks))then
-			write(*,*)'NAN in 0 BF_block_MVP_dat'
-			stop
-		end if
+
+		! if(BF_checkNAN(blocks))then
+			! write(*,*)'NAN in 0 BF_block_MVP_dat'
+			! stop
+		! end if
 
 		if (chara=='N') then
 
@@ -2455,26 +2432,26 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 			level_half = blocks%level_half
 
 
-			allocate(ButterflyVector(0:level_butterfly+2))
+			allocate(BFvec%vec(0:level_butterfly+2))
 
 
-			allocate (ButterflyVector(0)%blocks(1,blocks%ButterflyV%nblk_loc))
-			ButterflyVector(0)%num_row=1
-			ButterflyVector(0)%num_col=num_blocks
-			ButterflyVector(0)%idx_r=1
-			ButterflyVector(0)%inc_r=1
-			ButterflyVector(0)%nr=1
-			ButterflyVector(0)%idx_c=blocks%ButterflyV%idx
-			ButterflyVector(0)%inc_c=blocks%ButterflyV%inc
-			ButterflyVector(0)%nc=blocks%ButterflyV%nblk_loc
+			allocate (BFvec%vec(0)%blocks(1,blocks%ButterflyV%nblk_loc))
+			BFvec%vec(0)%num_row=1
+			BFvec%vec(0)%num_col=num_blocks
+			BFvec%vec(0)%idx_r=1
+			BFvec%vec(0)%inc_r=1
+			BFvec%vec(0)%nr=1
+			BFvec%vec(0)%idx_c=blocks%ButterflyV%idx
+			BFvec%vec(0)%inc_c=blocks%ButterflyV%inc
+			BFvec%vec(0)%nc=blocks%ButterflyV%nblk_loc
 
 			!$omp parallel do default(shared) private(i,nn,ii,jj)
-			do i=1, ButterflyVector(0)%nc
+			do i=1, BFvec%vec(0)%nc
 				nn=size(blocks%ButterflyV%blocks(i)%matrix,1)
-				allocate (ButterflyVector(0)%blocks(1,i)%matrix(nn,num_vectors))
+				allocate (BFvec%vec(0)%blocks(1,i)%matrix(nn,num_vectors))
 				do ii=1, nn
 					do jj=1, num_vectors
-						ButterflyVector(0)%blocks(1,i)%matrix(ii,jj)=random1(ii+arr_acc_n(i),jj)
+						BFvec%vec(0)%blocks(1,i)%matrix(ii,jj)=random1(ii+arr_acc_n(i),jj)
 					enddo
 				enddo
 			enddo
@@ -2483,39 +2460,39 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 			do level=0, level_half
 				call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
 
-				ButterflyVector(level+1)%idx_r=idx_r
-				ButterflyVector(level+1)%inc_r=inc_r
-				ButterflyVector(level+1)%nr=nr
-				ButterflyVector(level+1)%idx_c=idx_c
-				ButterflyVector(level+1)%inc_c=inc_c
-				ButterflyVector(level+1)%nc=nc
+				BFvec%vec(level+1)%idx_r=idx_r
+				BFvec%vec(level+1)%inc_r=inc_r
+				BFvec%vec(level+1)%nr=nr
+				BFvec%vec(level+1)%idx_c=idx_c
+				BFvec%vec(level+1)%inc_c=inc_c
+				BFvec%vec(level+1)%nc=nc
 				if (level/=level_butterfly+1) then
-					ButterflyVector(level+1)%num_row=2**level
-					ButterflyVector(level+1)%num_col=2**(level_butterfly-level)
+					BFvec%vec(level+1)%num_row=2**level
+					BFvec%vec(level+1)%num_col=2**(level_butterfly-level)
 				else
-					ButterflyVector(level+1)%num_row=2**level_butterfly
-					ButterflyVector(level+1)%num_col=1
+					BFvec%vec(level+1)%num_row=2**level_butterfly
+					BFvec%vec(level+1)%num_col=1
 				endif
 				if(level_half/=level)then ! the last level doesn't require doubling block columns
 				if(nc==1 .and. 2**(level_butterfly-level)>1)then ! double the number of local block columns used for MPI communication
-					ButterflyVector(level+1)%nc=2
-					ButterflyVector(level+1)%idx_c=ButterflyVector(level+1)%idx_c-1+mod(ButterflyVector(level+1)%idx_c,2)
+					BFvec%vec(level+1)%nc=2
+					BFvec%vec(level+1)%idx_c=BFvec%vec(level+1)%idx_c-1+mod(BFvec%vec(level+1)%idx_c,2)
 				endif
 				endif
-				allocate(ButterflyVector(level+1)%blocks(ButterflyVector(level+1)%nr,ButterflyVector(level+1)%nc))
+				allocate(BFvec%vec(level+1)%blocks(BFvec%vec(level+1)%nr,BFvec%vec(level+1)%nc))
 
 				if (level==0) then
 					flops=0
 					!$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
 					do j=1, blocks%ButterflyV%nblk_loc
 						index_j=(j-1)*inc_c+idx_c
-						index_j_loc_s=(index_j-ButterflyVector(level+1)%idx_c)/ButterflyVector(level+1)%inc_c+1
+						index_j_loc_s=(index_j-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
 						rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
 						nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-						allocate (ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix(rank,num_vectors))
-						ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix=0
+						allocate (BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix(rank,num_vectors))
+						BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix=0
 
-						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,ButterflyVector(0)%blocks(1,j)%matrix,nn,ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix,rank,'T','N',rank,num_vectors,nn,cone,czero,flop=flop)
+						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(0)%blocks(1,j)%matrix,nn,BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix,rank,'T','N',rank,num_vectors,nn,cone,czero,flop=flop)
 						flops=flops+flop
 					enddo
 					!$omp end parallel do
@@ -2526,10 +2503,10 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					do i=1, blocks%ButterflyU%nblk_loc
 						rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
 						mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-						allocate (ButterflyVector(level+1)%blocks(i,1)%matrix(mm,num_vectors))
-						ButterflyVector(level+1)%blocks(i,1)%matrix=0
+						allocate (BFvec%vec(level+1)%blocks(i,1)%matrix(mm,num_vectors))
+						BFvec%vec(level+1)%blocks(i,1)%matrix=0
 
-						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,ButterflyVector(level)%blocks(i,1)%matrix,rank,ButterflyVector(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,rank,cone,czero,flop=flop)
+						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(level)%blocks(i,1)%matrix,rank,BFvec%vec(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,rank,cone,czero,flop=flop)
 						flops = flops + flop
 					enddo
 					!$omp end parallel do
@@ -2544,49 +2521,48 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 						index_i=(index_i_loc-1)*inc_r+idx_r  !index_i is global index of row-wise ordering at current level
 						index_j=(index_j_loc-1)*inc_c+idx_c
 
-						index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1 !index_ii is global index in ButterflyVector(level)
+						index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1 !index_ii is global index in BFvec%vec(level)
 
-						index_ii_loc=(index_ii-ButterflyVector(level)%idx_r)/ButterflyVector(level)%inc_r+1 !index_ii_loc is local index in ButterflyVector(level)
-						index_jj_loc=(index_jj-ButterflyVector(level)%idx_c)/ButterflyVector(level)%inc_c+1
+						index_ii_loc=(index_ii-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level)
+						index_jj_loc=(index_jj-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
 
 
-						index_i_loc_s=(index_i-ButterflyVector(level+1)%idx_r)/ButterflyVector(level+1)%inc_r+1 !index_i_loc_s is local index in ButterflyVector(level+1)
+						index_i_loc_s=(index_i-BFvec%vec(level+1)%idx_r)/BFvec%vec(level+1)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level+1)
 						index_i_loc_k=(index_i-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
-						index_j_loc_s=(index_j-ButterflyVector(level+1)%idx_c)/ButterflyVector(level+1)%inc_c+1
+						index_j_loc_s=(index_j-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
 						index_j_loc_k=(2*index_j-1-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
 
 						nn1=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
 						nn2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,2)
 						mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
 
-						allocate (ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,num_vectors))
-						ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+						allocate (BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,num_vectors))
+						BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
 
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,ButterflyVector(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn1,ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn1,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn1,BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn1,cone,cone,flop=flop)
 						flops = flops + flop
 
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,mm,ButterflyVector(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix,nn2,ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn2,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix,nn2,BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn2,cone,cone,flop=flop)
 						flops = flops + flop
 					enddo
 					!$omp end parallel do
 					stats%Flop_Tmp = stats%Flop_Tmp + flops
 				endif
 
-				do j=1, ButterflyVector(level)%nc
-					do i=1, ButterflyVector(level)%nr
-						if(allocated(ButterflyVector(level)%blocks(i,j)%matrix))deallocate (ButterflyVector(level)%blocks(i,j)%matrix)
+				do j=1, BFvec%vec(level)%nc
+					do i=1, BFvec%vec(level)%nr
+						if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate (BFvec%vec(level)%blocks(i,j)%matrix)
 					enddo
 				enddo
 				if(level_half/=level)then
-					call BF_exchange_matvec(blocks,ButterflyVector(level+1),num_vectors,stats,ptree,level,'R','B')
+					call BF_exchange_matvec(blocks,BFvec%vec(level+1),num_vectors,stats,ptree,level,'R','B')
 				endif
 			enddo
 
-
 			if(level_half+1/=0)then
-				call BF_all2all_matvec(blocks,ButterflyVector(level_half+1),num_vectors,stats,ptree,level_half,'R','C')
+				call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half,'R','C')
 			else
-				call BF_all2all_matvec(blocks,ButterflyVector(level_half+1),num_vectors,stats,ptree,level_half+1,'R','C')
+				call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half+1,'R','C')
 			endif
 
 			do level=level_half+1,level_butterfly+1
@@ -2613,21 +2589,21 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					inc_c=inc_c0
 				endif
 
-				ButterflyVector(level+1)%idx_r=idx_r
-				ButterflyVector(level+1)%inc_r=inc_r
-				ButterflyVector(level+1)%nr=nr
-				ButterflyVector(level+1)%idx_c=idx_c
-				ButterflyVector(level+1)%inc_c=inc_c
-				ButterflyVector(level+1)%nc=nc
+				BFvec%vec(level+1)%idx_r=idx_r
+				BFvec%vec(level+1)%inc_r=inc_r
+				BFvec%vec(level+1)%nr=nr
+				BFvec%vec(level+1)%idx_c=idx_c
+				BFvec%vec(level+1)%inc_c=inc_c
+				BFvec%vec(level+1)%nc=nc
 				if (level/=level_butterfly+1) then
-					ButterflyVector(level+1)%num_row=2**level
-					ButterflyVector(level+1)%num_col=2**(level_butterfly-level)
+					BFvec%vec(level+1)%num_row=2**level
+					BFvec%vec(level+1)%num_col=2**(level_butterfly-level)
 				else
-					ButterflyVector(level+1)%num_row=2**level_butterfly
-					ButterflyVector(level+1)%num_col=1
+					BFvec%vec(level+1)%num_row=2**level_butterfly
+					BFvec%vec(level+1)%num_col=1
 				endif
 
-				allocate(ButterflyVector(level+1)%blocks(ButterflyVector(level+1)%nr,ButterflyVector(level+1)%nc))
+				allocate(BFvec%vec(level+1)%blocks(BFvec%vec(level+1)%nr,BFvec%vec(level+1)%nc))
 
 
 				if (level==0) then
@@ -2635,12 +2611,12 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					!$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
 					do j=1, nc0
 						index_j=(j-1)*inc_c0+idx_c0
-						index_j_loc_s=(index_j-ButterflyVector(level+1)%idx_c)/ButterflyVector(level+1)%inc_c+1
+						index_j_loc_s=(index_j-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
 						rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
 						nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
-						allocate (ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix(rank,num_vectors))
-						ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix=0
-						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,ButterflyVector(0)%blocks(1,j)%matrix,nn,ButterflyVector(1)%blocks(1,index_j_loc_s)%matrix,rank,'T','N',rank,num_vectors,nn,cone,czero,flop=flop)
+						allocate (BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix(rank,num_vectors))
+						BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix=0
+						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(0)%blocks(1,j)%matrix,nn,BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix,rank,'T','N',rank,num_vectors,nn,cone,czero,flop=flop)
 						flops=flops+flop
 					enddo
 					!$omp end parallel do
@@ -2650,14 +2626,14 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					!$omp parallel do default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop) reduction(+:flops)
 					do i=1, nr0
 						index_i=(i-1)*inc_r0+idx_r0
-						index_i_loc_s=(index_i-ButterflyVector(level)%idx_r)/ButterflyVector(level)%inc_r+1
+						index_i_loc_s=(index_i-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1
 
 						rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
 						mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-						allocate (ButterflyVector(level+1)%blocks(i,1)%matrix(mm,num_vectors))
-						ButterflyVector(level+1)%blocks(i,1)%matrix=0
+						allocate (BFvec%vec(level+1)%blocks(i,1)%matrix(mm,num_vectors))
+						BFvec%vec(level+1)%blocks(i,1)%matrix=0
 
-						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,ButterflyVector(level)%blocks(index_i_loc_s,1)%matrix,rank,ButterflyVector(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,rank,cone,czero,flop=flop)
+						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(level)%blocks(index_i_loc_s,1)%matrix,rank,BFvec%vec(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,rank,cone,czero,flop=flop)
 						flops = flops + flop
 					enddo
 					!$omp end parallel do
@@ -2673,35 +2649,35 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 						index_j=(index_j_loc-1)*inc_c0+idx_c0
 
 
-						index_ii_loc=(index_i-ButterflyVector(level)%idx_r)/ButterflyVector(level)%inc_r+1  !index_ii_loc is local index in ButterflyVector(level)
-						index_jj_loc=(index_j-ButterflyVector(level)%idx_c)/ButterflyVector(level)%inc_c+1
+						index_ii_loc=(index_i-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1  !index_ii_loc is local index in BFvec%vec(level)
+						index_jj_loc=(index_j-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
 
 
-						index_ii=2*index_i-1; index_jj=int((index_j+1)/2)  !index_ii is global index in ButterflyVector(level+1)
+						index_ii=2*index_i-1; index_jj=int((index_j+1)/2)  !index_ii is global index in BFvec%vec(level+1)
 
 
-						index_i_loc_s=(index_ii-ButterflyVector(level+1)%idx_r)/ButterflyVector(level+1)%inc_r+1 !index_i_loc_s is local index in ButterflyVector(level+1)
+						index_i_loc_s=(index_ii-BFvec%vec(level+1)%idx_r)/BFvec%vec(level+1)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level+1)
 						index_i_loc_k=(2*index_i-1-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
-						index_j_loc_s=(index_jj-ButterflyVector(level+1)%idx_c)/ButterflyVector(level+1)%inc_c+1
+						index_j_loc_s=(index_jj-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
 						index_j_loc_k=(index_j-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
 
 
 						mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
 						nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
-						if(.not. allocated(ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
-							allocate (ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,num_vectors))
-							ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+						if(.not. allocated(BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
+							allocate (BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,num_vectors))
+							BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
 						endif
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,ButterflyVector(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn,ButterflyVector(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn,BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn,cone,cone,flop=flop)
 						flops = flops + flop
 
 						mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,1)
 						nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,2)
-						if(.not. allocated(ButterflyVector(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix))then
-							allocate (ButterflyVector(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix(mm,num_vectors))
-							ButterflyVector(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix=0
+						if(.not. allocated(BFvec%vec(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix))then
+							allocate (BFvec%vec(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix(mm,num_vectors))
+							BFvec%vec(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix=0
 						endif
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,mm,ButterflyVector(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn,ButterflyVector(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn,BFvec%vec(level+1)%blocks(index_i_loc_s+1,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn,cone,cone,flop=flop)
 						flops = flops + flop
 
 					enddo
@@ -2710,14 +2686,14 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				endif
 
 
-				do j=1, ButterflyVector(level)%nc
-					do i=1, ButterflyVector(level)%nr
-						if(allocated(ButterflyVector(level)%blocks(i,j)%matrix))deallocate (ButterflyVector(level)%blocks(i,j)%matrix)
+				do j=1, BFvec%vec(level)%nc
+					do i=1, BFvec%vec(level)%nr
+						if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate (BFvec%vec(level)%blocks(i,j)%matrix)
 					enddo
 				enddo
 
 				if(level/=level_butterfly+1)then
-					call BF_exchange_matvec(blocks,ButterflyVector(level+1),num_vectors,stats,ptree,level,'R','R')
+					call BF_exchange_matvec(blocks,BFvec%vec(level+1),num_vectors,stats,ptree,level,'R','R')
 				endif
 			enddo
 
@@ -2726,7 +2702,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				do i=1, blocks%ButterflyU%nblk_loc
 					mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
 					do ii=1, mm
-						random2(ii+arr_acc_m(i),jj)=b*random2(ii+arr_acc_m(i),jj)+a*ButterflyVector(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)
+						random2(ii+arr_acc_m(i),jj)=b*random2(ii+arr_acc_m(i),jj)+a*BFvec%vec(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)
 					enddo
 				enddo
 			enddo
@@ -2736,7 +2712,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				write(*,*)'NAN in 2 BF_block_MVP_dat',blocks%row_group,blocks%col_group,blocks%level,blocks%level_butterfly
 				stop
 			end if
-			!deallocate (butterflyvector)
+			!deallocate (BFvec%vec)
 
 		elseif (chara=='T') then
 
@@ -2744,24 +2720,24 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 			num_blocks=2**level_butterfly
 			level_half = blocks%level_half
 
-			allocate (ButterflyVector(0:level_butterfly+2))
-			allocate (ButterflyVector(0)%blocks(blocks%ButterflyU%nblk_loc,1))
-			ButterflyVector(0)%num_row=num_blocks
-			ButterflyVector(0)%num_col=1
-			ButterflyVector(0)%idx_r=blocks%ButterflyU%idx
-			ButterflyVector(0)%inc_r=blocks%ButterflyU%inc
-			ButterflyVector(0)%nr=blocks%ButterflyU%nblk_loc
-			ButterflyVector(0)%idx_c=1
-			ButterflyVector(0)%inc_c=1
-			ButterflyVector(0)%nc=1
+			allocate (BFvec%vec(0:level_butterfly+2))
+			allocate (BFvec%vec(0)%blocks(blocks%ButterflyU%nblk_loc,1))
+			BFvec%vec(0)%num_row=num_blocks
+			BFvec%vec(0)%num_col=1
+			BFvec%vec(0)%idx_r=blocks%ButterflyU%idx
+			BFvec%vec(0)%inc_r=blocks%ButterflyU%inc
+			BFvec%vec(0)%nr=blocks%ButterflyU%nblk_loc
+			BFvec%vec(0)%idx_c=1
+			BFvec%vec(0)%inc_c=1
+			BFvec%vec(0)%nc=1
 
 			!$omp parallel do default(shared) private(i,mm,ii,jj)
-			do i=1, ButterflyVector(0)%nr
+			do i=1, BFvec%vec(0)%nr
 				mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-				allocate (ButterflyVector(0)%blocks(i,1)%matrix(mm,num_vectors))
+				allocate (BFvec%vec(0)%blocks(i,1)%matrix(mm,num_vectors))
 				do ii=1, mm
 					do jj=1, num_vectors
-						ButterflyVector(0)%blocks(i,1)%matrix(ii,jj)=random1(ii+arr_acc_m(i),jj)
+						BFvec%vec(0)%blocks(i,1)%matrix(ii,jj)=random1(ii+arr_acc_m(i),jj)
 					enddo
 				enddo
 			enddo
@@ -2771,40 +2747,40 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 			do level=level_butterfly+1, level_half+1,-1
 				call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
 
-				ButterflyVector(level_butterfly-level+2)%idx_r=idx_r
-				ButterflyVector(level_butterfly-level+2)%inc_r=inc_r
-				ButterflyVector(level_butterfly-level+2)%nr=nr
-				ButterflyVector(level_butterfly-level+2)%idx_c=idx_c
-				ButterflyVector(level_butterfly-level+2)%inc_c=inc_c
-				ButterflyVector(level_butterfly-level+2)%nc=nc
+				BFvec%vec(level_butterfly-level+2)%idx_r=idx_r
+				BFvec%vec(level_butterfly-level+2)%inc_r=inc_r
+				BFvec%vec(level_butterfly-level+2)%nr=nr
+				BFvec%vec(level_butterfly-level+2)%idx_c=idx_c
+				BFvec%vec(level_butterfly-level+2)%inc_c=inc_c
+				BFvec%vec(level_butterfly-level+2)%nc=nc
 				if (level/=0) then
-					ButterflyVector(level_butterfly-level+2)%num_row=2**(level-1)
-					ButterflyVector(level_butterfly-level+2)%num_col=2**(level_butterfly-level+1)
+					BFvec%vec(level_butterfly-level+2)%num_row=2**(level-1)
+					BFvec%vec(level_butterfly-level+2)%num_col=2**(level_butterfly-level+1)
 				else
-					ButterflyVector(level_butterfly-level+2)%num_row=1
-					ButterflyVector(level_butterfly-level+2)%num_col=2**level_butterfly
+					BFvec%vec(level_butterfly-level+2)%num_row=1
+					BFvec%vec(level_butterfly-level+2)%num_col=2**level_butterfly
 				endif
 				if(level_half+1/=level)then ! the last level doesn't require doubling block rows
 				if(nr==1 .and. 2**(level-1)>1)then ! double the number of local block rows used for MPI communication
-					ButterflyVector(level_butterfly-level+2)%nr=2
-					ButterflyVector(level_butterfly-level+2)%idx_r=ButterflyVector(level_butterfly-level+2)%idx_r-1+mod(ButterflyVector(level_butterfly-level+2)%idx_r,2)
+					BFvec%vec(level_butterfly-level+2)%nr=2
+					BFvec%vec(level_butterfly-level+2)%idx_r=BFvec%vec(level_butterfly-level+2)%idx_r-1+mod(BFvec%vec(level_butterfly-level+2)%idx_r,2)
 				endif
 				endif
-				allocate(ButterflyVector(level_butterfly-level+2)%blocks(ButterflyVector(level_butterfly-level+2)%nr,ButterflyVector(level_butterfly-level+2)%nc))
+				allocate(BFvec%vec(level_butterfly-level+2)%blocks(BFvec%vec(level_butterfly-level+2)%nr,BFvec%vec(level_butterfly-level+2)%nc))
 
 				if (level==level_butterfly+1) then
 					flops=0
 					!$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
 					do i=1, blocks%ButterflyU%nblk_loc
 						index_i=(i-1)*blocks%ButterflyU%inc+blocks%ButterflyU%idx
-						index_i_loc_s=(index_i-ButterflyVector(1)%idx_r)/ButterflyVector(1)%inc_r+1
+						index_i_loc_s=(index_i-BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r+1
 
 						rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
 						mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-						allocate (ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix(rank,num_vectors))
-						ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix=0
+						allocate (BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix(rank,num_vectors))
+						BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix=0
 
-						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,ButterflyVector(0)%blocks(i,1)%matrix,mm,ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix,rank,'T','N',rank,num_vectors,mm,cone,czero,flop=flop)
+						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(0)%blocks(i,1)%matrix,mm,BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix,rank,'T','N',rank,num_vectors,mm,cone,czero,flop=flop)
 						flops = flops + flop
 
 					enddo
@@ -2816,9 +2792,9 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					do j=1, blocks%ButterflyV%nblk_loc
 						nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
 						rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-						allocate (ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix(nn,num_vectors))
-						ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix=0
-						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,ButterflyVector(level_butterfly+1)%blocks(1,j)%matrix,rank,ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix,nn,'N','N',nn,num_vectors,rank,cone,czero,flop=flop)
+						allocate (BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix(nn,num_vectors))
+						BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix=0
+						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(level_butterfly+1)%blocks(1,j)%matrix,rank,BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix,nn,'N','N',nn,num_vectors,rank,cone,czero,flop=flop)
 						flops = flops + flop
 					enddo
 					!$omp end parallel do
@@ -2832,26 +2808,26 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 						index_i=(index_i_loc-1)*inc_r+idx_r  !index_i is global index of column-wise ordering at current level
 						index_j=(index_j_loc-1)*inc_c+idx_c
 
-						index_ii=2*index_i-1; index_jj=int((index_j+1)/2) !index_ii is global index in ButterflyVector(level_butterfly-level+1)
+						index_ii=2*index_i-1; index_jj=int((index_j+1)/2) !index_ii is global index in BFvec%vec(level_butterfly-level+1)
 
-						index_ii_loc=(index_ii-ButterflyVector(level_butterfly-level+1)%idx_r)/ButterflyVector(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in ButterflyVector(level_butterfly-level+1)
-						index_jj_loc=(index_jj-ButterflyVector(level_butterfly-level+1)%idx_c)/ButterflyVector(level_butterfly-level+1)%inc_c+1
+						index_ii_loc=(index_ii-BFvec%vec(level_butterfly-level+1)%idx_r)/BFvec%vec(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+						index_jj_loc=(index_jj-BFvec%vec(level_butterfly-level+1)%idx_c)/BFvec%vec(level_butterfly-level+1)%inc_c+1
 
-						index_i_loc_s=(index_i-ButterflyVector(level_butterfly-level+2)%idx_r)/ButterflyVector(level_butterfly-level+2)%inc_r+1 !index_i_loc_s is local index in ButterflyVector(level_butterfly-level+2)
+						index_i_loc_s=(index_i-BFvec%vec(level_butterfly-level+2)%idx_r)/BFvec%vec(level_butterfly-level+2)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
 						index_i_loc_k=(2*index_i-1-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
-						index_j_loc_s=(index_j-ButterflyVector(level_butterfly-level+2)%idx_c)/ButterflyVector(level_butterfly-level+2)%inc_c+1
+						index_j_loc_s=(index_j-BFvec%vec(level_butterfly-level+2)%idx_c)/BFvec%vec(level_butterfly-level+2)%inc_c+1
 						index_j_loc_k=(index_j-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
 
 						mm1=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
 						mm2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,1)
 						nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
-						allocate (ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix(nn,num_vectors))
-						ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+						allocate (BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix(nn,num_vectors))
+						BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
 
 
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm1,ButterflyVector(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm1,ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm1,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm1,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm1,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm1,cone,cone,flop=flop)
 						flops = flops + flop
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,mm2,ButterflyVector(level_butterfly-level+1)%blocks(index_ii_loc+1,index_jj_loc)%matrix,mm2,ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm2,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,mm2,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc+1,index_jj_loc)%matrix,mm2,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm2,cone,cone,flop=flop)
 						flops = flops + flop
 
 					enddo
@@ -2859,24 +2835,22 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					stats%Flop_Tmp = stats%Flop_Tmp + flops
 				endif
 
-				do j=1, ButterflyVector(level_butterfly-level+1)%nc
-					do i=1, ButterflyVector(level_butterfly-level+1)%nr
-						deallocate (ButterflyVector(level_butterfly-level+1)%blocks(i,j)%matrix)
+				do j=1, BFvec%vec(level_butterfly-level+1)%nc
+					do i=1, BFvec%vec(level_butterfly-level+1)%nr
+						deallocate (BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
 					enddo
 				enddo
 
 				if(level_half+1/=level)then
-					call BF_exchange_matvec(blocks,ButterflyVector(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','B')
+					call BF_exchange_matvec(blocks,BFvec%vec(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','B')
 				endif
 			enddo
 
-
 			if(level_half/=level_butterfly+1)then
-				call BF_all2all_matvec(blocks,ButterflyVector(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half+1,'C','R')
+				call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half+1,'C','R')
 			else
-				call BF_all2all_matvec(blocks,ButterflyVector(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half,'C','R')
+				call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half,'C','R')
 			endif
-
 
 			do level=level_half,0,-1
 				call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0,'R')
@@ -2902,21 +2876,21 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					inc_c=inc_c0
 				endif
 
-				ButterflyVector(level_butterfly-level+2)%idx_r=idx_r
-				ButterflyVector(level_butterfly-level+2)%inc_r=inc_r
-				ButterflyVector(level_butterfly-level+2)%nr=nr
-				ButterflyVector(level_butterfly-level+2)%idx_c=idx_c
-				ButterflyVector(level_butterfly-level+2)%inc_c=inc_c
-				ButterflyVector(level_butterfly-level+2)%nc=nc
+				BFvec%vec(level_butterfly-level+2)%idx_r=idx_r
+				BFvec%vec(level_butterfly-level+2)%inc_r=inc_r
+				BFvec%vec(level_butterfly-level+2)%nr=nr
+				BFvec%vec(level_butterfly-level+2)%idx_c=idx_c
+				BFvec%vec(level_butterfly-level+2)%inc_c=inc_c
+				BFvec%vec(level_butterfly-level+2)%nc=nc
 				if (level/=0) then
-					ButterflyVector(level+1)%num_row=2**(level-1)
-					ButterflyVector(level+1)%num_col=2**(level_butterfly-level+1)
+					BFvec%vec(level+1)%num_row=2**(level-1)
+					BFvec%vec(level+1)%num_col=2**(level_butterfly-level+1)
 				else
-					ButterflyVector(level+1)%num_row=1
-					ButterflyVector(level+1)%num_col=2**level_butterfly
+					BFvec%vec(level+1)%num_row=1
+					BFvec%vec(level+1)%num_col=2**level_butterfly
 				endif
 
-				allocate(ButterflyVector(level_butterfly-level+2)%blocks(ButterflyVector(level_butterfly-level+2)%nr,ButterflyVector(level_butterfly-level+2)%nc))
+				allocate(BFvec%vec(level_butterfly-level+2)%blocks(BFvec%vec(level_butterfly-level+2)%nr,BFvec%vec(level_butterfly-level+2)%nc))
 
 
 				if (level==level_butterfly+1) then
@@ -2924,14 +2898,14 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					!$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
 					do i=1, blocks%ButterflyU%nblk_loc
 						index_i=(i-1)*blocks%ButterflyU%inc+blocks%ButterflyU%idx
-						index_i_loc_s=(index_i-ButterflyVector(1)%idx_r)/ButterflyVector(1)%inc_r+1
+						index_i_loc_s=(index_i-BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r+1
 
 						rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
 						mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-						allocate (ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix(rank,num_vectors))
-						ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix=0
+						allocate (BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix(rank,num_vectors))
+						BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix=0
 
-						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,ButterflyVector(0)%blocks(i,1)%matrix,mm,ButterflyVector(1)%blocks(index_i_loc_s,1)%matrix,rank,'T','N',rank,num_vectors,mm,cone,czero,flop=flop)
+						call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(0)%blocks(i,1)%matrix,mm,BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix,rank,'T','N',rank,num_vectors,mm,cone,czero,flop=flop)
 						flops = flops + flop
 
 					enddo
@@ -2942,13 +2916,13 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					!$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
 					do j=1, blocks%ButterflyV%nblk_loc
 						index_j=(j-1)*blocks%ButterflyV%inc+blocks%ButterflyV%idx
-						index_j_loc_s=(index_j-ButterflyVector(level_butterfly+1)%idx_c)/ButterflyVector(level_butterfly+1)%inc_c+1
+						index_j_loc_s=(index_j-BFvec%vec(level_butterfly+1)%idx_c)/BFvec%vec(level_butterfly+1)%inc_c+1
 
 						nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
 						rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
-						allocate (ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix(nn,num_vectors))
-						ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix=0
-						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,ButterflyVector(level_butterfly+1)%blocks(1,index_j_loc_s)%matrix,rank,ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix,nn,'N','N',nn,num_vectors,rank,cone,czero,flop=flop)
+						allocate (BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix(nn,num_vectors))
+						BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix=0
+						call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(level_butterfly+1)%blocks(1,index_j_loc_s)%matrix,rank,BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix,nn,'N','N',nn,num_vectors,rank,cone,czero,flop=flop)
 						flops = flops + flop
 					enddo
 					!$omp end parallel do
@@ -2962,35 +2936,35 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 						index_i=(index_i_loc-1)*inc_r0+idx_r0  !index_i is global index of row-wise ordering at current level
 						index_j=(index_j_loc-1)*inc_c0+idx_c0
 
-						index_ii=int((index_i+1)/2); index_jj=2*index_j-1 !index_ii is global index in ButterflyVector(level_butterfly-level+2)
+						index_ii=int((index_i+1)/2); index_jj=2*index_j-1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
 
-						index_ii_loc=(index_i-ButterflyVector(level_butterfly-level+1)%idx_r)/ButterflyVector(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in ButterflyVector(level_butterfly-level+1)
-						index_jj_loc=(index_j-ButterflyVector(level_butterfly-level+1)%idx_c)/ButterflyVector(level_butterfly-level+1)%inc_c+1
+						index_ii_loc=(index_i-BFvec%vec(level_butterfly-level+1)%idx_r)/BFvec%vec(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+						index_jj_loc=(index_j-BFvec%vec(level_butterfly-level+1)%idx_c)/BFvec%vec(level_butterfly-level+1)%inc_c+1
 
-						index_i_loc_s=(index_ii-ButterflyVector(level_butterfly-level+2)%idx_r)/ButterflyVector(level_butterfly-level+2)%inc_r+1 !index_i_loc_s is local index in ButterflyVector(level_butterfly-level+2)
+						index_i_loc_s=(index_ii-BFvec%vec(level_butterfly-level+2)%idx_r)/BFvec%vec(level_butterfly-level+2)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
 						index_i_loc_k=(index_i-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
-						index_j_loc_s=(index_jj-ButterflyVector(level_butterfly-level+2)%idx_c)/ButterflyVector(level_butterfly-level+2)%inc_c+1
+						index_j_loc_s=(index_jj-BFvec%vec(level_butterfly-level+2)%idx_c)/BFvec%vec(level_butterfly-level+2)%inc_c+1
 						index_j_loc_k=(2*index_j-1-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
 
 
 						mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
 						nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
-						if(.not. allocated(ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
-							allocate (ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix(nn,num_vectors))
-							ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+						if(.not. allocated(BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
+							allocate (BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix(nn,num_vectors))
+							BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
 						endif
-						! write(*,*)index_ii_loc,index_jj_loc,shape(ButterflyVector(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(ButterflyVector(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,ButterflyVector(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm,ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm,cone,cone,flop=flop)
+						! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm,cone,cone,flop=flop)
 						flops = flops + flop
 
 
 						mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,1)
 						nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,2)
-						if(.not. allocated(ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix))then
-							allocate (ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix(nn,num_vectors))
-							ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix=0
+						if(.not. allocated(BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix))then
+							allocate (BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix(nn,num_vectors))
+							BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix=0
 						endif
-						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,mm,ButterflyVector(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm,ButterflyVector(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix,nn,'T','N',nn,num_vectors,mm,cone,cone,flop=flop)
+						call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,mm,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s+1)%matrix,nn,'T','N',nn,num_vectors,mm,cone,cone,flop=flop)
 						flops = flops + flop
 
 
@@ -3000,14 +2974,14 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 				endif
 
 
-				do j=1, ButterflyVector(level_butterfly-level+1)%nc
-					do i=1, ButterflyVector(level_butterfly-level+1)%nr
-						deallocate (ButterflyVector(level_butterfly-level+1)%blocks(i,j)%matrix)
+				do j=1, BFvec%vec(level_butterfly-level+1)%nc
+					do i=1, BFvec%vec(level_butterfly-level+1)%nr
+						deallocate (BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
 					enddo
 				enddo
 
 				if(level/=0)then
-					call BF_exchange_matvec(blocks,ButterflyVector(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','R')
+					call BF_exchange_matvec(blocks,BFvec%vec(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','R')
 				endif
 			enddo
 
@@ -3017,7 +2991,7 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 					nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
 					! write(*,*)nn,arr_acc_n(j)
 					do ii=1, nn
-						random2(ii+arr_acc_n(j),jj)=b*random2(ii+arr_acc_n(j),jj)+a*ButterflyVector(level_butterfly+2)%blocks(1,j)%matrix(ii,jj)
+						random2(ii+arr_acc_n(j),jj)=b*random2(ii+arr_acc_n(j),jj)+a*BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix(ii,jj)
 					enddo
 				enddo
 			enddo
@@ -3026,15 +3000,15 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 
 
 		do level=0, level_butterfly+2
-			do j=1, ButterflyVector(level)%nc
-				do i=1, ButterflyVector(level)%nr
-					if(allocated(ButterflyVector(level)%blocks(i,j)%matrix))deallocate (ButterflyVector(level)%blocks(i,j)%matrix)
+			do j=1, BFvec%vec(level)%nc
+				do i=1, BFvec%vec(level)%nr
+					if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate (BFvec%vec(level)%blocks(i,j)%matrix)
 				enddo
 			enddo
-			deallocate (ButterflyVector(level)%blocks)
+			deallocate (BFvec%vec(level)%blocks)
 		enddo
 
-		deallocate (ButterflyVector)
+		deallocate (BFvec%vec)
 		deallocate(arr_acc_m,arr_acc_n)
 
 
@@ -3043,6 +3017,387 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
     return
 
 end subroutine BF_block_MVP_dat
+
+
+
+!**** Matvec of partial levels of BF with vectors
+! if chara=='N', out=BF(level_end:0)*vec, if chara=='T', out=vec*BF(level_butterfly+1:level_end).
+	!blocks: working BF
+	!chara: 'N' or 'T'
+	!num_vectors: number of vectors
+	!VectIn: dimension (mnloc,num_vectors) the local input vectors
+	!BFvec: storing the result of partial matvec
+	!level_end: the last level of the operator
+	!ptree: process tree
+	!stats: statistics
+subroutine BF_block_MVP_partial(blocks,chara,num_vectors,VectIn,BFvec,level_end,ptree,msh,stats)
+
+    use BPACK_DEFS
+	use misc
+    implicit none
+
+    integer index_i, index_j, na, nb, index_start, num_vectors
+    integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
+    integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
+    integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+    integer vector_a, vector_b, nn1, nn2, mm1, mm2,level_half,level_final
+	integer idx_r,inc_r,nr,idx_c,inc_c,nc
+	integer idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0
+    DT ctemp
+    character chara
+	type(matrixblock)::blocks
+	type(proctree)::ptree
+	integer pgno,comm,ierr
+	type(Hstat)::stats
+	type(mesh)::msh
+	real(kind=8)::flop,flops
+	integer index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,level_end
+
+    type(butterfly_vec) :: BFvec
+    DT :: VectIn(:,:)
+	DT,allocatable::matrixtemp(:,:),matrixtemp1(:,:),Vout_tmp(:,:)
+
+	integer,allocatable:: arr_acc_m(:),arr_acc_n(:)
+
+	integer idxs,groupn_start,groupm_start
+
+	level_butterfly=blocks%level_butterfly
+	pgno = blocks%pgno
+	comm = ptree%pgrp(pgno)%comm
+	if(comm==MPI_COMM_NULL)then
+		write(*,*)'ninin',pgno,comm==MPI_COMM_NULL,ptree%MyID
+	endif
+
+	call assert(IOwnPgrp(ptree,pgno),'I do not share this block!')
+
+
+
+	if(BF_checkNAN(blocks))then
+		write(*,*)'NAN in 0 BF_block_MVP_partial'
+		stop
+	end if
+
+	if (chara=='N') then
+
+		if(isnan(sum(abs(VectIn(:,1))**2)))then
+			write(*,*)'NAN in 1 BF_block_MVP_partial'
+			stop
+		end if
+
+		level_butterfly=blocks%level_butterfly
+		num_blocks=2**level_butterfly
+		level_half = blocks%level_half
+		call assert(level_half>=level_end,'partial matvec with chara=N requires row-wise ordering')
+
+		if(.not. allocated(BFvec%vec))allocate(BFvec%vec(0:level_butterfly+2))
+
+		allocate (BFvec%vec(0)%blocks(1,blocks%ButterflyV%nblk_loc))
+		BFvec%vec(0)%num_row=1
+		BFvec%vec(0)%num_col=num_blocks
+		BFvec%vec(0)%idx_r=1
+		BFvec%vec(0)%inc_r=1
+		BFvec%vec(0)%nr=1
+		BFvec%vec(0)%idx_c=blocks%ButterflyV%idx
+		BFvec%vec(0)%inc_c=blocks%ButterflyV%inc
+		BFvec%vec(0)%nc=blocks%ButterflyV%nblk_loc
+
+
+
+		groupn_start=blocks%col_group*2**level_butterfly
+		call GetLocalBlockRange(ptree,blocks%pgno,0,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+		!$omp parallel do default(shared) private(i,nn,ii,jj,idxs)
+		do i=1, BFvec%vec(0)%nc
+			nn = msh%basis_group(groupn_start+(i-1)*inc_c+idx_c-1)%tail-msh%basis_group(groupn_start+(i-1)*inc_c+idx_c-1)%head+1
+			idxs = msh%basis_group(groupn_start+(i-1)*inc_c+idx_c-1)%head-msh%basis_group(groupn_start+idx_c-1)%head
+			allocate (BFvec%vec(0)%blocks(1,i)%matrix(nn,num_vectors))
+			do ii=1, nn
+				do jj=1, num_vectors
+					BFvec%vec(0)%blocks(1,i)%matrix(ii,jj)=VectIn(ii+idxs,jj)
+				enddo
+			enddo
+		enddo
+		!$omp end parallel do
+
+
+
+
+		do level=0, level_end
+			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+
+			BFvec%vec(level+1)%idx_r=idx_r
+			BFvec%vec(level+1)%inc_r=inc_r
+			BFvec%vec(level+1)%nr=nr
+			BFvec%vec(level+1)%idx_c=idx_c
+			BFvec%vec(level+1)%inc_c=inc_c
+			BFvec%vec(level+1)%nc=nc
+			if (level/=level_butterfly+1) then
+				BFvec%vec(level+1)%num_row=2**level
+				BFvec%vec(level+1)%num_col=2**(level_butterfly-level)
+			else
+				BFvec%vec(level+1)%num_row=2**level_butterfly
+				BFvec%vec(level+1)%num_col=1
+			endif
+			if(level_half/=level)then ! the last level doesn't require doubling block columns
+			if(nc==1 .and. 2**(level_butterfly-level)>1)then ! double the number of local block columns used for MPI communication
+				BFvec%vec(level+1)%nc=2
+				BFvec%vec(level+1)%idx_c=BFvec%vec(level+1)%idx_c-1+mod(BFvec%vec(level+1)%idx_c,2)
+			endif
+			endif
+			allocate(BFvec%vec(level+1)%blocks(BFvec%vec(level+1)%nr,BFvec%vec(level+1)%nc))
+
+			if (level==0) then
+				flops=0
+				!$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
+				do j=1, blocks%ButterflyV%nblk_loc
+					index_j=(j-1)*inc_c+idx_c
+					index_j_loc_s=(index_j-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
+					rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
+					nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+					allocate (BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix(rank,num_vectors))
+					BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix=0
+
+					call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(0)%blocks(1,j)%matrix,nn,BFvec%vec(1)%blocks(1,index_j_loc_s)%matrix,rank,'T','N',rank,num_vectors,nn,cone,czero,flop=flop)
+					flops=flops+flop
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			elseif (level==level_butterfly+1) then
+				flops=0
+				!$omp parallel do default(shared) private(i,rank,mm,flop) reduction(+:flops)
+				do i=1, blocks%ButterflyU%nblk_loc
+					rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
+					mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+					allocate (BFvec%vec(level+1)%blocks(i,1)%matrix(mm,num_vectors))
+					BFvec%vec(level+1)%blocks(i,1)%matrix=0
+
+					call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(level)%blocks(i,1)%matrix,rank,BFvec%vec(level+1)%blocks(i,1)%matrix,mm,'N','N',mm,num_vectors,rank,cone,czero,flop=flop)
+					flops = flops + flop
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			else
+				flops=0
+				!$omp parallel do default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+
+				do index_ij=1, nr*nc
+					index_j_loc = (index_ij-1)/nr+1
+					index_i_loc= mod(index_ij-1,nr) + 1  !index_i_loc is local index of row-wise ordering at current level
+					index_i=(index_i_loc-1)*inc_r+idx_r  !index_i is global index of row-wise ordering at current level
+					index_j=(index_j_loc-1)*inc_c+idx_c
+
+					index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1 !index_ii is global index in BFvec%vec(level)
+
+					index_ii_loc=(index_ii-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level)
+					index_jj_loc=(index_jj-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
+
+
+					index_i_loc_s=(index_i-BFvec%vec(level+1)%idx_r)/BFvec%vec(level+1)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level+1)
+					index_i_loc_k=(index_i-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
+					index_j_loc_s=(index_j-BFvec%vec(level+1)%idx_c)/BFvec%vec(level+1)%inc_c+1
+					index_j_loc_k=(2*index_j-1-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
+
+					nn1=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
+					nn2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,2)
+					mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
+
+					allocate (BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,num_vectors))
+					BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+
+					call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,nn1,BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn1,cone,cone,flop=flop)
+					flops = flops + flop
+
+					call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix,nn2,BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,mm,'N','N',mm,num_vectors,nn2,cone,cone,flop=flop)
+					flops = flops + flop
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			endif
+
+			do j=1, BFvec%vec(level)%nc
+				do i=1, BFvec%vec(level)%nr
+					if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate (BFvec%vec(level)%blocks(i,j)%matrix)
+				enddo
+			enddo
+			if(level_half/=level)then
+				call BF_exchange_matvec(blocks,BFvec%vec(level+1),num_vectors,stats,ptree,level,'R','B')
+			endif
+		enddo
+
+		! if(level_half+1/=0)then
+			! call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half,'R','C')
+		! else
+			! call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half+1,'R','C')
+		! endif
+
+		! deallocate(arr_acc_n)
+
+	elseif (chara=='T') then
+
+		! allocate(arr_acc_m(blocks%ButterflyU%nblk_loc))
+		! k2=0
+		! do i=1, blocks%ButterflyU%nblk_loc
+			! arr_acc_m(i) = k2
+			! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+			! k2 =k2 +mm
+		! enddo
+
+
+		level_butterfly=blocks%level_butterfly
+		num_blocks=2**level_butterfly
+		level_half = blocks%level_half
+		call assert(level_half+1<=level_end,'partial matvec with chara=T requires column-wise ordering')
+
+		if(.not. allocated(BFvec%vec))allocate(BFvec%vec(0:level_butterfly+2))
+		allocate (BFvec%vec(0)%blocks(blocks%ButterflyU%nblk_loc,1))
+		BFvec%vec(0)%num_row=num_blocks
+		BFvec%vec(0)%num_col=1
+		BFvec%vec(0)%idx_r=blocks%ButterflyU%idx
+		BFvec%vec(0)%inc_r=blocks%ButterflyU%inc
+		BFvec%vec(0)%nr=blocks%ButterflyU%nblk_loc
+		BFvec%vec(0)%idx_c=1
+		BFvec%vec(0)%inc_c=1
+		BFvec%vec(0)%nc=1
+
+
+		groupm_start=blocks%row_group*2**level_butterfly
+		call GetLocalBlockRange(ptree,blocks%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+		!$omp parallel do default(shared) private(i,mm,ii,jj,idxs)
+		do i=1, BFvec%vec(0)%nr
+			mm = msh%basis_group(groupm_start+(i-1)*inc_r+idx_r-1)%tail-msh%basis_group(groupm_start+(i-1)*inc_r+idx_r-1)%head+1
+			idxs = msh%basis_group(groupm_start+(i-1)*inc_r+idx_r-1)%head-msh%basis_group(groupm_start+idx_r-1)%head
+			allocate (BFvec%vec(0)%blocks(i,1)%matrix(mm,num_vectors))
+			do ii=1, mm
+				do jj=1, num_vectors
+					BFvec%vec(0)%blocks(i,1)%matrix(ii,jj)=VectIn(ii+idxs,jj)
+				enddo
+			enddo
+		enddo
+		!$omp end parallel do
+
+
+		do level=level_butterfly+1, level_end,-1
+			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+
+			BFvec%vec(level_butterfly-level+2)%idx_r=idx_r
+			BFvec%vec(level_butterfly-level+2)%inc_r=inc_r
+			BFvec%vec(level_butterfly-level+2)%nr=nr
+			BFvec%vec(level_butterfly-level+2)%idx_c=idx_c
+			BFvec%vec(level_butterfly-level+2)%inc_c=inc_c
+			BFvec%vec(level_butterfly-level+2)%nc=nc
+			if (level/=0) then
+				BFvec%vec(level_butterfly-level+2)%num_row=2**(level-1)
+				BFvec%vec(level_butterfly-level+2)%num_col=2**(level_butterfly-level+1)
+			else
+				BFvec%vec(level_butterfly-level+2)%num_row=1
+				BFvec%vec(level_butterfly-level+2)%num_col=2**level_butterfly
+			endif
+			if(level_half+1/=level)then ! the last level doesn't require doubling block rows
+			if(nr==1 .and. 2**(level-1)>1)then ! double the number of local block rows used for MPI communication
+				BFvec%vec(level_butterfly-level+2)%nr=2
+				BFvec%vec(level_butterfly-level+2)%idx_r=BFvec%vec(level_butterfly-level+2)%idx_r-1+mod(BFvec%vec(level_butterfly-level+2)%idx_r,2)
+			endif
+			endif
+			allocate(BFvec%vec(level_butterfly-level+2)%blocks(BFvec%vec(level_butterfly-level+2)%nr,BFvec%vec(level_butterfly-level+2)%nc))
+
+			if (level==level_butterfly+1) then
+				flops=0
+				!$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
+				do i=1, blocks%ButterflyU%nblk_loc
+					index_i=(i-1)*blocks%ButterflyU%inc+blocks%ButterflyU%idx
+					index_i_loc_s=(index_i-BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r+1
+
+					rank=size(blocks%ButterflyU%blocks(i)%matrix,2)
+					mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
+					allocate (BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix(rank,num_vectors))
+					BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix=0
+
+					call gemmf90(blocks%ButterflyU%blocks(i)%matrix,mm,BFvec%vec(0)%blocks(i,1)%matrix,mm,BFvec%vec(1)%blocks(index_i_loc_s,1)%matrix,rank,'T','N',rank,num_vectors,mm,cone,czero,flop=flop)
+					flops = flops + flop
+
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			elseif (level==0) then
+				flops=0
+				!$omp parallel do default(shared) private(j,rank,nn,flop) reduction(+:flops)
+				do j=1, blocks%ButterflyV%nblk_loc
+					nn=size(blocks%ButterflyV%blocks(j)%matrix,1)
+					rank=size(blocks%ButterflyV%blocks(j)%matrix,2)
+					allocate (BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix(nn,num_vectors))
+					BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix=0
+					call gemmf90(blocks%ButterflyV%blocks(j)%matrix,nn,BFvec%vec(level_butterfly+1)%blocks(1,j)%matrix,rank,BFvec%vec(level_butterfly+2)%blocks(1,j)%matrix,nn,'N','N',nn,num_vectors,rank,cone,czero,flop=flop)
+					flops = flops + flop
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			else
+				flops=0
+				!$omp parallel do default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+				do index_ij=1, nr*nc
+					index_j_loc = (index_ij-1)/nr+1
+					index_i_loc= mod(index_ij-1,nr) + 1  !index_i_loc is local index of column-wise ordering at current level
+					index_i=(index_i_loc-1)*inc_r+idx_r  !index_i is global index of column-wise ordering at current level
+					index_j=(index_j_loc-1)*inc_c+idx_c
+
+					index_ii=2*index_i-1; index_jj=int((index_j+1)/2) !index_ii is global index in BFvec%vec(level_butterfly-level+1)
+
+					index_ii_loc=(index_ii-BFvec%vec(level_butterfly-level+1)%idx_r)/BFvec%vec(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+					index_jj_loc=(index_jj-BFvec%vec(level_butterfly-level+1)%idx_c)/BFvec%vec(level_butterfly-level+1)%inc_c+1
+
+					index_i_loc_s=(index_i-BFvec%vec(level_butterfly-level+2)%idx_r)/BFvec%vec(level_butterfly-level+2)%inc_r+1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+					index_i_loc_k=(2*index_i-1-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
+					index_j_loc_s=(index_j-BFvec%vec(level_butterfly-level+2)%idx_c)/BFvec%vec(level_butterfly-level+2)%inc_c+1
+					index_j_loc_k=(index_j-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
+
+					mm1=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
+					mm2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,1)
+					nn=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
+					allocate (BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix(nn,num_vectors))
+					BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix=0
+
+
+					call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,mm1,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,mm1,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm1,cone,cone,flop=flop)
+					flops = flops + flop
+					call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix,mm2,BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc+1,index_jj_loc)%matrix,mm2,BFvec%vec(level_butterfly-level+2)%blocks(index_i_loc_s,index_j_loc_s)%matrix,nn,'T','N',nn,num_vectors,mm2,cone,cone,flop=flop)
+					flops = flops + flop
+
+				enddo
+				!$omp end parallel do
+				stats%Flop_Tmp = stats%Flop_Tmp + flops
+			endif
+
+			do j=1, BFvec%vec(level_butterfly-level+1)%nc
+				do i=1, BFvec%vec(level_butterfly-level+1)%nr
+					deallocate (BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
+				enddo
+			enddo
+
+			if(level_half+1/=level)then
+				call BF_exchange_matvec(blocks,BFvec%vec(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','B')
+			endif
+		enddo
+
+		! if(level_half/=level_butterfly+1)then
+			! call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half+1,'C','R')
+		! else
+			! call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half,'C','R')
+		! endif
+		! deallocate(arr_acc_m)
+	endif
+
+
+
+
+
+    return
+
+end subroutine BF_block_MVP_partial
+
+
+
+
+
+
 
 
 
@@ -3159,7 +3514,7 @@ subroutine BF_value(mi,nj,blocks,value)
 end subroutine BF_value
 
 
-subroutine BF_get_rank(block_i)
+subroutine BF_get_rank(block_i,ptree)
 use BPACK_DEFS
 use misc
 implicit none
@@ -3168,7 +3523,8 @@ type(matrixblock)::block_i
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly
-
+integer::ierr
+type(proctree)::ptree
 
 block_i%rankmin = 100000
 block_i%rankmax = -100000
@@ -3205,6 +3561,10 @@ do level=0, level_butterfly+1
 		enddo
 	endif
 enddo
+
+
+call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(block_i%pgno)%Comm,ierr)
+call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%rankmin,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_i%pgno)%Comm,ierr)
 
 
 end subroutine BF_get_rank

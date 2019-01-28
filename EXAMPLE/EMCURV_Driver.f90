@@ -195,7 +195,7 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
-	! call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
+   ! call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
 
 	!**** factorization phase
     call BPACK_Factorization(bmat,option,stats,ptree,msh)

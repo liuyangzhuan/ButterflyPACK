@@ -711,7 +711,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	else
 		! write(*,*)'Schulz Iteration Time:',n2-n1
 		call BF_delete(block_o,1)
-		call BF_get_rank(block_Xn)
+		call BF_get_rank(block_Xn,ptree)
 		rank_new_max = block_Xn%rankmax
 		call BF_copy_delete(block_Xn,block_o,Memory)
 		call BF_delete(schulz_op%matrices_block,1)
@@ -1504,12 +1504,6 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 				 enddo
 			 enddo
 		enddo
-
-		call BF_get_rank(blocks_A)
-		call BF_get_rank(blocks_B)
-		call BF_get_rank(blocks_C)
-		call BF_get_rank(blocks_D)
-
 	end if
 
 	! assign M_p,N_p,M_p_db,N_p_db according to the block row layout
@@ -1527,6 +1521,11 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
 		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
 		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,1)	! is this needed?
 	enddo
+
+	call BF_get_rank(blocks_A,ptree)
+	call BF_get_rank(blocks_B,ptree)
+	call BF_get_rank(blocks_C,ptree)
+	call BF_get_rank(blocks_D,ptree)
 
 
 	! mm1=msh%basis_group(blocks_A%row_group)%tail-msh%basis_group(blocks_A%row_group)%head+1
