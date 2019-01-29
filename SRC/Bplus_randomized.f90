@@ -366,8 +366,6 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	block_rand%pgno_db = block%pgno_db
 
 
-
-
 	if(associated(block%N_p))then
 		allocate(block_rand%N_p(size(block%N_p,1),2))
 		block_rand%N_p = block%N_p
@@ -393,53 +391,81 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 
 	!****** row-wise ordering from right side
 	do level=0, level_half
-		call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
-		if(level==0)then
-			block_rand%ButterflyV%idx=idx_c
-			block_rand%ButterflyV%inc=inc_c
-			block_rand%ButterflyV%nblk_loc=nc
-			block_rand%ButterflyV%num_blk=num_blocks
-		elseif(level==level_butterfly+1)then
-			block_rand%ButterflyU%idx=idx_r
-			block_rand%ButterflyU%inc=inc_r
-			block_rand%ButterflyU%nblk_loc=nr
-			block_rand%ButterflyU%num_blk=num_blocks
+		if(level_butterfly==0)then
+			if(level==0)then
+				block_rand%ButterflyV%idx=1
+				block_rand%ButterflyV%inc=1
+				block_rand%ButterflyV%nblk_loc=1
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=1
+				block_rand%ButterflyU%inc=1
+				block_rand%ButterflyU%nblk_loc=1
+				block_rand%ButterflyU%num_blk=num_blocks
+			endif
 		else
-			block_rand%ButterflyKerl(level)%num_row=2**level
-			block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
-			block_rand%ButterflyKerl(level)%idx_r=idx_r
-			block_rand%ButterflyKerl(level)%inc_r=inc_r
-			block_rand%ButterflyKerl(level)%nr=nr
-			block_rand%ButterflyKerl(level)%idx_c=idx_c*2-1
-			block_rand%ButterflyKerl(level)%inc_c=inc_c
-			block_rand%ButterflyKerl(level)%nc=nc*2
+			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+			if(level==0)then
+				block_rand%ButterflyV%idx=idx_c
+				block_rand%ButterflyV%inc=inc_c
+				block_rand%ButterflyV%nblk_loc=nc
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=idx_r
+				block_rand%ButterflyU%inc=inc_r
+				block_rand%ButterflyU%nblk_loc=nr
+				block_rand%ButterflyU%num_blk=num_blocks
+			else
+				block_rand%ButterflyKerl(level)%num_row=2**level
+				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+				block_rand%ButterflyKerl(level)%idx_r=idx_r
+				block_rand%ButterflyKerl(level)%inc_r=inc_r
+				block_rand%ButterflyKerl(level)%nr=nr
+				block_rand%ButterflyKerl(level)%idx_c=idx_c*2-1
+				block_rand%ButterflyKerl(level)%inc_c=inc_c
+				block_rand%ButterflyKerl(level)%nc=nc*2
+			endif
 		endif
 	enddo
 
 	!****** column-wise ordering from left side
 	level_final=level_half+1
 	do level=level_butterfly+1,level_final, -1
-		call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
-
-		if(level==0)then
-			block_rand%ButterflyV%idx=idx_c
-			block_rand%ButterflyV%inc=inc_c
-			block_rand%ButterflyV%nblk_loc=nc
-			block_rand%ButterflyV%num_blk=num_blocks
-		elseif(level==level_butterfly+1)then
-			block_rand%ButterflyU%idx=idx_r
-			block_rand%ButterflyU%inc=inc_r
-			block_rand%ButterflyU%nblk_loc=nr
-			block_rand%ButterflyU%num_blk=num_blocks
+		if(level_butterfly==0)then
+			if(level==0)then
+				block_rand%ButterflyV%idx=1
+				block_rand%ButterflyV%inc=1
+				block_rand%ButterflyV%nblk_loc=1
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=1
+				block_rand%ButterflyU%inc=1
+				block_rand%ButterflyU%nblk_loc=1
+				block_rand%ButterflyU%num_blk=num_blocks
+			endif
 		else
-			block_rand%ButterflyKerl(level)%num_row=2**level
-			block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
-			block_rand%ButterflyKerl(level)%idx_r=idx_r*2-1
-			block_rand%ButterflyKerl(level)%inc_r=inc_r
-			block_rand%ButterflyKerl(level)%nr=nr*2
-			block_rand%ButterflyKerl(level)%idx_c=idx_c
-			block_rand%ButterflyKerl(level)%inc_c=inc_c
-			block_rand%ButterflyKerl(level)%nc=nc
+			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+
+			if(level==0)then
+				block_rand%ButterflyV%idx=idx_c
+				block_rand%ButterflyV%inc=inc_c
+				block_rand%ButterflyV%nblk_loc=nc
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=idx_r
+				block_rand%ButterflyU%inc=inc_r
+				block_rand%ButterflyU%nblk_loc=nr
+				block_rand%ButterflyU%num_blk=num_blocks
+			else
+				block_rand%ButterflyKerl(level)%num_row=2**level
+				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+				block_rand%ButterflyKerl(level)%idx_r=idx_r*2-1
+				block_rand%ButterflyKerl(level)%inc_r=inc_r
+				block_rand%ButterflyKerl(level)%nr=nr*2
+				block_rand%ButterflyKerl(level)%idx_c=idx_c
+				block_rand%ButterflyKerl(level)%inc_c=inc_c
+				block_rand%ButterflyKerl(level)%nc=nc
+			endif
 		endif
 	enddo
 

@@ -423,7 +423,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,stats,option,element_Zmn)
 					stats%Mem_Direct_for=stats%Mem_Direct_for+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 				endif
-				! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
+				! ! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
 				! if(level>=option%level_check .and. level_c/=ho_bf1%Maxlevel+1)then
 					! call BF_compress_test(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,element_Zmn,ptree,option,stats)
 					! !stop

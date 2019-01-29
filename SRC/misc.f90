@@ -2799,6 +2799,7 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 			level_p=level_p+1
 		enddo
 		ith = ith - 2**level_p + 1
+		call assert(level_p<=level_butterfly,'too many processes sharing this block')
 		nleaf = 2**(level_butterfly-level_p)
 		if(dir=='R')then
 			idx_c=(ith-1)*nleaf+1

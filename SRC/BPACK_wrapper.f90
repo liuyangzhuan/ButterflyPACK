@@ -1363,7 +1363,7 @@ subroutine C_BF_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bf_for_Cptr,option_Cptr,
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(ptree_Cptr, ptree)
-
+	stats%Flop_Tmp=0
 	stats%Flop_C_Mult=0
 	stats%Time_C_Mult=0
 	xout=0

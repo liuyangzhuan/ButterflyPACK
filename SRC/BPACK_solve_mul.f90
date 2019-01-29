@@ -60,6 +60,7 @@ subroutine BPACK_Solution(bmat,x,b,Ns_loc,num_vectors,option,ptree,stats)
 		deallocate(r0_initial)
 	else
 		call BPACK_Inv_Mult('N',Ns_loc,num_vectors,b,x,bmat,ptree,option,stats)
+		stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	end if
 
 
@@ -275,6 +276,7 @@ end subroutine BPACK_Solution
 		y=x
 	else if (precond==HODLRPRECON)then
 		call BPACK_Inv_Mult('N',nn_loc,1,x,y,bmat,ptree,option,stats)
+		stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 	endif
 	end subroutine BPACK_ApplyPrecon
 
@@ -501,7 +503,7 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 			if(level==ho_bf1%Maxlevel+1)then
 				call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,&
 				&Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ctemp1,ctemp2)
-				stats%Flop_Sol = stats%Flop_Sol + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)
+				stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc-idx_start_loc+1,num_vectors,idx_end_loc-idx_start_loc+1)
 			else
 				call Bplus_block_MVP_inverse_dat(ho_bf1,level,ii,trans_tmp,idx_end_loc-idx_start_loc+1,num_vectors,Vout(idx_start_loc:idx_end_loc,1:num_vectors),vec_new(idx_start_loc:idx_end_loc,1:num_vectors),ptree,stats)
 
@@ -512,8 +514,6 @@ subroutine HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,ho_bf1,ptree,option,stat
 	! Vout = vec_new(1:Ns,1)
 	! deallocate(vec_old)
 	deallocate(vec_new)
-
-    stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 
 		! do ii=1,Ns
 		! write(131,*)abs(Vout(ii,1))
@@ -627,6 +627,8 @@ subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
     type(proctree)::ptree
 	type(Hstat)::stats
 	type(Hoption)::option
+
+	stats%Flop_Tmp=0
 
 	trans_tmp = trans
 	if(trans=='C')then
