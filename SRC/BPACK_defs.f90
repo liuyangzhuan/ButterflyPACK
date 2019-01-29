@@ -157,9 +157,9 @@ module BPACK_DEFS
 
      !**** keep track of skeleton columns and rows for one butterfly level
      type butterfly_skel
-		 integer nc,nr ! # local block rows/columns
-		 integer idx_c,idx_r ! column and row number of the first local block
-		 integer inc_c,inc_r ! increment of local block row and columns
+		 integer:: nc=0,nr=0 ! # local block rows/columns
+		 integer:: idx_c=0,idx_r=0 ! column and row number of the first local block
+		 integer:: inc_c=0,inc_r=0 ! increment of local block row and columns
          type(butterflyindex),allocatable :: inds(:,:)
      end type butterfly_skel
 
@@ -168,9 +168,9 @@ module BPACK_DEFS
      type butterfly_kerl
          integer num_col ! # block columns
          integer num_row ! # block rows
-		 integer nc,nr ! # local block rows/columns
-		 integer idx_c,idx_r ! column and row number of the first local block
-		 integer inc_c,inc_r ! increment of local block row and columns
+		 integer:: nc=0,nr=0 ! # local block rows/columns
+		 integer:: idx_c=0,idx_r=0 ! column and row number of the first local block
+		 integer:: inc_c=0,inc_r=0 ! increment of local block row and columns
          type(butterflymatrix),allocatable :: blocks(:,:)
      end type butterfly_kerl
 
@@ -178,9 +178,9 @@ module BPACK_DEFS
 	 !**** one outter most factor
      type butterfly_UV
          integer num_blk
-		 integer:: nblk_loc=1 ! # local block rows/columns
-		 integer:: idx=1 ! column or row number of the first local block
-		 integer:: inc=1 ! increment of local block row or columns
+		 integer:: nblk_loc=0 ! # local block rows/columns
+		 integer:: idx=0 ! column or row number of the first local block
+		 integer:: inc=0 ! increment of local block row or columns
          type(butterflymatrix),allocatable :: blocks(:)
      end type butterfly_UV
 

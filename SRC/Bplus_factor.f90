@@ -222,29 +222,18 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 	block_off1 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1)%LL(1)%matrices_block(1)
 	block_off2 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2)%LL(1)%matrices_block(1)
 
-
-	! ! allocate BP_inverse_schur on the second process grid
-	! if(.not. associated(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL))then
-		! block_off2 => ho_bf1%levels(level_c)%BP(rowblock*2)%LL(1)%matrices_block(1)
-		! allocate(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(LplusMax))
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%Lplus=ho_bf1%levels(level_c)%BP(rowblock*2)%Lplus
-		! do ll=1,LplusMax
-			! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(ll)%Nbound=0
-		! end do
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%Nbound = 1
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%rankmax = 0
-		! allocate(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1))
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%level = block_off2%level
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%level_butterfly = block_off2%level_butterfly
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%col_group = block_off2%col_group
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%row_group = block_off2%col_group
-		! ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%style = 2
-	! endif
-
 	block_o =>  ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
 	call BF_delete(block_o,1)
 
 	block_o%level_butterfly = 0
+	block_o%ButterflyU%nblk_loc=1
+	block_o%ButterflyU%inc=1
+	block_o%ButterflyU%idx=1
+	block_o%ButterflyV%nblk_loc=1
+	block_o%ButterflyV%inc=1
+	block_o%ButterflyV%idx=1
+
+
 	allocate(block_o%ButterflyU%blocks(1))
 	allocate(block_o%ButterflyV%blocks(1))
 
@@ -626,7 +615,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	integer niter
 	real(kind=8):: error_inout,rate,err_avr
 	integer itermax,ntry,converged
-	real(kind=8):: n1,n2,Memory,memory_temp
+	real(kind=8):: n1,n2,Memory,memory_temp,norm1,norm2
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
@@ -635,13 +624,14 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	DT,allocatable::VecIn(:,:),VecOut(:,:),VecBuff(:,:)
 	DT::ctemp1,ctemp2
 	character(len=10)::iternumber
+	integer ierr
 
 	error_inout=0
 	level_butterfly=block_o%level_butterfly
 
 	Memory = 0
 
-	mm = block_o%M
+	mm = block_o%M_loc
 
 	num_vect=1
 	allocate(VecIn(mm,num_vect))
@@ -654,7 +644,9 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 	call BF_copy('N',block_o,schulz_op%matrices_block,memory_temp)
 	call BF_copy('N',block_o,block_Xn,memory_temp)
 
+
 	call BF_compute_schulz_init(schulz_op,option,ptree,stats)
+
 
 	itermax=100
 	converged=0
@@ -683,11 +675,15 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 		! AXnR
 		call BF_block_MVP_dat(schulz_op%matrices_block,'N',mm,mm,num_vect,VecBuff,VecOut,ctemp1,ctemp2,ptree,stats)
 		VecOut = 	VecBuff+VecOut
-		error_inout = fnorm(VecOut-VecIn,mm,num_vect)/fnorm(VecIn,mm,num_vect)
+
+		norm1 = fnorm(VecOut-VecIn,mm,num_vect)**2d0
+		norm2 = fnorm(VecIn,mm,num_vect)**2d0
+		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm,ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, norm2, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm,ierr)
+		error_inout = sqrt(norm1)/sqrt(norm2)
 
 
-
-		if(option%verbosity>=1)write(*,'(A22,A6,I3,A8,I2,A8,I3,A7,Es14.7)')' Schultz ',' rank:',block_Xn%rankmax,' Iter:',ii,' L_butt:',block_Xn%level_butterfly,' error:',error_inout
+		if(ptree%MyID==Main_ID .and. option%verbosity>=1)write(*,'(A22,A6,I3,A8,I2,A8,I3,A7,Es14.7)')' Schultz ',' rank:',block_Xn%rankmax,' Iter:',ii,' L_butt:',block_Xn%level_butterfly,' error:',error_inout
 
 
 		if(error_inout<option%tol_rand)then
@@ -767,7 +763,7 @@ subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 
 	level_butterfly=schulz_op%matrices_block%level_butterfly
 
-	mm = schulz_op%matrices_block%M
+	mm = schulz_op%matrices_block%M_loc
 	nn=mm
 	num_vect=min(10,nn)
 
@@ -799,8 +795,9 @@ subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 
 
 	! computation of range Q of AR
-	call ComputeRange(mm,num_vect,RandVectOut,ranktmp,0,option%tol_comp,Flops=flop)
-	stats%Flop_tmp = stats%Flop_tmp + flop
+	call PComputeRange(schulz_op%matrices_block%M_p,num_vect,RandVectOut,ranktmp,option%tol_comp,ptree,schulz_op%matrices_block%pgno,flop)
+	stats%Flop_Tmp = stats%Flop_Tmp + flop
+
 
 	! computation of B = Q^c*A
 	RandVectOut=conjg(cmplx(RandVectOut,kind=8))
@@ -808,19 +805,18 @@ subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 	RandVectIn =RandVectOut+RandVectIn
 	RandVectOut=conjg(cmplx(RandVectOut,kind=8))
 
-	! computation of SVD of B and LR of A
-	mn=min(nn,ranktmp)
-	allocate (UU(nn,mn),VV(mn,ranktmp),Singular(mn))
-	call SVD_Truncate(RandVectIn(1:nn,1:ranktmp),nn,ranktmp,mn,UU,VV,Singular,option%tol_comp,rank,flop=flop)
-	stats%Flop_tmp = stats%Flop_tmp + flop
+	! computation of singular values of B
+	mn=min(schulz_op%matrices_block%M,ranktmp)
+	allocate(Singular(mn))
+	Singular=0
+	call PSVDTruncateSigma(schulz_op%matrices_block,RandVectIn,ranktmp,rank,Singular,option,stats,ptree,flop)
+	stats%Flop_Tmp = stats%Flop_Tmp + flop
 	schulz_op%A2norm=Singular(1)
+	deallocate(Singular)
 
-	deallocate(UU,VV,Singular)
 
 	deallocate(RandVectIn)
 	deallocate(RandVectOut)
-
-
 
 
 
@@ -952,7 +948,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 		! stop
 
-		if(option%verbosity>=2 .and. level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' SchurI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
+		if(option%verbosity>=2 .and. level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' RecursiveI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
 
 		call BF_delete(blocks_A,1)
 		call BF_delete(blocks_B,1)

@@ -361,7 +361,7 @@ end subroutine Bplus_block_MVP_dat
 subroutine Bplus_DoubleDistribute(bplus_o,stats,ptree)
 implicit none
 
-integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj
+integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj,level
 type(proctree)::ptree
 integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
@@ -451,11 +451,53 @@ if(bplus_o%Lplus==1)then
 			endif
 		endif
 	else
-		write(*,*)'redistribution of butterfly not implemented'
-				! write(*,*)blocks%N_p,blocks%N_loc,blocks%N_p_db,blocks%rankmax,blocks%pgno
-				! call assert(blocks%N_p(1,2)-blocks%N_p(1,1)+1==blocks%N_loc,'not good')
-				! call assert(blocks%M_p(1,2)-blocks%M_p(1,1)+1==blocks%M_loc,'not good')
-		! stop
+		if(blocks%pgno/=blocks%pgno_db)then
+
+			!*** make sure every process has blocks%ButterflyKerl allocated
+			if(.not. allocated(blocks%ButterflyKerl))then
+				allocate(blocks%ButterflyKerl(blocks%level_butterfly))
+			endif
+
+			do level=0,blocks%level_butterfly+1
+				if(level==0)then
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyV,level,blocks,blocks%pgno_db,blocks%ButterflyV,level,stats,ptree)
+				elseif(level==blocks%level_butterfly+1)then
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyU,level,blocks,blocks%pgno_db,blocks%ButterflyU,level,stats,ptree)
+				else
+					call BF_all2all_ker(blocks,blocks%pgno,blocks%ButterflyKerl(level),level,blocks,blocks%pgno_db,blocks%ButterflyKerl(level),level,stats,ptree)
+				endif
+			enddo
+
+
+			!*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
+			if(.not. IOwnPgrp(ptree,blocks%pgno_db))then
+				deallocate(blocks%ButterflyKerl)
+			endif
+
+
+			if(blocks%M_loc>0)then
+				deallocate(blocks%M_p)
+			endif
+			if(blocks%M_loc_db>0)then
+				blocks%M_loc =blocks%M_loc_db
+				blocks%M_p=>blocks%M_p_db
+				blocks%M_p_db=>NULL()
+				blocks%pgno=blocks%pgno_db
+			endif
+
+			if(blocks%N_loc>0)then
+				deallocate(blocks%N_p)
+			endif
+			if(blocks%N_loc_db>0)then
+				blocks%N_loc =blocks%N_loc_db
+				blocks%N_p=>blocks%N_p_db
+				blocks%N_p_db=>NULL()
+				blocks%pgno=blocks%pgno_db
+			endif
+
+			call BF_get_rank(blocks,ptree)
+
+		endif
 	endif
 
 	n2 = OMP_get_wtime()
@@ -1789,7 +1831,7 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,pid0,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
+	integer ierr,nsendrecv,pid,pid0,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
@@ -1939,17 +1981,17 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 
 		if(sendflag)then
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-			Nskel=size(kerls%blocks(ii,jj)%matrix,1)
+			Nrow=size(kerls%blocks(ii,jj)%matrix,1)
 			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
 			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
-			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nskel
+			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
 			sendquant(pp)%size=sendquant(pp)%size+3
-			do i=1,Nskel*Ncol
-				rr = mod(i-1,Nskel)+1
-				cc = (i-1)/Nskel+1
+			do i=1,Nrow*Ncol
+				rr = mod(i-1,Nrow)+1
+				cc = (i-1)/Nrow+1
 				sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls%blocks(ii,jj)%matrix(rr,cc)
 			enddo
-			sendquant(pp)%size=sendquant(pp)%size+Nskel*Ncol
+			sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
 		endif
 	enddo
 	enddo
@@ -1987,17 +2029,17 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
 			jj=(index_j-kerls%idx_c)/kerls%inc_c+1
 			i=i+1
-			Nskel=NINT(dble(recvquant(pp)%dat(i,1)))
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
 			if(.not. allocated(kerls%blocks(ii,jj)%matrix))then
-				allocate(kerls%blocks(ii,jj)%matrix(Nskel,Ncol))
+				allocate(kerls%blocks(ii,jj)%matrix(Nrow,Ncol))
 				kerls%blocks(ii,jj)%matrix=0
 			endif
-			do j=1,Nskel*Ncol
-				rr = mod(j-1,Nskel)+1
-				cc = (j-1)/Nskel+1
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
 				kerls%blocks(ii,jj)%matrix(rr,cc) = kerls%blocks(ii,jj)%matrix(rr,cc) + recvquant(pp)%dat(i+j,1)
 			enddo
-			i=i+Nskel*Ncol
+			i=i+Nrow*Ncol
 		enddo
 	enddo
 
@@ -2047,7 +2089,7 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
 	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
@@ -2173,18 +2215,18 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
 
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
-			Nskel=size(kerls%blocks(ii,jj)%matrix,1)
+			Nrow=size(kerls%blocks(ii,jj)%matrix,1)
 
 			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
 			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
-			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nskel
+			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
 			sendquant(pp)%size=sendquant(pp)%size+3
-			do i=1,Nskel*Ncol
-				rr = mod(i-1,Nskel)+1
-				cc = (i-1)/Nskel+1
+			do i=1,Nrow*Ncol
+				rr = mod(i-1,Nrow)+1
+				cc = (i-1)/Nrow+1
 				sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls%blocks(ii,jj)%matrix(rr,cc)
 			enddo
-			sendquant(pp)%size=sendquant(pp)%size+Nskel*Ncol
+			sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
 			deallocate(kerls%blocks(ii,jj)%matrix)
 	enddo
 	enddo
@@ -2290,15 +2332,15 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
 			jj=(index_j-kerls%idx_c)/kerls%inc_c+1
 			i=i+1
-			Nskel=NINT(dble(recvquant(pp)%dat(i,1)))
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
 			call assert(.not. allocated(kerls%blocks(ii,jj)%matrix),'receiving dat alreay exists locally')
-			allocate(kerls%blocks(ii,jj)%matrix(Nskel,Ncol))
-			do j=1,Nskel*Ncol
-				rr = mod(j-1,Nskel)+1
-				cc = (j-1)/Nskel+1
+			allocate(kerls%blocks(ii,jj)%matrix(Nrow,Ncol))
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
 				kerls%blocks(ii,jj)%matrix(rr,cc) = recvquant(pp)%dat(i+j,1)
 			enddo
-			i=i+Nskel*Ncol
+			i=i+Nrow*Ncol
 		enddo
 	enddo
 
@@ -2324,6 +2366,738 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 	! time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_all2all_matvec
+
+
+
+
+
+
+
+
+!*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
+!**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
+subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,level_o,stats,ptree)
+
+   use BPACK_DEFS
+   implicit none
+	integer pgno_i,pgno_o,pgno,level_i,level_o
+    integer i, j, level_butterfly_i,level_butterfly_o, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
+    integer level, length_1, length_2, level_blocks
+    integer rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+    real(kind=8) flop
+    DT ctemp
+	type(matrixblock)::block_i,block_o
+	type(Hstat)::stats
+	type(proctree)::ptree
+
+	integer,allocatable::jpvt(:)
+	integer ierr,nsendrecv,pid,tag,nproc,Nrow,Ncol,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer idx_r,idx_c,inc_r,inc_c,nr,nc,num_row,num_col,level_new
+
+	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::S_req(:),R_req(:)
+	integer,allocatable:: statuss(:,:),statusr(:,:)
+	real(kind=8)::n1,n2
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
+	type(butterfly_kerl)::kerls_i,kerls_o
+	integer rr,cc
+	logical all2all
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
+	integer::dist
+	character::mode
+
+
+
+	n1 = OMP_get_wtime()
+
+	nproc = max(ptree%pgrp(pgno_i)%nproc,ptree%pgrp(pgno_o)%nproc)
+	pgno = min(pgno_i,pgno_o)
+	tag = pgno
+
+	if(IOwnPgrp(ptree,pgno_i))then
+		level_butterfly_i=block_i%level_butterfly
+	else
+		level_butterfly_i=-1
+		block_i%level_half=-1
+	endif
+	if(IOwnPgrp(ptree,pgno_o))then
+		level_butterfly_o=block_o%level_butterfly
+	else
+		level_butterfly_o=-1
+		block_o%level_half=-1
+	endif
+	call MPI_ALLREDUCE(MPI_IN_PLACE,level_butterfly_i,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,level_butterfly_o,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%level_half,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,block_o%level_half,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+
+
+	if(level_i<=block_i%level_half)then
+		call assert(level_o<=block_o%level_half,'row-wise ordering is only redistributed to row-wise ordering')
+		mode='R'
+	endif
+
+	if(level_i>block_i%level_half)then
+		call assert(level_o>block_o%level_half,'column-wise ordering is only redistributed to column-wise ordering')
+		mode='C'
+	endif
+
+	call assert((ptree%pgrp(pgno_i)%head<=ptree%pgrp(pgno_o)%head .and. ptree%pgrp(pgno_i)%tail>=ptree%pgrp(pgno_o)%tail) .or. (ptree%pgrp(pgno_o)%head<=ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgno_o)%tail>=ptree%pgrp(pgno_i)%tail),'pgno_i or pgno_o should be contained in the other')
+
+
+	call GetLocalBlockRange(ptree,pgno_o,level_o,level_butterfly_o,idx_r,inc_r,nr,idx_c,inc_c,nc,mode)
+
+	num_row=2**level_o
+	num_col=2**(level_butterfly_o-level_o+1)
+
+	if(mode=='R')then
+		idx_c=idx_c*2-1
+		inc_c=inc_c
+		nc=nc*2
+	elseif(mode=='C')then
+		idx_r=idx_r*2-1
+		inc_r=inc_r
+		nr=nr*2
+	endif
+
+	! allocation of communication quantities
+	allocate(statuss(MPI_status_size,nproc))
+	allocate(statusr(MPI_status_size,nproc))
+	allocate(S_req(nproc))
+	allocate(R_req(nproc))
+	allocate(sendquant(nproc))
+	do ii=1,nproc
+		sendquant(ii)%size=0
+		sendquant(ii)%active=0
+	enddo
+	allocate(recvquant(nproc))
+	do ii=1,nproc
+		recvquant(ii)%size=0
+		recvquant(ii)%active=0
+	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
+
+	! calculate send buffer sizes in the first pass
+	do ii=1,nr
+	do jj=1,nc
+		index_i = (ii-1)*inc_r+idx_r
+		index_j = (jj-1)*inc_c+idx_c
+		if(mode=='R')then
+			index_j0=floor_safe((index_j-1)/2d0)+1
+			index_i0=index_i
+		endif
+		if(mode=='C')then
+			index_i0=floor_safe((index_i-1)/2d0)+1
+			index_j0=index_j
+		endif
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pid)
+		pp=pid-ptree%pgrp(pgno)%head+1
+		if(recvquant(pp)%active==0)then
+			recvquant(pp)%active=1
+			Nrecvactive=Nrecvactive+1
+			recvIDactive(Nrecvactive)=pp
+		endif
+	enddo
+	enddo
+
+
+	do ii=1,kerls_i%nr
+	do jj=1,kerls_i%nc
+		index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r
+		index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c
+		if(mode=='R')then
+			index_j0=floor_safe((index_j-1)/2d0)+1
+			index_i0=index_i
+		endif
+		if(mode=='C')then
+			index_i0=floor_safe((index_i-1)/2d0)+1
+			index_j0=index_j
+		endif
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
+		pp=pid-ptree%pgrp(pgno)%head+1
+		if(sendquant(pp)%active==0)then
+			sendquant(pp)%active=1
+			Nsendactive=Nsendactive+1
+			sendIDactive(Nsendactive)=pp
+		endif
+		sendquant(pp)%size=sendquant(pp)%size+4+size(kerls_i%blocks(ii,jj)%matrix,1)*size(kerls_i%blocks(ii,jj)%matrix,2)
+	enddo
+	enddo
+
+	! communicate receive buffer sizes
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+		recvid=pp-1+ptree%pgrp(pgno)%head
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(pgno)%Comm,S_req(tt),ierr)
+	enddo
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
+	endif
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
+	endif
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		sendquant(pp)%size=0
+	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
+	enddo
+
+
+	! pack the send buffer in the second pass
+	do ii=1,kerls_i%nr
+	do jj=1,kerls_i%nc
+			index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r
+			index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c
+
+			if(mode=='R')then
+				index_j0=floor_safe((index_j-1)/2d0)+1
+				index_i0=index_i
+			endif
+			if(mode=='C')then
+				index_i0=floor_safe((index_i-1)/2d0)+1
+				index_j0=index_j
+			endif
+
+			call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
+
+			pp=pid-ptree%pgrp(pgno)%head+1
+			Nrow=size(kerls_i%blocks(ii,jj)%matrix,1)
+			Ncol=size(kerls_i%blocks(ii,jj)%matrix,2)
+
+			sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
+			sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
+			sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
+			sendquant(pp)%dat(sendquant(pp)%size+4,1)=Ncol
+			sendquant(pp)%size=sendquant(pp)%size+4
+			do i=1,Nrow*Ncol
+				rr = mod(i-1,Nrow)+1
+				cc = (i-1)/Nrow+1
+				sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls_i%blocks(ii,jj)%matrix(rr,cc)
+			enddo
+			sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
+			deallocate(kerls_i%blocks(ii,jj)%matrix)
+	enddo
+	enddo
+	if(allocated(kerls_i%blocks))deallocate(kerls_i%blocks)
+
+	if(nr>0 .and. nc>0)then
+	kerls_o%idx_r=idx_r
+	kerls_o%idx_c=idx_c
+	kerls_o%inc_r=inc_r
+	kerls_o%inc_c=inc_c
+	kerls_o%nr=nr
+	kerls_o%nc=nc
+	kerls_o%num_row=num_row
+	kerls_o%num_col=num_col
+	allocate(kerls_o%blocks(kerls_o%nr,kerls_o%nc))
+	endif
+
+
+	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
+#if 0
+	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
+#else
+	all2all=.false.
+#endif
+
+	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
+		allocate(sdispls(nproc))
+		allocate(sendcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			sendcounts(pp)=sendquant(pp)%size
+			sdispls(pp)=dist
+			dist = dist + sendquant(pp)%size
+		enddo
+		allocate(sendbufall2all(dist))
+		do pp=1,nproc
+			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+		enddo
+
+		allocate(rdispls(nproc))
+		allocate(recvcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			recvcounts(pp)=recvquant(pp)%size
+			rdispls(pp)=dist
+			dist = dist + recvquant(pp)%size
+		enddo
+		allocate(recvbufall2all(dist))
+
+		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
+
+		do pp=1,nproc
+			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+		enddo
+
+		deallocate(sdispls)
+		deallocate(sendcounts)
+		deallocate(sendbufall2all)
+		deallocate(rdispls)
+		deallocate(recvcounts)
+		deallocate(recvbufall2all)
+
+	else
+
+		Nreqs=0
+		do tt=1,Nsendactive
+			pp=sendIDactive(tt)
+			recvid=pp-1+ptree%pgrp(pgno)%head
+			if(recvid/=ptree%MyID)then
+				Nreqs=Nreqs+1
+				call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(pgno)%Comm,S_req(Nreqs),ierr)
+			else
+				if(sendquant(pp)%size>0)recvquant(pp)%dat=sendquant(pp)%dat
+			endif
+		enddo
+
+		Nreqr=0
+		do tt=1,Nrecvactive
+			pp=recvIDactive(tt)
+			sendid=pp-1+ptree%pgrp(pgno)%head
+			if(sendid/=ptree%MyID)then
+				Nreqr=Nreqr+1
+				call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(pgno)%Comm,R_req(Nreqr),ierr)
+			endif
+		enddo
+
+		if(Nreqs>0)then
+			call MPI_waitall(Nreqs,S_req,statuss,ierr)
+		endif
+		if(Nreqr>0)then
+			call MPI_waitall(Nreqr,R_req,statusr,ierr)
+		endif
+	endif
+
+	! copy data from buffer to target
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat(i,1)))
+			ii=(index_i-kerls_o%idx_r)/kerls_o%inc_r+1
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
+			jj=(index_j-kerls_o%idx_c)/kerls_o%inc_c+1
+			i=i+1
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
+			i=i+1
+			Ncol=NINT(dble(recvquant(pp)%dat(i,1)))
+			call assert(.not. allocated(kerls_o%blocks(ii,jj)%matrix),'receiving dat alreay exists locally')
+			allocate(kerls_o%blocks(ii,jj)%matrix(Nrow,Ncol))
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
+				kerls_o%blocks(ii,jj)%matrix(rr,cc) = recvquant(pp)%dat(i+j,1)
+			enddo
+			i=i+Nrow*Ncol
+		enddo
+	enddo
+
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	enddo
+	deallocate(sendquant)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	enddo
+	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
+
+end subroutine BF_all2all_ker
+
+
+
+
+
+
+
+
+!*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
+!**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
+subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,level_o,stats,ptree)
+
+   use BPACK_DEFS
+   implicit none
+	integer pgno_i,pgno_o,pgno,level_i,level_o
+    integer i, j, level_butterfly_i,level_butterfly_o, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
+    integer level, length_1, length_2, level_blocks
+    integer rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+    real(kind=8) flop
+    DT ctemp
+	type(matrixblock)::block_i,block_o
+	type(Hstat)::stats
+	type(proctree)::ptree
+
+	integer,allocatable::jpvt(:)
+	integer ierr,nsendrecv,pid,tag,nproc,Nrow,Ncol,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer idx_r,idx_c,idx,inc_r,inc_c,inc,nr,nc,nblk_loc,num_blk,level_new
+
+	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::S_req(:),R_req(:)
+	integer,allocatable:: statuss(:,:),statusr(:,:)
+	real(kind=8)::n1,n2
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
+	type(butterfly_UV)::kerls_i,kerls_o
+	integer rr,cc
+	logical all2all
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
+	integer::dist
+	character::mode
+
+	n1 = OMP_get_wtime()
+
+	nproc = max(ptree%pgrp(pgno_i)%nproc,ptree%pgrp(pgno_o)%nproc)
+	pgno = min(pgno_i,pgno_o)
+	tag = pgno
+
+
+	if(IOwnPgrp(ptree,pgno_i))then
+		level_butterfly_i=block_i%level_butterfly
+	else
+		level_butterfly_i=-1
+		block_i%level_half=-1
+	endif
+	if(IOwnPgrp(ptree,pgno_o))then
+		level_butterfly_o=block_o%level_butterfly
+	else
+		level_butterfly_o=-1
+		block_o%level_half=-1
+	endif
+	call MPI_ALLREDUCE(MPI_IN_PLACE,level_butterfly_i,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,level_butterfly_o,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%level_half,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,block_o%level_half,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+
+	if(level_i<=block_i%level_half)then
+		call assert(level_o<=block_o%level_half,'row-wise ordering is only redistributed to row-wise ordering')
+		mode='R'
+	endif
+
+	if(level_i>block_i%level_half)then
+		call assert(level_o>block_o%level_half,'column-wise ordering is only redistributed to column-wise ordering')
+		mode='C'
+	endif
+
+	call assert((ptree%pgrp(pgno_i)%head<=ptree%pgrp(pgno_o)%head .and. ptree%pgrp(pgno_i)%tail>=ptree%pgrp(pgno_o)%tail) .or. (ptree%pgrp(pgno_o)%head<=ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgno_o)%tail>=ptree%pgrp(pgno_i)%tail),'pgno_i or pgno_o should be contained in the other')
+
+
+	call GetLocalBlockRange(ptree,pgno_o,level_o,level_butterfly_o,idx_r,inc_r,nr,idx_c,inc_c,nc,mode)
+
+	if(mode=='R')then
+		num_blk=2**level_butterfly_o
+		idx=idx_c
+		inc=inc_c
+		nblk_loc=nc
+	elseif(mode=='C')then
+		num_blk=2**level_butterfly_o
+		idx=idx_r
+		inc=inc_r
+		nblk_loc=nr
+	endif
+
+	! allocation of communication quantities
+	allocate(statuss(MPI_status_size,nproc))
+	allocate(statusr(MPI_status_size,nproc))
+	allocate(S_req(nproc))
+	allocate(R_req(nproc))
+	allocate(sendquant(nproc))
+	do ii=1,nproc
+		sendquant(ii)%size=0
+		sendquant(ii)%active=0
+	enddo
+	allocate(recvquant(nproc))
+	do ii=1,nproc
+		recvquant(ii)%size=0
+		recvquant(ii)%active=0
+	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
+
+	! calculate send buffer sizes in the first pass
+	do ii=1,nblk_loc
+		! convert indices from output to input
+		if(mode=='R')then
+			index_i = 1
+			index_j = (ii-1)*inc+idx
+		elseif(mode=='C')then
+			index_i = (ii-1)*inc+idx
+			index_j = 1
+		endif
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pid)
+		pp=pid-ptree%pgrp(pgno)%head+1
+		if(recvquant(pp)%active==0)then
+			recvquant(pp)%active=1
+			Nrecvactive=Nrecvactive+1
+			recvIDactive(Nrecvactive)=pp
+		endif
+	enddo
+
+	do ii=1,kerls_i%nblk_loc
+		! convert indices from input to output
+		if(mode=='R')then
+			index_i = 1
+			index_j = (ii-1)*kerls_i%inc+kerls_i%idx
+		elseif(mode=='C')then
+			index_i = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_j = 1
+		endif
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
+		pp=pid-ptree%pgrp(pgno)%head+1
+		if(sendquant(pp)%active==0)then
+			sendquant(pp)%active=1
+			Nsendactive=Nsendactive+1
+			sendIDactive(Nsendactive)=pp
+		endif
+		sendquant(pp)%size=sendquant(pp)%size+4+size(kerls_i%blocks(ii)%matrix,1)*size(kerls_i%blocks(ii)%matrix,2)
+	enddo
+
+	! communicate receive buffer sizes
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+		recvid=pp-1+ptree%pgrp(pgno)%head
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(pgno)%Comm,S_req(tt),ierr)
+	enddo
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
+	endif
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
+	endif
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		sendquant(pp)%size=0
+	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
+	enddo
+
+
+	! pack the send buffer in the second pass
+	do ii=1,kerls_i%nblk_loc
+	   ! convert indices from input to output
+		if(mode=='R')then
+			index_i = 1
+			index_j = (ii-1)*kerls_i%inc+kerls_i%idx
+		elseif(mode=='C')then
+			index_i = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_j = 1
+		endif
+
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
+
+		pp=pid-ptree%pgrp(pgno)%head+1
+		Nrow=size(kerls_i%blocks(ii)%matrix,1)
+		Ncol=size(kerls_i%blocks(ii)%matrix,2)
+
+		sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
+		sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
+		sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
+		sendquant(pp)%dat(sendquant(pp)%size+4,1)=Ncol
+		sendquant(pp)%size=sendquant(pp)%size+4
+		do i=1,Nrow*Ncol
+			rr = mod(i-1,Nrow)+1
+			cc = (i-1)/Nrow+1
+			sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls_i%blocks(ii)%matrix(rr,cc)
+		enddo
+		sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
+		deallocate(kerls_i%blocks(ii)%matrix)
+	enddo
+	if(allocated(kerls_i%blocks))deallocate(kerls_i%blocks)
+
+	if(nblk_loc>0)then
+	kerls_o%idx=idx
+	kerls_o%inc=inc
+	kerls_o%nblk_loc=nblk_loc
+	kerls_o%num_blk=num_blk
+	allocate(kerls_o%blocks(kerls_o%nblk_loc))
+	endif
+
+	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
+#if 0
+	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
+#else
+	all2all=.false.
+#endif
+
+	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
+		allocate(sdispls(nproc))
+		allocate(sendcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			sendcounts(pp)=sendquant(pp)%size
+			sdispls(pp)=dist
+			dist = dist + sendquant(pp)%size
+		enddo
+		allocate(sendbufall2all(dist))
+		do pp=1,nproc
+			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+		enddo
+
+		allocate(rdispls(nproc))
+		allocate(recvcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			recvcounts(pp)=recvquant(pp)%size
+			rdispls(pp)=dist
+			dist = dist + recvquant(pp)%size
+		enddo
+		allocate(recvbufall2all(dist))
+
+		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
+
+		do pp=1,nproc
+			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+		enddo
+
+		deallocate(sdispls)
+		deallocate(sendcounts)
+		deallocate(sendbufall2all)
+		deallocate(rdispls)
+		deallocate(recvcounts)
+		deallocate(recvbufall2all)
+
+	else
+
+		Nreqs=0
+		do tt=1,Nsendactive
+			pp=sendIDactive(tt)
+			recvid=pp-1+ptree%pgrp(pgno)%head
+			if(recvid/=ptree%MyID)then
+				Nreqs=Nreqs+1
+				call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(pgno)%Comm,S_req(Nreqs),ierr)
+			else
+				if(sendquant(pp)%size>0)recvquant(pp)%dat=sendquant(pp)%dat
+			endif
+		enddo
+
+		Nreqr=0
+		do tt=1,Nrecvactive
+			pp=recvIDactive(tt)
+			sendid=pp-1+ptree%pgrp(pgno)%head
+			if(sendid/=ptree%MyID)then
+				Nreqr=Nreqr+1
+				call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(pgno)%Comm,R_req(Nreqr),ierr)
+			endif
+		enddo
+
+		if(Nreqs>0)then
+			call MPI_waitall(Nreqs,S_req,statuss,ierr)
+		endif
+		if(Nreqr>0)then
+			call MPI_waitall(Nreqr,R_req,statusr,ierr)
+		endif
+	endif
+
+	! copy data from buffer to target
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat(i,1)))
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
+
+			if(mode=='R')then
+				ii=(index_j-kerls_o%idx)/kerls_o%inc+1
+			elseif(mode=='C')then
+				ii=(index_i-kerls_o%idx)/kerls_o%inc+1
+			endif
+			i=i+1
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
+			i=i+1
+			Ncol=NINT(dble(recvquant(pp)%dat(i,1)))
+			call assert(.not. allocated(kerls_o%blocks(ii)%matrix),'receiving dat alreay exists locally')
+			allocate(kerls_o%blocks(ii)%matrix(Nrow,Ncol))
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
+				kerls_o%blocks(ii)%matrix(rr,cc) = recvquant(pp)%dat(i+j,1)
+			enddo
+			i=i+Nrow*Ncol
+		enddo
+	enddo
+
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	enddo
+	deallocate(sendquant)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	enddo
+	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
+
+end subroutine BF_all2all_UV
+
+
+
+
+
+
 
 
 subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats)
@@ -3222,26 +3996,7 @@ subroutine BF_block_MVP_partial(blocks,chara,num_vectors,VectIn,BFvec,level_end,
 				call BF_exchange_matvec(blocks,BFvec%vec(level+1),num_vectors,stats,ptree,level,'R','B')
 			endif
 		enddo
-
-		! if(level_half+1/=0)then
-			! call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half,'R','C')
-		! else
-			! call BF_all2all_matvec(blocks,BFvec%vec(level_half+1),num_vectors,stats,ptree,level_half+1,'R','C')
-		! endif
-
-		! deallocate(arr_acc_n)
-
 	elseif (chara=='T') then
-
-		! allocate(arr_acc_m(blocks%ButterflyU%nblk_loc))
-		! k2=0
-		! do i=1, blocks%ButterflyU%nblk_loc
-			! arr_acc_m(i) = k2
-			! mm=size(blocks%ButterflyU%blocks(i)%matrix,1)
-			! k2 =k2 +mm
-		! enddo
-
-
 		level_butterfly=blocks%level_butterfly
 		num_blocks=2**level_butterfly
 		level_half = blocks%level_half
@@ -3376,18 +4131,7 @@ subroutine BF_block_MVP_partial(blocks,chara,num_vectors,VectIn,BFvec,level_end,
 				call BF_exchange_matvec(blocks,BFvec%vec(level_butterfly-level+2),num_vectors,stats,ptree,level,'C','B')
 			endif
 		enddo
-
-		! if(level_half/=level_butterfly+1)then
-			! call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half+1,'C','R')
-		! else
-			! call BF_all2all_matvec(blocks,BFvec%vec(level_butterfly-level_half+1),num_vectors,stats,ptree,level_half,'C','R')
-		! endif
-		! deallocate(arr_acc_m)
 	endif
-
-
-
-
 
     return
 
@@ -3529,6 +4273,7 @@ type(proctree)::ptree
 block_i%rankmin = 100000
 block_i%rankmax = -100000
 
+if(IOwnPgrp(ptree,block_i%pgno))then
 
 level_butterfly = block_i%level_butterfly
 num_blocks=2**level_butterfly
@@ -3562,9 +4307,10 @@ do level=0, level_butterfly+1
 	endif
 enddo
 
-
 call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(block_i%pgno)%Comm,ierr)
 call MPI_ALLREDUCE(MPI_IN_PLACE,block_i%rankmin,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_i%pgno)%Comm,ierr)
+
+endif
 
 
 end subroutine BF_get_rank

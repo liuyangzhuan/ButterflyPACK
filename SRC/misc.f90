@@ -2779,67 +2779,74 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 	type(proctree)::ptree
 	integer :: level_p,level,ll,group,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,pgno,pgno1,found,nleaf,ith
 	character::dir
-	call assert(IOwnPgrp(ptree,pgno),'I do not own this pgrp in FindLeafRange')
-	found=0
-	level_p=0
-	pgno1=pgno
-	ith=1
-	do while(found==0)
-		if(ptree%pgrp(pgno1)%nproc==1)then
-			found=1
-			exit
-		endif
-		if(IOwnPgrp(ptree,pgno1*2))then
-			pgno1=pgno1*2
-			ith=ith*2
-		elseif(IOwnPgrp(ptree,pgno1*2+1))then
-			pgno1=pgno1*2+1
-			ith=ith*2+1
-		endif
-		level_p=level_p+1
-	enddo
-	ith = ith - 2**level_p + 1
-	nleaf = 2**(level_butterfly-level_p)
-	if(dir=='R')then
-		idx_c=(ith-1)*nleaf+1
-		nc=nleaf
-		inc_c=1
-		idx_r=1
-		nr=1
-		inc_r=1
-		do ll=1,level
-			if(ll/=level_butterfly+1)then
-				idx_r = 2*idx_r-mod(idx_c,2) ! odd/even column indices mapped to odd/even row indices
-				idx_c = floor((idx_c-1)/2d0)+1
-				if(nc>1)then ! if at previous level column blocks are contiguous, double #row and half #column
-					nc=nc/2
-					nr=nr*2
-				else         ! otherwise double row increments
-					inc_r=inc_r*2
-				endif
+	if(IOwnPgrp(ptree,pgno))then
+		found=0
+		level_p=0
+		pgno1=pgno
+		ith=1
+		do while(found==0)
+			if(ptree%pgrp(pgno1)%nproc==1)then
+				found=1
+				exit
 			endif
-		enddo
-	elseif(dir=='C')then
-		idx_r=(ith-1)*nleaf+1
-		nr=nleaf
-		inc_r=1
-		idx_c=1
-		nc=1
-		inc_c=1
-		do ll=level_butterfly,level,-1
-			if(ll/=0)then
-				idx_c = 2*idx_c-mod(idx_r,2) ! odd/even row indices mapped to odd/even column indices
-				idx_r = floor((idx_r-1)/2d0)+1
-				if(nr>1)then ! if at previous level row blocks are contiguous, double #column and half #row
-					nr=nr/2
-					nc=nc*2
-				else
-					inc_c=inc_c*2 ! otherwise double column increments
-				endif
+			if(IOwnPgrp(ptree,pgno1*2))then
+				pgno1=pgno1*2
+				ith=ith*2
+			elseif(IOwnPgrp(ptree,pgno1*2+1))then
+				pgno1=pgno1*2+1
+				ith=ith*2+1
 			endif
+			level_p=level_p+1
 		enddo
+		ith = ith - 2**level_p + 1
+		nleaf = 2**(level_butterfly-level_p)
+		if(dir=='R')then
+			idx_c=(ith-1)*nleaf+1
+			nc=nleaf
+			inc_c=1
+			idx_r=1
+			nr=1
+			inc_r=1
+			do ll=1,level
+				if(ll/=level_butterfly+1)then
+					idx_r = 2*idx_r-mod(idx_c,2) ! odd/even column indices mapped to odd/even row indices
+					idx_c = floor((idx_c-1)/2d0)+1
+					if(nc>1)then ! if at previous level column blocks are contiguous, double #row and half #column
+						nc=nc/2
+						nr=nr*2
+					else         ! otherwise double row increments
+						inc_r=inc_r*2
+					endif
+				endif
+			enddo
+		elseif(dir=='C')then
+			idx_r=(ith-1)*nleaf+1
+			nr=nleaf
+			inc_r=1
+			idx_c=1
+			nc=1
+			inc_c=1
+			do ll=level_butterfly,level,-1
+				if(ll/=0)then
+					idx_c = 2*idx_c-mod(idx_r,2) ! odd/even row indices mapped to odd/even column indices
+					idx_r = floor((idx_r-1)/2d0)+1
+					if(nr>1)then ! if at previous level row blocks are contiguous, double #column and half #row
+						nr=nr/2
+						nc=nc*2
+					else
+						inc_c=inc_c*2 ! otherwise double column increments
+					endif
+				endif
+			enddo
+		endif
+	else
+		idx_r=0
+		inc_r=0
+		nr=0
+		idx_c=0
+		inc_c=0
+		nc=0
 	endif
-
 end subroutine GetLocalBlockRange
 
 

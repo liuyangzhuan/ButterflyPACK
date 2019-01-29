@@ -385,52 +385,73 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 		block_rand%M_p_db = block%M_p_db
 	endif
 
+	groupm_start=groupm*2**level_butterfly
+	groupn_start=groupn*2**level_butterfly
+	if (level_butterfly/=0) then
+		allocate (block_rand%ButterflyKerl(level_butterfly))
+	endif
+
+	!****** row-wise ordering from right side
+	do level=0, level_half
+		call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+		if(level==0)then
+			block_rand%ButterflyV%idx=idx_c
+			block_rand%ButterflyV%inc=inc_c
+			block_rand%ButterflyV%nblk_loc=nc
+			block_rand%ButterflyV%num_blk=num_blocks
+		elseif(level==level_butterfly+1)then
+			block_rand%ButterflyU%idx=idx_r
+			block_rand%ButterflyU%inc=inc_r
+			block_rand%ButterflyU%nblk_loc=nr
+			block_rand%ButterflyU%num_blk=num_blocks
+		else
+			block_rand%ButterflyKerl(level)%num_row=2**level
+			block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+			block_rand%ButterflyKerl(level)%idx_r=idx_r
+			block_rand%ButterflyKerl(level)%inc_r=inc_r
+			block_rand%ButterflyKerl(level)%nr=nr
+			block_rand%ButterflyKerl(level)%idx_c=idx_c*2-1
+			block_rand%ButterflyKerl(level)%inc_c=inc_c
+			block_rand%ButterflyKerl(level)%nc=nc*2
+		endif
+	enddo
+
+	!****** column-wise ordering from left side
+	level_final=level_half+1
+	do level=level_butterfly+1,level_final, -1
+		call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+
+		if(level==0)then
+			block_rand%ButterflyV%idx=idx_c
+			block_rand%ButterflyV%inc=inc_c
+			block_rand%ButterflyV%nblk_loc=nc
+			block_rand%ButterflyV%num_blk=num_blocks
+		elseif(level==level_butterfly+1)then
+			block_rand%ButterflyU%idx=idx_r
+			block_rand%ButterflyU%inc=inc_r
+			block_rand%ButterflyU%nblk_loc=nr
+			block_rand%ButterflyU%num_blk=num_blocks
+		else
+			block_rand%ButterflyKerl(level)%num_row=2**level
+			block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+			block_rand%ButterflyKerl(level)%idx_r=idx_r*2-1
+			block_rand%ButterflyKerl(level)%inc_r=inc_r
+			block_rand%ButterflyKerl(level)%nr=nr*2
+			block_rand%ButterflyKerl(level)%idx_c=idx_c
+			block_rand%ButterflyKerl(level)%inc_c=inc_c
+			block_rand%ButterflyKerl(level)%nc=nc
+		endif
+	enddo
+
 
 	if(nodataflag==0)then
-
-		groupm_start=groupm*2**level_butterfly
-		groupn_start=groupn*2**level_butterfly
-		if (level_butterfly/=0) then
-			allocate (block_rand%ButterflyKerl(level_butterfly))
-		endif
-
 		!****** row-wise ordering from right side
 	    do level=0, level_half
-			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
 			if(level==0)then
-				block_rand%ButterflyV%idx=idx_c
-				block_rand%ButterflyV%inc=inc_c
-				block_rand%ButterflyV%nblk_loc=nc
-				block_rand%ButterflyV%num_blk=num_blocks
 				allocate(block_rand%ButterflyV%blocks(block_rand%ButterflyV%nblk_loc))
-				! do jj=1, block_rand%ButterflyV%nblk_loc
-					! blocks=block_rand%ButterflyV%idx+(jj-1)*block_rand%ButterflyV%inc
-					! dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
-					! allocate (block_rand%ButterflyV%blocks(jj)%matrix(dimension_n,dimension_rank))
-					! block_rand%ButterflyV%blocks(jj)%matrix=0
-				! enddo
 			elseif(level==level_butterfly+1)then
-				block_rand%ButterflyU%idx=idx_r
-				block_rand%ButterflyU%inc=inc_r
-				block_rand%ButterflyU%nblk_loc=nr
-				block_rand%ButterflyU%num_blk=num_blocks
 				allocate(block_rand%ButterflyU%blocks(block_rand%ButterflyU%nblk_loc))
-
-				! do ii=1, block_rand%ButterflyU%nblk_loc
-					! blocks=block_rand%ButterflyU%idx+(ii-1)*block_rand%ButterflyU%inc
-					! dimension_m= msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
-					! allocate (block_rand%ButterflyU%blocks(ii)%matrix(dimension_m,dimension_rank))
-					! block_rand%ButterflyU%blocks(ii)%matrix=0
-				! enddo
 			else
-				block_rand%ButterflyKerl(level)%num_row=2**level
-				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
-				block_rand%ButterflyKerl(level)%idx_r=idx_r
-				block_rand%ButterflyKerl(level)%inc_r=inc_r
-				block_rand%ButterflyKerl(level)%nr=nr
-				block_rand%ButterflyKerl(level)%idx_c=idx_c*2-1
-				block_rand%ButterflyKerl(level)%inc_c=inc_c
-				block_rand%ButterflyKerl(level)%nc=nc*2
 				allocate(block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr,block_rand%ButterflyKerl(level)%nc))
 			endif
 		enddo
@@ -438,42 +459,11 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 		!****** column-wise ordering from left side
 		level_final=level_half+1
 		do level=level_butterfly+1,level_final, -1
-			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
-
 			if(level==0)then
-				block_rand%ButterflyV%idx=idx_c
-				block_rand%ButterflyV%inc=inc_c
-				block_rand%ButterflyV%nblk_loc=nc
-				block_rand%ButterflyV%num_blk=num_blocks
 				allocate(block_rand%ButterflyV%blocks(block_rand%ButterflyV%nblk_loc))
-				! do jj=1, block_rand%ButterflyV%nblk_loc
-					! blocks=block_rand%ButterflyV%idx+(jj-1)*block_rand%ButterflyV%inc
-					! dimension_n=msh%basis_group(groupn_start+blocks-1)%tail-msh%basis_group(groupn_start+blocks-1)%head+1
-					! allocate (block_rand%ButterflyV%blocks(jj)%matrix(dimension_n,dimension_rank))
-					! block_rand%ButterflyV%blocks(jj)%matrix=0
-				! enddo
 			elseif(level==level_butterfly+1)then
-				block_rand%ButterflyU%idx=idx_r
-				block_rand%ButterflyU%inc=inc_r
-				block_rand%ButterflyU%nblk_loc=nr
-				block_rand%ButterflyU%num_blk=num_blocks
 				allocate(block_rand%ButterflyU%blocks(block_rand%ButterflyU%nblk_loc))
-
-				! do ii=1, block_rand%ButterflyU%nblk_loc
-					! blocks=block_rand%ButterflyU%idx+(ii-1)*block_rand%ButterflyU%inc
-					! dimension_m= msh%basis_group(groupm_start+blocks-1)%tail-msh%basis_group(groupm_start+blocks-1)%head+1
-					! allocate (block_rand%ButterflyU%blocks(ii)%matrix(dimension_m,dimension_rank))
-					! block_rand%ButterflyU%blocks(ii)%matrix=0
-				! enddo
 			else
-				block_rand%ButterflyKerl(level)%num_row=2**level
-				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
-				block_rand%ButterflyKerl(level)%idx_r=idx_r*2-1
-				block_rand%ButterflyKerl(level)%inc_r=inc_r
-				block_rand%ButterflyKerl(level)%nr=nr*2
-				block_rand%ButterflyKerl(level)%idx_c=idx_c
-				block_rand%ButterflyKerl(level)%inc_c=inc_c
-				block_rand%ButterflyKerl(level)%nc=nc
 				allocate(block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr,block_rand%ButterflyKerl(level)%nc))
 			endif
 		enddo
@@ -1707,6 +1697,105 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	deallocate(matQUt2D)
 
 end subroutine PQxSVDTruncate
+
+
+
+
+
+
+subroutine PQxSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option,stats,ptree,flops)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer level_c,rowblock
+    integer rank,rmax,group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+
+    real(kind=8)::n1,n2,flop
+    real(kind=8),optional::flops
+	type(proctree)::ptree
+	type(matrixblock)::block_rand
+	type(Hoption)::option
+	type(Hstat)::stats
+	DT::matQcA_trans(:,:)
+	integer num_vect,level_butterfly
+	DT,allocatable:: RandVectInR(:,:),RandVectOutR(:,:)
+	real(kind=8):: Singular(:)
+	integer q,qq,Nloc,pp
+	DT,pointer :: matQ2D(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:)
+	integer descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
+	integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
+	integer ierr
+
+	if(present(flops))flops = 0
+	Singular=0
+
+	!!!!**** generate 2D grid blacs quantities
+	ctxt = ptree%pgrp(block_rand%pgno)%ctxt
+	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+	if(myrow/=-1 .and. mycol/=-1)then
+
+		myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+		! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+		call descinit( descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call assert(info==0,'descinit fail for descQcA_trans2D')
+		allocate(MatQcA_trans2D(myArows,myAcols))
+		MatQcA_trans2D=0
+
+		mnmin=min(block_rand%N,rmax)
+
+		myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
+		allocate(UU(myArows,myAcols))
+		! write(*,*)ptree%MyID,'descUU',N, mnmin
+		call descinit( descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call assert(info==0,'descinit fail for descUU')
+		UU=0
+
+		myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+		allocate(VV(myArows,myAcols))
+		! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+		call descinit( descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call assert(info==0,'descinit fail for descVV')
+		VV=0
+	else
+		descQcA_trans2D(2)=-1
+		descUU(2)=-1
+		descVV(2)=-1
+		allocate(matQcA_trans2D(1,1)) ! required for Redistribute1Dto2D
+		matQcA_trans2D=0
+		allocate(UU(1,1))  ! required for Redistribute2Dto1D
+		UU=0
+		allocate(VV(1,1))
+		VV=0
+	endif
+
+
+!!!!**** redistribution into 2D grid
+	call Redistribute1Dto2D(matQcA_trans,block_rand%N_p,0,block_rand%pgno,matQcA_trans2D,block_rand%N,0,block_rand%pgno,rmax,ptree)
+
+!!!!**** compute singular values
+	rank=0
+	if(myrow/=-1 .and. mycol/=-1)then
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
+		if(present(flops))flops = flops + flop/dble(nprow*npcol)
+	else
+	endif
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1,MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE, Singular, rank,MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+
+	deallocate(MatQcA_trans2D)
+	deallocate(UU)
+	deallocate(VV)
+
+end subroutine PQxSVDTruncateSigma
+
+
+
 
 
 
@@ -2953,9 +3042,9 @@ subroutine BF_block_MVP_schulz_dat(schulz_op,block_Xn,trans,M,N,num_vect_sub,Vin
 	   type is (integer)
 
 			groupn=block_Xn%col_group    ! Note: row_group and col_group interchanged here
-			nn=block_Xn%N
+			nn=block_Xn%N_loc
 			groupm=block_Xn%row_group    ! Note: row_group and col_group interchanged here
-			mm=block_Xn%M
+			mm=block_Xn%M_loc
 			call assert(mm==nn,'block nonsquare')
 
 			if(schulz_op%order==2)then
@@ -3176,16 +3265,16 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 
 	integer level_c,rowblock,unique_nth
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,test,M,N,mv,nv
-    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    integer mm,nn,mn,qq,pp,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag,head,tail
     character trans
     ! real(kind=8) a,b,c,d
-    DT ctemp, ctemp1, ctemp2,a,b
+    DT ctemp,a,b
 
 
     ! type(vectorsblock), pointer :: random1, random2
 
     real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,rank
+	integer idx_start_glo,N_diag,idx_start_diag,idx_end_diag,idx_start_loc,idx_end_loc,rank
 	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vbuff(:,:),Vout_tmp(:,:),tmpU(:,:),tmpV(:,:)
 
 	integer Nsub,Ng
@@ -3203,6 +3292,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 	class(*)::ho_bf1
     class(*),optional::msh
 	type(matrixblock)::block_o
+	type(matrixblock),pointer::blocks
 	type(proctree)::ptree
 	type(Hstat)::stats
 
@@ -3221,83 +3311,59 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 		allocate(Vout_tmp(mv,nv))
 		Vout_tmp = Vout
 
-
-
-		! mm=block_o%M
-		! nn=block_o%N
-		! rank=1
-		! allocate(tmpU(mm,rank))
-		! tmpU=1d0
-		! allocate(tmpV(rank,nn))
-		! tmpV=1d0
-		! allocate(Vbuff(rank,num_vect_sub))
-		! Vbuff=0
-		! if(trans=='N')then
-			! call gemmf90(tmpV,rank,Vin,nn,Vbuff,rank,'N','N',rank,num_vect_sub,nn,cone,czero)
-			! call gemmf90(tmpU,mm,Vbuff,rank,Vout,M,'N','N',mm,num_vect_sub,rank,cone,czero)
-		! else
-			! call gemmf90(tmpU,mm,Vin,mm,Vbuff,rank,'T','N',rank,num_vect_sub,mm,cone,czero)
-			! call gemmf90(tmpV,rank,Vbuff,rank,Vout,N,'T','N',nn,num_vect_sub,rank,cone,czero)
-		! endif
-
-		! deallocate(tmpU)
-		! deallocate(tmpV)
-		! deallocate(Vbuff)
-
-
-
-
 		if(trans=='N')then
 
 			level_butterfly=block_o%level_butterfly
-			num_blocks=2**level_butterfly
 
 			groupn=block_o%col_group  ! Note: row_group and col_group interchanged here
-			nn=block_o%N
+			nn=block_o%N_loc
 
 			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-			mm=block_o%M
+			mm=block_o%M_loc
 
 			allocate(Vbuff(mm,num_vect_sub))
 			Vbuff=0
 
-			groupn_start=groupn*2**(level_butterfly)
-			header_nn=msh%basis_group(groupn_start)%head
-			idx_start = 1
-
 			! get the right multiplied vectors
-			idx_start_glo = msh%basis_group(groupm)%head
-			ctemp1=1.0d0 ; ctemp2=0.0d0
+			pp = ptree%myid-ptree%pgrp(block_o%pgno)%head+1
+			idx_start_glo = block_o%headm + block_o%M_p(pp,1) -1
+
+
 		n1 = OMP_get_wtime()
-		  call BF_block_MVP_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,ctemp1,ctemp2,ptree,stats)
+		  call BF_block_MVP_dat(block_o,'N',mm,nn,num_vect_sub,Vin,Vbuff,cone,czero,ptree,stats)
 		n2 = OMP_get_wtime()
 		! time_tmp = time_tmp + n2 - n1
-			mm=block_o%M
+			mm=block_o%M_loc
 			allocate(vec_new(mm,num_vect_sub))
 
 			do level = ho_bf1%Maxlevel+1,level_c+1,-1
 				N_diag = 2**(level-level_c-1)
-				idx_start_diag = (rowblock-1)*N_diag+1
+				idx_start_diag = max((rowblock-1)*N_diag+1,ho_bf1%levels(level)%Bidxs)
+				idx_end_diag = min(rowblock*N_diag,ho_bf1%levels(level)%Bidxe)
 				vec_new = 0
 
-
 				n1 = OMP_get_wtime()
-				do ii = idx_start_diag,idx_start_diag+N_diag-1
-					! write(*,*)level,ii
-					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here
+				do ii = idx_start_diag,idx_end_diag
+					if(associated(ho_bf1%levels(level)%BP_inverse(ii)%LL))then
+					blocks=>ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+					if(IOwnPgrp(ptree,blocks%pgno))then
+					qq = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+					head = blocks%headm + blocks%M_p(qq,1) -1
+					tail = head + blocks%M_loc - 1
+					idx_start_loc = head-idx_start_glo+1
+					idx_end_loc = tail-idx_start_glo+1
 
-					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1
 					if(level==ho_bf1%Maxlevel+1)then
-						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
-						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
+						call Full_block_MVP_dat(blocks,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,&
+						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,czero)
 					else
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'N',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
+					endif
+					endif
 					endif
 				end do
 				n2 = OMP_get_wtime()
 				! time_tmp = time_tmp + n2 - n1
-
 
 				Vbuff = vec_new
 			end do
@@ -3308,45 +3374,49 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 			deallocate(vec_new)
 
 		else
-			ctemp1=1.0d0 ; ctemp2=0.0d0
 
 			level_butterfly=block_o%level_butterfly
-			num_blocks=2**level_butterfly
 
 			groupn=block_o%col_group  ! Note: row_group and col_group interchanged here
-			nn=block_o%N
+			nn=block_o%N_loc
 
 			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-			mm=block_o%M
+			mm=block_o%M_loc
 
 			allocate(Vbuff(mm,num_vect_sub))
 			Vbuff=0
 
-			groupm_start=groupm*2**(level_butterfly)
-			header_mm=msh%basis_group(groupm_start)%head
-			idx_start = 1
 
 			! get the left multiplied vectors
-			mm=block_o%M
-			idx_start_glo = block_o%headm
+			pp = ptree%myid-ptree%pgrp(block_o%pgno)%head+1
+			idx_start_glo = block_o%headm + block_o%M_p(pp,1) -1
 
 			allocate(vec_new(mm,num_vect_sub))
 			Vbuff = Vin
 			do level = level_c+1,ho_bf1%Maxlevel+1
 				N_diag = 2**(level-level_c-1)
-				idx_start_diag = (rowblock-1)*N_diag+1
+				idx_start_diag = max((rowblock-1)*N_diag+1,ho_bf1%levels(level)%Bidxs)
+				idx_end_diag = min(rowblock*N_diag,ho_bf1%levels(level)%Bidxe)
 				vec_new = 0
 
 				n1 = OMP_get_wtime()
-				do ii = idx_start_diag,idx_start_diag+N_diag-1
-					groupm_diag = ho_bf1%levels(level)%BP_inverse(ii)%row_group ! Note: row_group and col_group interchanged here
-					idx_start_loc = msh%basis_group(groupm_diag)%head-idx_start_glo+1
-					idx_end_loc = msh%basis_group(groupm_diag)%tail-idx_start_glo+1
+				do ii = idx_start_diag,idx_end_diag
+					if(associated(ho_bf1%levels(level)%BP_inverse(ii)%LL))then
+					blocks=>ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+					if(IOwnPgrp(ptree,blocks%pgno))then
+					qq = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+					head = blocks%headm + blocks%M_p(qq,1) -1
+					tail = head + blocks%M_loc - 1
+					idx_start_loc = head-idx_start_glo+1
+					idx_end_loc = tail-idx_start_glo+1
+
 					if(level==ho_bf1%Maxlevel+1)then
 						call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1),'T',idx_end_loc-idx_start_loc+1,num_vect_sub,&
-						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ctemp1,ctemp2)
+						&Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,czero)
 					else
 						call BF_block_MVP_inverse_dat(ho_bf1,level,ii,'T',idx_end_loc-idx_start_loc+1,num_vect_sub,Vbuff(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),ptree,stats)
+					endif
+					endif
 					endif
 				end do
 				n2 = OMP_get_wtime()
@@ -3359,10 +3429,10 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 
 			deallocate(vec_new)
 
-			mm=block_o%M
-			nn=block_o%N
+			mm=block_o%M_loc
+			nn=block_o%N_loc
 			n1 = OMP_get_wtime()
-			call BF_block_MVP_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,ctemp1,ctemp2,ptree,stats)
+			call BF_block_MVP_dat(block_o,'T',mm,nn,num_vect_sub,Vbuff,Vout,cone,czero,ptree,stats)
 			n2 = OMP_get_wtime()
 			! time_tmp = time_tmp + n2 - n1
 
