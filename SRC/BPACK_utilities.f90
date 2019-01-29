@@ -364,21 +364,21 @@ subroutine PrintStat(stats,ptree)
 
 
 	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Construction time:',rtemp,'Seconds'
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Constr time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	call MPI_ALLREDUCE(stats%Mem_Direct_for,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Construction mem:',rtemp+rtemp1,'MB'
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Tot constr mem:',rtemp+rtemp1,'MB'
 	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Construction flops:',rtemp
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Constr flops:',rtemp
 	if(ptree%MyID==Main_ID)write (*,'(A21,I14)') 'Rank before factor:', maxval(stats%rankmax_of_level_global)
 
 
 	call MPI_ALLREDUCE(stats%Time_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Factorization time:',rtemp,'Seconds'
+    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Factor time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Mem_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Factorization mem:',rtemp,'MB'
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Tot factor mem:',rtemp,'MB'
 	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factorization flops:',rtemp
+    if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'Factor flops:',rtemp
 
 	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Solve time:',rtemp,'Seconds'

@@ -1703,7 +1703,7 @@ end subroutine PQxSVDTruncate
 
 
 
-subroutine PQxSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option,stats,ptree,flops)
+subroutine PSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option,stats,ptree,flops)
 
     use BPACK_DEFS
     implicit none
@@ -1792,7 +1792,7 @@ subroutine PQxSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option
 	deallocate(UU)
 	deallocate(VV)
 
-end subroutine PQxSVDTruncateSigma
+end subroutine PSVDTruncateSigma
 
 
 

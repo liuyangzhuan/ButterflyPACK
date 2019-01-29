@@ -167,6 +167,12 @@ PROGRAM ButterflyPACK_IE_2D
         read(strings,*)option%pat_comp
     endif
 
+    if(iargc()>=15)then
+        call getarg(15,strings)
+        read(strings,*)option%schulzlevel
+    endif
+
+
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength

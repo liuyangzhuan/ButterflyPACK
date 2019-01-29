@@ -578,7 +578,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 	if(level_butterfly>=option%schulzlevel)then
 		call BF_inverse_schulziteration_IplusButter(block_o,error,option,stats,ptree,msh)
 	else
-		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,msh,pgno)
+		call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,pgno)
 	endif
 
 	error_inout = max(error_inout, error)
@@ -843,7 +843,7 @@ subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 end subroutine BF_compute_schulz_init
 
 
-recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,option,error_inout,stats,ptree,msh,pgno)
+recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,recurlevel,option,error_inout,stats,ptree,msh,pgno)
 
     use BPACK_DEFS
 	use misc
@@ -855,7 +855,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 	integer level_c,rowblock
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
-    integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,rank,err_cnt
+    integer num_col, num_row, recurlevel, mm, nn, ii, jj,tt,kk1,kk2,rank,err_cnt
     character chara
     real(kind=8) T0,err_avr
     type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
@@ -908,7 +908,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		else
 			pgno1=pgno*2
 		endif
-		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,option,error,stats,ptree,msh,pgno1)
+		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
 		error_inout = max(error_inout, error)
 
 		! construct the schur complement A-BD^-1C
@@ -934,7 +934,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 		else
 			pgno1=pgno*2+1
 		endif
-		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,option,error,stats,ptree,msh,pgno1)
+		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
 		error_inout = max(error_inout, error)
 
 		level_butterfly = level_butterfly_target
@@ -948,7 +948,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 		! stop
 
-		if(option%verbosity>=2 .and. level==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' RecursiveI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
+		if(option%verbosity>=2 .and. recurlevel==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' RecursiveI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
 
 		call BF_delete(blocks_A,1)
 		call BF_delete(blocks_B,1)
@@ -1813,7 +1813,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 
 				!!!!! invert I+B1 to be I+B2
 				level_butterfly=block_o%level_butterfly
-				call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)
+				call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)
 				error_inout = max(error_inout, error)
 
 
