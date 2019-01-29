@@ -43,7 +43,7 @@ PROGRAM ButterflyPACK_IE_2D
 	integer seed_myid(50)
 	integer times(8)
 	integer edge
-	real(kind=8) t1,t2,x,y,z,r,theta,phi
+	real(kind=8) t1,t2,t3, x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -105,8 +105,9 @@ PROGRAM ButterflyPACK_IE_2D
 	option%forwardN15flag=0
         ! option%schulzlevel=0
         ! option%LRlevel=100
-        ! option%level_check=1
+        option%level_check=1
     option%tol_itersol=1d-5
+    option%sample_para=1d0
 
 	if(iargc()>=1)then
 		call getarg(1,strings)
@@ -161,6 +162,11 @@ PROGRAM ButterflyPACK_IE_2D
 		read(strings,*)option%near_para
 	endif
 
+    if(iargc()>=14)then
+        call getarg(14,strings)
+        read(strings,*)option%pat_comp
+    endif
+
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength
@@ -195,7 +201,14 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
-   ! call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
+    t1 = OMP_get_wtime()
+    call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
+    t2 = OMP_get_wtime()
+    t3=t2-t1
+    call MPI_ALLREDUCE(MPI_IN_PLACE,t3,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'matvec time:',t3
+    call MPI_ALLREDUCE(MPI_IN_PLACE,time_tmp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'time_tmp:',time_tmp
 
 	!**** factorization phase
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -203,6 +216,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** solve phase
    call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+
 
 
 	!**** print statistics
