@@ -429,6 +429,7 @@ subroutine SetDefaultOptions(option)
 	option%itermax=10
 	option%powiter=0
 	option%ILU=0
+	option%Nbundle=1
 	option%near_para=SafeEps
 	option%format=HODLR
 	option%verbosity=0
@@ -473,6 +474,7 @@ subroutine CopyOptions(option,option1)
 	option1%itermax = option%itermax
 	option1%powiter = option%powiter
 	option1%ILU = option%ILU
+	option1%Nbundle = option%Nbundle
 	option1%near_para = option%near_para
 	option1%format = option%format
 	option1%verbosity = option%verbosity

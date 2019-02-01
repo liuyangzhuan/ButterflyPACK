@@ -366,6 +366,7 @@ module BPACK_DEFS
 		real(kind=8)::rankrate ! increasing rate of rank estimates per iteration
 		integer::itermax ! max number of iteration in randomized schemes
 		integer::ILU ! only perform LU on dense diagonal blocks, used only in the context of H-LU
+		integer::Nbundle ! multiply Nbundle sets of vectors together in randomized schemes
 
 		! options for solve
 		real(kind=8) tol_itersol  ! tolerance for iterative solvers

@@ -1982,7 +1982,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 		Ng = 2**level_butterfly/Nsub
 
 
-		Nbind = min(1,Nsub)
+		Nbind = min(option%Nbundle,Nsub)
 		num_vect_sub = num_vect_subsub*Nbind
 
 		allocate(RandVectIn(block_rand%M_loc,num_vect_sub))
@@ -2173,7 +2173,7 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(level-level_left_start)))    !  check here later
 		Ng = 2**level_butterfly/Nsub
 
-		Nbind = min(1,Nsub)
+		Nbind = min(option%Nbundle,Nsub)
 		num_vect_sub = num_vect_subsub*Nbind
 
 		allocate(RandVectIn(block_rand%N_loc,num_vect_sub))

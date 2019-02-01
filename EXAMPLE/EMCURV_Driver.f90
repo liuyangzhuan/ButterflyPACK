@@ -103,11 +103,11 @@ PROGRAM ButterflyPACK_IE_2D
 	option%verbosity=2
 	option%ILU=0
 	option%forwardN15flag=0
-        option%schulzlevel=0
+        ! option%schulzlevel=0
         ! option%LRlevel=100
        ! option%level_check=1
     option%tol_itersol=1d-5
-    option%sample_para=1d0
+    ! option%sample_para=4d0
 
 	if(iargc()>=1)then
 		call getarg(1,strings)
@@ -170,6 +170,11 @@ PROGRAM ButterflyPACK_IE_2D
     if(iargc()>=15)then
         call getarg(15,strings)
         read(strings,*)option%schulzlevel
+    endif
+
+    if(iargc()>=16)then
+        call getarg(16,strings)
+        read(strings,*)option%Nbundle
     endif
 
 

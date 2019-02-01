@@ -476,6 +476,11 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	option%ILU=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='Nbundle')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%Nbundle=val_i
+	valid_opt=1
+	endif
 	if(trim(str)=='format')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%format=val_i
