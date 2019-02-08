@@ -902,7 +902,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 			! level_butterfly=level_butterfly_target-1
 			level_butterfly=blocks_D%level_butterfly
 			pgno1 = blocks_D%pgno
-			call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
+			call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,recurlevel+1,option,error,stats,ptree,msh,pgno1)
 			error_inout = max(error_inout, error)
 
 			! construct the schur complement A-BD^-1C
@@ -924,7 +924,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 			! level_butterfly=level_butterfly_target-1
 			level_butterfly=blocks_A%level_butterfly
 			pgno1 = blocks_D%pgno
-			call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
+			call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,recurlevel+1,option,error,stats,ptree,msh,pgno1)
 			error_inout = max(error_inout, error)
 			call BF_get_rank_ABCD(partitioned_block,rank0)
 		else
