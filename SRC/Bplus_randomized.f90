@@ -1471,7 +1471,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 		call BF_get_rank(block_rand(1),ptree)
 
 
-		if(ptree%MyID==Main_ID .and. option%verbosity>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max
+		if(ptree%MyID==Main_ID .and. option%verbosity>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max,' #nproc:',ptree%pgrp(block_rand(1)%pgno)%nproc
 
 
 		!!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec
