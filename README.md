@@ -45,6 +45,7 @@ make
  - Pieter Ghysels - pghysels@lbl.gov (Lawrence Berkeley National Laboratory)
  - Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory)
  - Han Guo - hanguo@umich.edu (University of Michigan)
+ - Eric Michielssen - emichiel@umich.edu (University of Michigan)
  - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
 
 ## Reference
