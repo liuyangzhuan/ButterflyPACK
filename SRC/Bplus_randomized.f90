@@ -322,7 +322,6 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 	DT, allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
 	real(kind=8), allocatable:: Singular(:)
 	integer rankmax
-    type(partitionedblocks)::partitioned_block
 	type(mesh)::msh
 	type(Hoption)::option
 	type(proctree)::ptree
@@ -1954,7 +1953,6 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	integer niter,unique_nth
 	real(kind=8):: error_inout
 	integer,allocatable::perms(:)
-	type(partitionedblocks)::partitioned_block
 	class(*):: operand
 	class(*),optional:: operand1
 	type(proctree)::ptree
@@ -2150,7 +2148,6 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	real(kind=8)::rank_new_avr
 	DT,allocatable:: RandVectIn(:,:),RandVectOut(:,:)
 	integer niter,level
-	type(partitionedblocks)::partitioned_block
 
 	type(matrixblock)::blocks_o,block_rand
 	class(*):: operand
@@ -2669,19 +2666,23 @@ end subroutine BF_Randomized_Vectors_RR
 
 
 
+
+
+
 ! blocks_D: D^-1 - I
 ! blocks_B: B
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
-subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
+subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M_loc,N_loc,num_vect_sub,Vinin,Voutout,a,b,ptree,stats,operand1)
    use BPACK_DEFS
 
 
    implicit none
-   integer level, ii, M, N, num_vect_sub, mv,nv
+   integer level, ii, M, N, M_loc, N_loc, num_vect_sub, mv,nv
    character trans
-   DT :: Vin(:,:), Vout(:,:)
-   DT,allocatable :: Vin_tmp(:,:),Vout_tmp(:,:),Vbuff(:,:)
+   DT :: Vinin(:,:), Voutout(:,:)  ! the leading dimensions are block_o%M_loc or block_o%N_loc
+   DT,allocatable :: Vin(:,:), Vout(:,:) ! the leading dimensions are blocks_B%M_loc+blocks_B%N_loc
+   DT,allocatable :: Vin_tmp(:,:),Vout_tmp(:,:),Vbuff(:,:),V1(:,:),V2(:,:)
    DT :: ctemp1,ctemp2,a,b
    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
    integer groupn,groupm,mm,nn
@@ -2693,134 +2694,155 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 
    select TYPE(partitioned_block)
 
-   type is (partitionedblocks)
-		call assert(M==N,'M/=N in BF_block_MVP_inverse_ABCD_dat')
+   type is (matrixblock)
+		call assert(M_loc==N_loc,'M/=N in BF_block_MVP_inverse_ABCD_dat')
 
-		blocks_A => partitioned_block%blocks_A
-		blocks_B => partitioned_block%blocks_B
-		blocks_C => partitioned_block%blocks_C
-		blocks_D => partitioned_block%blocks_D
+		blocks_A => partitioned_block%sons(1,1)
+		blocks_B => partitioned_block%sons(1,2)
+		blocks_C => partitioned_block%sons(2,1)
+		blocks_D => partitioned_block%sons(2,2)
 
 		ctemp1=1.0d0
 		ctemp2=0.0d0
 
 		groupn=blocks_B%col_group    ! Note: row_group and col_group interchanged here
-		nn=blocks_B%N
+		nn=blocks_B%N_loc
 		groupm=blocks_B%row_group    ! Note: row_group and col_group interchanged here
-		mm=blocks_B%M
+		mm=blocks_B%M_loc
 
-		if(mm+nn/=N)write(*,*)'d3d',mm,nn,N
-		call assert(mm+nn==N,'mm+nn/=N')
+		N=mm+nn
 
-		mv=size(Vout,1)
-		nv=size(Vout,2)
-		allocate(Vout_tmp(mv,nv))
-		Vout_tmp = Vout
+		!** convert the layout of input and output to those of child groups
+		allocate(V1(mm,num_vect_sub))
+		allocate(V2(nn,num_vect_sub))
+		allocate(Vout(N,num_vect_sub))
+		allocate(Vin(N,num_vect_sub))
+		call Redistribute1Dto1D(Vinin,block_o%M_p,0,block_o%pgno,V1,blocks_A%M_p,0,blocks_A%pgno,num_vect_sub,ptree)
+		if(mm>0)Vin(1:blocks_A%M_loc,:)=V1
+		call Redistribute1Dto1D(Vinin,block_o%M_p,0,block_o%pgno,V2,blocks_D%M_p,blocks_A%M,blocks_D%pgno,num_vect_sub,ptree)
+		if(nn>0)Vin(1+blocks_A%M_loc:N,:)=V2
+		call Redistribute1Dto1D(Voutout,block_o%M_p,0,block_o%pgno,V1,blocks_A%M_p,0,blocks_A%pgno,num_vect_sub,ptree)
+		if(mm>0)Vout(1:blocks_A%M_loc,:)=V1
+		call Redistribute1Dto1D(Voutout,block_o%M_p,0,block_o%pgno,V2,blocks_D%M_p,blocks_A%M,blocks_D%pgno,num_vect_sub,ptree)
+		if(nn>0)Vout(1+blocks_A%M_loc:N,:)=V2
 
-		allocate(Vin_tmp(N,num_vect_sub))
-		Vin_tmp = Vin
-		Vout = 0
 
-		allocate(Vbuff(nn,num_vect_sub))
-		Vbuff = 0
+		if(IOwnPgrp(ptree,blocks_A%pgno))then
 
-		if(trans=='N')then
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
-			call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
-			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
+			allocate(Vout_tmp(N,num_vect_sub))
+			Vout_tmp = Vout
+			allocate(Vin_tmp(N,num_vect_sub))
+			Vin_tmp = Vin
+			Vout = 0
+			allocate(Vbuff(nn,num_vect_sub))
+			Vbuff = 0
 
-			if(isnan(fnorm(Vout,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD11N'
-				stop
+			if(trans=='N')then
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
+				Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
+				call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
+				&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)- Vout(1:mm,1:num_vect_sub)
+				Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
+
+				if(isnan(fnorm(Vout,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD11N'
+					stop
+				end if
+
+				! write(2111,*)abs(Vout)
+
+				call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
+				&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vin = Vout + Vin
+
+				if(isnan(fnorm(Vin,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD22N'
+					stop
+				end if
+				! write(2112,*)abs(Vin)
+
+				call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
+				&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vbuff, Vout(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vout(1+mm:mm+nn,1:num_vect_sub) = Vout(1+mm:mm+nn,1:num_vect_sub) + Vbuff
+
+				if(isnan(fnorm(Vout,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD33N'
+					stop
+				end if
+				Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+				Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
+
+				! write(2113,*)abs(Vout)
+				! stop
+
+			else if(trans=='T')then
+
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
+				Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
+				call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
+				&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
+				Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
+
+				if(isnan(fnorm(Vout,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD11T'
+					stop
+				end if
+
+				call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
+				&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vin = Vout + Vin
+
+				if(isnan(fnorm(Vin,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD22T'
+					stop
+				end if
+
+				call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
+				&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
+				call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
+				&Vbuff,Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
+				Vout(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub)+Vbuff
+
+				if(isnan(fnorm(Vout,N,num_vect_sub)))then
+					write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD33T'
+					stop
+				end if
+				Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
+				Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
 			end if
 
-			! write(2111,*)abs(Vout)
+		   Vin = Vin_tmp
+		   Vout = Vout-Vin
+		   Vout = a*Vout + b*Vout_tmp
+		   deallocate(Vout_tmp)
+		   deallocate(Vin_tmp)
+		   deallocate(Vbuff)
+	    endif
 
-			call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vin = Vout + Vin
+	    if(mm>0)V1=Vin(1:blocks_A%M_loc,:)
+		call Redistribute1Dto1D(V1,blocks_A%M_p,0,blocks_A%pgno,Vinin,block_o%M_p,0,block_o%pgno,num_vect_sub,ptree)
+		if(nn>0)V2=Vin(1+blocks_A%M_loc:N,:)
+		call Redistribute1Dto1D(V2,blocks_D%M_p,blocks_A%M,blocks_D%pgno,Vinin,block_o%M_p,0,block_o%pgno,num_vect_sub,ptree)
+		if(mm>0)V1=Vout(1:blocks_A%M_loc,:)
+		call Redistribute1Dto1D(V1,blocks_A%M_p,0,blocks_A%pgno,Voutout,block_o%M_p,0,block_o%pgno,num_vect_sub,ptree)
+		if(nn>0)V2=Vout(1+blocks_A%M_loc:N,:)
+		call Redistribute1Dto1D(V2,blocks_D%M_p,blocks_A%M,blocks_D%pgno,Voutout,block_o%M_p,0,block_o%pgno,num_vect_sub,ptree)
 
-			if(isnan(fnorm(Vin,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD22N'
-				stop
-			end if
-			! write(2112,*)abs(Vin)
+	   deallocate(Vin)
+	   deallocate(V1)
+	   deallocate(V2)
+	   deallocate(Vout)
 
-			call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vbuff, Vout(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vout(1+mm:mm+nn,1:num_vect_sub) = Vout(1+mm:mm+nn,1:num_vect_sub) + Vbuff
-
-			if(isnan(fnorm(Vout,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD33N'
-				stop
-			end if
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-
-			! write(2113,*)abs(Vout)
-			! stop
-
-		else if(trans=='T')then
-
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vin(1+mm:N,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			Vbuff = Vbuff + Vin(1+mm:N,1:num_vect_sub)
-			call BF_block_MVP_dat(blocks_C,trans,nn,mm,num_vect_sub,&
-			&Vbuff,Vout(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub) - Vout(1:mm,1:num_vect_sub)
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub)
-
-			if(isnan(fnorm(Vout,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD11T'
-				stop
-			end if
-
-			call BF_block_MVP_dat(blocks_A,trans,mm,mm,num_vect_sub,&
-			&Vout(1:mm,1:num_vect_sub),Vin(1:mm,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vout(1+mm:mm+nn,1:num_vect_sub),Vin(1+mm:mm+nn,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vin = Vout + Vin
-
-			if(isnan(fnorm(Vin,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD22T'
-				stop
-			end if
-
-			call BF_block_MVP_dat(blocks_B,trans,mm,nn,num_vect_sub,&
-			&Vin(1:mm,1:num_vect_sub),Vbuff,ctemp1,ctemp2,ptree,stats)
-			call BF_block_MVP_dat(blocks_D,trans,nn,nn,num_vect_sub,&
-			&Vbuff,Vout(1+mm:N,1:num_vect_sub),ctemp1,ctemp2,ptree,stats)
-			Vout(1+mm:N,1:num_vect_sub) = Vout(1+mm:N,1:num_vect_sub)+Vbuff
-
-			if(isnan(fnorm(Vout,N,num_vect_sub)))then
-				write(*,*)fnorm(Vin,N,num_vect_sub),fnorm(Vout,N,num_vect_sub),'ABCD33T'
-				stop
-			end if
-
-
-			Vout(1+mm:N,1:num_vect_sub) = Vin(1+mm:N,1:num_vect_sub) - Vout(1+mm:N,1:num_vect_sub)
-			Vout(1:mm,1:num_vect_sub) = Vin(1:mm,1:num_vect_sub)
-
-		end if
-
-
-
-	   Vin = Vin_tmp
-	   Vout = Vout-Vin
-
-	   Vout = a*Vout + b*Vout_tmp
-	   deallocate(Vout_tmp)
-
-	   deallocate(Vin_tmp)
-	   deallocate(Vbuff)
 
    class default
 		write(*,*)"unexpected type"
@@ -2830,6 +2852,7 @@ subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block,block_o,trans,M,N,num
 
 
 end subroutine BF_block_MVP_inverse_ABCD_dat
+
 
 
 
@@ -2859,13 +2882,13 @@ subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,tran
 
    select TYPE(partitioned_block)
 
-   type is (partitionedblocks)
+   type is (matrixblock)
 		call assert(M==N,'M/=N in BF_block_MVP_inverse_A_minusBDinvC_dat')
 
-		blocks_A => partitioned_block%blocks_A
-		blocks_B => partitioned_block%blocks_B
-		blocks_C => partitioned_block%blocks_C
-		blocks_D => partitioned_block%blocks_D
+		blocks_A => partitioned_block%sons(1,1)
+		blocks_B => partitioned_block%sons(1,2)
+		blocks_C => partitioned_block%sons(2,1)
+		blocks_D => partitioned_block%sons(2,2)
 
 
 		groupn=blocks_B%col_group    ! Note: row_group and col_group interchanged here

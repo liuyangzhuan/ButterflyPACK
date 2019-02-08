@@ -306,17 +306,6 @@ module BPACK_DEFS
 	end type Bmatrix
 
 
-
-	!**** partitioned blocks for reursive computing (I+B)^-1
-	 type partitionedblocks
-		integer level
-		type(matrixblock),pointer:: blocks_A=>null()
-		type(matrixblock),pointer:: blocks_B=>null()
-		type(matrixblock),pointer:: blocks_C=>null()
-		type(matrixblock),pointer:: blocks_D=>null()
-	 end type partitionedblocks
-
-
 	 !**** intermidate vectors for applying a butterfly
      type RandomBlock
          integer level_butterfly

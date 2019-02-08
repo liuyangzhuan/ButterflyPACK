@@ -873,87 +873,83 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 	integer level_butterfly_target,pgno,pgno1
 	type(proctree)::ptree
 	type(mesh)::msh
-
-	type(partitionedblocks)::partitioned_block
+	integer ierr
+	type(matrixblock)::partitioned_block
 
 	error_inout=0
-
-	! write(*,*)'inverse ABDC',blocks_io%row_group,blocks_io%col_group,blocks_io%level,blocks_io%level_butterfly
 
 	if(blocks_io%level_butterfly==0)then
 		call LR_SMW(blocks_io,Memory,ptree,stats,pgno)
 		return
     else
-		allocate(partitioned_block%blocks_A)
-		allocate(partitioned_block%blocks_B)
-		allocate(partitioned_block%blocks_C)
-		allocate(partitioned_block%blocks_D)
+		allocate(partitioned_block%sons(2,2))
 
-		blocks_A => partitioned_block%blocks_A
-		blocks_B => partitioned_block%blocks_B
-		blocks_C => partitioned_block%blocks_C
-		blocks_D => partitioned_block%blocks_D
+		blocks_A => partitioned_block%sons(1,1)
+		blocks_B => partitioned_block%sons(1,2)
+		blocks_C => partitioned_block%sons(2,1)
+		blocks_D => partitioned_block%sons(2,2)
 
 		! split into four smaller butterflies
 		n1 = OMP_get_wtime()
-		call BF_split(blocks_io, blocks_A, blocks_B, blocks_C, blocks_D,ptree,msh)
+		call BF_split(blocks_io, partitioned_block,ptree,stats,msh)
 		n2 = OMP_get_wtime()
 		stats%Time_split = stats%Time_split + n2-n1
 
-		! partitioned inverse of D
-		! level_butterfly=level_butterfly_target-1
-		level_butterfly=blocks_D%level_butterfly
-		if(GetTreelevel(pgno)==ptree%nlevel)then
-			pgno1=pgno
+
+		if(IOwnPgrp(ptree,blocks_D%pgno))then
+
+			! partitioned inverse of D
+			! level_butterfly=level_butterfly_target-1
+			level_butterfly=blocks_D%level_butterfly
+			pgno1 = blocks_D%pgno
+			call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
+			error_inout = max(error_inout, error)
+
+			! construct the schur complement A-BD^-1C
+
+			! level_butterfly = level_butterfly_target-1
+			level_butterfly = blocks_A%level_butterfly
+
+			! write(*,*)'A-BDC',level_butterfly,level
+
+
+			call BF_get_rank_ABCD(partitioned_block,rank0)
+			rate=1.2d0
+			call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
+			stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+			error_inout = max(error_inout, error)
+
+			! write(*,*)'ddd1'
+			! partitioned inverse of the schur complement
+			! level_butterfly=level_butterfly_target-1
+			level_butterfly=blocks_A%level_butterfly
+			pgno1 = blocks_D%pgno
+			call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
+			error_inout = max(error_inout, error)
+			call BF_get_rank_ABCD(partitioned_block,rank0)
 		else
-			pgno1=pgno*2
+			rank0=0
 		endif
-		call BF_inverse_partitionedinverse_IplusButter(blocks_D,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
-		error_inout = max(error_inout, error)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, rank0, 1,MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm,ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1,MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm,ierr)
 
-		! construct the schur complement A-BD^-1C
-
-		! level_butterfly = level_butterfly_target-1
-		level_butterfly = blocks_A%level_butterfly
-
-		! write(*,*)'A-BDC',level_butterfly,level
-
-
-		call BF_get_rank_ABCD(partitioned_block,rank0)
-		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
-		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
-		error_inout = max(error_inout, error)
-
-		! write(*,*)'ddd1'
-		! partitioned inverse of the schur complement
-		! level_butterfly=level_butterfly_target-1
-		level_butterfly=blocks_A%level_butterfly
-		if(GetTreelevel(pgno)==ptree%nlevel)then
-			pgno1=pgno
-		else
-			pgno1=pgno*2+1
-		endif
-		call BF_inverse_partitionedinverse_IplusButter(blocks_A,level_butterfly,recurlevel,option,error,stats,ptree,msh,pgno1)
-		error_inout = max(error_inout, error)
 
 		level_butterfly = level_butterfly_target
-		call BF_get_rank_ABCD(partitioned_block,rank0)
 		rate=1.2d0
 		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree,msh)
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 
-
-
 		! stop
 
-		if(option%verbosity>=2 .and. recurlevel==0)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' RecursiveI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
+		if(option%verbosity>=2 .and. recurlevel==0 .and. ptree%MyID==Main_ID)write(*,'(A23,A6,I3,A8,I3,A11,Es14.7)')' RecursiveI ',' rank:',blocks_io%rankmax,' L_butt:',blocks_io%level_butterfly,' error:',error_inout
 
-		call BF_delete(blocks_A,1)
-		call BF_delete(blocks_B,1)
-		call BF_delete(blocks_C,1)
-		call BF_delete(blocks_D,1)
+		do ii=1,2
+		do jj=1,2
+			call BF_delete(partitioned_block%sons(ii,jj),1)
+		enddo
+		enddo
+		deallocate(partitioned_block%sons)
 
 		return
 
@@ -961,7 +957,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 end subroutine BF_inverse_partitionedinverse_IplusButter
 
 
-subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
+subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
     use BPACK_DEFS
 	use misc
 
@@ -969,560 +965,123 @@ subroutine BF_split(blocks_i,blocks_A,blocks_B,blocks_C,blocks_D,ptree,msh)
     use omp_lib
 
     implicit none
-	integer level_p,ADflag
+	integer level_p,ADflag,iii,jjj
 	integer mm1,mm2,nn1,nn2,M1,M2,N1,N2,ii,jj,kk,j,i,mm,nn
 	integer level_butterfly, num_blocks, level_butterfly_c, num_blocks_c,level,num_col,num_row,num_rowson,num_colson
 
-    type(matrixblock),target::blocks_i,blocks_A,blocks_B,blocks_C,blocks_D
-    type(matrixblock),pointer::blocks
+    type(matrixblock),target::blocks_i
+    type(matrixblock)::blocks_o,blocks_dummy
+    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D,blocks
 	DT,allocatable:: matrixtemp1(:,:),matrixtemp2(:,:),vin(:,:),vout1(:,:),vout2(:,:)
 	DT::ctemp1,ctemp2
 	type(mesh)::msh
 	type(proctree)::ptree
-	integer Maxgrp
+	type(Hstat)::stats
+	integer pgno
 
-	Maxgrp=2**(ptree%nlevel)-1
 
-
-	blocks_A%level = blocks_i%level+1
-	blocks_A%row_group = blocks_i%row_group*2
-	blocks_A%col_group = blocks_i%col_group*2
-	blocks_A%style = blocks_i%style
-
-	blocks_B%level = blocks_i%level+1
-	blocks_B%row_group = blocks_i%row_group*2
-	blocks_B%col_group = blocks_i%col_group*2+1
-	blocks_B%style = blocks_i%style
-
-	blocks_C%level = blocks_i%level+1
-	blocks_C%row_group = blocks_i%row_group*2+1
-	blocks_C%col_group = blocks_i%col_group*2
-	blocks_C%style = blocks_i%style
-
-	blocks_D%level = blocks_i%level+1
-	blocks_D%row_group = blocks_i%row_group*2+1
-	blocks_D%col_group = blocks_i%col_group*2+1
-	blocks_D%style = blocks_i%style
-
+	blocks_A=>blocks_o%sons(1,1)
+	blocks_B=>blocks_o%sons(1,2)
+	blocks_C=>blocks_o%sons(2,1)
+	blocks_D=>blocks_o%sons(2,2)
 
 	if(blocks_i%level_butterfly==0)then
-
-		blocks_A%level_butterfly = 0
-		blocks_B%level_butterfly = 0
-		blocks_C%level_butterfly = 0
-		blocks_D%level_butterfly = 0
-
-		allocate(blocks_A%ButterflyU%blocks(1))
-		allocate(blocks_B%ButterflyU%blocks(1))
-		allocate(blocks_C%ButterflyU%blocks(1))
-		allocate(blocks_D%ButterflyU%blocks(1))
-
-		allocate(blocks_A%ButterflyV%blocks(1))
-		allocate(blocks_B%ButterflyV%blocks(1))
-		allocate(blocks_C%ButterflyV%blocks(1))
-		allocate(blocks_D%ButterflyV%blocks(1))
-
-		mm1=msh%basis_group(blocks_A%row_group)%tail-msh%basis_group(blocks_A%row_group)%head+1
-		nn1=msh%basis_group(blocks_A%col_group)%tail-msh%basis_group(blocks_A%col_group)%head+1
-		mm2=msh%basis_group(blocks_D%row_group)%tail-msh%basis_group(blocks_D%row_group)%head+1
-		nn2=msh%basis_group(blocks_D%col_group)%tail-msh%basis_group(blocks_D%col_group)%head+1
-		kk = size(blocks_i%ButterflyU%blocks(1)%matrix,2)
-
-
-
-		allocate(blocks_A%ButterflyU%blocks(1)%matrix(mm1,kk))
-		allocate(blocks_A%ButterflyV%blocks(1)%matrix(nn1,kk))
-		blocks_A%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1:mm1,1:kk)
-		blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1:nn1,1:kk)
-		blocks_A%rankmax = kk
-		blocks_A%rankmin = kk
-
-		allocate(blocks_B%ButterflyU%blocks(1)%matrix(mm1,kk))
-		allocate(blocks_B%ButterflyV%blocks(1)%matrix(nn2,kk))
-		blocks_B%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1:mm1,1:kk)
-		blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1+nn1:nn1+nn2,1:kk)
-		blocks_B%rankmax = kk
-		blocks_B%rankmin = kk
-
-		allocate(blocks_C%ButterflyU%blocks(1)%matrix(mm2,kk))
-		allocate(blocks_C%ButterflyV%blocks(1)%matrix(nn1,kk))
-		blocks_C%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1+mm1:mm1+mm2,1:kk)
-		blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1:nn1,1:kk)
-		blocks_C%rankmax = kk
-		blocks_C%rankmin = kk
-
-		allocate(blocks_D%ButterflyU%blocks(1)%matrix(mm2,kk))
-		allocate(blocks_D%ButterflyV%blocks(1)%matrix(nn2,kk))
-		blocks_D%ButterflyU%blocks(1)%matrix = blocks_i%ButterflyU%blocks(1)%matrix(1+mm1:mm1+mm2,1:kk)
-		blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix(1+nn1:nn1+nn2,1:kk)
-		blocks_D%rankmax = kk
-		blocks_D%rankmin = kk
-
-
-
-
-
-		blocks_A%headm=blocks_i%headm
-		blocks_A%M=mm1
-		blocks_A%headn=blocks_i%headn
-		blocks_A%N=nn1
-		blocks_B%headm=blocks_i%headm
-		blocks_B%M=mm1
-		blocks_B%headn=blocks_i%headn+nn1
-		blocks_B%N=nn2
-		blocks_C%headm=blocks_i%headm+mm1
-		blocks_C%M=mm2
-		blocks_C%headn=blocks_i%headn
-		blocks_C%N=nn1
-		blocks_D%headm=blocks_i%headm+mm1
-		blocks_D%M=mm2
-		blocks_D%headn=blocks_i%headn+nn1
-		blocks_D%N=nn2
-
-
-	else if(blocks_i%level_butterfly==1)then
-		blocks_A%level_butterfly = 0
-		blocks_B%level_butterfly = 0
-		blocks_C%level_butterfly = 0
-		blocks_D%level_butterfly = 0
-
-		allocate(blocks_A%ButterflyU%blocks(1))
-		allocate(blocks_B%ButterflyU%blocks(1))
-		allocate(blocks_C%ButterflyU%blocks(1))
-		allocate(blocks_D%ButterflyU%blocks(1))
-
-		allocate(blocks_A%ButterflyV%blocks(1))
-		allocate(blocks_B%ButterflyV%blocks(1))
-		allocate(blocks_C%ButterflyV%blocks(1))
-		allocate(blocks_D%ButterflyV%blocks(1))
-
-		mm1 = size(blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,1)
-		nn1 = size(blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,2)
-		mm2 = size(blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,1)
-		nn2 = size(blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,2)
-
-		M1 = size(blocks_i%ButterflyU%blocks(1)%matrix,1)
-		M2 = size(blocks_i%ButterflyU%blocks(2)%matrix,1)
-		N1 = size(blocks_i%ButterflyV%blocks(1)%matrix,1)
-		N2 = size(blocks_i%ButterflyV%blocks(2)%matrix,1)
-
-		allocate(blocks_A%ButterflyU%blocks(1)%matrix(M1,nn1))
-		allocate(blocks_A%ButterflyV%blocks(1)%matrix(N1,nn1))
-		! call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,blocks_A%ButterflyU%blocks(1)%matrix, M1, nn1, mm1)
-		call gemmf90(blocks_i%ButterflyU%blocks(1)%matrix,M1,blocks_i%ButterflyKerl(1)%blocks(1,1)%matrix,mm1,blocks_A%ButterflyU%blocks(1)%matrix,M1,'N','N',M1, nn1, mm1,cone,czero)
-		blocks_A%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
-		blocks_A%rankmax = nn1
-		blocks_A%rankmin = nn1
-		blocks_A%ButterflyU%nblk_loc=1
-		blocks_A%ButterflyU%inc=1
-		blocks_A%ButterflyU%idx=1
-		blocks_A%ButterflyV%nblk_loc=1
-		blocks_A%ButterflyV%inc=1
-		blocks_A%ButterflyV%idx=1
-
-		allocate(blocks_B%ButterflyU%blocks(1)%matrix(M1,nn2))
-		allocate(blocks_B%ButterflyV%blocks(1)%matrix(N2,nn2))
-		! call gemm_omp(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,blocks_B%ButterflyU%blocks(1)%matrix, M1, nn2, mm1)
-		call gemmf90(blocks_i%ButterflyU%blocks(1)%matrix,M1,blocks_i%ButterflyKerl(1)%blocks(1,2)%matrix,mm1,blocks_B%ButterflyU%blocks(1)%matrix,M1,'N','N',M1, nn2, mm1,cone,czero)
-		blocks_B%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix
-		blocks_B%rankmax = nn2
-		blocks_B%rankmin = nn2
-		blocks_B%ButterflyU%nblk_loc=1
-		blocks_B%ButterflyU%inc=1
-		blocks_B%ButterflyU%idx=1
-		blocks_B%ButterflyV%nblk_loc=1
-		blocks_B%ButterflyV%inc=1
-		blocks_B%ButterflyV%idx=1
-
-		allocate(blocks_C%ButterflyU%blocks(1)%matrix(M2,nn1))
-		allocate(blocks_C%ButterflyV%blocks(1)%matrix(N1,nn1))
-		! call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,blocks_C%ButterflyU%blocks(1)%matrix, M2, nn1, mm2)
-		call gemmf90(blocks_i%ButterflyU%blocks(2)%matrix,M2,blocks_i%ButterflyKerl(1)%blocks(2,1)%matrix,mm2,blocks_C%ButterflyU%blocks(1)%matrix,M2,'N','N',M2, nn1, mm2,cone,czero)
-		blocks_C%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(1)%matrix
-		blocks_C%rankmax = nn1
-		blocks_C%rankmin = nn1
-		blocks_C%ButterflyU%nblk_loc=1
-		blocks_C%ButterflyU%inc=1
-		blocks_C%ButterflyU%idx=1
-		blocks_C%ButterflyV%nblk_loc=1
-		blocks_C%ButterflyV%inc=1
-		blocks_C%ButterflyV%idx=1
-
-		allocate(blocks_D%ButterflyU%blocks(1)%matrix(M2,nn2))
-		allocate(blocks_D%ButterflyV%blocks(1)%matrix(N2,nn2))
-		! call gemm_omp(blocks_i%ButterflyU%blocks(2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,blocks_D%ButterflyU%blocks(1)%matrix, M2, nn2, mm2)
-		call gemmf90(blocks_i%ButterflyU%blocks(2)%matrix,M2,blocks_i%ButterflyKerl(1)%blocks(2,2)%matrix,mm2,blocks_D%ButterflyU%blocks(1)%matrix,M2,'N','N',M2, nn2, mm2,cone,czero)
-		blocks_D%ButterflyV%blocks(1)%matrix = blocks_i%ButterflyV%blocks(2)%matrix
-		blocks_D%rankmax = nn2
-		blocks_D%rankmin = nn2
-		blocks_D%ButterflyU%nblk_loc=1
-		blocks_D%ButterflyU%inc=1
-		blocks_D%ButterflyU%idx=1
-		blocks_D%ButterflyV%nblk_loc=1
-		blocks_D%ButterflyV%inc=1
-		blocks_D%ButterflyV%idx=1
-
-		blocks_A%headm=blocks_i%headm
-		blocks_A%M=M1
-		blocks_A%headn=blocks_i%headn
-		blocks_A%N=N1
-		blocks_B%headm=blocks_i%headm
-		blocks_B%M=M1
-		blocks_B%headn=blocks_i%headn+N1
-		blocks_B%N=N2
-		blocks_C%headm=blocks_i%headm+M1
-		blocks_C%M=M2
-		blocks_C%headn=blocks_i%headn
-		blocks_C%N=N1
-		blocks_D%headm=blocks_i%headm+M1
-		blocks_D%M=M2
-		blocks_D%headn=blocks_i%headn+N1
-		blocks_D%N=N2
-
-
+		level_butterfly=GetTreelevel(msh%Maxgroup)-1-blocks_i%level-1
 	else
-		blocks_A%level_butterfly = blocks_i%level_butterfly-2
-		blocks_B%level_butterfly = blocks_i%level_butterfly-2
-		blocks_C%level_butterfly = blocks_i%level_butterfly-2
-		blocks_D%level_butterfly = blocks_i%level_butterfly-2
-
-		level_butterfly_c = blocks_i%level_butterfly-2
-		num_blocks_c = 2**level_butterfly_c
-
-		blocks_A%ButterflyU%nblk_loc=num_blocks_c
-		blocks_A%ButterflyU%inc=1
-		blocks_A%ButterflyU%idx=1
-		blocks_A%ButterflyV%nblk_loc=num_blocks_c
-		blocks_A%ButterflyV%inc=1
-		blocks_A%ButterflyV%idx=1
-		allocate(blocks_A%ButterflyU%blocks(num_blocks_c))
-		allocate(blocks_A%ButterflyV%blocks(num_blocks_c))
-		M1=0
-		N1=0
-		do ii =1,num_blocks_c
-			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,1)
-			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,2)
-			mm2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,1)
-			nn2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,2)
-			allocate(blocks_A%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
-			M1=M1+mm1+mm2
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,matrixtemp1,mm1,kk,nn1)
-
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,1)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
-
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,matrixtemp2,mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,1)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
-			blocks_A%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_A%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-
-			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,1)
-			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,2)
-			mm2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,1)
-			nn2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,1)
-			allocate(blocks_A%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
-			N1=N1+mm1+mm2
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,matrixtemp1, mm1,kk,nn1)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)
+		level_butterfly=max(blocks_i%level_butterfly-2,0)
+	endif
 
 
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,matrixtemp2, mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(1,2*ii)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)
-			blocks_A%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_A%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-
-		end do
-
-
-		blocks_B%ButterflyU%nblk_loc=num_blocks_c
-		blocks_B%ButterflyU%inc=1
-		blocks_B%ButterflyU%idx=1
-		blocks_B%ButterflyV%nblk_loc=num_blocks_c
-		blocks_B%ButterflyV%inc=1
-		blocks_B%ButterflyV%idx=1
-		allocate(blocks_B%ButterflyU%blocks(num_blocks_c))
-		allocate(blocks_B%ButterflyV%blocks(num_blocks_c))
-		do ii =1,num_blocks_c
-			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,1)
-			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,2)
-			mm2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,1)
-			nn2 = size(blocks_i%ButterflyU%blocks(2*ii)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,2)
-			allocate(blocks_B%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,matrixtemp1,mm1,kk,nn1)
-
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1,2)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
-
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,matrixtemp2,mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii,2)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
-			blocks_B%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_B%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-
-			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
-			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
-			mm2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,1)
-			nn2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,1)
-			allocate(blocks_B%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,kk,nn1)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(1,2*ii-1+num_blocks_c*2)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)
-
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(1,2*ii+num_blocks_c*2)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)
-			blocks_B%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_B%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-		end do
-
-
-		blocks_C%ButterflyU%nblk_loc=num_blocks_c
-		blocks_C%ButterflyU%inc=1
-		blocks_C%ButterflyU%idx=1
-		blocks_C%ButterflyV%nblk_loc=num_blocks_c
-		blocks_C%ButterflyV%inc=1
-		blocks_C%ButterflyV%idx=1
-		allocate(blocks_C%ButterflyU%blocks(num_blocks_c))
-		allocate(blocks_C%ButterflyV%blocks(num_blocks_c))
-		do ii =1,num_blocks_c
-			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
-			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
-			mm2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,1)
-			nn2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,2)
-			allocate(blocks_C%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,matrixtemp1,mm1,kk,nn1)
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,1)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,matrixtemp2,mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,1)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
-			blocks_C%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_C%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-
-			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,1)
-			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,2)
-			mm2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,1)
-			nn2 = size(blocks_i%ButterflyV%blocks(2*ii)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,1)
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			allocate(blocks_C%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,matrixtemp1, mm1,kk,nn1)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)
-
-
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,matrixtemp2, mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(2,2*ii)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)
-			blocks_C%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_C%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-		end do
-
-
-		blocks_D%ButterflyU%nblk_loc=num_blocks_c
-		blocks_D%ButterflyU%inc=1
-		blocks_D%ButterflyU%idx=1
-		blocks_D%ButterflyV%nblk_loc=num_blocks_c
-		blocks_D%ButterflyV%inc=1
-		blocks_D%ButterflyV%idx=1
-		allocate(blocks_D%ButterflyU%blocks(num_blocks_c))
-		allocate(blocks_D%ButterflyV%blocks(num_blocks_c))
-		M2=0
-		N2=0
-		do ii =1,num_blocks_c
-			mm1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
-			nn1 = size(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
-			mm2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,1)
-			nn2 = size(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,2)
-			allocate(blocks_D%ButterflyU%blocks(ii)%matrix(mm1+mm2,kk))
-			M2=M2+mm1+mm2
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,matrixtemp1,mm1,kk,nn1)
-
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii-1+num_blocks_c*2,2)%matrix,nn1,matrixtemp1,mm1,'N','N',mm1,kk,nn1,cone,czero)
-
-			! call gemm_omp(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,matrixtemp2,mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyU%blocks(2*ii+num_blocks_c*2)%matrix,mm2,blocks_i%ButterflyKerl(level_butterfly_c+2)%blocks(2*ii+num_blocks_c*2,2)%matrix,nn2,matrixtemp2,mm2,'N','N',mm2,kk,nn2,cone,czero)
-			blocks_D%ButterflyU%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_D%ButterflyU%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-
-			mm1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,1)
-			nn1 = size(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,2)
-			mm2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,1)
-			nn2 = size(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,2)
-			kk = size(blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,1)
-			allocate(blocks_D%ButterflyV%blocks(ii)%matrix(mm1+mm2,kk))
-			N2=N2+mm1+mm2
-			allocate(matrixtemp1(mm1,kk))
-			allocate(matrixtemp2(mm2,kk))
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,matrixtemp1, mm1,kk,nn1)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii-1+num_blocks_c*2)%matrix,mm1, blocks_i%ButterflyKerl(1)%blocks(2,2*ii-1+num_blocks_c*2)%matrix,kk, matrixtemp1,mm1, 'N','T',mm1,kk,nn1,cone,czero)
-			! call gemmNT_omp(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,matrixtemp2, mm2,kk,nn2)
-			call gemmf90(blocks_i%ButterflyV%blocks(2*ii+num_blocks_c*2)%matrix,mm2, blocks_i%ButterflyKerl(1)%blocks(2,2*ii+num_blocks_c*2)%matrix,kk, matrixtemp2,mm2, 'N','T',mm2,kk,nn2,cone,czero)
-			blocks_D%ButterflyV%blocks(ii)%matrix(1:mm1,1:kk) = matrixtemp1
-			blocks_D%ButterflyV%blocks(ii)%matrix(1+mm1:mm1+mm2,1:kk) = matrixtemp2
-			deallocate(matrixtemp1)
-			deallocate(matrixtemp2)
-		end do
-
-		blocks_A%headm=blocks_i%headm
-		blocks_A%M=M1
-		blocks_A%headn=blocks_i%headn
-		blocks_A%N=N1
-		blocks_B%headm=blocks_i%headm
-		blocks_B%M=M1
-		blocks_B%headn=blocks_i%headn+N1
-		blocks_B%N=N2
-		blocks_C%headm=blocks_i%headm+M1
-		blocks_C%M=M2
-		blocks_C%headn=blocks_i%headn
-		blocks_C%N=N1
-		blocks_D%headm=blocks_i%headm+M1
-		blocks_D%M=M2
-		blocks_D%headn=blocks_i%headn+N1
-		blocks_D%N=N2
-
-		if(level_butterfly_c/=0)then
-			allocate(blocks_A%ButterflyKerl(level_butterfly_c))
-			allocate(blocks_B%ButterflyKerl(level_butterfly_c))
-			allocate(blocks_C%ButterflyKerl(level_butterfly_c))
-			allocate(blocks_D%ButterflyKerl(level_butterfly_c))
-		end if
-		do level=1, level_butterfly_c
-             num_col=blocks_i%ButterflyKerl(level+1)%num_col
-             num_row=blocks_i%ButterflyKerl(level+1)%num_row
-             num_colson=num_col/2
-             num_rowson=num_row/2
-			 blocks_A%ButterflyKerl(level)%num_row=num_rowson
-			 blocks_A%ButterflyKerl(level)%num_col=num_colson
-			 blocks_A%ButterflyKerl(level)%nr=num_rowson
-			 blocks_A%ButterflyKerl(level)%inc_r=1
-			 blocks_A%ButterflyKerl(level)%idx_r=1
-			 blocks_A%ButterflyKerl(level)%nc=num_colson
-			 blocks_A%ButterflyKerl(level)%inc_c=1
-			 blocks_A%ButterflyKerl(level)%idx_c=1
-			 allocate (blocks_A%ButterflyKerl(level)%blocks(num_rowson,num_colson))
-
-			 blocks_B%ButterflyKerl(level)%num_row=num_rowson
-			 blocks_B%ButterflyKerl(level)%num_col=num_colson
-			 blocks_B%ButterflyKerl(level)%nr=num_rowson
-			 blocks_B%ButterflyKerl(level)%inc_r=1
-			 blocks_B%ButterflyKerl(level)%idx_r=1
-			 blocks_B%ButterflyKerl(level)%nc=num_colson
-			 blocks_B%ButterflyKerl(level)%inc_c=1
-			 blocks_B%ButterflyKerl(level)%idx_c=1
-			 allocate (blocks_B%ButterflyKerl(level)%blocks(num_rowson,num_colson))
-
-			 blocks_C%ButterflyKerl(level)%num_row=num_rowson
-			 blocks_C%ButterflyKerl(level)%num_col=num_colson
-			 blocks_C%ButterflyKerl(level)%nr=num_rowson
-			 blocks_C%ButterflyKerl(level)%inc_r=1
-			 blocks_C%ButterflyKerl(level)%idx_r=1
-			 blocks_C%ButterflyKerl(level)%nc=num_colson
-			 blocks_C%ButterflyKerl(level)%inc_c=1
-			 blocks_C%ButterflyKerl(level)%idx_c=1
-			 allocate (blocks_C%ButterflyKerl(level)%blocks(num_rowson,num_colson))
-
-			 blocks_D%ButterflyKerl(level)%num_row=num_rowson
-			 blocks_D%ButterflyKerl(level)%num_col=num_colson
-			 blocks_D%ButterflyKerl(level)%nr=num_rowson
-			 blocks_D%ButterflyKerl(level)%inc_r=1
-			 blocks_D%ButterflyKerl(level)%idx_r=1
-			 blocks_D%ButterflyKerl(level)%nc=num_colson
-			 blocks_D%ButterflyKerl(level)%inc_c=1
-			 blocks_D%ButterflyKerl(level)%idx_c=1
-			 allocate (blocks_D%ButterflyKerl(level)%blocks(num_rowson,num_colson))
-
-			do j=1, num_col
-				 do i=1, num_row
-					 mm=size(blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix,1)
-					 nn=size(blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix,2)
-					 if (i<=num_rowson .and. j<=num_colson) then
-						 allocate (blocks_A%ButterflyKerl(level)%blocks(i,j)%matrix(mm,nn))
-						 !$omp parallel do default(shared) private(ii,jj)
-						 do jj=1, nn
-							 do ii=1, mm
-								 blocks_A%ButterflyKerl(level)%blocks(i,j)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
-							 enddo
-						 enddo
-						 !$omp end parallel do
-					 elseif (i>num_rowson .and. j<=num_colson) then
-						 allocate (blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%matrix(mm,nn))
-						 !$omp parallel do default(shared) private(ii,jj)
-						 do jj=1, nn
-							 do ii=1, mm
-								 blocks_C%ButterflyKerl(level)%blocks(i-num_rowson,j)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
-							 enddo
-						 enddo
-						 !$omp end parallel do
-					 elseif (i<=num_rowson .and. j>num_colson) then
-						 allocate (blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%matrix(mm,nn))
-						 !$omp parallel do default(shared) private(ii,jj)
-						 do jj=1, nn
-							 do ii=1, mm
-								 blocks_B%ButterflyKerl(level)%blocks(i,j-num_colson)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
-							 enddo
-						 enddo
-						 !$omp end parallel do
-					 elseif (i>num_rowson .and. j>num_colson) then
-						 allocate (blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%matrix(mm,nn))
-						 !$omp parallel do default(shared) private(ii,jj)
-						 do jj=1, nn
-							 do ii=1, mm
-								 blocks_D%ButterflyKerl(level)%blocks(i-num_rowson,j-num_colson)%matrix(ii,jj)=blocks_i%ButterflyKerl(level+1)%blocks(i,j)%matrix(ii,jj)
-							 enddo
-						 enddo
-						 !$omp end parallel do
-					 endif
-				 enddo
-			 enddo
-		enddo
-	end if
-
-	! assign M_p,N_p,M_p_db,N_p_db according to the block row layout
-	do ii=1,4
-		if(ii==1)blocks=>blocks_A
-		if(ii==2)blocks=>blocks_B
-		if(ii==3)blocks=>blocks_C
-		if(ii==4)blocks=>blocks_D
-		if(blocks_i%pgno*2>Maxgrp)then
-			blocks%pgno=blocks_i%pgno
-		else
-			if(ii==1 .or. ii==2)blocks%pgno=blocks_i%pgno*2
-			if(ii==3 .or. ii==4)blocks%pgno=blocks_i%pgno*2+1
-		endif
-		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
-		call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,1)	! is this needed?
+	!*** try to use the same process group as blocks_i
+	pgno = blocks_i%pgno
+	do while(level_butterfly<ptree%nlevel-GetTreelevel(pgno))
+		pgno = pgno*2
 	enddo
 
-	call BF_get_rank(blocks_A,ptree)
-	call BF_get_rank(blocks_B,ptree)
-	call BF_get_rank(blocks_C,ptree)
-	call BF_get_rank(blocks_D,ptree)
 
+	do iii=1,2
+	do jjj=1,2
+		blocks=>blocks_o%sons(iii,jjj)
+		blocks%level = blocks_i%level+1
+		blocks%row_group = blocks_i%row_group*2+iii-1
+		blocks%col_group = blocks_i%col_group*2+jjj-1
+		blocks%style = blocks_i%style
+		blocks%headm = msh%basis_group(blocks%row_group)%head
+		blocks%M = msh%basis_group(blocks%row_group)%tail-msh%basis_group(blocks%row_group)%head+1
+		blocks%headn = msh%basis_group(blocks%col_group)%head
+		blocks%N = msh%basis_group(blocks%col_group)%tail-msh%basis_group(blocks%col_group)%head+1
+		blocks%pgno = pgno
+		call ComputeParallelIndices(blocks,pgno,ptree,msh,0)
+	enddo
+	enddo
+
+	if(blocks_i%level_butterfly==0)then
+		write(*,*)'level_butterfly=0 in BF_split is not tested'
+
+		kk = size(blocks_i%ButterflyU%blocks(1)%matrix,2)
+		do iii=1,2
+		do jjj=1,2
+			blocks=>blocks_o%sons(iii,jjj)
+			blocks%level_butterfly=0
+			blocks%level_half = 0
+			allocate(blocks%ButterflyU%blocks(1))
+			allocate(blocks%ButterflyV%blocks(1))
+			if(IOwnPgrp(ptree,blocks%pgno))then
+				allocate(blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc,kk))
+				allocate(blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc,kk))
+				blocks%rankmax = kk
+				blocks%rankmin = kk
+				blocks%ButterflyU%nblk_loc=1
+				blocks%ButterflyU%inc=1
+				blocks%ButterflyU%idx=1
+				blocks%ButterflyV%nblk_loc=1
+				blocks%ButterflyV%inc=1
+				blocks%ButterflyV%idx=1
+			endif
+			call Redistribute1Dto1D(blocks_i%ButterflyU%blocks(1)%matrix,blocks_i%M_p,blocks_i%headm,blocks_i%pgno,blocks%ButterflyU%blocks(1)%matrix,blocks%M_p,blocks%headm,blocks%pgno,kk,ptree)
+			call Redistribute1Dto1D(blocks_i%ButterflyV%blocks(1)%matrix,blocks_i%N_p,blocks_i%headn,blocks_i%pgno,blocks%ButterflyV%blocks(1)%matrix,blocks%N_p,blocks%headn,blocks%pgno,kk,ptree)
+		enddo
+		enddo
+
+	else
+
+	   !**** first redistribute blocks_i into blocks_dummy%sons of the same butterfly levels
+		blocks_dummy%level_butterfly = blocks_i%level_butterfly
+		blocks_dummy%level_half = blocks_i%level_half
+		allocate(blocks_dummy%sons(2,2))
+		do ii=1,2
+		do jj=1,2
+			allocate(blocks_dummy%sons(ii,jj)%ButterflyKerl(blocks_dummy%level_butterfly))
+			blocks_dummy%sons(ii,jj)%level_butterfly=blocks_dummy%level_butterfly
+			blocks_dummy%sons(ii,jj)%level_half=blocks_dummy%level_half
+		enddo
+		enddo
+
+
+		do level=0,blocks_dummy%level_butterfly+1
+			if(level==0)then
+				call BF_all2all_V_split(blocks_i,blocks_i%pgno,level,blocks_dummy,blocks_o%sons(1,1)%pgno,level,stats,ptree)
+			elseif(level==blocks_i%level_butterfly+1)then
+				call BF_all2all_U_split(blocks_i,blocks_i%pgno,level,blocks_dummy,blocks_o%sons(1,1)%pgno,level,stats,ptree)
+			else
+				call BF_all2all_ker_split(blocks_i,blocks_i%pgno,level,blocks_dummy,blocks_o%sons(1,1)%pgno,level,stats,ptree)
+			endif
+		enddo
+		!**** next convert blocks_dummy%sons into  blocks_o%sons
+		call BF_convert_to_smallBF(blocks_dummy,blocks_o,stats,ptree)
+		do ii=1,2
+		do jj=1,2
+			call BF_delete(blocks_dummy%sons(ii,jj),1)
+		enddo
+		enddo
+		deallocate(blocks_dummy%sons)
+	endif
+
+	do ii=1,2
+	do jj=1,2
+		call BF_get_rank(blocks_o%sons(ii,jj),ptree)
+	enddo
+	enddo
 
 	! mm1=msh%basis_group(blocks_A%row_group)%tail-msh%basis_group(blocks_A%row_group)%head+1
 	! nn1=msh%basis_group(blocks_A%col_group)%tail-msh%basis_group(blocks_A%col_group)%head+1
@@ -1562,15 +1121,15 @@ subroutine BF_get_rank_ABCD(partitioned_block,rankmax)
     use BPACK_DEFS
     implicit none
 
-	integer rankmax
-    type(partitionedblocks)::partitioned_block
+	integer rankmax,ii,jj
+    type(matrixblock)::partitioned_block
 
 	rankmax = -1000
-	rankmax = max(rankmax,partitioned_block%blocks_A%rankmax)
-	rankmax = max(rankmax,partitioned_block%blocks_B%rankmax)
-	rankmax = max(rankmax,partitioned_block%blocks_C%rankmax)
-	rankmax = max(rankmax,partitioned_block%blocks_D%rankmax)
-
+	do ii=1,2
+	do jj=1,2
+	rankmax = max(rankmax,partitioned_block%sons(ii,jj)%rankmax)
+	enddo
+	enddo
 end subroutine BF_get_rank_ABCD
 
 
