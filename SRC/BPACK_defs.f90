@@ -502,7 +502,7 @@ module BPACK_DEFS
 
 	!*** need to further work on the following:
 	 real(kind=8)::time_tmp
-	 integer vecCNT
+
 
 	 ! integer,allocatable:: basis_group_pre(:,:)
 end module BPACK_DEFS

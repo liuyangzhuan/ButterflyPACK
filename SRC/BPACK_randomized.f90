@@ -92,6 +92,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 	type(proctree)::ptree
 	type(mesh)::msh
 	integer Bidxs,Bidxe,ierr,tt
+	integer vecCNT
 
 	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(0:ho_bf1%Maxlevel))
 	stats%rankmax_of_level = 0
@@ -159,12 +160,12 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 					stats%Time_random(1) = stats%Time_random(1) + n2-n1
 
 					n1 = OMP_get_wtime()
-					call HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,option,stats,ker,ptree,msh)
+					call HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,vecCNT,option,stats,ker,ptree,msh)
 					n2 = OMP_get_wtime()
 					if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'reconstructLL: ', n2-n1, 'vecCNT',vecCNT
 
 					n1 = OMP_get_wtime()
-					call HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,option,stats,ker,ptree,msh)
+					call HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,vecCNT,option,stats,ker,ptree,msh)
 					n2 = OMP_get_wtime()
 					if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'reconstructRR: ', n2-n1, 'vecCNT',vecCNT
 				end if
@@ -703,106 +704,7 @@ end subroutine HODLR_randomized_OneL_Fullmat
 
 
 
-
-
-! subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,option,stats,ker,ptree,msh)
-
-    ! use BPACK_DEFS
-    ! implicit none
-
-    ! integer level_c,rowblock,N
-    ! integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    ! integer i, j, ii, jj,bb, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    ! DT ctemp, a, b
-    ! character chara
-	! integer level_right_start
-
-    ! type(RandomBlock),allocatable :: vec_rand(:)
-    ! integer Nsub,Ng,nth,nth_s,nth_e
-	! integer Nbind
-    ! real(kind=8)::n1,n2
-
-    ! integer blocks1, blocks2, blocks3, level_butterfly
-    ! integer tt
-    ! type(matrixblock),pointer::block_o
-
-
-    ! integer::rank_new_max,dimension_rank
-	! real(kind=8)::rank_new_avr,error
-	! DT,allocatable::matrixtmp(:,:)
-	! integer niter,unique_nth  ! level# where each block is touched only once
-	! real(kind=8):: error_inout
-	! integer,allocatable::perms(:)
-
-    ! type(matrixblock)::block_rand(:)
-	! type(hobf)::ho_bf1
-	! type(Hoption)::option
-	! type(Hstat)::stats
-	! type(kernelquant)::ker
-	! type(proctree)::ptree
-	! type(mesh)::msh
-
-	! procedure(HMatVec)::blackbox_HODLR_MVP
-
-
-
-
-	! vecCNT = 0
-
-    ! allocate (vec_rand(ho_bf1%levels(level_c)%N_block_forward))
-
-
-    ! dimension_rank = block_rand(1)%dimension_rank   ! be careful here
-	! num_blocks=2**level_butterfly
-	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
-	! Nbind = 1
-	! num_vect_sub = num_vect_subsub*Nbind
-	! level_right_start = floor_safe(level_butterfly/2d0)
-
-	! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		! allocate(vec_rand(bb)%RandomVectorLL(0:level_butterfly+2))
-		! call BF_Init_RandVect_Empty('T',vec_rand(bb),num_vect_sub,block_rand(bb),stats)
-	! end do
-
-	! do unique_nth = 0,level_right_start
-		! Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later
-		! Ng = 2**level_butterfly/Nsub
-
-		! do ii = 1,Nsub/Nbind
-			! nth_s = (ii-1)*Nbind+1
-			! nth_e = ii*Nbind
-
-			! n1 = OMP_get_wtime()
-			! call HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
-			! vecCNT = vecCNT + num_vect_sub*2
-
-			! n2 = OMP_get_wtime()
-			! ! time_getvec = time_getvec + n2-n1
-			! stats%Time_Random(2) = stats%Time_Random(2) + n2-n1
-
-			! n1 = OMP_get_wtime()
-			! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-				! call BF_Resolving_Butterfly_LL_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
-			! end do
-			! n2 = OMP_get_wtime()
-			! stats%Time_Random(3) = stats%Time_Random(3) + n2-n1
-		! end do
-	! end do
-
-	! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		! call BF_Delete_RandVect('T',vec_rand(bb),level_butterfly)
-	! end do
-	! deallocate(vec_rand)
-
-    ! return
-
-! end subroutine HODLR_Reconstruction_LL
-
-
-subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,option,stats,ker,ptree,msh)
+subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,vecCNT,option,stats,ker,ptree,msh)
 
     use BPACK_DEFS
     implicit none
@@ -843,6 +745,7 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,lev
 	type(mesh)::msh
 	DT,allocatable:: RandVectIn(:,:),RandVectOut(:,:)
 	integer bb_inv,idx_start_loc,idx_end_loc,pp,head,tail
+	integer vecCNT
 
 	procedure(HMatVec)::blackbox_HODLR_MVP
 
@@ -902,6 +805,520 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,lev
     return
 
 end subroutine HODLR_Reconstruction_LL
+
+
+
+
+
+subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,vecCNT,option,stats,ker,ptree,msh)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer level_c,rowblock,Nloc
+    integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
+    integer i, j, ii, jj,bb, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+    integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
+    integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb,Bidxs
+    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
+    DT ctemp, a, b
+    character chara
+	integer level_left_start
+
+    type(RandomBlock),allocatable :: vec_rand(:)
+    integer Nsub,Ng,nth,nth_s,nth_e
+	integer Nbind
+    real(kind=8)::n1,n2
+
+    integer blocks1, blocks2, blocks3, level_butterfly
+    integer tt
+    type(matrixblock),pointer::block_o
+
+
+    integer::rank_new_max,dimension_rank
+	real(kind=8)::rank_new_avr,error
+	DT,allocatable::matrixtmp(:,:)
+	integer niter,unique_nth  ! level# where each block is touched only once
+	real(kind=8):: error_inout
+	integer,allocatable::perms(:)
+
+    type(matrixblock)::block_rand(:)
+	type(hobf)::ho_bf1
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	type(mesh)::msh
+	DT,allocatable:: RandVectIn(:,:),RandVectOut(:,:)
+	integer bb_inv,idx_start_loc,idx_end_loc,pp,head,tail
+	integer vecCNT
+	procedure(HMatVec)::blackbox_HODLR_MVP
+
+	vecCNT = 0
+
+    dimension_rank = block_rand(1)%dimension_rank   ! be careful here
+	num_blocks=2**level_butterfly
+	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	level_left_start = block_rand(1)%level_half+1 !  check here later
+	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
+
+	do level = level_butterfly+1,level_left_start,-1
+		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(level-level_left_start)))    !  check here later
+		Ng = 2**level_butterfly/Nsub
+
+		Nbind = min(option%Nbundle,Nsub)
+		num_vect_sub = num_vect_subsub*Nbind
+
+		allocate(RandVectIn(Nloc,num_vect_sub))
+		RandVectIn=0
+		allocate(RandVectOut(Nloc,num_vect_sub))
+		RandVectOut=0
+
+		do ii = 1,Nsub/Nbind
+			nth_s = (ii-1)*Nbind+1
+			nth_e = ii*Nbind
+
+			n1 = OMP_get_wtime()
+			call HODLR_Randomized_Vectors('R',ho_bf1,block_rand,RandVectIn,RandVectOut,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,level,ker,ptree,stats,msh,option)
+			vecCNT = vecCNT + num_vect_sub*2
+
+			n2 = OMP_get_wtime()
+			! time_getvec = time_getvec + n2-n1
+			stats%Time_Random(2) = stats%Time_Random(2) + n2-n1
+
+			n1 = OMP_get_wtime()
+
+			do bb_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
+				pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
+				head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn -1
+				tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc -1
+				idx_start_loc = head-msh%idxs+1
+				idx_end_loc = tail-msh%idxs+1
+
+				call BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1,level_c,num_vect_sub,nth_s,nth_e,Ng,level,Bidxs,bb_inv,block_rand,RandVectIn(idx_start_loc:idx_end_loc,1:num_vect_sub),RandVectOut(idx_start_loc:idx_end_loc,1:num_vect_sub),option,ptree,msh,stats)
+
+			enddo
+			n2 = OMP_get_wtime()
+			stats%Time_Random(3) = stats%Time_Random(3) + n2-n1
+		end do
+
+		deallocate(RandVectIn)
+		deallocate(RandVectOut)
+
+	end do
+
+    return
+
+end subroutine HODLR_Reconstruction_RR
+
+
+
+
+
+
+subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,error,ker,ptree,stats,msh,option)
+
+    use BPACK_DEFS
+    implicit none
+
+	integer nth
+    integer i,j,k,level,ii,jj,kk,test,groupm,groupn,bb,pp
+    integer Nloc,mm,nn
+    real(kind=8) a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
+    DT ctemp, ctemp1, ctemp2
+
+    ! type(matricesblock), pointer :: blocks
+    type(RandomBlock), pointer :: random
+	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly,ierr
+	integer*8 idx_start
+	real(kind=8)::error,tmp1,tmp2,norm1,norm2
+	integer level_c,rowblock,dimension_m,header_m,tailer_m,header_n,tailer_n
+	DT,allocatable::RandomVectors_Output_ref(:,:)
+	type(matrixblock),pointer::block_o
+
+	type(hobf)::ho_bf1
+	type(matrixblock)::block_rand(:)
+	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	procedure(HMatVec)::blackbox_HODLR_MVP
+	type(Hstat)::stats
+	type(Hoption)::option
+	type(mesh)::msh
+	integer Bidxs,Bidxe,bb_inv,head,tail,idx_start_loc,idx_end_loc
+
+	if(level_c/=ho_bf1%Maxlevel+1)then
+		Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
+		Bidxe = ho_bf1%levels(level_c)%Bidxe*2
+	else
+		Bidxs = ho_bf1%levels(level_c)%Bidxs
+		Bidxe = ho_bf1%levels(level_c)%Bidxe
+	endif
+
+
+	num_vect=1
+	allocate (RandomVectors_InOutput(3))
+	do ii=1,3
+		allocate (RandomVectors_InOutput(ii)%vector(Nloc,num_vect))
+		RandomVectors_InOutput(ii)%vector = 0d0
+	end do
+
+	do bb =Bidxs,Bidxe
+		if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
+			block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			mm=block_o%M_loc
+			pp = ptree%MyID - ptree%pgrp(block_o%pgno)%head + 1
+			header_m = block_o%M_p(pp,1) + block_o%headm -1
+			k=header_m-msh%idxs
+			do jj=1,num_vect
+				do ii=1, mm
+					call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,jj))	! matrixtemp1(jj,ii) !
+				enddo
+			enddo
+
+			! !!! this is needed to use HODLR_Mult, otherwise I need to write a separate subroutine for matvec of block_rand at one level
+			! write(*,*)block_rand(bb-Bidxs+1)%row_group,block_rand(bb-Bidxs+1)%col_group,'b copy',bb-Bidxs+1,ptree%MyID
+			! call BF_copy('N',block_rand(bb-Bidxs+1),block_o)
+			! write(*,*)block_o%row_group,block_o%col_group,'a copy'
+		endif
+	end do
+
+
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, Nloc,level_c,num_vect,ker,ptree,stats,msh,option)
+
+
+	do bb_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
+		pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
+		head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn -1
+		tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc -1
+		idx_start_loc = head-msh%idxs+1
+		idx_end_loc = tail-msh%idxs+1
+		if(level_c==ho_bf1%Maxlevel+1)then
+			call Full_block_MVP_dat(block_rand(bb_inv-Bidxs+1),'N',idx_end_loc-idx_start_loc+1,num_vect,&
+			&RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc,1:num_vect),RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc,1:num_vect),cone,czero)
+		else
+			call BF_block_MVP_twoforward_dat(ho_bf1,level_c,bb_inv,block_rand,'N',idx_end_loc-idx_start_loc+1,num_vect,RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc,1:num_vect),RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc,1:num_vect),cone,czero,ptree,stats)
+		endif
+	end do
+
+
+	! call HODLR_Mult('N',Nloc,num_vect,level_c,level_c,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,ho_bf1,ptree,option,stats)
+	! do bb =Bidxs,Bidxe
+		! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
+			! block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			! !!! this is needed to use HODLR_Mult, otherwise I need to write a seperate subroutine for matvec of block_rand at one level
+			! ! write(*,*)block_o%row_group,block_o%col_group,'b delete'
+			! call BF_delete(block_o,1)
+			! ! write(*,*)block_o%row_group,block_o%col_group,'a delete'
+		! endif
+	! end do
+
+
+
+	tmp1 = fnorm(RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector,Nloc,1)**2d0
+	call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
+	tmp2 = fnorm(RandomVectors_InOutput(3)%vector,Nloc,1)**2d0
+	call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
+	error = sqrt(norm1)/sqrt(norm2)
+	! error=0
+	do ii=1,3
+		deallocate (RandomVectors_InOutput(ii)%vector)
+	end do
+	deallocate(RandomVectors_InOutput)
+
+
+    return
+
+end subroutine HODLR_Test_Error_RR
+
+
+subroutine HODLR_Randomized_Vectors(side,ho_bf1,block_rand,RandVectIn,RandVectOut,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
+
+    use BPACK_DEFS
+
+	use misc
+    implicit none
+
+	integer level_c,rowblock,unique_nth
+    integer Nloc,i,j,k,level,ii,jj,kk,test,bb
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real(kind=8) a,b,c,d
+    ! DT ctemp, ctemp1, ctemp2
+	type(matrixblock),pointer::block_o
+
+    type(vectorsblock), pointer :: random1, random2
+
+    real(kind=8),allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
+
+	integer Nsub,Ng
+	integer*8 idx_start
+    integer level_blocks
+    integer groupm_start, groupn_start
+    integer header_mm, header_nn
+	integer header_m, header_n, tailer_m, tailer_n
+
+	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub
+	real(kind=8)::n1,n2
+
+	type(hobf)::ho_bf1
+	type(matrixblock)::block_rand(:)
+	DT:: RandVectIn(:,:),RandVectOut(:,:)
+	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	type(Hstat)::stats
+	type(Hoption)::option
+	type(mesh)::msh
+	integer Bidxs,Bidxe
+	integer idx_r,inc_r,nr,idx_c,inc_c,nc,idx_m_s,idx_m_e,idxs,idxe
+	character::trans,side
+	integer level_left_start,level_right_start
+
+	procedure(HMatVec)::blackbox_HODLR_MVP
+
+
+	RandVectIn=0
+	RandVectOut=0
+	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
+
+	if(side=='L')then
+		trans='T'
+		level_right_start = block_rand(1)%level_half
+		Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later
+	else if(side=='R')then
+		trans='N'
+		level_left_start = block_rand(1)%level_half+1 !  check here later
+		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
+	endif
+
+	Ng = 2**level_butterfly/Nsub
+	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
+	Bidxe = ho_bf1%levels(level_c)%Bidxe*2
+
+
+	do bb = Bidxs,Bidxe
+		if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
+			block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
+			! mm=block_o%M_loc
+			! pp = ptree%MyID - ptree%pgrp(block_o%pgno)%head + 1
+			! header_m = block_o%M_p(pp,1) + block_o%headm -1
+			! k=header_m-msh%idxs
+
+			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
+			groupm_start=groupm*2**(level_butterfly)
+
+			call GetLocalBlockRange(ptree,block_rand(bb-Bidxs+1)%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+			idx_m_s=idx_r
+			idx_m_e=idx_r+nr-1
+
+			do nth= nth_s,nth_e
+				!$omp parallel do default(shared) private(i,mm,idxs,idxe)
+				do i=(nth-1)*Ng+1, nth*Ng
+					if(i>=idx_m_s .and. i<=idx_m_e)then
+						idxs=msh%basis_group(groupm_start+i-1)%head-msh%idxs+1
+						idxe=msh%basis_group(groupm_start+i-1)%tail-msh%idxs+1
+						mm=idxe-idxs+1
+						call RandomSubMat(idxs,idxe,(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(mm,num_vect_subsub),RandVectIn,0)
+					endif
+				enddo
+				!$omp end parallel do
+			enddo
+		endif
+	enddo
+
+	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans,RandVectIn,RandVectOut,Nloc,level_c,num_vect_sub,ker,ptree,stats,msh,option)
+
+    return
+
+end subroutine HODLR_Randomized_Vectors
+
+
+
+subroutine PComputeRange_twoforward(ho_bf1,level,Bidxs,ii,ranks,AR,eps,ptree,stats)
+   use BPACK_DEFS
+   implicit none
+   integer ranks(:)
+   integer level, ii, bb
+   DT :: AR(:,:)
+   DT,pointer :: matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp(:,:)
+   type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2,block_off
+   integer tempi,groupn,groupm,mm(2),mm1,nn1,mm2,nn2,ierr,nin1,nout1,nin2,nout2,offout(2),offout1,offout2,rank
+   type(hobf)::ho_bf1
+   type(proctree)::ptree
+   type(Hstat)::stats
+   real(kind=8)::n1,n2,eps,flop
+   integer,pointer::M_p(:,:)
+   integer Bidxs
+
+	block_off1 => ho_bf1%levels(level)%BP(ii*2-1)%LL(1)%matrices_block(1)
+	block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
+	block_inv => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+
+	mm(1)=block_off1%M_loc
+	mm(2)=block_off2%M_loc
+
+	offout(1) = 0
+	offout(2) = block_off1%M
+
+	!!!*** redistribute AR from process layout of hodlr to the process layout of block_off1 and block_off2
+	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-1-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
+
+	do bb=1,2
+	block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
+	M_p => block_off%M_p
+	if(mm(bb)>0)then
+		if(bb==1)then
+		allocate(matrixtemp1(mm(bb),ranks(ii*2-1+bb-1-Bidxs+1)))
+		matrixtemp=>matrixtemp1
+		endif
+		if(bb==2)then
+		allocate(matrixtemp2(mm(bb),ranks(ii*2-1+bb-1-Bidxs+1)))
+		matrixtemp=>matrixtemp2
+		endif
+	endif
+	n1 = OMP_get_wtime()
+	call Redistribute1Dto1D(AR,block_inv%M_p,0,block_inv%pgno,matrixtemp,M_p,offout(bb),block_off%pgno,ranks(ii*2-1+bb-1-Bidxs+1),ptree)
+    n2 = OMP_get_wtime()
+    stats%Time_RedistV = stats%Time_RedistV + n2-n1
+	enddo
+
+	!!!*** compute range of AR from QR for block_off1 and block_off2
+	do bb=1,2
+		block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
+		M_p => block_off%M_p
+		if(bb==1)matrixtemp=>matrixtemp1
+		if(bb==2)matrixtemp=>matrixtemp2
+
+		if(mm(bb)>0)then
+			call PComputeRange(M_p,ranks(ii*2-1+bb-1-Bidxs+1),matrixtemp,rank,eps,ptree,block_off%pgno,flop)
+
+			ranks(ii*2-1+bb-1-Bidxs+1) = rank
+			stats%Flop_Fill = stats%Flop_Fill + flop
+		endif
+	enddo
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-1-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
+	! write(*,*)'wonima',ii*2-1-Bidxs+1,ranks(ii*2-1-Bidxs+1),ii*2-Bidxs+1,ranks(ii*2-Bidxs+1),ptree%MyID,mm(1)
+
+
+
+	!!!*** redistribute AR from process layout of block_off1 and block_off2  to the process layout of hodlr
+	do bb=1,2
+		block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
+		M_p => block_off%M_p
+		if(bb==1)matrixtemp=>matrixtemp1
+		if(bb==2)matrixtemp=>matrixtemp2
+
+		n1 = OMP_get_wtime()
+		call Redistribute1Dto1D(matrixtemp,M_p,offout(bb),block_off%pgno,AR,block_inv%M_p,0,block_inv%pgno,ranks(ii*2-1+bb-1-Bidxs+1),ptree)
+		n2 = OMP_get_wtime()
+		stats%Time_RedistV = stats%Time_RedistV + n2-n1
+		if(mm(bb)>0)then
+			deallocate(matrixtemp)
+		endif
+	enddo
+
+end subroutine PComputeRange_twoforward
+
+
+
+!!!!!***** this subroutine is part of the randomized SVD.
+! Given B^T = (Q^cA)^T (N_loc x ranks(bb)) and Q (M_loc x ranks(bb)) in the process layout of hodlr, it computes SVD B=USV and output A = (QU)*(SV)
+subroutine PQxSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,block_rand,option,ptree,stats)
+   use BPACK_DEFS
+   implicit none
+   integer ranks(:)
+   integer level, ii, bb,bb_inv
+   DT :: Q(:,:),QcA_trans(:,:)
+   DT,pointer :: mat1(:,:),mat2(:,:),mat(:,:),matQ1(:,:),matQ2(:,:),matQ(:,:),matQ2D(:,:),matQcA_trans1(:,:),matQcA_trans2(:,:),matQcA_trans(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:),mattemp(:,:)
+   type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2,block_off
+   integer groupn,groupm,mm(2),nn(2),ierr,nin1,nout1,nin2,nout2,offM(2),offN(2),offout1,offout2,rank
+   type(hobf)::ho_bf1
+   type(proctree)::ptree
+   type(Hstat)::stats
+   type(Hoption)::option
+   real(kind=8)::n1,n2,eps,flop
+   integer,pointer::M_p(:,:),N_p(:,:)
+   real(kind=8),pointer::Singular(:)
+   integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
+   integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
+   type(matrixblock)::block_rand(:)
+   integer Bidxs
+   stats%Flop_Tmp=0
+	block_off1 => ho_bf1%levels(level)%BP(bb_inv*2-1)%LL(1)%matrices_block(1)
+	block_off2 => ho_bf1%levels(level)%BP(bb_inv*2)%LL(1)%matrices_block(1)
+	block_inv => ho_bf1%levels(level)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)
+
+	mm(1)=block_off1%M_loc
+	mm(2)=block_off2%M_loc
+	nn(1)=block_off1%N_loc
+	nn(2)=block_off2%N_loc
+
+	offM(1) = 0
+	offM(2) = block_off1%M
+	offN(1) = block_off1%M
+	offN(2) = 0
+
+	!!!*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
+	n1 = OMP_get_wtime()
+	do bb=1,2
+		block_off => ho_bf1%levels(level)%BP(bb_inv*2-1+bb-1)%LL(1)%matrices_block(1)
+		M_p => block_off%M_p
+		N_p => block_off%N_p
+		if(mm(bb)>0)then
+			if(bb==1)then
+			allocate(matQ1(mm(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
+			matQ=>matQ1
+			endif
+			if(bb==2)then
+			allocate(matQ2(mm(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
+			matQ=>matQ2
+			endif
+		endif
+		call Redistribute1Dto1D(Q,block_inv%M_p,0,block_inv%pgno,matQ,M_p,offM(bb),block_off%pgno,ranks(bb_inv*2-1+bb-1-Bidxs+1),ptree)
+
+
+		if(nn(bb)>0)then
+			if(bb==1)then
+			allocate(matQcA_trans1(nn(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
+			matQcA_trans=>matQcA_trans1
+			endif
+			if(bb==2)then
+			allocate(matQcA_trans2(nn(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
+			matQcA_trans=>matQcA_trans2
+			endif
+		endif
+		call Redistribute1Dto1D(QcA_trans,block_inv%N_p,0,block_inv%pgno,matQcA_trans,N_p,offN(bb),block_off%pgno,ranks(bb_inv*2-1+bb-1-Bidxs+1),ptree)
+	enddo
+	n2 = OMP_get_wtime()
+	stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+	!!!*** compute B^T=V^TS^TU^T and A = (QU)*(SV)
+	do bb=1,2
+		block_off => ho_bf1%levels(level)%BP(bb_inv*2-1+bb-1)%LL(1)%matrices_block(1)
+		M_p => block_off%M_p
+		N_p => block_off%N_p
+		M = block_off%M
+		N = block_off%N
+		if(bb==1)matQcA_trans=>matQcA_trans1
+		if(bb==2)matQcA_trans=>matQcA_trans2
+		if(bb==1)matQ=>matQ1
+		if(bb==2)matQ=>matQ2
+		if(mm(bb)>0)then
+			call PQxSVDTruncate(block_rand(bb_inv*2-1+bb-1-Bidxs+1),matQ,matQcA_trans,ranks(bb_inv*2-1+bb-1-Bidxs+1),rank,option,stats,ptree,flop)
+			stats%Flop_Fill = stats%Flop_Fill+flop
+			deallocate(matQcA_trans)
+			deallocate(matQ)
+		endif
+	enddo
+
+end subroutine PQxSVDTruncate_twoforward
+
 
 
 
@@ -1096,928 +1513,5 @@ end subroutine BF_Resolving_Butterfly_RR_dat_twoforward
 
 
 
-! subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,option,stats,ker,ptree,msh)
-
-    ! use BPACK_DEFS
-    ! implicit none
-
-    ! integer level_c,rowblock
-    ! integer N, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    ! integer i, j, ii, jj,bb, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    ! integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    ! integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb
-    ! integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    ! DT ctemp, a, b
-    ! character chara
-	! integer level_right_start
-
-    ! integer Nsub,Ng,nth,nth_s,nth_e
-	! integer Nbind
-    ! real(kind=8)::n1,n2
-
-    ! integer blocks1, blocks2, blocks3, level_butterfly
-    ! integer tt
-    ! type(matrixblock),pointer::block_o
-    ! integer::rank_new_max,dimension_rank,level_left_start
-	! real(kind=8)::rank_new_avr
-	! DT,allocatable::matrixtmp(:,:)
-	! integer niter,unique_nth  ! level# where each block is touched only once
-	! real(kind=8):: error_inout,rtemp
-	! integer,allocatable::perms(:)
-	! type(RandomBlock),allocatable :: vec_rand(:)
-
-	! type(hobf)::ho_bf1
-	! type(matrixblock)::block_rand(:)
-	! type(Hoption)::option
-	! type(Hstat)::stats
-	! type(kernelquant)::ker
-	! type(proctree)::ptree
-	! type(mesh)::msh
-
-	! procedure(HMatVec)::blackbox_HODLR_MVP
-
-
-	! vecCNT = 0
-
-
-    ! dimension_rank = block_rand(1)%dimension_rank   ! be careful here
-	! num_blocks=2**level_butterfly
-	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
-	! Nbind = 1
-	! num_vect_sub = num_vect_subsub*Nbind
-
-	! allocate (vec_rand(ho_bf1%levels(level_c)%N_block_forward))
-
-	! level_left_start= floor_safe(level_butterfly/2d0)+1    !  check here later
-
-	! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		! allocate (vec_rand(bb)%RandomVectorRR(0:level_butterfly+2))
-		! call BF_Init_RandVect_Empty('N',vec_rand(bb),num_vect_sub,block_rand(bb),stats)
-	! end do
-
-	! do unique_nth=level_butterfly+1,level_left_start,-1
-		! Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
-		! Ng = 2**level_butterfly/Nsub
-
-		! do ii = 1,Nsub/Nbind
-			! nth_s = (ii-1)*Nbind+1
-			! nth_e = ii*Nbind
-
-			! n1 = OMP_get_wtime()
-
-			! call HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
-
-			! vecCNT = vecCNT + num_vect_sub*2
-
-			! n2 = OMP_get_wtime()
-			! ! time_getvec = time_getvec + n2-n1
-			! stats%Time_Random(2) = stats%Time_Random(2) + n2-n1
-
-			! n1 = OMP_get_wtime()
-			! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-				! call BF_Resolving_Butterfly_RR_new(num_vect_sub,nth_s,nth_e,Ng,unique_nth,block_rand(bb),vec_rand(bb),option,stats)
-			! end do
-			! n2 = OMP_get_wtime()
-			! stats%Time_Random(3) = stats%Time_Random(3) + n2-n1
-		! end do
-	! end do
-
-
-	! do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		! call BF_Delete_RandVect('N',vec_rand(bb),level_butterfly)
-	! end do
-	! deallocate(vec_rand)
-
-	! ! write(*,*)'more cool'
-    ! return
-
-! end subroutine HODLR_Reconstruction_RR
-
-
-
-
-
-subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,option,stats,ker,ptree,msh)
-
-    use BPACK_DEFS
-    implicit none
-
-    integer level_c,rowblock,Nloc
-    integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-    integer i, j, ii, jj,bb, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
-    integer header_m, header_n, tailer_m, tailer_n, mm, nn, num_blocks, level_define, col_vector
-    integer rank1, rank2, rank, num_groupm, num_groupn, header_nn, header_mm, ma, mb,Bidxs
-    integer vector_a, vector_b, nn1, nn2, level_blocks, mm1, mm2,num_vect_sub,num_vect_subsub
-    DT ctemp, a, b
-    character chara
-	integer level_left_start
-
-    type(RandomBlock),allocatable :: vec_rand(:)
-    integer Nsub,Ng,nth,nth_s,nth_e
-	integer Nbind
-    real(kind=8)::n1,n2
-
-    integer blocks1, blocks2, blocks3, level_butterfly
-    integer tt
-    type(matrixblock),pointer::block_o
-
-
-    integer::rank_new_max,dimension_rank
-	real(kind=8)::rank_new_avr,error
-	DT,allocatable::matrixtmp(:,:)
-	integer niter,unique_nth  ! level# where each block is touched only once
-	real(kind=8):: error_inout
-	integer,allocatable::perms(:)
-
-    type(matrixblock)::block_rand(:)
-	type(hobf)::ho_bf1
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(kernelquant)::ker
-	type(proctree)::ptree
-	type(mesh)::msh
-	DT,allocatable:: RandVectIn(:,:),RandVectOut(:,:)
-	integer bb_inv,idx_start_loc,idx_end_loc,pp,head,tail
-
-	procedure(HMatVec)::blackbox_HODLR_MVP
-
-	vecCNT = 0
-
-    dimension_rank = block_rand(1)%dimension_rank   ! be careful here
-	num_blocks=2**level_butterfly
-	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
-	level_left_start = block_rand(1)%level_half+1 !  check here later
-	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
-
-	do level = level_butterfly+1,level_left_start,-1
-		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(level-level_left_start)))    !  check here later
-		Ng = 2**level_butterfly/Nsub
-
-		Nbind = min(option%Nbundle,Nsub)
-		num_vect_sub = num_vect_subsub*Nbind
-
-		allocate(RandVectIn(Nloc,num_vect_sub))
-		RandVectIn=0
-		allocate(RandVectOut(Nloc,num_vect_sub))
-		RandVectOut=0
-
-		do ii = 1,Nsub/Nbind
-			nth_s = (ii-1)*Nbind+1
-			nth_e = ii*Nbind
-
-			n1 = OMP_get_wtime()
-			call HODLR_Randomized_Vectors('R',ho_bf1,block_rand,RandVectIn,RandVectOut,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,level,ker,ptree,stats,msh,option)
-			vecCNT = vecCNT + num_vect_sub*2
-
-			n2 = OMP_get_wtime()
-			! time_getvec = time_getvec + n2-n1
-			stats%Time_Random(2) = stats%Time_Random(2) + n2-n1
-
-			n1 = OMP_get_wtime()
-
-			do bb_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
-				pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
-				head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn -1
-				tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc -1
-				idx_start_loc = head-msh%idxs+1
-				idx_end_loc = tail-msh%idxs+1
-
-				call BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1,level_c,num_vect_sub,nth_s,nth_e,Ng,level,Bidxs,bb_inv,block_rand,RandVectIn(idx_start_loc:idx_end_loc,1:num_vect_sub),RandVectOut(idx_start_loc:idx_end_loc,1:num_vect_sub),option,ptree,msh,stats)
-
-			enddo
-			n2 = OMP_get_wtime()
-			stats%Time_Random(3) = stats%Time_Random(3) + n2-n1
-		end do
-
-		deallocate(RandVectIn)
-		deallocate(RandVectOut)
-
-	end do
-
-    return
-
-end subroutine HODLR_Reconstruction_RR
-
-
-
-
-
-
-subroutine HODLR_Test_Error_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,level_c,error,ker,ptree,stats,msh,option)
-
-    use BPACK_DEFS
-    implicit none
-
-	integer nth
-    integer i,j,k,level,ii,jj,kk,test,groupm,groupn,bb,pp
-    integer Nloc,mm,nn
-    real(kind=8) a,b,c,d, condition_number,norm1_R,norm2_R,norm3_R,norm4_R
-    DT ctemp, ctemp1, ctemp2
-
-    ! type(matricesblock), pointer :: blocks
-    type(RandomBlock), pointer :: random
-	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly,ierr
-	integer*8 idx_start
-	real(kind=8)::error,tmp1,tmp2,norm1,norm2
-	integer level_c,rowblock,dimension_m,header_m,tailer_m,header_n,tailer_n
-	DT,allocatable::RandomVectors_Output_ref(:,:)
-	type(matrixblock),pointer::block_o
-
-	type(hobf)::ho_bf1
-	type(matrixblock)::block_rand(:)
-	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
-	type(kernelquant)::ker
-	type(proctree)::ptree
-	procedure(HMatVec)::blackbox_HODLR_MVP
-	type(Hstat)::stats
-	type(Hoption)::option
-	type(mesh)::msh
-	integer Bidxs,Bidxe,bb_inv,head,tail,idx_start_loc,idx_end_loc
-
-	if(level_c/=ho_bf1%Maxlevel+1)then
-		Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
-		Bidxe = ho_bf1%levels(level_c)%Bidxe*2
-	else
-		Bidxs = ho_bf1%levels(level_c)%Bidxs
-		Bidxe = ho_bf1%levels(level_c)%Bidxe
-	endif
-
-
-	num_vect=1
-	allocate (RandomVectors_InOutput(3))
-	do ii=1,3
-		allocate (RandomVectors_InOutput(ii)%vector(Nloc,num_vect))
-		RandomVectors_InOutput(ii)%vector = 0d0
-	end do
-
-	do bb =Bidxs,Bidxe
-		if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
-			block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-			mm=block_o%M_loc
-			pp = ptree%MyID - ptree%pgrp(block_o%pgno)%head + 1
-			header_m = block_o%M_p(pp,1) + block_o%headm -1
-			k=header_m-msh%idxs
-			do jj=1,num_vect
-				do ii=1, mm
-					call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,jj))	! matrixtemp1(jj,ii) !
-				enddo
-			enddo
-
-			! !!! this is needed to use HODLR_Mult, otherwise I need to write a separate subroutine for matvec of block_rand at one level
-			! write(*,*)block_rand(bb-Bidxs+1)%row_group,block_rand(bb-Bidxs+1)%col_group,'b copy',bb-Bidxs+1,ptree%MyID
-			! call BF_copy('N',block_rand(bb-Bidxs+1),block_o)
-			! write(*,*)block_o%row_group,block_o%col_group,'a copy'
-		endif
-	end do
-
-
-	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, Nloc,level_c,num_vect,ker,ptree,stats,msh,option)
-
-
-	do bb_inv = ho_bf1%levels(level_c)%Bidxs,ho_bf1%levels(level_c)%Bidxe
-		pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
-		head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp,1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn -1
-		tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc -1
-		idx_start_loc = head-msh%idxs+1
-		idx_end_loc = tail-msh%idxs+1
-		if(level_c==ho_bf1%Maxlevel+1)then
-			call Full_block_MVP_dat(block_rand(bb_inv-Bidxs+1),'N',idx_end_loc-idx_start_loc+1,num_vect,&
-			&RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc,1:num_vect),RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc,1:num_vect),cone,czero)
-		else
-			call BF_block_MVP_twoforward_dat(ho_bf1,level_c,bb_inv,block_rand,'N',idx_end_loc-idx_start_loc+1,num_vect,RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc,1:num_vect),RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc,1:num_vect),cone,czero,ptree,stats)
-		endif
-	end do
-
-
-	! call HODLR_Mult('N',Nloc,num_vect,level_c,level_c,RandomVectors_InOutput(1)%vector,RandomVectors_InOutput(2)%vector,ho_bf1,ptree,option,stats)
-	! do bb =Bidxs,Bidxe
-		! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
-			! block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-			! !!! this is needed to use HODLR_Mult, otherwise I need to write a seperate subroutine for matvec of block_rand at one level
-			! ! write(*,*)block_o%row_group,block_o%col_group,'b delete'
-			! call BF_delete(block_o,1)
-			! ! write(*,*)block_o%row_group,block_o%col_group,'a delete'
-		! endif
-	! end do
-
-
-
-	tmp1 = fnorm(RandomVectors_InOutput(2)%vector-RandomVectors_InOutput(3)%vector,Nloc,1)**2d0
-	call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
-	tmp2 = fnorm(RandomVectors_InOutput(3)%vector,Nloc,1)**2d0
-	call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%Comm,ierr)
-	error = sqrt(norm1)/sqrt(norm2)
-	! error=0
-	do ii=1,3
-		deallocate (RandomVectors_InOutput(ii)%vector)
-	end do
-	deallocate(RandomVectors_InOutput)
-
-
-    return
-
-end subroutine HODLR_Test_Error_RR
-
-
-
-subroutine HODLR_Randomized_Vectors_LL(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
-
-    use BPACK_DEFS
-
-	use misc
-    implicit none
-
-	integer level_c,rowblock,unique_nth
-    integer N,i,j,k,level,ii,jj,kk,test,bb
-    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
-    character chara
-    real(kind=8) a,b,c,d
-    ! DT ctemp, ctemp1, ctemp2
-	type(matrixblock),pointer::block_o
-
-    type(vectorsblock), pointer :: random1, random2
-
-    real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,num_blocks
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
-
-	integer Nsub,Ng
-	integer*8 idx_start
-    integer level_blocks
-    integer groupm_start, groupn_start
-    integer header_mm, header_nn
-	integer header_m, header_n, tailer_m, tailer_n
-
-	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_right_start
-	real(kind=8)::n1,n2
-
-	type(hobf)::ho_bf1
-	type(matrixblock)::block_rand(:)
-	type(RandomBlock):: vec_rand(:)
-	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
-	type(kernelquant)::ker
-	type(proctree)::ptree
-	type(Hstat)::stats
-	type(Hoption)::option
-	type(mesh)::msh
-
-	procedure(HMatVec)::blackbox_HODLR_MVP
-
-
-
-    ! ctemp1=1.0d0 ; ctemp2=0.0d0
-	! block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)
-
-	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-
-    num_blocks=2**level_butterfly
-	level_right_start = floor_safe(level_butterfly/2d0)
-	Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later
-    Ng = 2**level_butterfly/Nsub
-	! dimension_rank =block_rand(1)%dimension_rank
-
-
-	allocate (RandomVectors_InOutput(3))
-	do ii=1,3
-		allocate (RandomVectors_InOutput(ii)%vector(N,num_vect_sub))
-		RandomVectors_InOutput(ii)%vector = 0d0
-	end do
-
-	call assert(ho_bf1%levels(level_c)%N_block_forward>1,'N_block_forward not correct')
-	! call assert(oddeven==0 .or. oddeven==1,'oddeven not correct')
-
-	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-
-		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1
-
-		groupm_start=groupm*2**(level_butterfly)
-
-		do nth= nth_s,nth_e
-			do i=1, num_blocks
-				if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then
-					header_m=msh%basis_group(groupm_start+i-1)%head
-					tailer_m=msh%basis_group(groupm_start+i-1)%tail
-					mm=tailer_m-header_m+1
-					k=header_m-1
-
-					allocate(matrixtemp1(num_vect_subsub,mm))
-					call RandomMat(num_vect_subsub,mm,min(mm,num_vect_subsub),matrixtemp1,0)
-
-					! !$omp parallel do default(shared) private(ii,jj)
-					 do jj=1,num_vect_subsub
-						 do ii=1, mm
-							 call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj))	! matrixtemp1(jj,ii) !
-						 enddo
-					 enddo
-					 ! !$omp end parallel do
-					 deallocate(matrixtemp1)
-
-				 end if
-			end do
-		end do
-
-	end do
-
-
-	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,'T', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,ker,ptree,stats,msh,option)
-
-
-	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-
-		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1
-		groupm_start=groupm*2**(level_butterfly)
-		! random=>random_Block(bb)
-		do i=1, num_blocks
-			header_m=msh%basis_group(groupm_start+i-1)%head
-			k = header_m - 1
-			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
-			! !$omp parallel do default(shared) private(ii,jj)
-			do ii=1, mm
-				do jj=1, num_vect_sub
-					vec_rand(bb)%RandomVectorLL(0)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
-				enddo
-			enddo
-			! !$omp end parallel do
-			! k=k+mm
-		enddo
-
-
-		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here
-		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1
-		groupn_start=groupn*2**(level_butterfly)
-		do i=1, num_blocks
-			header_n=msh%basis_group(groupn_start+i-1)%head
-			k = header_n - 1
-			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
-			! !$omp parallel do default(shared) private(ii,jj)
-			do ii=1, nn
-				do jj=1, num_vect_sub
-					vec_rand(bb)%RandomVectorLL(level_butterfly+2)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
-				enddo
-			enddo
-			! !$omp end parallel do
-			! k=k+nn
-		enddo
-	end do
-
-
-    ! !$omp parallel do default(shared) private(i)
-    do i=1, 3
-        deallocate (RandomVectors_InOutput(i)%vector)
-    enddo
-    ! !$omp end parallel do
-    deallocate (RandomVectors_InOutput)
-
-
-    return
-
-end subroutine HODLR_Randomized_Vectors_LL
-
-subroutine HODLR_Randomized_Vectors(side,ho_bf1,block_rand,RandVectIn,RandVectOut,blackbox_HODLR_MVP,Nloc,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
-
-    use BPACK_DEFS
-
-	use misc
-    implicit none
-
-	integer level_c,rowblock,unique_nth
-    integer Nloc,i,j,k,level,ii,jj,kk,test,bb
-    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
-    character chara
-    real(kind=8) a,b,c,d
-    ! DT ctemp, ctemp1, ctemp2
-	type(matrixblock),pointer::block_o
-
-    type(vectorsblock), pointer :: random1, random2
-
-    real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
-
-	integer Nsub,Ng
-	integer*8 idx_start
-    integer level_blocks
-    integer groupm_start, groupn_start
-    integer header_mm, header_nn
-	integer header_m, header_n, tailer_m, tailer_n
-
-	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub
-	real(kind=8)::n1,n2
-
-	type(hobf)::ho_bf1
-	type(matrixblock)::block_rand(:)
-	DT:: RandVectIn(:,:),RandVectOut(:,:)
-	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
-	type(kernelquant)::ker
-	type(proctree)::ptree
-	type(Hstat)::stats
-	type(Hoption)::option
-	type(mesh)::msh
-	integer Bidxs,Bidxe
-	integer idx_r,inc_r,nr,idx_c,inc_c,nc,idx_m_s,idx_m_e,idxs,idxe
-	character::trans,side
-	integer level_left_start,level_right_start
-
-	procedure(HMatVec)::blackbox_HODLR_MVP
-
-
-	RandVectIn=0
-	RandVectOut=0
-	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-
-	if(side=='L')then
-		trans='T'
-		level_right_start = block_rand(1)%level_half
-		Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-unique_nth)))   !  check here later
-	else if(side=='R')then
-		trans='N'
-		level_left_start = block_rand(1)%level_half+1 !  check here later
-		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
-	endif
-
-	Ng = 2**level_butterfly/Nsub
-	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
-	Bidxe = ho_bf1%levels(level_c)%Bidxe*2
-
-
-	do bb = Bidxs,Bidxe
-		if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
-			block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-			! mm=block_o%M_loc
-			! pp = ptree%MyID - ptree%pgrp(block_o%pgno)%head + 1
-			! header_m = block_o%M_p(pp,1) + block_o%headm -1
-			! k=header_m-msh%idxs
-
-			groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-			groupm_start=groupm*2**(level_butterfly)
-
-			call GetLocalBlockRange(ptree,block_rand(bb-Bidxs+1)%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
-			idx_m_s=idx_r
-			idx_m_e=idx_r+nr-1
-
-			do nth= nth_s,nth_e
-				!$omp parallel do default(shared) private(i,mm,idxs,idxe)
-				do i=(nth-1)*Ng+1, nth*Ng
-					if(i>=idx_m_s .and. i<=idx_m_e)then
-						idxs=msh%basis_group(groupm_start+i-1)%head-msh%idxs+1
-						idxe=msh%basis_group(groupm_start+i-1)%tail-msh%idxs+1
-						mm=idxe-idxs+1
-						call RandomSubMat(idxs,idxe,(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(mm,num_vect_subsub),RandVectIn,0)
-					endif
-				enddo
-				!$omp end parallel do
-			enddo
-		endif
-	enddo
-
-	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,trans,RandVectIn,RandVectOut,Nloc,level_c,num_vect_sub,ker,ptree,stats,msh,option)
-
-    return
-
-end subroutine HODLR_Randomized_Vectors
-
-
-
-
-
-subroutine HODLR_Randomized_Vectors_RR(ho_bf1,block_rand,vec_rand,blackbox_HODLR_MVP,N,level_c,level_butterfly,nth_s,nth_e,num_vect_sub,unique_nth,ker,ptree,stats,msh,option)
-
-    use BPACK_DEFS
-
-	use misc
-    implicit none
-
-	integer level_c,rowblock,unique_nth
-    integer N,i,j,k,level,num_blocks,ii,jj,kk,test,bb
-    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
-    character chara
-    real(kind=8) a,b,c,d
-    ! DT ctemp, ctemp1, ctemp2
-	type(matrixblock),pointer::block_o
-
-    ! type(vectorsblock), pointer :: random1, random2
-
-    real(kind=8),allocatable :: Singular(:)
-	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
-	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:)
-
-	integer Nsub,Ng
-	integer*8 idx_start
-    integer level_blocks
-    integer groupm_start, groupn_start
-    integer header_mm, header_nn
-	integer header_m, header_n, tailer_m, tailer_n
-
-	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,level_left_start
-	real(kind=8)::n1,n2
-
-	type(hobf)::ho_bf1
-	type(matrixblock)::block_rand(:)
-	type(RandomBlock):: vec_rand(:)
-	type(vectorsblock),pointer:: RandomVectors_InOutput(:)
-	type(kernelquant)::ker
-	procedure(HMatVec)::blackbox_HODLR_MVP
-	type(proctree)::ptree
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(Hoption)::option
-
-    ! ctemp1=1.0d0 ; ctemp2=0.0d0
-	! block_o =>  ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1)
-
-	num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
-    num_blocks=2**level_butterfly
-	level_left_start= floor_safe(level_butterfly/2d0)+1
-
-
-	Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth-level_left_start)))    !  check here later
-	Ng = 2**level_butterfly/Nsub
-
-	allocate (RandomVectors_InOutput(3))
-	do ii=1,3
-		allocate (RandomVectors_InOutput(ii)%vector(N,num_vect_sub))
-		RandomVectors_InOutput(ii)%vector = 0d0
-	end do
-
-	call assert(ho_bf1%levels(level_c)%N_block_forward>1,'N_block_forward not correct')
-	! call assert(oddeven==0 .or. oddeven==1,'oddeven not correct')
-
-	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-
-		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here
-		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1
-
-		groupn_start=groupn*2**(level_butterfly)
-
-		do nth= nth_s,nth_e
-			do i=1, num_blocks
-				if(i>=(nth-1)*Ng+1 .and. i<=nth*Ng)then
-					header_n=msh%basis_group(groupn_start+i-1)%head
-					tailer_n=msh%basis_group(groupn_start+i-1)%tail
-					nn=tailer_n-header_n+1
-					k=header_n-1
-
-					allocate(matrixtemp1(num_vect_subsub,nn))
-					call RandomMat(num_vect_subsub,nn,min(num_vect_subsub,nn),matrixtemp1,0)
-
-					! !$omp parallel do default(shared) private(ii,jj)
-					 do jj=1,num_vect_subsub
-						 do ii=1, nn
-							 call random_dp_number(RandomVectors_InOutput(1)%vector(ii+k,(nth-nth_s)*num_vect_subsub+jj))	! matrixtemp1(jj,ii) !
-						 enddo
-					 enddo
-					 ! !$omp end parallel do
-					 deallocate(matrixtemp1)
-
-				 end if
-			end do
-		end do
-
-	end do
-
-
-
-	call HODLR_MVP_randomized_OneL(ho_bf1,blackbox_HODLR_MVP,'N', RandomVectors_InOutput(1)%vector, RandomVectors_InOutput(3)%vector, N,level_c,num_vect_sub,ker,ptree,stats,msh,option)
-
-
-	do bb=1,ho_bf1%levels(level_c)%N_block_forward
-		block_o =>  ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1)
-
-		groupn=block_o%col_group  ! Note: row_group and col_group interchanged here
-		! nn=msh%basis_group(groupn)%tail-msh%basis_group(groupn)%head+1
-		groupn_start=groupn*2**(level_butterfly)
-		! random=>random_Block(bb)
-		do i=1, num_blocks
-			header_n=msh%basis_group(groupn_start+i-1)%head
-			k = header_n - 1
-			nn=size(block_rand(bb)%ButterflyV%blocks(i)%matrix,1)
-			! !$omp parallel do default(shared) private(ii,jj)
-			do ii=1, nn
-				do jj=1, num_vect_sub
-					vec_rand(bb)%RandomVectorRR(0)%blocks(1,i)%matrix(ii,jj)=RandomVectors_InOutput(1)%vector(ii+k,jj)
-				enddo
-			enddo
-			! !$omp end parallel do
-			! k=k+nn
-		enddo
-
-
-		groupm=block_o%row_group  ! Note: row_group and col_group interchanged here
-		! mm=msh%basis_group(groupm)%tail-msh%basis_group(groupm)%head+1
-		groupm_start=groupm*2**(level_butterfly)
-		do i=1, num_blocks
-			header_m=msh%basis_group(groupm_start+i-1)%head
-			k = header_m - 1
-			mm=size(block_rand(bb)%ButterflyU%blocks(i)%matrix,1)
-			! !$omp parallel do default(shared) private(ii,jj)
-			do ii=1, mm
-				do jj=1, num_vect_sub
-					vec_rand(bb)%RandomVectorRR(level_butterfly+2)%blocks(i,1)%matrix(ii,jj)=RandomVectors_InOutput(3)%vector(ii+k,jj)
-				enddo
-			enddo
-			! !$omp end parallel do
-			! k=k+mm
-		enddo
-	end do
-
-
-    ! !$omp parallel do default(shared) private(i)
-    do i=1, 3
-        deallocate (RandomVectors_InOutput(i)%vector)
-    enddo
-    ! !$omp end parallel do
-    deallocate (RandomVectors_InOutput)
-
-
-    return
-
-end subroutine HODLR_Randomized_Vectors_RR
-
-subroutine PComputeRange_twoforward(ho_bf1,level,Bidxs,ii,ranks,AR,eps,ptree,stats)
-   use BPACK_DEFS
-   implicit none
-   integer ranks(:)
-   integer level, ii, bb
-   DT :: AR(:,:)
-   DT,pointer :: matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp(:,:)
-   type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2,block_off
-   integer tempi,groupn,groupm,mm(2),mm1,nn1,mm2,nn2,ierr,nin1,nout1,nin2,nout2,offout(2),offout1,offout2,rank
-   type(hobf)::ho_bf1
-   type(proctree)::ptree
-   type(Hstat)::stats
-   real(kind=8)::n1,n2,eps,flop
-   integer,pointer::M_p(:,:)
-   integer Bidxs
-
-	block_off1 => ho_bf1%levels(level)%BP(ii*2-1)%LL(1)%matrices_block(1)
-	block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
-	block_inv => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-
-	mm(1)=block_off1%M_loc
-	mm(2)=block_off2%M_loc
-
-	offout(1) = 0
-	offout(2) = block_off1%M
-
-	!!!*** redistribute AR from process layout of hodlr to the process layout of block_off1 and block_off2
-	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-1-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
-	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
-
-	do bb=1,2
-	block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
-	M_p => block_off%M_p
-	if(mm(bb)>0)then
-		if(bb==1)then
-		allocate(matrixtemp1(mm(bb),ranks(ii*2-1+bb-1-Bidxs+1)))
-		matrixtemp=>matrixtemp1
-		endif
-		if(bb==2)then
-		allocate(matrixtemp2(mm(bb),ranks(ii*2-1+bb-1-Bidxs+1)))
-		matrixtemp=>matrixtemp2
-		endif
-	endif
-	n1 = OMP_get_wtime()
-	call Redistribute1Dto1D(AR,block_inv%M_p,0,block_inv%pgno,matrixtemp,M_p,offout(bb),block_off%pgno,ranks(ii*2-1+bb-1-Bidxs+1),ptree)
-    n2 = OMP_get_wtime()
-    stats%Time_RedistV = stats%Time_RedistV + n2-n1
-	enddo
-
-	!!!*** compute range of AR from QR for block_off1 and block_off2
-	do bb=1,2
-		block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
-		M_p => block_off%M_p
-		if(bb==1)matrixtemp=>matrixtemp1
-		if(bb==2)matrixtemp=>matrixtemp2
-
-		if(mm(bb)>0)then
-			call PComputeRange(M_p,ranks(ii*2-1+bb-1-Bidxs+1),matrixtemp,rank,eps,ptree,block_off%pgno,flop)
-
-			ranks(ii*2-1+bb-1-Bidxs+1) = rank
-			stats%Flop_Fill = stats%Flop_Fill + flop
-		endif
-	enddo
-
-	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-1-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
-	call MPI_ALLREDUCE(MPI_IN_PLACE ,ranks(ii*2-Bidxs+1),1,MPI_INTEGER,MPI_MIN,ptree%pgrp(block_inv%pgno)%Comm,ierr)
-	! write(*,*)'wonima',ii*2-1-Bidxs+1,ranks(ii*2-1-Bidxs+1),ii*2-Bidxs+1,ranks(ii*2-Bidxs+1),ptree%MyID,mm(1)
-
-
-
-	!!!*** redistribute AR from process layout of block_off1 and block_off2  to the process layout of hodlr
-	do bb=1,2
-		block_off => ho_bf1%levels(level)%BP(ii*2-1+bb-1)%LL(1)%matrices_block(1)
-		M_p => block_off%M_p
-		if(bb==1)matrixtemp=>matrixtemp1
-		if(bb==2)matrixtemp=>matrixtemp2
-
-		n1 = OMP_get_wtime()
-		call Redistribute1Dto1D(matrixtemp,M_p,offout(bb),block_off%pgno,AR,block_inv%M_p,0,block_inv%pgno,ranks(ii*2-1+bb-1-Bidxs+1),ptree)
-		n2 = OMP_get_wtime()
-		stats%Time_RedistV = stats%Time_RedistV + n2-n1
-		if(mm(bb)>0)then
-			deallocate(matrixtemp)
-		endif
-	enddo
-
-end subroutine PComputeRange_twoforward
-
-
-
-!!!!!***** this subroutine is part of the randomized SVD.
-! Given B^T = (Q^cA)^T (N_loc x ranks(bb)) and Q (M_loc x ranks(bb)) in the process layout of hodlr, it computes SVD B=USV and output A = (QU)*(SV)
-subroutine PQxSVDTruncate_twoforward(ho_bf1,level,Bidxs,bb_inv,ranks,Q,QcA_trans,block_rand,option,ptree,stats)
-   use BPACK_DEFS
-   implicit none
-   integer ranks(:)
-   integer level, ii, bb,bb_inv
-   DT :: Q(:,:),QcA_trans(:,:)
-   DT,pointer :: mat1(:,:),mat2(:,:),mat(:,:),matQ1(:,:),matQ2(:,:),matQ(:,:),matQ2D(:,:),matQcA_trans1(:,:),matQcA_trans2(:,:),matQcA_trans(:,:),matQcA_trans2D(:,:),matQUt2D(:,:),UU(:,:),VV(:,:),mattemp(:,:)
-   type(matrixblock),pointer::block_o,block_inv,block_schur,block_off1,block_off2,block_off
-   integer groupn,groupm,mm(2),nn(2),ierr,nin1,nout1,nin2,nout2,offM(2),offN(2),offout1,offout2,rank
-   type(hobf)::ho_bf1
-   type(proctree)::ptree
-   type(Hstat)::stats
-   type(Hoption)::option
-   real(kind=8)::n1,n2,eps,flop
-   integer,pointer::M_p(:,:),N_p(:,:)
-   real(kind=8),pointer::Singular(:)
-   integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9),descQUt2D(9)
-   integer tempi,ctxt,info,iproc,jproc,myi,myj,myArows,myAcols,myrow,mycol,nprow,npcol,M,N,mnmin
-   type(matrixblock)::block_rand(:)
-   integer Bidxs
-   stats%Flop_Tmp=0
-	block_off1 => ho_bf1%levels(level)%BP(bb_inv*2-1)%LL(1)%matrices_block(1)
-	block_off2 => ho_bf1%levels(level)%BP(bb_inv*2)%LL(1)%matrices_block(1)
-	block_inv => ho_bf1%levels(level)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)
-
-	mm(1)=block_off1%M_loc
-	mm(2)=block_off2%M_loc
-	nn(1)=block_off1%N_loc
-	nn(2)=block_off2%N_loc
-
-	offM(1) = 0
-	offM(2) = block_off1%M
-	offN(1) = block_off1%M
-	offN(2) = 0
-
-	!!!*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
-	n1 = OMP_get_wtime()
-	do bb=1,2
-		block_off => ho_bf1%levels(level)%BP(bb_inv*2-1+bb-1)%LL(1)%matrices_block(1)
-		M_p => block_off%M_p
-		N_p => block_off%N_p
-		if(mm(bb)>0)then
-			if(bb==1)then
-			allocate(matQ1(mm(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
-			matQ=>matQ1
-			endif
-			if(bb==2)then
-			allocate(matQ2(mm(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
-			matQ=>matQ2
-			endif
-		endif
-		call Redistribute1Dto1D(Q,block_inv%M_p,0,block_inv%pgno,matQ,M_p,offM(bb),block_off%pgno,ranks(bb_inv*2-1+bb-1-Bidxs+1),ptree)
-
-
-		if(nn(bb)>0)then
-			if(bb==1)then
-			allocate(matQcA_trans1(nn(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
-			matQcA_trans=>matQcA_trans1
-			endif
-			if(bb==2)then
-			allocate(matQcA_trans2(nn(bb),ranks(bb_inv*2-1+bb-1-Bidxs+1)))
-			matQcA_trans=>matQcA_trans2
-			endif
-		endif
-		call Redistribute1Dto1D(QcA_trans,block_inv%N_p,0,block_inv%pgno,matQcA_trans,N_p,offN(bb),block_off%pgno,ranks(bb_inv*2-1+bb-1-Bidxs+1),ptree)
-	enddo
-	n2 = OMP_get_wtime()
-	stats%Time_RedistV = stats%Time_RedistV + n2-n1
-
-	!!!*** compute B^T=V^TS^TU^T and A = (QU)*(SV)
-	do bb=1,2
-		block_off => ho_bf1%levels(level)%BP(bb_inv*2-1+bb-1)%LL(1)%matrices_block(1)
-		M_p => block_off%M_p
-		N_p => block_off%N_p
-		M = block_off%M
-		N = block_off%N
-		if(bb==1)matQcA_trans=>matQcA_trans1
-		if(bb==2)matQcA_trans=>matQcA_trans2
-		if(bb==1)matQ=>matQ1
-		if(bb==2)matQ=>matQ2
-		if(mm(bb)>0)then
-			call PQxSVDTruncate(block_rand(bb_inv*2-1+bb-1-Bidxs+1),matQ,matQcA_trans,ranks(bb_inv*2-1+bb-1-Bidxs+1),rank,option,stats,ptree,flop)
-			stats%Flop_Fill = stats%Flop_Fill+flop
-			deallocate(matQcA_trans)
-			deallocate(matQ)
-		endif
-	enddo
-
-end subroutine PQxSVDTruncate_twoforward
 
 end module BPACK_randomMVP
