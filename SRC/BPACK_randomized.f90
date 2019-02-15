@@ -129,7 +129,7 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 			rank_max_lastiter = rank_max_lastlevel
 			error_lastiter=Bigvalue
 			do tt = 1,option%itermax
-				rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt-1))+3
+				rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt-1))+1
 
 				if(level_butterfly==0)then
 					n1 = OMP_get_wtime()

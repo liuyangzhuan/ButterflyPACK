@@ -794,7 +794,7 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 
 	do tt = 1,option%itermax
 
-		rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt-1))+3
+		rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt-1))+1
 
 
 		groupm=blocks_o%row_group
