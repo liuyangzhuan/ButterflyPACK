@@ -35,7 +35,7 @@ subroutine MPI_verbose_barrier(msg,ptree)
 end subroutine MPI_verbose_barrier
 
 
-subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree)
+subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree,option)
     use BPACK_DEFS
 	use misc
     implicit none
@@ -46,6 +46,7 @@ subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree)
 	integer  send_count_ind, send_count_dat, S_request1,S_request2, success, recv_count_ind, recv_count_dat, send_count_tot,recv_count_tot
 	type(proctree)::ptree
 	type(mesh)::msh
+	type(Hoption)::option
 	integer ierr
 	integer,allocatable::Localmyid2myid(:)
 
@@ -93,9 +94,9 @@ subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree)
 			deallocate(ptree%send_buff_dat)
 		end if
 
-		write(ptree%MyID+1000,*)'cast: ',send_ID,ptree%MyID,recv_count_tot
+		if(option%verbosity>=2)write(ptree%MyID+10000,*)'cast: ',send_ID,ptree%MyID,recv_count_tot
 		call MPI_Bcast(ptree%recv_buff_dat,recv_count_tot,MPI_DT,Local_send_ID,Local_COMM,ierr)
-		write(ptree%MyID+1000,*)'castF: ',send_ID,ptree%MyID,recv_count_tot
+		if(option%verbosity>=2)write(ptree%MyID+10000,*)'castF: ',send_ID,ptree%MyID,recv_count_tot
 
 		if(recv==1)then
 		recv_count_ind = 1
@@ -117,7 +118,7 @@ end subroutine blocks_partial_bcast
 
 
 
-subroutine blocks_send(block,indices,recv_ID,send_count,msh,ptree)
+subroutine blocks_send(block,indices,recv_ID,send_count,msh,ptree,option)
 
     use BPACK_DEFS
 	use misc
@@ -125,6 +126,7 @@ subroutine blocks_send(block,indices,recv_ID,send_count,msh,ptree)
 
 	type(proctree)::ptree
 	type(mesh)::msh
+	type(Hoption)::option
 	integer ierr
     integer count1, count2, requests, rank, group_m, group_n
     integer i, ii, j, jj, style, recv_ID, mm, nn, indices, send_count, topflag, send_count_ind, send_count_dat, send_count_tot, S_request1,S_request2, success
@@ -152,15 +154,15 @@ subroutine blocks_send(block,indices,recv_ID,send_count,msh,ptree)
 
 	call MPI_Isend(ptree%send_buff_dat,send_count_tot,MPI_DT,recv_ID,send_tag,ptree%Comm,S_request2,ierr)
 
-	write(ptree%MyID+1000,*)'send: ',ptree%MyID,recv_ID,send_count_tot, block%row_group, block%col_group
+	if(option%verbosity>=2)write(ptree%MyID+10000,*)'send: ',ptree%MyID,recv_ID,send_count_tot, block%row_group, block%col_group
 
 	call MPI_wait(S_request2,statuss,ierr)
 	if(ierr/=MPI_SUCCESS)then
-		write(ptree%MyID+1000,*)'send dat fail ',ierr
+		if(option%verbosity>=2)write(ptree%MyID+10000,*)'send dat fail ',ierr
 		stop
 	end if
 
-	write(ptree%MyID+1000,*)'sendF: ',ptree%MyID,recv_ID,send_count_tot, block%row_group, block%col_group
+	if(option%verbosity>=2)write(ptree%MyID+10000,*)'sendF: ',ptree%MyID,recv_ID,send_count_tot, block%row_group, block%col_group
 	! deallocate(send_buff_ind)
 	deallocate(ptree%send_buff_dat)
 
@@ -259,7 +261,7 @@ end subroutine blocks_structure2buff
 
 
 
-subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree)
+subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree,option)
 
     use BPACK_DEFS
 	use misc
@@ -272,6 +274,7 @@ subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree)
     character chara
 	type(proctree)::ptree
 	type(mesh)::msh
+	type(Hoption)::option
 	integer ierr
 
     type(matrixblock) :: block
@@ -293,21 +296,21 @@ subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree)
 		end if
 	enddo
 
-	write(ptree%MyID+1000,*)'recv: ',send_ID, ptree%MyID,recv_count_tot, block%row_group, block%col_group
+	if(option%verbosity>=2)write(ptree%MyID+10000,*)'recv: ',send_ID, ptree%MyID,recv_count_tot, block%row_group, block%col_group
 
 	call MPI_wait(R_request2,statuss,ierr)
 	if(ierr/=MPI_SUCCESS)then
-		write(ptree%MyID+1000,*)'recv dat fail ',ierr
+		if(option%verbosity>=2)write(ptree%MyID+10000,*)'recv dat fail ',ierr
 		stop
 	end if
 
-	write(ptree%MyID+1000,*)'recvF: ',send_ID, ptree%MyID,recv_count_tot, block%row_group, block%col_group
+	if(option%verbosity>=2)write(ptree%MyID+10000,*)'recvF: ',send_ID, ptree%MyID,recv_count_tot, block%row_group, block%col_group
 
 	recv_count_ind = 1
 	recv_count_dat = 1+NINT(dble(ptree%recv_buff_dat(1)))
 	call blocks_buff2structure(block,recv_count_ind,recv_count_dat,msh,ptree)
 	! call assert(recv_count_dat==recv_count_tot,'recv_count_dat/=recv_count_tot')
-	write(ptree%MyID+1000,*)'copyF: ',send_ID, ptree%MyID,recv_count_dat, block%row_group, block%col_group
+	if(option%verbosity>=2)write(ptree%MyID+10000,*)'copyF: ',send_ID, ptree%MyID,recv_count_dat, block%row_group, block%col_group
 
 	! deallocate(recv_buff_ind)
 	deallocate(ptree%recv_buff_dat)

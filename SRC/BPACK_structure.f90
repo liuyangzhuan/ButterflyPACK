@@ -304,11 +304,17 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn,ptree)
 	if(Maxlevel<nlevel_pre)Maxlevel=nlevel_pre
 
 
-	if(Maxlevel<ptree%nlevel-1)then
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'too many processes for paralleling leaf boxes, keep refining the tree ...'
-		Maxlevel = ptree%nlevel-1
-	endif
+	!!!!! make refinement to make sure Maxlevel>=ptree%nlevel, i.e., one processor handles at least two leaf boxes. This refinement can have performance penalties
 
+	! if(Maxlevel<ptree%nlevel-1)then
+		! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'too many processes for paralleling leaf boxes, keep refining the tree ...'
+		! Maxlevel = ptree%nlevel-1
+	! endif
+
+	if(Maxlevel<ptree%nlevel)then
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
+		Maxlevel = ptree%nlevel
+	endif
 
 
 	select case(option%format)

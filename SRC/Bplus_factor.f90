@@ -795,7 +795,7 @@ subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 
 
 	! computation of range Q of AR
-	call PComputeRange(schulz_op%matrices_block%M_p,num_vect,RandVectOut,ranktmp,option%tol_comp,ptree,schulz_op%matrices_block%pgno,flop)
+	call PComputeRange(schulz_op%matrices_block%M_p,num_vect,RandVectOut,ranktmp,option%tol_Rdetect,ptree,schulz_op%matrices_block%pgno,flop)
 	stats%Flop_Tmp = stats%Flop_Tmp + flop
 
 
@@ -1016,7 +1016,6 @@ subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
 	enddo
 
 	if(blocks_i%level_butterfly==0)then
-		write(*,*)'level_butterfly=0 in BF_split is not tested'
 
 		kk = size(blocks_i%ButterflyU%blocks(1)%matrix,2)
 		do iii=1,2

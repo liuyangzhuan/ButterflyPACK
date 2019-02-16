@@ -539,7 +539,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
 
 				if(recv==1)blocks_r=>h_mat%Computing_matricesblock_l(1,j)
 				if(send==1)blocks_s=>h_mat%Local_blocks(j+group_startn,ii)
-				call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
+				call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree,option)
 
 				T3=OMP_get_wtime()
 				call MPI_verbose_barrier('bcast one blocks in L21',ptree)
@@ -570,13 +570,13 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                         ! indices=0
                         ! !request_global=MPI_request_null
                         ! blocks11=>h_mat%Local_blocks(j+group_startn,ii)
-                        ! call blocks_send(blocks11,indices,recv_ID,counts,msh,ptree)
+                        ! call blocks_send(blocks11,indices,recv_ID,counts,msh,ptree,option)
                     ! endif
                     ! if (recv_ID==ptree%MyID) then
                         ! counts=0
                         ! indices=0
                         ! blocks11=>h_mat%Computing_matricesblock_l(1,j)
-                        ! call blocks_recv(blocks11,indices,send_ID,counts,msh,ptree)
+                        ! call blocks_recv(blocks11,indices,send_ID,counts,msh,ptree,option)
                     ! endif
                 ! endif
 				! T3=OMP_get_wtime()
@@ -621,13 +621,13 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                         counts=0
                         indices=0
                         blocks33=>h_mat%Local_blocks(j+group_startm,ii)
-                        call blocks_send(blocks33,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks33,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks33=>h_mat%Computing_matricesblock_m(1,1)
-                        call blocks_recv(blocks33,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks33,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()
@@ -680,7 +680,7 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
 
 						if(recv==1)blocks_r=>h_mat%Computing_matricesblock_u(i,1)
 						if(send==1)blocks_s=>h_mat%Local_blocks(j+group_startm,ii)
-						call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
+						call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree,option)
 						T3=OMP_get_wtime()
 						call MPI_verbose_barrier('bcast one blocks in U12',ptree)
 						T4=OMP_get_wtime()
@@ -713,13 +713,13 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                             ! !request_global=MPI_request_null
                             ! indices=0
                             ! blocks22=>h_mat%Local_blocks(j+group_startm,ii)
-                            ! call blocks_send(blocks22,indices,recv_ID,counts,msh,ptree)
+                            ! call blocks_send(blocks22,indices,recv_ID,counts,msh,ptree,option)
                         ! endif
                         ! if (recv_ID==ptree%MyID) then
                             ! counts=0
                             ! indices=0
                             ! blocks22=>h_mat%Computing_matricesblock_u(i,1)
-                            ! call blocks_recv(blocks22,indices,send_ID,counts,msh,ptree)
+                            ! call blocks_recv(blocks22,indices,send_ID,counts,msh,ptree,option)
                         ! endif
                     ! endif
 					! T3=OMP_get_wtime()
@@ -787,13 +787,13 @@ subroutine Hmat_add_multiply_TopLevel(block3,chara,block1,block2,h_mat,option,st
                         counts=0
                         indices=0
                         blocks33=>h_mat%Computing_matricesblock_m(1,1)
-                        call blocks_send(blocks33,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks33,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks33=>h_mat%Local_blocks(j+group_startm,ii)
-                        call blocks_recv(blocks33,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks33,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()
@@ -961,13 +961,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                         counts=0
                         indices=0
                         blocks_ll=>h_mat%Local_blocks(j+group_startn,ii)
-                        call blocks_send(blocks_ll,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks_ll,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks_ll=>h_mat%Computing_matricesblock_l(1,j)
-                        call blocks_recv(blocks_ll,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks_ll,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()
@@ -998,13 +998,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                         !request_global=MPI_request_null
                         indices=0
                         blocks_uu=>h_mat%Local_blocks(j+group_startm,ii)
-                        call blocks_send(blocks_uu,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks_uu,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks_uu=>h_mat%Computing_matricesblock_u(i,1)
-                        call blocks_recv(blocks_uu,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks_uu,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()
@@ -1096,7 +1096,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 
 					if(recv==1)blocks_r=>h_mat%Computing_matricesblock_m(1,j)
 					if(send==1)blocks_s=>h_mat%Local_blocks(j+group_startn,ii)
-					call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
+					call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree,option)
 
 
 					T3=OMP_get_wtime()
@@ -1119,13 +1119,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                                 ! !request_global=MPI_request_null
                                 ! indices=0
                                 ! blocks_mm=>h_mat%Local_blocks(j+group_startn,ii)
-                                ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree)
+                                ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree,option)
                             ! endif
                             ! if (k==ptree%MyID) then
                                 ! counts=0
                                 ! indices=0
                                 ! blocks_mm=>h_mat%Computing_matricesblock_m(1,j)
-                                ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree)
+                                ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree,option)
                             ! endif
                         ! endif
 						! T3=OMP_get_wtime()
@@ -1151,7 +1151,7 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
 
 					if(recv==1)blocks_r=>h_mat%Computing_matricesblock_m(i,1)
 					if(send==1)blocks_s=>h_mat%Local_blocks(j+group_startn,ii)
-					call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree)
+					call blocks_partial_bcast(blocks_s,blocks_r,send,recv,send_ID,msh,ptree,option)
 
 					T3=OMP_get_wtime()
                     call MPI_verbose_barrier('bcast one blocks in U11',ptree)
@@ -1172,13 +1172,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                                 ! ! !request_global=MPI_request_null
                                 ! ! indices=0
                                 ! ! blocks_mm=>h_mat%Local_blocks(j+group_startn,ii)
-                                ! ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree)
+                                ! ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree,option)
                             ! ! endif
                             ! ! if (k==ptree%MyID) then
                                 ! ! counts=0
                                 ! ! indices=0
                                 ! ! blocks_mm=>h_mat%Computing_matricesblock_m(i,1)
-                                ! ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree)
+                                ! ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree,option)
                             ! ! endif
                         ! ! endif
 						! ! T3=OMP_get_wtime()
@@ -1306,13 +1306,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                         counts=0
                         indices=0
                         blocks_ll=>h_mat%Computing_matricesblock_l(1,j)
-                        call blocks_send(blocks_ll,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks_ll,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks_ll=>h_mat%Local_blocks(j+group_startn,ii)
-                        call blocks_recv(blocks_ll,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks_ll,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()
@@ -1340,13 +1340,13 @@ subroutine Hmat_LXM_XUM_TopLevel(blocks_m,blocks_u,blocks_l,h_mat,option,stats,p
                         counts=0
                         indices=0
                         blocks_uu=>h_mat%Computing_matricesblock_u(i,1)
-                        call blocks_send(blocks_uu,indices,recv_ID,counts,msh,ptree)
+                        call blocks_send(blocks_uu,indices,recv_ID,counts,msh,ptree,option)
                     endif
                     if (recv_ID==ptree%MyID) then
                         counts=0
                         indices=0
                         blocks_uu=>h_mat%Local_blocks(j+group_startm,ii)
-                        call blocks_recv(blocks_uu,indices,send_ID,counts,msh,ptree)
+                        call blocks_recv(blocks_uu,indices,send_ID,counts,msh,ptree,option)
                     endif
                 endif
 				T3=OMP_get_wtime()

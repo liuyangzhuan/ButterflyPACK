@@ -102,12 +102,16 @@ PROGRAM ButterflyPACK_IE_3D
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
 
-	option%format= HMAT!  HODLR !
+	option%ErrSol=1	
+	option%format=  HMAT!  HODLR !
 	option%near_para=2.01d0
 	option%verbosity=2
 	option%ILU=0
 	option%forwardN15flag=0
-
+	option%LRlevel=100
+	option%tol_itersol=1d-5
+	option%sample_para=4d0
+	
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
@@ -117,17 +121,52 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
 	if(iargc()>=3)then
 		call getarg(3,strings)
-		read(strings,*)option%precon
+		read(strings,*)option%LR_BLK_NUM
 	endif
 	if(iargc()>=4)then
 		call getarg(4,strings)
-		read(strings,*)option%xyzsort
+		read(strings,*)option%tol_comp
+		option%tol_rand=option%tol_comp
+		option%tol_Rdetect=option%tol_comp*1d-1
 	endif
 	if(iargc()>=5)then
 		call getarg(5,strings)
+		read(strings,*)option%ErrFillFull
+	endif
+	if(iargc()>=6)then
+		call getarg(6,strings)
+		read(strings,*)option%RecLR_leaf
+	endif
+	if(iargc()>=7)then
+		call getarg(7,strings)
+		read(strings,*)option%BACA_Batch
+	endif
+	if(iargc()>=8)then
+		call getarg(8,strings)
+		read(strings,*)option%LRlevel
+	endif
+	if(iargc()>=9)then
+		call getarg(9,strings)
+		read(strings,*)option%precon
+	endif
+	if(iargc()>=10)then
+		call getarg(10,strings)
+		read(strings,*)option%xyzsort
+	endif
+	if(iargc()>=11)then
+		call getarg(11,strings)
 		read(strings,*)option%Nmin_leaf
 	endif
-
+	if(iargc()>=12)then
+		call getarg(12,strings)
+		read(strings,*)option%near_para
+	endif
+    if(iargc()>=13)then
+        call getarg(13,strings)
+        read(strings,*)option%pat_comp
+    endif
+		
+	
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength

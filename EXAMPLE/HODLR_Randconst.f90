@@ -288,7 +288,6 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	!**** intialize the user-defined derived type quant
 	option%nogeo=0
 	option%xyzsort=CKD
-	option%LRlevel=100
 
 
 	explicitflag=0

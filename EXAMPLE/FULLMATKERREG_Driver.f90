@@ -149,6 +149,8 @@ PROGRAM ButterflyPACK_FullKRR
 	read(strings,*)option%RecLR_leaf
 	call getarg(5,strings)
 	read(strings,*)option%tol_comp
+	option%tol_rand=option%tol_comp
+	option%tol_Rdetect=option%tol_comp*1d-1
 
     !**** set solver parameters
 	option%xyzsort=NATURAL

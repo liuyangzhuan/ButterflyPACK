@@ -128,6 +128,8 @@ PROGRAM ButterflyPACK_IE_2D
 	if(iargc()>=5)then
 		call getarg(5,strings)
 		read(strings,*)option%tol_comp
+		option%tol_rand=option%tol_comp
+		option%tol_Rdetect=option%tol_comp*1d-1
 	endif
 	if(iargc()>=6)then
 		call getarg(6,strings)
