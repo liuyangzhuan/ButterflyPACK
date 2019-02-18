@@ -33,6 +33,8 @@ env:
   - TEST_NUMBER=6"
   - TEST_NUMBER=7"
   - TEST_NUMBER=8"
+  - TEST_NUMBER=9"
+  - TEST_NUMBER=10"
 
 
 git:

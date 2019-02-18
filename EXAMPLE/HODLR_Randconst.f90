@@ -298,6 +298,11 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		CALL getarg(1, DATA_DIR)
 	endif
 
+	if(iargc()>=2)then
+		call getarg(2,strings)
+		read(strings,*)option%LRlevel
+	endif
+
 
 	!**** predefine the first three levels of tree due to the physical meanings
 	quant%ptree=>ptree
