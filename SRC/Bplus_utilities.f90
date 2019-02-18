@@ -6234,6 +6234,139 @@ end subroutine BF_MoveSingulartoRight
 
 
 
+
+
+subroutine BF_Init_blocks(level_butterfly,groupm,groupn,pgno,block_rand,msh,ptree)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer level_c,rowblock,kover
+	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
+    integer dimension_max,dimension_m, dimension_n, blocks, groupm, groupm_start,groupn_start,groupn,index_j,index_i
+    real(kind=8) a,b,c,d
+    DT ctemp
+	type(matrixblock)::block,block_rand
+	DT, allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)
+	real(kind=8), allocatable:: Singular(:)
+	type(mesh)::msh
+	! type(Hoption)::option
+	type(proctree)::ptree
+	integer level_final,level_half
+	integer idx_r,inc_r,nr,idx_c,inc_c,nc
+	integer pgno
+
+    block_rand%level_butterfly=level_butterfly
+    num_blocks=2**level_butterfly
+
+	! level_half = BF_Switchlevel(level_butterfly,option)
+	level_half = floor_safe(dble(level_butterfly)/2d0) ! from outer to inner
+	block_rand%level_half=level_half
+
+    block_rand%style=2
+    block_rand%row_group=groupm
+    block_rand%col_group=groupn
+
+	block_rand%M = msh%basis_group(block_rand%row_group)%tail - msh%basis_group(block_rand%row_group)%head + 1
+	block_rand%N = msh%basis_group(block_rand%col_group)%tail - msh%basis_group(block_rand%col_group)%head + 1
+	block_rand%headm = msh%basis_group(block_rand%row_group)%head
+	block_rand%headn = msh%basis_group(block_rand%col_group)%head
+
+
+	block_rand%pgno = pgno
+
+	groupm_start=groupm*2**level_butterfly
+	groupn_start=groupn*2**level_butterfly
+	if (level_butterfly/=0) then
+		allocate (block_rand%ButterflyKerl(level_butterfly))
+	endif
+
+	!****** row-wise ordering from right side
+	do level=0, level_half
+		if(level_butterfly==0)then
+			if(level==0)then
+				block_rand%ButterflyV%idx=1
+				block_rand%ButterflyV%inc=1
+				block_rand%ButterflyV%nblk_loc=1
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=1
+				block_rand%ButterflyU%inc=1
+				block_rand%ButterflyU%nblk_loc=1
+				block_rand%ButterflyU%num_blk=num_blocks
+			endif
+		else
+			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+			if(level==0)then
+				block_rand%ButterflyV%idx=idx_c
+				block_rand%ButterflyV%inc=inc_c
+				block_rand%ButterflyV%nblk_loc=nc
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=idx_r
+				block_rand%ButterflyU%inc=inc_r
+				block_rand%ButterflyU%nblk_loc=nr
+				block_rand%ButterflyU%num_blk=num_blocks
+			else
+				block_rand%ButterflyKerl(level)%num_row=2**level
+				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+				block_rand%ButterflyKerl(level)%idx_r=idx_r
+				block_rand%ButterflyKerl(level)%inc_r=inc_r
+				block_rand%ButterflyKerl(level)%nr=nr
+				block_rand%ButterflyKerl(level)%idx_c=idx_c*2-1
+				block_rand%ButterflyKerl(level)%inc_c=inc_c
+				block_rand%ButterflyKerl(level)%nc=nc*2
+			endif
+		endif
+	enddo
+
+	!****** column-wise ordering from left side
+	level_final=level_half+1
+	do level=level_butterfly+1,level_final, -1
+		if(level_butterfly==0)then
+			if(level==0)then
+				block_rand%ButterflyV%idx=1
+				block_rand%ButterflyV%inc=1
+				block_rand%ButterflyV%nblk_loc=1
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=1
+				block_rand%ButterflyU%inc=1
+				block_rand%ButterflyU%nblk_loc=1
+				block_rand%ButterflyU%num_blk=num_blocks
+			endif
+		else
+			call GetLocalBlockRange(ptree,block_rand%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+
+			if(level==0)then
+				block_rand%ButterflyV%idx=idx_c
+				block_rand%ButterflyV%inc=inc_c
+				block_rand%ButterflyV%nblk_loc=nc
+				block_rand%ButterflyV%num_blk=num_blocks
+			elseif(level==level_butterfly+1)then
+				block_rand%ButterflyU%idx=idx_r
+				block_rand%ButterflyU%inc=inc_r
+				block_rand%ButterflyU%nblk_loc=nr
+				block_rand%ButterflyU%num_blk=num_blocks
+			else
+				block_rand%ButterflyKerl(level)%num_row=2**level
+				block_rand%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+				block_rand%ButterflyKerl(level)%idx_r=idx_r*2-1
+				block_rand%ButterflyKerl(level)%inc_r=inc_r
+				block_rand%ButterflyKerl(level)%nr=nr*2
+				block_rand%ButterflyKerl(level)%idx_c=idx_c
+				block_rand%ButterflyKerl(level)%inc_c=inc_c
+				block_rand%ButterflyKerl(level)%nc=nc
+			endif
+		endif
+	enddo
+
+    return
+
+end subroutine BF_Init_blocks
+
+
+
 recursive subroutine Hmat_block_copy(trans,block2,block1,memory)
 
     use BPACK_DEFS

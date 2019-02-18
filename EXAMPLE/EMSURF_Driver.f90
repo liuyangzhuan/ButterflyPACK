@@ -102,7 +102,7 @@ PROGRAM ButterflyPACK_IE_3D
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
 
-	option%ErrSol=1	
+	option%ErrSol=1
 	option%format=  HMAT!  HODLR !
 	option%near_para=2.01d0
 	option%verbosity=2
@@ -111,7 +111,7 @@ PROGRAM ButterflyPACK_IE_3D
 	option%LRlevel=100
 	option%tol_itersol=1d-5
 	option%sample_para=4d0
-	
+
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
@@ -165,8 +165,13 @@ PROGRAM ButterflyPACK_IE_3D
         call getarg(13,strings)
         read(strings,*)option%pat_comp
     endif
-		
-	
+    if(iargc()>=14)then
+        call getarg(14,strings)
+        read(strings,*)option%format
+    endif
+
+
+
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength

@@ -179,6 +179,10 @@ PROGRAM ButterflyPACK_IE_2D
         read(strings,*)option%Nbundle
     endif
 
+    if(iargc()>=17)then
+        call getarg(17,strings)
+        read(strings,*)option%format
+    endif
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength

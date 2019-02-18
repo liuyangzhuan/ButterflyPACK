@@ -368,7 +368,6 @@ end subroutine BF_Init_randomized
 
 
 
-
 subroutine BF_Resolving_Butterfly_LL_dat(num_vect_sub,nth_s,nth_e,Ng,level,blocks,RandVectIn,RandVectOut,option,ptree,msh,stats)
 
    use BPACK_DEFS

@@ -666,12 +666,16 @@ subroutine unpack_butterfly_blocks(block,Maxlevel,ptree,msh,pgno)
 	type(mesh)::msh
 	integer pgno
 
+
 	block%rankmax=block%Butterfly_index_MPI(2)
     level_butterfly=block%Butterfly_index_MPI(3)
     block%level_butterfly=level_butterfly
     num_blocks=block%Butterfly_index_MPI(4)
     count1=4
     count2=0
+
+
+	call BF_Init_blocks(level_butterfly,block%row_group,block%col_group,pgno,block,msh,ptree)
 
     allocate(block%ButterflyU%blocks(num_blocks))
     do i=1, num_blocks
@@ -709,7 +713,7 @@ subroutine unpack_butterfly_blocks(block,Maxlevel,ptree,msh,pgno)
     enddo
 
     if (level_butterfly/=0) then
-        allocate(block%ButterflyKerl(level_butterfly))
+        if(.not. allocated(block%ButterflyKerl))allocate(block%ButterflyKerl(level_butterfly))
         do level=1, level_butterfly
             count1=count1+1
             num_row=block%Butterfly_index_MPI(count1)

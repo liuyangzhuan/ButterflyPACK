@@ -1803,22 +1803,21 @@ subroutine Hmat_add_multiply_Hblock3(blocks,chara,block1,block2,h_mat,option,sta
 	endif
 
 	allocate(block_agent)
-	block_agent%row_group = blocks%row_group
-	block_agent%col_group = blocks%col_group
-	block_agent%level = blocks%level
-	block_agent%style=2
+	call BF_Init_randomized(level_butterfly,rank0,blocks%row_group,blocks%col_group,blocks,block_agent,msh,ptree,option,1)
 
-    group_m=blocks%row_group
-    group_n=blocks%col_group
+	! block_agent%row_group = blocks%row_group
+	! block_agent%col_group = blocks%col_group
+	! block_agent%level = blocks%level
+	! block_agent%style=2
 
-	block_agent%headm=blocks%headm
-	block_agent%M=blocks%M
-	block_agent%headn=blocks%headn
-	block_agent%N=blocks%N
+	! block_agent%headm=blocks%headm
+	! block_agent%M=blocks%M
+	! block_agent%headn=blocks%headn
+	! block_agent%N=blocks%N
 
-	block_agent%pgno=blocks%pgno
-	call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,0)
-	call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,1)	! is this needed?
+	! block_agent%pgno=blocks%pgno
+	! call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,0)
+	! call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,1)	! is this needed?
 
 
 	h_mat%blocks_1=>block1
