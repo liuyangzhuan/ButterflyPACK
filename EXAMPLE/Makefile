@@ -11,20 +11,21 @@ include ../make.inc
 
 FZEXM1 = EMCURV_Module.o EMCURV_Driver.o  
 FZEXM2 = EMSURF_Module.o EMSURF_Driver.o  
-FZEXM3 = HODLR_Randconst.o
+FZEXM3 = SMAT_Driver.o
 
 FDEXM1 = FULLMAT_Driver.o
 FDEXM2 = KERREG_Driver.o
 # FDEXM3 = FULLMATKERREG_Driver.o
+FDEXM4 = Frontal_Driver.o
 
 CDEXM1 = InterfaceTest.o
 
 all: double doublecomplex
 
-double: ctest full krr 
-# double: ctest full krr fullkrr
+double: ctest full krr frontal
+# double: ctest full krr fullkrr frontal
 
-doublecomplex: ie2d ie3d smat
+doublecomplex: ie2d ie3d smat 
  
 ie2d: $(FZEXM1) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM1) $(LIBS) -lm -o $@
@@ -43,6 +44,9 @@ krr: $(FDEXM2) $(DButterflyPACKLIB)
 	
 # fullkrr: $(FDEXM3) $(DButterflyPACKLIB)
 	# $(FLOADER) $(FLOADOPTS) $(FDEXM3) $(LIBS) -lm -o $@		
+	
+frontal: $(FDEXM4) $(DButterflyPACKLIB)
+	$(FLOADER) $(FLOADOPTS) $(FDEXM4) $(LIBS) -lm -o $@		
 	
 ctest: $(CDEXM1) $(DButterflyPACKLIB)
 	$(CXXLOADER) $(CXXLOADOPTS) $(CDEXM1) $(LIBS) -lm $(FIMPLICIT_LINKLIB) -o $@		
@@ -63,6 +67,6 @@ ctest: $(CDEXM1) $(DButterflyPACKLIB)
 
 clean:	
 	# rm -f *.o *.mod ie2d ie3d smat ctest full krr fullkrr
-	rm -f *.o *.mod ie2d ie3d smat ctest full krr 
+	rm -f *.o *.mod ie2d ie3d smat ctest full krr frontal
 
 

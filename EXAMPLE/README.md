@@ -108,11 +108,17 @@ sh ./EM3D_DATA/preprocessor_3dmesh/run_gmsh.sh ! this preprocessor generates a f
 mpirun -n nmpi ./EXAMPLE/ie3d [./EM3D_DATA/preprocessor_3dmesh/sphere_2300]
 ```
 
-HODLR_Randconst.f90:
+SMAT_Driver.f90:
 An example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
 ```
-sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
+sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh ./EM3D_DATA/FULLMAT_DATA/Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
 mpirun -n nmpi ./EXAMPLE/smat
+```
+
+Frontal_Driver.f90:
+An example for compressing a frontal matrix from 3D poisson equations. The frontal matrix is stored in file. This example first read in the full matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
+```
+mpirun -n nmpi ./EXAMPLE/frontal
 ```
 
 FULLMAT_Driver.f90:

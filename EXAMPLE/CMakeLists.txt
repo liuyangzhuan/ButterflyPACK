@@ -16,7 +16,7 @@ set(FZEXM2 EMSURF_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3d ${FZEXM2})
 target_link_libraries(ie3d ${all_link_libs_z})
 
-set(FZEXM3 HODLR_Randconst.f90)
+set(FZEXM3 SMAT_Driver.f90)
 add_executable(smat ${FZEXM3})
 target_link_libraries(smat ${all_link_libs_z})
 
@@ -37,6 +37,10 @@ target_link_libraries(krr ${all_link_libs_d})
 # set(FDEXM3 FULLMATKERREG_Driver.f90)
 # add_executable(fullkrr ${FDEXM3})
 # target_link_libraries(fullkrr ${all_link_libs_d})
+
+set(FDEXM4 Frontal_Driver.f90)
+add_executable(frontal ${FDEXM4})
+target_link_libraries(frontal ${all_link_libs_d})
 
 
 # endif()

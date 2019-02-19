@@ -15,8 +15,8 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 
-! This exmple works with double-complex precision data
-#define DAT 0
+! This exmple works with double precision data
+#define DAT 1
 
 #include "ButterflyPACK_config.fi"
 
@@ -28,8 +28,8 @@ implicit none
 	!**** define your application-related variables here
 	type quant_app
 		integer::Nunk ! matrix size
-		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
-		complex(kind=8), allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid
+		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
+		DT, allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid
 		integer,pointer :: N_p(:,:)=>null() ! column sizes of all processes sharing this hodlr
 		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
 		type(mesh),pointer::msh   ! Use this metadata in matvec
@@ -47,7 +47,7 @@ contains
 
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		complex(kind=8)::value_e
+		DT::value_e
 		integer ii
 
 		select TYPE(quant)
@@ -67,9 +67,9 @@ contains
 		use BPACK_Solve_Mul
 		implicit none
 		character trans
-		complex(kind=8) Vin(:,:),Vout(:,:)
-		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
-		complex(kind=8) ctemp,a,b
+		DT Vin(:,:),Vout(:,:)
+		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
+		DT ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
@@ -96,9 +96,9 @@ contains
 		use misc
 		implicit none
 		character trans
-		complex(kind=8) Vin(:,:),Vout(:,:)
-		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
-		complex(kind=8) ctemp,a,b
+		DT Vin(:,:),Vout(:,:)
+		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
+		DT ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
@@ -167,8 +167,8 @@ contains
 		use DenseLA
 		use misc
 		implicit none
-		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
-		complex(kind=8) ctemp,a,b
+		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
+		DT ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::N
 		real(kind=8) n1,n2,tmp(2)
@@ -221,7 +221,7 @@ contains
 end module APPLICATION_MODULE
 
 
-PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
+PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
     use BPACK_DEFS
 
@@ -241,11 +241,12 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
     integer i,j,k, threads_num,ii,jj
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,tmp(3),Memory
-	complex(kind=8),allocatable:: InputVec(:)
-	complex(kind=8):: ctemp
+	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,Memory
+	real(kind=8),allocatable::tmp(:)
+	DT,allocatable:: InputVec(:)
+	DT:: ctemp
 	integer kk,black_step,rank0
-	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
+	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings
 	type(Hoption),target:: option,option1
 	type(Hstat),target::stats,stats1
@@ -278,7 +279,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	deallocate(groupmembers)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_ScatteringMatrix_Matvec"
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
 	!**** initialize stats and option
@@ -286,14 +287,20 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	call SetDefaultOptions(option)
 
 	!**** intialize the user-defined derived type quant
-	option%nogeo=0
-	option%xyzsort=CKD
+	quant%ptree=>ptree
+	quant%Nunk = 50
+
+	option%nogeo=1   ! this indicates the first HOLDR construction requires no geometry information
+	option%xyzsort=NATURAL ! this indicates the first HOLDR construction requires no reordering
+	option%Nmin_leaf=5
+	option%rank0=16
+	option%rankrate=2d0
 
 
 	explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
-	DATA_DIR='../EXAMPLE/FULLMAT_DATA'
+	DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_poisson_50.mat'
 	if(iargc()>=1)then
 		CALL getarg(1, DATA_DIR)
 	endif
@@ -303,34 +310,23 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		read(strings,*)option%LRlevel
 	endif
 
+	if(iargc()>=3)then
+		call getarg(3,strings)
+		read(strings,*)option%tol_comp
+		option%tol_rand=option%tol_comp
+		option%tol_Rdetect=option%tol_comp*1d-1
+	endif
 
-	!**** predefine the first three levels of tree due to the physical meanings
-	quant%ptree=>ptree
-	quant%Nunk = 3720
-	Nin1 = 320*2
-	Nout1 = 610*2
-	Nin2 = 320*2
-	Nout2 = 610*2
-	call assert(Nin1+Nout1+Nin2+Nout2==quant%Nunk,'The two surfaces have mismatched number of unknowns')
-	allocate(tree(4))
-	tree(1) = Nin1
-	tree(2) = Nout1
-	tree(3) = Nin2
-	tree(4) = Nout2
+	if(iargc()>=4)then
+		call getarg(4,strings)
+		read(strings,*)explicitflag
+	endif
 
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for scattering matrix compression'
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A11,I9)')' Nsurface: ',quant%Nunk
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
 
 
-	!**** generate the list of confidantes for clustering. For simplicity, duplicate locations of each point
-	allocate(xyz(3,quant%Nunk))
-	open(unit=521,file=trim(DATA_DIR)//'/Smatrix.geo',status='old')
-	do kk=1,quant%Nunk/2
-		read(521,*) xyz(1,2*kk-1),xyz(2,2*kk-1),xyz(3,2*kk-1)
-		xyz(:,2*kk) = xyz(:,2*kk-1)
-	end do
-	close(521)
 
 
 	!**** generate the full matrix used for entry evaluation function Zelem_FULL
@@ -338,14 +334,16 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 	allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 	quant%matZ_glo = 0
-	open(unit=888,file=trim(DATA_DIR)//'/Smatrix.mat',status='old')
+	allocate(tmp(1:quant%Nunk))
+	open(unit=888,file=trim(DATA_DIR),status='old')
 	do ii=1,quant%Nunk
+	read(888,*)tmp(1:quant%Nunk)
 	do kk=1,quant%Nunk
-		read(888,*)tmp(1),tmp(2)
-		quant%matZ_glo(kk,ii) = cmplx(tmp(1),tmp(2),dp)
+		quant%matZ_glo(ii,kk) = tmp(kk)
 	end do
 	end do
 	close(unit=888)
+	deallocate(tmp)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
@@ -355,16 +353,17 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 	if(explicitflag ==1)then
 
+		option%forwardN15flag=0
+
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
 		ker%FuncZmn => Zelem_FULL
+		ker%FuncHMatVec=>HODLR_MVP_Fullmat
 
 		!**** initialization of the construction phase
 	    allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
-		deallocate(xyz)
-		deallocate(tree)
 
 		!**** define other quantities in quant using information returned by BPACK_construction_Init
 		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
@@ -401,11 +400,8 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 		!**** initialization of the construction phase
 	    allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz,tree=tree)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
-		deallocate(xyz)
-		deallocate(tree)
-
 
 		!**** define other quantities in quant using information returned by BPACK_construction_Init
 		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
@@ -417,7 +413,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 	end if
 
-
+	call PrintStat(stats,ptree)
 
 	!*********** Construct the second HODLR by using the first HODLR as a matvec
 
@@ -474,6 +470,8 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 
+	call PrintStat(stats1,ptree)
+
 	!**** deletion of quantities
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
 	if(allocated(quant%matZ_loc))deallocate(quant%matZ_loc)
@@ -498,7 +496,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	call MPI_Finalize(ierr)
 
 
-end PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
+end PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 

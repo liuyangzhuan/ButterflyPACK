@@ -105,7 +105,7 @@ PROGRAM ButterflyPACK_IE_3D
 	option%ErrSol=1
 	option%format=  HMAT!  HODLR !
 	option%near_para=2.01d0
-	option%verbosity=2
+	option%verbosity=1
 	option%ILU=0
 	option%forwardN15flag=0
 	option%LRlevel=100

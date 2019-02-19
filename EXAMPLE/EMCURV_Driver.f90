@@ -100,7 +100,7 @@ PROGRAM ButterflyPACK_IE_2D
 	option%ErrSol=1
 	option%format=  HODLR !HMAT!  HODLR !
 	option%near_para=0.01d0
-	option%verbosity=2
+	option%verbosity=1
 	option%ILU=0
 	option%forwardN15flag=0
         ! option%schulzlevel=0
