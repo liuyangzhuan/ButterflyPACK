@@ -18,8 +18,8 @@ case "${TEST_NUMBER}" in
 2) mpirun "-n" "2" "$EXAMPLE_FOLDER/krr" "$DATA_FOLDER/KRR_DATA/susy_10Kn" "8" "10000" "1000" "0.1" "1.0" "2" "2";; # test HODLR with LR for KRR
 3) mpirun "-n" "4" "$EXAMPLE_FOLDER/ie2d" "1" "10" "5000" "0.08" "1d-4" "0" "4" "16" "0" "1" "2" "200" "0.01d0" "3" "100" "1" "1"
    mpirun "-n" "4" "$EXAMPLE_FOLDER/ie2d" "1" "10" "5000" "0.08" "1d-4" "0" "4" "16" "100" "1" "2" "200" "0.01d0" "3" "100" "1" "1";;   # test HODLR with BF and LR for 2d IE
-4) mpirun "-n" "4" "$EXAMPLE_FOLDER/ie2d" "1" "10" "5000" "0.08" "1d-4" "0" "4" "16" "0" "1" "2" "200" "2.01d0" "3" "100" "1" "2"
-5) mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "2.0" "1" "1e-2" "0" "4" "1" "0" "1" "2" "100" "2.01d0" "3" "2"
+4) mpirun "-n" "4" "$EXAMPLE_FOLDER/ie2d" "1" "10" "5000" "0.08" "1d-4" "0" "4" "16" "0" "1" "2" "200" "2.01d0" "3" "100" "1" "2";;
+5) mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "2.0" "1" "1e-2" "0" "4" "1" "0" "1" "2" "100" "2.01d0" "3" "2";;
 6) mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "2.0" "1" "1e-2" "0" "4" "1" "0" "1" "2" "100" "0.01d0" "3" "1"
    mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "2.0" "1" "1e-2" "0" "4" "1" "100" "1" "2" "100" "0.01d0" "3" "1";; # test HODLR with BF and LR for 3d IE
 7) mpirun "-n" "2" "$EXAMPLE_FOLDER/ctest" "1" "$DATA_FOLDER/KRR_DATA/susy_10Kn" "8" "1" "0.1" "10.0" "200" "1e-2" "3" "0" "100";; # test CPP interface with HODLR-LR for KRR with SUSY dataset
