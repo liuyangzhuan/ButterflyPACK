@@ -288,16 +288,16 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	!**** intialize the user-defined derived type quant
 	quant%ptree=>ptree
-	quant%Nunk = 50	
+	quant%Nunk = 50
 
 	option%nogeo=1   ! this indicates the first HOLDR construction requires no geometry information
-	option%xyzsort=NATURAL ! this indicates the first HOLDR construction requires no reordering	
-	option%Nmin_leaf=5	
-	option%rank0=16	
-	option%rankrate=2d0	
-	option%verbosity=2	
-	
-	
+	option%xyzsort=NATURAL ! this indicates the first HOLDR construction requires no reordering
+	option%Nmin_leaf=5
+	option%rank0=16
+	option%rankrate=2d0
+	option%verbosity=2
+
+
 	explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
@@ -310,25 +310,25 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		call getarg(2,strings)
 		read(strings,*)option%LRlevel
 	endif
-	
+
 	if(iargc()>=3)then
 		call getarg(3,strings)
 		read(strings,*)option%tol_comp
 		option%tol_rand=option%tol_comp
 		option%tol_Rdetect=option%tol_comp*1d-1
-	endif	
-	
+	endif
+
 	if(iargc()>=4)then
 		call getarg(4,strings)
 		read(strings,*)explicitflag
-	endif		
-	
+	endif
+
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
-	
 
-	
+
+
 
 	!**** generate the full matrix used for entry evaluation function Zelem_FULL
 	t1 = OMP_get_wtime()
@@ -351,19 +351,19 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	! allocate(tree(16))
 	! tree = (/3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4/)
-	
+
 	allocate(tree(1))
 	tree(1) = quant%Nunk
 
 	if(explicitflag ==1)then
 
 		option%forwardN15flag=0
-	
+
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
 		ker%FuncZmn => Zelem_FULL
 		ker%FuncHMatVec=>HODLR_MVP_Fullmat
-		
+
 		!**** initialization of the construction phase
 	    allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,tree=tree)
@@ -418,10 +418,10 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	end if
 
 	deallocate(tree)
-	
-	
+
+
 	call BPACK_Factorization(bmat,option,stats,ptree,msh)
-	
+
 	call PrintStat(stats,ptree)
 
 	!*********** Construct the second HODLR by using the first HODLR as a matvec
@@ -478,7 +478,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	!**** computation of the construction phase
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
-	
+
 	call PrintStat(stats1,ptree)
 
 	!**** deletion of quantities

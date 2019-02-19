@@ -112,6 +112,7 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
 		else
 			VV = Matrix/Singular(1)
 		endif
+		if(present(flop))flop=mm*nn
 	elseif(nn==1)then
 		VV(1,1)=1d0
 		Singular(1) = fnorm(Matrix,mm,nn)
@@ -120,6 +121,7 @@ subroutine gesvd_robust(Matrix,Singular,UU,VV,mm,nn,mn_min,flop)
 		else
 			UU = Matrix/Singular(1)
 		endif
+		if(present(flop))flop=mm*nn
 	else
 		if(fnorm(Matrix,mm,nn)<SafeUnderflow)then
 			Singular=0

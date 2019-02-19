@@ -1407,11 +1407,11 @@ subroutine BF_Resolving_Butterfly_LL_dat_twoforward(ho_bf1,level_c,num_vect_sub,
 		if(bb==2)matIn=>matIn2
 		if(mm(bb)>0)then
 			call BF_Resolving_Butterfly_LL_dat(num_vect_sub,nth_s,nth_e,Ng,level,block_rand(bb_inv*2-1+bb-1-Bidxs+1),matIn,matOut,option,ptree,msh,stats)
-			stats%Flop_Fill = stats%Flop_Fill+flop
 			deallocate(matOut)
 			deallocate(matIn)
 		endif
 	enddo
+	stats%Flop_Fill = stats%Flop_Fill+stats%Flop_Tmp
 
 end subroutine BF_Resolving_Butterfly_LL_dat_twoforward
 
@@ -1502,11 +1502,11 @@ subroutine BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1,level_c,num_vect_sub,
 		if(bb==2)matIn=>matIn2
 		if(mm(bb)>0)then
 			call BF_Resolving_Butterfly_RR_dat(num_vect_sub,nth_s,nth_e,Ng,level,block_rand(bb_inv*2-1+bb-1-Bidxs+1),matIn,matOut,option,ptree,msh,stats)
-			stats%Flop_Fill = stats%Flop_Fill+flop
 			deallocate(matOut)
 			deallocate(matIn)
 		endif
 	enddo
+	stats%Flop_Fill = stats%Flop_Fill+stats%Flop_Tmp
 
 end subroutine BF_Resolving_Butterfly_RR_dat_twoforward
 

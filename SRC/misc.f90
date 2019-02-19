@@ -1412,7 +1412,7 @@ subroutine LeastSquare(m,n,k,A,b,x,eps_r,Flops)
 
 
 	if(fnorm(b,m,k)<SafeUnderflow)then
-		write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k)
+		write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k),'size b: ',m,k,'size A',m,n
 		x = 0
 	else
 
