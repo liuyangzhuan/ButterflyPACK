@@ -141,4 +141,4 @@ install:
 
 script:
   - cd $TRAVIS_BUILD_DIR
-  - travis_wait 30 sudo sh ./.travis_tests.sh
+  - travis_wait 60 sudo sh ./.travis_tests.sh
