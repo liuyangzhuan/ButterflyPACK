@@ -28,9 +28,9 @@ subroutine MPI_verbose_barrier(msg,ptree)
 	type(proctree)::ptree
 	character(*)::msg
 	integer ierr
-	! write(1000+ptree%Myid,*)'waiting ',msg
+	! write(ptree%MyID+10000,*)'waiting ',msg
 	call MPI_barrier(ptree%Comm,ierr)
-	! write(1000+ptree%Myid,*)'waiting done ',msg
+	! write(ptree%MyID+10000,*)'waiting done ',msg
 
 end subroutine MPI_verbose_barrier
 
@@ -873,6 +873,7 @@ recursive subroutine unpack_all_blocks_one_node(block,Maxlevel,ptree,msh,pgno)
 	type(mesh)::msh
 	integer pgno,pgno1,pgno2,Maxgrp
 
+	call assert(block%row_group>0 .and. block%row_group<=msh%Maxgroup .and. block%col_group>0 .and. block%col_group<=msh%Maxgroup,'wrong row_group or col_group in unpack_all_blocks_one_node')
 	block%pgno = pgno
 	block%M = msh%basis_group(block%row_group)%tail - msh%basis_group(block%row_group)%head + 1
 	block%N = msh%basis_group(block%col_group)%tail - msh%basis_group(block%col_group)%head + 1

@@ -306,9 +306,6 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
-		write(*,*)'in BPACK_Test_Solve_error '
-	endif
 
 	allocate (x(N_unk_loc,1))
 	x=0
@@ -319,18 +316,8 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	btrue=0
 	allocate (b(N_unk_loc,1))
 	b=0
-
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
-		write(*,*)'before BPACK_Mult '
-	endif
-
 	call BPACK_Mult('N',N_unk_loc,1,xtrue,btrue,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
-
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
-		write(*,*)'before BPACK_Solution '
-	endif
-
 	call BPACK_Solution(bmat,x,btrue,N_unk_loc,1,option,ptree,stats)
 	call BPACK_Mult('N',N_unk_loc,1,x,b,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
