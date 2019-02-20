@@ -306,13 +306,9 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	DT,allocatable:: current(:),voltage(:)
 	integer idxs,idxe
 
-
-	! idxs = bmat%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-	! idxe = bmat%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-
-
-	! ! N_unk=msh%Nunk
-	! N_unk_loc = idxe-idxs+1
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
+		write(*,*)'in BPACK_Test_Solve_error '
+	endif
 
 	allocate (x(N_unk_loc,1))
 	x=0
@@ -323,8 +319,18 @@ subroutine BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	btrue=0
 	allocate (b(N_unk_loc,1))
 	b=0
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
+		write(*,*)'before BPACK_Mult '
+	endif
+
 	call BPACK_Mult('N',N_unk_loc,1,xtrue,btrue,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
+		write(*,*)'before BPACK_Solution '
+	endif
+
 	call BPACK_Solution(bmat,x,btrue,N_unk_loc,1,option,ptree,stats)
 	call BPACK_Mult('N',N_unk_loc,1,x,b,bmat,ptree,option,stats)
 	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
