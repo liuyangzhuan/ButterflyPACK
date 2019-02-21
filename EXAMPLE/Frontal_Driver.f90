@@ -288,7 +288,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	!**** intialize the user-defined derived type quant
 	quant%ptree=>ptree
-	quant%Nunk = 50
+	
 
 	option%nogeo=1   ! this indicates the first HOLDR construction requires no geometry information
 	option%xyzsort=NATURAL ! this indicates the first HOLDR construction requires no reordering
@@ -301,28 +301,34 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
+	quant%Nunk = 50
 	DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_poisson_50.mat'
+
 	if(iargc()>=1)then
-		CALL getarg(1, DATA_DIR)
+		call getarg(1,strings)
+		read(strings,*)quant%Nunk
 	endif
 
 	if(iargc()>=2)then
-		call getarg(2,strings)
-		read(strings,*)option%LRlevel
+		CALL getarg(2, DATA_DIR)
 	endif
 
 	if(iargc()>=3)then
 		call getarg(3,strings)
+		read(strings,*)option%LRlevel
+	endif
+
+	if(iargc()>=4)then
+		call getarg(4,strings)
 		read(strings,*)option%tol_comp
 		option%tol_rand=option%tol_comp
 		option%tol_Rdetect=option%tol_comp*1d-1
 	endif
 
-	if(iargc()>=4)then
-		call getarg(4,strings)
+	if(iargc()>=5)then
+		call getarg(5,strings)
 		read(strings,*)explicitflag
 	endif
-
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
