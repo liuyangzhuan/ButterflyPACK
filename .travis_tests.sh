@@ -28,7 +28,7 @@ case "${TEST_NUMBER}" in
 8) mpirun "-n" "7" "$EXAMPLE_FOLDER/ctest" "2" "1000" "8" "1" "0.1" "10.0" "100" "1e-4" "2" "0" "100";; # test CPP interface with HODLR-LR for KRR with random points
 9) mpirun "-n" "3" "$EXAMPLE_FOLDER/ctest" "3" "5000" "20" "100" "1e-4" "2" "0" "100";;  # test CPP interface with HODLR-LR for product of two random matrices 
 10) mpirun "-n" "5" "$EXAMPLE_FOLDER/full";; # test HODLR with LR for reading a KRR matrix from a file 
-11) mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "100" "1e-1" "0" # test sampling-based construction of HODLR with LR for an 3D poisson frontal matrix stored in file
+11) mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "100" "1e-1" "0" # test sampling-based construction of HODLR with LR for an 3D poisson frontal matrix stored in file
    mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "0" "1e-1" "0" # test sampling-based construction of HODLR with BF for an 3D poisson frontal matrix stored in file
    mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "0" "1e-1" "1";; # test entry-evaluation-based construction of HODLR with BF for an 3D poisson frontal matrix stored in file   
 *) printf "${RED} ###GC: Unknown test\n" ;;
