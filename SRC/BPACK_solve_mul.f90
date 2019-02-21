@@ -688,7 +688,7 @@ subroutine Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
 	integer,allocatable::status_all(:,:),srequest_all(:)
 	integer :: status(MPI_Status_size)
 
-	if(ptree%MyID/=MPI_COMM_NULL)then
+	if(ptree%Comm/=MPI_COMM_NULL)then
 
 		trans_tmp = trans
 		if(trans=='C')then

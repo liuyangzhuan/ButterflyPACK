@@ -24,7 +24,7 @@ cmake .. \
 	-DMPI_C_COMPILER=/opt/intel/compilers_and_libraries_2019.1.144/linux/mpi/intel64/bin/mpiicc \
 	-DMPI_Fortran_COMPILER=/opt/intel/compilers_and_libraries_2019.1.144/linux/mpi/intel64/bin/mpiifort \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Debug \
+	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 	# -DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel -lpthread" \
 
