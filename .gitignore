@@ -16,3 +16,4 @@ make.inc
 ./EXAMPLE/FULLMAT_DATA/*.mat
 ./EXAMPLE/FULLMAT_DATA/*.csv
 ./EXAMPLE/ButterflyPACK_config.fi
+./EXAMPLE/FULLMATKERREG_Driver.f90
