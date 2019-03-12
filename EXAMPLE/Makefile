@@ -12,6 +12,7 @@ include ../make.inc
 FZEXM1 = EMCURV_Module.o EMCURV_Driver.o  
 FZEXM2 = EMSURF_Module.o EMSURF_Driver.o  
 FZEXM3 = SMAT_Driver.o
+FZEXM4 = EMCURV_Module.o EMCURV_Eigen_Driver.o
 
 FDEXM1 = FULLMAT_Driver.o
 FDEXM2 = KERREG_Driver.o
@@ -25,16 +26,19 @@ all: double doublecomplex
 double: ctest full krr frontal
 # double: ctest full krr fullkrr frontal
 
-doublecomplex: ie2d ie3d smat 
+doublecomplex: ie2d ie3d smat ie2deigen 
  
 ie2d: $(FZEXM1) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM1) $(LIBS) -lm -o $@
-
+	
 ie3d: $(FZEXM2) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM2) $(LIBS) -lm -o $@
 
 smat: $(FZEXM3) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM3) $(LIBS) -lm -o $@
+
+ie2deigen: $(FZEXM4) $(ZButterflyPACKLIB)
+	$(FLOADER) $(FLOADOPTS) $(FZEXM4) $(LIBS) -lm -o $@	
 	
 full: $(FDEXM1) $(DButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FDEXM1) $(LIBS) -lm -o $@
@@ -67,6 +71,6 @@ ctest: $(CDEXM1) $(DButterflyPACKLIB)
 
 clean:	
 	# rm -f *.o *.mod ie2d ie3d smat ctest full krr fullkrr
-	rm -f *.o *.mod ie2d ie3d smat ctest full krr frontal
+	rm -f *.o *.mod ie2d ie3d smat ctest full krr frontal ie2deigen
 
 

@@ -197,6 +197,18 @@ if(SCALAPACK_FOUND)
  endif()
 
 
+  # #--------------------- ARPACK ---------------------
+if(TPL_ARPACK_LIBRARIES)
+	set(CMAKE_Fortran_FLAGS "-DHAVE_ARPACK ${CMAKE_Fortran_FLAGS}")
+    message("-- Using TPL_ARPACK_LIBRARIES='${TPL_ARPACK_LIBRARIES}'")
+    set(ARPACK_LIB ${TPL_ARPACK_LIBRARIES})
+    # fix up LAPACK library name
+    string (REPLACE ";" " " ARPACK_LIB_STR "${ARPACK_LIB}")
+    set(ARPACK_LIB_EXPORT ${ARPACK_LIB_STR})
+endif()
+
+
+
 #--------------------- MPI ---------------------
 find_package(MPI)
 if(MPI_Fortran_FOUND )

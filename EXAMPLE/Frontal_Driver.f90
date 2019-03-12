@@ -288,7 +288,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	!**** intialize the user-defined derived type quant
 	quant%ptree=>ptree
-	
+
 
 	option%nogeo=1   ! this indicates the first HOLDR construction requires no geometry information
 	option%xyzsort=NATURAL ! this indicates the first HOLDR construction requires no reordering

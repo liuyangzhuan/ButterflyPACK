@@ -181,7 +181,55 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 end subroutine BPACK_construction_Init
 
 
+!**** Computation of the full matrix with matrix entry evaluation
+subroutine FULLMAT_Element(option,stats,msh,ker,element_Zmn,ptree)
 
+    implicit none
+
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	procedure(Zelem)::element_Zmn
+	DT,allocatable::fullmat(:,:),fullmat_tmp(:,:)
+	integer N_unk_loc,N_unk_loc1,N_unk_locmax,ii,jj,pp
+	integer ierr
+
+	N_unk_loc = msh%idxe-msh%idxs+1
+	allocate(fullmat(msh%Nunk,N_unk_loc))
+	do jj=msh%idxs,msh%idxe
+	do ii=1,msh%Nunk
+		call element_Zmn(ii,jj,fullmat(ii,jj-msh%idxs+1),msh,option,ker)
+	enddo
+	enddo
+
+	call MPI_ALLREDUCE(N_unk_loc,N_unk_locmax,1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
+	allocate(fullmat_tmp(msh%Nunk,N_unk_locmax))
+
+	do pp=1,ptree%nproc
+		if(ptree%MyID==pp-1)then
+			N_unk_loc1=N_unk_loc
+			fullmat_tmp = fullmat
+		endif
+		call MPI_Bcast(N_unk_loc1,1,MPI_integer,pp-1,ptree%Comm,ierr)
+		call MPI_Bcast(fullmat_tmp,N_unk_loc1*msh%Nunk,MPI_DT,pp-1,ptree%Comm,ierr)
+
+		if(ptree%MyID==Main_ID)then
+			do jj=1,N_unk_loc1
+			do ii=1,msh%Nunk
+				write(665,*)dble(cmplx(fullmat_tmp(ii,jj),kind=8)),aimag(cmplx(fullmat_tmp(ii,jj),kind=8)),''
+			enddo
+			enddo
+		endif
+	enddo
+
+
+	deallocate(fullmat)
+	deallocate(fullmat_tmp)
+
+
+end subroutine FULLMAT_Element
 
 
 !**** Computation of the construction phase with matrix entry evaluation

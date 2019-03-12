@@ -52,6 +52,9 @@ implicit none
 		integer::Ncorner ! # of corners in 2D curves to facilate partitioning
 		real(kind=8),allocatable::corner_points(:,:) ! coordinates of corner points
 		real(kind=8)::corner_radius ! radius of the corner points within which no partitioning is performed
+		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
+		complex(kind=8)::SI=1 ! 0: regular mode 1: shift-invert mode
+		complex(kind=8)::shift=0d0 ! the shift value in shift-invert Arnoldi iterations
 	end type quant_EMCURV
 
 contains
@@ -121,6 +124,54 @@ contains
 		return
 
 	end subroutine Zelem_EMCURV
+
+
+	!**** user-defined subroutine to sample real(Z_mn)
+	subroutine Zelem_EMCURV_Real(m,n,value_e,quant)
+		use BPACK_DEFS
+		implicit none
+		integer, INTENT(IN):: m,n
+		complex(kind=8) value_e
+		class(*),pointer :: quant
+
+		call Zelem_EMCURV(m,n,value_e,quant)
+		value_e=dble(value_e)
+	end subroutine  Zelem_EMCURV_Real
+
+
+	!**** user-defined subroutine to sample Z_mn-sigma*Delta_mn or Z_mn-sigma*real(Z_mn)
+	subroutine Zelem_EMCURV_Shifted(m,n,value_e,quant)
+
+		use BPACK_DEFS
+		implicit none
+
+		integer edge_m, edge_n, i, j, flag
+		integer, INTENT(IN):: m,n
+		real(kind=8) r_mn, rtemp1, rtemp2
+		complex(kind=8) value_e
+
+		class(*),pointer :: quant
+
+		call Zelem_EMCURV(m,n,value_e,quant)
+		select TYPE(quant)
+			type is (quant_EMCURV)
+				if(quant%CMmode==1)then
+					value_e = value_e - quant%shift*dble(value_e)
+				else
+					if(m==n)then
+						value_e = value_e - quant%shift
+					endif
+				endif
+			class default
+				write(*,*)"unexpected type"
+				stop
+			end select
+
+		return
+
+	end subroutine Zelem_EMCURV_Shifted
+
+
 
 
 	subroutine VV_polar_CURV(dphi,edge,ctemp_1,curr,msh,quant)
