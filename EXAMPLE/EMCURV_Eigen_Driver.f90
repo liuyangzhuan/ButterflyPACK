@@ -113,6 +113,11 @@ PROGRAM ButterflyPACK_IE_2D
 	quant%wavelength=0.08
 	quant%Nunk=5000
 
+	!**** default parameters for the eigen solvers
+	quant%CMmode=0
+	quant%SI=0
+	quant%shift=(0d0, 0d0)	
+	
 	option%ErrSol=1
 	option%format=  HODLR !HMAT!  HODLR !
 	option%near_para=0.01d0
@@ -125,6 +130,9 @@ PROGRAM ButterflyPACK_IE_2D
     option%tol_itersol=1d-5
     ! option%sample_para=4d0
 
+	
+	
+	
 	if(iargc()>=1)then
 		call getarg(1,strings)
 		read(strings,*)option%LR_BLK_NUM
@@ -200,14 +208,27 @@ PROGRAM ButterflyPACK_IE_2D
         read(strings,*)option%format
     endif
 
-
-	quant%CMmode=0
-	quant%SI=1
-	quant%shift=(0d0, 0d0)
+    if(iargc()>=18)then
+        call getarg(18,strings)
+        read(strings,*)quant%CMmode
+    endif	
 	
+    if(iargc()>=19)then
+        call getarg(19,strings)
+        read(strings,*)quant%SI
+    endif	
+	
+    ! if(iargc()>=20)then
+        ! call getarg(20,strings)
+        ! read(strings,*)quant%shift
+    ! endif	
+		
+	
+
+
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
-	
+
 
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
@@ -333,7 +354,7 @@ PROGRAM ButterflyPACK_IE_2D
 		call BPACK_Factorization(bmat2,option2,stats2,ptree2,msh2)
 		!**** print statistics
 		call PrintStat(stats2,ptree2)
-	endif	
+	endif
 	!***********************************************************************
 
 
@@ -368,7 +389,7 @@ PROGRAM ButterflyPACK_IE_2D
       iparam(1) = ishfts
       iparam(3) = maxitr
       ! iparam(7) = mode
-	  
+
 
 	  allocate(select(maxncv))
 	  allocate(ax(Nunk_loc))
@@ -385,7 +406,7 @@ PROGRAM ButterflyPACK_IE_2D
 	if(quant%CMmode==0)then ! solve the eigen mode
 
 		do while(ido/=99)
-			
+
 			if(quant%SI==0)then  ! regular mode
 				bmattype  = 'I'
 				which='LM'  ! largest eigenvalues
@@ -403,9 +424,9 @@ PROGRAM ButterflyPACK_IE_2D
 				call pznaupd(ptree%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl,rwork, info )
 				if(ido == -1 .or. ido == 1)then !Perform  y <--- OP*x = inv[A-SIGMA*I]*x
 					call BPACK_Solution(bmat,workd(ipntr(2)),workd(ipntr(1)),Nunk_loc,1,option,ptree,stats)
-				endif	
+				endif
 			endif
-			
+
 		enddo
 
       if ( info < 0 ) then
@@ -463,9 +484,9 @@ PROGRAM ButterflyPACK_IE_2D
          endif
       end if
 
-	else if(quant%CMmode==1)then ! solve the characteristic mode	
+	else if(quant%CMmode==1)then ! solve the characteristic mode
 		do while(ido/=99)
-			
+
 			if(quant%SI==0)then ! regular mode
 				bmattype  = 'G'
 				which='LM'	 ! largest eigenvalues
@@ -477,7 +498,7 @@ PROGRAM ButterflyPACK_IE_2D
 					call BPACK_Solution(bmat2,workd(ipntr(2)),workd(ipntr(3)),Nunk_loc,1,option2,ptree2,stats2)
 				else if(ido==2)then !Perform  y <--- M*x
 					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)),bmat2,ptree2,option2,stats2)
-				endif						
+				endif
 			else ! shift-invert mode
 				bmattype  = 'G'
 				which='LM'	! eigenvalues closest to the shifts
@@ -492,7 +513,7 @@ PROGRAM ButterflyPACK_IE_2D
 				else if(ido==2)then !Perform  y <--- M*x
 					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)),bmat2,ptree2,option2,stats2)
 				endif
-			endif	
+			endif
 		enddo
 
       if ( info < 0 ) then
@@ -553,7 +574,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	endif
 
-	
+
 	  deallocate(select)
 	  deallocate(ax)
 	  deallocate(mx)
@@ -564,8 +585,8 @@ PROGRAM ButterflyPACK_IE_2D
 	  deallocate(resid)
 	  deallocate(workl)
 	  deallocate(rwork)
-	  deallocate(rd)	
-	
+	  deallocate(rd)
+
 #endif
 
 

@@ -330,6 +330,10 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		read(strings,*)explicitflag
 	endif
 
+	if(iargc()>=6)then
+		call getarg(6,strings)
+		read(strings,*)option%Nmin_leaf
+	endif
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
 

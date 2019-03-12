@@ -53,7 +53,7 @@ implicit none
 		real(kind=8),allocatable::corner_points(:,:) ! coordinates of corner points
 		real(kind=8)::corner_radius ! radius of the corner points within which no partitioning is performed
 		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
-		complex(kind=8)::SI=1 ! 0: regular mode 1: shift-invert mode
+		integer::SI=0 ! 0: regular mode 1: shift-invert mode
 		complex(kind=8)::shift=0d0 ! the shift value in shift-invert Arnoldi iterations
 	end type quant_EMCURV
 

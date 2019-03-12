@@ -360,12 +360,13 @@ end subroutine Hmat_construction
 
 
 
+
 subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 
 
     use BPACK_DEFS
     implicit none
-	real(kind=8) n1,n2
+	real(kind=8) n1,n2,n3,n4,n5
     integer i, j, ii, ii_inv, jj, kk, iii, jjj,ll
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter,ierr
@@ -413,7 +414,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 			Bidxs = ho_bf1%levels(level_c)%Bidxs
 			Bidxe = ho_bf1%levels(level_c)%Bidxe
 		endif
-
+		n3 = OMP_get_wtime()
 		do ii =Bidxs,Bidxe
 		! do ii =Bidxs,Bidxs
 			if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(ii)%pgno))then
@@ -478,7 +479,10 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn,ptree)
 				! end if
 			endif
 		end do
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level
+		n4 = OMP_get_wtime()
+		n5 = n4-n3
+		call MPI_ALLREDUCE(MPI_IN_PLACE ,n5,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level,'time',n5
 	end do
 	n2 = OMP_get_wtime()
 	stats%Time_Fill = stats%Time_Fill + n2-n1

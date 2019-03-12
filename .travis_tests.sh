@@ -31,5 +31,7 @@ case "${TEST_NUMBER}" in
 11) mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "100" "1e-1" "0" # test sampling-based construction of HODLR with LR for an 3D poisson frontal matrix stored in file
    mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "0" "1e-1" "0" # test sampling-based construction of HODLR with BF for an 3D poisson frontal matrix stored in file
    mpirun "-n" "2" "$EXAMPLE_FOLDER/frontal" "50" "$DATA_FOLDER/FULLMAT_DATA/Frontal_poisson_50.mat" "0" "1e-1" "1";; # test entry-evaluation-based construction of HODLR with BF for an 3D poisson frontal matrix stored in file   
+12) mpirun "-n" "4" "$EXAMPLE_FOLDER/ie2deigen" "1" "10" "5000" "0.08" "1d-4" "0" "4" "16" "0" "1" "2" "200" "0.01d0" "3" "100" "1" "1" "0" "0"
 *) printf "${RED} ###GC: Unknown test\n" ;;
 esac
+
