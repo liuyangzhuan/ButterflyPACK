@@ -165,7 +165,7 @@ install:
     -DTPL_BLAS_LIBRARIES="$BLAS_LIB" \
     -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" \
     -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB" \
-    -DTPL_ARPACK_LIBRARIES=$ARPACK_LIB"
+    -DTPL_ARPACK_LIBRARIES="$ARPACK_LIB"
   - make
   - make install
   - printf "${BLUE} GC; Done installing ButterflyPACK from source\n"
