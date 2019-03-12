@@ -24,6 +24,10 @@ set(FZEXM4 EMCURV_Eigen_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2deigen ${FZEXM4})
 target_link_libraries(ie2deigen ${all_link_libs_z})
 
+set(FZEXM5 FrontalDist_Driver.f90)
+add_executable(frontaldist ${FZEXM5})
+target_link_libraries(frontaldist ${all_link_libs_z})
+
 
 # else()
 set(CDEXM InterfaceTest.cpp)

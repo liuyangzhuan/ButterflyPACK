@@ -30,7 +30,7 @@ module BPACK_DEFS
 	DT,parameter :: cone=1d0
 	DT,parameter :: czero=0d0
     integer,parameter :: Main_ID = 0 ! Head MPI rank
-	integer,parameter :: nbslpk=16 ! blacs/scalapack block size
+	integer,parameter :: nbslpk=32 ! blacs/scalapack block size
 	integer,parameter :: Rows_per_processor=1 ! depreciated
 	integer,parameter :: MPI_Header=11 ! number of integers in the MPI header
 	integer,parameter :: INDEX_Header=4 ! number of integers in header of Butterfly_index_MPI

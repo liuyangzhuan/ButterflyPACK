@@ -116,8 +116,8 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** default parameters for the eigen solvers
 	quant%CMmode=0
 	quant%SI=0
-	quant%shift=(0d0, 0d0)	
-	
+	quant%shift=(0d0, 0d0)
+
 	option%ErrSol=1
 	option%format=  HODLR !HMAT!  HODLR !
 	option%near_para=0.01d0
@@ -130,9 +130,9 @@ PROGRAM ButterflyPACK_IE_2D
     option%tol_itersol=1d-5
     ! option%sample_para=4d0
 
-	
-	
-	
+
+
+
 	if(iargc()>=1)then
 		call getarg(1,strings)
 		read(strings,*)option%LR_BLK_NUM
@@ -211,19 +211,19 @@ PROGRAM ButterflyPACK_IE_2D
     if(iargc()>=18)then
         call getarg(18,strings)
         read(strings,*)quant%CMmode
-    endif	
-	
+    endif
+
     if(iargc()>=19)then
         call getarg(19,strings)
         read(strings,*)quant%SI
-    endif	
-	
+    endif
+
     ! if(iargc()>=20)then
         ! call getarg(20,strings)
         ! read(strings,*)quant%shift
-    ! endif	
-		
-	
+    ! endif
+
+
 
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
@@ -370,9 +370,10 @@ PROGRAM ButterflyPACK_IE_2D
 
 #ifdef HAVE_ARPACK
 
+      t1 = OMP_get_wtime()
 	  maxn = quant%Nunk
 	  ldv = Nunk_loc
-	  maxnev = 4
+	  maxnev = 2
 	  maxncv = 20
 
 	  n = maxn
@@ -573,7 +574,8 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 	endif
-
+    t2 = OMP_get_wtime()
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Eigen Solve time: ', t2-t1 
 
 	  deallocate(select)
 	  deallocate(ax)

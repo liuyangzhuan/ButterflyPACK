@@ -101,6 +101,12 @@ A 2D EFIE example with several built-in geometries. This example constructs (wit
 mpirun -n nmpi ./EXAMPLE/ie2d
 ```
 
+EMCURV_Eigen_Driver.f90 and EMCURV_Module.f90:
+A 2D EFIE example with several built-in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and compute its eigen values with ARPACK. When quant%CMmode=0, the example performs eigen analysis; when quant%CMmode=1, the example performs characteristic mode analysis. When quant%SI=0, regular mode in arpack is invoked; when quant%SI=1, shift-and-invert mode in arpack is invoked. 
+```
+mpirun -n nmpi ./EXAMPLE/ie2deigen
+```
+
 EMSURF_Driver.f90 and EMSURF_Module.f90:
 A 3D EFIE/CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/CFIE matrix and solve it with plane-wave excitations.
 ```
@@ -111,7 +117,7 @@ mpirun -n nmpi ./EXAMPLE/ie3d [./EM3D_DATA/preprocessor_3dmesh/sphere_2300]
 SMAT_Driver.f90:
 An example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
 ```
-sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh ./EM3D_DATA/FULLMAT_DATA/Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
+sh ./FULLMAT_DATA/file_merge.sh ./FULLMAT_DATA/Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
 mpirun -n nmpi ./EXAMPLE/smat
 ```
 
@@ -121,10 +127,17 @@ An example for compressing a frontal matrix from 3D poisson equations. The front
 mpirun -n nmpi ./EXAMPLE/frontal
 ```
 
+FrontalDist_Driver.f90:
+An example for compressing a frontal matrix from 3D elastic Helmholtz equations. The frontal matrix is stored in parallel files with a 2x2 process grid. This example first read in the 2D-block cyclic matrix, then used it as matrix-vector multiplication to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
+```
+sh ./FULLMAT_DATA/file_merge.sh ./FULLMAT_DATA/Frontal_elastic ! this extract 4 files storing the full matrix
+mpirun -n 4 ./EXAMPLE/frontaldist
+```
+
 FULLMAT_Driver.f90:
 An example for compressing a randomly generated low-rank matrix (if tst=1) or a full RBF kernel matrix stored in file (if tst=2). The example first constructs a hierarchical matrix with entry evaluation, then uses the first hierarchical matrix as matrix-vector multiplication to construct a second hierarchical matrix.
 ```
-sh ./EM3D_DATA/FULLMAT_DATA/file_merge.sh K05N4096.csv ! this extract a full matrix stored as K05N4096.csv
+sh ./FULLMAT_DATA/file_merge.sh K05N4096.csv ! this extract a full matrix stored as K05N4096.csv
 mpirun -n nmpi ./EXAMPLE/full
 ```
 
