@@ -806,6 +806,55 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
             quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
             quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
+		
+    elseif (quant%model2d==13) then   !************array of open cylinders*****************
+		nr = 2 ! number of repeats in the vertical dimension
+		nc = 2 ! number of repeats in the horizontal dimension
+		spacer = 5
+		spacec = 5
+
+		call assert(mod(Maxedge,nr*nc)==0,'Maxedge should divide by nr*nc')
+
+		Maxedge_cell = Maxedge/(nr*nc)
+
+        quant%Delta_ll=3d0/2d0*pi/Maxedge_cell !2.0d0*pi*5d0/6d0/Maxedge
+        quant%maxnode=nr*nc*(2*Maxedge_cell+1)
+		allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
+
+		do ii=1,nr
+		do jj=1,nc
+
+		nodeoff = ((ii-1)*nc+jj-1)*(2*Maxedge_cell+1)
+		edgeoff = ((ii-1)*nc+jj-1)*Maxedge_cell
+
+        quant%xyz(1,0+nodeoff)=cos(0*pi)+ (jj-1)*spacec ; quant%xyz(2,0+nodeoff)=sin(0*pi) + (ii-1)*spacer
+        !$omp parallel do default(shared) private(node,dx)
+        do node=1, Maxedge_cell
+            dx=node*quant%Delta_ll
+            quant%xyz(1,node*2+nodeoff)=cos(0*pi+dx) + (jj-1)*spacec
+            quant%xyz(2,node*2+nodeoff)=sin(0*pi+dx) + (ii-1)*spacer
+        enddo
+        !$omp end parallel do
+
+
+        !$omp parallel do default(shared) private(node)
+        do node=1, Maxedge_cell
+            quant%xyz(1,node*2-1+nodeoff)=(quant%xyz(1,node*2-2+nodeoff)+quant%xyz(1,node*2+nodeoff))/2d0
+            quant%xyz(2,node*2-1+nodeoff)=(quant%xyz(2,node*2-2+nodeoff)+quant%xyz(2,node*2+nodeoff))/2d0
+        enddo
+        !$omp end parallel do
+
+
+        quant%info_unk(1,1+edgeoff)=0+nodeoff ; quant%info_unk(2,1+edgeoff)=2+nodeoff ; quant%info_unk(0,1+edgeoff)=1+nodeoff
+        do edge=2, Maxedge_cell
+            quant%info_unk(1,edge+edgeoff)=quant%info_unk(2,edge-1+edgeoff)
+            quant%info_unk(2,edge+edgeoff)=quant%info_unk(2,edge-1+edgeoff)+2
+            quant%info_unk(0,edge+edgeoff)=quant%info_unk(0,edge-1+edgeoff)+2
+        enddo
+
+		enddo
+		enddo
+
     endif
 
 	quant%maxedgelength = 0
