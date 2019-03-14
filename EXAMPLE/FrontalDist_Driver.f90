@@ -35,6 +35,8 @@ implicit none
 		type(proctree),pointer::ptree ! Use this metadata in matvec
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
+		CHARACTER (LEN=1000) DATA_DIR
+		integer:: explicitflag
 	end type quant_app
 
 contains
@@ -162,7 +164,7 @@ contains
 		integer nproc,ctxt,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol
 		CHARACTER (*) DATA_DIR
 		character(len=1024)  :: smyrow,smycol
-		
+
 
 		pgno=1
 		nproc = ptree%pgrp(pgno)%nproc
@@ -185,15 +187,15 @@ contains
 		!!!!****** assemble the full matrix in 2D blacs layout
 		ctxt = ptree%pgrp(pgno)%ctxt
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-		
-		
-		
+
+
+
 		if(myrow/=-1 .and. mycol/=-1)then
 		myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
 		myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
 		allocate(quant%matZ_loc(myArows,myAcols))
-		
-		
+
+
 
 		t1 = OMP_get_wtime()
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
@@ -217,8 +219,8 @@ contains
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
 		t2 = OMP_get_wtime()
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
-			
-		
+
+
 		endif
 
 	end subroutine CreateDistDenseMat
@@ -255,19 +257,17 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	DT:: ctemp
 	integer kk,black_step,rank0
 	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	type(Hoption),target:: option,option1
 	type(Hstat),target::stats,stats1
 	type(mesh),target::msh,msh1
 	type(kernelquant),target::ker,ker1
-	integer:: explicitflag
 	type(Bmatrix),target::bmat,bmat1
 	integer Nin1,Nout1,Nin2,Nout2
 	type(proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)
 	integer :: ierr
 	integer :: nmpi
-	CHARACTER (LEN=1000) DATA_DIR
 	type(quant_app),target::quant,quant1
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
@@ -275,7 +275,9 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	integer Nunk_loc
 	integer nprow, npcol, myrow, mycol, nprow1, npcol1, myrow1, mycol1, M1,N1,Mloc1,Nloc1,Mbslpk1,Nbslpk1
 	character(len=1024)  :: smyrow,smycol
-	
+	integer nargs,flag
+
+
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -308,57 +310,64 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	option%verbosity=2
 
 
-	explicitflag=0
+	quant%explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
 	quant%Nunk = 2500
-	DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_elastic/Frontal_elastic_2500'
+	quant%DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_elastic/Frontal_elastic_2500'
 
-	if(iargc()>=1)then
-		call getarg(1,strings)
-		read(strings,*)quant%Nunk
-	endif
 
-	if(iargc()>=2)then
-		CALL getarg(2, DATA_DIR)
-	endif
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if	(trim(strings)=='--nunk')then
+							read(strings1,*)quant%Nunk
+						else if	(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%DATA_DIR
+						else if	(trim(strings)=='--explicitflag')then
+							read(strings1,*)quant%explicitflag
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
 
-	if(iargc()>=3)then
-		call getarg(3,strings)
-		read(strings,*)option%LRlevel
-	endif
 
-	if(iargc()>=4)then
-		call getarg(4,strings)
-		read(strings,*)option%tol_comp
-		option%tol_rand=option%tol_comp
-		option%tol_Rdetect=option%tol_comp*1d-1
-	endif
 
-	if(iargc()>=5)then
-		call getarg(5,strings)
-		read(strings,*)explicitflag
-	endif
-
-	if(iargc()>=6)then
-		call getarg(6,strings)
-		read(strings,*)option%Nmin_leaf
-	endif
-
-	
-	
 	call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
 	write(smyrow , *) myrow
 	write(smycol , *) mycol
-	open(unit=888,file=trim(DATA_DIR)//'_pr'//trim(adjustl(smyrow))//'_pc'//trim(adjustl(smycol))//'.dat',status='old')
+	open(unit=888,file=trim(quant%DATA_DIR)//'_pr'//trim(adjustl(smyrow))//'_pc'//trim(adjustl(smycol))//'.dat',status='old')
 	read(888,*) ! skip the first line
 	read(888,*)M1,N1,Mloc1,Nloc1,Mbslpk1,Nbslpk1,nprow1,npcol1,myrow1,mycol1
 	call assert(M1==N1 .and. quant%Nunk == M1, 'input matrix dims not matching')
 	call assert(Mbslpk1==Nbslpk1 .and. Mbslpk1==nbslpk, 'block sizes not matching')
 	call assert(nprow1==nprow .and. npcol1==npcol, 'process grid dims not matching')
-	close(888)	
-	
-	
+	close(888)
+
+
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
 
 
@@ -368,10 +377,10 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	allocate(tree(1))
 	tree(1) = quant%Nunk
 
-	if(explicitflag ==1)then
+	if(quant%explicitflag ==1)then
 		write(*,*)'Entry evaluation on distributed-memory matrix is not implemented'
 		stop
-	else if(explicitflag ==0)then
+	else if(quant%explicitflag ==0)then
 
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
@@ -383,7 +392,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 
 		!**** define other quantities in quant using information returned by BPACK_construction_Init
-		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant,option,DATA_DIR)
+		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant,option,quant%DATA_DIR)
 
 
 		!**** computation of the construction phase

@@ -44,7 +44,7 @@ PROGRAM ButterflyPACK_IE_3D
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length,edge
 	integer :: ierr
@@ -58,10 +58,10 @@ PROGRAM ButterflyPACK_IE_3D
 	type(proctree)::ptree
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	CHARACTER (LEN=1000) DATA_DIR
 	real(kind=8),allocatable::xyz(:,:)
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
+	integer nargs,flag
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -93,7 +93,7 @@ PROGRAM ButterflyPACK_IE_3D
     call gauss_points(quant)
 
     !*************************input******************************
-	DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
+	quant%DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
 
 	quant%mesh_normal=1
 	quant%scaling=1d0
@@ -112,64 +112,8 @@ PROGRAM ButterflyPACK_IE_3D
 	option%tol_itersol=1d-5
 	option%sample_para=4d0
 
-	if(iargc()>=1)then
-		CALL getarg(1, DATA_DIR)
-	endif
-	if(iargc()>=2)then
-		call getarg(2,strings)
-		read(strings,*)quant%wavelength
-	endif
-	if(iargc()>=3)then
-		call getarg(3,strings)
-		read(strings,*)option%LR_BLK_NUM
-	endif
-	if(iargc()>=4)then
-		call getarg(4,strings)
-		read(strings,*)option%tol_comp
-		option%tol_rand=option%tol_comp
-		option%tol_Rdetect=option%tol_comp*1d-1
-	endif
-	if(iargc()>=5)then
-		call getarg(5,strings)
-		read(strings,*)option%ErrFillFull
-	endif
-	if(iargc()>=6)then
-		call getarg(6,strings)
-		read(strings,*)option%RecLR_leaf
-	endif
-	if(iargc()>=7)then
-		call getarg(7,strings)
-		read(strings,*)option%BACA_Batch
-	endif
-	if(iargc()>=8)then
-		call getarg(8,strings)
-		read(strings,*)option%LRlevel
-	endif
-	if(iargc()>=9)then
-		call getarg(9,strings)
-		read(strings,*)option%precon
-	endif
-	if(iargc()>=10)then
-		call getarg(10,strings)
-		read(strings,*)option%xyzsort
-	endif
-	if(iargc()>=11)then
-		call getarg(11,strings)
-		read(strings,*)option%Nmin_leaf
-	endif
-	if(iargc()>=12)then
-		call getarg(12,strings)
-		read(strings,*)option%near_para
-	endif
-    if(iargc()>=13)then
-        call getarg(13,strings)
-        read(strings,*)option%pat_comp
-    endif
-    if(iargc()>=14)then
-        call getarg(14,strings)
-        read(strings,*)option%format
-    endif
 
+	! mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "-quant" "--data_dir" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "--wavelength" "2.0" "-option" "--lr_blk_num" "1" "--tol_comp" "1e-2" "--errfillfull" "0" "--reclr_leaf" "4" "--baca_batch" "1" "--lrlevel" "0" "--precon" "1" "--xyzsort" "2" "--nmin_leaf" "100" "--near_para" "0.01d0" "--pat_comp" "3" "--format" "1"
 
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
@@ -187,7 +131,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	!**** geometry generalization and discretization
-	call geo_modeling_SURF(quant,ptree%Comm,DATA_DIR)
+	call geo_modeling_SURF(quant,ptree%Comm,quant%DATA_DIR)
 
 
 

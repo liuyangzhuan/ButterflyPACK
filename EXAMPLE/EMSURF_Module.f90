@@ -53,6 +53,7 @@ implicit none
 		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
 		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
+		CHARACTER (LEN=1000) DATA_DIR
 	end type quant_EMSURF
 
 contains

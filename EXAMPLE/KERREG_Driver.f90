@@ -30,7 +30,7 @@ implicit none
 		integer dimn  ! dimension of the data sets
 		integer ntrain,ntest ! size of training points and test points
 		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
-
+		CHARACTER (LEN=1000) DATA_DIR
 		integer Nunk ! size of the matrix
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 
@@ -105,7 +105,7 @@ PROGRAM ButterflyPACK_KRR
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length
 	integer :: ierr
@@ -119,10 +119,11 @@ PROGRAM ButterflyPACK_KRR
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	type(proctree)::ptree
-	CHARACTER (LEN=1000) DATA_DIR
 	integer MPI_thread
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
+	integer nargs,flag
+
 
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -147,7 +148,7 @@ PROGRAM ButterflyPACK_KRR
 
 
 	!**** intialize the user-defined derived type quant
-	DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
+	quant%DATA_DIR='../EXAMPLE/KRR_DATA/susy_10Kn'
     quant%dimn=8
     quant%ntrain=10000
     quant%ntest=1000
@@ -155,45 +156,58 @@ PROGRAM ButterflyPACK_KRR
 	quant%lambda=10.0
 
 
-    !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters and solver parameters
-	if(iargc()>=1)then
-		CALL getarg(1, DATA_DIR)
-	endif
-	if(iargc()>=2)then
-		call getarg(2,strings)
-		read(strings,*)quant%dimn
-	endif
-	if(iargc()>=3)then
-		call getarg(3,strings)
-		read(strings,*)quant%ntrain
-	endif
-	if(iargc()>=4)then
-		call getarg(4,strings)
-		read(strings,*)quant%ntest
-	endif
-	if(iargc()>=5)then
-		call getarg(5,strings)
-		read(strings,*)quant%sigma
-	endif
-	if(iargc()>=6)then
-		call getarg(6,strings)
-		read(strings,*)quant%lambda
-	endif
-	if(iargc()>=7)then
-		call getarg(7,strings)
-		read(strings,*)option%xyzsort
-	endif
-	if(iargc()>=8)then
-		call getarg(8,strings)
-		read(strings,*)option%RecLR_leaf
-	endif
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters   !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters and solver parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--dimn')then
+							read(strings1,*)quant%dimn
+						else if	(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%data_dir
+						else if	(trim(strings)=='--ntrain')then
+							read(strings1,*)quant%ntrain
+						else if	(trim(strings)=='--ntest')then
+							read(strings1,*)quant%ntest
+						else if	(trim(strings)=='--sigma')then
+							read(strings1,*)quant%sigma
+						else if	(trim(strings)=='--lambda')then
+							read(strings1,*)quant%lambda
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
 
-	quant%trainfile_p=trim(DATA_DIR)//'_train.csv'
-	quant%trainfile_l=trim(DATA_DIR)//'_train_label.csv'
-	quant%testfile_p=trim(DATA_DIR)//'_test.csv'
-	quant%testfile_l=trim(DATA_DIR)//'_test_label.csv'
+
+
+
+	quant%trainfile_p=trim(quant%DATA_DIR)//'_train.csv'
+	quant%trainfile_l=trim(quant%DATA_DIR)//'_train_label.csv'
+	quant%testfile_p=trim(quant%DATA_DIR)//'_test.csv'
+	quant%testfile_l=trim(quant%DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
-	write(*,*)'training set: ',trim(quant%trainfile_p)
+	if(ptree%MyID==Main_ID)write(*,*)'training set: ',trim(quant%trainfile_p)
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"

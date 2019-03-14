@@ -36,6 +36,8 @@ implicit none
 		type(proctree),pointer::ptree ! Use this metadata in matvec
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
+		CHARACTER (LEN=1000) DATA_DIR ! File path that stores the scattering matrix
+		integer:: explicitflag ! hodlr construction with entry evaluation or matvec
 	end type quant_app
 
 contains
@@ -246,24 +248,24 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	DT:: ctemp
 	integer kk,black_step,rank0
 	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	type(Hoption),target:: option,option1
 	type(Hstat),target::stats,stats1
 	type(mesh),target::msh,msh1
 	type(kernelquant),target::ker,ker1
-	integer:: explicitflag
+
 	type(Bmatrix),target::bmat,bmat1
 	integer Nin1,Nout1,Nin2,Nout2
 	type(proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)
 	integer :: ierr
 	integer :: nmpi
-	CHARACTER (LEN=1000) DATA_DIR
 	type(quant_app),target::quant,quant1
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
 	real(kind=8),allocatable::xyz(:,:)
 	integer Nunk_loc
+	integer nargs,flag
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -290,18 +292,48 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	option%xyzsort=CKD
 
 
-	explicitflag=0
+	quant%explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
-	DATA_DIR='../EXAMPLE/FULLMAT_DATA'
-	if(iargc()>=1)then
-		CALL getarg(1, DATA_DIR)
-	endif
+	quant%DATA_DIR='../EXAMPLE/FULLMAT_DATA'
 
-	if(iargc()>=2)then
-		call getarg(2,strings)
-		read(strings,*)option%LRlevel
-	endif
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--explicitflag')then
+							read(strings1,*)quant%explicitflag
+						else if	(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%data_dir
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
+
+
+
 
 
 	!**** predefine the first three levels of tree due to the physical meanings
@@ -325,7 +357,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 	!**** generate the list of confidantes for clustering. For simplicity, duplicate locations of each point
 	allocate(xyz(3,quant%Nunk))
-	open(unit=521,file=trim(DATA_DIR)//'/Smatrix.geo',status='old')
+	open(unit=521,file=trim(quant%DATA_DIR)//'/Smatrix.geo',status='old')
 	do kk=1,quant%Nunk/2
 		read(521,*) xyz(1,2*kk-1),xyz(2,2*kk-1),xyz(3,2*kk-1)
 		xyz(:,2*kk) = xyz(:,2*kk-1)
@@ -338,7 +370,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 	allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 	quant%matZ_glo = 0
-	open(unit=888,file=trim(DATA_DIR)//'/Smatrix.mat',status='old')
+	open(unit=888,file=trim(quant%DATA_DIR)//'/Smatrix.mat',status='old')
 	do ii=1,quant%Nunk
 	do kk=1,quant%Nunk
 		read(888,*)tmp(1),tmp(2)
@@ -353,7 +385,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 
 
 
-	if(explicitflag ==1)then
+	if(quant%explicitflag ==1)then
 
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant
@@ -396,7 +428,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		deallocate(Vin,Vout1,Vout2)
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
-	else if(explicitflag ==0)then
+	else if(quant%explicitflag ==0)then
 
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant

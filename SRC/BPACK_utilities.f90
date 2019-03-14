@@ -442,6 +442,95 @@ subroutine SetDefaultOptions(option)
 end subroutine SetDefaultOptions
 
 
+subroutine ReadOption(option,ptree,ii)
+	implicit none
+	type(Hoption)::option
+	type(proctree)::ptree
+	integer ii
+	integer nargs,flag
+	character(len=1024)  :: strings,strings1
+
+	nargs = iargc()
+	flag=1
+	do while(flag==1)
+		ii=ii+1
+		if(ii<=nargs)then
+			call getarg(ii,strings)
+			if(strings(1:2)=='--')then
+				ii=ii+1
+				call getarg(ii,strings1)
+
+				if(trim(strings)=='--nmin_leaf')then
+					read(strings1,*)option%Nmin_leaf
+				else if	(trim(strings)=='--tol_comp')then
+					read(strings1,*)option%tol_comp
+					option%tol_rand=option%tol_comp
+					option%tol_Rdetect=option%tol_comp*1d-1
+				else if	(trim(strings)=='--tol_itersol')then
+					read(strings1,*)option%tol_itersol
+				else if	(trim(strings)=='--n_iter')then
+					read(strings1,*)option%n_iter
+				else if	(trim(strings)=='--level_check')then
+					read(strings1,*)option%level_check
+				else if	(trim(strings)=='--precon')then
+					read(strings1,*)option%precon
+				else if	(trim(strings)=='--xyzsort')then
+					read(strings1,*)option%xyzsort
+				else if	(trim(strings)=='--schulzorder')then
+					read(strings1,*)option%schulzorder
+				else if	(trim(strings)=='--schulzlevel')then
+					read(strings1,*)option%schulzlevel
+				else if	(trim(strings)=='--lrlevel')then
+					read(strings1,*)option%LRlevel
+				else if	(trim(strings)=='--errfillfull')then
+					read(strings1,*)option%ErrFillFull
+				else if	(trim(strings)=='--baca_batch')then
+					read(strings1,*)option%BACA_Batch
+				else if	(trim(strings)=='--reclr_leaf')then
+					read(strings1,*)option%RecLR_leaf
+				else if	(trim(strings)=='--nogeo')then
+					read(strings1,*)option%nogeo
+				else if	(trim(strings)=='--errsol')then
+					read(strings1,*)option%ErrSol
+				else if	(trim(strings)=='--lr_blk_num')then
+					read(strings1,*)option%LR_BLK_NUM
+				else if	(trim(strings)=='--rank0')then
+					read(strings1,*)option%rank0
+				else if	(trim(strings)=='--rankrate')then
+					read(strings1,*)option%rankrate
+				else if	(trim(strings)=='--itermax')then
+					read(strings1,*)option%itermax
+				else if	(trim(strings)=='--powiter')then
+					read(strings1,*)option%powiter
+				else if	(trim(strings)=='--ilu')then
+					read(strings1,*)option%ILU
+				else if	(trim(strings)=='--nbundle')then
+					read(strings1,*)option%Nbundle
+				else if	(trim(strings)=='--near_para')then
+					read(strings1,*)option%near_para
+				else if	(trim(strings)=='--format')then
+					read(strings1,*)option%format
+				else if	(trim(strings)=='--verbosity')then
+					read(strings1,*)option%verbosity
+				else if	(trim(strings)=='--rmax')then
+					read(strings1,*)option%rmax
+				else if	(trim(strings)=='--sample_para')then
+					read(strings1,*)option%sample_para
+				else if	(trim(strings)=='--pat_comp')then
+					read(strings1,*)option%pat_comp
+				else
+					if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown option: ', trim(strings)
+				endif
+			else
+				flag=0
+			endif
+		else
+			flag=0
+		endif
+	enddo
+
+end subroutine ReadOption
+
 
 subroutine CopyOptions(option,option1)
 	implicit none

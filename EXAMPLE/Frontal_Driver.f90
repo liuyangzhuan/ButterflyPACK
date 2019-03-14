@@ -36,6 +36,8 @@ implicit none
 		type(proctree),pointer::ptree ! Use this metadata in matvec
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
+		CHARACTER (LEN=1000) DATA_DIR ! File path that stores the frontal matrix
+		integer:: explicitflag ! hodlr construction with entry evaluation or matvec
 	end type quant_app
 
 contains
@@ -247,24 +249,24 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	DT:: ctemp
 	integer kk,black_step,rank0
 	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	type(Hoption),target:: option,option1
 	type(Hstat),target::stats,stats1
 	type(mesh),target::msh,msh1
 	type(kernelquant),target::ker,ker1
-	integer:: explicitflag
 	type(Bmatrix),target::bmat,bmat1
 	integer Nin1,Nout1,Nin2,Nout2
 	type(proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)
 	integer :: ierr
 	integer :: nmpi
-	CHARACTER (LEN=1000) DATA_DIR
 	type(quant_app),target::quant,quant1
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
 	real(kind=8),allocatable::xyz(:,:)
 	integer Nunk_loc
+	integer nargs,flag
+
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -298,46 +300,52 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	option%verbosity=2
 
 
-	explicitflag=0
+	quant%explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
 	quant%Nunk = 50
-	DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_poisson_50.mat'
+	quant%DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_poisson_50.mat'
 
-	if(iargc()>=1)then
-		call getarg(1,strings)
-		read(strings,*)quant%Nunk
-	endif
 
-	if(iargc()>=2)then
-		CALL getarg(2, DATA_DIR)
-	endif
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if	(trim(strings)=='--nunk')then
+							read(strings1,*)quant%Nunk
+						else if	(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%DATA_DIR
+						else if	(trim(strings)=='--explicitflag')then
+							read(strings1,*)quant%explicitflag
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
 
-	if(iargc()>=3)then
-		call getarg(3,strings)
-		read(strings,*)option%LRlevel
-	endif
-
-	if(iargc()>=4)then
-		call getarg(4,strings)
-		read(strings,*)option%tol_comp
-		option%tol_rand=option%tol_comp
-		option%tol_Rdetect=option%tol_comp*1d-1
-	endif
-
-	if(iargc()>=5)then
-		call getarg(5,strings)
-		read(strings,*)explicitflag
-	endif
-
-	if(iargc()>=6)then
-		call getarg(6,strings)
-		read(strings,*)option%Nmin_leaf
-	endif
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
-
-
 
 
 	!**** generate the full matrix used for entry evaluation function Zelem_FULL
@@ -346,7 +354,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 	quant%matZ_glo = 0
 	allocate(tmp(1:quant%Nunk))
-	open(unit=888,file=trim(DATA_DIR),status='old')
+	open(unit=888,file=trim(quant%DATA_DIR),status='old')
 	do ii=1,quant%Nunk
 	read(888,*)tmp(1:quant%Nunk)
 	do kk=1,quant%Nunk
@@ -365,7 +373,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	allocate(tree(1))
 	tree(1) = quant%Nunk
 
-	if(explicitflag ==1)then
+	if(quant%explicitflag ==1)then
 
 		option%forwardN15flag=0
 
@@ -406,7 +414,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		deallocate(Vin,Vout1,Vout2)
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)error,'accuracy of construction'
 
-	else if(explicitflag ==0)then
+	else if(quant%explicitflag ==0)then
 
 		!**** register the user-defined function and type in ker
 		ker%QuantApp => quant

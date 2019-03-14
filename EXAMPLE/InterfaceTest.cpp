@@ -276,6 +276,7 @@ if(tst==1){
 	if(argc>4)ker = stoi(argv[4]);
 	if(argc>5)h = stof(argv[5]);
 	if(argc>6)lambda = stof(argv[6]);
+
 	if(argc>7)Nmin = stoi(argv[7]);
 	if(argc>8)tol = stof(argv[8]);
 	if(argc>9)com_opt = stoi(argv[9]);
@@ -301,6 +302,7 @@ if(tst==2){
 	if(argc>4)ker = stoi(argv[4]);
 	if(argc>5)h = stof(argv[5]);
 	if(argc>6)lambda = stof(argv[6]);
+
 	if(argc>7)Nmin = stoi(argv[7]);
 	if(argc>8)tol = stof(argv[8]);
 	if(argc>9)com_opt = stoi(argv[9]);
@@ -329,6 +331,7 @@ if(tst==3){
 	if(argc>2)Npo = stoi(argv[2]);
 	if(argc>3)rank_rand = stoi(argv[3]);
 	if(argc>4)Nmin = stoi(argv[4]);
+
 	if(argc>5)tol = stof(argv[5]);
 	if(argc>6)com_opt = stoi(argv[6]);
 	if(argc>7)checkerr = stoi(argv[7]);

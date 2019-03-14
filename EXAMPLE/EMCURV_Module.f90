@@ -304,8 +304,8 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 	type(quant_EMCURV)::quant
     integer i,j,ii,jj,iii,jjj
     integer intemp
-    integer node, patch, edge, flag
-    integer node1, node2, num_node,Maxedge
+    integer node, patch, edge, flag, nodeoff,edgeoff
+    integer node1, node2, num_node,Maxedge, Maxedge_cell
     integer node_temp(2)
     real(kind=8) dx, xx, yy, rr, theta,L,M,Am,tt,L1,L2,L3, angle,r_st,r_ed,delta_r
 
@@ -316,6 +316,9 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     real(kind=8) a(3),b(3),c(3),r0, phi_start
 	! type(proctree)::ptree
 	integer MPIcomm,ierr,MyID
+	integer nr,nc
+	real(kind=8) spacer, spacec
+
 
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 
@@ -806,7 +809,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
             quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
             quant%info_unk(0,edge)=quant%info_unk(0,edge-1)+2
         enddo
-		
+
     elseif (quant%model2d==13) then   !************array of open cylinders*****************
 		nr = 2 ! number of repeats in the vertical dimension
 		nc = 2 ! number of repeats in the horizontal dimension

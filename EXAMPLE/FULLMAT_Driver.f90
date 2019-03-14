@@ -35,6 +35,8 @@ implicit none
 		type(proctree),pointer::ptree ! Use this metadata in matvec
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
+		CHARACTER (LEN=1000) DATA_DIR
+		integer:: tst=1
 	end type quant_app
 
 contains
@@ -155,7 +157,7 @@ PROGRAM ButterflyPACK_FULL
 	real(kind=8),allocatable:: datain(:)
 
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length
 	integer :: ierr
@@ -170,11 +172,10 @@ PROGRAM ButterflyPACK_FULL
 	integer nmpi
 	integer level,Maxlevel
 	type(proctree),target::ptree,ptree1
-	CHARACTER (LEN=1000) DATA_DIR
-	integer:: tst=1
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer,allocatable::tree(:)
+	integer nargs,flag
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -206,15 +207,49 @@ PROGRAM ButterflyPACK_FULL
     ! option%LRlevel=100
 
 
-	!**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file
-	if(iargc()>=1)then
-		call getarg(1,strings)
-		read(strings,*)tst
-	endif
+	quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'
+
+
+
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters !**** read the test number. 1: the kernel is product of two random matrices 2: kernel is a dense matrix stored in file
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if	(trim(strings)=='--tst')then
+							read(strings1,*)quant%tst
+						else if	(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%DATA_DIR
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
+
 
 !******************************************************************************!
 ! generate a LR matrix as two matrix product
-	if(tst==1)then
+	if(quant%tst==1)then
 		!**** Get matrix size and rank and create the matrix
 		quant%Nunk = 10000
 		quant%rank = 2
@@ -242,24 +277,20 @@ PROGRAM ButterflyPACK_FULL
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
-
 	endif
 
 
 
 !******************************************************************************!
 ! generate a LR matrix stored in a files
-	if(tst==2)then
-		strings = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'
-		if(iargc()>=2)then
-			call getarg(2,strings)
-		endif
+	if(quant%tst==2)then
+
 
 		!**** Get matrix size and rank and create the matrix
 		quant%Nunk = 4096
 		allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 		allocate(datain(quant%Nunk))
-		open(10, file=strings)
+		open(10, file=quant%DATA_DIR)
 		do ii=1,quant%Nunk
 			read(10,*) datain(:)
 			quant%matZ_glo(:,ii)=datain

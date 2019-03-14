@@ -48,7 +48,7 @@ PROGRAM ButterflyPACK_IE_2D
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length
 	integer :: ierr
@@ -81,7 +81,7 @@ PROGRAM ButterflyPACK_IE_2D
     real(kind=8) tol
     logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
-
+	integer nargs,flag
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -130,98 +130,49 @@ PROGRAM ButterflyPACK_IE_2D
     option%tol_itersol=1d-5
     ! option%sample_para=4d0
 
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--model2d')then
+							read(strings1,*)quant%model2d
+						else if	(trim(strings)=='--nunk')then
+							read(strings1,*)quant%Nunk
+						else if	(trim(strings)=='--wavelength')then
+							read(strings1,*)quant%wavelength
+						else if	(trim(strings)=='--cmmode')then
+							read(strings1,*)quant%CMmode
+						else if	(trim(strings)=='--si')then
+							read(strings1,*)quant%SI
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
 
 
 
-	if(iargc()>=1)then
-		call getarg(1,strings)
-		read(strings,*)option%LR_BLK_NUM
-	endif
-	if(iargc()>=2)then
-		call getarg(2,strings)
-		read(strings,*)quant%model2d
-	endif
-	if(iargc()>=3)then
-		call getarg(3,strings)
-		read(strings,*)quant%Nunk
-	endif
-	if(iargc()>=4)then
-		call getarg(4,strings)
-		read(strings,*)quant%wavelength
-	endif
-	if(iargc()>=5)then
-		call getarg(5,strings)
-		read(strings,*)option%tol_comp
-		option%tol_rand=option%tol_comp
-		option%tol_Rdetect=option%tol_comp*1d-1
-	endif
-	if(iargc()>=6)then
-		call getarg(6,strings)
-		read(strings,*)option%ErrFillFull
-	endif
-	if(iargc()>=7)then
-		call getarg(7,strings)
-		read(strings,*)option%RecLR_leaf
-	endif
-	if(iargc()>=8)then
-		call getarg(8,strings)
-		read(strings,*)option%BACA_Batch
-	endif
-	if(iargc()>=9)then
-		call getarg(9,strings)
-		read(strings,*)option%LRlevel
-	endif
-	if(iargc()>=10)then
-		call getarg(10,strings)
-		read(strings,*)option%precon
-	endif
-	if(iargc()>=11)then
-		call getarg(11,strings)
-		read(strings,*)option%xyzsort
-	endif
-	if(iargc()>=12)then
-		call getarg(12,strings)
-		read(strings,*)option%Nmin_leaf
-	endif
-	if(iargc()>=13)then
-		call getarg(13,strings)
-		read(strings,*)option%near_para
-	endif
-
-    if(iargc()>=14)then
-        call getarg(14,strings)
-        read(strings,*)option%pat_comp
-    endif
-
-    if(iargc()>=15)then
-        call getarg(15,strings)
-        read(strings,*)option%schulzlevel
-    endif
-
-    if(iargc()>=16)then
-        call getarg(16,strings)
-        read(strings,*)option%Nbundle
-    endif
-
-    if(iargc()>=17)then
-        call getarg(17,strings)
-        read(strings,*)option%format
-    endif
-
-    if(iargc()>=18)then
-        call getarg(18,strings)
-        read(strings,*)quant%CMmode
-    endif
-
-    if(iargc()>=19)then
-        call getarg(19,strings)
-        read(strings,*)quant%SI
-    endif
-
-    ! if(iargc()>=20)then
-        ! call getarg(20,strings)
-        ! read(strings,*)quant%shift
-    ! endif
 
 
 
@@ -575,7 +526,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	endif
     t2 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Eigen Solve time: ', t2-t1 
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Eigen Solve time: ', t2-t1
 
 	  deallocate(select)
 	  deallocate(ax)
