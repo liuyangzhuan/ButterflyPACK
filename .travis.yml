@@ -130,9 +130,9 @@ before_install:
     -DMPI=ON \
     -DEXAMPLES=ON \
     -DCOVERALLS=ON 
-  - make 
+  - make
   - export ARPACK_LIB="$TRAVIS_BUILD_DIR/installDir/arpack-ng/build/lib/libarpack.so $TRAVIS_BUILD_DIR/installDir/arpack-ng/build/lib/libparpack.so"
- - printf "${BLUE} GC; Done installing arpack from source\n"
+  - printf "${BLUE} GC; Done installing arpack from source\n"
   
 
 install:
