@@ -112,9 +112,42 @@ PROGRAM ButterflyPACK_IE_3D
 	option%tol_itersol=1d-5
 	option%sample_para=4d0
 
-
-	! mpirun "-n" "8" "$EXAMPLE_FOLDER/ie3d" "-quant" "--data_dir" "$DATA_FOLDER/EM3D_DATA/sphere_2300" "--wavelength" "2.0" "-option" "--lr_blk_num" "1" "--tol_comp" "1e-2" "--errfillfull" "0" "--reclr_leaf" "4" "--baca_batch" "1" "--lrlevel" "0" "--precon" "1" "--xyzsort" "2" "--nmin_leaf" "100" "--near_para" "0.01d0" "--pat_comp" "3" "--format" "1"
-
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--data_dir')then
+							read(strings1,*)quant%data_dir
+						else if	(trim(strings)=='--wavelength')then
+							read(strings1,*)quant%wavelength
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo	
+	
+	
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
