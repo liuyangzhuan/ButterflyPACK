@@ -172,9 +172,7 @@ PROGRAM ButterflyPACK_KRR
 						if(trim(strings)=='--dimn')then
 							read(strings1,*)quant%dimn
 						else if	(trim(strings)=='--data_dir')then
-						write(*,*)'before:',quant%data_dir,' ',strings1
-							read(strings1,*)quant%data_dir
-						write(*,*)'after:',quant%data_dir
+							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--ntrain')then
 							read(strings1,*)quant%ntrain
 						else if	(trim(strings)=='--ntest')then

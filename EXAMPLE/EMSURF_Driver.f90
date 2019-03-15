@@ -126,7 +126,7 @@ PROGRAM ButterflyPACK_IE_3D
 						ii=ii+1
 						call getarg(ii,strings1)
 						if(trim(strings)=='--data_dir')then
-							read(strings1,*)quant%data_dir
+							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
 						else

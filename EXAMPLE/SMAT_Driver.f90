@@ -313,7 +313,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 						if(trim(strings)=='--explicitflag')then
 							read(strings1,*)quant%explicitflag
 						else if	(trim(strings)=='--data_dir')then
-							read(strings1,*)quant%data_dir
+							quant%data_dir=trim(strings1)
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif

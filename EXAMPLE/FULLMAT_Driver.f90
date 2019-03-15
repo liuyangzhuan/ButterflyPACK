@@ -227,7 +227,7 @@ PROGRAM ButterflyPACK_FULL
 						if	(trim(strings)=='--tst')then
 							read(strings1,*)quant%tst
 						else if	(trim(strings)=='--data_dir')then
-							read(strings1,*)quant%DATA_DIR
+							quant%data_dir=trim(strings1)
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
