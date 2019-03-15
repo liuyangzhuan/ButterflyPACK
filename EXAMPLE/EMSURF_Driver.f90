@@ -145,9 +145,9 @@ PROGRAM ButterflyPACK_IE_3D
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
-	enddo	
-	
-	
+	enddo
+
+
 
     quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
