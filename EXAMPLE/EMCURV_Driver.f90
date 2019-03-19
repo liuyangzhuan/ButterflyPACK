@@ -96,6 +96,7 @@ PROGRAM ButterflyPACK_IE_2D
     quant%RCS_Nsample=2000
 	quant%model2d=10
 	quant%wavelength=0.08
+	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
 	quant%Nunk=5000
 
 	option%ErrSol=1
@@ -129,6 +130,10 @@ PROGRAM ButterflyPACK_IE_2D
 							read(strings1,*)quant%Nunk
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
+							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+						else if (trim(strings)=='--freq')then
+							read(strings1,*)quant%freq
+							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -149,7 +154,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 
-    quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
+
     quant%wavenum=2*pi/quant%wavelength
 	! option%touch_para = 3* quant%minedgelength
 
@@ -157,6 +162,7 @@ PROGRAM ButterflyPACK_IE_2D
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
+   write (*,*) 'frequency:',quant%freq
    write (*,*) 'wavelength:',quant%wavelength
    write (*,*) ''
    endif

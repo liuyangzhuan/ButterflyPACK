@@ -20,17 +20,14 @@
 
 #include "ButterflyPACK_config.fi"
 
-
-
-PROGRAM ButterflyPACK_IE_2D
+PROGRAM ButterflyPACK_IE_3D
     use BPACK_DEFS
-    use EMCURV_MODULE
+	use EMSURF_MODULE
 
 	use BPACK_structure
-	use BPACK_Solve_Mul
 	use BPACK_factor
 	use BPACK_constr
-	use BPACK_Utilities
+	use BPACK_Solve_Mul
 	use omp_lib
 	use misc
     implicit none
@@ -43,30 +40,27 @@ PROGRAM ButterflyPACK_IE_2D
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	integer edge
-	real(kind=8) t1,t2,t3, x,y,z,r,theta,phi
+	real(kind=8) t1,t2,x,y,z,r,theta,phi
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
-	integer :: length
+	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
 	type(Hoption)::option_sh,option_A,option_B
 	type(Hstat)::stats_sh,stats_A,stats_B
 	type(mesh)::msh_sh,msh_A,msh_B
-	type(kernelquant)::ker_sh,ker_A,ker_B
 	type(Bmatrix)::bmat_sh,bmat_A,bmat_B
+	type(kernelquant)::ker_sh,ker_A,ker_B
+	type(quant_EMSURF),target::quant
+	type(proctree)::ptree_sh,ptree_A,ptree_B
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree_sh,ptree_A,ptree_B
-	type(quant_EMCURV),target::quant
-	CHARACTER (LEN=1000) DATA_DIR
-	integer:: randsize=50
 	real(kind=8),allocatable::xyz(:,:)
-	integer,allocatable::Permutation(:),tree(:)
-	integer Nunk_loc,Maxlevel
+	integer,allocatable::Permutation(:)
+	integer Nunk_loc
 
 	integer maxn, maxnev, maxncv, ldv
 	integer iparam(11), ipntr(14)
@@ -81,6 +75,9 @@ PROGRAM ButterflyPACK_IE_2D
     real(kind=8) tol
     logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
+	character(len=1024)  :: substring
+
+
 	integer nargs,flag
 
 	! nmpi and groupmembers should be provided by the user
@@ -91,28 +88,37 @@ PROGRAM ButterflyPACK_IE_2D
 		groupmembers(ii)=(ii-1)
 	enddo
 
-	! generate the process tree
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_A)
 	deallocate(groupmembers)
 
 
 	if(ptree_A%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "ButterflyPACK_IE_2D"
+    write(*,*) "ButterflyPACK_IE_3D"
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats_A)
+	call InitStat(stats_sh)
 	call SetDefaultOptions(option_A)
 
+
 	!**** intialize the user-defined derived type quant
-	quant%RCS_static=1
-    quant%RCS_Nsample=2000
-	quant%model2d=10
-	quant%wavelength=0.08
+	! compute the quadrature rules
+    quant%integral_points=6
+    allocate (quant%ng1(quant%integral_points), quant%ng2(quant%integral_points), quant%ng3(quant%integral_points), quant%gauss_w(quant%integral_points))
+    call gauss_points(quant)
+
+    !*************************input******************************
+	quant%DATA_DIR='../EXAMPLE/EM3D_DATA/sphere_2300'
+
+	quant%mesh_normal=1
+	quant%scaling=1d0
+	quant%wavelength=2.0
 	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
-	quant%Nunk=5000
+	quant%RCS_static=2
+    quant%RCS_Nsample=1000
+	quant%CFIE_alpha=1
 
 	!**** default parameters for the eigen solvers
 	quant%CMmode=0
@@ -123,18 +129,15 @@ PROGRAM ButterflyPACK_IE_2D
 	quant%which='LM'
 
 
-
 	option_A%ErrSol=1
-	option_A%format=  HODLR !HMAT!  HODLR !
-	option_A%near_para=0.01d0
-	option_A%verbosity=2
+	option_A%format=  HMAT!  HODLR !
+	option_A%near_para=2.01d0
+	option_A%verbosity=1
 	option_A%ILU=0
 	option_A%forwardN15flag=0
-        ! option_A%schulzlevel=0
-        ! option_A%LRlevel=100
-       ! option_A%level_check=1
-    option_A%tol_itersol=1d-5
-    ! option_A%sample_para=4d0
+	option_A%LRlevel=100
+	option_A%tol_itersol=1d-5
+	option_A%sample_para=4d0
 
 	nargs = iargc()
 	ii=1
@@ -149,10 +152,8 @@ PROGRAM ButterflyPACK_IE_2D
 					if(strings(1:2)=='--')then
 						ii=ii+1
 						call getarg(ii,strings1)
-						if(trim(strings)=='--model2d')then
-							read(strings1,*)quant%model2d
-						else if	(trim(strings)=='--nunk')then
-							read(strings1,*)quant%Nunk
+						if(trim(strings)=='--data_dir')then
+							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
 							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
@@ -189,53 +190,53 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 
-    quant%wavenum=2*pi/quant%wavelength
 
+    quant%wavenum=2*pi/quant%wavelength
+	! option_A%touch_para = 3* quant%minedgelength
 
    !***********************************************************************
-   if(ptree_sh%MyID==Main_ID)then
+	if(ptree_A%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
    write (*,*) 'frequency:',quant%freq
    write (*,*) 'wavelength:',quant%wavelength
    write (*,*) ''
-   endif
+	endif
    !***********************************************************************
 
 
-
-
-    !***********************************************************************
+	!***********************************************************************
 	!**** construct compressed A
 	!**** geometry generalization and discretization
-    call geo_modeling_CURV(quant,ptree_A%Comm)
-	!**** register the user-defined function and type in ker_A
+	call geo_modeling_SURF(quant,ptree_A%Comm,quant%DATA_DIR)
+	!**** register the user-defined function and type in ker
 	ker_A%QuantApp => quant
-	ker_A%FuncZmn => Zelem_EMCURV
-	allocate(xyz(2,quant%Nunk))
-	do edge=1, quant%Nunk
-		xyz(:,edge) = quant%xyz(:,edge*2-1)
+	ker_A%FuncZmn => Zelem_EMSURF
+	!**** initialization of the construction phase
+	t1 = OMP_get_wtime()
+	allocate(xyz(3,quant%Nunk))
+	do ii=1, quant%Nunk
+		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 	enddo
-	allocate(Permutation(quant%Nunk))
+    allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
-	deallocate(Permutation)
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
-	call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,element_Zmn_user,ptree_A)
+	t2 = OMP_get_wtime()
+	!**** computation of the construction phase
+    call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,element_Zmn_user,ptree_A)
 	!**** print statistics
 	call PrintStat(stats_A,ptree_A)
 
-	! call FULLMAT_Element(option_A,stats_A,msh_A,ker_A,element_Zmn_user,ptree_sh)
+
 	!***********************************************************************
-
-
-    !***********************************************************************
 	!**** construct compressed A - sigma I or  A - sigma real(A)
 	if(quant%SI==1)then
 		call CopyOptions(option_A,option_sh)
-		!**** register the user-defined function and type in ker_sh
+		!**** register the user-defined function and type in ker
 		ker_sh%QuantApp => quant
-		ker_sh%FuncZmn => Zelem_EMCURV_Shifted
-		!**** initialize stats and option
+		ker_sh%FuncZmn => Zelem_EMSURF_Shifted
+		!**** initialize stats_sh and option
 		call InitStat(stats_sh)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
@@ -244,31 +245,36 @@ PROGRAM ButterflyPACK_IE_2D
 		enddo
 		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
 		deallocate(groupmembers)
-		allocate(xyz(2,quant%Nunk))
-		do edge=1, quant%Nunk
-			xyz(:,edge) = quant%xyz(:,edge*2-1)
+		!**** initialization of the construction phase
+		t1 = OMP_get_wtime()
+		allocate(xyz(3,quant%Nunk))
+		do ii=1, quant%Nunk
+			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 		enddo
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
+		t2 = OMP_get_wtime()
 		!**** computation of the construction phase
 		call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,element_Zmn_user,ptree_sh)
 		!**** factorization phase
 		call BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
+		! !**** solve phase
+		! call EM_solve_SURF(bmat_sh,option_sh,msh_sh,quant,ptree_sh,stats_sh)
 		!**** print statistics
 		call PrintStat(stats_sh,ptree_sh)
 	endif
 
 
-
-    !***********************************************************************
+	!***********************************************************************
 	!**** construct compressed real(A)
 	if(quant%CMmode==1)then ! solve the characteristic mode
 		call CopyOptions(option_A,option_B)
+		!**** register the user-defined function and type in ker
 		ker_B%QuantApp => quant
-		ker_B%FuncZmn => Zelem_EMCURV_Real
-		!**** initialize stats and option
+		ker_B%FuncZmn => Zelem_EMSURF_Real
+		!**** initialize stats_sh and option
 		call InitStat(stats_B)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
@@ -277,14 +283,18 @@ PROGRAM ButterflyPACK_IE_2D
 		enddo
 		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_B)
 		deallocate(groupmembers)
-		allocate(xyz(2,quant%Nunk))
-		do edge=1, quant%Nunk
-			xyz(:,edge) = quant%xyz(:,edge*2-1)
+		!**** initialization of the construction phase
+		t1 = OMP_get_wtime()
+		allocate(xyz(3,quant%Nunk))
+		do ii=1, quant%Nunk
+			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 		enddo
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
-		deallocate(Permutation)
+		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
+		t2 = OMP_get_wtime()
+		!**** computation of the construction phase
 		call BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,element_Zmn_user,ptree_B)
 		!**** factorization phase
 		if(quant%SI==0)then
@@ -293,19 +303,21 @@ PROGRAM ButterflyPACK_IE_2D
 		!**** print statistics
 		call PrintStat(stats_B,ptree_B)
 	endif
+
 	!***********************************************************************
-
-
-    !***********************************************************************
 	!**** eigen solver
 	allocate(eigval(quant%nev))
 	allocate(eigvec(Nunk_loc,quant%nev))
 	call BPACK_Eigen(bmat_A,option_A,ptree_A, stats_A,bmat_B,option_B,ptree_B, stats_B, bmat_sh,option_sh,ptree_sh,stats_sh, quant%Nunk,Nunk_loc, quant%nev,quant%tol_eig,quant%CMmode,quant%SI,quant%shift,quant%which,nconv,eigval,eigvec)
+	do ii=1,nconv
+	write(substring , *) ii
+	call current_node_patch_mapping('EigVec_'//trim(adjustl(substring))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
+	enddo
 	deallocate(eigval)
 	deallocate(eigvec)
 
 
-    if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
+	if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
 	if(quant%SI==1)then
 		call delete_proctree(ptree_sh)
@@ -329,14 +341,18 @@ PROGRAM ButterflyPACK_IE_2D
 		call BPACK_delete(bmat_B)
 	endif
 
-
 	!**** deletion of quantities
-	call delete_quant_EMCURV(quant)
+	call delete_quant_EMSURF(quant)
+
 
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 
-end PROGRAM ButterflyPACK_IE_2D
+    ! ! ! ! pause
+
+end PROGRAM ButterflyPACK_IE_3D
+
+
 
 
 

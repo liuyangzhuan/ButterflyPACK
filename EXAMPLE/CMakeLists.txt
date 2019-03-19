@@ -28,6 +28,9 @@ set(FZEXM5 FrontalDist_Driver.f90)
 add_executable(frontaldist ${FZEXM5})
 target_link_libraries(frontaldist ${all_link_libs_z})
 
+set(FZEXM6 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
+add_executable(ie3deigen ${FZEXM6})
+target_link_libraries(ie3deigen ${all_link_libs_z})
 
 # else()
 set(CDEXM InterfaceTest.cpp)

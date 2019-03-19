@@ -301,7 +301,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
 		blocks=>h_mat%Local_blocks(ptree%MyID+1,i)
         do ii=blocks%headm,blocks%headm+blocks%M-1
 			call element_Zmn(ii,ii,ctemp,msh,option,ker)
-			scale_factor = max(scale_factor,abs(ctemp))
+			scale_factor = max(scale_factor,abs(ctemp/option%scale_factor))
 			! write(*,*)ii,abs(ctemp)
 		enddo
 	enddo

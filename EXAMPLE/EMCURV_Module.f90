@@ -32,7 +32,7 @@ implicit none
 	type quant_EMCURV
 		real(kind=8) wavenum    ! CEM: wave number
 		real(kind=8) wavelength  ! CEM: wave length
-		real(kind=8) omiga       ! CEM: angular frequency
+		real(kind=8) freq       ! CEM: frequency
 		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
@@ -55,6 +55,10 @@ implicit none
 		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
 		integer::SI=0 ! 0: regular mode 1: shift-invert mode
 		complex(kind=8)::shift=0d0 ! the shift value in shift-invert Arnoldi iterations
+		integer::nev=1 ! nubmer of requested eigen values
+		character(len=2) which ! which portion of eigen spectrum
+		real(kind=8) tol_eig ! tolerance in arpack
+
 	end type quant_EMCURV
 
 contains
@@ -1075,7 +1079,7 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
 	quant%wavelength=wavelength
 	quant%RCS_static=1
     quant%RCS_Nsample=2000
-    quant%omiga=2*pi/quant%wavelength/sqrt(mu0*eps0)
+    quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
     quant%wavenum=2*pi/quant%wavelength
 	! quant%rank_approximate_para1=6.0
     ! quant%rank_approximate_para2=6.0

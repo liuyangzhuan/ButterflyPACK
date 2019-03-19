@@ -14,6 +14,7 @@ FZEXM2 = EMSURF_Module.o EMSURF_Driver.o
 FZEXM3 = SMAT_Driver.o
 FZEXM4 = EMCURV_Module.o EMCURV_Eigen_Driver.o
 FZEXM5 = FrontalDist_Driver.o
+FZEXM6 = EMSURF_Module.o EMSURF_Eigen_Driver.o 
 
 FDEXM1 = FULLMAT_Driver.o
 FDEXM2 = KERREG_Driver.o
@@ -24,10 +25,10 @@ CDEXM1 = InterfaceTest.o
 
 all: double doublecomplex
 
-double: ctest full krr frontal
+double: ctest full krr frontal frontaldist
 # double: ctest full krr fullkrr frontal
 
-doublecomplex: ie2d ie3d smat ie2deigen 
+doublecomplex: ie2d ie3d smat ie2deigen ie3deigen 
  
 ie2d: $(FZEXM1) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM1) $(LIBS) -lm -o $@
@@ -42,7 +43,10 @@ ie2deigen: $(FZEXM4) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM4) $(LIBS) -lm -o $@	
 	
 frontaldist: $(FZEXM5) $(ZButterflyPACKLIB)
-	$(FLOADER) $(FLOADOPTS) $(FZEXM5) $(LIBS) -lm -o $@		
+	$(FLOADER) $(FLOADOPTS) $(FZEXM5) $(LIBS) -lm -o $@	
+	
+ie3deigen: $(FZEXM6) $(ZButterflyPACKLIB)
+	$(FLOADER) $(FLOADOPTS) $(FZEXM6) $(LIBS) -lm -o $@	
 	
 	
 full: $(FDEXM1) $(DButterflyPACKLIB)
@@ -76,6 +80,6 @@ ctest: $(CDEXM1) $(DButterflyPACKLIB)
 
 clean:	
 	# rm -f *.o *.mod ie2d ie3d smat ctest full krr fullkrr
-	rm -f *.o *.mod ie2d ie3d smat ctest full krr frontal ie2deigen frontaldist
+	rm -f *.o *.mod ie2d ie3d smat ctest full krr frontal ie2deigen ie3deigen frontaldist
 
 

@@ -31,7 +31,7 @@ implicit none
 	type quant_EMSURF
 		real(kind=8) wavenum    ! CEM: wave number
 		real(kind=8) wavelength  ! CEM: wave length
-		real(kind=8) omiga       ! CEM: angular frequency
+		real(kind=8) freq       ! CEM: frequency
 		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
@@ -54,6 +54,13 @@ implicit none
 		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
 		CHARACTER (LEN=1000) DATA_DIR
+		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
+		integer::SI=0 ! 0: regular mode 1: shift-invert mode
+		complex(kind=8)::shift=0d0 ! the shift value in shift-invert Arnoldi iterations
+		integer::nev=1 ! nubmer of requested eigen values
+		character(len=2) which ! which portion of eigen spectrum
+		real(kind=8) tol_eig ! tolerance in arpack
+
 	end type quant_EMSURF
 
 contains
@@ -192,7 +199,7 @@ subroutine Zelem_EMSURF(m,n,value_e,quant)
 				ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 			enddo
 		enddo
-		value_e=ln*lm*junit*(ctemp1-ctemp2)/4./pi/quant%omiga/eps0
+		value_e=ln*lm*junit*(ctemp1-ctemp2)/2./quant%freq/eps0
 		value_m=value_m*lm*ln
 
 		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*impedence0*value_m
@@ -207,6 +214,52 @@ subroutine Zelem_EMSURF(m,n,value_e,quant)
 
 end subroutine Zelem_EMSURF
 
+
+
+	!**** user-defined subroutine to sample real(Z_mn)
+	subroutine Zelem_EMSURF_Real(m,n,value_e,quant)
+		use BPACK_DEFS
+		implicit none
+		integer, INTENT(IN):: m,n
+		complex(kind=8) value_e
+		class(*),pointer :: quant
+
+		call Zelem_EMSURF(m,n,value_e,quant)
+		value_e=dble(value_e)
+	end subroutine  Zelem_EMSURF_Real
+
+
+	!**** user-defined subroutine to sample Z_mn-sigma*Delta_mn or Z_mn-sigma*real(Z_mn)
+	subroutine Zelem_EMSURF_Shifted(m,n,value_e,quant)
+
+		use BPACK_DEFS
+		implicit none
+
+		integer edge_m, edge_n, i, j, flag
+		integer, INTENT(IN):: m,n
+		real(kind=8) r_mn, rtemp1, rtemp2
+		complex(kind=8) value_e
+
+		class(*),pointer :: quant
+
+		call Zelem_EMSURF(m,n,value_e,quant)
+		select TYPE(quant)
+			type is (quant_EMSURF)
+				if(quant%CMmode==1)then
+					value_e = value_e - quant%shift*dble(value_e)
+				else
+					if(m==n)then
+						value_e = value_e - quant%shift
+					endif
+				endif
+			class default
+				write(*,*)"unexpected type"
+				stop
+			end select
+
+		return
+
+	end subroutine Zelem_EMSURF_Shifted
 
 
 
@@ -637,84 +690,70 @@ return
 end function ianalytic2
 
 
-subroutine current_node_patch_mapping(chara,curr,quant)
+subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 
     use BPACK_DEFS
     implicit none
 
-    integer patch, edge, node_patch(3), node_edge, node
-    integer i,j,k,ii,jj,kk,flag
-    real(kind=8) center(3), current_patch(3,0:3),  current_abs, r, a
-    character chara
-    character(20) string
+    integer patch, edge, node_patch(3), node_edge, node, info_idx
+    integer i,j,k,ii,jj,kk,flag,lr
+    real(kind=8) center(3), r, a, signs, current_patch(3),  current_abs
+	character(*)::string
     complex(kind=8)::curr(:)
 	type(quant_EMSURF)::quant
+	type(mesh)::msh
+	type(proctree)::ptree
 
-    real(kind=8),allocatable :: current_at_patch(:), current_at_node(:)
-    integer,allocatable :: edge_of_patch(:,:)
+    real(kind=8),allocatable :: current_at_patch(:),vec_current_at_patch(:,:), current_at_node(:)
+	integer ierr
 
-    allocate (edge_of_patch(3,quant%maxpatch))
-    edge_of_patch = -1
 	allocate (current_at_node(quant%maxnode),current_at_patch(quant%maxpatch))
+	allocate (vec_current_at_patch(3,quant%maxpatch))
+	current_at_node=0
+	current_at_patch=0
+	vec_current_at_patch=0
 
-    !$omp parallel do default(shared) private(patch,i,edge)
-    do patch=1,quant%maxpatch
-        i=0
-        ! do while (i<3)     !!! Modified by Yang Liu, commented out, this doesn't make sense
-            do edge=1, quant%Nunk
-                if (quant%info_unk(3,edge)==patch .or. quant%info_unk(4,edge)==patch) then
-                    i=i+1
-                    edge_of_patch(i,patch)=edge
-                endif
-            enddo
-        ! enddo
-    enddo
-    !$omp end parallel do
-
-    !$omp parallel do default(shared) private(patch,i,j,edge,current_abs,current_patch,a,r)
-    do patch=1, quant%maxpatch
-        do i=1,3
-            center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
-        enddo
-        do edge=1,3
-			if(edge_of_patch(edge,patch)==-1)then
-				current_patch(:,edge)=0
-			else
-				current_abs=dble(curr(edge_of_patch(edge,patch)))
-				if (quant%info_unk(3,edge_of_patch(edge,patch))==patch) then
-					r=0.
-					do j=1,3
-						a=quant%xyz(j,quant%info_unk(5,edge_of_patch(edge,patch)))-center(j)
-						r=r+a**2
-						current_patch(j,edge)=current_abs*a
-					enddo
-					r=sqrt(r)
-					do j=1,3
-						current_patch(j,edge)=current_patch(j,edge)/r
-					enddo
-				elseif (quant%info_unk(4,edge_of_patch(edge,patch))==patch) then
-					r=0.
-					do j=1,3
-						a=quant%xyz(j,quant%info_unk(6,edge_of_patch(edge,patch)))-center(j)
-						r=r+a**2
-						current_patch(j,edge)=-current_abs*a
-					enddo
-					r=sqrt(r)
-					do j=1,3
-						current_patch(j,edge)=current_patch(j,edge)/r
-					enddo
-				endif
+	!$omp parallel do default(shared) private(lr,patch,signs,info_idx,i,j,center,edge,current_abs,current_patch,a,r)
+	do edge=msh%idxs,msh%idxe
+		do lr=3,4
+		patch = quant%info_unk(lr,msh%new2old(edge))
+		if(patch/=-1)then
+			if(lr==3)then
+				signs=1
+				info_idx=5
 			endif
-        enddo
-        do i=1,3
-            current_patch(i,0)=0.
-            do edge=1,3
-                current_patch(i,0)=current_patch(i,0)+current_patch(i,edge)
-            enddo
-        enddo
-        current_at_patch(patch)=sqrt(current_patch(1,0)**2+current_patch(2,0)**2+current_patch(3,0)**2)
-    enddo
-    !$omp end parallel do
+			if(lr==4)then
+				signs=-1
+				info_idx=6
+			endif
+
+			do i=1,3
+				center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
+			enddo
+			current_abs=dble(curr(edge-msh%idxs+1))
+			r=0.
+			do j=1,3
+				a=quant%xyz(j,quant%info_unk(info_idx,msh%new2old(edge)))-center(j)
+				r=r+a**2
+				current_patch(j)=signs*current_abs*a
+			enddo
+			r=sqrt(r)
+			current_patch = current_patch/r
+			do i=1,3
+			!$omp atomic
+			vec_current_at_patch(i,patch)=vec_current_at_patch(i,patch) + current_patch(i)
+			!$omp end atomic
+			enddo
+		endif
+		enddo
+	enddo
+	!$omp end parallel do
+	call MPI_ALLREDUCE(MPI_IN_PLACE,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+
+
+	do i=1,quant%maxpatch
+	current_at_patch(i) = sqrt(sum(vec_current_at_patch(1:3,i)**2))
+	enddo
 
     !$omp parallel do default(shared) private(patch,i,ii,node,a)
     do node=1, quant%maxnode
@@ -731,14 +770,16 @@ subroutine current_node_patch_mapping(chara,curr,quant)
     enddo
     !$omp end parallel do
 
-    string='current'//chara//'.out'
+	if(ptree%MyID == Main_ID)then
+    ! string='current'//chara//'.out'
     open(30,file=string)
     do node=1, quant%maxnode
-        write (30,*) node,current_at_node(node)
+        write (30,*) current_at_node(node)
     enddo
     close(30)
+	endif
 
-    deallocate (edge_of_patch,current_at_node,current_at_patch)
+    deallocate (current_at_node,current_at_patch,vec_current_at_patch)
     return
 
 end subroutine current_node_patch_mapping
@@ -1153,6 +1194,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
     allocate(quant%xyz(3,quant%maxnode+Maxedge))
     allocate(quant%node_of_patch(0:3,quant%maxpatch),quant%info_unk(0:6,maxedge+1000))
+	quant%info_unk=-1
+	quant%node_of_patch=-1
     allocate(quant%normal_of_patch(3,quant%maxpatch))
 
 

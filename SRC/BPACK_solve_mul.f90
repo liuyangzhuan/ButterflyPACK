@@ -23,6 +23,297 @@ use Bplus_compress
 contains
 
 
+
+
+
+!**** eigen solver using ARPACK
+	!bmat_shift,option_sh,ptree_sh,stats_sh: matrix, option, process tree and statistics for A-sigmaI or A-sigma*B and its inverse, not referenced if SI=0
+	!bmat_A,option_A,ptree_A,stats_A: matrix, option, process tree and statistics for A
+	!bmat_B,option_B,ptree_B,stats_B: matrix, option, process tree and statistics for B, not referenced if CMmode=0
+	!CMmode: 0: solve the eigen mode with AV=VD; 1: solve the characteristic mode with AV=BVD, B=real(A)
+	!SI: 0: regular mode 1: shift-invert mode
+	!Nunk: size of A
+	!Nunk_loc: local size of A
+	!nev: number of eigen value required
+	!nconv: number of eigen value converged
+	!tol: tolerance in ARPACK
+	!shift: shift value, not referenced if SI=0
+	!eigval: returned eigenvalues of size(nev)
+	!eigvec: returned eigenvectors  of size(Nunk_loc x nev)
+	!which: which eigenvlaues are computed: 'LM', 'SM', LR', 'SR', LI', 'SI'
+subroutine BPACK_Eigen(bmat_A,option_A,ptree_A, stats_A,bmat_B,option_B,ptree_B, stats_B, bmat_sh,option_sh,ptree_sh,stats_sh, Nunk,Nunk_loc, nev,tol,CMmode,SI,shift,which,nconv,eigval,eigvec)
+
+    use BPACK_DEFS
+    implicit none
+
+	integer Nunk, Nunk_loc, nev, nconv,CMmode,SI
+	character(len=2) which
+	complex(kind=8) shift
+	complex(kind=8) eigval(nev)
+	complex(kind=8) eigvec(Nunk_loc,nev)
+    integer i, j, ii, jj, iii, jjj
+	real(kind=8):: rel_error,t1,t2
+	type(Hoption)::option_sh,option_A,option_B
+	type(proctree)::ptree_sh,ptree_A,ptree_B
+	type(Hstat)::stats_sh,stats_A,stats_B
+	type(Bmatrix)::bmat_sh,bmat_A,bmat_B
+	real(kind=8) n1,n2,rtemp
+
+	integer maxn, maxnev, maxncv, ldv, ierr
+	integer iparam(11), ipntr(14)
+    logical,allocatable:: select(:)
+    complex(kind=8),allocatable:: ax(:), mx(:), d(:), v(:,:), workd(:), workev(:), resid(:), workl(:)
+    real(kind=8),allocatable:: rwork(:), rd(:,:)
+
+    character bmattype
+    integer ido, n, nx, ncv, lworkl, info, maxitr, ishfts, mode
+    complex(kind=8) sigma
+    real(kind=8) tol
+    logical rvec
+	real(kind=8),external :: pdznorm2, dlapy2
+
+	nconv=0
+
+#ifdef HAVE_ARPACK
+
+#if DAT==0
+
+      t1 = OMP_get_wtime()
+	  maxn = Nunk
+	  ldv = Nunk_loc
+	  maxnev = nev
+	  maxncv = nev*4
+
+	  n = maxn
+      ncv   = maxncv
+      lworkl  = 3*ncv**2+5*ncv
+      ido    = 0
+      info   = 0
+
+      ishfts = 1
+      maxitr = 3000
+      iparam(1) = ishfts
+      iparam(3) = maxitr
+
+
+	  allocate(select(maxncv))
+	  allocate(ax(Nunk_loc))
+	  allocate(mx(Nunk_loc))
+	  allocate(d(maxn))
+	  allocate(v(ldv,maxncv))
+	  allocate(workd(3*Nunk_loc))
+	  allocate(workev(3*maxncv))
+	  allocate(resid(maxn))
+	  allocate(workl(3*maxncv*maxncv+5*maxncv))
+	  allocate(rwork(maxncv))
+	  allocate(rd(maxncv,3))
+
+	if(CMmode==0)then ! solve the eigen mode
+
+		do while(ido/=99)
+
+			if(SI==0)then  ! regular mode
+				bmattype  = 'I'
+				! which='LM'  ! largest eigenvalues
+				iparam(7) = 1
+				sigma=0d0
+				call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl,rwork, info )
+				if(ido == -1 .or. ido == 1)then !Perform  y <--- OP*x = A*x
+					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)),bmat_A,ptree_A,option_A,stats_A)
+				endif
+			else                ! shift-invert mode
+				bmattype  = 'I'
+				! which='LM' ! eigenvalues closest to the shifts
+				iparam(7) = 3
+				sigma = shift
+				call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl,rwork, info )
+				if(ido == -1 .or. ido == 1)then !Perform  y <--- OP*x = inv[A-SIGMA*I]*x
+					call BPACK_Solution(bmat_sh,workd(ipntr(2)),workd(ipntr(1)),Nunk_loc,1,option_sh,ptree_sh,stats_sh)
+				endif
+			endif
+
+		enddo
+
+      if ( info < 0 ) then
+         print *, ' '
+         print *, ' Error with _naupd, info = ', info
+         print *, ' Check the documentation of _naupd.'
+         print *, ' '
+      else
+         rvec = .true.
+         call pzneupd  (ptree_A%Comm,rvec, 'A', select, d, v, ldv, sigma, workev, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, ierr)
+         if ( ierr /= 0) then
+             print *, ' '
+             print *, ' Error with _neupd, info = ', ierr
+             print *, ' Check the documentation of _neupd. '
+             print *, ' '
+         else
+             nconv = iparam(5)
+             do j=1, nconv
+
+				call BPACK_Mult('N',Nunk_loc,1,v(1,j),ax,bmat_A,ptree_A,option_A,stats_A)
+				mx(1:Nunk_loc) = v(1:Nunk_loc,j)
+                call zaxpy (Nunk_loc, -d(j), mx, 1, ax, 1)
+                rd(j,1) = dble (d(j))
+                rd(j,2) = dimag (d(j))
+                rd(j,3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
+                rd(j,3) = rd(j,3) / dlapy2 (rd(j,1),rd(j,2))
+			enddo
+            call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6,'Ritz values (Real, Imag) and direct residuals')
+
+			eigval(1:nconv)=d(1:nconv)
+			eigvec(1:Nunk_loc,1:nconv)=v(1:Nunk_loc,1:nconv)
+
+
+          end if
+
+		 if (ptree_A%MyID==Main_ID)then
+         if ( info .eq. 1) then
+             print *, ' '
+             print *, ' Maximum number of iterations reached.'
+             print *, ' '
+         else if ( info .eq. 3) then
+             print *, ' '
+             print *, ' No shifts could be applied during implicit Arnoldi update, try increasing NCV.'
+             print *, ' '
+         end if
+         print *, ' '
+         print *, '_NDRV1'
+         print *, '====== '
+         print *, ' '
+         print *, ' Size of the matrix is ', n
+         print *, ' The number of processors is ', ptree_A%nproc
+         print *, ' The number of Ritz values requested is ', nev
+         print *, ' The number of Arnoldi vectors generated', ' (NCV) is ', ncv
+         print *, ' What portion of the spectrum: ', which
+         print *, ' The number of converged Ritz values is ', nconv
+         print *, ' The number of Implicit Arnoldi update',' iterations taken is ', iparam(3)
+         print *, ' The number of OP*x is ', iparam(9)
+         print *, ' The convergence criterion is ', tol
+         print *, ' '
+         endif
+      end if
+
+	else if(CMmode==1)then ! solve the characteristic mode
+		do while(ido/=99)
+
+			if(SI==0)then ! regular mode
+				bmattype  = 'G'
+				! which='LM'	 ! largest eigenvalues
+				iparam(7) = 2
+				sigma = 0
+				call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl,rwork, info )
+				if(ido == -1 .or. ido == -1)then !Perform  y <--- OP*x = inv[M]*A*x
+					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)+Nunk_loc),bmat_A,ptree_A,option_A,stats_A)
+					call BPACK_Solution(bmat_B,workd(ipntr(2)),workd(ipntr(2)+Nunk_loc),Nunk_loc,1,option_B,ptree_B,stats_B)
+				else if(ido==2)then !Perform  y <--- M*x
+					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)),bmat_B,ptree_B,option_B,stats_B)
+				endif
+			else ! shift-invert mode
+				bmattype  = 'G'
+				! which='LM'	! eigenvalues closest to the shifts
+				iparam(7) = 3
+				sigma = shift
+				call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl,rwork, info )
+				if(ido == -1)then !Perform  y <--- OP*x = inv[A-SIGMA*M]*M*x
+					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)+Nunk_loc),bmat_B,ptree_B,option_B,stats_B)
+					call BPACK_Solution(bmat_sh,workd(ipntr(2)),workd(ipntr(2)+Nunk_loc),Nunk_loc,1,option_sh,ptree_sh,stats_sh)
+				else if(ido==1)then !Perform y <-- OP*x = inv[A-sigma*M]*M*x, M*x has been saved in workd(ipntr(3))
+					call BPACK_Solution(bmat_sh,workd(ipntr(2)),workd(ipntr(3)),Nunk_loc,1,option_sh,ptree_sh,stats_sh)
+				else if(ido==2)then !Perform  y <--- M*x
+					call BPACK_Mult('N',Nunk_loc,1,workd(ipntr(1)),workd(ipntr(2)),bmat_B,ptree_B,option_B,stats_B)
+				endif
+			endif
+		enddo
+
+      if ( info < 0 ) then
+         print *, ' '
+         print *, ' Error with _naupd, info = ', info
+         print *, ' Check the documentation of _naupd.'
+         print *, ' '
+      else
+         rvec = .true.
+         call pzneupd  (ptree_A%Comm,rvec, 'A', select, d, v, ldv, sigma, workev, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, ierr)
+         if ( ierr /= 0) then
+             print *, ' '
+             print *, ' Error with _neupd, info = ', ierr
+             print *, ' Check the documentation of _neupd. '
+             print *, ' '
+         else
+             nconv = iparam(5)
+             do j=1, nconv
+
+				call BPACK_Mult('N',Nunk_loc,1,v(1,j),ax,bmat_A,ptree_A,option_A,stats_A)
+				call BPACK_Mult('N',Nunk_loc,1,v(1,j),mx,bmat_B,ptree_B,option_B,stats_B)
+                call zaxpy (Nunk_loc, -d(j), mx, 1, ax, 1)
+                rd(j,1) = dble (d(j))
+                rd(j,2) = dimag (d(j))
+                rd(j,3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
+                rd(j,3) = rd(j,3) / dlapy2 (rd(j,1),rd(j,2))
+			enddo
+            call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6,'Ritz values (Real, Imag) and direct residuals')
+			eigval(1:nconv)=d(1:nconv)
+			eigvec(1:Nunk_loc,1:nconv)=v(1:Nunk_loc,1:nconv)
+          end if
+
+		 if (ptree_A%MyID==Main_ID)then
+         if ( info .eq. 1) then
+             print *, ' '
+             print *, ' Maximum number of iterations reached.'
+             print *, ' '
+         else if ( info .eq. 3) then
+             print *, ' '
+             print *, ' No shifts could be applied during implicit Arnoldi update, try increasing NCV.'
+             print *, ' '
+         end if
+         print *, ' '
+         print *, '_NDRV1'
+         print *, '====== '
+         print *, ' '
+         print *, ' Size of the matrix is ', n
+         print *, ' The number of processors is ', ptree_A%nproc
+         print *, ' The number of Ritz values requested is ', nev
+         print *, ' The number of Arnoldi vectors generated', ' (NCV) is ', ncv
+         print *, ' What portion of the spectrum: ', which
+         print *, ' The number of converged Ritz values is ', nconv
+         print *, ' The number of Implicit Arnoldi update',' iterations taken is ', iparam(3)
+         print *, ' The number of OP*x is ', iparam(9)
+         print *, ' The convergence criterion is ', tol
+         print *, ' '
+         endif
+      end if
+
+
+	endif
+    t2 = OMP_get_wtime()
+    if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*)'Eigen Solve time: ', t2-t1
+
+	  deallocate(select)
+	  deallocate(ax)
+	  deallocate(mx)
+	  deallocate(d)
+	  deallocate(v)
+	  deallocate(workd)
+	  deallocate(workev)
+	  deallocate(resid)
+	  deallocate(workl)
+	  deallocate(rwork)
+	  deallocate(rd)
+
+#else
+	  if(ptree_A%MyID==Main_ID)write(*,*)'eigen driver for real matrices are not yet implemented'
+#endif
+
+#else
+	  if(ptree_A%MyID==Main_ID)write(*,*)'arpack not found, returning nconv=0'
+#endif
+
+
+end subroutine BPACK_Eigen
+
+
+
+
 subroutine BPACK_Solution(bmat,x,b,Ns_loc,num_vectors,option,ptree,stats)
 
     use BPACK_DEFS

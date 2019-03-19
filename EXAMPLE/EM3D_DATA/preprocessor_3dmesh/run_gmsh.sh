@@ -1,5 +1,5 @@
 make
-export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
+export GMSH_DIR=/home/administrator/Desktop/research/preprocessor/gmsh-2.11.0-Linux/bin
 
 # # # # #${GMSH_DIR}/gmsh sphere.geo -1 -2 -format msh -algo del2d -clmin 7.65e-1 -clmax 1e0   # 48 patches
 # # # # #${GMSH_DIR}/gmsh sphere.geo -1 -2 -format msh -algo del2d -clmin 3.8e-1 -clmax 5e-1   # 192 patches
@@ -132,6 +132,13 @@ mv elem.geo ${name}_elem.inp
 #${GMSH_DIR}/gmsh plate.geo -2 -o plate_580000.nas -algo front2d -clmin 0.4e-2 -clmax 0.4e-2   # 583016 patches
 # ${GMSH_DIR}/gmsh plate.geo -2 -o plate_2300000.nas -algo front2d -clmin 0.2e-2 -clmax 0.2e-2   # 2314782 patches
 #${GMSH_DIR}/gmsh plate.geo -2 -o plate_10000000.nas -algo front2d -clmin 0.1e-2 -clmax 0.1e-2   # 2314782 patches
+
+
+name=pillbox_1000
+${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.12e-1 -clmax 0.2e-1 -string "Mesh.BdfFieldFormat = 2;"  
+./con_all ${name}.nas
+mv node.geo ${name}_node.inp
+mv elem.geo ${name}_elem.inp
 
 
 rm *.nas

@@ -111,7 +111,7 @@ EMSURF_Driver.f90 and EMSURF_Module.f90:
 A 3D EFIE/CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/CFIE matrix and solve it with plane-wave excitations.
 ```
 sh ./EM3D_DATA/preprocessor_3dmesh/run_gmsh.sh ! this preprocessor generates a few 3D example meshes using Gmsh (http://gmsh.info/)
-mpirun -n nmpi ./EXAMPLE/ie3d 
+mpirun -n nmpi ./EXAMPLE/ie3d
 ```
 
 SMAT_Driver.f90:
