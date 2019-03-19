@@ -75,7 +75,7 @@ PROGRAM ButterflyPACK_IE_3D
     real(kind=8) tol
     logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
-	character(len=1024)  :: substring
+	character(len=1024)  :: substring,substring1
 
 
 	integer nargs,flag
@@ -311,7 +311,8 @@ PROGRAM ButterflyPACK_IE_3D
 	call BPACK_Eigen(bmat_A,option_A,ptree_A, stats_A,bmat_B,option_B,ptree_B, stats_B, bmat_sh,option_sh,ptree_sh,stats_sh, quant%Nunk,Nunk_loc, quant%nev,quant%tol_eig,quant%CMmode,quant%SI,quant%shift,quant%which,nconv,eigval,eigvec)
 	do ii=1,nconv
 	write(substring , *) ii
-	call current_node_patch_mapping('EigVec_'//trim(adjustl(substring))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
+	write(substring1 , *) quant%freq
+	call current_node_patch_mapping('EigVec_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
 	enddo
 	deallocate(eigval)
 	deallocate(eigvec)
