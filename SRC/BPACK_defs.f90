@@ -17,6 +17,7 @@
 #include "ButterflyPACK_config.fi"
 module BPACK_DEFS
 	use iso_c_binding
+	use linkedlist
 	implicit none
     INCLUDE 'mpif.h'
 
@@ -184,6 +185,18 @@ module BPACK_DEFS
          type(butterflymatrix),allocatable :: blocks(:)
      end type butterfly_UV
 
+	!**** intersections of a block row and column
+	type:: intersect
+		integer::idx
+		integer::nc,nr
+		integer::nr_loc
+		integer,allocatable::rows(:),cols(:) ! store indices in bmat or global list of intersections
+		integer,allocatable::rows_loc(:) ! store indices in rows
+		DT,allocatable::dat(:,:)
+		DT,allocatable::dat_loc(:,:)
+	end type intersect
+
+
 	 !**** butterfly or LR structure
      type matrixblock
 		 integer pgno ! process group
@@ -223,6 +236,8 @@ module BPACK_DEFS
          DT,allocatable :: fullmat_MPI(:) ! massage for the dense blocks
          integer,allocatable :: Butterfly_index_MPI(:) ! index message the first 4 entries are: 1. depreciated 2. depreciated 3. level_butterfly 4. num_blocks
          DT,allocatable :: Butterfly_data_MPI(:) ! value message
+		 type(list):: lstr,lstc ! a list of intersections
+		 type(intersect),allocatable::inters(:) ! an array of intersections
 	 end type matrixblock
 
 
@@ -414,6 +429,13 @@ module BPACK_DEFS
 		type(c_funptr),pointer :: C_FuncHMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
 		type(c_funptr),pointer :: C_FuncBMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
 	end type kernelquant
+
+	!**** a derived type containing a pointer to a block
+	type:: block_ptr
+		type(matrixblock),pointer::ptr
+	end type block_ptr
+
+
 
 	abstract interface
 		subroutine BMatVec(operand,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)

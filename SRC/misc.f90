@@ -19,6 +19,7 @@
 include "mkl_vsl.f90"
 #endif
 
+
 module misc
 use BPACK_DEFS
 #ifdef Intel
@@ -26,6 +27,7 @@ USE IFPORT
 #endif
 use omp_lib
 use DenseLA
+use linkedlist
 
 
 integer, parameter :: int64 = selected_int_kind(18)

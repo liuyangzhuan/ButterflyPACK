@@ -5482,6 +5482,90 @@ end subroutine BF_block_MVP_partial
 
 
 
+subroutine Full_block_extraction(blocks,inters,ptree,msh,stats)
+    use BPACK_DEFS
+    implicit none
+	type(matrixblock)::blocks
+	type(proctree)::ptree
+	type(mesh)::msh
+	type(Hstat)::stats
+	integer nn,ri,ci,nng,headm,headn,pp,row_group,col_group
+	type(intersect)::inters(:)
+	integer ii,jj
+
+	headm = msh%basis_group(blocks%row_group)%head
+	headn = msh%basis_group(blocks%col_group)%head
+	do nn=1,size(blocks%inters,1)
+	nng=blocks%inters(nn)%idx
+	do ii=1,blocks%inters(nn)%nr_loc
+		ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1
+		do jj=1,blocks%inters(nn)%nc
+			ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+			blocks%inters(nn)%dat_loc(ii,jj)=blocks%fullmat(ri,ci)
+		enddo
+	enddo
+	enddo
+
+end subroutine Full_block_extraction
+
+
+
+subroutine LR_block_extraction(blocks,inters,ptree,msh,stats)
+    use BPACK_DEFS
+    implicit none
+	type(matrixblock)::blocks
+	type(proctree)::ptree
+	type(mesh)::msh
+	type(Hstat)::stats
+	integer nn,ri,ci,nng,headm,headn,head,tail,pp,row_group,col_group
+	type(intersect)::inters(:)
+	integer ii,jj,rank,ncol,nrow,iidx,pgno,ierr
+	DT,allocatable::Vpartial(:,:)
+
+	headm = blocks%headm
+	headn = blocks%headn
+	pgno = blocks%pgno
+
+	pp = ptree%myid-ptree%pgrp(pgno)%head+1
+	head=blocks%N_p(pp,1)
+	tail=blocks%N_p(pp,2)
+
+
+	rank=size(blocks%ButterflyU%blocks(1)%matrix,2)
+	ncol=0
+	do nn=1,size(blocks%inters,1)
+		ncol = ncol + blocks%inters(nn)%nc
+	enddo
+	allocate(Vpartial(rank,ncol))
+	Vpartial=0
+
+	iidx=0
+	do nn=1,size(blocks%inters,1)
+	nng=blocks%inters(nn)%idx
+	do jj=1,blocks%inters(nn)%nc
+		iidx=iidx+1
+		ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+		if(ci>=head .and. ci<=tail)then
+			Vpartial(:,iidx) = blocks%ButterflyV%blocks(1)%matrix(ci-head+1,:)
+		endif
+	enddo
+	enddo
+	call MPI_ALLREDUCE(MPI_IN_PLACE,Vpartial,rank*ncol,MPI_DT,MPI_SUM,ptree%pgrp(pgno)%Comm, ierr)
+
+	iidx=0
+	do nn=1,size(blocks%inters,1)
+	nng=blocks%inters(nn)%idx
+	do ii=1,blocks%inters(nn)%nr_loc
+		ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1-blocks%M_p(pp,1)+1
+		call gemmf77('N','N',1,blocks%inters(nn)%nc,rank, cone, blocks%ButterflyU%blocks(1)%matrix(ri,1), blocks%M_loc,Vpartial(1,iidx+1),rank,czero,blocks%inters(nn)%dat_loc(ii,1),blocks%inters(nn)%nr_loc)
+	enddo
+	iidx = iidx + blocks%inters(nn)%nc
+	enddo
+
+	deallocate(Vpartial)
+
+end subroutine LR_block_extraction
+
 
 
 
@@ -6818,5 +6902,20 @@ implicit none
 	! endif
 end subroutine ComputeParallelIndices
 
+
+function node_score_block_ptr_row(this) result(score)
+	implicit none
+	type(nod)::this
+	real(kind=8)::score
+	class(*),pointer::ptr
+
+	select TYPE(ptr=>this%item)
+		type is (block_ptr)
+			score=dble(ptr%ptr%row_group)
+		class default
+			write(*,*)'unexpected item type in node_score_dble'
+			stop
+	end select
+end function node_score_block_ptr_row
 
 end module Bplus_Utilities

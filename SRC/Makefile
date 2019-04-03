@@ -15,7 +15,7 @@ include ../make.inc
 #
 # Routines for ButterflyPACK
 #
-SRC = dgeqp3mod.o zgeqp3mod.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o \
+SRC = dgeqp3mod.o zgeqp3mod.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o linkedlist.o \
 	BPACK_defs.o DenseLA.o misc.o Bplus_utilities.o BPACK_utilities.o blocks_pack_unpack_for_MPI.o \
 	BPACK_structure.o Bplus_randomized.o Bplus_compress.o Bplus_factor.o BPACK_solve_mul.o \
 	BPACK_constr.o BPACK_randomized.o BPACK_factor.o BPACK_wrapper.o
