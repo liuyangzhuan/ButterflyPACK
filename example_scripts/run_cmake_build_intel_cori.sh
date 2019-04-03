@@ -1,6 +1,6 @@
 module swap PrgEnv-gnu PrgEnv-intel
 cd ..
-dos2unix  -q PrecisionPreprocessing.sh
+sed -i 's/^M$//' PrecisionPreprocessing.sh
 sh PrecisionPreprocessing.sh
 mkdir -p build
 cd build

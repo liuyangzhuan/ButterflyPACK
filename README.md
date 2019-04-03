@@ -12,7 +12,7 @@ ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyP
 
 ## Installation
 
-The installation uses CMake build system. You may need "dos2unix" and "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
+The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
 
 For an installation with GNU compiliers, do:
 ```

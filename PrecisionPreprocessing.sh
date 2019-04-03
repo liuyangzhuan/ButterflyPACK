@@ -8,8 +8,8 @@ MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
 TMP_FILE=$PWD/tmp.txt
 
 ######## The following takes care of windows to linux conversion
-dos2unix  -q */*
-dos2unix  -q */*/*
+sed -i 's/^M$//' */* &>/dev/null
+sed -i 's/^M$//' */*/* &>/dev/null
 sed -i 's/[[:blank:]]*$//' *.*
 sed -i 's/[[:blank:]]*$//' SRC/*.*
 sed -i 's/[[:blank:]]*$//' EXAMPLE/*.*

@@ -295,12 +295,14 @@ if (allocated(LHS%item))then
 endif
 
 if(allocated(RHS%item))then
-	allocate(LHS%item, mold=RHS%item)
+	allocate(LHS%item, source=RHS%item)
 	select TYPE(ptrr=>RHS%item)
 		type is (list)
 			select TYPE(ptrl=>LHS%item)
 			type is (list)
 				ptrl%num_nods=0
+				ptrl%head=>null()
+				ptrl%tail=>null()
 				ptrl%idx=ptrr%idx
 				cur=>ptrr%head
 				do ii=1,ptrr%num_nods
@@ -311,7 +313,7 @@ if(allocated(RHS%item))then
 				stop
 			end select
 		class default ! intrinsic types and derived types with scalar,allocatable, or pointers
-			LHS%item=RHS%item
+			! LHS%item=RHS%item
 	end select
 endif
 
@@ -330,11 +332,14 @@ type(nod),pointer:: cur
 integer ii
 class(*),pointer:: ptr
 if (present(item))then
-	allocate(val%item, mold=item)
+	allocate(val%item, source=item)
 	select TYPE(item)
 		type is (list)
 			select TYPE(ptr=>val%item)
 				type is (list)
+					ptr%num_nods=0
+					ptr%head=>null()
+					ptr%tail=>null()
 					ptr%idx=item%idx
 					cur=>item%head
 					do ii=1,item%num_nods
@@ -345,7 +350,7 @@ if (present(item))then
 					stop
 			end select
 		class default ! intrinsic types and derived types with scalar,allocatable, or pointers
-			val%item=item
+			! val%item=item
 	end select
 endif
 end function nod_constructor
