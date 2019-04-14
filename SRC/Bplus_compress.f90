@@ -977,7 +977,7 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat_i(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat_i(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -993,7 +993,7 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_INTEGER, recvbufall2all, recvcounts,rdispls, MPI_INTEGER, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat_i(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat_i(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
