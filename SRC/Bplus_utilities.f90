@@ -2542,7 +2542,7 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -2558,7 +2558,7 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
@@ -2848,7 +2848,7 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -2864,7 +2864,7 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
@@ -3218,7 +3218,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -3234,7 +3234,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
@@ -3774,7 +3774,7 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -3790,7 +3790,7 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
@@ -4126,7 +4126,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -4142,7 +4142,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)

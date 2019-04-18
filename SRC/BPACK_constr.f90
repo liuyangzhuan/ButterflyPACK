@@ -611,7 +611,7 @@ implicit none
 	type(proctree)::ptree
 	procedure(Zelem)::element_Zmn
 	type(intersect),allocatable::inters(:)
-	real(kind=8)::n1,n2
+	real(kind=8)::n1,n2,n3,n4
 	integer Ntest
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
 	integer:: cridx,info
@@ -634,8 +634,8 @@ implicit none
 	! nr=msh%Nunk
 	! nc=msh%Nunk
 
-	nr=4
-	nc=4
+	nr=10
+	nc=100
 
 	allocate(inters(Ninter))
 	lstr=list()
@@ -644,6 +644,8 @@ implicit none
 	lstblk=list()
 	pgno=1
 	ctxt = ptree%pgrp(pgno)%ctxt
+	nprow = ptree%pgrp(pgno)%nprow
+	npcol = ptree%pgrp(pgno)%npcol
 	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 
 
@@ -655,6 +657,7 @@ implicit none
 			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
 			allocate(inters(nn)%dat_loc(myArows,myAcols))
+			inters(nn)%dat_loc=0
 		endif
 
 		allocate(inters(nn)%rows(nr))
@@ -722,6 +725,9 @@ implicit none
 	enddo
 
 	call MergeSort(lstblk%head,node_score_block_ptr_row)
+
+	n2 = OMP_get_wtime()
+
 
 	! write(*,*)lstblk%num_nods
 	! cur=>lstblk%head
@@ -833,10 +839,12 @@ implicit none
 	cur=>cur%next
 	enddo
 
+	n3 = OMP_get_wtime()
+
 	! redistribute from blocks' intersections to the global intersecions inters
 	call BPACK_all2all_inters(inters, lstblk, stats,ptree)
 
-	n2 = OMP_get_wtime()
+	n4 = OMP_get_wtime()
 
 	! compare extracted values with element_Zmn
 	v1=0
@@ -857,6 +865,7 @@ implicit none
 				v1 =v1+abs(value1)**2d0
 				v2 =v2+abs(value2)**2d0
 				v3 =v3+abs(value2-value1)**2d0
+				! if(abs(value2-value1)**2d0/abs(value1)**2d0>1D-2)write(*,*)ptree%MyID,nn,myi,myj,abs(value2-value1)**2d0/abs(value1)**2d0,value2,value1
 			enddo
 			enddo
 		endif
@@ -865,7 +874,7 @@ implicit none
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v3,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
-	if(ptree%MyID==Main_ID)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
+	if(ptree%MyID==Main_ID)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2,Es9.2,Es9.2,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n4-n1,n2-n1,n3-n2,n4-n3
 
 	stop
 
@@ -944,7 +953,8 @@ subroutine BPACK_all2all_inters(inters, lstblk, stats,ptree)
 	nproc = ptree%pgrp(pgno)%nproc
 	tag = pgno
 	ctxt = ptree%pgrp(pgno)%ctxt
-	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+	nprow = ptree%pgrp(pgno)%nprow
+	npcol = ptree%pgrp(pgno)%npcol
 
 
 	! allocation of communication quantities
@@ -1087,7 +1097,7 @@ subroutine BPACK_all2all_inters(inters, lstblk, stats,ptree)
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -1103,7 +1113,7 @@ subroutine BPACK_all2all_inters(inters, lstblk, stats,ptree)
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvcounts(pp)>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
