@@ -644,10 +644,9 @@ implicit none
 	lstblk=list()
 	pgno=1
 	ctxt = ptree%pgrp(pgno)%ctxt
+	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 	nprow = ptree%pgrp(pgno)%nprow
 	npcol = ptree%pgrp(pgno)%npcol
-	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-
 
 	do nn=1,Ninter
 		inters(nn)%nr=nr
