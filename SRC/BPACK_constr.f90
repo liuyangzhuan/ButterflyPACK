@@ -630,7 +630,7 @@ implicit none
 
 	integer:: Ninter,nr,nc
 
-	Ninter=1
+	Ninter=2
 	! nr=msh%Nunk
 	! nc=msh%Nunk
 
@@ -663,10 +663,18 @@ implicit none
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		inters(nn)%rows(ii)=max(floor_safe(msh%Nunk*a),1)
-		! write(*,*)nn,ii,inters(nn)%rows(ii)
-		call list_append_item( lst, ii )
+		! if(nn==1 .and. ii==1)inters(nn)%rows(ii)=4319
+		! if(nn==1 .and. ii==2)inters(nn)%rows(ii)=1576
+		! if(nn==1 .and. ii==3)inters(nn)%rows(ii)=2122
+		! if(nn==1 .and. ii==4)inters(nn)%rows(ii)=2847
+		! if(nn==2 .and. ii==1)inters(nn)%rows(ii)=2100
+		! if(nn==2 .and. ii==2)inters(nn)%rows(ii)=4793
+		! if(nn==2 .and. ii==3)inters(nn)%rows(ii)=4980
+		! if(nn==2 .and. ii==4)inters(nn)%rows(ii)=4988
+		if(ptree%MyID==Main_ID)write(*,*)'r',nn,ii,inters(nn)%rows(ii)
+		call append( lst, ii )
 		enddo
-		call list_append_item(lstr,lst)
+		call append(lstr,lst)
 		call list_finalizer(lst)
 
 		allocate(inters(nn)%cols(nc))
@@ -675,9 +683,18 @@ implicit none
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		inters(nn)%cols(ii)=max(floor_safe(msh%Nunk*a),1)! inters(nn)%rows(ii) !
-		call list_append_item( lst, ii )
+		! if(nn==1 .and. ii==1)inters(nn)%cols(ii)=1660
+		! if(nn==1 .and. ii==2)inters(nn)%cols(ii)=3189
+		! if(nn==1 .and. ii==3)inters(nn)%cols(ii)=4067
+		! if(nn==1 .and. ii==4)inters(nn)%cols(ii)=1640
+		! if(nn==2 .and. ii==1)inters(nn)%cols(ii)=2467
+		! if(nn==2 .and. ii==2)inters(nn)%cols(ii)=2107
+		! if(nn==2 .and. ii==3)inters(nn)%cols(ii)=3411
+		! if(nn==2 .and. ii==4)inters(nn)%cols(ii)=923
+		if(ptree%MyID==Main_ID)write(*,*)'c',nn,ii,inters(nn)%cols(ii)
+		call append( lst, ii )
 		enddo
-		call list_append_item(lstc,lst)
+		call append(lstc,lst)
 		call list_finalizer(lst)
 	enddo
 
@@ -782,6 +799,8 @@ implicit none
 		endif
 	enddo
 	allocate(blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc))
+	allocate(blocks%inters(nn)%glo2loc(blocks%inters(nn)%nr))
+	blocks%inters(nn)%glo2loc=-1
 	blocks%inters(nn)%nr_loc=0
 	do jj=1,blocks%inters(nn)%nr
 		idx = blocks%inters(nn)%rows(jj)
@@ -789,6 +808,7 @@ implicit none
 		if(inters(blocks%inters(nn)%idx)%rows(idx)>=head .and. inters(blocks%inters(nn)%idx)%rows(idx)<=tail)then
 			blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
 			blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc)=jj ! rows_loc stores indices in rows
+			blocks%inters(nn)%glo2loc(jj)=blocks%inters(nn)%nr_loc
 		endif
 	enddo
 	allocate(blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc))
@@ -802,7 +822,7 @@ implicit none
 		if(blocks%level_butterfly==0)then
 			call LR_block_extraction(blocks,inters,ptree,msh,stats)
 		else
-			write(*,*)'BF extraction not implemented'
+			call BF_block_extraction(blocks,inters,ptree,msh,stats)
 		endif
 	endif
 
@@ -847,6 +867,8 @@ implicit none
 
 	if(ptree%MyID==Main_ID)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
 
+	stop
+
 	! deallocate intersections at each block
 	cur=>lstblk%head
 	do ii=1,lstblk%num_nods
@@ -859,6 +881,10 @@ implicit none
 			if(allocated(blocks%inters(nn)%rows))deallocate(blocks%inters(nn)%rows)
 			if(allocated(blocks%inters(nn)%cols))deallocate(blocks%inters(nn)%cols)
 			if(allocated(blocks%inters(nn)%rows_loc))deallocate(blocks%inters(nn)%rows_loc)
+			blocks%inters(nn)%nr=0
+			blocks%inters(nn)%nr_loc=0
+			blocks%inters(nn)%nc=0
+			blocks%inters(nn)%idx=0
 		enddo
 		deallocate(blocks%inters)
 	end select
@@ -1203,9 +1229,9 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 				type is (integer)
 					! write(*,*)row_group,inters(nth)%rows(ptr),msh%basis_group(row_group*2)%tail
 					if(inters(nth)%rows(ptr)<=msh%basis_group(row_group*2)%tail)then
-						call list_append_item(clstr(1),ptr)
+						call append(clstr(1),ptr)
 					else
-						call list_append_item(clstr(2),ptr)
+						call append(clstr(2),ptr)
 					endif
 				class default
 					write(*,*)'unexpected item type'
@@ -1218,9 +1244,9 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 				select type(ptr=>cur%item)
 				type is (integer)
 					if(inters(nth)%cols(ptr)<=msh%basis_group(col_group*2)%tail)then
-						call list_append_item(clstc(1),ptr)
+						call append(clstc(1),ptr)
 					else
-						call list_append_item(clstc(2),ptr)
+						call append(clstc(2),ptr)
 					endif
 				class default
 					write(*,*)'unexpected item type'
@@ -1241,10 +1267,10 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 		if(IOwnPgrp(ptree,blocks%pgno))then
 			if(blocks%lstr%num_nods==0)then
 				blk_ptr%ptr=>blocks
-				call list_append_item(lstblk,blk_ptr)
+				call append(lstblk,blk_ptr)
 			endif
-			call list_append_item(blocks%lstr,lstr)
-			call list_append_item(blocks%lstc,lstc)
+			call append(blocks%lstr,lstr)
+			call append(blocks%lstc,lstc)
 		endif
 	endif
 

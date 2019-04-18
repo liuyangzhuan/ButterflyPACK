@@ -148,6 +148,9 @@ module BPACK_DEFS
      type butterflymatrix
          DT,allocatable :: matrix(:,:) ! entries of the block
 		 ! integer::mdim,ndim	 ! dimensions of the block
+		 type(list):: lst ! a list of intersection#s
+		 integer,allocatable::index(:,:) ! an array of intersection#s
+		 integer::ndim=0 ! number of skeletons
      end type butterflymatrix
 
 	 !**** index set for one butterfly block
@@ -173,6 +176,8 @@ module BPACK_DEFS
 		 integer:: idx_c=0,idx_r=0 ! column and row number of the first local block
 		 integer:: inc_c=0,inc_r=0 ! increment of local block row and columns
          type(butterflymatrix),allocatable :: blocks(:,:)
+		 type(list):: lst! a list of active blocks
+		 integer,allocatable::index(:,:) ! an array of id of active blocks
      end type butterfly_kerl
 
 
@@ -192,6 +197,7 @@ module BPACK_DEFS
 		integer::nr_loc
 		integer,allocatable::rows(:),cols(:) ! store indices in bmat or global list of intersections
 		integer,allocatable::rows_loc(:) ! store indices in rows
+		integer,allocatable::glo2loc(:) ! store index mapping from rows to rows_loc
 		DT,allocatable::dat(:,:)
 		DT,allocatable::dat_loc(:,:)
 	end type intersect
@@ -435,6 +441,11 @@ module BPACK_DEFS
 		type(matrixblock),pointer::ptr
 	end type block_ptr
 
+
+	!*** a derived type for a pair of integers
+	type:: ipair
+	integer i,j
+	end type ipair
 
 
 	abstract interface

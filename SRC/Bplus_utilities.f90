@@ -1809,6 +1809,295 @@ end subroutine BF_Partial_MVP_Half
 
 
 
+subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
+
+   use BPACK_DEFS
+   implicit none
+    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i,index_i0,index_i1, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j1,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
+    integer level, length_1, length_2, level_blocks
+    integer rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+    real(kind=8) flop
+    DT ctemp
+	type(matrixblock)::blocks
+	type(Hstat)::stats
+	type(proctree)::ptree
+	type(butterfly_kerl)::kerls
+
+    integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+    integer,allocatable:: select_row_rr(:), select_column_rr(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+
+	integer,allocatable::jpvt(:)
+	integer ierr,nsendrecv,pids,pidr,pid,pid0,tag,nproc,Ncol,Ncol1,Nrow,Nreqr,Nreqs,recvid,sendid
+
+	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive
+	logical::sendflag,recvflag
+	integer,allocatable::S_req(:),R_req(:)
+	integer,allocatable:: statuss(:,:),statusr(:,:)
+	integer rr,cc
+	character mode,modetrans,collect
+	DT,allocatable::mat1(:,:),mat2(:,:),mat(:,:)
+
+	real(kind=8)::n1,n2
+
+	n1 = OMP_get_wtime()
+
+	mode='R'
+	modetrans='C'
+
+
+	level_butterfly=blocks%level_butterfly
+	nproc = ptree%pgrp(blocks%pgno)%nproc
+	tag = blocks%pgno
+
+
+	! allocation of communication quantities
+	allocate(statuss(MPI_status_size,nproc))
+	allocate(statusr(MPI_status_size,nproc))
+	allocate(S_req(nproc))
+	allocate(R_req(nproc))
+	allocate(sendquant(nproc))
+	do ii=1,nproc
+		sendquant(ii)%size=0
+		sendquant(ii)%active=0
+	enddo
+	allocate(recvquant(nproc))
+	do ii=1,nproc
+		recvquant(ii)%size=0
+		recvquant(ii)%active=0
+	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
+	! calculate send buffer sizes in the first pass
+
+	do nn=1,size(kerls%index,1)
+		ii = kerls%index(nn,1)
+		jj = kerls%index(nn,2)
+		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
+		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
+
+		sendflag=.false.
+		recvflag=.false.
+		if(collect=='R')then ! pair-wise reduction
+			if(mode=='R')then
+				index_i0=floor_safe((index_i-1)/2d0)+1
+				index_j0=2*index_j-mod(index_i-1,2)
+				index_i1=floor_safe((index_i-1)/2d0)+1
+				index_j1=2*index_j-mod(index_i,2)
+			elseif(mode=='C')then
+				write(*,*)'mode=C not needed in BF_exchange_extraction'
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pids)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,modetrans,pidr)
+		elseif(collect=='B')then ! pair-wise broadcast
+			if(mode=='R')then
+				index_j0 = index_j+2*mod(index_j,2)-1
+				index_i0=index_i
+				index_j1 = index_j
+				index_i1=index_i
+			elseif(mode=='C')then
+				write(*,*)'mode=C not needed in BF_exchange_extraction'
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pids)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,mode,pidr)
+		endif
+		sendflag = pids/=ptree%MyID
+		recvflag = pidr/=ptree%MyID
+
+		if(recvflag)then
+			pp=pidr-ptree%pgrp(blocks%pgno)%head+1
+			if(recvquant(pp)%active==0)then
+				recvquant(pp)%active=1
+				Nrecvactive=Nrecvactive+1
+				recvIDactive(Nrecvactive)=pp
+			endif
+		endif
+
+		if(sendflag)then
+			pp=pids-ptree%pgrp(blocks%pgno)%head+1
+			if(sendquant(pp)%active==0)then
+				sendquant(pp)%active=1
+				Nsendactive=Nsendactive+1
+				sendIDactive(Nsendactive)=pp
+			endif
+			if(allocated(kerls%blocks(ii,jj)%matrix))then
+				sendquant(pp)%size=sendquant(pp)%size+4+size(kerls%blocks(ii,jj)%matrix,1)*size(kerls%blocks(ii,jj)%matrix,1)
+			endif
+		endif
+	enddo
+
+	! communicate receive buffer sizes
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
+	enddo
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
+	endif
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
+	endif
+
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		sendquant(pp)%size=0
+	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
+	enddo
+
+
+	! pack the send buffer in the second pass
+	do nn=1,size(kerls%index,1)
+		ii = kerls%index(nn,1)
+		jj = kerls%index(nn,2)
+		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
+		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
+
+		sendflag=.false.
+		if(collect=='R')then ! pair-wise reduction
+			if(mode=='R')then
+				index_i0=floor_safe((index_i-1)/2d0)+1
+				index_j0=2*index_j-mod(index_i-1,2)
+			elseif(mode=='C')then
+				write(*,*)'mode=C not needed in BF_exchange_extraction'
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+		elseif(collect=='B')then ! pair-wise broadcast
+
+			if(mode=='R')then
+				index_j0 = index_j+2*mod(index_j,2)-1
+				index_i0=index_i
+			elseif(mode=='C')then
+				write(*,*)'mode=C not needed in BF_exchange_extraction'
+			endif
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+		endif
+		sendflag = pid/=ptree%MyID
+
+		if(sendflag)then
+			pp=pid-ptree%pgrp(blocks%pgno)%head+1
+			if(allocated(kerls%blocks(ii,jj)%matrix))then
+				Nrow=size(kerls%blocks(ii,jj)%matrix,1)
+				Ncol=size(kerls%blocks(ii,jj)%matrix,2)
+				sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
+				sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
+				sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
+				sendquant(pp)%dat(sendquant(pp)%size+4,1)=Ncol
+				sendquant(pp)%size=sendquant(pp)%size+4
+				do i=1,Nrow*Ncol
+					rr = mod(i-1,Nrow)+1
+					cc = (i-1)/Nrow+1
+					sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls%blocks(ii,jj)%matrix(rr,cc)
+				enddo
+				sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
+			endif
+		endif
+	enddo
+
+
+	! communicate the data buffer
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
+	enddo
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
+	endif
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
+	endif
+
+	! copy data from buffer to target
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat(i,1)))
+			ii=(index_i-kerls%idx_r)/kerls%inc_r+1
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
+			jj=(index_j-kerls%idx_c)/kerls%inc_c+1
+			i=i+1
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
+			i=i+1
+			Ncol=NINT(dble(recvquant(pp)%dat(i,1)))
+
+			if(allocated(kerls%blocks(ii,jj)%matrix))then
+				Ncol1=size(kerls%blocks(ii,jj)%matrix,2)
+				allocate(mat(Nrow,Ncol1+Ncol))
+				mat=kerls%blocks(ii,jj)%matrix
+				deallocate(kerls%blocks(ii,jj)%matrix)
+			else
+				Ncol1=0
+				allocate(mat(Nrow,Ncol1+Ncol))
+			endif
+			allocate(kerls%blocks(ii,jj)%matrix(Nrow,Ncol1+Ncol))
+
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
+				mat(rr,cc+Ncol1) = recvquant(pp)%dat(i+j,1)
+			enddo
+			kerls%blocks(ii,jj)%matrix = mat
+			deallocate(mat)
+			i=i+Nrow*Ncol
+		enddo
+	enddo
+
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	enddo
+	deallocate(sendquant)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	enddo
+	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
+
+end subroutine BF_exchange_extraction
+
+
+
+
+
 subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 
    use BPACK_DEFS
@@ -2064,6 +2353,303 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 	! time_tmp = time_tmp + n2 - n1
 
 end subroutine BF_exchange_matvec
+
+
+
+!*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode_new)
+
+   use BPACK_DEFS
+   implicit none
+    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
+    integer level, length_1, length_2, level_blocks
+    integer rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+    real(kind=8) flop
+    DT ctemp
+	type(matrixblock)::blocks
+	type(Hstat)::stats
+	type(proctree)::ptree
+
+    integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+    integer,allocatable:: select_row_rr(:), select_column_rr(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+
+	integer,allocatable::jpvt(:)
+	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
+
+	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::S_req(:),R_req(:)
+	integer,allocatable:: statuss(:,:),statusr(:,:)
+	character::mode,mode_new
+	real(kind=8)::n1,n2
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
+	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
+	type(butterfly_kerl)::kerls,kerls1
+	integer rr,cc
+	logical all2all
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
+	integer::dist
+
+
+
+	n1 = OMP_get_wtime()
+
+	call assert(mode/=mode_new,'only row2col or col2row is supported')
+
+	level_butterfly=blocks%level_butterfly
+	nproc = ptree%pgrp(blocks%pgno)%nproc
+	tag = blocks%pgno
+
+	! mode_new and level_new determine the block range in the new mode
+	if(mode_new=='R')then
+		level_new=max(level-1,0)
+	elseif(mode_new=='C')then
+		level_new=min(level+1,level_butterfly+1)
+	endif
+
+
+	! allocation of communication quantities
+	allocate(statuss(MPI_status_size,nproc))
+	allocate(statusr(MPI_status_size,nproc))
+	allocate(S_req(nproc))
+	allocate(R_req(nproc))
+	allocate(sendquant(nproc))
+	do ii=1,nproc
+		sendquant(ii)%size=0
+		sendquant(ii)%active=0
+	enddo
+	allocate(recvquant(nproc))
+	do ii=1,nproc
+		recvquant(ii)%size=0
+		recvquant(ii)%active=0
+	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
+
+	! calculate send buffer sizes in the first pass
+
+	do nn=1,size(kerls1%index,1)
+		ii = kerls1%index(nn,1)
+		jj = kerls1%index(nn,2)
+		index_i = (ii-1)*kerls1%inc_r+kerls1%idx_r
+		index_j = (jj-1)*kerls1%inc_c+kerls1%idx_c
+		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		pp=pid-ptree%pgrp(blocks%pgno)%head+1
+		if(recvquant(pp)%active==0)then
+			recvquant(pp)%active=1
+			Nrecvactive=Nrecvactive+1
+			recvIDactive(Nrecvactive)=pp
+		endif
+	enddo
+
+
+	do nn=1,size(kerls%index,1)
+		ii = kerls%index(nn,1)
+		jj = kerls%index(nn,2)
+		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
+		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+		pp=pid-ptree%pgrp(blocks%pgno)%head+1
+		if(sendquant(pp)%active==0)then
+			sendquant(pp)%active=1
+			Nsendactive=Nsendactive+1
+			sendIDactive(Nsendactive)=pp
+		endif
+		sendquant(pp)%size=sendquant(pp)%size+4+size(kerls%blocks(ii,jj)%matrix,1)*size(kerls%blocks(ii,jj)%matrix,2)
+	enddo
+
+	! communicate receive buffer sizes
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+		recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Isend(sendquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,S_req(tt),ierr)
+	enddo
+
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+		call MPI_Irecv(recvquant(pp)%size,1,MPI_INTEGER,pp-1,tag,ptree%pgrp(blocks%pgno)%Comm,R_req(tt),ierr)
+	enddo
+	if(Nsendactive>0)then
+		call MPI_waitall(Nsendactive,S_req,statuss,ierr)
+	endif
+	if(Nrecvactive>0)then
+		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
+	endif
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		sendquant(pp)%size=0
+	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
+	enddo
+
+
+	! pack the send buffer in the second pass
+	do nn=1,size(kerls%index,1)
+		ii = kerls%index(nn,1)
+		jj = kerls%index(nn,2)
+		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
+		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+
+		pp=pid-ptree%pgrp(blocks%pgno)%head+1
+		Nrow=size(kerls%blocks(ii,jj)%matrix,1)
+		Ncol=size(kerls%blocks(ii,jj)%matrix,2)
+
+		sendquant(pp)%dat(sendquant(pp)%size+1,1)=index_i
+		sendquant(pp)%dat(sendquant(pp)%size+2,1)=index_j
+		sendquant(pp)%dat(sendquant(pp)%size+3,1)=Nrow
+		sendquant(pp)%dat(sendquant(pp)%size+4,1)=Ncol
+		sendquant(pp)%size=sendquant(pp)%size+4
+		do i=1,Nrow*Ncol
+			rr = mod(i-1,Nrow)+1
+			cc = (i-1)/Nrow+1
+			sendquant(pp)%dat(sendquant(pp)%size+i,1) = kerls%blocks(ii,jj)%matrix(rr,cc)
+		enddo
+		sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
+		deallocate(kerls%blocks(ii,jj)%matrix)
+		if(allocated(kerls%blocks(ii,jj)%index))deallocate(kerls%blocks(ii,jj)%index)
+	enddo
+
+	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+#if 0
+	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
+#else
+	all2all=.false.
+#endif
+
+	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
+		allocate(sdispls(nproc))
+		allocate(sendcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			sendcounts(pp)=sendquant(pp)%size
+			sdispls(pp)=dist
+			dist = dist + sendquant(pp)%size
+		enddo
+		allocate(sendbufall2all(dist))
+		do pp=1,nproc
+			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+		enddo
+
+		allocate(rdispls(nproc))
+		allocate(recvcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			recvcounts(pp)=recvquant(pp)%size
+			rdispls(pp)=dist
+			dist = dist + recvquant(pp)%size
+		enddo
+		allocate(recvbufall2all(dist))
+
+		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
+
+		do pp=1,nproc
+			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+		enddo
+
+		deallocate(sdispls)
+		deallocate(sendcounts)
+		deallocate(sendbufall2all)
+		deallocate(rdispls)
+		deallocate(recvcounts)
+		deallocate(recvbufall2all)
+
+	else
+
+		Nreqs=0
+		do tt=1,Nsendactive
+			pp=sendIDactive(tt)
+			recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(recvid/=ptree%MyID)then
+				Nreqs=Nreqs+1
+				call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(Nreqs),ierr)
+			else
+				if(sendquant(pp)%size>0)recvquant(pp)%dat=sendquant(pp)%dat
+			endif
+		enddo
+
+		Nreqr=0
+		do tt=1,Nrecvactive
+			pp=recvIDactive(tt)
+			sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(sendid/=ptree%MyID)then
+				Nreqr=Nreqr+1
+				call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(Nreqr),ierr)
+			endif
+		enddo
+
+		if(Nreqs>0)then
+			call MPI_waitall(Nreqs,S_req,statuss,ierr)
+		endif
+		if(Nreqr>0)then
+			call MPI_waitall(Nreqr,R_req,statusr,ierr)
+		endif
+	endif
+
+	! copy data from buffer to target
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			index_i=NINT(dble(recvquant(pp)%dat(i,1)))
+			ii=(index_i-kerls1%idx_r)/kerls1%inc_r+1
+			i=i+1
+			index_j=NINT(dble(recvquant(pp)%dat(i,1)))
+			jj=(index_j-kerls1%idx_c)/kerls1%inc_c+1
+			i=i+1
+			Nrow=NINT(dble(recvquant(pp)%dat(i,1)))
+			i=i+1
+			Ncol=NINT(dble(recvquant(pp)%dat(i,1)))
+			call assert(.not. allocated(kerls1%blocks(ii,jj)%matrix),'receiving dat alreay exists locally')
+			allocate(kerls1%blocks(ii,jj)%matrix(Nrow,Ncol))
+			do j=1,Nrow*Ncol
+				rr = mod(j-1,Nrow)+1
+				cc = (j-1)/Nrow+1
+				kerls1%blocks(ii,jj)%matrix(rr,cc) = recvquant(pp)%dat(i+j,1)
+			enddo
+			i=i+Nrow*Ncol
+		enddo
+	enddo
+
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	enddo
+	deallocate(sendquant)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	enddo
+	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
+
+end subroutine BF_all2all_extraction
+
+
 
 
 
@@ -5569,6 +6155,887 @@ end subroutine LR_block_extraction
 
 
 
+subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
+    use BPACK_DEFS
+    implicit none
+	type(matrixblock)::blocks
+	type(proctree)::ptree
+	type(mesh)::msh
+	type(Hstat)::stats
+	integer ri,ci,nng,headm,headn,head,tail,pp,row_group,col_group
+	type(intersect)::inters(:)
+	integer ii,iii, jj,jjj,nnn,gg,gg1,gg2,rank,ncol,nrow,iidx,jidx,pgno,comm,ierr,idx1,idx2,idx,idx_r,idx_c,idx_r0,idx_c0,nc,nc0,nr,nr0,inc_c,inc_c0,inc_r,inc_r0
+    integer level_butterfly, num_blocks, level_half
+    integer group_m, group_n, mm, nn, index_i,index_i0, index_i_k, index_j_k, index_i_loc_k,index_i_s, index_j_s, index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s,ij,tt,nvec1,nvec2
+    integer level
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+	integer nsendrecv,pid,pid0,tag,nproc,Nreqr,Nreqs,recvid,sendid
+	type(butterfly_vec) :: BFvec,BFvec1
+	type(butterfly_kerl),allocatable::g_idx_m(:),g_idx_n(:)
+	integer,allocatable::group_ms(:),group_ns(:),group_ms1(:),group_ns1(:)
+	type(nod),pointer::cur
+	class(*),pointer::ptr
+	type(ipair):: p
+	DT,allocatable::mat1(:,:),mat2(:,:),mat(:,:)
+	DT,allocatable::Vpartial(:,:)
+	DT::val
+	integer idxr,idxc
+
+	headm = blocks%headm
+	headn = blocks%headn
+	pgno = blocks%pgno
+	comm = ptree%pgrp(pgno)%comm
+
+	pp = ptree%myid-ptree%pgrp(pgno)%head+1
+	head=blocks%N_p(pp,1)
+	tail=blocks%N_p(pp,2)
+
+	level_butterfly=blocks%level_butterfly
+	num_blocks=2**level_butterfly
+	level_half = blocks%level_half
+
+	! write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,'inin'
+
+	!******* preallocate BFvec and BFvec1, #of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
+	allocate(BFvec%vec(0:level_half+1))
+	allocate (BFvec%vec(0)%blocks(1,blocks%ButterflyV%nblk_loc))
+	BFvec%vec(0)%num_row=1
+	BFvec%vec(0)%num_col=num_blocks
+	BFvec%vec(0)%idx_r=1
+	BFvec%vec(0)%inc_r=1
+	BFvec%vec(0)%nr=1
+	BFvec%vec(0)%idx_c=blocks%ButterflyV%idx
+	BFvec%vec(0)%inc_c=blocks%ButterflyV%inc
+	BFvec%vec(0)%nc=blocks%ButterflyV%nblk_loc
+
+	do level=0, level_half
+		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+
+		BFvec%vec(level+1)%idx_r=idx_r
+		BFvec%vec(level+1)%inc_r=inc_r
+		BFvec%vec(level+1)%nr=nr
+		BFvec%vec(level+1)%idx_c=idx_c
+		BFvec%vec(level+1)%inc_c=inc_c
+		BFvec%vec(level+1)%nc=nc
+		if (level/=level_butterfly+1) then
+			BFvec%vec(level+1)%num_row=2**level
+			BFvec%vec(level+1)%num_col=2**(level_butterfly-level)
+		else
+			BFvec%vec(level+1)%num_row=2**level_butterfly
+			BFvec%vec(level+1)%num_col=1
+		endif
+		if(level_half/=level)then ! the last level doesn't require doubling block columns
+		if(nc==1 .and. 2**(level_butterfly-level)>1)then ! double the number of local block columns used for MPI communication
+			BFvec%vec(level+1)%nc=2
+			BFvec%vec(level+1)%idx_c=BFvec%vec(level+1)%idx_c-1+mod(BFvec%vec(level+1)%idx_c,2)
+		endif
+		endif
+		allocate(BFvec%vec(level+1)%blocks(BFvec%vec(level+1)%nr,BFvec%vec(level+1)%nc))
+	enddo
+
+
+	allocate(BFvec1%vec(level_half+1:level_butterfly+2))
+	do level=level_half,level_butterfly+1
+		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0,'C')
+
+		! convert the local column-wise kernel block ranges to local row-wise output vector ranges
+		if(level/=0 .and. level/=level_butterfly+1)then
+			idx_r = idx_r0*2-1
+			nr = nr0*2
+			inc_r=inc_r0
+			idx_c = ceiling_safe(idx_c0/2d0)
+			if(inc_c0>1)then
+			nc=nc0
+			else
+			nc = ceiling_safe(nc0/2d0)
+			endif
+			inc_c = ceiling_safe(inc_c0/2d0)
+		else
+			idx_r=idx_r0
+			nr=nr0
+			inc_r=inc_r0
+			idx_c=idx_c0
+			nc=nc0
+			inc_c=inc_c0
+		endif
+
+		BFvec1%vec(level+1)%idx_r=idx_r
+		BFvec1%vec(level+1)%inc_r=inc_r
+		BFvec1%vec(level+1)%nr=nr
+		BFvec1%vec(level+1)%idx_c=idx_c
+		BFvec1%vec(level+1)%inc_c=inc_c
+		BFvec1%vec(level+1)%nc=nc
+		if (level/=level_butterfly+1) then
+			BFvec1%vec(level+1)%num_row=2**level
+			BFvec1%vec(level+1)%num_col=2**(level_butterfly-level)
+		else
+			BFvec1%vec(level+1)%num_row=2**level_butterfly
+			BFvec1%vec(level+1)%num_col=1
+		endif
+		allocate(BFvec1%vec(level+1)%blocks(BFvec1%vec(level+1)%nr,BFvec1%vec(level+1)%nc))
+	enddo
+
+
+	!**** compute group_ms and group_ns which stores the leaf block number (from 1 to 2^L) of each index. group_ms1 and group_ns1 are used to track the block number in each butterfly level.
+	nrow=0
+	ncol=0
+	do nn=1,size(blocks%inters,1)
+	nng=blocks%inters(nn)%idx
+	nrow = nrow + blocks%inters(nn)%nr
+	ncol = ncol + blocks%inters(nn)%nc
+	enddo
+	allocate(group_ms(nrow))
+	allocate(group_ns(ncol))
+	iidx=0
+	jidx=0
+	do nn=1,size(blocks%inters,1)
+	nng=blocks%inters(nn)%idx
+	do ii=1,blocks%inters(nn)%nr
+		iidx = iidx + 1
+		group_ms(iidx)=findgroup(inters(nng)%rows(blocks%inters(nn)%rows(ii)),msh,level_butterfly,blocks%row_group)-blocks%row_group*2**level_butterfly+1
+	enddo
+	do jj=1,blocks%inters(nn)%nc
+		jidx = jidx + 1
+		group_ns(jidx)=findgroup(inters(nng)%cols(blocks%inters(nn)%cols(jj)),msh,level_butterfly,blocks%col_group)-blocks%col_group*2**level_butterfly+1
+	enddo
+	enddo
+	allocate(group_ms1(nrow))
+	group_ms1=group_ms
+	allocate(group_ns1(ncol))
+	group_ns1=group_ns
+
+
+	!**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+	allocate(g_idx_m(0:level_half+1))
+	allocate(g_idx_n(0:level_half+1))
+	do level=0, level_half+1
+		g_idx_m(level)%idx_r=BFvec%vec(level)%idx_r
+		g_idx_m(level)%inc_r=BFvec%vec(level)%inc_r
+		g_idx_m(level)%nr=BFvec%vec(level)%nr
+		g_idx_m(level)%idx_c=1
+		g_idx_m(level)%inc_c=1
+		g_idx_m(level)%nc=1
+		allocate(g_idx_m(level)%blocks(g_idx_m(level)%nr,g_idx_m(level)%nc))
+
+		g_idx_n(level)%idx_c=BFvec%vec(level)%idx_c
+		g_idx_n(level)%inc_c=BFvec%vec(level)%inc_c
+		g_idx_n(level)%nc=BFvec%vec(level)%nc
+		g_idx_n(level)%idx_r=1
+		g_idx_n(level)%inc_r=1
+		g_idx_n(level)%nr=1
+		allocate(g_idx_n(level)%blocks(g_idx_n(level)%nr,g_idx_n(level)%nc))
+	enddo
+
+	iidx=0
+	jidx=0
+	do nn=1,size(blocks%inters,1)
+		!*** for each index in each intersection, traverse the row and column tree
+		do ii=1,blocks%inters(nn)%nr
+			iidx = iidx + 1
+			do level=level_butterfly+2,0,-1
+				if(level<=level_half+1)then
+				index_i_s = group_ms1(iidx)
+				index_i_loc_s = (index_i_s-g_idx_m(level)%idx_r)/g_idx_m(level)%inc_r+1
+				if(index_i_s>=g_idx_m(level)%idx_r .and. mod(index_i_s-g_idx_m(level)%idx_r,g_idx_m(level)%inc_r)==0 .and. index_i_loc_s<=g_idx_m(level)%nr)then
+					if(g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx/=nn)then ! not seen this index_i_loc_s before
+						call append(g_idx_m(level)%lst,index_i_loc_s)
+						g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx=nn
+					endif
+				endif
+				endif
+				if(level>0 .and. level<level_butterfly+2)group_ms1(iidx) = floor_safe((group_ms1(iidx)+1)/2d0)
+			enddo
+		enddo
+		do jj=1,blocks%inters(nn)%nc
+			jidx = jidx + 1
+			do level=0, level_butterfly+2
+				if(level<=level_half+1)then
+				index_j_s = group_ns1(jidx)
+				index_j_loc_s = (index_j_s-g_idx_n(level)%idx_c)/g_idx_n(level)%inc_c+1
+				if(index_j_s>=g_idx_n(level)%idx_c .and. mod(index_j_s-g_idx_n(level)%idx_c,g_idx_n(level)%inc_c)==0 .and. index_j_loc_s<=g_idx_n(level)%nc)then
+					if(g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx/=nn)then ! not seen this index_j_loc_s before
+						call append(g_idx_n(level)%lst,index_j_loc_s)
+						g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx=nn
+					endif
+					if(level==0)BFvec%vec(level)%blocks(1,index_j_loc_s)%ndim = BFvec%vec(level)%blocks(1,index_j_loc_s)%ndim+1
+				endif
+				endif
+				if(level>0 .and. level<level_butterfly+2)group_ns1(jidx) = floor_safe((group_ns1(jidx)+1)/2d0)
+			enddo
+		enddo
+
+		!**** construct BFvec%vec(level)%lst for active BF blocks and BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
+		do level=0, level_half+1
+			allocate(g_idx_m(level)%index(g_idx_m(level)%lst%num_nods,1))
+			cur=>g_idx_m(level)%lst%head
+			do ii=1,g_idx_m(level)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				g_idx_m(level)%index(ii,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			call list_finalizer(g_idx_m(level)%lst)
+
+			allocate(g_idx_n(level)%index(g_idx_n(level)%lst%num_nods,1))
+			cur=>g_idx_n(level)%lst%head
+			do jj=1,g_idx_n(level)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				g_idx_n(level)%index(jj,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			call list_finalizer(g_idx_n(level)%lst)
+
+
+			do ii=1,size(g_idx_m(level)%index,1)
+			index_i_loc_s=g_idx_m(level)%index(ii,1)
+				do jj=1,size(g_idx_n(level)%index,1)
+				index_j_loc_s=g_idx_n(level)%index(jj,1)
+					if(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods==0)then ! first see this block
+						p%i=index_i_loc_s
+						p%j=index_j_loc_s
+						! write(*,*)p%i,p%j,BFvec%vec(level)%lst%num_nods
+						call append(BFvec%vec(level)%lst,p)
+					endif
+					call append(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst,nn)
+				enddo
+			enddo
+
+			deallocate(g_idx_m(level)%index)
+			deallocate(g_idx_n(level)%index)
+		enddo
+	enddo
+
+	deallocate(g_idx_m)
+	deallocate(g_idx_n)
+	deallocate(group_ms1)
+	deallocate(group_ns1)
+
+	!**** copy *%lst to *%index
+	do level=0, level_half+1
+		allocate(BFvec%vec(level)%index(BFvec%vec(level)%lst%num_nods,2))
+		cur=>BFvec%vec(level)%lst%head
+		do nn=1,BFvec%vec(level)%lst%num_nods
+		select type(ptr=>cur%item)
+		type is(ipair)
+			BFvec%vec(level)%index(nn,1)=ptr%i
+			BFvec%vec(level)%index(nn,2)=ptr%j
+		end select
+		cur=>cur%next
+		enddo
+		call list_finalizer(BFvec%vec(level)%lst)
+
+		do nn=1,size(BFvec%vec(level)%index,1)
+			index_i_loc_s=BFvec%vec(level)%index(nn,1)
+			index_j_loc_s=BFvec%vec(level)%index(nn,2)
+			allocate(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods,1))
+			cur=>BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%head
+			do ii=1,BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			call list_finalizer(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst)
+		enddo
+	enddo
+
+
+	allocate(group_ms1(nrow))
+	group_ms1=group_ms
+	allocate(group_ns1(ncol))
+	group_ns1=group_ns
+
+	!**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+	allocate(g_idx_m(level_half+1:level_butterfly+2))
+	allocate(g_idx_n(level_half+1:level_butterfly+2))
+	do level=level_half+1, level_butterfly+2
+		g_idx_m(level)%idx_r=BFvec1%vec(level)%idx_r
+		g_idx_m(level)%inc_r=BFvec1%vec(level)%inc_r
+		g_idx_m(level)%nr=BFvec1%vec(level)%nr
+		g_idx_m(level)%idx_c=1
+		g_idx_m(level)%inc_c=1
+		g_idx_m(level)%nc=1
+		allocate(g_idx_m(level)%blocks(g_idx_m(level)%nr,g_idx_m(level)%nc))
+
+		g_idx_n(level)%idx_c=BFvec1%vec(level)%idx_c
+		g_idx_n(level)%inc_c=BFvec1%vec(level)%inc_c
+		g_idx_n(level)%nc=BFvec1%vec(level)%nc
+		g_idx_n(level)%idx_r=1
+		g_idx_n(level)%inc_r=1
+		g_idx_n(level)%nr=1
+		allocate(g_idx_n(level)%blocks(g_idx_n(level)%nr,g_idx_n(level)%nc))
+	enddo
+
+
+	!**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+	iidx=0
+	jidx=0
+	do nn=1,size(blocks%inters,1)
+		!*** for each index in each intersection, traverse the row and column tree
+		do ii=1,blocks%inters(nn)%nr
+			iidx = iidx + 1
+			do level=level_butterfly+2,0,-1
+				if(level>=level_half+1)then
+				index_i_s = group_ms1(iidx)
+				index_i_loc_s = (index_i_s-g_idx_m(level)%idx_r)/g_idx_m(level)%inc_r+1
+				if(index_i_s>=g_idx_m(level)%idx_r .and. mod(index_i_s-g_idx_m(level)%idx_r,g_idx_m(level)%inc_r)==0 .and. index_i_loc_s<=g_idx_m(level)%nr)then
+					if(g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx/=nn)then ! not seen this index_i_loc_s before
+						call append(g_idx_m(level)%lst,index_i_loc_s)
+						g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx=nn
+					endif
+				endif
+				endif
+				if(level>0 .and. level<level_butterfly+2)group_ms1(iidx) = floor_safe((group_ms1(iidx)+1)/2d0)
+			enddo
+		enddo
+		do jj=1,blocks%inters(nn)%nc
+			jidx = jidx + 1
+			do level=0, level_butterfly+2
+				if(level>=level_half+1)then
+				index_j_s = group_ns1(jidx)
+				index_j_loc_s = (index_j_s-g_idx_n(level)%idx_c)/g_idx_n(level)%inc_c+1
+				if(index_j_s>=g_idx_n(level)%idx_c .and. mod(index_j_s-g_idx_n(level)%idx_c,g_idx_n(level)%inc_c)==0 .and. index_j_loc_s<=g_idx_n(level)%nc)then
+					if(g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx/=nn)then ! not seen this index_j_loc_s before
+						call append(g_idx_n(level)%lst,index_j_loc_s)
+						g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx=nn
+
+					endif
+					if(level==0)BFvec1%vec(level)%blocks(1,index_j_loc_s)%ndim = BFvec1%vec(level)%blocks(1,index_j_loc_s)%ndim+1
+				endif
+				endif
+				if(level>0 .and. level<level_butterfly+2)group_ns1(jidx) = floor_safe((group_ns1(jidx)+1)/2d0)
+			enddo
+		enddo
+
+		!**** construct BFvec1%vec(level)%lst for active BF blocks and BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
+		do level=level_half+1, level_butterfly+2
+			allocate(g_idx_m(level)%index(g_idx_m(level)%lst%num_nods,1))
+			cur=>g_idx_m(level)%lst%head
+			do ii=1,g_idx_m(level)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				g_idx_m(level)%index(ii,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			call list_finalizer(g_idx_m(level)%lst)
+
+			allocate(g_idx_n(level)%index(g_idx_n(level)%lst%num_nods,1))
+			cur=>g_idx_n(level)%lst%head
+			do jj=1,g_idx_n(level)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				g_idx_n(level)%index(jj,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			call list_finalizer(g_idx_n(level)%lst)
+
+
+			do ii=1,size(g_idx_m(level)%index,1)
+			index_i_loc_s=g_idx_m(level)%index(ii,1)
+				do jj=1,size(g_idx_n(level)%index,1)
+				index_j_loc_s=g_idx_n(level)%index(jj,1)
+					if(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods==0)then ! first see this block
+						p%i=index_i_loc_s
+						p%j=index_j_loc_s
+						call append(BFvec1%vec(level)%lst,p)
+					endif
+					call append(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst,nn)
+				enddo
+			enddo
+
+			deallocate(g_idx_m(level)%index)
+			deallocate(g_idx_n(level)%index)
+		enddo
+	enddo
+	deallocate(g_idx_m)
+	deallocate(g_idx_n)
+	deallocate(group_ms1)
+	deallocate(group_ns1)
+
+	!**** copy *%lst to *%index
+	do level=level_half+1, level_butterfly+2
+		allocate(BFvec1%vec(level)%index(BFvec1%vec(level)%lst%num_nods,2))
+		cur=>BFvec1%vec(level)%lst%head
+		do nn=1,BFvec1%vec(level)%lst%num_nods
+		select type(ptr=>cur%item)
+		type is(ipair)
+			BFvec1%vec(level)%index(nn,1)=ptr%i
+			BFvec1%vec(level)%index(nn,2)=ptr%j
+		end select
+		cur=>cur%next
+		enddo
+		call list_finalizer(BFvec1%vec(level)%lst)
+
+		do nn=1,size(BFvec1%vec(level)%index,1)
+			index_i_loc_s=BFvec1%vec(level)%index(nn,1)
+			index_j_loc_s=BFvec1%vec(level)%index(nn,2)
+
+			if(level/=level_butterfly+2)then ! last level doesn't need a list of intersection#
+			allocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods,1))
+			cur=>BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%head
+			do ii=1,BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods
+			select type(ptr=>cur%item)
+			type is(integer)
+				BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,1)=ptr
+			end select
+			cur=>cur%next
+			enddo
+			endif
+			call list_finalizer(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst)
+		enddo
+	enddo
+
+
+
+	!**** create a list of row_loc indices for each block of BFvec1%vec(level_butterfly+2)
+	iidx=0
+	do nn=1,size(blocks%inters,1)
+		!*** for each index in each intersection, traverse the row and column tree
+		do ii=1,blocks%inters(nn)%nr
+			iidx = iidx + 1
+			level=level_butterfly+2
+			index_i_s = group_ms(iidx)
+			index_i_loc_s = (index_i_s-BFvec1%vec(level)%idx_r)/BFvec1%vec(level)%inc_r+1
+			if(index_i_s>=BFvec1%vec(level)%idx_r .and. mod(index_i_s-BFvec1%vec(level)%idx_r,BFvec1%vec(level)%inc_r)==0 .and. index_i_loc_s<=BFvec1%vec(level)%nr)then
+				p%i=nn
+				p%j=blocks%inters(nn)%glo2loc(ii)
+				call append(BFvec1%vec(level)%blocks(index_i_loc_s,1)%lst,p)
+			endif
+		enddo
+	enddo
+
+	!**** copy *%lst to *%index
+	level=level_butterfly+2
+	do nn=1,size(BFvec1%vec(level)%index,1)
+		index_i_loc_s=BFvec1%vec(level)%index(nn,1)
+		index_j_loc_s=BFvec1%vec(level)%index(nn,2)
+
+		allocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods,2))
+		cur=>BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%head
+		do ii=1,BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods
+		select type(ptr=>cur%item)
+		type is(ipair)
+			BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,1)=ptr%i
+			BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,2)=ptr%j
+		end select
+		cur=>cur%next
+		enddo
+		call list_finalizer(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst)
+	enddo
+
+
+
+	!**** generate data in BFvec%vec(0)
+	do nn=1,size(BFvec%vec(0)%index,1)
+		index_j_loc_s = BFvec%vec(0)%index(nn,2)
+		allocate(BFvec%vec(0)%blocks(1,index_j_loc_s)%matrix(3,BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim))
+		BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim=0
+	enddo
+	jidx=0
+	do nn=1,size(blocks%inters,1)
+		nng=blocks%inters(nn)%idx
+		do jj=1,blocks%inters(nn)%nc
+			jidx = jidx + 1
+			index_j_s = group_ns(jidx)
+			index_j_loc_s = (index_j_s-BFvec%vec(0)%idx_c)/BFvec%vec(0)%inc_c+1
+			if(index_j_s>=BFvec%vec(0)%idx_c .and. mod(index_j_s-BFvec%vec(0)%idx_c,BFvec%vec(0)%inc_c)==0 .and. index_j_loc_s<=BFvec%vec(0)%nc)then
+				BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim = BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim + 1
+				BFvec%vec(0)%blocks(1,index_j_loc_s)%matrix(1,BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim)=nn
+				BFvec%vec(0)%blocks(1,index_j_loc_s)%matrix(2,BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim)=jj
+				BFvec%vec(0)%blocks(1,index_j_loc_s)%matrix(3,BFvec%vec(0)%blocks(1,index_j_loc_s)%ndim)=inters(nng)%cols(blocks%inters(nn)%cols(jj))-msh%basis_group(blocks%col_group*2**level_butterfly+index_j_s-1)%head+1
+			endif
+		enddo
+	enddo
+
+
+	!**** multiply BF with BFvec
+	do level=0, level_half
+		do nn=1,size(BFvec%vec(level+1)%index,1)
+			index_i_loc_s = BFvec%vec(level+1)%index(nn,1)
+			index_i_s = (index_i_loc_s-1)*BFvec%vec(level+1)%inc_r+BFvec%vec(level+1)%idx_r
+			index_j_loc_s = BFvec%vec(level+1)%index(nn,2)
+			index_j_s = (index_j_loc_s-1)*BFvec%vec(level+1)%inc_c+BFvec%vec(level+1)%idx_c
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i_s,index_j_s,'R',pid)
+			if(pid==ptree%MyID)then
+				if(level==0)then
+					index_j = index_j_s
+					index_j_loc_k = (index_j-blocks%ButterflyV%idx)/blocks%ButterflyV%inc+1
+					index_jj_loc = index_j_loc_k
+					rank=size(blocks%ButterflyV%blocks(index_j_loc_k)%matrix,2)
+					allocate(BFvec%vec(level+1)%blocks(1,index_j_loc_s)%matrix(rank+2,BFvec%vec(level)%blocks(1,index_jj_loc)%ndim))
+					BFvec%vec(level+1)%blocks(1,index_j_loc_s)%matrix(1:2,:) = BFvec%vec(level)%blocks(1,index_jj_loc)%matrix(1:2,:)
+					do nnn=1,BFvec%vec(level)%blocks(1,index_jj_loc)%ndim
+						jjj =NINT(dble(BFvec%vec(level)%blocks(1,index_jj_loc)%matrix(3,nnn)))
+						BFvec%vec(level+1)%blocks(1,index_j_loc_s)%matrix(3:rank+2,nnn) =  blocks%ButterflyV%blocks(index_j_loc_k)%matrix(jjj,:)
+					enddo
+				else if(level==level_butterfly+1)then
+					write(*,*)'should not come here as level_half<=level_butterfly'
+					stop
+				else
+					index_i = index_i_s
+					index_j = index_j_s
+					index_ii=floor_safe((index_i+1)/2d0) ; index_jj=2*index_j-1 !index_ii is global index in BFvec%vec(level)
+
+					index_ii_loc=(index_ii-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level)
+					index_jj_loc=(index_jj-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
+
+					index_i_loc_k=(index_i-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
+					index_j_loc_k=(2*index_j-1-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
+
+					nn1=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
+					nn2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix,2)
+					mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
+					if(allocated(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix))then
+					nvec1=size(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,2)
+					else
+					nvec1=0
+					endif
+
+					if(allocated(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix))then
+					nvec2=size(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix,2)
+					else
+					nvec2=0
+					endif
+
+					allocate(mat1(mm+2,nvec1))
+					if(nvec1>0)then
+					mat1=0
+					mat1(1:2,:)=BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(1:2,:)
+					call gemmf77('N','N',mm,nvec1,nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix, mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(3,1),nn1+2,czero,mat1(3,1),mm+2)
+					endif
+
+					allocate(mat2(mm+2,nvec2))
+					if(nvec2>0)then
+					mat2=0
+					mat2(1:2,:)=BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(1:2,:)
+					call gemmf77('N','N',mm,nvec2,nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix, mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(3,1),nn2+2,czero,mat2(3,1),mm+2)
+					endif
+
+					!**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
+					allocate(mat(mm+2,nvec1+nvec2))
+					idx1=0
+					idx2=0
+					idx=0
+					gg1=0
+					gg2=0
+					do ii = 1, size(BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1)
+						gg=NINT(dble(BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,1)))
+						do while(gg1<=gg)
+							if(gg1==gg)then
+								idx=idx+1
+								mat(:,idx)=mat1(:,idx1)
+							endif
+							idx1=idx1+1
+							if(idx1>nvec1)exit
+							gg1=NINT(dble(mat1(1,idx1)))
+						enddo
+						do while(gg2<=gg)
+							if(gg2==gg)then
+								idx=idx+1
+								mat(:,idx)=mat2(:,idx2)
+							endif
+							idx2=idx2+1
+							if(idx2>nvec2)exit
+							gg2=NINT(dble(mat2(1,idx2)))
+						enddo
+					enddo
+					allocate(BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm+2,idx))
+					BFvec%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix = mat(:,1:idx)
+					deallocate(mat1)
+					deallocate(mat2)
+					deallocate(mat)
+
+				endif
+			endif
+
+		enddo
+
+		do nn=1,size(BFvec%vec(level)%index,1)
+			index_i_loc_s = BFvec%vec(level)%index(nn,1)
+			index_j_loc_s = BFvec%vec(level)%index(nn,2)
+			if(allocated(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index))deallocate(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index)
+			if(allocated(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix))deallocate(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+		enddo
+		if(level_half/=level)then
+		call BF_exchange_extraction(blocks,BFvec%vec(level+1),stats,ptree,level,'B')
+		endif
+	enddo
+
+
+	! all2all communication from BFvec%vec(level_half+1) to BFvec1%vec(level_half+1)
+	call BF_all2all_extraction(blocks,BFvec%vec(level_half+1),BFvec1%vec(level_half+1),stats,ptree,level_half,'R','C')
+
+
+	!**** multiply BF with BFvec1
+	do level=level_half+1,level_butterfly+1
+		if (level==0) then
+			write(*,*)'should not come here as level_half>=0'
+			stop
+		elseif (level==level_butterfly+1) then
+
+			do nn=1,size(BFvec1%vec(level+1)%index,1)
+				index_i_loc_s = BFvec1%vec(level+1)%index(nn,1)
+				index_j_loc_s = BFvec1%vec(level+1)%index(nn,2)
+
+				idxr=0
+				idxc=0
+
+				do while(idxr<size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1))
+					idx=BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+1,1)
+					nr=0
+					do while(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+1+nr,1)==idx)
+					nr=nr+1
+					if(idxr+1+nr>size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1))exit
+					enddo
+					idx1=NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1)))
+					call assert(idx==idx1,'row and column intersection# not match')
+					nc=0
+					do while(NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1+nc)))==idx)
+					nc=nc+1
+					if(idxc+1+nc>size(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2))exit
+					enddo
+
+
+					rank = size(blocks%ButterflyU%blocks(index_i_loc_s)%matrix,2)
+					allocate(Vpartial(nr,nc))
+					Vpartial=0
+					allocate(mat(nr,rank))
+
+					nng=blocks%inters(idx)%idx
+					do ii=1,nr
+						iii = BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+ii,2)
+						mmm = inters(nng)%rows(blocks%inters(idx)%rows(blocks%inters(idx)%rows_loc(iii)))
+						ri=mmm-msh%basis_group(findgroup(mmm,msh,level_butterfly,blocks%row_group))%head+1
+						mat(ii,:) = blocks%ButterflyU%blocks(index_i_loc_s)%matrix(ri,:)
+					enddo
+
+					call gemmf77('N','N',nr,nc,rank, cone, mat, nr,BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(3,idxc+1),rank+2,czero,Vpartial,nr)
+
+
+					do ii=1,nr
+						iii = BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+ii,2)
+						do jj=1,nc
+							jjj = BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(2,idxc+jj)
+							blocks%inters(idx)%dat_loc(iii,jjj) = Vpartial(ii,jj)
+						enddo
+					enddo
+
+					! do ii=1,nr
+						! iii = BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+ii,2)
+						! iii=inters(nng)%rows(blocks%inters(idx)%rows(blocks%inters(idx)%rows_loc(iii)))-msh%basis_group(blocks%row_group)%head+1
+						! do jj=1,nc
+							! jjj = BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(2,idxc+jj)
+							! jjj=inters(nng)%cols(blocks%inters(idx)%cols(jjj))-msh%basis_group(blocks%col_group)%head+1
+							! call BF_value(iii,jjj,blocks,val)
+							! write(*,*)'seq:',abs(val)
+						! enddo
+					! enddo
+
+
+
+					deallocate(Vpartial)
+					deallocate(mat)
+
+					idxr = idxr + nr
+					idxc = idxc + nc
+				enddo
+			enddo
+
+
+			do nn=1,size(BFvec1%vec(level)%index,1)
+				index_i_loc_s = BFvec1%vec(level)%index(nn,1)
+				index_j_loc_s = BFvec1%vec(level)%index(nn,2)
+				if(allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index))deallocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index)
+				if(allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix))deallocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+			enddo
+
+			do nn=1,size(BFvec1%vec(level+1)%index,1)
+				index_i_loc_s = BFvec1%vec(level+1)%index(nn,1)
+				index_j_loc_s = BFvec1%vec(level+1)%index(nn,2)
+				if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index))deallocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index)
+				if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))deallocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+			enddo
+
+
+		else
+			do nn=1,size(BFvec1%vec(level+1)%index,1)
+				index_i_loc_s = BFvec1%vec(level+1)%index(nn,1)
+				index_i_s = (index_i_loc_s-1)*BFvec1%vec(level+1)%inc_r+BFvec1%vec(level+1)%idx_r
+				index_j_loc_s = BFvec1%vec(level+1)%index(nn,2)
+				index_j_s = (index_j_loc_s-1)*BFvec1%vec(level+1)%inc_c+BFvec1%vec(level+1)%idx_c
+				do jjj=0,1
+					index_i=floor_safe((index_i_s-1)/2d0)+1
+					index_j=2*index_j_s-jjj
+					call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,'C',pid)
+					if(pid==ptree%MyID)then
+						index_i_k = 2*index_i-mod(index_i_s,2)
+						index_j_k = index_j
+
+						index_i_loc_k=(index_i_k-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1 !index_i_loc_k is local index of kernels at current level
+						index_j_loc_k=(index_j_k-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
+
+						index_ii_loc=(index_i-BFvec1%vec(level)%idx_r)/BFvec1%vec(level)%inc_r+1 !index_ii_loc is local index in BFvec1%vec(level)
+						index_jj_loc=(index_j-BFvec1%vec(level)%idx_c)/BFvec1%vec(level)%inc_c+1
+
+
+						if(allocated(BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix))then
+							mm=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,1)
+							nn2=size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,2)
+							nvec2=size(BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,2)
+
+							allocate(mat2(mm+2,nvec2))
+							mat2=0
+							mat2(1:2,:)=BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(1:2,:)
+							call gemmf77('N','N',mm,nvec2,nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix, mm,BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(3,1),nn2+2,czero,mat2(3,1),mm+2)
+
+							if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
+								nvec1=size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2)
+								allocate(mat1(mm+2,nvec1))
+								mat1=BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix
+								deallocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+							else
+								nvec1=0
+								allocate(mat1(mm+2,nvec1))
+							endif
+
+							allocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm+2,nvec1+nvec2))
+							if(nvec1>0)BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(:,1:nvec1)=mat1
+							if(nvec2>0)BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(:,1+nvec1:nvec1+nvec2)=mat2
+
+							deallocate(mat1)
+							deallocate(mat2)
+
+						endif
+
+
+					endif
+				enddo
+			enddo
+
+
+			do nn=1,size(BFvec1%vec(level)%index,1)
+				index_i_loc_s = BFvec1%vec(level)%index(nn,1)
+				index_j_loc_s = BFvec1%vec(level)%index(nn,2)
+				if(allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index))deallocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index)
+				if(allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix))deallocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+			enddo
+
+
+
+			call BF_exchange_extraction(blocks,BFvec1%vec(level+1),stats,ptree,level,'R')
+
+
+
+		    !!!!!! sort the intersection# here
+			do nn=1,size(BFvec1%vec(level+1)%index,1)
+				index_i_loc_s = BFvec1%vec(level+1)%index(nn,1)
+				index_j_loc_s = BFvec1%vec(level+1)%index(nn,2)
+				if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
+					gg1=0
+					nvec1=0
+					do jj = 1, size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2)
+					gg=NINT(dble(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,jj)))
+
+					if(gg<gg1)then
+						nvec1=jj-1
+						exit
+					endif
+					gg1=gg
+					enddo
+					nvec2=size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2)-nvec1
+
+					mm = size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,1)
+					allocate(mat1(mm,nvec1))
+					if(nvec1>0)mat1=BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(:,1:nvec1)
+					allocate(mat2(mm,nvec2))
+					if(nvec2>0)mat2=BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(:,1+nvec1:nvec1+nvec2)
+					deallocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+
+					!**** filter out the columns of mat1 and mat2 that are not specified by BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
+					allocate(mat(mm,nvec1+nvec2))
+					idx1=0
+					idx2=0
+					idx=0
+					gg1=0
+					gg2=0
+					do ii = 1, size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1)
+						gg=NINT(dble(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(ii,1)))
+						do while(gg1<=gg)
+							if(gg1==gg)then
+								idx=idx+1
+								mat(:,idx)=mat1(:,idx1)
+							endif
+							idx1=idx1+1
+							if(idx1>nvec1)exit
+							gg1=NINT(dble(mat1(1,idx1)))
+						enddo
+						do while(gg2<=gg)
+							if(gg2==gg)then
+								idx=idx+1
+								mat(:,idx)=mat2(:,idx2)
+							endif
+							idx2=idx2+1
+							if(idx2>nvec2)exit
+							gg2=NINT(dble(mat2(1,idx2)))
+						enddo
+					enddo
+
+					allocate(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix(mm,idx))
+					BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix = mat(:,1:idx)
+
+					deallocate(mat)
+					deallocate(mat1)
+					deallocate(mat2)
+				endif
+			enddo
+		endif
+	enddo
+
+
+	deallocate(group_ms)
+	deallocate(group_ns)
+
+	do level=level_half+1,level_butterfly+2
+		if(allocated(BFvec1%vec(level)%index))deallocate(BFvec1%vec(level)%index)
+	enddo
+	deallocate(BFvec1%vec)
+
+	do level=0, level_half+1
+		if(allocated(BFvec%vec(level)%index))deallocate(BFvec%vec(level)%index)
+	enddo
+	deallocate(BFvec%vec)
+
+
+end subroutine BF_block_extraction
+
+
+integer function findgroup(idx,msh,level,group)
+    use BPACK_DEFS
+    implicit none
+	integer idx,level,ll,group,group1
+	type(mesh)::msh
+	group1=group
+	if(idx<msh%basis_group(group1)%head .or. idx>msh%basis_group(group1)%tail)then
+		findgroup=-1
+	else
+		do ll=1,level
+			if(idx<=msh%basis_group(2*group1)%tail)then
+				group1=group1*2
+			else
+				group1=group1*2+1
+			endif
+		enddo
+		findgroup=group1
+	endif
+
+end function findgroup
 
 
 
@@ -5649,6 +7116,7 @@ subroutine BF_value(mi,nj,blocks,value)
                 vectors_set(level)%vector(i)=blocks%ButterflyV%blocks(group_index_nn(0))%matrix(njj,i)
             enddo
             !!$omp end parallel do
+			! write(*,*)'seq: ',level, abs(sum(vectors_set(level)%vector))
         else
             rank1=size(blocks%ButterflyKerl(level)%blocks(group_index_mm(level_butterfly-level+1),group_index_nn(level))%matrix,2)
             rank2=size(blocks%ButterflyKerl(level)%blocks(group_index_mm(level_butterfly-level+1),group_index_nn(level))%matrix,1)
@@ -5663,11 +7131,13 @@ subroutine BF_value(mi,nj,blocks,value)
             enddo
             !!$omp end parallel do
             deallocate (vectors_set(level-1)%vector)
+			! write(*,*)'seq: ',level, abs(sum(vectors_set(level)%vector))
         endif
         if (level==level_butterfly) then
             rank=size(vectors_set(level)%vector,1)
             ctemp=0
             !!$omp parallel do default(shared) private(i) reduction(+:ctemp)
+			! write(*,*)'seq: ', level, abs(sum(blocks%ButterflyU%blocks(group_index_mm(0))%matrix(mii,1:rank))),mii
             do i=1, rank
                 ctemp=ctemp+blocks%ButterflyU%blocks(group_index_mm(0))%matrix(mii,i)*vectors_set(level)%vector(i)
             enddo

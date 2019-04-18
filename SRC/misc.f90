@@ -2877,7 +2877,7 @@ subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
 		do ll=level,1,-1
 			if(ll/=level_butterfly+1)then
 				idx_c = 2*idx_c-mod(idx_r,2) ! odd/even row indices mapped to odd/even column indices
-				idx_r = floor((idx_r-1)/2d0)+1
+				idx_r = floor_safe((idx_r-1)/2d0)+1
 			endif
 		enddo
 		idx=idx_c
@@ -2885,7 +2885,7 @@ subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
 		do ll=level,level_butterfly
 			if(ll/=0)then
 				idx_r = 2*idx_r-mod(idx_c,2) ! odd/even column indices mapped to odd/even row indices
-				idx_c = floor((idx_c-1)/2d0)+1
+				idx_c = floor_safe((idx_c-1)/2d0)+1
 			endif
 		enddo
 		idx=idx_r
@@ -2898,8 +2898,9 @@ subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
 	pgno1 = pgno*2**level_p ! index of the first process group at pgno's level + level_p of the process tree
 	pgno1 = pgno1 + idx -1 ! index of the process group that handles group idx in the process tree
 
-	pid = ptree%pgrp(pgno1)%head
 
+
+	pid = ptree%pgrp(pgno1)%head
 end subroutine GetBlockPID
 
 
