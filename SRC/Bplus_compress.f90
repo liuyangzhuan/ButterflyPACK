@@ -2877,8 +2877,8 @@ implicit none
 
 	if(.not. (min(blocks%M,blocks%N)>leafsize .or. (associated(gd%gdc))))then ! reach bottom level, call sequential aca
 
-		if(option%RecLR_leaf==RRQR)then
-			! !!!!! RRQR
+		if(option%RecLR_leaf==PS)then
+			! !!!!! CUR
 
 			! rmaxc = min(blocks%M,blocks%N)
 			! rmaxr = min(blocks%M,blocks%N)
@@ -3035,6 +3035,56 @@ implicit none
 			!$omp end parallel do
 
 			deallocate(QQ1,UU,VV,Singular)
+		else if(option%RecLR_leaf==RRQR)then
+			!!!!! RRQR
+			mn=min(blocks%M,blocks%N)
+			allocate (UU(blocks%M,mn),VV(mn,blocks%N))
+			allocate(QQ1(blocks%M,blocks%N))
+			do ii=1,blocks%M
+				do jj =1,blocks%N
+					edge_m = blocks%headm +ii - 1
+					edge_n = blocks%headn +jj - 1
+					call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,option,ker)
+				end do
+			end do
+
+			call RRQR_LQ(QQ1,blocks%M,blocks%N,mn,UU,VV,option%tol_comp,rank,'L',flops=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+
+			! rank=blocks%N
+
+			blocks%rankmax = rank
+			blocks%rankmin = rank
+
+			allocate (blocks%ButterflyV%blocks(1)%matrix(blocks%N,rank))
+
+
+			! blocks%ButterflyV%blocks(1)%matrix=0
+			! do j=1, rank
+					! blocks%ButterflyV%blocks(1)%matrix(j,j)=1d0
+			! enddo
+
+
+			! !$omp parallel do default(shared) private(i,j)
+			do j=1, rank
+				do i=1, blocks%N
+					blocks%ButterflyV%blocks(1)%matrix(i,j)=VV(j,i)
+				enddo
+			enddo
+			! !$omp end parallel do
+
+			allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M,rank))
+			! blocks%ButterflyU%blocks(1)%matrix = QQ1
+
+			! !$omp parallel do default(shared) private(i,j)
+			do j=1, rank
+				do i=1, blocks%M
+					blocks%ButterflyU%blocks(1)%matrix(i,j)=UU(i,j)
+				enddo
+			enddo
+			! !$omp end parallel do
+
+			deallocate(QQ1,UU,VV)
 
 		endif
 

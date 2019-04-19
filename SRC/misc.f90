@@ -2415,6 +2415,73 @@ subroutine ACA_CompressionFull(mat,matU,matV,rankmax_r,rankmax_c,rmax,rank,toler
 end subroutine ACA_CompressionFull
 
 
+recursive subroutine RRQR_LQ(mat,mm,nn,mn,UU,VV,tolerance,rank,lr,flops)
+!
+!
+implicit none
+integer mm,nn,mn,rank,ii,jj,rank_new
+real(kind=8):: tolerance
+DT::mat(mm,nn),UU(mm,mn),VV(mn,nn)
+DT,allocatable::mat0(:,:),UUt(:,:),VVt(:,:),tau(:),RR1(:,:)
+real(kind=8):: Singular(mn)
+integer::i,j,flag
+real(kind=8),optional::flops
+real(kind=8)::flop
+character::lr
+integer, allocatable :: jpiv(:)
+
+if(lr=='L')then ! LQ
+	allocate(mat0(nn,mm))
+	allocate(UUt(nn,mn))
+	allocate(VVt(mn,mm))
+	call copymatT(mat,mat0,mm,nn)
+	call RRQR_LQ(mat0,nn,mm,mn,UUt,VVt,tolerance,rank,'R',flops)
+	call copymatT(UUt,VV,nn,mn)
+	call copymatT(VVt,UU,mn,mm)
+	deallocate(mat0)
+	deallocate(UUt)
+	deallocate(VVt)
+elseif(lr=='R')then ! QR
+	if(present(flops))flops=0
+	allocate(mat0(mm,nn))
+	mat0 = mat
+	allocate(jpiv(nn))
+	jpiv=0
+	allocate(tau(mn))
+	tau=0
+	call geqp3modf90(mat0,jpiv,tau,tolerance,SafeUnderflow,rank,flop=flop)
+	if(present(flops))flops = flops + flop
+	if(rank>0)then
+		allocate(RR1(1:rank,nn))
+		RR1=0
+		do j=1, nn
+			do i=1, min(j,rank)
+				RR1(i,j)=mat0(i,j)
+			enddo
+		enddo
+
+		call un_or_gqrf90(mat0,tau,mm,rank,rank,flop=flop)
+		if(present(flops))flops = flops + flop
+		UU(1:mm,1:rank)=mat0(1:mm,1:rank)
+		do j=1,nn
+			VV(1:rank,jpiv(j))=RR1(1:rank,j)
+		enddo
+		deallocate(RR1)
+	else
+		rank=1
+		UU=0
+		VV=0
+	endif
+
+	deallocate(mat0)
+	deallocate(jpiv)
+	deallocate(tau)
+endif
+
+
+end subroutine RRQR_LQ
+
+
 subroutine SVD_Truncate(mat,mm,nn,mn,UU,VV,Singular,tolerance,rank,flop)
 !
 !
