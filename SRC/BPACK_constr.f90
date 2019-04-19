@@ -630,12 +630,12 @@ implicit none
 
 	integer:: Ninter,nr,nc
 
-	Ninter=2
+	Ninter=1
 	! nr=msh%Nunk
 	! nc=msh%Nunk
 
-	nr=10
-	nc=100
+	nr=5000
+	nc=5000
 
 	allocate(inters(Ninter))
 	lstr=list()
@@ -665,15 +665,15 @@ implicit none
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		inters(nn)%rows(ii)=max(floor_safe(msh%Nunk*a),1)
-		! if(nn==1 .and. ii==1)inters(nn)%rows(ii)=4319
-		! if(nn==1 .and. ii==2)inters(nn)%rows(ii)=1576
-		! if(nn==1 .and. ii==3)inters(nn)%rows(ii)=2122
-		! if(nn==1 .and. ii==4)inters(nn)%rows(ii)=2847
+		! if(nn==1 .and. ii==1)inters(nn)%rows(ii)=3115
+		! if(nn==1 .and. ii==2)inters(nn)%rows(ii)=708
+		! if(nn==1 .and. ii==3)inters(nn)%rows(ii)=4301
+		! if(nn==1 .and. ii==4)inters(nn)%rows(ii)=2255
 		! if(nn==2 .and. ii==1)inters(nn)%rows(ii)=2100
 		! if(nn==2 .and. ii==2)inters(nn)%rows(ii)=4793
 		! if(nn==2 .and. ii==3)inters(nn)%rows(ii)=4980
 		! if(nn==2 .and. ii==4)inters(nn)%rows(ii)=4988
-		if(ptree%MyID==Main_ID)write(*,*)'r',nn,ii,inters(nn)%rows(ii)
+		! if(ptree%MyID==Main_ID)write(*,*)'r',nn,ii,inters(nn)%rows(ii)
 		call append( lst, ii )
 		enddo
 		call append(lstr,lst)
@@ -685,15 +685,15 @@ implicit none
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		inters(nn)%cols(ii)=max(floor_safe(msh%Nunk*a),1)! inters(nn)%rows(ii) !
-		! if(nn==1 .and. ii==1)inters(nn)%cols(ii)=1660
-		! if(nn==1 .and. ii==2)inters(nn)%cols(ii)=3189
-		! if(nn==1 .and. ii==3)inters(nn)%cols(ii)=4067
-		! if(nn==1 .and. ii==4)inters(nn)%cols(ii)=1640
+		! if(nn==1 .and. ii==1)inters(nn)%cols(ii)=2561
+		! if(nn==1 .and. ii==2)inters(nn)%cols(ii)=2111
+		! if(nn==1 .and. ii==3)inters(nn)%cols(ii)=1841
+		! if(nn==1 .and. ii==4)inters(nn)%cols(ii)=3037
 		! if(nn==2 .and. ii==1)inters(nn)%cols(ii)=2467
 		! if(nn==2 .and. ii==2)inters(nn)%cols(ii)=2107
 		! if(nn==2 .and. ii==3)inters(nn)%cols(ii)=3411
 		! if(nn==2 .and. ii==4)inters(nn)%cols(ii)=923
-		if(ptree%MyID==Main_ID)write(*,*)'c',nn,ii,inters(nn)%cols(ii)
+		! if(ptree%MyID==Main_ID)write(*,*)'c',nn,ii,inters(nn)%cols(ii)
 		call append( lst, ii )
 		enddo
 		call append(lstc,lst)

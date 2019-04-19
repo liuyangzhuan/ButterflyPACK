@@ -2053,7 +2053,7 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 			if(allocated(kerls%blocks(ii,jj)%matrix))then
 				Ncol1=size(kerls%blocks(ii,jj)%matrix,2)
 				allocate(mat(Nrow,Ncol1+Ncol))
-				mat=kerls%blocks(ii,jj)%matrix
+				mat(1:Nrow,1:Ncol1)=kerls%blocks(ii,jj)%matrix
 				deallocate(kerls%blocks(ii,jj)%matrix)
 			else
 				Ncol1=0
@@ -2530,7 +2530,6 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 #else
 	all2all=.false.
 #endif
-
 	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
 		allocate(sdispls(nproc))
 		allocate(sendcounts(nproc))
@@ -6237,27 +6236,36 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 
 	allocate(BFvec1%vec(level_half+1:level_butterfly+2))
 	do level=level_half,level_butterfly+1
-		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0,'C')
-
-		! convert the local column-wise kernel block ranges to local row-wise output vector ranges
-		if(level/=0 .and. level/=level_butterfly+1)then
-			idx_r = idx_r0*2-1
-			nr = nr0*2
-			inc_r=inc_r0
-			idx_c = ceiling_safe(idx_c0/2d0)
-			if(inc_c0>1)then
-			nc=nc0
-			else
-			nc = ceiling_safe(nc0/2d0)
-			endif
-			inc_c = ceiling_safe(inc_c0/2d0)
-		else
+		if(level==level_half)then
+			call GetLocalBlockRange(ptree,blocks%pgno,level_half+1,level_butterfly,idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0,'C') ! this is the same as the target block range used in BF_all2all_matvec
 			idx_r=idx_r0
 			nr=nr0
 			inc_r=inc_r0
 			idx_c=idx_c0
 			nc=nc0
 			inc_c=inc_c0
+		else
+			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r0,inc_r0,nr0,idx_c0,inc_c0,nc0,'C')
+			! convert the local column-wise kernel block ranges to local row-wise output vector ranges
+			if(level/=0 .and. level/=level_butterfly+1)then
+				idx_r = idx_r0*2-1
+				nr = nr0*2
+				inc_r=inc_r0
+				idx_c = ceiling_safe(idx_c0/2d0)
+				if(inc_c0>1)then
+				nc=nc0
+				else
+				nc = ceiling_safe(nc0/2d0)
+				endif
+				inc_c = ceiling_safe(inc_c0/2d0)
+			else
+				idx_r=idx_r0
+				nr=nr0
+				inc_r=inc_r0
+				idx_c=idx_c0
+				nc=nc0
+				inc_c=inc_c0
+			endif
 		endif
 
 		BFvec1%vec(level+1)%idx_r=idx_r
@@ -6773,10 +6781,10 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		endif
 	enddo
 
-
+	! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'before all2all'
 	! all2all communication from BFvec%vec(level_half+1) to BFvec1%vec(level_half+1)
 	call BF_all2all_extraction(blocks,BFvec%vec(level_half+1),BFvec1%vec(level_half+1),stats,ptree,level_half,'R','C')
-
+	! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'after all2all'
 
 	!**** multiply BF with BFvec1
 	do level=level_half+1,level_butterfly+1
@@ -6828,7 +6836,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					do ii=1,nr
 						iii = BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+ii,2)
 						do jj=1,nc
-							jjj = BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(2,idxc+jj)
+							jjj = NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(2,idxc+jj)))
 							blocks%inters(idx)%dat_loc(iii,jjj) = Vpartial(ii,jj)
 						enddo
 					enddo
