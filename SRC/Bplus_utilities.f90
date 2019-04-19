@@ -1889,9 +1889,9 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 		if(collect=='R')then ! pair-wise reduction
 			if(mode=='R')then
 				index_i0=floor_safe((index_i-1)/2d0)+1
-				index_j0=2*index_j-mod(index_i-1,2)
+				index_j0=2*index_j-mod(index_i,2)
 				index_i1=floor_safe((index_i-1)/2d0)+1
-				index_j1=2*index_j-mod(index_i,2)
+				index_j1=2*index_j-mod(index_i-1,2)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
@@ -1929,7 +1929,7 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 				sendIDactive(Nsendactive)=pp
 			endif
 			if(allocated(kerls%blocks(ii,jj)%matrix))then
-				sendquant(pp)%size=sendquant(pp)%size+4+size(kerls%blocks(ii,jj)%matrix,1)*size(kerls%blocks(ii,jj)%matrix,1)
+				sendquant(pp)%size=sendquant(pp)%size+4+size(kerls%blocks(ii,jj)%matrix,1)*size(kerls%blocks(ii,jj)%matrix,2)
 			endif
 		endif
 	enddo
@@ -1976,7 +1976,7 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 		if(collect=='R')then ! pair-wise reduction
 			if(mode=='R')then
 				index_i0=floor_safe((index_i-1)/2d0)+1
-				index_j0=2*index_j-mod(index_i-1,2)
+				index_j0=2*index_j-mod(index_i,2)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
@@ -4511,7 +4511,7 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 		enddo
 		allocate(sendbufall2all(dist))
 		do pp=1,nproc
-			sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
 		enddo
 
 		allocate(rdispls(nproc))
@@ -4527,7 +4527,7 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
 
 		do pp=1,nproc
-			recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
 		enddo
 
 		deallocate(sdispls)
@@ -6431,6 +6431,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		do nn=1,size(BFvec%vec(level)%index,1)
 			index_i_loc_s=BFvec%vec(level)%index(nn,1)
 			index_j_loc_s=BFvec%vec(level)%index(nn,2)
+			! if(ptree%MyID>=2)write(*,*)ptree%MyID,'my',blocks%row_group,blocks%col_group,'BFvec range',level,index_i_loc_s,index_j_loc_s,(index_i_loc_s-1)*BFvec%vec(level)%inc_r+BFvec%vec(level)%idx_r,(index_j_loc_s-1)*BFvec%vec(level)%inc_c+BFvec%vec(level)%idx_c
 			allocate(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods,1))
 			cur=>BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%head
 			do ii=1,BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods
@@ -6577,6 +6578,9 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 			index_i_loc_s=BFvec1%vec(level)%index(nn,1)
 			index_j_loc_s=BFvec1%vec(level)%index(nn,2)
 
+! if(ptree%MyID>=2)write(*,*)ptree%MyID,'my',blocks%row_group,blocks%col_group,'BFvec1 range',level,index_i_loc_s,index_j_loc_s,(index_i_loc_s-1)*BFvec1%vec(level)%inc_r+BFvec1%vec(level)%idx_r,(index_j_loc_s-1)*BFvec1%vec(level)%inc_c+BFvec1%vec(level)%idx_c
+
+
 			if(level/=level_butterfly+2)then ! last level doesn't need a list of intersection#
 			allocate(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods,1))
 			cur=>BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%head
@@ -6594,7 +6598,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 
 
 
-	!**** create a list of row_loc indices for each block of BFvec1%vec(level_butterfly+2)
+	!**** create a list of row_loc indices for each block of BFvec1%vec(level_butterfly+2),note that BFvec1%vec(level)%blocks(index_i_loc_s,1)%lst and BFvec1%vec(level)%blocks(index_i_loc_s,1)%index are used at this level compared to other levels
 	iidx=0
 	do nn=1,size(blocks%inters,1)
 		!*** for each index in each intersection, traverse the row and column tree
@@ -6607,6 +6611,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 				p%i=nn
 				p%j=blocks%inters(nn)%glo2loc(ii)
 				call append(BFvec1%vec(level)%blocks(index_i_loc_s,1)%lst,p)
+				! write(*,*)ptree%MyID,'idtarg',index_i_s,index_i_loc_s
 			endif
 		enddo
 	enddo
@@ -6794,6 +6799,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					nr=nr+1
 					if(idxr+1+nr>size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1))exit
 					enddo
+					! if(ptree%MyID>=2)write(*,*)'id',ptree%MyID,index_i_loc_s,index_j_loc_s,idx,'shape',shape(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),idxc
 					idx1=NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1)))
 					call assert(idx==idx1,'row and column intersection# not match')
 					nc=0
@@ -6937,7 +6943,12 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 			do nn=1,size(BFvec1%vec(level+1)%index,1)
 				index_i_loc_s = BFvec1%vec(level+1)%index(nn,1)
 				index_j_loc_s = BFvec1%vec(level+1)%index(nn,2)
+
 				if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
+
+
+! if(ptree%MyID>=2)write(*,*)ptree%MyID,'fanibef',level+1,index_i_loc_s,index_j_loc_s,shape(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix),allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+
 					gg1=0
 					nvec1=0
 					do jj = 1, size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2)
@@ -6994,6 +7005,9 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					deallocate(mat1)
 					deallocate(mat2)
 				endif
+
+				! if(ptree%MyID>=2)write(*,*)ptree%MyID,'fani',level+1,index_i_loc_s,index_j_loc_s,shape(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix),allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix)
+
 			enddo
 		endif
 	enddo
