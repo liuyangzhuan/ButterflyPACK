@@ -630,12 +630,12 @@ implicit none
 
 	integer:: Ninter,nr,nc
 
-	Ninter=1
+	Ninter=2
 	! nr=msh%Nunk
 	! nc=msh%Nunk
 
-	nr=5000
-	nc=5000
+	nr=4
+	nc=4
 
 	allocate(inters(Ninter))
 	lstr=list()
@@ -875,7 +875,7 @@ implicit none
 
 	if(ptree%MyID==Main_ID)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2,Es9.2,Es9.2,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n4-n1,n2-n1,n3-n2,n4-n3
 
-	stop
+	!stop
 
 	! deallocate intersections at each block
 	cur=>lstblk%head
