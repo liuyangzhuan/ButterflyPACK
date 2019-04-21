@@ -627,6 +627,7 @@ implicit none
 	class(*),pointer::ptr,ptrr,ptrc,ptrri,ptrci
 	integer::head,tail,idx,pp,pgno,ctxt,nr_loc,nc_loc
 	type(matrixblock),pointer::blocks
+	integer num_blocks
 
 	integer:: Ninter,nr,nc
 
@@ -715,7 +716,8 @@ implicit none
 		case(HODLR)
 			call HODLR_MapIntersec2Block(bmat%ho_bf,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk,1,1,0)
 		case(HMAT)
-			write(*,*)'parallel element extraction for HMAT not implemented'
+			num_blocks = 2**msh%Dist_level
+			call Hmat_MapIntersec2Block(bmat%h_mat,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk,num_blocks)
 		end select
 	end select
 	end select
@@ -728,28 +730,29 @@ implicit none
 	n2 = OMP_get_wtime()
 
 
-	! write(*,*)lstblk%num_nods
-	! cur=>lstblk%head
-	! do ii=1,lstblk%num_nods
-	! select type(ptr=>cur%item)
-	! type is (block_ptr)
-	! curr=>ptr%ptr%lstr%head
-	! curc=>ptr%ptr%lstc%head
-	! do nn=1,ptr%ptr%lstr%num_nods
-	! select type(ptrr=>curr%item)
-	! type is (list)
-	! select type(ptrc=>curc%item)
-	! type is (list)
-		! write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods*ptrc%num_nods
-	! end select
-	! end select
-	! curr=>curr%next
-	! curc=>curc%next
-	! enddo
-	! end select
-	! cur=>cur%next
-	! enddo
-
+#if 0
+	write(*,*)lstblk%num_nods
+	cur=>lstblk%head
+	do ii=1,lstblk%num_nods
+	select type(ptr=>cur%item)
+	type is (block_ptr)
+	curr=>ptr%ptr%lstr%head
+	curc=>ptr%ptr%lstc%head
+	do nn=1,ptr%ptr%lstr%num_nods
+	select type(ptrr=>curr%item)
+	type is (list)
+	select type(ptrc=>curc%item)
+	type is (list)
+		write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods*ptrc%num_nods
+	end select
+	end select
+	curr=>curr%next
+	curc=>curc%next
+	enddo
+	end select
+	cur=>cur%next
+	enddo
+#endif
 
 	! construct intersections for each block from the block's lists
 	cur=>lstblk%head
@@ -1285,6 +1288,141 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 
 
 end subroutine HODLR_MapIntersec2Block
+
+
+
+subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,lstc,lstblk,num_blocks)
+    use BPACK_DEFS
+    implicit none
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(Hmat)::h_mat
+	type(mesh)::msh
+	type(proctree)::ptree
+	type(intersect)::inters(:)
+	integer nth,num_blocks
+	integer ii,jj,idx,row_group,col_group
+	type(list)::lstr,lstc,lstblk,clstr(2),clstc(2),clstr_g,clstc_g(num_blocks)
+
+	type(nod),pointer::cur
+	class(*),pointer::ptr
+	type(matrixblock),pointer::blocks
+	type(block_ptr)::blk_ptr
+
+		clstr_g%idx=nth
+		do jj=1,num_blocks
+			clstc_g(jj)%idx=nth
+		enddo
+
+		cur=>lstr%head
+		do ii=1,lstr%num_nods
+			select type(ptr=>cur%item)
+			type is (integer)
+				row_group = h_mat%Local_blocks(1,1)%row_group
+				if(inters(nth)%rows(ptr)>=msh%basis_group(row_group)%head .and. inters(nth)%rows(ptr)<=msh%basis_group(row_group)%tail)then
+					call append(clstr_g,ptr)
+				endif
+			class default
+				write(*,*)'unexpected item type'
+			end select
+			cur=>cur%next
+		enddo
+
+		cur=>lstc%head
+		do ii=1,lstc%num_nods
+			select type(ptr=>cur%item)
+			type is (integer)
+				jj = findgroup(inters(nth)%cols(ptr),msh,msh%Dist_level,1)-2**msh%Dist_level+1
+				call append(clstc_g(jj),ptr)
+			class default
+				write(*,*)'unexpected item type'
+			end select
+			cur=>cur%next
+		enddo
+
+
+		if(clstr_g%num_nods>0)then
+		do jj=1,num_blocks
+			if(clstc_g(jj)%num_nods>0)then
+				blocks=>h_mat%Local_blocks(jj,1)
+				call Hmat_MapIntersec2Block_Loc(blocks,option,stats,msh,ptree,inters,nth,clstr_g,clstc_g(jj),lstblk)
+			endif
+		enddo
+		endif
+
+end subroutine Hmat_MapIntersec2Block
+
+recursive subroutine Hmat_MapIntersec2Block_Loc(blocks,option,stats,msh,ptree,inters,nth,lstr,lstc,lstblk)
+    use BPACK_DEFS
+    implicit none
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(proctree)::ptree
+	type(intersect)::inters(:)
+	integer nth,bidx,level_c
+	integer ii,jj,idx,row_group,col_group
+	type(list)::lstr,lstc,lstblk,clstr(2),clstc(2)
+	type(nod),pointer::cur
+	class(*),pointer::ptr
+	type(matrixblock),pointer::blocks,blocks_son
+	integer flag
+	type(block_ptr)::blk_ptr
+
+	row_group = blocks%row_group
+	col_group = blocks%col_group
+	if(IOwnPgrp(ptree,blocks%pgno))then
+		if(blocks%style==4)then ! divided blocks
+			clstr(1)%idx=nth
+			clstr(2)%idx=nth
+			clstc(1)%idx=nth
+			clstc(2)%idx=nth
+			cur=>lstr%head
+			do ii=1,lstr%num_nods
+				select type(ptr=>cur%item)
+				type is (integer)
+					! write(*,*)row_group,inters(nth)%rows(ptr),msh%basis_group(row_group*2)%tail
+					if(inters(nth)%rows(ptr)<=msh%basis_group(row_group*2)%tail)then
+						call append(clstr(1),ptr)
+					else
+						call append(clstr(2),ptr)
+					endif
+				class default
+					write(*,*)'unexpected item type'
+				end select
+				cur=>cur%next
+			enddo
+
+			cur=>lstc%head
+			do ii=1,lstc%num_nods
+				select type(ptr=>cur%item)
+				type is (integer)
+					if(inters(nth)%cols(ptr)<=msh%basis_group(col_group*2)%tail)then
+						call append(clstc(1),ptr)
+					else
+						call append(clstc(2),ptr)
+					endif
+				class default
+					write(*,*)'unexpected item type'
+				end select
+				cur=>cur%next
+			enddo
+			do ii=1,2
+			do jj=1,2
+				blocks_son=>blocks%sons(ii,jj)
+				if(clstr(ii)%num_nods>0 .and. clstc(jj)%num_nods>0)call Hmat_MapIntersec2Block_Loc(blocks_son,option,stats,msh,ptree,inters,nth,clstr(ii),clstc(jj),lstblk)
+			enddo
+			enddo
+		else
+			if(blocks%lstr%num_nods==0)then
+				blk_ptr%ptr=>blocks
+				call append(lstblk,blk_ptr)
+			endif
+			call append(blocks%lstr,lstr)
+			call append(blocks%lstc,lstc)
+		endif
+	endif
+end subroutine Hmat_MapIntersec2Block_Loc
 
 
 end module BPACK_constr

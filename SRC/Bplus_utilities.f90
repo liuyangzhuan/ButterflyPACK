@@ -7038,6 +7038,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 end subroutine BF_block_extraction
 
 
+!*** Find the group index of point idx at the (group%level+level) level
 integer function findgroup(idx,msh,level,group)
     use BPACK_DEFS
     implicit none
