@@ -61,7 +61,8 @@ module BPACK_DEFS
 	integer,parameter:: RRQR=2
 	integer,parameter:: ACA=3
 	integer,parameter:: BACA=4
-	integer,parameter:: PS=5
+	integer,parameter:: BACANOVER=5
+	integer,parameter:: PS=6
 
 	integer,parameter:: NATURAL=0  ! natural order
 	integer,parameter:: CKD=1  ! cartesian kd tree

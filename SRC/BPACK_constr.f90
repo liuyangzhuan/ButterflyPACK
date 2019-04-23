@@ -916,6 +916,8 @@ implicit none
 	enddo
 	deallocate(inters)
 
+	stop
+
 end subroutine BPACK_CheckError
 
 

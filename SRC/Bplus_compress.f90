@@ -2951,14 +2951,15 @@ implicit none
 			!$omp end parallel do
 			deallocate (UU,VV,Singular)
 
-		else if(option%RecLR_leaf==BACA)then
+		else if(option%RecLR_leaf==BACA .or. option%RecLR_leaf==BACANOVER)then
 			!!! blocked ACA
 
 			rmax = min(option%rmax,min(blocks%M,blocks%N))
 			allocate(UU(blocks%M,rmax))
 			allocate(VV(rmax,blocks%N))
 
-			call LR_BACA(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,option,error)
+			if(option%RecLR_leaf==BACA)call LR_BACA(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,option,error)
+			if(option%RecLR_leaf==BACANOVER)call LR_BACA_noOverlap(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,option,error)
 
 			blocks%rankmax = rank
 			blocks%rankmin = rank
@@ -3843,8 +3844,8 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	! !$omp end parallel do
 	call un_or_gqrf90(QQ2,tau_Q,rankmax_c,rank,rank,flop=flop)
 	deallocate(tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flop
-
+	stats%Flop_Fill = stats%Flop_Fill + flop 
+ 
 	allocate(mattemp(rank,rank))
 	mattemp=0
 	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','T',rank,rank,rank,cone,czero,flop=flop)
@@ -3972,14 +3973,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		!$omp end parallel do
 		if(rank>0)then
 			do j=1,r_est
-
-
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1,rank)
-
-			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
-
-
 			enddo
 		endif
 
@@ -4006,14 +4001,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		!$omp end parallel do
 		if(rank>0)then
 			do i=1,r_est
-
-
-
 			call gemmf77('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
 			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N,rank)
-
-			! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
-
 			enddo
 		endif
 
@@ -4024,7 +4013,6 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_column(1:r_est) = jpvt(1:r_est)
-		! write(*,*)sum(jpvt)
 
 		!**** Compute columns column_R in CUR
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
@@ -4038,14 +4026,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		!$omp end parallel do
 		if(rank>0)then
 			do j=1,r_est
-
-
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
 			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1,rank)
-
-			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
-
-
 			enddo
 		endif
 
@@ -4056,34 +4038,7 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		enddo
 
 
-
-		! !**** Compute the skeleton matrix in CUR
-		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		! do i=1,r_est
-		! do j=1,r_est
-			! edge_m = header_m + select_row(i) - 1
-			! edge_n = header_n + select_column(j) - 1
-			! call element_Zmn(edge_m,edge_n,core(i,j),msh,option,ker)
-		! enddo
-		! enddo
-		! !$omp end parallel do
-		! if(rank>0)then
-			! allocate(matUtmp(r_est,rank))
-			! allocate(matVtmp(rank,r_est))
-			! do i=1,r_est
-			! matUtmp(i,1:rank) = matU(select_row(i),1:rank)
-			! enddo
-			! do j=1,r_est
-			! matVtmp(1:rank,j) = matV(1:rank,select_column(j))
-			! enddo
-			! ! call zgemm('N','N',r_est,r_est,rank, -cone, matUtmp, r_est,matVtmp,rank,cone,core,r_est)
-			! call gemmf90(matUtmp,r_est,matVtmp,rank,core,r_est,'N','N',r_est,r_est,rank, -cone,cone,flop=flop)
-			! stats%Flop_Fill = stats%Flop_Fill + flop
-			! deallocate(matUtmp)
-			! deallocate(matVtmp)
-		! endif
-
-
+#if 1
 		!**** generate column indices for the next iteration
 		row_Rtmp = row_R
 		do j=1,r_est
@@ -4096,31 +4051,9 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_column(1:r_est) = jpvt(1:r_est)
-
+#endif
 
 		!**** form the LR update by CUR
-
-
-		! call GeneralInverse(r_est,r_est,core,core_inv,tolerance)
-		! call zgemm('N','N',r_est,N,r_est, cone, core_inv, r_est,row_R,r_est,czero,row_Rtmp,r_est)
-		! ! call LeastSquare(r_est,r_est,N,core,row_R,row_Rtmp,tolerance)
-
-		! call LR_ReCompression(column_R,row_Rtmp,M,N,r_est,rankup,SVD_tolerance)
-		! ! rankup = r_est
-
-		! if(rankup>0)then
-
-		! call assert(rank+rankup<rmax,'try to increase rmax')
-
-		! matU(:,rank+1:rank+rankup) = column_R(:,1:rankup)
-		! matV(rank+1:rank+rankup,:) = row_Rtmp(1:rankup,:)
-		! rank = rank + rankup
-
-		! !**** update fnorm of UV and matUmatV
-		! call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2)
-		! call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2)
-		! endif
-
 
 		jpvt=0
 		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop=flop)
@@ -4149,11 +4082,11 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 			!**** update fnorm of UV and matUmatV
 			call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop
-			if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
-				call LR_FnormUp(matU,matV,M,N,rank-rankup,rankup,normA,normUV,tolerance*1e-2,Flops=flop)
-			else
-				call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
-			endif
+			! if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
+				call LR_FnormUp(matU,matV,M,N,rank-rankup,rankup,rmax,normA,normUV,tolerance*1e-2,Flops=flop)
+			! else
+				! call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
+			! endif
 			stats%Flop_Fill = stats%Flop_Fill + flop
 
 			if(normA>SafeUnderflow)then
@@ -4208,7 +4141,235 @@ end subroutine LR_BACA
 
 
 
+subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,option,error)
 
+    use BPACK_DEFS
+    implicit none
+
+	integer rank, rankup, ranknew, row, column, rankmax,N,M,rmax
+	DT,allocatable:: row_R(:,:),row_Rtmp(:,:),column_R(:,:),column_RT(:,:),fullmat(:,:),fullmat1(:,:)
+	DT::matU(M,rmax),matV(rmax,N)
+	DT, allocatable :: core(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
+	real(kind=8):: normA,normUV,flop,maxvalue
+	integer itr,itrmax,r_est,Nqr,bsize
+	integer,allocatable:: select_column(:), select_column1(:), select_row(:), perms(:),rows(:),columns(:)
+	integer,allocatable :: jpvt(:)
+
+    integer i, j, ii, jj, indx, rank_1, rank_2
+    real(kind=8) tolerance,SVD_tolerance
+    integer edge_m, edge_n, header_m, header_n,mn
+    real(kind=8) inner_UV,n1,n2,a,error
+
+	type(mesh)::msh
+	type(kernelquant)::ker
+	procedure(Zelem)::element_Zmn
+	type(proctree)::ptree
+	type(Hstat)::stats
+	type(Hoption)::option
+
+	n1 = OMP_get_wtime()
+
+	r_est=min(bsize,min(M,N))
+	! r_est=min(M,N)
+	itrmax = floor_safe(min(M,N)/dble(r_est))*2
+
+	Nqr = max(max(M,N),r_est)
+	allocate(jpvt(Nqr))
+	allocate(tau(Nqr))
+
+	allocate(columns(N))
+	columns=0
+	allocate(rows(M))
+	rows=0
+
+	allocate(select_column(r_est))
+	allocate(select_column1(r_est))
+	allocate(select_row(r_est))
+	select_column = 0
+	select_row = 0
+
+	allocate(row_R(r_est,N))
+	allocate(row_Rtmp(r_est,N))
+	allocate(column_R(M,r_est))
+	allocate(column_RT(r_est,M))
+	row_R=0
+	row_Rtmp=0
+	column_R=0
+	column_RT=0
+	allocate(perms(max(M,N)))
+	allocate(core(r_est,r_est))
+	! allocate(core_inv(r_est,r_est))
+	core=0
+	! core_inv=0
+
+	normA=0
+	normUV=0
+	itr=0
+	rank=0
+
+	do while (normUV>=tolerance*normA .and. itr<itrmax)
+
+		!**** create random column index for the first iteration
+		if(rank==0)then
+			call rperm(N, perms)
+			select_column = perms(1:r_est)
+		endif
+
+		select_column1=select_column	
+		
+		!**** Compute columns column_R to find a new set of rows and columns
+		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		do j=1,r_est
+		do i=1,M
+			edge_m = header_m + i - 1
+			edge_n = header_n + select_column(j) - 1
+			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+		enddo
+		enddo
+		!$omp end parallel do
+		if(rank>0)then
+			do j=1,r_est
+			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
+			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1,rank)
+			! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
+			enddo
+		endif
+
+
+		!**** Find row pivots from the columns column_R
+		call copymatT(column_R,column_RT,M,r_est)
+		if(rank>0)column_RT(:,rows(1:rank))=0
+		jpvt=0
+		! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+		call geqp3f90(column_RT,jpvt,tau,flop=flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
+		select_row(1:r_est) = jpvt(1:r_est)
+	
+
+		!**** Compute rows row_R in CUR
+		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		do i=1,r_est
+		do j=1,N
+			edge_m = header_m + select_row(i) - 1
+			edge_n = header_n + j - 1
+			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
+		enddo
+		enddo
+		!$omp end parallel do
+		if(rank>0)then
+			do i=1,r_est
+			call gemmf77('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
+			stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N,rank)
+			! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
+			enddo
+		endif
+
+		!**** Compute the skeleton matrix in CUR
+		do i=1,r_est
+			core(i,:)=column_R(select_row(i),:)
+		enddo
+		maxvalue=abs(core(1,1))
+
+
+		jpvt=0
+		call geqp3modf90(core,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop=flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
+		rankup = ranknew
+
+		if(rankup>0)then
+
+			row_Rtmp = row_R
+			call un_or_mqrf90(core,tau,row_Rtmp,'L','C',r_est,N,rankup,flop=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+			call trsmf90(core,row_Rtmp,'L','U','N','N',rankup,N,flop=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+
+			if(rank+rankup>rmax)rankup=rmax-rank
+
+			columns(rank+1:rankup+rank) = select_column1(jpvt(1:rankup))
+			rows(rank+1:rankup+rank) = select_row(1:rankup)
+ 
+
+			! call assert(rank+rankup<=rmax,'try to increase rmax')
+			do j=1,rankup
+			matU(:,rank+j) = column_R(:,jpvt(j))
+			enddo
+			matV(rank+1:rank+rankup,:) = row_Rtmp(1:rankup,:)
+
+			rank = rank + rankup
+
+
+			if(rank==rmax)exit
+
+
+			!**** update fnorm of UV and matUmatV
+			call LR_Fnorm(column_R,row_Rtmp,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+			call LR_FnormUp(matU,matV,M,N,rank-rankup,rankup,rmax,normA,normUV,tolerance*1e-2,Flops=flop)
+
+			stats%Flop_Fill = stats%Flop_Fill + flop
+
+			if(normA>SafeUnderflow)then
+				error = normUV/normA
+			else
+				error = 0
+				exit
+			endif
+			
+
+			!**** Find column pivots for the next iteration
+			jpvt=0
+			row_Rtmp = row_R
+			if(rank>0)row_Rtmp(:,columns(1:rank))=0
+			! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+			call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+			select_column(1:r_est) = jpvt(1:r_est)			
+		else
+			error = 0
+			exit
+		endif
+
+
+		write(*,*)itr,rank,rankup,error
+
+		itr = itr + 1
+	enddo
+
+	! write(*,*)normUV,normA
+
+	if(rank>0)then
+		call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,Flops=flop)
+		stats%Flop_Fill = stats%Flop_Fill + flop
+		rank = ranknew
+	else
+		rank = 1
+		matU(:,1)=0
+		matV(1,:)=0
+	endif
+
+	deallocate(jpvt)
+	deallocate(tau)
+	deallocate(select_column)
+	deallocate(select_column1)
+	deallocate(select_row)
+	deallocate(row_R)
+	deallocate(row_Rtmp)
+	deallocate(column_R)
+	deallocate(column_RT)
+	deallocate(core)
+	! deallocate(core_inv)
+	deallocate(perms)
+	deallocate(columns)
+	deallocate(rows)
+
+	n2 = OMP_get_wtime()
+	! time_tmp = time_tmp + n2 - n1
+
+
+    return
+
+end subroutine LR_BACA_noOverlap
 
 
 subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,option,ctxt,pgno)

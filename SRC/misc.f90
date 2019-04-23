@@ -249,13 +249,13 @@ subroutine LR_ReCompression(matU,matV,M,N,rmax,rank,SVD_tolerance,Flops)
 end subroutine LR_ReCompression
 
 
-subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
+subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,ldV,normUV,normUVupdate,tolerance,Flops)
 
 
     use BPACK_DEFS
     implicit none
 
-	integer N,M,ruv,rup
+	integer N,M,ruv,rup,ldV
 	real(kind=8) normUVupdate,normUV,inner_UV
 	real(kind=8),optional:: Flops
 	real(kind=8):: flop
@@ -270,16 +270,35 @@ subroutine LR_FnormUp(matU,matV,M,N,ruv,rup,normUV,normUVupdate,tolerance,Flops)
 
 	if(present(Flops))Flops=0
 
+		! inner_UV=0
+		! !$omp parallel do default(shared) private(j,i,k,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+		! do j=1,ruv
+			! do k=1,rup
+			! inner_U = dot_product(matU(:,j),matU(:,ruv+k))
+			! inner_V = dot_product(matV(j,:),matV(ruv+k,:))
+			! inner_UV=inner_UV+2*dble(inner_U*inner_V)
+			! enddo
+		! enddo
+		! !$omp end parallel do
+
+
 		inner_UV=0
-		!$omp parallel do default(shared) private(j,i,k,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+		if(ruv>0)then
+		allocate(UU(ruv,rup))
+		UU=0
+		call gemmf77('T','N',ruv,rup,M,cone,matU,M,matU(1,ruv+1),M,czero,UU,ruv)
+		allocate(VV(ruv,rup))
+		VV=0
+		call gemmf77('N','T',ruv,rup,N,cone,matV,ldV,matV(ruv+1,1),ldV,czero,VV,ruv)
 		do j=1,ruv
 			do k=1,rup
-			inner_U = dot_product(matU(:,j),matU(:,ruv+k))
-			inner_V = dot_product(matV(j,:),matV(ruv+k,:))
-			inner_UV=inner_UV+2*dble(inner_U*inner_V)
+				inner_UV = inner_UV + 2*dble(UU(j,k)*VV(j,k))
 			enddo
 		enddo
-		!$omp end parallel do
+		deallocate(UU)
+		deallocate(VV)
+		endif
+
 
 		normUV = sqrt(normUV**2d0+normUVupdate**2d0+inner_UV)
 
