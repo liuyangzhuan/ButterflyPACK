@@ -259,6 +259,7 @@ int main(int argc, char* argv[])
 	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
 	int checkerr = 1; //1: check compression quality
 	int batch = 100; //batch size for BACA
+	int bnum = 1; //sqrt of #of subblocks in H-BACA
 
 	C_QuantApp *quant_ptr;
 
@@ -282,7 +283,7 @@ if(tst==1){
 	if(argc>9)com_opt = stoi(argv[9]);
 	if(argc>10)checkerr = stoi(argv[10]);
 	if(argc>11)batch = stoi(argv[11]);
-
+	if(argc>12)bnum = stoi(argv[12]);
     vector<double> data_train = write_from_file(filename + "_train.csv");
 	Npo = data_train.size() / Ndim;
 
@@ -308,6 +309,7 @@ if(tst==2){
 	if(argc>9)com_opt = stoi(argv[9]);
 	if(argc>10)checkerr = stoi(argv[10]);
 	if(argc>11)batch = stoi(argv[11]);
+	if(argc>12)bnum = stoi(argv[12]);
 
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
@@ -336,7 +338,7 @@ if(tst==3){
 	if(argc>6)com_opt = stoi(argv[6]);
 	if(argc>7)checkerr = stoi(argv[7]);
 	if(argc>8)batch = stoi(argv[8]);
-
+	if(argc>9)bnum = stoi(argv[9]);
 
 	vector<double> matU(Npo*rank_rand);
       for (int i=0; i<Npo*rank_rand; i++)
@@ -392,6 +394,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "xyzsort", sort_opt);
 	d_c_bpack_set_I_option(&option, "ErrFillFull", checkerr);
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
+	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
 
 
     // construct hodlr with geometrical points

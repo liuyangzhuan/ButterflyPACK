@@ -3844,8 +3844,8 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	! !$omp end parallel do
 	call un_or_gqrf90(QQ2,tau_Q,rankmax_c,rank,rank,flop=flop)
 	deallocate(tau_Q)
-	stats%Flop_Fill = stats%Flop_Fill + flop 
- 
+	stats%Flop_Fill = stats%Flop_Fill + flop
+
 	allocate(mattemp(rank,rank))
 	mattemp=0
 	call gemmf90(RR1,rank,RR2,rank,mattemp,rank,'N','T',rank,rank,rank,cone,czero,flop=flop)
@@ -3963,8 +3963,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 		!**** Compute columns column_R to find a new set of rows and columns
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,r_est
 		do i=1,M
+		do j=1,r_est
 			edge_m = header_m + i - 1
 			edge_n = header_n + select_column(j) - 1
 			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
@@ -3991,8 +3991,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 		!**** Compute rows row_R in CUR
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do i=1,r_est
 		do j=1,N
+		do i=1,r_est
 			edge_m = header_m + select_row(i) - 1
 			edge_n = header_n + j - 1
 			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
@@ -4016,8 +4016,8 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 		!**** Compute columns column_R in CUR
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,r_est
 		do i=1,M
+		do j=1,r_est
 			edge_m = header_m + i - 1
 			edge_n = header_n + select_column(j) - 1
 			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
@@ -4215,12 +4215,12 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 			select_column = perms(1:r_est)
 		endif
 
-		select_column1=select_column	
-		
+		select_column1=select_column
+
 		!**** Compute columns column_R to find a new set of rows and columns
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,r_est
 		do i=1,M
+		do j=1,r_est
 			edge_m = header_m + i - 1
 			edge_n = header_n + select_column(j) - 1
 			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
@@ -4244,12 +4244,12 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 		call geqp3f90(column_RT,jpvt,tau,flop=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
 		select_row(1:r_est) = jpvt(1:r_est)
-	
+
 
 		!**** Compute rows row_R in CUR
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do i=1,r_est
 		do j=1,N
+		do i=1,r_est
 			edge_m = header_m + select_row(i) - 1
 			edge_n = header_n + j - 1
 			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
@@ -4288,7 +4288,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 			columns(rank+1:rankup+rank) = select_column1(jpvt(1:rankup))
 			rows(rank+1:rankup+rank) = select_row(1:rankup)
- 
+
 
 			! call assert(rank+rankup<=rmax,'try to increase rmax')
 			do j=1,rankup
@@ -4315,7 +4315,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 				error = 0
 				exit
 			endif
-			
+
 
 			!**** Find column pivots for the next iteration
 			jpvt=0
@@ -4324,14 +4324,14 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 			! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
 			call geqp3f90(row_Rtmp,jpvt,tau,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop
-			select_column(1:r_est) = jpvt(1:r_est)			
+			select_column(1:r_est) = jpvt(1:r_est)
 		else
 			error = 0
 			exit
 		endif
 
 
-		write(*,*)itr,rank,rankup,error
+		! write(*,*)itr,rank,rankup,error
 
 		itr = itr + 1
 	enddo

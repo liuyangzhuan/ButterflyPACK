@@ -256,6 +256,9 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn,ptre
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 
+	call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn,ptree)
+
+
 end subroutine BPACK_construction_Element
 
 subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn,ptree)
@@ -631,12 +634,12 @@ implicit none
 
 	integer:: Ninter,nr,nc
 
-	Ninter=2
+	Ninter=4
 	! nr=msh%Nunk
 	! nc=msh%Nunk
 
-	nr=4
-	nc=4
+	nr=100
+	nc=100
 
 	allocate(inters(Ninter))
 	lstr=list()
@@ -665,15 +668,10 @@ implicit none
 		do ii=1,nr
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+
+		! inters(nn)%rows(ii)=max(floor_safe(msh%basis_group(2)%tail*a),1)
 		inters(nn)%rows(ii)=max(floor_safe(msh%Nunk*a),1)
-		! if(nn==1 .and. ii==1)inters(nn)%rows(ii)=3115
-		! if(nn==1 .and. ii==2)inters(nn)%rows(ii)=708
-		! if(nn==1 .and. ii==3)inters(nn)%rows(ii)=4301
-		! if(nn==1 .and. ii==4)inters(nn)%rows(ii)=2255
-		! if(nn==2 .and. ii==1)inters(nn)%rows(ii)=2100
-		! if(nn==2 .and. ii==2)inters(nn)%rows(ii)=4793
-		! if(nn==2 .and. ii==3)inters(nn)%rows(ii)=4980
-		! if(nn==2 .and. ii==4)inters(nn)%rows(ii)=4988
+
 		! if(ptree%MyID==Main_ID)write(*,*)'r',nn,ii,inters(nn)%rows(ii)
 		call append( lst, ii )
 		enddo
@@ -685,15 +683,9 @@ implicit none
 		do ii=1,nc
 		call random_number(a)
 		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		! inters(nn)%cols(ii)=msh%basis_group(3)%head -1 + max(floor_safe((msh%basis_group(3)%tail-msh%basis_group(3)%head+1)*a),1)
 		inters(nn)%cols(ii)=max(floor_safe(msh%Nunk*a),1)! inters(nn)%rows(ii) !
-		! if(nn==1 .and. ii==1)inters(nn)%cols(ii)=2561
-		! if(nn==1 .and. ii==2)inters(nn)%cols(ii)=2111
-		! if(nn==1 .and. ii==3)inters(nn)%cols(ii)=1841
-		! if(nn==1 .and. ii==4)inters(nn)%cols(ii)=3037
-		! if(nn==2 .and. ii==1)inters(nn)%cols(ii)=2467
-		! if(nn==2 .and. ii==2)inters(nn)%cols(ii)=2107
-		! if(nn==2 .and. ii==3)inters(nn)%cols(ii)=3411
-		! if(nn==2 .and. ii==4)inters(nn)%cols(ii)=923
+
 		! if(ptree%MyID==Main_ID)write(*,*)'c',nn,ii,inters(nn)%cols(ii)
 		call append( lst, ii )
 		enddo

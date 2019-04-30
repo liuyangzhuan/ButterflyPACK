@@ -189,7 +189,7 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
 
-	call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_user,ptree)
+	! call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_user,ptree)
 	! stop
 
     !t1 = OMP_get_wtime()
