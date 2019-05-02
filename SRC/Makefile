@@ -23,7 +23,7 @@ SRC = dgeqp3mod.o zgeqp3mod.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o link
 all:  lib
 
 lib: $(SRC)
-	$(ARCH) $(ARCHFLAGS) $(ButterflyPACKLIB) $(SRC) 
+	$(ARCH) $(ARCHFLAGS) $(ButterflyPACKLIB) $(SRC)
 	$(RANLIB) $(ButterflyPACKLIB)
 
 %.o: %.c
@@ -36,8 +36,8 @@ lib: $(SRC)
 	$(FORTRAN) $(FFLAGS) -DDAT -c $< $(VERBOSE)
 
 %.o: %.f90
-	$(FORTRAN) $(FFLAGS) -DDAT $(INCDEF) -c $< $(VERBOSE)	
+	$(FORTRAN) $(FFLAGS) -DDAT $(INCDEF) -c $< $(VERBOSE)
 
-clean:	
+clean:
 	rm -f *.o *.mod $(ButterflyPACKLIB)
-	
+

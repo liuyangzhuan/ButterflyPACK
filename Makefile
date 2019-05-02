@@ -8,20 +8,20 @@
 #
 #  Creation date:   January 9, 2019 version 1.0.0
 #
-#  Modified:  January 9, 2019 version 1.0.0     
+#  Modified:  January 9, 2019 version 1.0.0
 #
 ############################################################################
 
 include make.inc
 
-all: lib install example 
+all: lib install example
 
 install:: lib
 	( cd SRC_DOUBLE; $(MAKE) )
-	( cd SRC_DOUBLECOMPLEX; $(MAKE) )	
+	( cd SRC_DOUBLECOMPLEX; $(MAKE) )
 	( cp $(DButterflyPACKLIB) build/lib; cp $(ZButterflyPACKLIB) build/lib)
 	( cp SRC_DOUBLE/*.h build/include; cp SRC_DOUBLECOMPLEX/*.h build/include)
-	
+
 example: lib
 	( cd EXAMPLE; $(MAKE) )
 
@@ -32,7 +32,7 @@ lib:
 	( sed -i 's/^M$//' PrecisionPreprocessing.sh; sh PrecisionPreprocessing.sh)
 	( cd SRC_DOUBLE; $(MAKE) )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) )
-	
+
 cleanlib:
 	( cd SRC_DOUBLE; $(MAKE) clean )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) clean )

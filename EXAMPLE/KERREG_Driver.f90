@@ -233,7 +233,7 @@ PROGRAM ButterflyPACK_KRR
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
 
 	!**** factorization phase
     call BPACK_Factorization(bmat,option,stats,ptree,msh)

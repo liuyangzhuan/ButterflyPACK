@@ -8,11 +8,20 @@ MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
 TMP_FILE=$PWD/tmp.txt
 
 ######## The following takes care of windows to linux conversion
-sed -i 's/^M$//' */* &>/dev/null
-sed -i 's/^M$//' */*/* &>/dev/null
-sed -i 's/[[:blank:]]*$//' *.*
-sed -i 's/[[:blank:]]*$//' SRC/*.*
-sed -i 's/[[:blank:]]*$//' EXAMPLE/*.*
+declare -a StringArray=("*.*" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
+for val in ${StringArray[@]}; do
+   # echo $val
+   sed -i "s/\r$//" $val
+   sed -i 's/[[:blank:]]*$//' $val
+done
+
+
+# sed -i "s/\r$//" *.*
+# sed -i "s/\r$//" SRC/*.*
+# sed -i "s/\r$//" EXAMPLE/*.*
+# sed -i 's/[[:blank:]]*$//' *.*
+# sed -i 's/[[:blank:]]*$//' SRC/*.*
+# sed -i 's/[[:blank:]]*$//' EXAMPLE/*.*
 
 ############################################################################
 echo "-- generating macro definition header ..."

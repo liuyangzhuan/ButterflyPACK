@@ -474,6 +474,17 @@ module BPACK_DEFS
 			type(kernelquant)::ker
 		end subroutine Zelem
 
+		subroutine Zelem_block(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag)
+			import::mesh,Hoption,kernelquant
+			implicit none
+			integer nrow, ncol,myflag,passflag
+			integer mrange(nrow)
+			integer nrange(ncol)
+			DT:: values(nrow,ncol)
+			type(mesh)::msh
+			type(Hoption)::option
+			type(kernelquant)::ker
+		end subroutine Zelem_block
 
 		subroutine F_Zelem(m,n,val,quant) ! interface of user-defined element evaluation routine in Fortran. m,n represents indices in natural order
 		  import::mesh,kernelquant

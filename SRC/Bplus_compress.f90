@@ -24,7 +24,7 @@ use BPACK_structure
 contains
 
 
-subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn_block,ptree)
 
    use BPACK_DEFS
    implicit none
@@ -42,7 +42,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
@@ -84,7 +84,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 		! H-BACA
 		leafsize = max(blocks%M,blocks%N)/option%LR_BLK_NUM
 
-		call LR_HBACA(blocks,leafsize,rank_new,option,msh,ker,stats,element_Zmn,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
+		call LR_HBACA(blocks,leafsize,rank_new,option,msh,ker,stats,element_Zmn_block,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
 
 		rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
 		rankmin_for_butterfly(0)=min(blocks%rankmin,rankmin_for_butterfly(0))
@@ -143,7 +143,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 				index_i_loc= mod(index_ij-1,nr) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new1,flops1)
+				call BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_block,ptree,index_i,index_j,level,rank_new1,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -215,7 +215,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn,ptre
 				index_i_loc= mod(index_ij-1,nr) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,level_final,rank_new1,flops1)
+				call BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_block,ptree,index_i,index_j,level,level_final,rank_new1,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -266,7 +266,7 @@ end subroutine BF_compress_NlogN
 
 
 
-subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_block,ptree,index_i,index_j,level,rank_new,flops)
 
    use BPACK_DEFS
    implicit none
@@ -284,16 +284,16 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer Nlayer
+	integer Nlayer,passflag
 
-	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:)
 
 	flops=0
 	level_butterfly=blocks%level_butterfly
@@ -341,39 +341,69 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,
 		header_m=msh%basis_group(group_m)%head
 		header_n=msh%basis_group(group_n)%head
 
-		allocate (core(rankmax_r,rankmax_c))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-		do ij=1,rankmax_c*rankmax_r
-			j = (ij-1)/rankmax_r+1
-			i = mod(ij-1,rankmax_r) + 1
-			edge_m=header_m+select_row(i)-1
-			edge_n=header_n+select_column(j)-1
-			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-			core(i,j)=ctemp
-		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		! allocate (core(rankmax_r,rankmax_c))
+		! allocate(mrange(rankmax_r))
+		! allocate(nrange(rankmax_c))
+		! do i=1,rankmax_r
+			! edge_m=header_m+select_row(i)-1
+		! enddo
+		! do j=1,rankmax_c
+			! edge_n=header_n+select_column(j)-1
+		! enddo
+		! call element_Zmn_block(rankmax_r,rankmax_c,mrange,nrange,core,msh,option,ker,0,passflag)
+		! deallocate(mrange)
+		! deallocate(nrange)
+
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+		! do ij=1,rankmax_c*rankmax_r
+			! j = (ij-1)/rankmax_r+1
+			! i = mod(ij-1,rankmax_r) + 1
+			! edge_m=header_m+select_row(i)-1
+			! edge_n=header_n+select_column(j)-1
+			! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			! core(i,j)=ctemp
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
 
 
 		allocate (matrix_V(rankmax_r,nn))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-		do ij=1,nn*rankmax_r
-			j = (ij-1)/rankmax_r+1
-			i = mod(ij-1,rankmax_r) + 1
-
-			edge_m=header_m+select_row(i)-1
-			edge_n=header_n+j-1
-			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-			matrix_V(i,j)=ctemp
+		allocate(mrange(rankmax_r))
+		allocate(nrange(nn))
+		do i=1,rankmax_r
+			mrange(i)=header_m+select_row(i)-1
 		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		do j=1,nn
+			nrange(j)=header_n+j-1
+		enddo
+		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag)
+		deallocate(mrange)
+		deallocate(nrange)
+
+		allocate (core(rankmax_r,rankmax_c))
+		do j=1,rankmax_c
+			core(:,j)=matrix_V(:,select_column(j))
+		enddo
+
+
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		! do ij=1,nn*rankmax_r
+			! j = (ij-1)/rankmax_r+1
+			! i = mod(ij-1,rankmax_r) + 1
+
+			! edge_m=header_m+select_row(i)-1
+			! edge_n=header_n+j-1
+			! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			! matrix_V(i,j)=ctemp
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
 
 		allocate(jpvt(max(rankmax_c,rankmax_r)))
 		allocate(tau(max(rankmax_c,rankmax_r)))
@@ -410,20 +440,32 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,
 		index_i_loc_k=(index_i-blocks%ButterflyU%idx)/blocks%ButterflyU%inc+1
 
 		allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm,rank_new))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-		do ij=1,rank_new*mm
-			j = (ij-1)/mm+1
-			i = mod(ij-1,mm) + 1
-			edge_m=i+header_m-1
-			edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
-			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-			blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
+		allocate(mrange(mm))
+		allocate(nrange(rank_new))
+		do i=1,mm
+			mrange(i)=i+header_m-1
 		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		do j=1,rank_new
+			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
+		enddo
+		call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag)
+		deallocate(mrange)
+		deallocate(nrange)
+
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		! do ij=1,rank_new*mm
+			! j = (ij-1)/mm+1
+			! i = mod(ij-1,mm) + 1
+			! edge_m=i+header_m-1
+			! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
+			! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			! blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
 	else
 		index_i_loc_s=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
 		index_i_loc_k=(index_i-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1
@@ -434,49 +476,70 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn,
 		header_n2=msh%basis_group(2*group_n+1)%head
 		nnn1=msh%basis_group(2*group_n)%tail-msh%basis_group(2*group_n)%head+1
 
-		allocate (core(rankmax_r,rankmax_c))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-		do ij=1,rankmax_c*rankmax_r
-			j = (ij-1)/rankmax_r+1
-			i = mod(ij-1,rankmax_r) + 1
-			if (select_column(j)<=nn1) then
-				edge_m=select_row(i)+header_m-1
-				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(select_column(j))+header_n1-1
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				core(i,j)=ctemp
-			else
-				edge_m=select_row(i)+header_m-1
-				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(select_column(j)-nn1)+header_n2-1
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				core(i,j)=ctemp
-			endif
-		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		! allocate (core(rankmax_r,rankmax_c))
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+		! do ij=1,rankmax_c*rankmax_r
+			! j = (ij-1)/rankmax_r+1
+			! i = mod(ij-1,rankmax_r) + 1
+			! if (select_column(j)<=nn1) then
+				! edge_m=select_row(i)+header_m-1
+				! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(select_column(j))+header_n1-1
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! core(i,j)=ctemp
+			! else
+				! edge_m=select_row(i)+header_m-1
+				! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(select_column(j)-nn1)+header_n2-1
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! core(i,j)=ctemp
+			! endif
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
 
 		allocate (matrix_V(rankmax_r,nn))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-		do ij=1,nn*rankmax_r
-			j = (ij-1)/rankmax_r+1
-			i = mod(ij-1,rankmax_r) + 1
-			if (j<=nn1) then
-				edge_m=select_row(i)+header_m-1
-				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(j)+header_n1-1
-			else
-				edge_m=select_row(i)+header_m-1
-				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
-			endif
-			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-			matrix_V(i,j)=ctemp
+		allocate(mrange(rankmax_r))
+		allocate(nrange(nn))
+		do i=1,rankmax_r
+			mrange(i)=select_row(i)+header_m-1
 		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		do j=1,nn
+			if (j<=nn1) then
+				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(j)+header_n1-1
+			else
+				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
+			endif
+		enddo
+		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag)
+		deallocate(mrange)
+		deallocate(nrange)
+
+		allocate (core(rankmax_r,rankmax_c))
+		do j=1,rankmax_c
+			core(:,j)=matrix_V(:,select_column(j))
+		enddo
+
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		! do ij=1,nn*rankmax_r
+			! j = (ij-1)/rankmax_r+1
+			! i = mod(ij-1,rankmax_r) + 1
+			! if (j<=nn1) then
+				! edge_m=select_row(i)+header_m-1
+				! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(j)+header_n1-1
+			! else
+				! edge_m=select_row(i)+header_m-1
+				! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
+			! endif
+			! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			! matrix_V(i,j)=ctemp
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
 
 		allocate(jpvt(max(rankmax_c,rankmax_r)))
 		allocate(tau(max(rankmax_c,rankmax_r)))
@@ -1080,7 +1143,7 @@ end subroutine BF_all2all_skel
 
 
 
-subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,ptree,index_i,index_j,level,level_final,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_block,ptree,index_i,index_j,level,level_final,rank_new,flops)
 
    use BPACK_DEFS
    implicit none
@@ -1098,16 +1161,17 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(proctree)::ptree
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
-	integer,allocatable::jpvt(:)
+	integer,allocatable::jpvt(:),mrange(:),nrange(:)
 	integer Nlayer
 
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
+	integer::passflag=0
 
 	flops=0
 	level_butterfly=blocks%level_butterfly
@@ -1163,50 +1227,85 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,
 			index_i_loc_k=(index_i-blocks%ButterflyU%idx)/blocks%ButterflyU%inc+1
 			allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm,rank_new))
 
-			!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-			do ij=1,mm*rank_new
-				j = (ij-1)/mm+1
-				i = mod(ij-1,mm) + 1
-				edge_m=header_m+i-1
-				edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
+			allocate(mrange(mm))
+			allocate(nrange(rank_new))
+			do i=1,mm
+			mrange(i)=header_m+i-1
 			enddo
-			!$omp end taskloop
+			do j=1,rank_new
+			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
+			enddo
+
+			call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+
+			! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+			! do ij=1,mm*rank_new
+				! j = (ij-1)/mm+1
+				! i = mod(ij-1,mm) + 1
+				! edge_m=header_m+i-1
+				! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
+			! enddo
+			! !$omp end taskloop
+
+
 		else
-			allocate (core(rankmax_c,rankmax_r))
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-			do ij=1,rankmax_c*rankmax_r
-				j = (ij-1)/rankmax_r+1
-				i = mod(ij-1,rankmax_r) + 1
-				edge_m=header_m+select_row(i)-1
-				edge_n=header_n+select_column(j)-1
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				core(j,i)=ctemp
-			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
+			! allocate (core(rankmax_c,rankmax_r))
+			! ! !$omp parallel
+			! ! !$omp single
+			! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+			! do ij=1,rankmax_c*rankmax_r
+				! j = (ij-1)/rankmax_r+1
+				! i = mod(ij-1,rankmax_r) + 1
+				! edge_m=header_m+select_row(i)-1
+				! edge_n=header_n+select_column(j)-1
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! core(j,i)=ctemp
+			! enddo
+			! !$omp end taskloop
+			! ! !$omp end single
+			! ! !$omp end parallel
 
 
 			allocate (matrix_V(rankmax_c,mm))
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-			do ij=1,mm*rankmax_c
-				j = (ij-1)/mm+1
-				i = mod(ij-1,mm) + 1
-
-				edge_m=header_m+i-1
-				edge_n=header_n+select_column(j)-1
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				matrix_V(j,i)=ctemp
+			allocate (matrix_V_tmp(mm,rankmax_c))
+			allocate(mrange(mm))
+			allocate(nrange(rankmax_c))
+			do i=1,mm
+				mrange(i)=header_m+i-1
 			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
+			do j=1,rankmax_c
+				nrange(j)=header_n+select_column(j)-1
+			enddo
+			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
+			deallocate(matrix_V_tmp)
+
+			allocate (core(rankmax_c,rankmax_r))
+			do i=1,rankmax_r
+				core(:,i)=matrix_V(:,select_row(i))
+			enddo
+
+			! ! !$omp parallel
+			! ! !$omp single
+			! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+			! do ij=1,mm*rankmax_c
+				! j = (ij-1)/mm+1
+				! i = mod(ij-1,mm) + 1
+
+				! edge_m=header_m+i-1
+				! edge_n=header_n+select_column(j)-1
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! matrix_V(j,i)=ctemp
+			! enddo
+			! !$omp end taskloop
+			! ! !$omp end single
+			! ! !$omp end parallel
 
 			allocate(jpvt(max(rankmax_c,rankmax_r)))
 			allocate(tau(max(rankmax_c,rankmax_r)))
@@ -1243,20 +1342,39 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,
 		index_j_loc_k=(index_j-blocks%ButterflyV%idx)/blocks%ButterflyV%inc+1
 
 		allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn,rank_new))
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-		do ij=1,rank_new*nn
-			j = (ij-1)/rank_new+1
-			i = mod(ij-1,rank_new) + 1
-			edge_m=blocks%ButterflySkel(level+1)%inds(1,index_j_loc_s)%array(i)+header_m-1
-			edge_n=j+header_n-1
-			call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-			blocks%ButterflyV%blocks(index_j_loc_k)%matrix(j,i)=ctemp
+		allocate (matrix_V_tmp(rank_new,nn))
+		allocate(mrange(rank_new))
+		allocate(nrange(nn))
+		do i=1,rank_new
+			mrange(i) = blocks%ButterflySkel(level+1)%inds(1,index_j_loc_s)%array(i)+header_m-1
 		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
+		do j=1,nn
+			nrange(j) = j+header_n-1
+		enddo
+		call element_Zmn_block(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag)
+		deallocate(mrange)
+		deallocate(nrange)
+		call copymatT(matrix_V_tmp,blocks%ButterflyV%blocks(index_j_loc_k)%matrix,rank_new,nn)
+		deallocate(matrix_V_tmp)
+
+
+		! ! !$omp parallel
+		! ! !$omp single
+		! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+		! do ij=1,rank_new*nn
+			! j = (ij-1)/rank_new+1
+			! i = mod(ij-1,rank_new) + 1
+			! edge_m=blocks%ButterflySkel(level+1)%inds(1,index_j_loc_s)%array(i)+header_m-1
+			! edge_n=j+header_n-1
+			! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+			! blocks%ButterflyV%blocks(index_j_loc_k)%matrix(j,i)=ctemp
+		! enddo
+		! !$omp end taskloop
+		! ! !$omp end single
+		! ! !$omp end parallel
+
+
+
 	else
 		index_i_loc_k=(2*index_i-1-blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r+1
 		index_j_loc_k=(index_j-blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c+1
@@ -1275,74 +1393,122 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn,
 			allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(mm1,rank_new))
 			allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix(mm2,rank_new))
 
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-			do ij=1,mm*rank_new
-				j = (ij-1)/mm+1
-				i = mod(ij-1,mm) + 1
+			allocate(matrix_V_tmp(mm1+mm2,rank_new))
+			allocate(mrange(mm1+mm2))
+			allocate(nrange(rank_new))
+			do i=1,mm1+mm2
 				if (i<=mm1) then
-					edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
-					call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-					blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(i,j)=ctemp
+					mrange(i)=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
 				else
-					edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
-					call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-					blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix(i-mm1,j)=ctemp
+					mrange(i)=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
 				endif
 			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
+			do j=1,rank_new
+				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
+			enddo
+			call element_Zmn_block(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+			if(mm1>0)blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix = matrix_V_tmp(1:mm1,:)
+			if(mm2>0)blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix = matrix_V_tmp(1+mm1:mm1+mm2,:)
+			deallocate(matrix_V_tmp)
+
+			! ! !$omp parallel
+			! ! !$omp single
+			! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+			! do ij=1,mm*rank_new
+				! j = (ij-1)/mm+1
+				! i = mod(ij-1,mm) + 1
+				! if (i<=mm1) then
+					! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
+					! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+					! blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(i,j)=ctemp
+				! else
+					! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
+					! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+					! blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix(i-mm1,j)=ctemp
+				! endif
+			! enddo
+			! !$omp end taskloop
+			! ! !$omp end single
+			! ! !$omp end parallel
 
 		else
 			index_i_loc_s=(index_i-blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r+1
 			index_j_loc_s=(index_j-blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c+1
-			allocate (core(rankmax_c,rankmax_r))
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-			do ij=1,rankmax_c*rankmax_r
-				j = (ij-1)/rankmax_r+1
-				i = mod(ij-1,rankmax_r) + 1
-				if (select_row(i)<=mm1) then
-					edge_n=select_column(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(select_row(i))+header_m1-1
-					call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-					core(j,i)=ctemp
-				else
-					edge_n=select_column(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(select_row(i)-mm1)+header_m2-1
-					call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-					core(j,i)=ctemp
-				endif
-			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
+
+
+			! allocate (core(rankmax_c,rankmax_r))
+			! ! !$omp parallel
+			! ! !$omp single
+			! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
+			! do ij=1,rankmax_c*rankmax_r
+				! j = (ij-1)/rankmax_r+1
+				! i = mod(ij-1,rankmax_r) + 1
+				! if (select_row(i)<=mm1) then
+					! edge_n=select_column(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(select_row(i))+header_m1-1
+					! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+					! core(j,i)=ctemp
+				! else
+					! edge_n=select_column(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(select_row(i)-mm1)+header_m2-1
+					! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+					! core(j,i)=ctemp
+				! endif
+			! enddo
+			! !$omp end taskloop
+			! ! !$omp end single
+			! ! !$omp end parallel
+
+			! allocate (matrix_V(rankmax_c,mm))
+			! ! !$omp parallel
+			! ! !$omp single
+			! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
+			! do ij=1,mm*rankmax_c
+				! j = (ij-1)/mm+1
+				! i = mod(ij-1,mm) + 1
+				! if (i<=mm1) then
+					! edge_n=select_column(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
+				! else
+					! edge_n=select_column(j)+header_n-1
+					! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
+				! endif
+				! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+				! matrix_V(j,i)=ctemp
+			! enddo
+			! !$omp end taskloop
+			! ! !$omp end single
+			! ! !$omp end parallel
 
 			allocate (matrix_V(rankmax_c,mm))
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-			do ij=1,mm*rankmax_c
-				j = (ij-1)/mm+1
-				i = mod(ij-1,mm) + 1
+			allocate (matrix_V_tmp(mm,rankmax_c))
+			allocate(mrange(mm))
+			allocate(nrange(rankmax_c))
+			do i=1,mm
 				if (i<=mm1) then
-					edge_n=select_column(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
+					mrange(i) = blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
 				else
-					edge_n=select_column(j)+header_n-1
-					edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
+					mrange(i) = blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
 				endif
-				call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-				matrix_V(j,i)=ctemp
 			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
+			do j=1,rankmax_c
+				nrange(j)=select_column(j)+header_n-1
+			enddo
+
+			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
+			deallocate(matrix_V_tmp)
+			allocate (core(rankmax_c,rankmax_r))
+			do i=1,rankmax_r
+			core(:,i)=matrix_V(:,select_row(i))
+			enddo
+
 
 			allocate(jpvt(max(rankmax_c,rankmax_r)))
 			allocate(tau(max(rankmax_c,rankmax_r)))
@@ -1397,7 +1563,7 @@ end subroutine BF_compress_NlogN_oneblock_C
 
 
 
-subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn_block,ptree)
 
    use BPACK_DEFS
 
@@ -1413,7 +1579,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 
 	Memory = 0
@@ -1429,10 +1595,10 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 				! if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
 
 				if(option%forwardN15flag==1)then
-					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
+					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn_block,ptree)
 					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				else
-					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn,ptree)
+					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,element_Zmn_block,ptree)
 				end if
 				Memory = Memory + rtemp
 			else
@@ -1443,7 +1609,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,element_Zmn,ptre
 				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
 				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
 				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)
-				call BF_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn,ptree)
+				call BF_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,element_Zmn_block,ptree)
 				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				Memory = Memory + rtemp
 			end if
@@ -1458,7 +1624,7 @@ end subroutine Bplus_compress_N15
 
 
 
-subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,element_Zmn_block,ptree)
 
    use BPACK_DEFS
 
@@ -1489,7 +1655,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row,frow
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 
 	integer cnt_tmp,rankFar,rankNear
@@ -1609,7 +1775,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 				end do
 			else
 				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,error)
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,error)
 				! if(rank==53)then
 					! write(*,*)group_m,group_n,boundary_map(group_m-groupm_start+1)
 					! stop
@@ -1756,7 +1922,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 				! if(blocks==342)write(111,*)Singular(1:rank)
 			else
 				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,error)
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,error)
 			end if
 
 
@@ -1875,7 +2041,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 end subroutine BF_compress_N15_withoutBoundary
 
 
-subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
+subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn_block,ptree)
 
    use BPACK_DEFS
 
@@ -1900,14 +2066,14 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 	real(kind=8):: minvalue(1:20)
 	integer dimension_m,dimension_n,dimension_rank,num_col,num_row
 	type(matrixblock)::blocks
-	integer cnt_tmp,rankFar,rankNear,leafsize,frow
+	integer cnt_tmp,rankFar,rankNear,leafsize,frow,passflag
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
-	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:)
 	cnt_tmp	= 0
 	rankFar = 0
 	rankNear = 0
@@ -1963,7 +2129,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))deallocate(blocks%ButterflyU%blocks(1)%matrix)
 		if(allocated(blocks%ButterflyV%blocks(1)%matrix))deallocate(blocks%ButterflyV%blocks(1)%matrix)
-		call LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
+		call LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn_block,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
 
 		rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
 		rankmin_for_butterfly(0)=min(blocks%rankmin,rankmin_for_butterfly(0))
@@ -1999,14 +2165,24 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 						mm=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
 						nn=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
 						allocate(QQ(mm,nn))
+						allocate(mrange(mm))
 						do ii=1,mm
-							do jj =1,nn
-								edge_m = msh%basis_group(group_m)%head + ii - 1
-								edge_n = msh%basis_group(group_n)%head + jj - 1
-								call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-								QQ(ii,jj) = ctemp
-							end do
-						end do
+						mrange(ii) = msh%basis_group(group_m)%head + ii - 1
+						enddo
+						allocate(nrange(nn))
+						do jj=1,nn
+						nrange(jj) = msh%basis_group(group_n)%head + jj - 1
+						enddo
+						call element_Zmn_block(mm,nn,mrange,nrange,QQ,msh,option,ker,0,passflag)
+
+						! do ii=1,mm
+							! do jj =1,nn
+								! edge_m = msh%basis_group(group_m)%head + ii - 1
+								! edge_n = msh%basis_group(group_n)%head + jj - 1
+								! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
+								! QQ(ii,jj) = ctemp
+							! end do
+						! end do
 
 						mn=min(mm,nn)
 						allocate (UU(mm,mn),VV(mn,nn),Singular(mn))
@@ -2045,7 +2221,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 							enddo
 						enddo
 						!$omp end parallel do
-						deallocate (QQ,UU,VV,Singular,mat_tmp)
+						deallocate (QQ,UU,VV,Singular,mat_tmp,mrange,nrange)
 
 					else
 
@@ -2241,7 +2417,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 				allocate(Singular(rmax))
 
 				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,error)
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,error)
 				! rank = min(rank,37)
 
 
@@ -2425,7 +2601,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn,ptree)
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
 				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,error)
+				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,error)
 				! rank = min(rank,37)
 
 
@@ -2837,7 +3013,7 @@ end subroutine BF_compress_test
 
 
 
-recursive subroutine LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gd,cridx)
+recursive subroutine LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gd,cridx)
 use BPACK_DEFS
 implicit none
     integer rank,ranktmp,leafsize
@@ -2847,7 +3023,7 @@ implicit none
 	type(Hoption)::option
 	type(kernelquant)::ker
 	type(matrixblock)::blocks,blockc(2)
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 	integer pgno
 	type(grid),pointer::gd
@@ -2864,8 +3040,9 @@ implicit none
 	real(kind=8),allocatable::RWORK(:),center(:)
 	real(kind=8):: rtemp,dist,error,rtemp1,rtemp0,fnorm1,fnorm0,flop
 	integer :: nb1Dc, nb1Dr,frow,Dimn,edge_n,edge_m,MyID,Ntest,rmaxc,rmaxr
-	integer,allocatable::M_p(:,:),N_p(:,:)
+	integer,allocatable::M_p(:,:),N_p(:,:),mrange(:),nrange(:)
 	type(Hstat)::stats
+	integer::passflag=0
 
 	rank=0
 	blocks%ButterflyU%idx=1
@@ -2885,7 +3062,7 @@ implicit none
 			rmaxc = blocks%N
 			rmaxr = blocks%M
 
-			call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,blocks%M,blocks%N,rmaxc,rmaxr,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,gd%ctxt)
+			call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,blocks%M,blocks%N,rmaxc,rmaxr,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,gd%ctxt)
 
 		else if(option%RecLR_leaf==ACA)then
 			!!!!! ACA-SVD
@@ -2919,7 +3096,7 @@ implicit none
 			! deallocate(center)
 			! !!!!!!!!!!!!
 
-			call LR_ACA(UU,VV,Singular,blocks%headm,blocks%headn,blocks%M,blocks%N,frow,rmax,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn,ptree,option,error)
+			call LR_ACA(UU,VV,Singular,blocks%headm,blocks%headn,blocks%M,blocks%N,frow,rmax,rank,option%tol_comp,option%tol_comp,msh,ker,stats,element_Zmn_block,ptree,option,error)
 
 			! if(error>option%tol_comp)then
 				! write(*,*)'niam',error
@@ -2958,8 +3135,8 @@ implicit none
 			allocate(UU(blocks%M,rmax))
 			allocate(VV(rmax,blocks%N))
 
-			if(option%RecLR_leaf==BACA)call LR_BACA(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,option,error)
-			if(option%RecLR_leaf==BACANOVER)call LR_BACA_noOverlap(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn,ptree,option,error)
+			if(option%RecLR_leaf==BACA)call LR_BACA(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn_block,ptree,option,error)
+			if(option%RecLR_leaf==BACANOVER)call LR_BACA_noOverlap(UU,VV,blocks%headm,blocks%headn,blocks%M,blocks%N,rmax,rank,option%tol_comp,option%tol_comp,option%BACA_Batch,msh,ker,stats,element_Zmn_block,ptree,option,error)
 
 			blocks%rankmax = rank
 			blocks%rankmin = rank
@@ -2990,13 +3167,26 @@ implicit none
 			mn=min(blocks%M,blocks%N)
 			allocate (UU(blocks%M,mn),VV(mn,blocks%N),Singular(mn))
 			allocate(QQ1(blocks%M,blocks%N))
+			allocate(mrange(blocks%M))
+			allocate(nrange(blocks%N))
 			do ii=1,blocks%M
-				do jj =1,blocks%N
-					edge_m = blocks%headm +ii - 1
-					edge_n = blocks%headn +jj - 1
-					call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,option,ker)
-				end do
-			end do
+				mrange(ii) = blocks%headm +ii - 1
+			enddo
+			do jj=1,blocks%N
+				nrange(jj) = blocks%headn +jj - 1
+			enddo
+			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+
+			! do ii=1,blocks%M
+				! do jj =1,blocks%N
+					! edge_m = blocks%headm +ii - 1
+					! edge_n = blocks%headn +jj - 1
+					! call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,option,ker)
+				! end do
+			! end do
+
 			call SVD_Truncate(QQ1,blocks%M,blocks%N,mn,UU,VV,Singular,option%tol_comp,rank,flop=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop
 
@@ -3040,14 +3230,29 @@ implicit none
 			!!!!! RRQR
 			mn=min(blocks%M,blocks%N)
 			allocate (UU(blocks%M,mn),VV(mn,blocks%N))
+
 			allocate(QQ1(blocks%M,blocks%N))
+			allocate(mrange(blocks%M))
+			allocate(nrange(blocks%N))
 			do ii=1,blocks%M
-				do jj =1,blocks%N
-					edge_m = blocks%headm +ii - 1
-					edge_n = blocks%headn +jj - 1
-					call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,option,ker)
-				end do
-			end do
+				mrange(ii) = blocks%headm +ii - 1
+			enddo
+			do jj=1,blocks%N
+				nrange(jj) = blocks%headn +jj - 1
+			enddo
+			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+
+
+			! allocate(QQ1(blocks%M,blocks%N))
+			! do ii=1,blocks%M
+				! do jj =1,blocks%N
+					! edge_m = blocks%headm +ii - 1
+					! edge_n = blocks%headn +jj - 1
+					! call element_Zmn(edge_m,edge_n,QQ1(ii,jj),msh,option,ker)
+				! end do
+			! end do
 
 			call RRQR_LQ(QQ1,blocks%M,blocks%N,mn,UU,VV,option%tol_comp,rank,'L',flops=flop)
 			stats%Flop_Fill = stats%Flop_Fill + flop
@@ -3091,7 +3296,7 @@ implicit none
 
 		! !!!!!!! check error
 		if(cridx==0)then
-		call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+		call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gd)
 		endif
 		! !!!!!!! check error
 	else
@@ -3132,7 +3337,7 @@ implicit none
 				allocate (blockc(1)%ButterflyU%blocks(1))
 				allocate (blockc(1)%ButterflyV%blocks(1))
 
-				call LR_HBACA(blockc(1),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc1,cridx+1)
+				call LR_HBACA(blockc(1),leafsize,rank,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gdc1,cridx+1)
 				dims_tmp(1)=blockc(1)%M
 				dims_tmp(2)=blockc(1)%N
 				dims_tmp(3)=blockc(1)%rankmax
@@ -3160,7 +3365,7 @@ implicit none
 				! write(*,*)blockc(2)%M,blockc(2)%N,'ha2'
 				allocate (blockc(2)%ButterflyU%blocks(1))
 				allocate (blockc(2)%ButterflyV%blocks(1))
-				call LR_HBACA(blockc(2),leafsize,rank,option,msh,ker,stats,element_Zmn,ptree,pgno,gdc2,cridx+1)
+				call LR_HBACA(blockc(2),leafsize,rank,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gdc2,cridx+1)
 				dims_tmp(4)=blockc(2)%M
 				dims_tmp(5)=blockc(2)%N
 				dims_tmp(6)=blockc(2)%rankmax
@@ -3440,7 +3645,7 @@ implicit none
 
 
 			! !!!!!!! check error
-			call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+			call LR_CheckError(blocks,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gd)
 			! !!!!!!! check error
 
 			! distribute UV factor into 1D grid
@@ -3495,7 +3700,7 @@ end subroutine LR_HBACA
 
 
 
-subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,option,error)
+subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,rmax,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn_block,ptree,option,error)
 
 
     use BPACK_DEFS
@@ -3513,17 +3718,20 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
     real(kind=8) inner_UV,n1,n2,a,error,flop
     integer,allocatable:: select_column(:), select_row(:)
 	DT::matU(rankmax_r,rmax),matV(rmax,rankmax_c)
+	DT::matr(1,rankmax_c),matc(rankmax_r,1)
 	real(kind=8)::Singular(rmax)
     DT,allocatable:: row_R(:),column_R(:),value_UV(:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:),norm_UVavrbynorm_Z(:)
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
 	real(kind=8), allocatable :: Singularsml(:)
+	integer::mrange(rankmax_r),nrange(rankmax_c)
 	type(Hstat)::stats
 	type(Hoption)::option
+	integer:: passflag=0
 
 
 	Navr=3 !5 !10
@@ -3553,16 +3761,25 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 
 	select_row(1)=frow
 
-	!$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
-	do j=1, rankmax_c
-		! value_Z=mat(select_row(1),j)
-		edge_m = header_m + select_row(1) - 1
-		edge_n = header_n + j - 1
-		call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
-		row_R(j)=value_Z
-		norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind = 8)))
+
+	mrange=select_row(1)
+	do j=1,rankmax_c
+		nrange(j)=header_n + j - 1
 	enddo
-	!$omp end parallel do
+	call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag)
+	row_R=matr(1,:)
+	norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
+
+	! !$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
+	! do j=1, rankmax_c
+		! ! value_Z=mat(select_row(1),j)
+		! edge_m = header_m + select_row(1) - 1
+		! edge_n = header_n + j - 1
+		! call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
+		! row_R(j)=value_Z
+		! norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind = 8)))
+	! enddo
+	! !$omp end parallel do
 
 	select_column(1)=maxloc(norm_row_R,1)
 	maxvalue=row_R(select_column(1))
@@ -3575,16 +3792,27 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 			a=0
 			call random_number(a)
 			select_row(1)=floor_safe(a*(rankmax_r-1))+1
-			!$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
-			do j=1, rankmax_c
-				! value_Z=mat(select_row(1),j)
-				edge_m = header_m + select_row(1) - 1
-				edge_n = header_n + j - 1
-				call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
-				row_R(j)=value_Z
-				norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
+
+			mrange=select_row(1)
+			do j=1,rankmax_c
+				nrange(j)=header_n + j - 1
 			enddo
-			!$omp end parallel do
+			call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag)
+			row_R=matr(1,:)
+			norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
+
+			! !$omp parallel do default(shared) private(j,value_Z,edge_m,edge_n)
+			! do j=1, rankmax_c
+				! ! value_Z=mat(select_row(1),j)
+				! edge_m = header_m + select_row(1) - 1
+				! edge_n = header_n + j - 1
+				! call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
+				! row_R(j)=value_Z
+				! norm_row_R(j)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
+			! enddo
+			! !$omp end parallel do
+
+
 
 			select_column(1)=maxloc(norm_row_R,1)
 			maxvalue=row_R(select_column(1))
@@ -3618,16 +3846,29 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	enddo
 	! !$omp end parallel do
 
-	!$omp parallel do default(shared) private(i,value_Z,edge_m,edge_n)
+
+
+
+	nrange=header_n + select_column(1) - 1
 	do i=1,rankmax_r
-		edge_m = header_m + i - 1
-		edge_n = header_n + select_column(1) - 1
-		call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
-		! value_Z=mat(i,select_column(1))
-		column_R(i)=value_Z
-		norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
+		mrange(i)=header_m + i - 1
 	enddo
-	!$omp end parallel do
+	call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag)
+	column_R=matc(:,1)
+	norm_column_R=dble(column_R*conjg(cmplx(column_R,kind=8)))
+
+
+
+	! !$omp parallel do default(shared) private(i,value_Z,edge_m,edge_n)
+	! do i=1,rankmax_r
+		! edge_m = header_m + i - 1
+		! edge_n = header_n + select_column(1) - 1
+		! call element_Zmn(edge_m,edge_n,value_Z,msh,option,ker)
+		! ! value_Z=mat(i,select_column(1))
+		! column_R(i)=value_Z
+		! norm_column_R(i)=dble(value_Z*conjg(cmplx(value_Z,kind=8)))
+	! enddo
+	! !$omp end parallel do
 
 	norm_column_R(select_row(1))=0
 
@@ -3656,13 +3897,21 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	do while (tolerance**2<(sum(norm_UVavrbynorm_Z)/min(Navr,rank)) .and. rank<rankmax_min)
 
 
-		!$omp parallel do default(shared) private(j,i,value_Z,edge_m,edge_n)
+		mrange(1)=header_m + select_row(rank+1) - 1
 		do j=1,rankmax_c
-			edge_m = header_m + select_row(rank+1) - 1
-			edge_n = header_n + j - 1
-			call element_Zmn(edge_m,edge_n,row_R(j),msh,option,ker)
+			nrange(j)=header_n + j - 1
 		enddo
-		!$omp end parallel do
+		call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag)
+		row_R=matr(1,:)
+
+
+		! !$omp parallel do default(shared) private(j,i,value_Z,edge_m,edge_n)
+		! do j=1,rankmax_c
+			! edge_m = header_m + select_row(rank+1) - 1
+			! edge_n = header_n + j - 1
+			! call element_Zmn(edge_m,edge_n,row_R(j),msh,option,ker)
+		! enddo
+		! !$omp end parallel do
 
 		call gemmf77('N','N',1,rankmax_c,rank, cone, matU(select_row(rank+1),1), rankmax_r,matV,rmax,czero,value_UV,1)
 
@@ -3702,13 +3951,21 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 		! !$omp end parallel do
 
 
-		!$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
+
+		nrange(1)=header_n + select_column(rank+1) - 1
 		do i=1,rankmax_r
-			edge_m = header_m + i - 1
-			edge_n = header_n + select_column(rank+1) - 1
-			call element_Zmn(edge_m,edge_n,column_R(i),msh,option,ker)
+			mrange(i)=header_m + i - 1
 		enddo
-		!$omp end parallel do
+		call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag)
+		column_R=matc(:,1)
+
+		! !$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
+		! do i=1,rankmax_r
+			! edge_m = header_m + i - 1
+			! edge_n = header_n + select_column(rank+1) - 1
+			! call element_Zmn(edge_m,edge_n,column_R(i),msh,option,ker)
+		! enddo
+		! !$omp end parallel do
 
 
 
@@ -3879,7 +4136,7 @@ end subroutine LR_ACA
 
 
 
-subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,option,error)
+subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn_block,ptree,option,error)
 
 
     use BPACK_DEFS
@@ -3901,24 +4158,14 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 	type(Hstat)::stats
 	type(Hoption)::option
+	integer::mrange(M),nrange(N)
+	integer::passflag=0
 
 	n1 = OMP_get_wtime()
-
-	! allocate(fullmat(M,N))
-	! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-	! do i=1,M
-	! do j=1,N
-		! edge_m = header_m + i - 1
-		! edge_n = header_n + j - 1
-		! call element_Zmn(edge_m,edge_n,fullmat(i,j),msh,option,ker)
-	! enddo
-	! enddo
-	! !$omp end parallel do
-
 
 	r_est=min(bsize,min(M,N))
 	! r_est=min(M,N)
@@ -3962,15 +4209,25 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		endif
 
 		!**** Compute columns column_R to find a new set of rows and columns
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
 		do i=1,M
+			mrange(i)=header_m + i - 1
+		enddo
 		do j=1,r_est
-			edge_m = header_m + i - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		enddo
-		!$omp end parallel do
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag)
+
+
+		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do i=1,M
+		! do j=1,r_est
+			! edge_m = header_m + i - 1
+			! edge_n = header_n + select_column(j) - 1
+			! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do
+
 		if(rank>0)then
 			do j=1,r_est
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
@@ -3990,15 +4247,24 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 
 
 		!**** Compute rows row_R in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,N
 		do i=1,r_est
-			edge_m = header_m + select_row(i) - 1
-			edge_n = header_n + j - 1
-			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
+			mrange(i)=header_m + select_row(i) - 1
 		enddo
+		do j=1,N
+			nrange(j)=header_n + j - 1
 		enddo
-		!$omp end parallel do
+		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag)
+
+		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do j=1,N
+		! do i=1,r_est
+			! edge_m = header_m + select_row(i) - 1
+			! edge_n = header_n + j - 1
+			! call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do
+
 		if(rank>0)then
 			do i=1,r_est
 			call gemmf77('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
@@ -4015,15 +4281,23 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		select_column(1:r_est) = jpvt(1:r_est)
 
 		!**** Compute columns column_R in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
 		do i=1,M
+			mrange(i)=header_m + i - 1
+		enddo
 		do j=1,r_est
-			edge_m = header_m + i - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		enddo
-		!$omp end parallel do
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag)
+
+		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do i=1,M
+		! do j=1,r_est
+			! edge_m = header_m + i - 1
+			! edge_n = header_n + select_column(j) - 1
+			! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do
 		if(rank>0)then
 			do j=1,r_est
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
@@ -4141,7 +4415,7 @@ end subroutine LR_BACA
 
 
 
-subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn,ptree,option,error)
+subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_tolerance,bsize,msh,ker,stats,element_Zmn_block,ptree,option,error)
 
     use BPACK_DEFS
     implicit none
@@ -4162,10 +4436,12 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 	type(mesh)::msh
 	type(kernelquant)::ker
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 	type(Hstat)::stats
 	type(Hoption)::option
+	integer::mrange(M),nrange(N)
+	integer::passflag=0
 
 	n1 = OMP_get_wtime()
 
@@ -4219,14 +4495,23 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 		!**** Compute columns column_R to find a new set of rows and columns
 		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do i=1,M
+		! do j=1,r_est
+			! edge_m = header_m + i - 1
+			! edge_n = header_n + select_column(j) - 1
+			! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do
+
 		do i=1,M
+			mrange(i)=header_m + i - 1
+		enddo
 		do j=1,r_est
-			edge_m = header_m + i - 1
-			edge_n = header_n + select_column(j) - 1
-			call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
+			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		enddo
-		!$omp end parallel do
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag)
+
 		if(rank>0)then
 			do j=1,r_est
 			call gemmf77('N','N',M,1,rank, -cone, matU, M,matV(1,select_column(j)),rmax,cone,column_R(1,j),M)
@@ -4247,15 +4532,23 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 
 		!**** Compute rows row_R in CUR
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		do j=1,N
+		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
+		! do j=1,N
+		! do i=1,r_est
+			! edge_m = header_m + select_row(i) - 1
+			! edge_n = header_n + j - 1
+			! call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
+		! enddo
+		! enddo
+		! !$omp end parallel do
 		do i=1,r_est
-			edge_m = header_m + select_row(i) - 1
-			edge_n = header_n + j - 1
-			call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
+			mrange(i)=header_m + select_row(i) - 1
 		enddo
+		do j=1,N
+			nrange(j)=header_n + j - 1
 		enddo
-		!$omp end parallel do
+		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag)
+
 		if(rank>0)then
 			do i=1,r_est
 			call gemmf77('N','N',1,N,rank, -cone, matU(select_row(i),1), M,matV,rmax,cone,row_R(i,1),r_est)
@@ -4372,7 +4665,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 end subroutine LR_BACA_noOverlap
 
 
-subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn,ptree,option,ctxt,pgno)
+subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolerance,SVD_tolerance,msh,ker,stats,element_Zmn_block,ptree,option,ctxt,pgno)
 
 
     use BPACK_DEFS
@@ -4388,14 +4681,14 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
     DT value_Z,value_UV,maxvalue
     DT inner_U,inner_V,ctemp
     real(kind=8) inner_UV,flop
-	DT,allocatable::matU(:,:),matV(:,:),UU(:,:),VV(:,:),MatrixSubselection(:,:)
+	DT,allocatable::matU(:,:),matV(:,:),matV_tmp(:,:),UU(:,:),VV(:,:),MatrixSubselection(:,:)
 	real(kind=8),allocatable::Singular(:)
     DT,allocatable:: row_R(:),column_R(:)
     real(kind=8),allocatable:: norm_row_R(:),norm_column_R(:)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(matrixblock)::blocks
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(Hstat)::stats
 
 	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),matU2D(:,:),matV2D(:,:),matU1D(:,:),matV1D(:,:)
@@ -4413,9 +4706,10 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 	integer,allocatable::select_col(:),select_row(:),N_p(:,:),M_p(:,:)
 	DT,allocatable:: WORK(:)
 	integer, allocatable :: ipiv(:),jpiv(:),JPERM(:)
+	integer:: mrange(M),nrange(N)
 	DT, allocatable :: tau(:)
 	real(kind=8):: RTEMP(1)
-
+	integer:: passflag=0
 	rank_new=0
 	! ctxt = ptree%pgrp(pgno)%ctxt
 	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
@@ -4429,25 +4723,44 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 		call linspaceI(1,N,rmaxc,select_col)
 
 		allocate(matV(N,rmaxr))
-		matV=0
-		do ii=1,N
-			do jj=1,rmaxr
-				edge_m = header_m + select_row(jj) - 1
-				edge_n = header_n + ii - 1
-				call element_Zmn(edge_m,edge_n,matV(ii,jj),msh,option,ker)
-			enddo
+		allocate(matV_tmp(rmaxr,N))
+		do ii=1,rmaxr
+			mrange(ii)=header_m + select_row(ii) - 1
 		enddo
+		do jj=1,N
+			nrange(jj) = header_n + jj - 1
+		enddo
+		call element_Zmn_block(rmaxr,N,mrange,nrange,matV_tmp,msh,option,ker,0,passflag)
+		call copymatT(matV_tmp,matV,rmaxr,N)
+		deallocate(matV_tmp)
+
+		! matV=0
+		! do ii=1,N
+			! do jj=1,rmaxr
+				! edge_m = header_m + select_row(jj) - 1
+				! edge_n = header_n + ii - 1
+				! call element_Zmn(edge_m,edge_n,matV(ii,jj),msh,option,ker)
+			! enddo
+		! enddo
 
 		allocate(MatrixSubselection(rmaxr,rmaxc))
 		MatrixSubselection=0
-
 		do ii=1,rmaxr
-			do jj=1,rmaxc
-				edge_m = header_m + select_row(ii) - 1
-				edge_n = header_n + select_col(jj) - 1
-				call element_Zmn(edge_m,edge_n,MatrixSubselection(ii,jj),msh,option,ker)
-			enddo
+			mrange(ii)=header_m + select_row(ii) - 1
 		enddo
+		do jj=1,rmaxc
+			nrange(jj)=header_n + select_col(jj) - 1
+		enddo
+		call element_Zmn_block(rmaxr,rmaxc,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag)
+
+
+		! do ii=1,rmaxr
+			! do jj=1,rmaxc
+				! edge_m = header_m + select_row(ii) - 1
+				! edge_n = header_n + select_col(jj) - 1
+				! call element_Zmn(edge_m,edge_n,MatrixSubselection(ii,jj),msh,option,ker)
+			! enddo
+		! enddo
 
 		allocate(jpiv(rmaxc))
 		jpiv=0
@@ -4470,13 +4783,24 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 		endif
 		allocate(blocks%ButterflyU%blocks(1)%matrix(M,rank))
 		blocks%ButterflyU%blocks(1)%matrix=0
+
 		do ii=1,M
-			do jj=1,rank
-				edge_m = header_m + ii - 1
-				edge_n = header_n + select_col(jpiv(jj)) - 1
-				call element_Zmn(edge_m,edge_n,blocks%ButterflyU%blocks(1)%matrix(ii,jj),msh,option,ker)
-			enddo
+			mrange(ii)=header_m + ii - 1
 		enddo
+		do jj=1,rank
+			nrange(jj)=header_n + select_col(jpiv(jj)) - 1
+		enddo
+		call element_Zmn_block(M,rank,mrange,nrange,blocks%ButterflyU%blocks(1)%matrix,msh,option,ker,0,passflag)
+
+
+
+		! do ii=1,M
+			! do jj=1,rank
+				! edge_m = header_m + ii - 1
+				! edge_n = header_n + select_col(jpiv(jj)) - 1
+				! call element_Zmn(edge_m,edge_n,blocks%ButterflyU%blocks(1)%matrix(ii,jj),msh,option,ker)
+			! enddo
+		! enddo
 
 		allocate(blocks%ButterflyV%blocks(1)%matrix(N,rank))
 		blocks%ButterflyV%blocks(1)%matrix = matV(1:N,1:rank)
@@ -4504,19 +4828,31 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 			myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(rmaxr, nbslpk, mycol, 0, npcol)
 			allocate(matV(myArows,myAcols))
+			allocate(matV_tmp(myAcols,myArows))
 			call descinit( descsmatV, N, rmaxr, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			call assert(info==0,'descinit fail for descsmatV')
 			matV=0
-
+			do myj=1,myAcols
+				call l2g(myj,mycol,rmaxr,npcol,nbslpk,jj)
+				mrange(myj)=header_m + select_row(jj) - 1
+			enddo
 			do myi=1,myArows
 				call l2g(myi,myrow,N,nprow,nbslpk,ii)
-				do myj=1,myAcols
-					call l2g(myj,mycol,rmaxr,npcol,nbslpk,jj)
-					edge_m = header_m + select_row(jj) - 1
-					edge_n = header_n + ii - 1
-					call element_Zmn(edge_m,edge_n,matV(myi,myj),msh,option,ker)
-				enddo
+				nrange(myi) = header_n + ii - 1
 			enddo
+			call element_Zmn_block(myAcols,myArows,mrange,nrange,matV_tmp,msh,option,ker,0,passflag)
+			call copymatT(matV_tmp,matV,myAcols,myArows)
+			deallocate(matV_tmp)
+
+			! do myi=1,myArows
+				! call l2g(myi,myrow,N,nprow,nbslpk,ii)
+				! do myj=1,myAcols
+					! call l2g(myj,mycol,rmaxr,npcol,nbslpk,jj)
+					! edge_m = header_m + select_row(jj) - 1
+					! edge_n = header_n + ii - 1
+					! call element_Zmn(edge_m,edge_n,matV(myi,myj),msh,option,ker)
+				! enddo
+			! enddo
 
 			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 			myArows = numroc_wp(rmaxr, nbslpk, myrow, 0, nprow)
@@ -4526,17 +4862,27 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 			call descinit( descsub, rmaxr, rmaxc, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			call assert(info==0,'descinit fail for descsub')
 			MatrixSubselection=0
-
-
 			do myi=1,myArows
 				call l2g(myi,myrow,rmaxr,nprow,nbslpk,ii)
-				do myj=1,myAcols
-					call l2g(myj,mycol,rmaxc,npcol,nbslpk,jj)
-					edge_m = header_m + select_row(ii) - 1
-					edge_n = header_n + select_col(jj) - 1
-					call element_Zmn(edge_m,edge_n,MatrixSubselection(myi,myj),msh,option,ker)
-				enddo
+				mrange(myi)=header_m + select_row(ii) - 1
 			enddo
+			do myj=1,myAcols
+				call l2g(myj,mycol,rmaxc,npcol,nbslpk,jj)
+				nrange(myj)=header_n + select_col(jj) - 1
+			enddo
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag)
+
+
+
+			! do myi=1,myArows
+				! call l2g(myi,myrow,rmaxr,nprow,nbslpk,ii)
+				! do myj=1,myAcols
+					! call l2g(myj,mycol,rmaxc,npcol,nbslpk,jj)
+					! edge_m = header_m + select_row(ii) - 1
+					! edge_n = header_n + select_col(jj) - 1
+					! call element_Zmn(edge_m,edge_n,MatrixSubselection(myi,myj),msh,option,ker)
+				! enddo
+			! enddo
 
 
 			! Compute QR of MatrixSubselection*P
@@ -4596,16 +4942,26 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 			call assert(info==0,'descinit fail for descButterU2D')
 			matU2D=0
 
-
 			do myi=1,myArows
 				call l2g(myi,myrow,M,nprow,nbslpk,ii)
-				do myj=1,myAcols
-					call l2g(myj,mycol,rank_new,npcol,nbslpk,jj)
-					edge_m = header_m + ii - 1
-					edge_n = header_n + select_col(ipiv(myj)) - 1
-					call element_Zmn(edge_m,edge_n,matU2D(myi,myj),msh,option,ker)
-				enddo
+				mrange(myi)=header_m + ii - 1
 			enddo
+			do myj=1,myAcols
+				call l2g(myj,mycol,rank_new,npcol,nbslpk,jj)
+				nrange(myj)=header_n + select_col(ipiv(myj)) - 1
+			enddo
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,matU2D,msh,option,ker,0,passflag)
+
+
+			! do myi=1,myArows
+				! call l2g(myi,myrow,M,nprow,nbslpk,ii)
+				! do myj=1,myAcols
+					! call l2g(myj,mycol,rank_new,npcol,nbslpk,jj)
+					! edge_m = header_m + ii - 1
+					! edge_n = header_n + select_col(ipiv(myj)) - 1
+					! call element_Zmn(edge_m,edge_n,matU2D(myi,myj),msh,option,ker)
+				! enddo
+			! enddo
 
 			deallocate(select_col)
 			deallocate(select_row)
@@ -4670,7 +5026,7 @@ end subroutine LR_SeudoSkeleton
 
 
 !!!!!!! check error of LR compression of blocks by comparing the full block, assuming 2D block-cyclic distribution
-subroutine LR_CheckError(blocks,option,msh,ker,stats,element_Zmn,ptree,pgno,gd)
+subroutine LR_CheckError(blocks,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gd)
 use BPACK_DEFS
 implicit none
 
@@ -4679,7 +5035,7 @@ implicit none
 	type(Hoption)::option
 	type(kernelquant)::ker
 	type(Hstat)::stats
-	procedure(Zelem)::element_Zmn
+	procedure(Zelem_block)::element_Zmn_block
 	type(proctree)::ptree
 	integer pgno
 	type(grid),pointer::gd
@@ -4691,7 +5047,10 @@ implicit none
 	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
 	integer edge_n,edge_m, rank
 	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
-
+	integer,allocatable::mrange(:),nrange(:)
+	integer::mrange_dummy(1),nrange_dummy(1)
+	DT:: mat_dummy(1,1)
+	integer:: passflag=0
 
 	if(option%ErrFillFull==1)then
 
@@ -4727,15 +5086,29 @@ implicit none
 			myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)
 			call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
 			allocate(Fullmat(myArows,myAcols))
+			allocate(mrange(myArows))
+			allocate(nrange(myAcols))
 			do myi=1,myArows
 				call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
-				do myj=1,myAcols
-					call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
-					edge_m = blocks%headm + ii - 1
-					edge_n = blocks%headn + jj - 1
-					call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,option,ker)
-				enddo
+				mrange(myi)=blocks%headm + ii - 1
 			enddo
+			do myj=1,myAcols
+				call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
+				nrange(myj) = blocks%headn + jj - 1
+			enddo
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,Fullmat,msh,option,ker,0,passflag)
+			deallocate(mrange)
+			deallocate(nrange)
+
+			! do myi=1,myArows
+				! call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
+				! do myj=1,myAcols
+					! call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
+					! edge_m = blocks%headm + ii - 1
+					! edge_n = blocks%headn + jj - 1
+					! call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,option,ker)
+				! enddo
+			! enddo
 
 			! compute the exact results
 			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
@@ -4763,6 +5136,10 @@ implicit none
 			rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
 			deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
 		endif
+
+		do while(passflag==0)
+			call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag)
+		enddo
 
 		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 		call MPI_ALLREDUCE(rtemp1,fnorm1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)

@@ -220,11 +220,11 @@ PROGRAM ButterflyPACK_IE_2D
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation)
 	deallocate(xyz)
-	call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,element_Zmn_user,ptree_A)
+	call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,element_Zmn_block_user,ptree_A)
 	!**** print statistics
 	call PrintStat(stats_A,ptree_A)
 
-	! call FULLMAT_Element(option_A,stats_A,msh_A,ker_A,element_Zmn_user,ptree_sh)
+	! call FULLMAT_Element(option_A,stats_A,msh_A,ker_A,element_Zmn_block_user,ptree_sh)
 	!***********************************************************************
 
 
@@ -253,7 +253,7 @@ PROGRAM ButterflyPACK_IE_2D
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
 		!**** computation of the construction phase
-		call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,element_Zmn_user,ptree_sh)
+		call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,element_Zmn_block_user,ptree_sh)
 		!**** factorization phase
 		call BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
 		!**** print statistics
@@ -285,7 +285,7 @@ PROGRAM ButterflyPACK_IE_2D
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
 		deallocate(Permutation)
 		deallocate(xyz)
-		call BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,element_Zmn_user,ptree_B)
+		call BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,element_Zmn_block_user,ptree_B)
 		!**** factorization phase
 		if(quant%SI==0)then
 			call BPACK_Factorization(bmat_B,option_B,stats_B,ptree_B,msh_B)
