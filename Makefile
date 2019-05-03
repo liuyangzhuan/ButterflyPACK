@@ -29,7 +29,7 @@ clean: cleanlib cleanex
 
 lib:
 	( mkdir -p build; cd build; mkdir -p lib; mkdir -p include; mkdir -p SRC_DOUBLE; mkdir -p SRC_DOUBLECOMPLEX)
-	( sed -i 's/^M$//' PrecisionPreprocessing.sh; sh PrecisionPreprocessing.sh)
+	( sed -i 's/^M$//' PrecisionPreprocessing.sh; bash PrecisionPreprocessing.sh)
 	( cd SRC_DOUBLE; $(MAKE) )
 	( cd SRC_DOUBLECOMPLEX; $(MAKE) )
 
