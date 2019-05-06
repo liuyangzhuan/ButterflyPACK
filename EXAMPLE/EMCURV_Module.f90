@@ -58,7 +58,6 @@ implicit none
 		integer::nev=1 ! nubmer of requested eigen values
 		character(len=2) which ! which portion of eigen spectrum
 		real(kind=8) tol_eig ! tolerance in arpack
-
 	end type quant_EMCURV
 
 contains

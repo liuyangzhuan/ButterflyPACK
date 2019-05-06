@@ -52,20 +52,21 @@ PROGRAM ButterflyPACK_IE_2D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
-	type(Bmatrix)::bmat
+	type(Hoption),target::option,option1
+	type(Hstat),target::stats,stats1
+	type(mesh),target::msh,msh1
+	type(kernelquant),target::ker,ker1
+	type(Bmatrix),target::bmat,bmat1
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree
+	type(proctree),target::ptree,ptree1
 	type(quant_EMCURV),target::quant
+	type(quant_bmat),target::quant1
 	CHARACTER (LEN=1000) DATA_DIR
 	integer:: randsize=50
 	real(kind=8),allocatable::xyz(:,:)
-	integer,allocatable::Permutation(:)
-	integer Nunk_loc
+	integer,allocatable::Permutation(:),tree(:)
+	integer Nunk_loc,Maxlevel
 	integer nargs,flag
 
 	! nmpi and groupmembers should be provided by the user
@@ -185,9 +186,74 @@ PROGRAM ButterflyPACK_IE_2D
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
 
+	!**** computation of the construction phase
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user,ptree)
+
+
+
+
+
+
+
+	!*********** Construct the second HODLR by using the first HODLR as parallel element extraction
+	call CopyOptions(option,option1)
+	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
+	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
+
+	!**** register the user-defined function and type in ker
+	ker1%FuncZmn=>Zelem_EMCURV
+	ker1%FuncZmnBlock=>Zelem_block_Extraction
+	ker1%QuantApp=>quant1
+
+	quant1%bmat=>bmat
+	quant1%msh=>msh
+	quant1%ptree=>ptree
+	quant1%stats=>stats
+	quant1%option=>option
+
+	msh1%Nunk = msh%Nunk
+
+	allocate(xyz(2,quant%Nunk))
+	do edge=1, quant%Nunk
+		xyz(:,edge) = quant%xyz(:,edge*2-1)
+	enddo
+	allocate(msh1%xyz(2,quant%Nunk)) ! xyz is used to compute group centers to determine admissibility
+	do edge=1,quant%Nunk
+		msh1%xyz(:,edge) = xyz(:,msh%new2old(edge))
+	enddo
+	deallocate(xyz)
+
+	call InitStat(stats1)
+
+	!**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
+	allocate(groupmembers(nmpi))
+	do ii=1,nmpi
+		groupmembers(ii)=(ii-1)
+	enddo
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+	deallocate(groupmembers)
+
+
+	!**** use the clustering tree from the first HODLR
+	select case(option%format)
+	case(HODLR)
+		Maxlevel=bmat%ho_bf%Maxlevel
+	case(HMAT)
+		Maxlevel=bmat%h_mat%Maxlevel
+	end select
+	allocate (tree(2**Maxlevel))
+	do ii=1,2**Maxlevel
+		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+	enddo
+
+	!**** initialization of the construction phase
+	allocate(Permutation(msh1%Nunk))
+	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	deallocate(Permutation) ! caller can use this permutation vector if needed
+	deallocate(tree)
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
+    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,element_Zmn_block_comm_user,ptree1)
 
 
     !t1 = OMP_get_wtime()
@@ -219,6 +285,16 @@ PROGRAM ButterflyPACK_IE_2D
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
+
+
+	!**** deletion of quantities
+	call delete_proctree(ptree1)
+	call delete_Hstat(stats1)
+	call delete_mesh(msh1)
+	call delete_kernelquant(ker1)
+	call BPACK_delete(bmat1)
+
+
 
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"

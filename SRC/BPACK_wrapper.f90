@@ -29,7 +29,7 @@ use iso_c_binding
 contains
 
 
-subroutine element_Zmn_block_user_C(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag)
+subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree)
     use BPACK_DEFS
     implicit none
     integer nrow, ncol,passflag,myflag,ii,jj,ij
@@ -38,6 +38,7 @@ subroutine element_Zmn_block_user_C(nrow,ncol,mrange,nrange,values,msh,option,ke
 	DT:: value_e,values(nrow,ncol)
 	type(mesh)::msh
 	type(Hoption)::option
+	type(proctree)::ptree
 	type(kernelquant)::ker
 	procedure(C_Zelem), POINTER :: proc
 
@@ -64,7 +65,7 @@ subroutine element_Zmn_block_user_C(nrow,ncol,mrange,nrange,values,msh,option,ke
 
 	return
 
-end subroutine element_Zmn_block_user_C
+end subroutine element_Zmn_block_nocomm_user_C
 
 
 
@@ -761,7 +762,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_nocomm_user_C,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -769,7 +770,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user_C,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user_C,ptree)
 
 
 	!**** return the permutation vector
@@ -942,7 +943,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_nocomm_user_C,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "

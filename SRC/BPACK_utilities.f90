@@ -101,7 +101,7 @@ use misc
 implicit none
 
 type(Hmat)::h_mat
-integer bm,bn,ii,jj
+integer bm,bn,ii,jj,level
 
 call Hmat_delete_global_tree(h_mat%blocks_root)
 deallocate(h_mat%blocks_root)
@@ -126,6 +126,13 @@ if(associated(h_mat%Local_blocks_copy))then
 	enddo
 	enddo
 	deallocate(h_mat%Local_blocks_copy)
+endif
+
+if(allocated(h_mat%lstblks))then
+	do level=0,h_mat%Maxlevel
+		call list_finalizer(h_mat%lstblks(level))
+	enddo
+	deallocate(h_mat%lstblks)
 endif
 
 end subroutine Hmat_delete
@@ -198,13 +205,16 @@ if(allocated(msh%new2old))deallocate(msh%new2old)
 ! if(allocated(msh%old2new))deallocate(msh%old2new)
 if(allocated(msh%pretree))deallocate(msh%pretree)
 if(allocated(msh%basis_group))then
-! do ii=1,msh%Maxgroup
-	! if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
-! enddo
+do ii=1,msh%Maxgroup
+	if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
+enddo
 deallocate(msh%basis_group)
 endif
 
 end subroutine delete_mesh
+
+
+
 
 subroutine delete_proctree(ptree)
 use BPACK_DEFS

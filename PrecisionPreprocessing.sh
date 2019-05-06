@@ -11,7 +11,7 @@ TMP_FILE=$PWD/tmp.txt
 declare -a StringArray=("*.*" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
 for val in ${StringArray[@]}; do
    # echo $val
-   sed -i "s/\r$//" $val
+   sed -i 's/\r$//' $val
    sed -i 's/[[:blank:]]*$//' $val
 done
 

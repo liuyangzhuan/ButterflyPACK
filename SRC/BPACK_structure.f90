@@ -95,7 +95,7 @@ end function euclidean_distance
 !     defined as 1-Z_ij^2/(Z_iiZ_jj)
 !     undefined otherwise
 !     Use with caution !!!
-real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,element_Zmn_block)
+real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,ptree,element_Zmn_block)
 
     use BPACK_DEFS
     implicit none
@@ -103,6 +103,7 @@ real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,element_Zmn_block
     integer edgem, edgen,passflag,rows(1),cols(1)
 	type(mesh)::msh
 	type(Hoption)::option
+	type(proctree)::ptree
 	type(kernelquant)::ker
 	procedure(Zelem_block)::element_Zmn_block
 	DT r1(1,1),r2(1,1),r3(1,1),r4(1,1)
@@ -112,16 +113,16 @@ real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,element_Zmn_block
 
 ! l2 distance
 #if 0
-	call element_Zmn_block(1,1,rows,rows,r1,msh,option,ker,0,passflag)
-	call element_Zmn_block(1,1,cols,cols,r2,msh,option,ker,0,passflag)
-	call element_Zmn_block(1,1,rows,cols,r3,msh,option,ker,0,passflag)
-	call element_Zmn_block(1,1,cols,rows,r4,msh,option,ker,0,passflag)
+	call element_Zmn_block(1,1,rows,rows,r1,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,1,cols,cols,r2,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,1,rows,cols,r3,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,1,cols,rows,r4,msh,option,ker,0,passflag,ptree)
     gram_distance=dble(r1(1,1)+r2(1,1)-r3(1,1)-r4(1,1))
 ! angular distance
 #else
-	call element_Zmn_block(1,1,rows,rows,r1,msh,option,ker,0,passflag)
-	call element_Zmn_block(1,1,cols,cols,r2,msh,option,ker,0,passflag)
-	call element_Zmn_block(1,1,rows,cols,r3,msh,option,ker,0,passflag)
+	call element_Zmn_block(1,1,rows,rows,r1,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,1,cols,cols,r2,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,1,rows,cols,r3,msh,option,ker,0,passflag,ptree)
     gram_distance=dble(1d0-r3(1,1)**2d0/(r1(1,1)*r2(1,1)))
 #endif
     return
@@ -353,7 +354,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 			enddo
 			rows(2)=ind_j
 			cols(2)=ind_j
-			call element_Zmn_block(2,2,rows,cols,rr,msh,option,ker,0,passflag)
+			call element_Zmn_block(2,2,rows,cols,rr,msh,option,ker,0,passflag,ptree)
 			if(abs(aimag(cmplx(rr(1,1),kind=8)))>SafeUnderflow .or. abs(aimag(cmplx(rr(2,2),kind=8)))>SafeUnderflow .or. abs(rr(1,2)-conjg(cmplx(rr(2,1),kind=8)))>abs(rr(1,2))*SafeEps)then
 				write(*,*)'Matrix not hermitian. The gram distance is undefined'
 			endif
@@ -372,6 +373,19 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'N_leaf:',int(msh%Nunk/(2**Maxlevel))
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Constructing basis groups...'
+
+
+	dimn=0
+	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
+	if(dimn>0)then
+	allocate(xyzrange(dimn))
+	allocate(xyzmin(dimn))
+	allocate(xyzmax(dimn))
+	allocate(auxpoint(dimn))
+	allocate(groupcenter(dimn))
+	endif
+
+
 
 	!**** construct the top few levels whose ordering is provided by the user
 	msh%basis_group(1)%head=1 ; msh%basis_group(1)%tail=msh%Nunk; msh%basis_group(1)%pgno=1
@@ -394,26 +408,49 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 				msh%basis_group(group)%head = msh%basis_group(2*group)%head
 				msh%basis_group(group)%tail = msh%basis_group(2*group+1)%tail
 			endif
+
+			!***** the following is needed for the near_or_far function in H matrix, this needs to be improved
+			if(allocated(msh%xyz))then
+				Dimn = size(msh%xyz,1)
+				groupcenter(1:dimn)=0.0d0
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					do ii=1,dimn
+						groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%new2old(edge))
+					enddo
+				enddo
+				do ii=1,dimn
+					groupcenter(ii)=groupcenter(ii)/(msh%basis_group(group)%tail-msh%basis_group(group)%head+1)
+				enddo
+
+				radiusmax=0.
+				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+					radius=0
+					do ii=1,dimn
+						radius=radius+(msh%xyz(ii,msh%new2old(edge))-groupcenter(ii))**2
+					enddo
+					radius=sqrt(radius)
+					if (radius>radiusmax) then
+						radiusmax=radius
+						center_edge=edge
+					endif
+				enddo
+
+				allocate(msh%basis_group(group)%center(dimn))
+				msh%basis_group(group)%center = groupcenter
+				msh%basis_group(group)%radius = radiusmax
+			endif
+
 		enddo
 	enddo
 
 
 	!**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
-	dimn=0
-	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
-	if(dimn>0)then
-	allocate(xyzrange(dimn))
-	allocate(xyzmin(dimn))
-	allocate(xyzmax(dimn))
-	allocate(auxpoint(dimn))
-	allocate(groupcenter(dimn))
-	endif
-
 	do level=nlevel_pre, Maxlevel
 		do group=2**level, 2**(level+1)-1
 			! msh%basis_group(group)%level=level
 
 			if(allocated(msh%xyz))then
+			if(.not. allocated(msh%basis_group(group)%center))then
 				groupcenter(1:dimn)=0.0d0
 				! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
@@ -442,6 +479,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 				allocate(msh%basis_group(group)%center(dimn))
 				msh%basis_group(group)%center = groupcenter
 				msh%basis_group(group)%radius = radiusmax
+			endif
 			endif
 
 			if(option%xyzsort==NATURAL)then !natural ordering
@@ -504,7 +542,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius2=0
 					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
-						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,option,element_Zmn_block)
+						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,option,ptree,element_Zmn_block)
 					enddo
 					! call assert(radius2>0,'radius2<0 cannot take square root')
 					! radius2 = sqrt(radius2)
@@ -523,7 +561,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
 
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,option,element_Zmn_block)
+					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,option,ptree,element_Zmn_block)
 				enddo
 				!$omp end parallel do
 
@@ -1324,6 +1362,14 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
             call Hmat_construct_local_tree(blocks,option,stats,msh,ptree,h_mat%Maxlevel)
         enddo
     enddo
+
+
+
+
+
+
+
+
 
     call MPI_allreduce(MPI_IN_PLACE,stats%leafs_of_level(0:h_mat%Maxlevel),h_mat%Maxlevel+1,MPI_integer,MPI_sum,ptree%Comm,ierr)
 

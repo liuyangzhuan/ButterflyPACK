@@ -321,6 +321,7 @@ module BPACK_DEFS
 		type(matrixblock), pointer :: Local_blocks_copy(:,:)=>null() ! copy of the forward matrix
 		type(matrixblock), pointer :: Computing_matricesblock_m(:,:)=>null(), Computing_matricesblock_l(:,:)=>null(), Computing_matricesblock_u(:,:)=>null()
 		type(matrixblock),pointer:: blocks_1=>null(),blocks_2=>null()
+		type(list),allocatable::lstblks(:) ! lstblks(level) is the list of blocks at that level
 	end type Hmat
 
 	type Bmatrix
@@ -430,6 +431,7 @@ module BPACK_DEFS
 
 		class(*),pointer :: QuantApp=>null() ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Zelem),nopass,pointer :: FuncZmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing an list of intersection of indices from Z (assuming predefined layout (2D-block cyclic))
 		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
 		type(c_ptr),pointer :: C_QuantApp=>null() ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
@@ -437,6 +439,19 @@ module BPACK_DEFS
 		type(c_funptr),pointer :: C_FuncHMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
 		type(c_funptr),pointer :: C_FuncBMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
 	end type kernelquant
+
+
+
+	type quant_bmat
+		type(Bmatrix),pointer::bmat ! Use this metadata in blocked element extraction
+		type(mesh),pointer::msh   ! Use this metadata in blocked element extraction
+		type(proctree),pointer::ptree ! Use this metadata in blocked element extraction
+		type(Hstat),pointer::stats ! Use this metadata in blocked element extraction
+		type(Hoption),pointer::option ! Use this metadata in blocked element extraction
+		type(kernelquant),pointer::ker ! Use this metadata in blocked element extraction
+	end type quant_bmat
+
+
 
 	!**** a derived type containing a pointer to a block
 	type:: block_ptr
@@ -474,8 +489,8 @@ module BPACK_DEFS
 			type(kernelquant)::ker
 		end subroutine Zelem
 
-		subroutine Zelem_block(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag)
-			import::mesh,Hoption,kernelquant
+		subroutine Zelem_block(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree)
+			import::mesh,Hoption,kernelquant,proctree
 			implicit none
 			integer nrow, ncol,myflag,passflag
 			integer mrange(nrow)
@@ -484,6 +499,7 @@ module BPACK_DEFS
 			type(mesh)::msh
 			type(Hoption)::option
 			type(kernelquant)::ker
+			type(proctree)::ptree
 		end subroutine Zelem_block
 
 		subroutine F_Zelem(m,n,val,quant) ! interface of user-defined element evaluation routine in Fortran. m,n represents indices in natural order
@@ -492,6 +508,16 @@ module BPACK_DEFS
 		  integer, INTENT(IN):: m,n
 		  DT::val
 		end subroutine F_Zelem
+
+
+		subroutine F_Zelem_block(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
+			class(*),pointer :: quant
+			integer:: Ninter
+			integer:: allrows(:),allcols(:)
+			DT::alldat_loc(:)
+			integer::colidx(Ninter),rowidx(Ninter)
+		end subroutine F_Zelem_block
+
 
 		subroutine C_Zelem (m,n,val,quant) ! interface of user-defined element evaluation routine in C. m,n represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
