@@ -52,7 +52,7 @@ end subroutine Zelem_block_Extraction
 
 
 
-subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree)
+subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
 
 	use BPACK_DEFS
 	implicit none
@@ -64,6 +64,7 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 	type(mesh)::msh
 	type(proctree)::ptree
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(kernelquant)::ker
 	integer ierr,idx_row,idx_col,idx_dat
 	integer,allocatable:: flags(:),dests(:),colidx1(:),rowidx1(:),colidx(:),rowidx(:),allrows(:),allcols(:),disps(:)
@@ -71,6 +72,7 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 	DT,allocatable::alldat_loc(:)
 	type(intersect),allocatable::inters(:)
 	integer myArows,myAcols
+	real(kind=8)::t1,t2
 
 	allocate(flags(ptree%nproc))
 
@@ -79,6 +81,7 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 	call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
 	passflag=minval(flags)
 
+	t1 = OMP_get_wtime()
 
 	if(passflag==0)then
 		proc => ker%FuncZmnBlock
@@ -207,6 +210,9 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 
 	endif
 
+	t2 = OMP_get_wtime()
+	stats%Time_Entry=stats%Time_Entry+t2-t1
+
 	deallocate(flags)
 
 	return
@@ -218,7 +224,7 @@ end subroutine element_Zmn_block_comm_user
 
 
 
-subroutine element_Zmn_block_nocomm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree)
+subroutine element_Zmn_block_nocomm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
 
 	use BPACK_DEFS
 	implicit none
@@ -230,12 +236,14 @@ subroutine element_Zmn_block_nocomm_user(nrow,ncol,mrange,nrange,values,msh,opti
 	type(mesh)::msh
 	type(proctree)::ptree
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(kernelquant)::ker
+	real(kind=8)::t1,t2
 
 	procedure(F_Zelem), POINTER :: proc
 
 	proc => ker%FuncZmn
-
+	t1 = OMP_get_wtime()
 	if(nrow*ncol>0)then
 		! !$omp parallel
 		! !$omp single
@@ -253,6 +261,9 @@ subroutine element_Zmn_block_nocomm_user(nrow,ncol,mrange,nrange,values,msh,opti
 		! !$omp end parallel
 
 	endif
+
+	t2 = OMP_get_wtime()
+	stats%Time_Entry=stats%Time_Entry+t2-t1
 
 	passflag=2
 
@@ -325,6 +336,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 
 	stats%Flop_Fill=0
 	stats%Time_Fill=0
+	stats%Time_Entry=0
 
 
 	!**** set thread number here
@@ -445,7 +457,7 @@ subroutine FULLMAT_Element(option,stats,msh,ker,element_Zmn_block,ptree)
 	do jj=1,N_unk_loc
 		nrange(jj)=jj-msh%idxs+1
 	enddo
-	call element_Zmn_block(msh%Nunk,N_unk_loc,mrange,nrange,fullmat,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(msh%Nunk,N_unk_loc,mrange,nrange,fullmat,msh,option,ker,0,passflag,ptree,stats)
 
 	call MPI_ALLREDUCE(N_unk_loc,N_unk_locmax,1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 	allocate(fullmat_tmp(msh%Nunk,N_unk_locmax))
@@ -557,7 +569,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
         do ii=blocks%headm,blocks%headm+blocks%M-1
 			mrange(1) = ii
 			nrange(1) = ii
-			call element_Zmn_block(1,1,mrange,nrange,mat,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(1,1,mrange,nrange,mat,msh,option,ker,0,passflag,ptree,stats)
 			scale_factor = max(scale_factor,abs(mat(1,1)/option%scale_factor))
 			! write(*,*)ii,abs(ctemp)
 		enddo
@@ -565,7 +577,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 
 	passflag=0
 	do while(passflag==0)
-	call element_Zmn_block(0,0,mrange,nrange,mat,msh,option,ker,2,passflag,ptree)
+	call element_Zmn_block(0,0,mrange,nrange,mat,msh,option,ker,2,passflag,ptree,stats)
 	enddo
 
 	option%scale_factor = 1d0/scale_factor
@@ -614,7 +626,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 
 		passflag=0
 		do while(passflag<2)
-		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree)
+		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
 		enddo
 	enddo
 
@@ -639,6 +651,8 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total construction time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Time_Entry,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total entry eval time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A26Es14.2)') 'Total construction flops:',rtemp
 
@@ -723,8 +737,6 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 					endif
 
 
-
-
 					! if(mod(ii,2)==1)then
 						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn_block,ptree)
 					! else
@@ -753,9 +765,6 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 
 
 						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp,'randomized_bf time,', tim_tmp,'stats%Time_random,',stats%Time_random
-
-
-
 						stop
 					end if
 
@@ -780,14 +789,14 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 
 		passflag=0
 		do while(passflag<2)
-		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree)
+		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
 		enddo
 
 		n4 = OMP_get_wtime()
 		n5 = n4-n3
 
 		call MPI_ALLREDUCE(MPI_IN_PLACE ,n5,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level so far:',stats%rankmax_of_level,'time',n5
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'time',n5, 'rankmax_of_level so far:',stats%rankmax_of_level
 	end do
 	n2 = OMP_get_wtime()
 	stats%Time_Fill = stats%Time_Fill + n2-n1
@@ -800,6 +809,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total construction time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Time_Entry,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total entry eval time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A26Es14.2)') 'Total construction flops:',rtemp
 	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
@@ -855,7 +866,7 @@ subroutine Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block
     allocate (blocks%fullmat(mm,nn))
 	if(blocks%row_group==blocks%col_group)allocate(blocks%ipiv(mm))
 
-	call element_Zmn_block(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree,stats)
 
 	deallocate(mrange)
 	deallocate(nrange)
@@ -1169,7 +1180,7 @@ end subroutine Hmat_block_construction
 				! call l2g(myj,mycol,inters(nn)%nc,npcol,nbslpk,jj)
 				! cols(myj) = inters(nn)%cols(jj)
 			! enddo
-			! call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree)
+			! call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree,stats)
 
 			! do myi=1,nr_loc
 			! do myj=1,nc_loc
@@ -1187,7 +1198,7 @@ end subroutine Hmat_block_construction
 			! allocate(rows(nr_loc))
 			! allocate(cols(nc_loc))
 			! allocate(Mat(nr_loc,nc_loc))
-			! call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree)
+			! call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree,stats)
 		! endif
 		! deallocate(rows)
 		! deallocate(cols)
@@ -1647,7 +1658,7 @@ implicit none
 				cols(myj) = allcols(jj+idx_col)
 			enddo
 			idx_col=idx_col+nc
-			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree,stats)
 
 			do myi=1,nr_loc
 			do myj=1,nc_loc
@@ -1666,7 +1677,7 @@ implicit none
 			allocate(rows(nr_loc))
 			allocate(cols(nc_loc))
 			allocate(Mat(nr_loc,nc_loc))
-			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree)
+			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree,stats)
 		endif
 		deallocate(rows)
 		deallocate(cols)

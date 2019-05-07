@@ -350,7 +350,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_
 		! do j=1,rankmax_c
 			! edge_n=header_n+select_column(j)-1
 		! enddo
-		! call element_Zmn_block(rankmax_r,rankmax_c,mrange,nrange,core,msh,option,ker,0,passflag,ptree)
+		! call element_Zmn_block(rankmax_r,rankmax_c,mrange,nrange,core,msh,option,ker,0,passflag,ptree,stats)
 		! deallocate(mrange)
 		! deallocate(nrange)
 
@@ -379,7 +379,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_
 		do j=1,nn
 			nrange(j)=header_n+j-1
 		enddo
-		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -448,7 +448,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_
 		do j=1,rank_new
 			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
 		enddo
-		call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -512,7 +512,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,element_Zmn_
 				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
 			endif
 		enddo
-		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -1236,7 +1236,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_
 			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
 			enddo
 
-			call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 
@@ -1280,7 +1280,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_
 			do j=1,rankmax_c
 				nrange(j)=header_n+select_column(j)-1
 			enddo
-			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
@@ -1351,7 +1351,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_
 		do j=1,nn
 			nrange(j) = j+header_n-1
 		enddo
-		call element_Zmn_block(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 		deallocate(mrange)
 		deallocate(nrange)
 		call copymatT(matrix_V_tmp,blocks%ButterflyV%blocks(index_j_loc_k)%matrix,rank_new,nn)
@@ -1406,7 +1406,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_
 			do j=1,rank_new
 				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
 			enddo
-			call element_Zmn_block(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 			if(mm1>0)blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix = matrix_V_tmp(1:mm1,:)
@@ -1499,7 +1499,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,element_Zmn_
 				nrange(j)=select_column(j)+header_n-1
 			enddo
 
-			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
@@ -2173,7 +2173,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn_block,
 						do jj=1,nn
 						nrange(jj) = msh%basis_group(group_n)%head + jj - 1
 						enddo
-						call element_Zmn_block(mm,nn,mrange,nrange,QQ,msh,option,ker,0,passflag,ptree)
+						call element_Zmn_block(mm,nn,mrange,nrange,QQ,msh,option,ker,0,passflag,ptree,stats)
 
 						! do ii=1,mm
 							! do jj =1,nn
@@ -3175,7 +3175,7 @@ end subroutine BF_compress_test
 			! do jj=1,blocks%N
 				! nrange(jj) = blocks%headn +jj - 1
 			! enddo
-			! call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree)
+			! call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree,stats)
 			! deallocate(mrange)
 			! deallocate(nrange)
 
@@ -3240,7 +3240,7 @@ end subroutine BF_compress_test
 			! do jj=1,blocks%N
 				! nrange(jj) = blocks%headn +jj - 1
 			! enddo
-			! call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree)
+			! call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree,stats)
 			! deallocate(mrange)
 			! deallocate(nrange)
 
@@ -3732,7 +3732,7 @@ implicit none
 
 	passflag=0
 	do while(passflag==0)
-	call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree)
+	call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
 	enddo
 
 	call LR_HBACA_Merge(blocks,leafsize,rank,option,msh,ker,stats,element_Zmn_block,ptree,pgno,gd,cridx)
@@ -4325,7 +4325,7 @@ implicit none
 			do jj=1,blocks%N
 				nrange(jj) = blocks%headn +jj - 1
 			enddo
-			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 
@@ -4390,7 +4390,7 @@ implicit none
 			do jj=1,blocks%N
 				nrange(jj) = blocks%headn +jj - 1
 			enddo
-			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(blocks%M,blocks%N,mrange,nrange,QQ1,msh,option,ker,0,passflag,ptree,stats)
 
 			! write(*,*)'ni',blocks%row_group,blocks%col_group,fnorm(QQ1,blocks%M,blocks%N)
 
@@ -4586,7 +4586,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	do j=1,rankmax_c
 		nrange(j)=header_n + j - 1
 	enddo
-	call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree,stats)
 	row_R=matr(1,:)
 	norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
 
@@ -4617,7 +4617,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 			do j=1,rankmax_c
 				nrange(j)=header_n + j - 1
 			enddo
-			call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree,stats)
 			row_R=matr(1,:)
 			norm_row_R=dble(row_R*conjg(cmplx(row_R,kind=8)))
 
@@ -4673,7 +4673,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 	do i=1,rankmax_r
 		mrange(i)=header_m + i - 1
 	enddo
-	call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag,ptree)
+	call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag,ptree,stats)
 	column_R=matc(:,1)
 	norm_column_R=dble(column_R*conjg(cmplx(column_R,kind=8)))
 
@@ -4721,7 +4721,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 		do j=1,rankmax_c
 			nrange(j)=header_n + j - 1
 		enddo
-		call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(1,rankmax_c,mrange,nrange,matr,msh,option,ker,0,passflag,ptree,stats)
 		row_R=matr(1,:)
 
 
@@ -4776,7 +4776,7 @@ subroutine LR_ACA(matU,matV,Singular,header_m,header_n,rankmax_r,rankmax_c,frow,
 		do i=1,rankmax_r
 			mrange(i)=header_m + i - 1
 		enddo
-		call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rankmax_r,1,mrange,nrange,matc,msh,option,ker,0,passflag,ptree,stats)
 		column_R=matc(:,1)
 
 		! !$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
@@ -5035,7 +5035,7 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		do j=1,r_est
 			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree,stats)
 
 
 		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
@@ -5073,7 +5073,7 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		do j=1,N
 			nrange(j)=header_n + j - 1
 		enddo
-		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag,ptree,stats)
 
 		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
 		! do j=1,N
@@ -5107,7 +5107,7 @@ subroutine LR_BACA(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance,SVD_toler
 		do j=1,r_est
 			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree,stats)
 
 		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
 		! do i=1,M
@@ -5330,7 +5330,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 		do j=1,r_est
 			nrange(j)=header_n + select_column(j) - 1
 		enddo
-		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(M,r_est,mrange,nrange,column_R,msh,option,ker,0,passflag,ptree,stats)
 
 		if(rank>0)then
 			do j=1,r_est
@@ -5367,7 +5367,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 		do j=1,N
 			nrange(j)=header_n + j - 1
 		enddo
-		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(r_est,N,mrange,nrange,row_R,msh,option,ker,0,passflag,ptree,stats)
 
 		if(rank>0)then
 			do i=1,r_est
@@ -5550,7 +5550,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 		do jj=1,N
 			nrange(jj) = header_n + jj - 1
 		enddo
-		call element_Zmn_block(rmaxr,N,mrange,nrange,matV_tmp,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rmaxr,N,mrange,nrange,matV_tmp,msh,option,ker,0,passflag,ptree,stats)
 		call copymatT(matV_tmp,matV,rmaxr,N)
 		deallocate(matV_tmp)
 
@@ -5571,7 +5571,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 		do jj=1,rmaxc
 			nrange(jj)=header_n + select_col(jj) - 1
 		enddo
-		call element_Zmn_block(rmaxr,rmaxc,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(rmaxr,rmaxc,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag,ptree,stats)
 
 
 		! do ii=1,rmaxr
@@ -5610,7 +5610,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 		do jj=1,rank
 			nrange(jj)=header_n + select_col(jpiv(jj)) - 1
 		enddo
-		call element_Zmn_block(M,rank,mrange,nrange,blocks%ButterflyU%blocks(1)%matrix,msh,option,ker,0,passflag,ptree)
+		call element_Zmn_block(M,rank,mrange,nrange,blocks%ButterflyU%blocks(1)%matrix,msh,option,ker,0,passflag,ptree,stats)
 
 
 
@@ -5660,7 +5660,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 				call l2g(myi,myrow,N,nprow,nbslpk,ii)
 				nrange(myi) = header_n + ii - 1
 			enddo
-			call element_Zmn_block(myAcols,myArows,mrange,nrange,matV_tmp,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(myAcols,myArows,mrange,nrange,matV_tmp,msh,option,ker,0,passflag,ptree,stats)
 			call copymatT(matV_tmp,matV,myAcols,myArows)
 			deallocate(matV_tmp)
 
@@ -5690,7 +5690,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 				call l2g(myj,mycol,rmaxc,npcol,nbslpk,jj)
 				nrange(myj)=header_n + select_col(jj) - 1
 			enddo
-			call element_Zmn_block(myArows,myAcols,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,MatrixSubselection,msh,option,ker,0,passflag,ptree,stats)
 
 
 
@@ -5770,7 +5770,7 @@ subroutine LR_SeudoSkeleton(blocks,header_m,header_n,M,N,rmaxc,rmaxr,rank,tolera
 				call l2g(myj,mycol,rank_new,npcol,nbslpk,jj)
 				nrange(myj)=header_n + select_col(ipiv(myj)) - 1
 			enddo
-			call element_Zmn_block(myArows,myAcols,mrange,nrange,matU2D,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,matU2D,msh,option,ker,0,passflag,ptree,stats)
 
 
 			! do myi=1,myArows
@@ -5916,7 +5916,7 @@ implicit none
 				call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
 				nrange(myj) = blocks%headn + jj - 1
 			enddo
-			call element_Zmn_block(myArows,myAcols,mrange,nrange,Fullmat,msh,option,ker,0,passflag,ptree)
+			call element_Zmn_block(myArows,myAcols,mrange,nrange,Fullmat,msh,option,ker,0,passflag,ptree,stats)
 			deallocate(mrange)
 			deallocate(nrange)
 
@@ -5959,7 +5959,7 @@ implicit none
 
 		passflag=0
 		do while(passflag==0)
-			call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree)
+			call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
 		enddo
 
 		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)

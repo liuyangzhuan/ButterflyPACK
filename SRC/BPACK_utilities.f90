@@ -316,6 +316,7 @@ subroutine InitStat(stats)
 	stats%Time_RedistV=0
 	stats%Time_SMW=0
 	stats%Time_Fill=0
+	stats%Time_Entry=0
 	stats%Mem_peak=0
 	stats%Mem_Sblock=0
 	stats%Mem_SMW=0
@@ -375,6 +376,8 @@ subroutine PrintStat(stats,ptree)
 
 	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'Constr time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Time_Entry,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'EntryEval time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	call MPI_ALLREDUCE(stats%Mem_Direct_for,rtemp1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Tot constr mem:',rtemp+rtemp1,'MB'

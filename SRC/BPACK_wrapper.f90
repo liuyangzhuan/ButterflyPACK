@@ -29,7 +29,7 @@ use iso_c_binding
 contains
 
 
-subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree)
+subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
     use BPACK_DEFS
     implicit none
     integer nrow, ncol,passflag,myflag,ii,jj,ij
@@ -38,11 +38,15 @@ subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,op
 	DT:: value_e,values(nrow,ncol)
 	type(mesh)::msh
 	type(Hoption)::option
+	type(Hstat)::stats
 	type(proctree)::ptree
 	type(kernelquant)::ker
 	procedure(C_Zelem), POINTER :: proc
+	real(kind=8)::t1,t2
 
 	call c_f_procpointer(ker%C_FuncZmn, proc)
+
+	t1 = OMP_get_wtime()
 
 	if(nrow*ncol>0)then
 	! !$omp parallel
@@ -60,6 +64,9 @@ subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,op
 	! !$omp end single
 	! !$omp end parallel
 	endif
+
+	t2 = OMP_get_wtime()
+	stats%Time_Entry=stats%Time_Entry+t2-t1
 
 	passflag=2
 
@@ -207,6 +214,10 @@ subroutine C_BPACK_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_bpack_getstats
 
 	if(trim(str)=='Time_Fill')then
 		val_d = stats%Time_Fill
+		valid_opt = 1
+	endif
+	if(trim(str)=='Time_Entry')then
+		val_d = stats%Time_Entry
 		valid_opt = 1
 	endif
 	if(trim(str)=='Time_Factor')then
@@ -676,6 +687,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 	stats%Flop_Fill=0
 	stats%Time_Fill=0
+	stats%Time_Entry=0
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
@@ -871,6 +883,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	stats%Flop_Fill=0
 	stats%Time_Fill=0
+	stats%Time_Entry=0
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc

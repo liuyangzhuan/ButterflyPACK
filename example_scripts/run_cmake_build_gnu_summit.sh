@@ -24,6 +24,6 @@ cmake .. \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DTPL_BLAS_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-lapack-3.8.0-wcabdyqhdi5rooxbkqa6x5d7hxyxwdkm/lib64/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-lapack-3.8.0-wcabdyqhdi5rooxbkqa6x5d7hxyxwdkm/lib64/liblapack.so" \
-	-DTPL_SCALAPACK_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-scalapack-2.0.2-gc7bg7j2zg7hd26sz4ckwcfnwysuqvcd/lib/libscalapack.so" \
-	-DTPL_ARPACK_LIBRARIES="/ccs/home/liuyangz/my_software/arpack-ng-gnu/build/lib/libarpack.so;/ccs/home/liuyangz/my_software/arpack-ng-gnu/build/lib/libparpack.so"
+	-DTPL_SCALAPACK_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-scalapack-2.0.2-gc7bg7j2zg7hd26sz4ckwcfnwysuqvcd/lib/libscalapack.so"
+	# -DTPL_ARPACK_LIBRARIES="/ccs/home/liuyangz/my_software/arpack-ng-gnu/build/lib/libarpack.so;/ccs/home/liuyangz/my_software/arpack-ng-gnu/build/lib/libparpack.so"
 # -DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check " \
