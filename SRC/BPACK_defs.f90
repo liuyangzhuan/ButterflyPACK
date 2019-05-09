@@ -459,6 +459,14 @@ module BPACK_DEFS
 	end type block_ptr
 
 
+	!**** a derived type containing an integer array
+	type:: iarray
+		integer:: num_nods=0 ! length of the array
+		integer:: idx=0 ! user-defined index
+		integer,allocatable::dat(:)
+		contains
+		final :: iarray_finalizer
+	end type iarray
 	!*** a derived type for a pair of integers
 	type:: ipair
 	integer i,j
@@ -578,4 +586,13 @@ module BPACK_DEFS
 
 
 	 ! integer,allocatable:: basis_group_pre(:,:)
+contains
+
+subroutine iarray_finalizer(lst)
+implicit none
+type(iarray):: lst
+if(allocated(lst%dat))deallocate(lst%dat)
+lst%idx=0
+lst%num_nods=0
+end subroutine iarray_finalizer
 end module BPACK_DEFS

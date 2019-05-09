@@ -20,7 +20,7 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=mpiCC\
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Debug \
+	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DTPL_BLAS_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-lapack-3.8.0-wcabdyqhdi5rooxbkqa6x5d7hxyxwdkm/lib64/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/autofs/nccs-svm1_sw/summit/.swci/1-compute/opt/spack/20180914/linux-rhel7-ppc64le/gcc-6.4.0/netlib-lapack-3.8.0-wcabdyqhdi5rooxbkqa6x5d7hxyxwdkm/lib64/liblapack.so" \

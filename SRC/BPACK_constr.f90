@@ -72,7 +72,7 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 	DT,allocatable::alldat_loc(:)
 	type(intersect),allocatable::inters(:)
 	integer myArows,myAcols
-	real(kind=8)::t1,t2
+	real(kind=8)::t1,t2,t3,t4
 
 	allocate(flags(ptree%nproc))
 
@@ -157,7 +157,6 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 		enddo
 		call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
 
-
 		! !***** parallel extraction of the data
 		! call BPACK_ExtractElement(bmat,option,msh,stats,ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx)
 		call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,ker%QuantApp)
@@ -196,11 +195,13 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 		deallocate(disps)
 		deallocate(alldat_loc)
 
-
+t3 = OMP_get_wtime()
 		!***** redistribution from 2D-block cyclic layout to the layout indicated by dests
 		call BPACK_all2all_inters_2D2User(inters,dests,values,ptree)
-
-
+t4 = OMP_get_wtime()
+! if(ptree%MyID==Main_ID)then
+! write(*,*)t4-t3,'BPACK_all2all_inters_2D2User'
+! endif
 		!***** deallocate global intersections
 		do nn=1,Ninter
 			if(allocated(inters(nn)%dat_loc))deallocate(inters(nn)%dat_loc)
@@ -717,8 +718,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 	allocate (stats%rankmax_of_level_global(0:ho_bf1%Maxlevel))
 	stats%rankmax_of_level_global = 0
 
-	do level_c = 1,ho_bf1%Maxlevel+1
-	! do level_c = 1,1
+	! do level_c = 1,ho_bf1%Maxlevel+1
+	do level_c = ho_bf1%Maxlevel+1,ho_bf1%Maxlevel+1
 		if(level_c/=ho_bf1%Maxlevel+1)then
 			Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 			Bidxe = ho_bf1%levels(level_c)%Bidxe*2
@@ -1267,7 +1268,7 @@ implicit none
 	type(proctree)::ptree
 	procedure(Zelem_block)::element_Zmn_block
 	type(intersect),allocatable::inters(:)
-	real(kind=8)::n1,n2,n3,n4
+	real(kind=8)::n0,n1,n2,n3,n4,n5
 	integer Ntest,passflag
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
 	integer:: cridx,info
@@ -1279,7 +1280,7 @@ implicit none
 	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
 	real(kind=8):: a,v1,v2,v3
 	DT:: value1,value2,value3
-	type(list)::lstr,lstc,lst,lstblk
+	type(list)::lstr,lstc,lstblk
 	type(nod),pointer::cur,curr,curc,curri,curci
 	class(*),pointer::ptr,ptrr,ptrc,ptrri,ptrci
 	integer::head,tail,idx,pp,pgno,ctxt,nr_loc,nc_loc
@@ -1290,11 +1291,14 @@ implicit none
 	integer:: Ninter,nr,nc,ntot_loc
 	DT::alldat_loc(:)
 	integer::colidx(Ninter),rowidx(Ninter)
+	type(iarray)::lst
+
+	n0 = OMP_get_wtime()
 
 	allocate(inters(Ninter))
 	lstr=list()
 	lstc=list()
-	lst=list()
+	! lst=list()
 	lstblk=list()
 	pgno=1
 	ctxt = ptree%pgrp(pgno)%ctxt
@@ -1317,24 +1321,28 @@ implicit none
 		endif
 
 		allocate(inters(nn)%rows(nr))
+		lst%num_nods=nr
 		lst%idx=nn
+		allocate(lst%dat(lst%num_nods))
 		do ii=1,nr
 		idx_row=idx_row+1
 		inters(nn)%rows(ii)=allrows(idx_row)
-		call append( lst, ii )
+		lst%dat(ii)=ii
 		enddo
 		call append(lstr,lst)
-		call list_finalizer(lst)
+		call iarray_finalizer(lst)
 
 		allocate(inters(nn)%cols(nc))
+		lst%num_nods=nc
 		lst%idx=nn
+		allocate(lst%dat(lst%num_nods))
 		do ii=1,nc
 		idx_col=idx_col+1
 		inters(nn)%cols(ii)=allcols(idx_col)
-		call append( lst, ii )
+		lst%dat(ii)=ii
 		enddo
 		call append(lstc,lst)
-		call list_finalizer(lst)
+		call iarray_finalizer(lst)
 	enddo
 
 
@@ -1345,9 +1353,9 @@ implicit none
 	curc=>lstc%head
 	do nn=1,Ninter
 	select type(ptrr=>curr%item)
-	type is(list)
+	type is(iarray)
 	select type(ptrc=>curc%item)
-	type is(list)
+	type is(iarray)
 		select case(option%format)
 		case(HODLR)
 			call HODLR_MapIntersec2Block(bmat%ho_bf,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk,1,1,0)
@@ -1376,9 +1384,9 @@ implicit none
 	curc=>ptr%ptr%lstc%head
 	do nn=1,ptr%ptr%lstr%num_nods
 	select type(ptrr=>curr%item)
-	type is (list)
+	type is (iarray)
 	select type(ptrc=>curc%item)
-	type is (list)
+	type is (iarray)
 		write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods*ptrc%num_nods
 	end select
 	end select
@@ -1405,31 +1413,16 @@ implicit none
 	allocate(blocks%inters(blocks%lstr%num_nods))
 	do nn=1,blocks%lstr%num_nods ! loop all lists of list of rows and columns
 	select type(ptrr=>curr%item)
-	type is (list)
+	type is (iarray)
 	select type(ptrc=>curc%item)
-	type is (list)
+	type is (iarray)
 		blocks%inters(nn)%nr=ptrr%num_nods
 		allocate(blocks%inters(nn)%rows(ptrr%num_nods))
+		blocks%inters(nn)%rows=ptrr%dat
 		blocks%inters(nn)%nc=ptrc%num_nods
 		allocate(blocks%inters(nn)%cols(ptrc%num_nods))
+		blocks%inters(nn)%cols=ptrc%dat
 		blocks%inters(nn)%idx=ptrr%idx
-
-		curri=>ptrr%head
-		do jj=1,ptrr%num_nods
-			select type(ptrri=>curri%item)
-			type is (integer)
-				blocks%inters(nn)%rows(jj)=ptrri
-			end select
-			curri=>curri%next
-		enddo
-		curci=>ptrc%head
-		do jj=1,ptrc%num_nods
-			select type(ptrci=>curci%item)
-			type is (integer)
-				blocks%inters(nn)%cols(jj)=ptrci
-			end select
-			curci=>curci%next
-		enddo
 	end select
 	end select
 	curr=>curr%next
@@ -1536,6 +1529,12 @@ implicit none
 	deallocate(inters)
 
 
+	n5 = OMP_get_wtime()
+
+	if(ptree%MyID==Main_ID)then
+		write(*,*)n1-n0,n2-n1,n3-n2,n4-n3,n5-n4
+	endif
+
 end subroutine BPACK_ExtractElement
 
 
@@ -1574,14 +1573,27 @@ implicit none
 	integer,allocatable:: allrows(:),allcols(:)
 	integer,allocatable::datidx(:),colidx(:),rowidx(:)
 	DT,allocatable::alldat_loc(:)
-	integer:: Ninter,nr,nc,ntot_loc
+	integer:: Ninter,nr,nc,ntot_loc,level
 
-	Ninter=4
-	! nr=msh%Nunk
-	! nc=msh%Nunk
+	select case(option%format)
+	case(HODLR)
+		level=bmat%ho_bf%Maxlevel
+	case(HMAT)
+		level=bmat%h_mat%Maxlevel
+	end select
 
-	nr=100
-	nc=100
+	! level=1
+
+	Ninter=2**level
+	nr=38
+	nc=38
+
+	! Ninter=4
+	! ! nr=msh%Nunk
+	! ! nc=msh%Nunk
+
+	! nr=100
+	! nc=100
 
 	allocate(colidx(Ninter))
 	allocate(rowidx(Ninter))
@@ -1611,16 +1623,18 @@ implicit none
 		endif
 
 		do ii=1,nr
-		call random_number(a)
-		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
-		allrows(idx_row+1)=max(floor_safe(msh%Nunk*a),1)
+		! call random_number(a)
+		! call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		! allrows(idx_row+1)=max(floor_safe(msh%Nunk*a),1)
+		allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
 		idx_row=idx_row+1
 		enddo
 
 		do ii=1,nc
-		call random_number(a)
-		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
-		allcols(idx_col+1)=max(floor_safe(msh%Nunk*a),1)
+		! call random_number(a)
+		! call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		! allcols(idx_col+1)=max(floor_safe(msh%Nunk*a),1)
+		allcols(idx_col+1)=msh%basis_group(2**level+nn-1)%head+ii-1
 		idx_col=idx_col+1
 		enddo
 	enddo
@@ -2285,8 +2299,9 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 	type(proctree)::ptree
 	type(intersect)::inters(:)
 	integer nth,bidx,level_c
-	integer ii,idx,row_group,col_group
-	type(list)::lstr,lstc,lstblk,clstr(2),clstc(2)
+	integer ii,ll,idx,row_group,col_group
+	type(list)::lstblk
+	type(iarray)::lstr,lstc,clstr(2),clstc(2)
 	type(nod),pointer::cur
 	class(*),pointer::ptr
 	type(matrixblock),pointer::blocks
@@ -2304,37 +2319,43 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 		else
 			clstr(1)%idx=nth
 			clstr(2)%idx=nth
-			clstc(1)%idx=nth
-			clstc(2)%idx=nth
-			cur=>lstr%head
+			clstr(1)%num_nods=0
+			clstr(2)%num_nods=0
+
 			do ii=1,lstr%num_nods
-				select type(ptr=>cur%item)
-				type is (integer)
-					! write(*,*)row_group,inters(nth)%rows(ptr),msh%basis_group(row_group*2)%tail
-					if(inters(nth)%rows(ptr)<=msh%basis_group(row_group*2)%tail)then
-						call append(clstr(1),ptr)
-					else
-						call append(clstr(2),ptr)
-					endif
-				class default
-					write(*,*)'unexpected item type'
-				end select
-				cur=>cur%next
+				ll=2
+				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
+				clstr(ll)%num_nods=clstr(ll)%num_nods+1
+			enddo
+			allocate(clstr(1)%dat(clstr(1)%num_nods))
+			allocate(clstr(2)%dat(clstr(2)%num_nods))
+			clstr(1)%num_nods=0
+			clstr(2)%num_nods=0
+			do ii=1,lstr%num_nods
+				ll=2
+				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
+				clstr(ll)%num_nods=clstr(ll)%num_nods+1
+				clstr(ll)%dat(clstr(ll)%num_nods)=lstr%dat(ii)
 			enddo
 
-			cur=>lstc%head
+			clstc(1)%idx=nth
+			clstc(2)%idx=nth
+			clstc(1)%num_nods=0
+			clstc(2)%num_nods=0
 			do ii=1,lstc%num_nods
-				select type(ptr=>cur%item)
-				type is (integer)
-					if(inters(nth)%cols(ptr)<=msh%basis_group(col_group*2)%tail)then
-						call append(clstc(1),ptr)
-					else
-						call append(clstc(2),ptr)
-					endif
-				class default
-					write(*,*)'unexpected item type'
-				end select
-				cur=>cur%next
+				ll=2
+				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
+				clstc(ll)%num_nods=clstc(ll)%num_nods+1
+			enddo
+			allocate(clstc(1)%dat(clstc(1)%num_nods))
+			allocate(clstc(2)%dat(clstc(2)%num_nods))
+			clstc(1)%num_nods=0
+			clstc(2)%num_nods=0
+			do ii=1,lstc%num_nods
+				ll=2
+				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
+				clstc(ll)%num_nods=clstc(ll)%num_nods+1
+				clstc(ll)%dat(clstc(ll)%num_nods)=lstc%dat(ii)
 			enddo
 			if(clstr(1)%num_nods>0 .and. clstc(2)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(1),clstc(2),lstblk,level_c,2*bidx-1,1)
 			if(clstr(2)%num_nods>0 .and. clstc(1)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(2),clstc(1),lstblk,level_c,2*bidx,1)
@@ -2373,7 +2394,8 @@ subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,l
 	type(intersect)::inters(:)
 	integer nth,num_blocks
 	integer ii,jj,idx,row_group,col_group
-	type(list)::lstr,lstc,lstblk,clstr(2),clstc(2),clstr_g,clstc_g(num_blocks)
+	type(list)::lstblk
+	type(iarray)::lstr,lstc,clstr_g,clstc_g(num_blocks)
 
 	type(nod),pointer::cur
 	class(*),pointer::ptr
@@ -2381,36 +2403,42 @@ subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,l
 	type(block_ptr)::blk_ptr
 
 		clstr_g%idx=nth
+		clstr_g%num_nods=0
 		do jj=1,num_blocks
 			clstc_g(jj)%idx=nth
+			clstc_g(jj)%num_nods=0
 		enddo
 
-		cur=>lstr%head
+
 		do ii=1,lstr%num_nods
-			select type(ptr=>cur%item)
-			type is (integer)
-				row_group = h_mat%Local_blocks(1,1)%row_group
-				if(inters(nth)%rows(ptr)>=msh%basis_group(row_group)%head .and. inters(nth)%rows(ptr)<=msh%basis_group(row_group)%tail)then
-					call append(clstr_g,ptr)
-				endif
-			class default
-				write(*,*)'unexpected item type'
-			end select
-			cur=>cur%next
+			row_group = h_mat%Local_blocks(1,1)%row_group
+			if(inters(nth)%rows(lstr%dat(ii))>=msh%basis_group(row_group)%head .and. inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group)%tail)then
+				clstr_g%num_nods=clstr_g%num_nods+1
+			endif
+		enddo
+		allocate(clstr_g%dat(clstr_g%num_nods))
+		clstr_g%num_nods=0
+		do ii=1,lstr%num_nods
+			row_group = h_mat%Local_blocks(1,1)%row_group
+			if(inters(nth)%rows(lstr%dat(ii))>=msh%basis_group(row_group)%head .and. inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group)%tail)then
+				clstr_g%num_nods=clstr_g%num_nods+1
+				clstr_g%dat(clstr_g%num_nods)=lstr%dat(ii)
+			endif
 		enddo
 
-		cur=>lstc%head
 		do ii=1,lstc%num_nods
-			select type(ptr=>cur%item)
-			type is (integer)
-				jj = findgroup(inters(nth)%cols(ptr),msh,msh%Dist_level,1)-2**msh%Dist_level+1
-				call append(clstc_g(jj),ptr)
-			class default
-				write(*,*)'unexpected item type'
-			end select
-			cur=>cur%next
+			jj = findgroup(inters(nth)%cols(lstc%dat(ii)),msh,msh%Dist_level,1)-2**msh%Dist_level+1
+			clstc_g(jj)%num_nods=clstc_g(jj)%num_nods+1
 		enddo
-
+		do jj=1,num_blocks
+			allocate(clstc_g(jj)%dat(clstc_g(jj)%num_nods))
+			clstc_g(jj)%num_nods=0
+		enddo
+		do ii=1,lstc%num_nods
+			jj = findgroup(inters(nth)%cols(lstc%dat(ii)),msh,msh%Dist_level,1)-2**msh%Dist_level+1
+			clstc_g(jj)%num_nods=clstc_g(jj)%num_nods+1
+			clstc_g(jj)%dat(clstc_g(jj)%num_nods)=lstc%dat(ii)
+		enddo
 
 		if(clstr_g%num_nods>0)then
 		do jj=1,num_blocks
@@ -2432,8 +2460,9 @@ recursive subroutine Hmat_MapIntersec2Block_Loc(blocks,option,stats,msh,ptree,in
 	type(proctree)::ptree
 	type(intersect)::inters(:)
 	integer nth,bidx,level_c
-	integer ii,jj,idx,row_group,col_group
-	type(list)::lstr,lstc,lstblk,clstr(2),clstc(2)
+	integer ii,jj,ll,idx,row_group,col_group
+	type(list)::lstblk
+	type(iarray)::lstr,lstc,clstr(2),clstc(2)
 	type(nod),pointer::cur
 	class(*),pointer::ptr
 	type(matrixblock),pointer::blocks,blocks_son
@@ -2446,38 +2475,45 @@ recursive subroutine Hmat_MapIntersec2Block_Loc(blocks,option,stats,msh,ptree,in
 		if(blocks%style==4)then ! divided blocks
 			clstr(1)%idx=nth
 			clstr(2)%idx=nth
-			clstc(1)%idx=nth
-			clstc(2)%idx=nth
-			cur=>lstr%head
+			clstr(1)%num_nods=0
+			clstr(2)%num_nods=0
+
 			do ii=1,lstr%num_nods
-				select type(ptr=>cur%item)
-				type is (integer)
-					! write(*,*)row_group,inters(nth)%rows(ptr),msh%basis_group(row_group*2)%tail
-					if(inters(nth)%rows(ptr)<=msh%basis_group(row_group*2)%tail)then
-						call append(clstr(1),ptr)
-					else
-						call append(clstr(2),ptr)
-					endif
-				class default
-					write(*,*)'unexpected item type'
-				end select
-				cur=>cur%next
+				ll=2
+				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
+				clstr(ll)%num_nods=clstr(ll)%num_nods+1
+			enddo
+			allocate(clstr(1)%dat(clstr(1)%num_nods))
+			allocate(clstr(2)%dat(clstr(2)%num_nods))
+			clstr(1)%num_nods=0
+			clstr(2)%num_nods=0
+			do ii=1,lstr%num_nods
+				ll=2
+				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
+				clstr(ll)%num_nods=clstr(ll)%num_nods+1
+				clstr(ll)%dat(clstr(ll)%num_nods)=lstr%dat(ii)
 			enddo
 
-			cur=>lstc%head
+			clstc(1)%idx=nth
+			clstc(2)%idx=nth
+			clstc(1)%num_nods=0
+			clstc(2)%num_nods=0
 			do ii=1,lstc%num_nods
-				select type(ptr=>cur%item)
-				type is (integer)
-					if(inters(nth)%cols(ptr)<=msh%basis_group(col_group*2)%tail)then
-						call append(clstc(1),ptr)
-					else
-						call append(clstc(2),ptr)
-					endif
-				class default
-					write(*,*)'unexpected item type'
-				end select
-				cur=>cur%next
+				ll=2
+				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
+				clstc(ll)%num_nods=clstc(ll)%num_nods+1
 			enddo
+			allocate(clstc(1)%dat(clstc(1)%num_nods))
+			allocate(clstc(2)%dat(clstc(2)%num_nods))
+			clstc(1)%num_nods=0
+			clstc(2)%num_nods=0
+			do ii=1,lstc%num_nods
+				ll=2
+				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
+				clstc(ll)%num_nods=clstc(ll)%num_nods+1
+				clstc(ll)%dat(clstc(ll)%num_nods)=lstc%dat(ii)
+			enddo
+
 			do ii=1,2
 			do jj=1,2
 				blocks_son=>blocks%sons(ii,jj)
