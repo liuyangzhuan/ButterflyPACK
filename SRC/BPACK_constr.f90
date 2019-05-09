@@ -718,8 +718,8 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 	allocate (stats%rankmax_of_level_global(0:ho_bf1%Maxlevel))
 	stats%rankmax_of_level_global = 0
 
-	! do level_c = 1,ho_bf1%Maxlevel+1
-	do level_c = ho_bf1%Maxlevel+1,ho_bf1%Maxlevel+1
+	do level_c = 1,ho_bf1%Maxlevel+1
+	! do level_c = ho_bf1%Maxlevel+1,ho_bf1%Maxlevel+1
 		if(level_c/=ho_bf1%Maxlevel+1)then
 			Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 			Bidxe = ho_bf1%levels(level_c)%Bidxe*2
