@@ -194,6 +194,7 @@ module BPACK_DEFS
 
 	!**** intersections of a block row and column
 	type:: intersect
+		integer::pg ! the index in the process group
 		integer::idx
 		integer::nc,nr
 		integer::nr_loc
@@ -431,7 +432,7 @@ module BPACK_DEFS
 
 		class(*),pointer :: QuantApp=>null() ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Zelem),nopass,pointer :: FuncZmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing an list of intersection of indices from Z (assuming predefined layout (2D-block cyclic))
+		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing an list of intersection of indices from Z (data layout needs to be provided)
 		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
 		type(c_ptr),pointer :: C_QuantApp=>null() ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
@@ -467,6 +468,7 @@ module BPACK_DEFS
 		contains
 		final :: iarray_finalizer
 	end type iarray
+
 	!*** a derived type for a pair of integers
 	type:: ipair
 	integer i,j
@@ -519,12 +521,13 @@ module BPACK_DEFS
 		end subroutine F_Zelem
 
 
-		subroutine F_Zelem_block(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
+		subroutine F_Zelem_block(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
 			class(*),pointer :: quant
 			integer:: Ninter
 			integer:: allrows(:),allcols(:)
 			DT::alldat_loc(:)
-			integer::colidx(Ninter),rowidx(Ninter)
+			integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
+			integer::Npmap,pmaps(Npmap,3)
 		end subroutine F_Zelem_block
 
 
