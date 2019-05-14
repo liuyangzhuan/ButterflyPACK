@@ -190,7 +190,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
 
 
 

@@ -405,7 +405,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant)
 
 		!**** computation of the construction phase
-		call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user,ptree)
+		call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
 
 
 
