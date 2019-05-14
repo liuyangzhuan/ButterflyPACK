@@ -368,6 +368,8 @@ module BPACK_DEFS
 		real(kind=8):: near_para ! parameters used to determine whether two groups are nearfield or farfield pair
 		real(kind=8):: scale_factor ! parameters used to scale matrix entries
 		integer::rmax ! maximum rank truncation
+		integer:: elem_extract ! 1: use user-defined element extraction 0: use user-defined formula
+		integer:: cpp ! 1: use user-defined c/cpp functions 0: use user-defined fortran functions
 
 		! options for inversion
 		real(kind=8) tol_LS       ! tolerance in pseudo inverse
@@ -432,11 +434,12 @@ module BPACK_DEFS
 
 		class(*),pointer :: QuantApp=>null() ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Zelem),nopass,pointer :: FuncZmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing an list of intersection of indices from Z (data layout needs to be provided)
+		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
 		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
 		type(c_ptr),pointer :: C_QuantApp=>null() ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
 		type(c_funptr),pointer :: C_FuncZmn=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
+		type(c_funptr),pointer :: C_FuncZmnBlock=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
 		type(c_funptr),pointer :: C_FuncHMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
 		type(c_funptr),pointer :: C_FuncBMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
 	end type kernelquant
@@ -537,6 +540,16 @@ module BPACK_DEFS
 		  integer(kind=C_INT), INTENT(IN):: m,n
 		  CBIND_DT::val
 		end subroutine C_Zelem
+
+		subroutine C_Zelem_block (Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
+		  USE, INTRINSIC :: ISO_C_BINDING
+		  type(c_ptr) :: quant
+		  integer(kind=C_INT):: Ninter
+		  integer(kind=C_INT):: allrows(:),allcols(:)
+		  CBIND_DT::alldat_loc(:)
+		  integer(kind=C_INT)::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
+		  integer(kind=C_INT)::Npmap,pmaps(Npmap,3)
+		end subroutine C_Zelem_block
 
 
 		subroutine HMatVec(trans,M,N,num_vect,Vin,Vout,ker)

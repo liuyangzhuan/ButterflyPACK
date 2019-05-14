@@ -187,7 +187,7 @@ PROGRAM ButterflyPACK_IE_2D
 	deallocate(xyz)
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
 
 
 
@@ -199,6 +199,7 @@ PROGRAM ButterflyPACK_IE_2D
 	call CopyOptions(option,option1)
 	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
 	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
+	option1%elem_extract=1 ! this indicates the second HOLDR construction uses user-defined parallel element extraction
 
 	!**** register the user-defined function and type in ker
 	ker1%FuncZmn=>Zelem_EMCURV
@@ -225,13 +226,13 @@ PROGRAM ButterflyPACK_IE_2D
 
 	call InitStat(stats1)
 
-	!**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
-	allocate(groupmembers(nmpi))
-	do ii=1,nmpi
-		groupmembers(ii)=(ii-1)
-	enddo
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
-	deallocate(groupmembers)
+	! !**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
+	! allocate(groupmembers(nmpi))
+	! do ii=1,nmpi
+		! groupmembers(ii)=(ii-1)
+	! enddo
+	! call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+	! deallocate(groupmembers)
 
 
 	!**** use the clustering tree from the first HODLR
@@ -248,12 +249,16 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** initialization of the construction phase
 	allocate(Permutation(msh1%Nunk))
-	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree,tree=tree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(tree)
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,element_Zmn_block_comm_user,ptree1)
+    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,element_Zmn_block_user,ptree)
+
+	! call blacs_exit(1)
+	! call MPI_Finalize(ierr)
+	! return
 
 
     !t1 = OMP_get_wtime()
@@ -288,7 +293,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 	!**** deletion of quantities
-	call delete_proctree(ptree1)
+	! call delete_proctree(ptree1)
 	call delete_Hstat(stats1)
 	call delete_mesh(msh1)
 	call delete_kernelquant(ker1)

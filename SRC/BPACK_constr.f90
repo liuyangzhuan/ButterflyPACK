@@ -53,7 +53,7 @@ end subroutine Zelem_block_Extraction
 
 
 
-subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
+subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
 
 	use BPACK_DEFS
 	implicit none
@@ -70,253 +70,201 @@ subroutine element_Zmn_block_comm_user(nrow,ncol,mrange,nrange,values,msh,option
 	integer ierr,idx_row,idx_col,idx_dat
 	integer,allocatable:: flags(:),dests(:),colidx1(:),rowidx1(:),colidx(:),rowidx(:),allrows(:),allcols(:),disps(:),pgidx(:),pmaps(:,:)
 	procedure(F_Zelem_block), POINTER :: proc
+	procedure(C_Zelem_block), POINTER :: proc_c
+	procedure(F_Zelem), POINTER :: proc1
+	procedure(C_Zelem), POINTER :: proc1_c
 	DT,allocatable::alldat_loc(:)
 	type(intersect),allocatable::inters(:)
 	integer myArows,myAcols,Npmap
 	real(kind=8)::t1,t2,t3,t4
 
-	allocate(flags(ptree%nproc))
 
+	if(option%elem_extract==0)then
 
+		t1 = OMP_get_wtime()
 
-	call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
-	passflag=minval(flags)
-
-	t1 = OMP_get_wtime()
-
-	if(passflag==0)then
-		proc => ker%FuncZmnBlock
-
-		! pgno=1
-		! ctxt = ptree%pgrp(pgno)%ctxt
-		! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-		! nprow = ptree%pgrp(pgno)%nprow
-		! npcol = ptree%pgrp(pgno)%npcol
-
-
-		allocate(colidx1(ptree%nproc))
-		allocate(rowidx1(ptree%nproc))
-		allocate(disps(ptree%nproc))
-
-		call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
-		call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
-
-
-		Npmap=ptree%nproc
-		allocate(pmaps(Npmap,3))
-		do pp=1,Npmap
-			pmaps(pp,1)=1
-			pmaps(pp,2)=1
-			pmaps(pp,3)=pp-1
-		enddo
-
-		Ninter=0
-		do pp=1,ptree%nproc
-		if(flags(pp)==0)then
-		Ninter=Ninter+1
-		endif
-		enddo
-
-		allocate(colidx(Ninter))
-		allocate(rowidx(Ninter))
-		allocate(pgidx(Ninter))
-
-		!***** Count number of active intersections Ninter
-		Ninter=0
-		do pp=1,ptree%nproc
-		if(flags(pp)==0)then
-		Ninter=Ninter+1
-		pgidx(Ninter)=pp
-		rowidx(Ninter)=rowidx1(pp)
-		colidx(Ninter)=colidx1(pp)
-		endif
-		enddo
-
-		!***** count number of local data
-		idx_dat=0
-		do nn=1,Ninter
-			nr=rowidx(nn)
-			nc=colidx(nn)
-			! datidx(nn)=ntot_loc
-			nprow=pmaps(pgidx(nn),1)
-			npcol=pmaps(pgidx(nn),2)
-			call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
-			if(myrow/=-1 .and. mycol/=-1)then
-				myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
-				myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-				idx_dat = idx_dat + myArows*myAcols
+		if(option%cpp==1)then
+			call c_f_procpointer(ker%C_FuncZmn, proc1_C)
+			! !$omp parallel
+			! !$omp single
+			!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+			do ij=1,ncol*nrow
+				jj = (ij-1)/nrow+1
+				ii = mod(ij-1,nrow) + 1
+				value_e=0
+				call proc1_C(msh%new2old(mrange(ii))-1,msh%new2old(nrange(jj))-1,value_e,ker%C_QuantApp)
+				value_e =value_e*option%scale_factor
+				values(ii,jj) = value_e
+			enddo
+			!$omp end taskloop
+			! !$omp end single
+			! !$omp end parallel
+		else
+			proc1 => ker%FuncZmn
+			if(nrow*ncol>0)then
+				! !$omp parallel
+				! !$omp single
+				!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+				do ij=1,ncol*nrow
+					jj = (ij-1)/nrow+1
+					ii = mod(ij-1,nrow) + 1
+					value_e=0
+					call proc1(msh%new2old(mrange(ii)),msh%new2old(nrange(jj)),value_e,ker%QuantApp)
+					value_e =value_e*option%scale_factor
+					values(ii,jj)=value_e
+				enddo
+				!$omp end taskloop
+				! !$omp end single
+				! !$omp end parallel
 			endif
-		enddo
-		allocate(alldat_loc(idx_dat))
-		if(idx_dat>0)alldat_loc=0
+		endif
+
+		t2 = OMP_get_wtime()
+		stats%Time_Entry=stats%Time_Entry+t2-t1
+
+		passflag=2
+	else if(option%elem_extract==1)then
+
+		allocate(flags(ptree%nproc))
+
+		call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
+		passflag=minval(flags)
+
+		t1 = OMP_get_wtime()
+
+		if(passflag==0)then
+
+			allocate(colidx1(ptree%nproc))
+			allocate(rowidx1(ptree%nproc))
+			allocate(disps(ptree%nproc))
+
+			call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+			call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
 
 
-		!***** Broadcast mrange and nrange for each intersection
-		idx_row=sum(rowidx)
-		allocate(allrows(idx_row))
-		idx=0
-		do pp=1,ptree%nproc
-			disps(pp)=idx
-			idx=idx+rowidx1(pp)
-		enddo
-		call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+			Npmap=ptree%nproc
+			allocate(pmaps(Npmap,3))
+			do pp=1,Npmap
+				pmaps(pp,1)=1
+				pmaps(pp,2)=1
+				pmaps(pp,3)=pp-1
+			enddo
 
-		idx_col=sum(colidx)
-		allocate(allcols(idx_col))
-		idx=0
-		do pp=1,ptree%nproc
-			disps(pp)=idx
-			idx=idx+colidx1(pp)
-		enddo
-		call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+			Ninter=0
+			do pp=1,ptree%nproc
+			if(flags(pp)==0)then
+			Ninter=Ninter+1
+			endif
+			enddo
 
-		! !***** parallel extraction of the data
-		call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%QuantApp)
+			allocate(colidx(Ninter))
+			allocate(rowidx(Ninter))
+			allocate(pgidx(Ninter))
 
-		idx=0
-		do jj=1,ncol ! note that alldat_loc has column major
-		do ii=1,nrow
-			idx=idx+1
-			values(ii,jj)=alldat_loc(idx)
-		enddo
-		enddo
+			!***** Count number of active intersections Ninter
+			Ninter=0
+			do pp=1,ptree%nproc
+			if(flags(pp)==0)then
+			Ninter=Ninter+1
+			pgidx(Ninter)=pp
+			rowidx(Ninter)=rowidx1(pp)
+			colidx(Ninter)=colidx1(pp)
+			endif
+			enddo
+
+			!***** count number of local data
+			idx_dat=0
+			do nn=1,Ninter
+				nr=rowidx(nn)
+				nc=colidx(nn)
+				! datidx(nn)=ntot_loc
+				nprow=pmaps(pgidx(nn),1)
+				npcol=pmaps(pgidx(nn),2)
+				call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
+				if(myrow/=-1 .and. mycol/=-1)then
+					myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
+					myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
+					idx_dat = idx_dat + myArows*myAcols
+				endif
+			enddo
+			allocate(alldat_loc(idx_dat))
+			if(idx_dat>0)alldat_loc=0
 
 
+			!***** Broadcast mrange and nrange for each intersection
+			idx_row=sum(rowidx)
+			allocate(allrows(idx_row))
+			idx=0
+			do pp=1,ptree%nproc
+				disps(pp)=idx
+				idx=idx+rowidx1(pp)
+			enddo
+			call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
 
-		! !***** copy the results to the intersection data structure
-		! allocate(inters(Ninter))
-		! idx_dat=0
-		! do nn=1,Ninter
-			! nr=rowidx(nn)
-			! nc=colidx(nn)
-			! inters(nn)%nr=nr
-			! inters(nn)%nc=nc
-			! call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
-			! if(myrow/=-1 .and. mycol/=-1)then
-				! myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
-				! myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-				! if(myArows*myAcols>0)then
-				! allocate(inters(nn)%dat_loc(myArows,myAcols))
-				! do ii=1,myArows
-				! do jj=1,myAcols
-					! inters(nn)%dat_loc(ii,jj) = alldat_loc(idx_dat+ii+(jj-1)*myArows)
-				! enddo
-				! enddo
-				! idx_dat = idx_dat + myArows*myAcols
-				! endif
-			! endif
-		! enddo
+			idx_col=sum(colidx)
+			allocate(allcols(idx_col))
+			idx=0
+			do pp=1,ptree%nproc
+				disps(pp)=idx
+				idx=idx+colidx1(pp)
+			enddo
+			call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
 
-		deallocate(allrows)
-		deallocate(allcols)
-		deallocate(colidx1)
-		deallocate(colidx)
-		deallocate(rowidx1)
-		deallocate(rowidx)
-		deallocate(disps)
-		deallocate(alldat_loc)
-		deallocate(pgidx)
-		deallocate(pmaps)
+			if(option%cpp==1)then
+				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
+				! !***** parallel extraction of the data
+				do ii=1,idx_row
+					allrows(ii)=msh%new2old(allrows(ii))-1
+				enddo
+				do jj=1,idx_col
+					allcols(jj)=msh%new2old(allcols(jj))-1
+				enddo
+				pgidx=pgidx-1
+				call proc_C(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
+			else
+				proc => ker%FuncZmnBlock
+				! !***** parallel extraction of the data
+				do ii=1,idx_row
+					allrows(ii)=msh%new2old(allrows(ii))
+				enddo
+				do jj=1,idx_col
+					allcols(jj)=msh%new2old(allcols(jj))
+				enddo
+				call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%QuantApp)
+			endif
 
-! t3 = OMP_get_wtime()
-		! !***** redistribution from 2D-block cyclic layout to the layout indicated by dests
-		! call BPACK_all2all_inters_2D2User(inters,dests,values,ptree)
-! t4 = OMP_get_wtime()
-! if(ptree%MyID==Main_ID)then
-! write(*,*)t4-t3,'BPACK_all2all_inters_2D2User'
-! endif
-		! !***** deallocate global intersections
-		! do nn=1,Ninter
-			! if(allocated(inters(nn)%dat_loc))deallocate(inters(nn)%dat_loc)
-		! enddo
-		! deallocate(inters)
-		! deallocate(dests)
 
+			idx=0
+			do jj=1,ncol ! note that alldat_loc has column major
+			do ii=1,nrow
+				idx=idx+1
+				values(ii,jj)=alldat_loc(idx)
+			enddo
+			enddo
+
+			deallocate(allrows)
+			deallocate(allcols)
+			deallocate(colidx1)
+			deallocate(colidx)
+			deallocate(rowidx1)
+			deallocate(rowidx)
+			deallocate(disps)
+			deallocate(alldat_loc)
+			deallocate(pgidx)
+			deallocate(pmaps)
+
+		endif
+
+		t2 = OMP_get_wtime()
+		stats%Time_Entry=stats%Time_Entry+t2-t1
+
+		deallocate(flags)
 	endif
 
-	t2 = OMP_get_wtime()
-	stats%Time_Entry=stats%Time_Entry+t2-t1
-
-	deallocate(flags)
-
 	return
 
-end subroutine element_Zmn_block_comm_user
+end subroutine element_Zmn_block_user
 
-
-
-
-
-
-subroutine element_Zmn_block_nocomm_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
-
-	use BPACK_DEFS
-	implicit none
-
-	integer ii, jj,ij,i,j,nrow,ncol,passflag,myflag
-	integer mrange(nrow)
-	integer nrange(ncol)
-	DT:: value_e,values(nrow,ncol)
-	type(mesh)::msh
-	type(proctree)::ptree
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(kernelquant)::ker
-	real(kind=8)::t1,t2
-
-	procedure(F_Zelem), POINTER :: proc
-
-	proc => ker%FuncZmn
-	t1 = OMP_get_wtime()
-	if(nrow*ncol>0)then
-		! !$omp parallel
-		! !$omp single
-		!$omp taskloop default(shared) private(ij,ii,jj,value_e)
-		do ij=1,ncol*nrow
-			jj = (ij-1)/nrow+1
-			ii = mod(ij-1,nrow) + 1
-			value_e=0
-			call proc(msh%new2old(mrange(ii)),msh%new2old(nrange(jj)),value_e,ker%QuantApp)
-			value_e =value_e*option%scale_factor
-			values(ii,jj)=value_e
-		enddo
-		!$omp end taskloop
-		! !$omp end single
-		! !$omp end parallel
-
-	endif
-
-	t2 = OMP_get_wtime()
-	stats%Time_Entry=stats%Time_Entry+t2-t1
-
-	passflag=2
-
-	return
-
-end subroutine element_Zmn_block_nocomm_user
-
-
-
-
-subroutine element_Zmn_user(edge_m,edge_n,value_e,msh,option,ker)
-
-	use BPACK_DEFS
-	implicit none
-
-	integer edge_m, edge_n
-	DT:: value_e
-	type(mesh)::msh
-	type(Hoption)::option
-	type(kernelquant)::ker
-
-	procedure(F_Zelem), POINTER :: proc
-	value_e=0
-	proc => ker%FuncZmn
-	call proc(msh%new2old(edge_m),msh%new2old(edge_n),value_e,ker%QuantApp)
-	value_e =value_e*option%scale_factor
-	return
-
-end subroutine element_Zmn_user
 
 
 !**** Initialization of the construction phase
@@ -427,7 +375,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_nocomm_user,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -943,7 +891,287 @@ end subroutine Hmat_block_construction
 
 
 
-!!!!!!! extract a list of intersections from a bmat, assuming 2D-block cyclic layout (over all proceses in ptree) for every intersection
+!!!!!!! extract a list of intersections from a block
+subroutine BF_ExtractElement(blocks_o,option,msh,stats,ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps)
+use BPACK_DEFS
+implicit none
+
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(Bmatrix)::bmat
+	type(mesh)::msh
+	type(proctree)::ptree
+	procedure(Zelem_block)::element_Zmn_block
+	type(intersect),allocatable::inters(:)
+	real(kind=8)::n0,n1,n2,n3,n4,n5
+	integer Ntest,passflag
+	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
+	integer:: cridx,info
+	integer,allocatable::rows(:),cols(:)
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Mat(:,:)
+	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)
+	integer N,M,i,j,ii,jj,nn,myi,myj,iproc,jproc,rmax
+	integer edge_n,edge_m, rank
+	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
+	real(kind=8):: a,v1,v2,v3
+	DT:: value1,value2,value3
+	type(list)::lstr,lstc,lstblk
+	type(nod),pointer::cur,curr,curc,curri,curci
+	class(*),pointer::ptr,ptrr,ptrc,ptrri,ptrci
+	integer::head,tail,idx,pp,pgno,nr_loc,nc_loc
+	type(matrixblock),pointer::blocks
+	integer num_blocks,idx_row,idx_col,idx_dat
+	integer:: allrows(:),allcols(:)
+	integer,allocatable::datidx(:)
+	integer:: Ninter,nr,nc,ntot_loc
+	DT::alldat_loc(:)
+	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
+	integer::Npmap,pmaps(Npmap,3),flag2D
+	type(iarray)::lst
+	type(matrixblock),pointer::blocks_o
+
+	n0 = OMP_get_wtime()
+	flag2D=0
+	allocate(inters(Ninter))
+	lstr=list()
+	lstc=list()
+	! lst=list()
+	lstblk=list()
+	idx_row=0
+	idx_col=0
+	do nn=1,Ninter
+		nr=rowidx(nn)
+		nc=colidx(nn)
+		inters(nn)%nr=nr
+		inters(nn)%nc=nc
+		inters(nn)%pg=pgidx(nn)
+		nprow=pmaps(pgidx(nn),1)
+		npcol=pmaps(pgidx(nn),2)
+		call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
+		if(myrow/=-1 .and. mycol/=-1)then
+			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
+			allocate(inters(nn)%dat_loc(myArows,myAcols))
+			inters(nn)%dat_loc=0
+		endif
+		if(nprow*npcol>1)flag2D=1
+		allocate(inters(nn)%rows(nr))
+		lst%num_nods=nr
+		lst%idx=nn
+		allocate(lst%dat(lst%num_nods))
+		do ii=1,nr
+		idx_row=idx_row+1
+		inters(nn)%rows(ii)=allrows(idx_row)
+		lst%dat(ii)=ii
+		enddo
+		call append(lstr,lst)
+		call iarray_finalizer(lst)
+
+		allocate(inters(nn)%cols(nc))
+		lst%num_nods=nc
+		lst%idx=nn
+		allocate(lst%dat(lst%num_nods))
+		do ii=1,nc
+		idx_col=idx_col+1
+		inters(nn)%cols(ii)=allcols(idx_col)
+		lst%dat(ii)=ii
+		enddo
+		call append(lstc,lst)
+		call iarray_finalizer(lst)
+	enddo
+
+
+	n1 = OMP_get_wtime()
+
+
+	curr=>lstr%head
+	curc=>lstc%head
+	do nn=1,Ninter
+	select type(ptrr=>curr%item)
+	type is(iarray)
+	select type(ptrc=>curc%item)
+	type is(iarray)
+		call Hmat_MapIntersec2Block_Loc(blocks_o,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk)
+	end select
+	end select
+	curr=>curr%next
+	curc=>curc%next
+	enddo
+
+	call MergeSort(lstblk%head,node_score_block_ptr_row)
+
+	n2 = OMP_get_wtime()
+
+
+#if 0
+	write(*,*)lstblk%num_nods
+	cur=>lstblk%head
+	do ii=1,lstblk%num_nods
+	select type(ptr=>cur%item)
+	type is (block_ptr)
+	curr=>ptr%ptr%lstr%head
+	curc=>ptr%ptr%lstc%head
+	do nn=1,ptr%ptr%lstr%num_nods
+	select type(ptrr=>curr%item)
+	type is (iarray)
+	select type(ptrc=>curc%item)
+	type is (iarray)
+		write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods*ptrc%num_nods
+	end select
+	end select
+	curr=>curr%next
+	curc=>curc%next
+	enddo
+	end select
+	cur=>cur%next
+	enddo
+#endif
+
+	! construct intersections for each block from the block's lists
+	cur=>lstblk%head
+	do ii=1,lstblk%num_nods ! loop all blocks
+	select type(ptr=>cur%item)
+	type is (block_ptr)
+	blocks=>ptr%ptr
+	pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+	head=blocks%M_p(pp,1)+blocks%headm-1
+	tail=blocks%M_p(pp,2)+blocks%headm-1
+
+	curr=>blocks%lstr%head
+	curc=>blocks%lstc%head
+	allocate(blocks%inters(blocks%lstr%num_nods))
+	do nn=1,blocks%lstr%num_nods ! loop all lists of list of rows and columns
+	select type(ptrr=>curr%item)
+	type is (iarray)
+	select type(ptrc=>curc%item)
+	type is (iarray)
+		blocks%inters(nn)%nr=ptrr%num_nods
+		allocate(blocks%inters(nn)%rows(ptrr%num_nods))
+		blocks%inters(nn)%rows=ptrr%dat
+		blocks%inters(nn)%nc=ptrc%num_nods
+		allocate(blocks%inters(nn)%cols(ptrc%num_nods))
+		blocks%inters(nn)%cols=ptrc%dat
+		blocks%inters(nn)%idx=ptrr%idx
+	end select
+	end select
+	curr=>curr%next
+	curc=>curc%next
+
+	blocks%inters(nn)%nr_loc=0
+	do jj=1,blocks%inters(nn)%nr
+		idx = blocks%inters(nn)%rows(jj)
+		if(inters(blocks%inters(nn)%idx)%rows(idx)>=head .and. inters(blocks%inters(nn)%idx)%rows(idx)<=tail)then
+			blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
+		endif
+	enddo
+	allocate(blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc))
+	allocate(blocks%inters(nn)%glo2loc(blocks%inters(nn)%nr))
+	blocks%inters(nn)%glo2loc=-1
+	blocks%inters(nn)%nr_loc=0
+	do jj=1,blocks%inters(nn)%nr
+		idx = blocks%inters(nn)%rows(jj)
+		! write(*,*)inters(blocks%inters(nn)%idx)%rows(idx),head,tail
+		if(inters(blocks%inters(nn)%idx)%rows(idx)>=head .and. inters(blocks%inters(nn)%idx)%rows(idx)<=tail)then
+			blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
+			blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc)=jj ! rows_loc stores indices in rows
+			blocks%inters(nn)%glo2loc(jj)=blocks%inters(nn)%nr_loc
+		endif
+	enddo
+	allocate(blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc))
+	enddo
+
+	! extract entries on an array of intersections for each block
+
+	if(blocks%style==1)then
+		call Full_block_extraction(blocks,inters,ptree,msh,stats)
+	else
+		if(blocks%level_butterfly==0)then
+			call LR_block_extraction(blocks,inters,ptree,msh,stats)
+		else
+			call BF_block_extraction(blocks,inters,ptree,msh,stats)
+		endif
+	endif
+
+	! finalize the lists of lists of rows and columns for each block because they have been transferred to intersections
+	call list_finalizer(blocks%lstr)
+	call list_finalizer(blocks%lstc)
+	end select
+	cur=>cur%next
+	enddo
+
+	n3 = OMP_get_wtime()
+
+	! redistribute from blocks' intersections to the global intersecions inters
+	if(flag2D==1)then ! if each intersection is only needed by one processor, the communication can be optimized
+	call BPACK_all2all_inters(inters, lstblk, stats,ptree,ptree%nproc,Npmap,pmaps)
+	else
+	call BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,ptree%nproc,Npmap,pmaps)
+	endif
+
+	n4 = OMP_get_wtime()
+
+	ntot_loc=0
+	do nn=1,Ninter
+		if(allocated(inters(nn)%dat_loc))then
+			nr_loc=size(inters(nn)%dat_loc,1)
+			nc_loc=size(inters(nn)%dat_loc,2)
+			do jj=1,nc_loc
+			do ii=1,nr_loc
+				alldat_loc(ntot_loc+ii+(jj-1)*nr_loc)=inters(nn)%dat_loc(ii,jj)
+			enddo
+			enddo
+			ntot_loc = ntot_loc + nr_loc*nc_loc
+		endif
+	enddo
+
+
+	! deallocate intersections at each block
+	cur=>lstblk%head
+	do ii=1,lstblk%num_nods
+	select type(ptr=>cur%item)
+	type is (block_ptr)
+		blocks=>ptr%ptr
+		do nn=1,size(blocks%inters,1)
+			if(allocated(blocks%inters(nn)%dat))deallocate(blocks%inters(nn)%dat)
+			if(allocated(blocks%inters(nn)%dat_loc))deallocate(blocks%inters(nn)%dat_loc)
+			if(allocated(blocks%inters(nn)%rows))deallocate(blocks%inters(nn)%rows)
+			if(allocated(blocks%inters(nn)%cols))deallocate(blocks%inters(nn)%cols)
+			if(allocated(blocks%inters(nn)%rows_loc))deallocate(blocks%inters(nn)%rows_loc)
+			blocks%inters(nn)%nr=0
+			blocks%inters(nn)%nr_loc=0
+			blocks%inters(nn)%nc=0
+			blocks%inters(nn)%idx=0
+		enddo
+		deallocate(blocks%inters)
+	end select
+	cur=>cur%next
+	enddo
+
+	! finalize the list of block_ptr
+	call list_finalizer(lstblk)
+
+
+	! deallocate global intersections
+	do nn=1,Ninter
+		if(allocated(inters(nn)%dat))deallocate(inters(nn)%dat)
+		if(allocated(inters(nn)%dat_loc))deallocate(inters(nn)%dat_loc)
+		if(allocated(inters(nn)%rows))deallocate(inters(nn)%rows)
+		if(allocated(inters(nn)%cols))deallocate(inters(nn)%cols)
+		if(allocated(inters(nn)%rows_loc))deallocate(inters(nn)%rows_loc)
+	enddo
+	deallocate(inters)
+
+
+	n5 = OMP_get_wtime()
+
+	! if(ptree%MyID==Main_ID)then
+		! write(*,*)n1-n0,n2-n1,n3-n2,n4-n3,n5-n4
+	! endif
+
+end subroutine BF_ExtractElement
+
+
+!!!!!!! extract a list of intersections from a bmat
 subroutine BPACK_ExtractElement(bmat,option,msh,stats,ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps)
 use BPACK_DEFS
 implicit none
@@ -1424,7 +1652,7 @@ implicit none
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v3,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
-	if(ptree%MyID==Main_ID)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
 
 	!stop
 

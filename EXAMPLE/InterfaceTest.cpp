@@ -195,11 +195,26 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
   Q->Sample(*m,*n,val);
 }
 
+// The extraction sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncZmnBlock(int* Ninter, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;
+  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+}
+
+// The extraction sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncBZmnBlock(int* Ninter, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;
+
+  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+}
+
+
 // The matvec sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
   d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);
 }
+
 
 // The matvec sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant, double *a, double *b) {
@@ -257,7 +272,7 @@ int main(int argc, char* argv[])
 	double tol=1e-4; //compression tolerance
 	int com_opt=4; //1:SVD 2:RRQR 3:ACA 4:BACA
 	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
-	int checkerr = 1; //1: check compression quality
+	int checkerr = 0; //1: check compression quality
 	int batch = 100; //batch size for BACA
 	int bnum = 1; //sqrt of #of subblocks in H-BACA
 
@@ -327,7 +342,7 @@ if(tst==2){
 	/* Test Product of two Random matrices*/
 if(tst==3){
 	ker = 6;
-	int rank_rand = 10;
+	int rank_rand = 100;
 	Npo = 10000;
 
 	if(argc>2)Npo = stoi(argv[2]);
@@ -367,6 +382,7 @@ if(tst==3){
 	int* groups = new int[size];
 	int i_opt;
 	double d_opt;
+	int cpp=1; //1: use user-defined cpp/c functions for construction
 
 	//quantities for the first holdr
 	F2Cptr bmat;  //hierarchical matrix returned by Fortran code
@@ -395,10 +411,11 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "ErrFillFull", checkerr);
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
 	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
+	d_c_bpack_set_I_option(&option, "cpp", cpp);
 
 
     // construct hodlr with geometrical points
-	d_c_bpack_construct_element(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, quant_ptr, &Fcomm);
+	d_c_bpack_construct_element(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr, &Fcomm);
 
 	// factor hodlr
 	d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
@@ -471,6 +488,51 @@ if(tst==3){
 
 
 
+	//////////////////// use resulting hodlr as entry extraction to create a new holdr
+	quant_ptr1=new C_QuantApp();
+	quant_ptr1->bmat=&bmat;
+	quant_ptr1->msh=&msh;
+	quant_ptr1->ptree=&ptree;
+	quant_ptr1->stats=&stats;
+	quant_ptr1->option=&option;
+
+	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
+	d_c_bpack_copyoption(&option,&option1);
+	d_c_bpack_createstats(&stats1);
+
+	d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
+	d_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
+	d_c_bpack_set_I_option(&option1, "format", 1);// HODLR format
+	d_c_bpack_set_I_option(&option1, "elem_extract", 1);// use element extraction
+
+
+	perms1 = new int[Npo1]; //permutation vector returned by HODLR
+	//tree1 and nlevel1 should be provided by the caller, otherwise natural ordering is used
+	nlevel1 = 0; // 0: tree level, nonzero if a tree is provided
+	tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
+	tree1[0] = Npo1;
+
+	// d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	// d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
+
+	d_c_bpack_construct_element(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr1, &Fcomm);
+
+
+	if(myrank==master_rank)std::cout<<"Printing stats of the third HODLR: "<<std::endl;
+	d_c_bpack_printstats(&stats1,&ptree1);
+
+	d_c_bpack_deletestats(&stats1);
+	d_c_bpack_deleteproctree(&ptree1);
+	d_c_bpack_deletemesh(&msh1);
+	d_c_bpack_deletekernelquant(&kerquant1);
+	d_c_bpack_delete(&bmat1);
+	d_c_bpack_deleteoption(&option1);
+	delete quant_ptr1;
+	delete perms1;
+	delete tree1;
+
+
+
 
 if(tst==3){
 	//////////////////// use resulting hodlr as matvec to create a new bf
@@ -503,10 +565,44 @@ if(tst==3){
 	int myrow=0;     // local number of rows
 	int mycol=0;     // local number of columns
 
-	d_c_bf_construct_matvec_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
-	if(myrank==master_rank)std::cout<<"Printing stats of the third BF: "<<std::endl;
+	if(myrank==master_rank)std::cout<<"Printing stats of the fourth BF: "<<std::endl;
+	d_c_bpack_printstats(&stats2,&ptree2);
+
+	d_c_bpack_deletestats(&stats2);
+	d_c_bpack_deleteproctree(&ptree2);
+	d_c_bpack_deletemesh(&msh2);
+	d_c_bpack_deletekernelquant(&kerquant2);
+	d_c_bf_deletebf(&bf);
+	d_c_bpack_deleteoption(&option2);
+
+	delete quant_ptr2;
+
+
+
+	//////////////////// use resulting hodlr as entry extraction to create a new bf
+	quant_ptr2=new C_QuantApp();
+	quant_ptr2->bmat=&bmat;
+	quant_ptr2->msh=&msh;
+	quant_ptr2->ptree=&ptree;
+	quant_ptr2->stats=&stats;
+	quant_ptr2->option=&option;
+	quant_ptr2->_n=Npo;
+
+	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree2);
+	d_c_bpack_copyoption(&option,&option2);
+	d_c_bpack_createstats(&stats2);
+
+	d_c_bpack_set_I_option(&option2, "nogeo", 1); // no geometrical information
+	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering
+	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
+
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_element_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
+
+	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
 	d_c_bpack_printstats(&stats2,&ptree2);
 
 	d_c_bpack_deletestats(&stats2);

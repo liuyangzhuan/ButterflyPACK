@@ -7943,7 +7943,6 @@ subroutine BF_Init_blocks(level_butterfly,groupm,groupn,pgno,block_rand,msh,ptre
 end subroutine BF_Init_blocks
 
 
-
 recursive subroutine Hmat_block_copy(trans,block2,block1,memory)
 
     use BPACK_DEFS

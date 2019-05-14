@@ -237,7 +237,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn_bloc
 	endif
 
 
-	stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
+	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
 
     deallocate (rankmax_for_butterfly)
     deallocate (rankmin_for_butterfly)
@@ -2019,7 +2019,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 	enddo
 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
-	stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
+	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
 	! if(blocks==342)then
 	! write(*,*)rankmax_for_butterfly
 	! write(*,*)rankmin_for_butterfly
@@ -2825,7 +2825,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,element_Zmn_block,
 	end if
 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
-	stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
+	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
 
 	! write(*,*)stats%rankmax_of_level,'nitaima',rankmax_for_butterfly
 	! stop

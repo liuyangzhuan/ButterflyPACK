@@ -29,71 +29,6 @@ use iso_c_binding
 contains
 
 
-subroutine element_Zmn_block_nocomm_user_C(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
-    use BPACK_DEFS
-    implicit none
-    integer nrow, ncol,passflag,myflag,ii,jj,ij
-	integer mrange(nrow)
-	integer nrange(ncol)
-	DT:: value_e,values(nrow,ncol)
-	type(mesh)::msh
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(proctree)::ptree
-	type(kernelquant)::ker
-	procedure(C_Zelem), POINTER :: proc
-	real(kind=8)::t1,t2
-
-	call c_f_procpointer(ker%C_FuncZmn, proc)
-
-	t1 = OMP_get_wtime()
-
-	if(nrow*ncol>0)then
-	! !$omp parallel
-	! !$omp single
-	!$omp taskloop default(shared) private(ij,ii,jj,value_e)
-	do ij=1,ncol*nrow
-		jj = (ij-1)/nrow+1
-		ii = mod(ij-1,nrow) + 1
-		value_e=0
-		call proc(msh%new2old(mrange(ii))-1,msh%new2old(nrange(jj))-1,value_e,ker%C_QuantApp)
-		value_e =value_e*option%scale_factor
-		values(ii,jj) = value_e
-	enddo
-	!$omp end taskloop
-	! !$omp end single
-	! !$omp end parallel
-	endif
-
-	t2 = OMP_get_wtime()
-	stats%Time_Entry=stats%Time_Entry+t2-t1
-
-	passflag=2
-
-	return
-
-end subroutine element_Zmn_block_nocomm_user_C
-
-
-
-subroutine element_Zmn_user_C(edge_m,edge_n,value_e,msh,option,ker)
-    use BPACK_DEFS
-    implicit none
-    integer edge_m, edge_n
-    DT value_e
-	type(mesh)::msh
-	type(Hoption)::option
-	type(kernelquant)::ker
-	procedure(C_Zelem), POINTER :: proc
-
-	value_e=0
-	call c_f_procpointer(ker%C_FuncZmn, proc)
-	call proc(msh%new2old(edge_m)-1,msh%new2old(edge_n)-1,value_e,ker%C_QuantApp)
-	value_e =value_e*option%scale_factor
-	return
-
-end subroutine element_Zmn_user_C
-
 
 subroutine matvec_user_C(trans,M,N,num_vect,Vin,Vout,ker)
 
@@ -558,6 +493,20 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	valid_opt=1
 	endif
 
+	if(trim(str)=='elem_extract')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%elem_extract=val_i
+	valid_opt=1
+	endif
+
+	if(trim(str)=='cpp')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%cpp=val_i
+	valid_opt=1
+	endif
+
+
+
 !**** double parameters
 	if(trim(str)=='tol_comp')then
 	call c_f_pointer(val_Cptr, val_d)
@@ -634,9 +583,10 @@ end subroutine C_BPACK_Setoption
 	!ker_Cptr: the structure containing kernel quantities
 	!ptree_Cptr: the structure containing process tree
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
+	!C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
 	!MPIcomm: user-provided MPI communicator
-subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct_element")
+subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_FuncZmnBlock,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct_element")
 	implicit none
 	integer Npo,Ndim
 	real(kind=8) Locations(*)
@@ -661,6 +611,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 	type(c_ptr) :: ptree_Cptr
 	type(c_ptr), intent(in),target :: C_QuantApp
 	type(c_funptr), intent(in),value,target :: C_FuncZmn
+	type(c_funptr), intent(in),value,target :: C_FuncZmnBlock
 
 	type(Hoption),pointer::option
 	type(Hstat),pointer::stats
@@ -716,6 +667,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 	!**** register the user-defined function and type in ker
 	ker%C_QuantApp => C_QuantApp
 	ker%C_FuncZmn => C_FuncZmn
+	ker%C_FuncZmnBlock => C_FuncZmnBlock
 
 
 	msh%Nunk = Npo
@@ -774,7 +726,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_nocomm_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -782,7 +734,9 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_nocomm_user_C,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
+
+	call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
 
 
 	!**** return the permutation vector
@@ -956,7 +910,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_nocomm_user_C,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -1063,7 +1017,7 @@ subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh
 end subroutine c_bpack_construct_Matvec_Compute
 
 
-!**** C interface of BF construction via blackbox matvec
+!**** C interface of BF construction via blackbox matvec or entry extraction
 	!M,N: matrix size (in)
 	!M_loc,N_loc: number of local row/column indices (out)
 	!bf_Cptr: the structure containing the block (out)
@@ -1074,7 +1028,7 @@ end subroutine c_bpack_construct_Matvec_Compute
 	!mshc_Cptr: the structure containing points and ordering information for the column dimension (in)
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bf_construct_matvec_init")
+subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bf_construct_init")
 	implicit none
 	integer M,N
 
@@ -1153,7 +1107,14 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	msh%basis_group(1)%pgno=1
 	call copy_basis_group(mshr%basis_group,1,Maxgroup_rc,msh%basis_group,2,msh%Maxgroup,0)
 	call copy_basis_group(mshc%basis_group,1,Maxgroup_rc,msh%basis_group,3,msh%Maxgroup,mshr%Nunk)
-
+	! msh%new2old maps the indices in a larger (M+N)x(M+N) matrix into the MxM and NxN matrices
+	allocate(msh%new2old(msh%Nunk))
+	do ii=1,M
+		msh%new2old(ii)=ii
+	enddo
+	do ii=1+M,N+M
+		msh%new2old(ii)=ii-M
+	enddo
 	blocks%level=1
 	blocks%col_group=3
 	blocks%row_group=2
@@ -1188,7 +1149,7 @@ subroutine C_BF_Construct_Matvec_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cpt
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 
-end subroutine C_BF_Construct_Matvec_Init
+end subroutine C_BF_Construct_Init
 
 
 
@@ -1251,6 +1212,7 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 	ker%C_FuncBMatVec => C_FuncBMatVec
 
 	t1 = OMP_get_wtime()
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) " "
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "FastMATVEC-based BF construction......"
 
 	call BF_randomized(blocks%level_butterfly,option%rank0,option%rankrate,blocks,ker,Bmatvec_user_C,error,'CMatVec',option,stats,ptree,msh)
@@ -1276,6 +1238,96 @@ subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr
 	ptree_Cptr=c_loc(ptree)
 
 end subroutine C_BF_Construct_Matvec_Compute
+
+
+
+
+!**** C interface of BF construction via entry extraction
+	!bf_Cptr: the structure containing the block (inout)
+	!option_Cptr: the structure containing option (in)
+	!stats_Cptr: the structure containing statistics (inout)
+	!msh_Cptr: the structure containing points and ordering information (in)
+	!ker_Cptr: the structure containing kernel quantities (inout)
+	!ptree_Cptr: the structure containing process tree (in)
+	!C_FuncZmnBlock: the C_pointer to user-provided function to extract a list of intersections from a block (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
+subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmnBlock,C_QuantApp) bind(c, name="c_bf_construct_element_compute")
+	implicit none
+
+    integer Maxlevel
+    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+	integer,allocatable:: groupmembers(:)
+	integer level
+	type(c_ptr) :: bf_Cptr
+	type(c_ptr) :: option_Cptr
+	type(c_ptr) :: stats_Cptr
+	type(c_ptr) :: msh_Cptr
+	type(c_ptr) :: ker_Cptr
+	type(c_ptr) :: ptree_Cptr
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncZmnBlock
+
+	type(Hoption),pointer::option
+	type(Hstat),pointer::stats
+	type(mesh),pointer::msh
+	type(kernelquant),pointer::ker
+	type(matrixblock),pointer::blocks
+	type(proctree),pointer::ptree
+	integer seed_myid(50)
+	integer times(8)
+	real(kind=8) t1,t2,error,Memory
+	integer ierr
+
+	!**** allocate HODLR solver structures
+
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(msh_Cptr, msh)
+	call c_f_pointer(bf_Cptr, blocks)
+	call c_f_pointer(ker_Cptr, ker)
+
+
+
+
+	! !**** register the user-defined function and type in ker
+	ker%C_QuantApp => C_QuantApp
+	ker%C_FuncZmnBlock => C_FuncZmnBlock
+
+	t1 = OMP_get_wtime()
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) " "
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction......"
+
+
+	call BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn_block_user,ptree)
+
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction finished"
+
+	call BF_ComputeMemory(blocks,stats%Mem_Comp_for)
+
+	t2 = OMP_get_wtime()
+
+ 	if(.not. allocated(stats%rankmax_of_level))allocate (stats%rankmax_of_level(0:0))
+	if(.not. allocated(stats%rankmax_of_level_global))allocate (stats%rankmax_of_level_global(0:0))
+	stats%rankmax_of_level(0) = blocks%rankmax
+	stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+	stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+	stats%Time_Fill =stats%Time_Fill+t2-t1
+	stats%Flop_Fill=stats%Flop_Fill+stats%Flop_Tmp
+	!**** return the C address of hodlr structures to C caller
+	bf_Cptr=c_loc(blocks)
+	option_Cptr=c_loc(option)
+	stats_Cptr=c_loc(stats)
+	msh_Cptr=c_loc(msh)
+	ker_Cptr=c_loc(ker)
+	ptree_Cptr=c_loc(ptree)
+
+end subroutine C_BF_Construct_Element_Compute
+
+
+
 
 
 
@@ -1445,6 +1497,140 @@ end subroutine C_BF_Mult
 
 
 
+
+!!!!!!! extract a list of intersections from a block
+subroutine C_BF_ExtractElement(block_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bf_extractelement")
+use BPACK_DEFS
+implicit none
+
+	type(intersect),allocatable::inters(:)
+	real(kind=8)::n0,n1,n2,n3,n4,n5
+	integer Ntest,passflag
+	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
+	integer:: cridx,info
+	integer,allocatable::rows(:),cols(:)
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Mat(:,:)
+	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)
+	integer N,M,i,j,ii,jj,nn,myi,myj,iproc,jproc,rmax
+	integer edge_n,edge_m, rank
+	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
+	real(kind=8):: a,v1,v2,v3
+	DT:: value1,value2,value3
+	type(list)::lstr,lstc,lstblk
+	type(nod),pointer::cur,curr,curc,curri,curci
+	class(*),pointer::ptr,ptrr,ptrc,ptrri,ptrci
+	integer::head,tail,idx,pp,pgno,nr_loc,nc_loc
+	type(matrixblock),pointer::blocks
+	integer num_blocks,idx_row,idx_col,idx_dat
+	integer:: allrows(:),allcols(:)
+	integer,allocatable::datidx(:)
+	integer:: Ninter,nr,nc,ntot_loc
+	DT::alldat_loc(:)
+	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
+	integer::Npmap,pmaps(Npmap,3),flag2D
+	type(iarray)::lst
+	type(matrixblock),pointer::blocks_o
+	integer,allocatable:: allrows1(:),allcols1(:),pgidx1(:)
+
+	type(c_ptr), intent(in) :: block_Cptr
+	type(c_ptr), intent(in) :: ptree_Cptr
+	type(c_ptr), intent(in) :: option_Cptr
+	type(c_ptr), intent(in) :: msh_Cptr
+	type(c_ptr), intent(in) :: stats_Cptr
+
+	type(Hoption),pointer::option
+	type(Hstat),pointer::stats
+	type(Bmatrix),pointer::bmat
+	type(proctree),pointer::ptree
+	type(mesh),pointer::msh
+
+	call c_f_pointer(block_Cptr, blocks_o)
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(msh_Cptr, msh)
+
+
+	idx_row=sum(rowidx)
+	allocate(allrows1(idx_row))
+	allrows1=allrows+1
+	idx_col=sum(colidx)
+	allocate(allcols1(idx_col))
+	allcols1=allcols+1
+	allocate(pgidx1(Ninter))
+	pgidx1=pgidx+1
+
+	call BF_ExtractElement(blocks_o,option,msh,stats,ptree,Ninter,allrows1,allcols1,alldat_loc,rowidx,colidx,pgidx1,Npmap,pmaps)
+
+	deallocate(allrows1)
+	deallocate(allcols1)
+	deallocate(pgidx1)
+
+end subroutine C_BF_ExtractElement
+
+
+
+!**** C interface of parallel extraction of a list of intersections from a Bmat matrix
+	!Ninter: number of intersections
+	!allrows: 1D array containing the global row indices (in original order starting from 0) stacked together
+	!allcols: 1D array containing the global column indices (in original order starting from 0) stacked together
+	!alldat_loc: 1D array containing the local entry values defined by pmaps (in column major) stacked together
+	!rowidx: 1D array containing sizes of rows of each intersection
+	!colidx: 1D array containing sizes of columns of each intersection
+	!pgidx: 1D array containing the process group number of each intersection
+	!Npmap: number of process groups
+	!pmaps: 2D array (Npmapx3) containing #of process rows, #of process columns, and starting process ID in each intersection
+	!bmat_Cptr: the structure containing HODLR
+	!option_Cptr: the structure containing option
+	!stats_Cptr: the structure containing statistics
+	!ptree_Cptr: the structure containing process tree
+	!msh_Cptr: the structure containing points and ordering information
+subroutine C_BPACK_ExtractElement(bmat_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bpack_extractelement")
+use BPACK_DEFS
+implicit none
+	type(c_ptr), intent(in) :: bmat_Cptr
+	type(c_ptr), intent(in) :: ptree_Cptr
+	type(c_ptr), intent(in) :: option_Cptr
+	type(c_ptr), intent(in) :: msh_Cptr
+	type(c_ptr), intent(in) :: stats_Cptr
+
+	type(Hoption),pointer::option
+	type(Hstat),pointer::stats
+	type(Bmatrix),pointer::bmat
+	type(proctree),pointer::ptree
+	type(mesh),pointer::msh
+
+	integer:: allrows(:),allcols(:)
+	integer,allocatable:: allrows1(:),allcols1(:),pgidx1(:)
+	integer:: Ninter,idx_row,idx_col
+	DT::alldat_loc(:)
+	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
+	integer::Npmap,pmaps(Npmap,3)
+
+	call c_f_pointer(bmat_Cptr, bmat)
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(stats_Cptr, stats)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(msh_Cptr, msh)
+
+	idx_row=sum(rowidx)
+	allocate(allrows1(idx_row))
+	allrows1=allrows+1
+	idx_col=sum(colidx)
+	allocate(allcols1(idx_col))
+	allcols1=allcols+1
+	allocate(pgidx1(Ninter))
+	pgidx1=pgidx+1
+
+	call BPACK_ExtractElement(bmat,option,msh,stats,ptree,Ninter,allrows1,allcols1,alldat_loc,rowidx,colidx,pgidx1,Npmap,pmaps)
+
+	deallocate(allrows1)
+	deallocate(allcols1)
+	deallocate(pgidx1)
+
+end subroutine C_BPACK_ExtractElement
+
+
 !**** C interface of HODLR-vector multiplication
 	!xin: input vector
     !Ninloc:size of local input vectors
@@ -1473,7 +1659,6 @@ subroutine C_BPACK_Mult(trans,xin,xout,Ninloc,Noutloc,Ncol,bmat_Cptr,option_Cptr
 	type(Hoption),pointer::option
 	type(Hstat),pointer::stats
 	type(Bmatrix),pointer::bmat
-
 	type(proctree),pointer::ptree
 
 	t1 = OMP_get_wtime()

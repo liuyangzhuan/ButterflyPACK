@@ -451,6 +451,8 @@ subroutine SetDefaultOptions(option)
 	option%forwardN15flag=1
 	option%sample_para=2.0d0
 	option%pat_comp=3
+	option%elem_extract=0
+	option%cpp=0
 
 end subroutine SetDefaultOptions
 
@@ -531,6 +533,10 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%sample_para
 				else if	(trim(strings)=='--pat_comp')then
 					read(strings1,*)option%pat_comp
+				else if	(trim(strings)=='--elem_extract')then
+					read(strings1,*)option%elem_extract
+				else if	(trim(strings)=='--cpp')then
+					read(strings1,*)option%cpp
 				else
 					if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown option: ', trim(strings)
 				endif
@@ -585,6 +591,8 @@ subroutine CopyOptions(option,option1)
 	option1%forwardN15flag = option%forwardN15flag
 	option1%sample_para = option%sample_para
 	option1%pat_comp = option%pat_comp
+	option1%elem_extract = option%elem_extract
+	option1%cpp = option%cpp
 
 end subroutine CopyOptions
 
