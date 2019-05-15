@@ -52,221 +52,6 @@ subroutine Zelem_block_Extraction(Ninter,allrows,allcols,alldat_loc,rowidx,colid
 end subroutine Zelem_block_Extraction
 
 
-
-subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
-
-	use BPACK_DEFS
-	implicit none
-
-	integer ii, jj,nn,pp,ij,i,j,nrow,ncol,passflag,myflag,Ninter,idx,nc,nr,pgno,ctxt,nprow,npcol,myrow,mycol
-	integer mrange(nrow)
-	integer nrange(ncol)
-	DT:: value_e,values(nrow,ncol)
-	type(mesh)::msh
-	type(proctree)::ptree
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(kernelquant)::ker
-	integer ierr,idx_row,idx_col,idx_dat
-	integer,allocatable:: flags(:),dests(:),colidx1(:),rowidx1(:),colidx(:),rowidx(:),allrows(:),allcols(:),disps(:),pgidx(:),pmaps(:,:)
-	procedure(F_Zelem_block), POINTER :: proc
-	procedure(C_Zelem_block), POINTER :: proc_c
-	procedure(F_Zelem), POINTER :: proc1
-	procedure(C_Zelem), POINTER :: proc1_c
-	DT,allocatable::alldat_loc(:)
-	type(intersect),allocatable::inters(:)
-	integer myArows,myAcols,Npmap
-	real(kind=8)::t1,t2,t3,t4
-
-
-	if(option%elem_extract==0)then
-
-		t1 = OMP_get_wtime()
-
-		if(option%cpp==1)then
-			call c_f_procpointer(ker%C_FuncZmn, proc1_C)
-			! !$omp parallel
-			! !$omp single
-			!$omp taskloop default(shared) private(ij,ii,jj,value_e)
-			do ij=1,ncol*nrow
-				jj = (ij-1)/nrow+1
-				ii = mod(ij-1,nrow) + 1
-				value_e=0
-				call proc1_C(msh%new2old(mrange(ii))-1,msh%new2old(nrange(jj))-1,value_e,ker%C_QuantApp)
-				value_e =value_e*option%scale_factor
-				values(ii,jj) = value_e
-			enddo
-			!$omp end taskloop
-			! !$omp end single
-			! !$omp end parallel
-		else
-			proc1 => ker%FuncZmn
-			if(nrow*ncol>0)then
-				! !$omp parallel
-				! !$omp single
-				!$omp taskloop default(shared) private(ij,ii,jj,value_e)
-				do ij=1,ncol*nrow
-					jj = (ij-1)/nrow+1
-					ii = mod(ij-1,nrow) + 1
-					value_e=0
-					call proc1(msh%new2old(mrange(ii)),msh%new2old(nrange(jj)),value_e,ker%QuantApp)
-					value_e =value_e*option%scale_factor
-					values(ii,jj)=value_e
-				enddo
-				!$omp end taskloop
-				! !$omp end single
-				! !$omp end parallel
-			endif
-		endif
-
-		t2 = OMP_get_wtime()
-		stats%Time_Entry=stats%Time_Entry+t2-t1
-
-		passflag=2
-	else if(option%elem_extract==1)then
-
-		allocate(flags(ptree%nproc))
-
-		call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
-		passflag=minval(flags)
-
-		t1 = OMP_get_wtime()
-
-		if(passflag==0)then
-
-			allocate(colidx1(ptree%nproc))
-			allocate(rowidx1(ptree%nproc))
-			allocate(disps(ptree%nproc))
-
-			call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
-			call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
-
-
-			Npmap=ptree%nproc
-			allocate(pmaps(Npmap,3))
-			do pp=1,Npmap
-				pmaps(pp,1)=1
-				pmaps(pp,2)=1
-				pmaps(pp,3)=pp-1
-			enddo
-
-			Ninter=0
-			do pp=1,ptree%nproc
-			if(flags(pp)==0)then
-			Ninter=Ninter+1
-			endif
-			enddo
-
-			allocate(colidx(Ninter))
-			allocate(rowidx(Ninter))
-			allocate(pgidx(Ninter))
-
-			!***** Count number of active intersections Ninter
-			Ninter=0
-			do pp=1,ptree%nproc
-			if(flags(pp)==0)then
-			Ninter=Ninter+1
-			pgidx(Ninter)=pp
-			rowidx(Ninter)=rowidx1(pp)
-			colidx(Ninter)=colidx1(pp)
-			endif
-			enddo
-
-			!***** count number of local data
-			idx_dat=0
-			do nn=1,Ninter
-				nr=rowidx(nn)
-				nc=colidx(nn)
-				! datidx(nn)=ntot_loc
-				nprow=pmaps(pgidx(nn),1)
-				npcol=pmaps(pgidx(nn),2)
-				call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
-				if(myrow/=-1 .and. mycol/=-1)then
-					myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
-					myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-					idx_dat = idx_dat + myArows*myAcols
-				endif
-			enddo
-			allocate(alldat_loc(idx_dat))
-			if(idx_dat>0)alldat_loc=0
-
-
-			!***** Broadcast mrange and nrange for each intersection
-			idx_row=sum(rowidx)
-			allocate(allrows(idx_row))
-			idx=0
-			do pp=1,ptree%nproc
-				disps(pp)=idx
-				idx=idx+rowidx1(pp)
-			enddo
-			call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
-
-			idx_col=sum(colidx)
-			allocate(allcols(idx_col))
-			idx=0
-			do pp=1,ptree%nproc
-				disps(pp)=idx
-				idx=idx+colidx1(pp)
-			enddo
-			call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
-
-			if(option%cpp==1)then
-				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
-				! !***** parallel extraction of the data
-				do ii=1,idx_row
-					allrows(ii)=msh%new2old(allrows(ii))-1
-				enddo
-				do jj=1,idx_col
-					allcols(jj)=msh%new2old(allcols(jj))-1
-				enddo
-				pgidx=pgidx-1
-				call proc_C(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
-			else
-				proc => ker%FuncZmnBlock
-				! !***** parallel extraction of the data
-				do ii=1,idx_row
-					allrows(ii)=msh%new2old(allrows(ii))
-				enddo
-				do jj=1,idx_col
-					allcols(jj)=msh%new2old(allcols(jj))
-				enddo
-				call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%QuantApp)
-			endif
-
-
-			idx=0
-			do jj=1,ncol ! note that alldat_loc has column major
-			do ii=1,nrow
-				idx=idx+1
-				values(ii,jj)=alldat_loc(idx)
-			enddo
-			enddo
-
-			deallocate(allrows)
-			deallocate(allcols)
-			deallocate(colidx1)
-			deallocate(colidx)
-			deallocate(rowidx1)
-			deallocate(rowidx)
-			deallocate(disps)
-			deallocate(alldat_loc)
-			deallocate(pgidx)
-			deallocate(pmaps)
-
-		endif
-
-		t2 = OMP_get_wtime()
-		stats%Time_Entry=stats%Time_Entry+t2-t1
-
-		deallocate(flags)
-	endif
-
-	return
-
-end subroutine element_Zmn_block_user
-
-
-
 !**** Initialization of the construction phase
 	! N is matrix dimension
 	! P is the permutation vector returned
@@ -375,7 +160,7 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -404,7 +189,7 @@ end subroutine BPACK_construction_Init
 
 
 !**** Computation of the full matrix with matrix entry evaluation
-subroutine FULLMAT_Element(option,stats,msh,ker,element_Zmn_block,ptree)
+subroutine FULLMAT_Element(option,stats,msh,ker,ptree)
 
     implicit none
 
@@ -413,7 +198,6 @@ subroutine FULLMAT_Element(option,stats,msh,ker,element_Zmn_block,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	DT,allocatable::fullmat(:,:),fullmat_tmp(:,:)
 	integer N_unk_loc,N_unk_loc1,N_unk_locmax,ii,jj,pp
 	integer,allocatable::mrange(:),nrange(:)
@@ -429,7 +213,7 @@ subroutine FULLMAT_Element(option,stats,msh,ker,element_Zmn_block,ptree)
 	do jj=1,N_unk_loc
 		nrange(jj)=jj-msh%idxs+1
 	enddo
-	call element_Zmn_block(msh%Nunk,N_unk_loc,mrange,nrange,fullmat,msh,option,ker,0,passflag,ptree,stats)
+	call element_Zmn_block_user(msh%Nunk,N_unk_loc,mrange,nrange,fullmat,msh,option,ker,0,passflag,ptree,stats)
 
 	call MPI_ALLREDUCE(N_unk_loc,N_unk_locmax,1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 	allocate(fullmat_tmp(msh%Nunk,N_unk_locmax))
@@ -462,7 +246,7 @@ end subroutine FULLMAT_Element
 
 
 !**** Computation of the construction phase with matrix entry evaluation
-subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block,ptree)
+subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
     implicit none
 
@@ -472,26 +256,25 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_bloc
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
 
 	select case(option%format)
     case(HODLR)
-		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,element_Zmn_block,ptree)
+		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,ptree)
     case(HMAT)
-		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
+		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,ptree)
 	end select
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 
-	call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
+	call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 
 
 end subroutine BPACK_construction_Element
 
-subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
+subroutine Hmat_construction(h_mat,option,stats,msh,ker,ptree)
 
     implicit none
 
@@ -501,7 +284,6 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	integer ierr
     integer i, j, ii, jj, iii, jjj, k, kk
     integer num_blocks,level
@@ -541,7 +323,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
         do ii=blocks%headm,blocks%headm+blocks%M-1
 			mrange(1) = ii
 			nrange(1) = ii
-			call element_Zmn_block(1,1,mrange,nrange,mat,msh,option,ker,0,passflag,ptree,stats)
+			call element_Zmn_block_user(1,1,mrange,nrange,mat,msh,option,ker,0,passflag,ptree,stats)
 			scale_factor = max(scale_factor,abs(mat(1,1)/option%scale_factor))
 			! write(*,*)ii,abs(ctemp)
 		enddo
@@ -549,7 +331,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 
 	passflag=0
 	do while(passflag==0)
-	call element_Zmn_block(0,0,mrange,nrange,mat,msh,option,ker,2,passflag,ptree,stats)
+	call element_Zmn_block_user(0,0,mrange,nrange,mat,msh,option,ker,2,passflag,ptree,stats)
 	enddo
 
 	option%scale_factor = 1d0/scale_factor
@@ -583,7 +365,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 		do ii=1,h_mat%lstblks(level)%num_nods
 		select type(ptr=>cur%item)
 		type is (block_ptr)
-			call Hmat_block_construction(ptr%ptr,rtemp1,rtemp2,option,stats,msh,ker,element_Zmn_block,ptree)
+			call Hmat_block_construction(ptr%ptr,rtemp1,rtemp2,option,stats,msh,ker,ptree)
 		end select
 		cur=>cur%next
 		enddo
@@ -598,7 +380,7 @@ subroutine Hmat_construction(h_mat,option,stats,msh,ker,element_Zmn_block,ptree)
 
 		passflag=0
 		do while(passflag<2)
-		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
+		call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
 		enddo
 	enddo
 
@@ -643,7 +425,7 @@ end subroutine Hmat_construction
 
 
 
-subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptree)
+subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,ptree)
 
 
     use BPACK_DEFS
@@ -664,7 +446,6 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	integer::passflag=0
 	integer::mrange_dummy(1),nrange_dummy(1)
 	DT::mat_dummy(1,1)
@@ -710,7 +491,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 
 
 					! if(mod(ii,2)==1)then
-						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,element_Zmn_block,ptree)
+						call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii),option,rtemp,stats,msh,ker,ptree)
 					! else
 						! call BF_delete(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),1)
 						! call BF_copy('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
@@ -748,7 +529,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 						level=ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
 						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'constructing level',level
 					endif
-					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,stats,option,ptree,element_Zmn_block)
+					call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),msh,ker,stats,option,ptree)
 					stats%Mem_Direct_for=stats%Mem_Direct_for+SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 				endif
 				! ! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
@@ -761,7 +542,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 
 		passflag=0
 		do while(passflag<2)
-		call element_Zmn_block(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
+		call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,2,passflag,ptree,stats)
 		enddo
 
 		n4 = OMP_get_wtime()
@@ -801,7 +582,7 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,element_Zmn_block,ptre
 end subroutine HODLR_construction
 
 
-subroutine Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block)
+subroutine Full_construction(blocks,msh,ker,stats,option,ptree)
 
     use BPACK_DEFS
     implicit none
@@ -816,7 +597,6 @@ subroutine Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block
 	type(proctree)::ptree
 	type(Hstat)::stats
 	type(kernelquant)::ker
-	procedure(Zelem_block)::element_Zmn_block
 	integer,allocatable::mrange(:),nrange(:)
 	integer passflag
 
@@ -838,7 +618,7 @@ subroutine Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block
     allocate (blocks%fullmat(mm,nn))
 	if(blocks%row_group==blocks%col_group)allocate(blocks%ipiv(mm))
 
-	call element_Zmn_block(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree,stats)
+	call element_Zmn_block_user(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree,stats)
 
 	deallocate(mrange)
 	deallocate(nrange)
@@ -848,7 +628,7 @@ subroutine Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block
 end subroutine Full_construction
 
 
-recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,option,stats,msh,ker,element_Zmn_block,ptree)
+recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,option,stats,msh,ker,ptree)
 
     implicit none
 
@@ -862,24 +642,23 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	! t1=OMP_GET_WTIME()
     if (blocks%style==2) then
 		if(option%forwardN15flag==1)then
-			call BF_compress_N15(blocks,option,Memory_tmp,stats,msh,ker,element_Zmn_block,ptree)
+			call BF_compress_N15(blocks,option,Memory_tmp,stats,msh,ker,ptree)
 			call BF_sym2asym(blocks)
 		else
-			call BF_compress_NlogN(blocks,option,Memory_tmp,stats,msh,ker,element_Zmn_block,ptree)
+			call BF_compress_NlogN(blocks,option,Memory_tmp,stats,msh,ker,ptree)
 		end if
 		Memory_far=Memory_far+Memory_tmp
     elseif (blocks%style==1) then
-		call Full_construction(blocks,msh,ker,stats,option,ptree,element_Zmn_block)
+		call Full_construction(blocks,msh,ker,stats,option,ptree)
 		Memory_near=Memory_near+SIZEOF(blocks%fullmat)/1024.0d3
     elseif (blocks%style==4) then
 		do ii=1,2
 		do jj=1,2
 			blocks_son=>blocks%sons(ii,jj)
-			call Hmat_block_construction(blocks_son,Memory_far,Memory_near,option,stats,msh,ker,element_Zmn_block,ptree)
+			call Hmat_block_construction(blocks_son,Memory_far,Memory_near,option,stats,msh,ker,ptree)
 		enddo
 		enddo
     endif
@@ -901,7 +680,6 @@ implicit none
 	type(Bmatrix)::bmat
 	type(mesh)::msh
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	type(intersect),allocatable::inters(:)
 	real(kind=8)::n0,n1,n2,n3,n4,n5
 	integer Ntest,passflag
@@ -1181,7 +959,6 @@ implicit none
 	type(Bmatrix)::bmat
 	type(mesh)::msh
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	type(intersect),allocatable::inters(:)
 	real(kind=8)::n0,n1,n2,n3,n4,n5
 	integer Ntest,passflag
@@ -1458,7 +1235,7 @@ end subroutine BPACK_ExtractElement
 
 
 !!!!!!! check error of BPACK construction using parallel element extraction
-subroutine BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_block,ptree)
+subroutine BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 use BPACK_DEFS
 implicit none
 
@@ -1468,7 +1245,6 @@ implicit none
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	procedure(Zelem_block)::element_Zmn_block
 	type(intersect),allocatable::inters(:)
 	real(kind=8)::n1,n2,n3,n4
 	integer Ntest,passflag
@@ -1611,7 +1387,7 @@ implicit none
 				call l2g(myj,mycol,nc,npcol,nbslpk,jj)
 				cols(myj) = allcols(jj+idx_col)
 			enddo
-			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree,stats)
+			call element_Zmn_block_user(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree,stats)
 
 			do myi=1,nr_loc
 			do myj=1,nc_loc
@@ -1630,7 +1406,7 @@ implicit none
 			allocate(rows(nr_loc))
 			allocate(cols(nc_loc))
 			allocate(Mat(nr_loc,nc_loc))
-			call element_Zmn_block(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree,stats)
+			call element_Zmn_block_user(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree,stats)
 		endif
 		deallocate(rows)
 		deallocate(cols)

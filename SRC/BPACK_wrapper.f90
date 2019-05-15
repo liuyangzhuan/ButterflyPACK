@@ -726,7 +726,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -734,9 +734,9 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
-	call BPACK_CheckError(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
+	call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 
 
 	!**** return the permutation vector
@@ -910,7 +910,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,element_Zmn_block_user,ptree)
+    call Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	call BPACK_structuring(bmat,option,msh,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
@@ -1299,7 +1299,7 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction......"
 
 
-	call BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,element_Zmn_block_user,ptree)
+	call BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction finished"

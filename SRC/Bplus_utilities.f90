@@ -8410,4 +8410,220 @@ function node_score_block_ptr_row(this) result(score)
 	end select
 end function node_score_block_ptr_row
 
+
+
+
+subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
+
+	use BPACK_DEFS
+	implicit none
+
+	integer ii, jj,nn,pp,ij,i,j,nrow,ncol,passflag,myflag,Ninter,idx,nc,nr,pgno,ctxt,nprow,npcol,myrow,mycol
+	integer mrange(nrow)
+	integer nrange(ncol)
+	DT:: value_e,values(nrow,ncol)
+	type(mesh)::msh
+	type(proctree)::ptree
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(kernelquant)::ker
+	integer ierr,idx_row,idx_col,idx_dat
+	integer,allocatable:: flags(:),dests(:),colidx1(:),rowidx1(:),colidx(:),rowidx(:),allrows(:),allcols(:),disps(:),pgidx(:),pmaps(:,:)
+	procedure(F_Zelem_block), POINTER :: proc
+	procedure(C_Zelem_block), POINTER :: proc_c
+	procedure(F_Zelem), POINTER :: proc1
+	procedure(C_Zelem), POINTER :: proc1_c
+	DT,allocatable::alldat_loc(:)
+	type(intersect),allocatable::inters(:)
+	integer myArows,myAcols,Npmap
+	real(kind=8)::t1,t2,t3,t4
+
+
+	if(option%elem_extract==0)then
+
+		t1 = OMP_get_wtime()
+
+		if(option%cpp==1)then
+			call c_f_procpointer(ker%C_FuncZmn, proc1_C)
+			! !$omp parallel
+			! !$omp single
+			!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+			do ij=1,ncol*nrow
+				jj = (ij-1)/nrow+1
+				ii = mod(ij-1,nrow) + 1
+				value_e=0
+				call proc1_C(msh%new2old(mrange(ii))-1,msh%new2old(nrange(jj))-1,value_e,ker%C_QuantApp)
+				value_e =value_e*option%scale_factor
+				values(ii,jj) = value_e
+			enddo
+			!$omp end taskloop
+			! !$omp end single
+			! !$omp end parallel
+		else
+			proc1 => ker%FuncZmn
+			if(nrow*ncol>0)then
+				! !$omp parallel
+				! !$omp single
+				!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+				do ij=1,ncol*nrow
+					jj = (ij-1)/nrow+1
+					ii = mod(ij-1,nrow) + 1
+					value_e=0
+					call proc1(msh%new2old(mrange(ii)),msh%new2old(nrange(jj)),value_e,ker%QuantApp)
+					value_e =value_e*option%scale_factor
+					values(ii,jj)=value_e
+				enddo
+				!$omp end taskloop
+				! !$omp end single
+				! !$omp end parallel
+			endif
+		endif
+
+		t2 = OMP_get_wtime()
+		stats%Time_Entry=stats%Time_Entry+t2-t1
+
+		passflag=2
+	else if(option%elem_extract==1)then
+
+		allocate(flags(ptree%nproc))
+
+		call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
+		passflag=minval(flags)
+
+		t1 = OMP_get_wtime()
+
+		if(passflag==0)then
+
+			allocate(colidx1(ptree%nproc))
+			allocate(rowidx1(ptree%nproc))
+			allocate(disps(ptree%nproc))
+
+			call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+			call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+
+
+			Npmap=ptree%nproc
+			allocate(pmaps(Npmap,3))
+			do pp=1,Npmap
+				pmaps(pp,1)=1
+				pmaps(pp,2)=1
+				pmaps(pp,3)=pp-1
+			enddo
+
+			Ninter=0
+			do pp=1,ptree%nproc
+			if(flags(pp)==0)then
+			Ninter=Ninter+1
+			endif
+			enddo
+
+			allocate(colidx(Ninter))
+			allocate(rowidx(Ninter))
+			allocate(pgidx(Ninter))
+
+			!***** Count number of active intersections Ninter
+			Ninter=0
+			do pp=1,ptree%nproc
+			if(flags(pp)==0)then
+			Ninter=Ninter+1
+			pgidx(Ninter)=pp
+			rowidx(Ninter)=rowidx1(pp)
+			colidx(Ninter)=colidx1(pp)
+			endif
+			enddo
+
+			!***** count number of local data
+			idx_dat=0
+			do nn=1,Ninter
+				nr=rowidx(nn)
+				nc=colidx(nn)
+				! datidx(nn)=ntot_loc
+				nprow=pmaps(pgidx(nn),1)
+				npcol=pmaps(pgidx(nn),2)
+				call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
+				if(myrow/=-1 .and. mycol/=-1)then
+					myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
+					myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
+					idx_dat = idx_dat + myArows*myAcols
+				endif
+			enddo
+			allocate(alldat_loc(idx_dat))
+			if(idx_dat>0)alldat_loc=0
+
+
+			!***** Broadcast mrange and nrange for each intersection
+			idx_row=sum(rowidx)
+			allocate(allrows(idx_row))
+			idx=0
+			do pp=1,ptree%nproc
+				disps(pp)=idx
+				idx=idx+rowidx1(pp)
+			enddo
+			call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+
+			idx_col=sum(colidx)
+			allocate(allcols(idx_col))
+			idx=0
+			do pp=1,ptree%nproc
+				disps(pp)=idx
+				idx=idx+colidx1(pp)
+			enddo
+			call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+
+			if(option%cpp==1)then
+				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
+				! !***** parallel extraction of the data
+				do ii=1,idx_row
+					allrows(ii)=msh%new2old(allrows(ii))-1
+				enddo
+				do jj=1,idx_col
+					allcols(jj)=msh%new2old(allcols(jj))-1
+				enddo
+				pgidx=pgidx-1
+				call proc_C(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
+			else
+				proc => ker%FuncZmnBlock
+				! !***** parallel extraction of the data
+				do ii=1,idx_row
+					allrows(ii)=msh%new2old(allrows(ii))
+				enddo
+				do jj=1,idx_col
+					allcols(jj)=msh%new2old(allcols(jj))
+				enddo
+				call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%QuantApp)
+			endif
+
+
+			idx=0
+			do jj=1,ncol ! note that alldat_loc has column major
+			do ii=1,nrow
+				idx=idx+1
+				values(ii,jj)=alldat_loc(idx)
+			enddo
+			enddo
+
+			deallocate(allrows)
+			deallocate(allcols)
+			deallocate(colidx1)
+			deallocate(colidx)
+			deallocate(rowidx1)
+			deallocate(rowidx)
+			deallocate(disps)
+			deallocate(alldat_loc)
+			deallocate(pgidx)
+			deallocate(pmaps)
+
+		endif
+
+		t2 = OMP_get_wtime()
+		stats%Time_Entry=stats%Time_Entry+t2-t1
+
+		deallocate(flags)
+	endif
+
+	return
+
+end subroutine element_Zmn_block_user
+
+
 end module Bplus_Utilities

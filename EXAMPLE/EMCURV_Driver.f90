@@ -187,7 +187,7 @@ PROGRAM ButterflyPACK_IE_2D
 	deallocate(xyz)
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_block_user,ptree)
+    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 
 
@@ -254,7 +254,7 @@ PROGRAM ButterflyPACK_IE_2D
 	deallocate(tree)
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,element_Zmn_block_user,ptree)
+    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree)
 
 	! call blacs_exit(1)
 	! call MPI_Finalize(ierr)
