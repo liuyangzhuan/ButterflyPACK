@@ -196,16 +196,16 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 }
 
 // The extraction sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmnBlock(int* Ninter, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
 }
 
 // The extraction sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncBZmnBlock(int* Ninter, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-
-  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+  // for(int ii=0;ii<*Nallrows;ii++)cout<<allrows[ii]<<endl;
+  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
 }
 
 

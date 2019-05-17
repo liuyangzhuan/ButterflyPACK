@@ -8580,7 +8580,7 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 					allcols(jj)=msh%new2old(allcols(jj))-1
 				enddo
 				pgidx=pgidx-1
-				call proc_C(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
+				call proc_C(Ninter,idx_row,idx_col,idx_dat,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
 			else
 				proc => ker%FuncZmnBlock
 				! !***** parallel extraction of the data

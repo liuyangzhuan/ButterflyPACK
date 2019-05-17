@@ -541,12 +541,12 @@ module BPACK_DEFS
 		  CBIND_DT::val
 		end subroutine C_Zelem
 
-		subroutine C_Zelem_block (Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
+		subroutine C_Zelem_block (Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
-		  integer(kind=C_INT):: Ninter
-		  integer(kind=C_INT):: allrows(:),allcols(:)
-		  CBIND_DT::alldat_loc(:)
+		  integer(kind=C_INT):: Ninter,Nallrows, Nallcols, Nalldat_loc
+		  integer(kind=C_INT):: allrows(Nallrows),allcols(Nallcols)
+		  CBIND_DT::alldat_loc(Nalldat_loc)
 		  integer(kind=C_INT)::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
 		  integer(kind=C_INT)::Npmap,pmaps(Npmap,3)
 		end subroutine C_Zelem_block

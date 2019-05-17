@@ -1499,13 +1499,14 @@ end subroutine C_BF_Mult
 
 
 !!!!!!! extract a list of intersections from a block
-subroutine C_BF_ExtractElement(block_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bf_extractelement")
+subroutine C_BF_ExtractElement(block_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,Nallrows, Nallcols, Nalldat_loc,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bf_extractelement")
 use BPACK_DEFS
 implicit none
 
 	type(intersect),allocatable::inters(:)
 	real(kind=8)::n0,n1,n2,n3,n4,n5
 	integer Ntest,passflag
+	integer Nallrows, Nallcols, Nalldat_loc
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
 	integer:: cridx,info
 	integer,allocatable::rows(:),cols(:)
@@ -1522,10 +1523,10 @@ implicit none
 	integer::head,tail,idx,pp,pgno,nr_loc,nc_loc
 	type(matrixblock),pointer::blocks
 	integer num_blocks,idx_row,idx_col,idx_dat
-	integer:: allrows(:),allcols(:)
+	integer:: allrows(Nallrows),allcols(Nallcols)
 	integer,allocatable::datidx(:)
 	integer:: Ninter,nr,nc,ntot_loc
-	DT::alldat_loc(:)
+	DT::alldat_loc(Nalldat_loc)
 	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
 	integer::Npmap,pmaps(Npmap,3),flag2D
 	type(iarray)::lst
@@ -1585,7 +1586,7 @@ end subroutine C_BF_ExtractElement
 	!stats_Cptr: the structure containing statistics
 	!ptree_Cptr: the structure containing process tree
 	!msh_Cptr: the structure containing points and ordering information
-subroutine C_BPACK_ExtractElement(bmat_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bpack_extractelement")
+subroutine C_BPACK_ExtractElement(bmat_Cptr,option_Cptr,msh_Cptr,stats_Cptr,ptree_Cptr,Ninter,Nallrows, Nallcols, Nalldat_loc,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps) bind(c, name="c_bpack_extractelement")
 use BPACK_DEFS
 implicit none
 	type(c_ptr), intent(in) :: bmat_Cptr
@@ -1600,10 +1601,11 @@ implicit none
 	type(proctree),pointer::ptree
 	type(mesh),pointer::msh
 
-	integer:: allrows(:),allcols(:)
+	integer Nallrows, Nallcols, Nalldat_loc
+	integer:: allrows(Nallrows),allcols(Nallcols)
 	integer,allocatable:: allrows1(:),allcols1(:),pgidx1(:)
 	integer:: Ninter,idx_row,idx_col
-	DT::alldat_loc(:)
+	DT::alldat_loc(Nalldat_loc)
 	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
 	integer::Npmap,pmaps(Npmap,3)
 
