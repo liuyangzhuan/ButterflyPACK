@@ -567,15 +567,6 @@ end subroutine C_BPACK_Setoption
 
 
 !**** C interface of matrix construction
-	!Npo: matrix size
-	!Ndim: data set dimensionality (not used if nogeo=1)
-	!Locations: coordinates used for clustering (not used if nogeo=1)
-	!Nmin: leafsize in HODLR tree
-	!tol: compression tolerance
-	!nlevel: the number of top levels that have been ordered
-	!tree: the order tree provided by the caller
-	!Permutation: return the permutation vector new2old (indexed from 1)
-	!Npo_loc: number of local row/column indices
 	!bmat_Cptr: the structure containing HODLR
 	!option_Cptr: the structure containing option
 	!stats_Cptr: the structure containing statistics
@@ -585,24 +576,15 @@ end subroutine C_BPACK_Setoption
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
-	!MPIcomm: user-provided MPI communicator
-subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,Npo_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_FuncZmnBlock,C_QuantApp,MPIcomm) bind(c, name="c_bpack_construct_element")
+subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_FuncZmnBlock,C_QuantApp) bind(c, name="c_bpack_construct_element_compute")
 	implicit none
-	integer Npo,Ndim
-	real(kind=8) Locations(*)
 
     real(kind=8) para
     real(kind=8) tolerance,h,lam
     integer Primary_block, nn, mm, MyID_old,Maxlevel,give,need
     integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
-	real(kind=8),parameter :: cd = 299792458d0
-	integer,allocatable:: groupmembers(:)
-	integer nlevel,level
-	integer Permutation(*),tree(*)
-	integer Npo_loc
-	! type(matricesblock), pointer :: blocks_i
+	integer level
 	integer groupm
-	integer MPIcomm
 	type(c_ptr) :: bmat_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
@@ -625,136 +607,24 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 	character(len=1024)  :: strings
 
 	!**** allocate HODLR solver structures
-	allocate(bmat)
-
-	! allocate(option)
-	! allocate(stats)
-	allocate(msh)
-	allocate(ker)
-
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
+	call c_f_pointer(bmat_Cptr, bmat)
+	call c_f_pointer(msh_Cptr, msh)
+	call c_f_pointer(ker_Cptr, ker)
 
-	stats%Flop_Fill=0
-	stats%Time_Fill=0
-	stats%Time_Entry=0
-
-
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'NUMBER_MPI=',ptree%nproc
-
- 	threads_num=1
-    CALL getenv("OMP_NUM_THREADS", strings)
-	strings = TRIM(strings)
-	if(LEN_TRIM(strings)>0)then
-		read(strings , *) threads_num
-	endif
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'OMP_NUM_THREADS=',threads_num
-	call OMP_set_num_threads(threads_num)
-
-	!**** create a random seed
-	call DATE_AND_TIME(values=times)     ! Get the current time
-	seed_myid(1) = times(4) * (360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
-	! seed_myid(1) = myid*1000
-	! call RANDOM_SEED(PUT=seed_myid)
-	call init_random_seed()
-
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
-    write(*,*) "HODLR_BUTTERFLY_SOLVER"
-    write(*,*) "   "
-	endif
 
 	!**** register the user-defined function and type in ker
 	ker%C_QuantApp => C_QuantApp
 	ker%C_FuncZmn => C_FuncZmn
 	ker%C_FuncZmnBlock => C_FuncZmnBlock
 
-
-	msh%Nunk = Npo
-
-
 	t1 = OMP_get_wtime()
-
-
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel:"
-	Maxlevel=nlevel
-	allocate(msh%pretree(2**Maxlevel))
-
-	msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
-
-
-	!**** make 0-element node a 1-element node
-
-	! write(*,*)'before adjustment:',msh%pretree
-	need = 0
-	do ii=1,2**Maxlevel
-		if(msh%pretree(ii)==0)need=need+1
-	enddo
-	do while(need>0)
-		give = ceiling_safe(need/dble(2**Maxlevel-need))
-		do ii=1,2**Maxlevel
-			nn = msh%pretree(ii)
-			if(nn>1)then
-				msh%pretree(ii) = msh%pretree(ii) - min(min(nn-1,give),need)
-				need = need - min(min(nn-1,give),need)
-			endif
-		enddo
-	enddo
-	do ii=1,2**Maxlevel
-		if(msh%pretree(ii)==0)msh%pretree(ii)=1
-	enddo
-	! write(*,*)'after adjustment:',msh%pretree
-	tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
-
-
-	!**** the geometry points are provided by user
-	if(option%nogeo==0)then
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder:"
-		Dimn = Ndim
-		allocate (msh%xyz(Dimn,0:msh%Nunk))
-		ii=0
-		do edge=1,msh%Nunk
-			msh%xyz(1:Dimn,edge)= Locations(ii+1:ii+Dimn)
-			ii = ii + Dimn
-		enddo
-	endif
-
-
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-
-
-	t1 = OMP_get_wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
-    call Cluster_partition(bmat,option,msh,ker,stats,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
-
-
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
-
 	call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
-
-
-	!**** return the permutation vector
-	select case(option%format)
-	case(HODLR)
-		msh%idxs = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
-		msh%idxe = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
-	case(HMAT)
-		msh%idxs = bmat%h_mat%Local_blocks(1,1)%headm
-		msh%idxe = bmat%h_mat%Local_blocks(1,1)%headm+bmat%h_mat%Local_blocks(1,1)%M-1
-	end select
-
-	Npo_loc = msh%idxe-msh%idxs+1
-	if(ptree%MyID==Main_ID)then
-		do edge=1,Npo
-			Permutation(edge) = msh%new2old(edge)
-		enddo
-	endif
+	t2 = OMP_get_wtime()
 
 	!**** return the C address of hodlr structures to C caller
 	bmat_Cptr=c_loc(bmat)
@@ -764,9 +634,7 @@ subroutine C_BPACK_Construct_Element(Npo,Ndim,Locations,nlevel,tree,Permutation,
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 
-
-
-end subroutine C_BPACK_Construct_Element
+end subroutine C_BPACK_Construct_Element_Compute
 
 
 
@@ -775,9 +643,11 @@ end subroutine C_BPACK_Construct_Element
 
 !**** C interface of matrix construction via blackbox matvec
 	!N: matrix size (in)
+	!Ndim: data set dimensionality (not used if nogeo=1)
+	!Locations: coordinates used for clustering (not used if nogeo=1)
 	!nlevel: the number of top levels that have been ordered (in)
 	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
-	!Permutation: return the permutation vector new2old (indexed from 1) (out)
+	!Permutation: return the permutation vector new2old (indexed from 0) (out)
 	!N_loc: number of local row/column indices (out)
 	!bmat_Cptr: the structure containing HODLR (out)
 	!option_Cptr: the structure containing option (in)
@@ -785,10 +655,10 @@ end subroutine C_BPACK_Construct_Element
 	!msh_Cptr: the structure containing points and ordering information (out)
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_matvec_init")
+subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_init")
 	implicit none
-	integer N
-
+	integer N,Ndim
+	real(kind=8) Locations(*)
     real(kind=8) para
     real(kind=8) tolerance,h,lam
     integer Primary_block, nn, mm, MyID_old,Maxlevel,give,need
@@ -826,6 +696,8 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 
+
+	call assert(option%xyzsort/=TM_GRAM,'gram distance based clustering is not supported in this interface')
 
 	!**** allocate HODLR solver structures
 	allocate(bmat)
@@ -904,6 +776,20 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	! write(*,*)'after adjustment:',msh%pretree
 	tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 
+
+	!**** the geometry points are provided by user
+	if(option%nogeo==0)then
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "User-supplied kernel requiring reorder:"
+		Dimn = Ndim
+		allocate (msh%xyz(Dimn,0:msh%Nunk))
+		ii=0
+		do edge=1,msh%Nunk
+			msh%xyz(1:Dimn,edge)= Locations(ii+1:ii+Dimn)
+			ii = ii + Dimn
+		enddo
+	endif
+
+
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
@@ -929,7 +815,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	N_loc = msh%idxe-msh%idxs+1
 	if(ptree%MyID==Main_ID)then
 		do edge=1,N
-			Permutation(edge) = msh%new2old(edge)
+			Permutation(edge) = msh%new2old(edge)-1
 		enddo
 	endif
 
@@ -941,7 +827,7 @@ subroutine c_bpack_construct_Matvec_Init(N,nlevel,tree,Permutation,N_loc,bmat_Cp
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 
-end subroutine c_bpack_construct_Matvec_Init
+end subroutine C_BPACK_Construct_Init
 
 
 
@@ -954,7 +840,7 @@ end subroutine c_bpack_construct_Matvec_Init
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
-subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")
+subroutine C_BPACK_Construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")
 	implicit none
 
     real(kind=8) para
@@ -1014,7 +900,7 @@ subroutine c_bpack_construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh
 	ker_Cptr=c_loc(ker)
 	ptree_Cptr=c_loc(ptree)
 
-end subroutine c_bpack_construct_Matvec_Compute
+end subroutine C_BPACK_Construct_Matvec_Compute
 
 
 !**** C interface of BF construction via blackbox matvec or entry extraction

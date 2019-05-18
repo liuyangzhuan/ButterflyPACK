@@ -415,7 +415,8 @@ if(tst==3){
 
 
     // construct hodlr with geometrical points
-	d_c_bpack_construct_element(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr, &Fcomm);
+	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree);
+	d_c_bpack_construct_element_compute(&bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 
 	// factor hodlr
 	d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
@@ -468,8 +469,10 @@ if(tst==3){
 	int nlevel1 = 0; // 0: tree level, nonzero if a tree is provided
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
+	int Ndim1=0; //data dimension
+	double* dat_ptr1;
 
-	d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
 	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 
@@ -515,7 +518,9 @@ if(tst==3){
 	// d_c_bpack_construct_matvec_init(&Npo1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
 	// d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
-	d_c_bpack_construct_element(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr1, &Fcomm);
+
+	d_c_bpack_construct_init(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_element_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr1);
 
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the third HODLR: "<<std::endl;
