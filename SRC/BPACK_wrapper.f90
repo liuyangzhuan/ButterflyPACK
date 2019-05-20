@@ -1443,7 +1443,7 @@ implicit none
 	allrows1=allrows+1
 	idx_col=sum(colidx)
 	allocate(allcols1(idx_col))
-	allcols1=allcols+1
+	allcols1=allcols+1+blocks_o%M
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
 

@@ -794,7 +794,7 @@ implicit none
 	type is (iarray)
 	select type(ptrc=>curc%item)
 	type is (iarray)
-		write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods*ptrc%num_nods
+		write(*,*)ptree%MyID,ptr%ptr%row_group,ptr%ptr%col_group,nn,ptrr%num_nods,ptrc%num_nods
 	end select
 	end select
 	curr=>curr%next

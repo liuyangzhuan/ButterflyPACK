@@ -137,6 +137,7 @@ public:
   int _nloc = 0;
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
+  F2Cptr* bf;  //BF returned by Fortran code
   F2Cptr* stats;      //statistics structure returned by Fortran code
   F2Cptr* msh;		   //mesh structure returned by Fortran code
   F2Cptr* ptree;      //process tree returned by Fortran code
@@ -204,8 +205,11 @@ inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalld
 // The extraction sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  // for(int ii=0;ii<*Nallrows;ii++)cout<<allrows[ii]<<endl;
-  d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+
+  d_c_bf_extractelement(Q->bf,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
+
+  // // for(int ii=0;ii<*Nallrows;ii++)cout<<allrows[ii]<<endl;
+  // d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
 }
 
 
@@ -343,7 +347,7 @@ if(tst==2){
 if(tst==3){
 	ker = 6;
 	int rank_rand = 100;
-	Npo = 10000;
+	Npo = 1000;
 
 	if(argc>2)Npo = stoi(argv[2]);
 	if(argc>3)rank_rand = stoi(argv[3]);
@@ -543,7 +547,7 @@ if(tst==3){
 	//////////////////// use resulting hodlr as matvec to create a new bf
 
 	// quantities for the second holdr
-	F2Cptr bf;  //BF returned by Fortran code
+	F2Cptr bf,bf2;  //BF returned by Fortran code
 	F2Cptr option2;     //option structure returned by Fortran code
 	F2Cptr stats2;      //statistics structure returned by Fortran code
 	F2Cptr msh2;		   //d_mesh structure returned by Fortran code
@@ -580,7 +584,6 @@ if(tst==3){
 	d_c_bpack_deleteproctree(&ptree2);
 	d_c_bpack_deletemesh(&msh2);
 	d_c_bpack_deletekernelquant(&kerquant2);
-	d_c_bf_deletebf(&bf);
 	d_c_bpack_deleteoption(&option2);
 
 	delete quant_ptr2;
@@ -589,7 +592,7 @@ if(tst==3){
 
 	//////////////////// use resulting hodlr as entry extraction to create a new bf
 	quant_ptr2=new C_QuantApp();
-	quant_ptr2->bmat=&bmat;
+	quant_ptr2->bf=&bf;
 	quant_ptr2->msh=&msh;
 	quant_ptr2->ptree=&ptree;
 	quant_ptr2->stats=&stats;
@@ -604,8 +607,8 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering
 	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
-	d_c_bf_construct_element_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
 	d_c_bpack_printstats(&stats2,&ptree2);
@@ -614,9 +617,10 @@ if(tst==3){
 	d_c_bpack_deleteproctree(&ptree2);
 	d_c_bpack_deletemesh(&msh2);
 	d_c_bpack_deletekernelquant(&kerquant2);
-	d_c_bf_deletebf(&bf);
+	d_c_bf_deletebf(&bf2);
 	d_c_bpack_deleteoption(&option2);
 
+	d_c_bf_deletebf(&bf);
 	delete quant_ptr2;
 
 }
