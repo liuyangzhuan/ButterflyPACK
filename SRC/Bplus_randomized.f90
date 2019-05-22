@@ -916,7 +916,7 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 	enddo
 
 	! computation of range Q
-	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_Rdetect,ptree,block_rand%pgno,flop)
+	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_comp,ptree,block_rand%pgno,flop)
 	stats%Flop_Tmp = stats%Flop_Tmp + flop
 
 	! computation of B^T = (Q^c*A)^T
@@ -1029,7 +1029,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 !!!!**** compute B^T=V^TS^TU^T
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
-		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_Rdetect,rank,ctxt,flop=flop)
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
 		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 		do ii=1,rank
 			call g2l(ii,rank,npcol,nbslpk,jproc,myj)
@@ -1160,7 +1160,7 @@ subroutine PSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option,s
 !!!!**** compute singular values
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
-		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_Rdetect,rank,ctxt,flop=flop)
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
 		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 	else
 	endif
@@ -3789,7 +3789,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,rankthusfar,blocks,
 
 				! write(*,*)mm,nn,rmax,'didi'
 
-				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_Rdetect,Flops=flop)
+				call RandomizedSVD(matRcol,matZRcol,matRrow,matZcRrow,matU_glo,matV_glo,Singular,mm,nn,rmax,rank,option%tol_LS,option%tol_comp,Flops=flop)
 				rankthusfar = max(rankthusfar,rank)
 				! write(*,*)'yani 4'
 				do ii=1,rank

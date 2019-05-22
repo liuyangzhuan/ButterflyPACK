@@ -350,7 +350,7 @@ subroutine HODLR_randomized_OneL_Lowrank(ho_bf1,block_rand,blackbox_HODLR_MVP,Nl
 		idx_start_loc = head-msh%idxs+1
 		idx_end_loc = tail-msh%idxs+1
 
-		call PComputeRange_twoforward(ho_bf1,level_c,Bidxs,bb_inv,ranks,RandVectOutR(idx_start_loc:idx_end_loc,1:num_vect),option%tol_Rdetect,ptree,stats)
+		call PComputeRange_twoforward(ho_bf1,level_c,Bidxs,bb_inv,ranks,RandVectOutR(idx_start_loc:idx_end_loc,1:num_vect),option%tol_comp,ptree,stats)
 
 	end do
 
