@@ -448,7 +448,7 @@ subroutine SetDefaultOptions(option)
 	option%verbosity=0
 	option%scale_factor=1d0
 	option%rmax=3000
-	option%forwardN15flag=1
+	option%forwardN15flag=0
 	option%sample_para=2.0d0
 	option%pat_comp=3
 	option%elem_extract=0

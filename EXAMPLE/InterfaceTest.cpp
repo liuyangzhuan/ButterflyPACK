@@ -416,6 +416,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
 	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
 	d_c_bpack_set_I_option(&option, "cpp", cpp);
+	d_c_bpack_set_I_option(&option, "LRlevel", 100);
 
 
     // construct hodlr with geometrical points
@@ -574,15 +575,14 @@ if(tst==3){
 	int myrow=0;     // local number of rows
 	int mycol=0;     // local number of columns
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh2, &kerquant2, &ptree2);
-	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2);
+	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh1, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fourth BF: "<<std::endl;
 	d_c_bpack_printstats(&stats2,&ptree2);
 
 	d_c_bpack_deletestats(&stats2);
 	d_c_bpack_deleteproctree(&ptree2);
-	d_c_bpack_deletemesh(&msh2);
 	d_c_bpack_deletekernelquant(&kerquant2);
 	d_c_bpack_deleteoption(&option2);
 
@@ -593,7 +593,7 @@ if(tst==3){
 	//////////////////// use resulting hodlr as entry extraction to create a new bf
 	quant_ptr2=new C_QuantApp();
 	quant_ptr2->bf=&bf;
-	quant_ptr2->msh=&msh;
+	quant_ptr2->msh=&msh1;
 	quant_ptr2->ptree=&ptree;
 	quant_ptr2->stats=&stats;
 	quant_ptr2->option=&option;
@@ -621,6 +621,7 @@ if(tst==3){
 	d_c_bpack_deleteoption(&option2);
 
 	d_c_bf_deletebf(&bf);
+	d_c_bpack_deletemesh(&msh1);
 	delete quant_ptr2;
 
 }
