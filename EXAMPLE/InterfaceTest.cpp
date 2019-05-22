@@ -416,7 +416,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
 	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
 	d_c_bpack_set_I_option(&option, "cpp", cpp);
-	d_c_bpack_set_I_option(&option, "LRlevel", 100);
+	d_c_bpack_set_I_option(&option, "LRlevel", 0);
 
 
     // construct hodlr with geometrical points
