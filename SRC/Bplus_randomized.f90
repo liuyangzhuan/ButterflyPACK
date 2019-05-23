@@ -916,7 +916,7 @@ subroutine BF_Reconstruction_Lowrank(block_rand,blocks_o,operand,blackbox_MVP_da
 	enddo
 
 	! computation of range Q
-	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_comp,ptree,block_rand%pgno,flop)
+	call PComputeRange(block_rand%M_p,num_vect,RandVectOutR,ranks,option%tol_Rdetect,ptree,block_rand%pgno,flop)
 	stats%Flop_Tmp = stats%Flop_Tmp + flop
 
 	! computation of B^T = (Q^c*A)^T

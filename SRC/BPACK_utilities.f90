@@ -311,6 +311,7 @@ subroutine InitStat(stats)
 	stats%Time_Sblock=0
 	stats%Time_Sol=0
 	stats%Time_C_Mult=0
+	stats%Time_C_Extract=0
 	stats%Time_Inv=0
 	stats%Time_RedistB=0
 	stats%Time_RedistV=0
@@ -330,6 +331,7 @@ subroutine InitStat(stats)
 	stats%Flop_Factor=0
 	stats%Flop_Sol=0
 	stats%Flop_C_Mult=0
+	stats%Flop_C_Extract=0
 
 	stats%Time_Direct_LU=0
 	stats%Time_Add_Multiply=0
@@ -403,6 +405,11 @@ subroutine PrintStat(stats,ptree)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'C_mult time:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_C_Mult,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'C_mult flops:',rtemp
+
+	call MPI_ALLREDUCE(stats%Time_C_Extract,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A8)') 'C_extract time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Flop_C_Extract,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2)') 'C_extract flops:',rtemp
 
 	call MPI_ALLREDUCE(stats%Mem_peak,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)write (*,'(A21,Es14.2,A3)') 'Peak mem:',rtemp,'MB'

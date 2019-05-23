@@ -6143,6 +6143,7 @@ subroutine LR_block_extraction(blocks,inters,ptree,msh,stats)
 	do ii=1,blocks%inters(nn)%nr_loc
 		ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1-blocks%M_p(pp,1)+1
 		call gemmf77('N','N',1,blocks%inters(nn)%nc,rank, cone, blocks%ButterflyU%blocks(1)%matrix(ri,1), blocks%M_loc,Vpartial(1,iidx+1),rank,czero,blocks%inters(nn)%dat_loc(ii,1),blocks%inters(nn)%nr_loc)
+		stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(1,blocks%inters(nn)%nc,rank)
 	enddo
 	iidx = iidx + blocks%inters(nn)%nc
 	enddo
@@ -6722,6 +6723,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					mat1=0
 					mat1(1:2,:)=BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(1:2,:)
 					call gemmf77('N','N',mm,nvec1,nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix, mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(3,1),nn1+2,czero,mat1(3,1),mm+2)
+					stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm,nvec1,nn1)
 					endif
 
 					allocate(mat2(mm+2,nvec2))
@@ -6729,6 +6731,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					mat2=0
 					mat2(1:2,:)=BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(1:2,:)
 					call gemmf77('N','N',mm,nvec2,nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix, mm,BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(3,1),nn2+2,czero,mat2(3,1),mm+2)
+					stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm,nvec2,nn2)
 					endif
 
 					!**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
@@ -6831,7 +6834,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					enddo
 
 					call gemmf77('N','N',nr,nc,rank, cone, mat, nr,BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(3,idxc+1),rank+2,czero,Vpartial,nr)
-
+					stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(nr,nc,rank)
 
 					do ii=1,nr
 						iii = BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index(idxr+ii,2)
@@ -6908,6 +6911,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 							mat2=0
 							mat2(1:2,:)=BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(1:2,:)
 							call gemmf77('N','N',mm,nvec2,nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix, mm,BFvec1%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix(3,1),nn2+2,czero,mat2(3,1),mm+2)
+							stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm,nvec2,nn2)
 
 							if(allocated(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix))then
 								nvec1=size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%matrix,2)

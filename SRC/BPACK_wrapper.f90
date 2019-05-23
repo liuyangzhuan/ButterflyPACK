@@ -187,6 +187,10 @@ subroutine C_BPACK_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_bpack_getstats
 		val_d = stats%Time_C_Mult
 		valid_opt = 1
 	endif
+	if(trim(str)=='Time_C_Extract')then
+		val_d = stats%Time_C_Extract
+		valid_opt = 1
+	endif
 	if(trim(str)=='Time_Direct_LU')then
 		val_d = stats%Time_Direct_LU
 		valid_opt = 1
@@ -233,7 +237,10 @@ subroutine C_BPACK_Getstats(stats_Cptr,nam,val_d) bind(c, name="c_bpack_getstats
 		val_d = stats%Flop_C_Mult
 		valid_opt = 1
 	endif
-
+	if(trim(str)=='Flop_C_Extract')then
+		val_d = stats%Flop_C_Extract
+		valid_opt = 1
+	endif
 
 	if(trim(str)=='Mem_Factor')then
 		val_d = stats%Mem_Factor
@@ -1430,6 +1437,9 @@ implicit none
 	type(Bmatrix),pointer::bmat
 	type(proctree),pointer::ptree
 	type(mesh),pointer::msh
+	real(kind=8) t1,t2
+
+	t1 = OMP_get_wtime()
 
 	call c_f_pointer(block_Cptr, blocks_o)
 	call c_f_pointer(option_Cptr, option)
@@ -1437,6 +1447,8 @@ implicit none
 	call c_f_pointer(ptree_Cptr, ptree)
 	call c_f_pointer(msh_Cptr, msh)
 
+	stats%Flop_C_Extract=0
+	stats%Time_C_Extract=0
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
@@ -1452,6 +1464,11 @@ implicit none
 	deallocate(allrows1)
 	deallocate(allcols1)
 	deallocate(pgidx1)
+
+	t2 = OMP_get_wtime()
+
+	stats%Time_C_Extract = stats%Time_C_Extract + t2-t1
+	stats%Flop_C_Extract = stats%Flop_C_Extract + stats%Flop_Tmp
 
 end subroutine C_BF_ExtractElement
 
@@ -1494,12 +1511,18 @@ implicit none
 	DT::alldat_loc(Nalldat_loc)
 	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
 	integer::Npmap,pmaps(Npmap,3)
+	real(kind=8) t1,t2
+
+	t1 = OMP_get_wtime()
 
 	call c_f_pointer(bmat_Cptr, bmat)
 	call c_f_pointer(option_Cptr, option)
 	call c_f_pointer(stats_Cptr, stats)
 	call c_f_pointer(ptree_Cptr, ptree)
 	call c_f_pointer(msh_Cptr, msh)
+
+	stats%Flop_C_Extract=0
+	stats%Time_C_Extract=0
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
@@ -1515,6 +1538,11 @@ implicit none
 	deallocate(allrows1)
 	deallocate(allcols1)
 	deallocate(pgidx1)
+
+	t2 = OMP_get_wtime()
+
+	stats%Time_C_Extract = stats%Time_C_Extract + t2-t1
+	stats%Flop_C_Extract = stats%Flop_C_Extract + stats%Flop_Tmp
 
 end subroutine C_BPACK_ExtractElement
 

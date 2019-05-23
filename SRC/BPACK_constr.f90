@@ -708,6 +708,8 @@ implicit none
 	type(iarray)::lst
 	type(matrixblock),pointer::blocks_o
 
+	stats%Flop_Tmp = 0d0
+
 	n0 = OMP_get_wtime()
 	flag2D=0
 	allocate(inters(Ninter))
@@ -985,6 +987,8 @@ implicit none
 	integer::colidx(Ninter),rowidx(Ninter),pgidx(Ninter)
 	integer::Npmap,pmaps(Npmap,3),flag2D
 	type(iarray)::lst
+
+	stats%Flop_Tmp = 0d0
 
 	n0 = OMP_get_wtime()
 	flag2D=0

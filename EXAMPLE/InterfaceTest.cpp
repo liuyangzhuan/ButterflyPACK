@@ -530,6 +530,7 @@ if(tst==3){
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the third HODLR: "<<std::endl;
 	d_c_bpack_printstats(&stats1,&ptree1);
+	d_c_bpack_printstats(&stats,&ptree);
 
 	d_c_bpack_deletestats(&stats1);
 	d_c_bpack_deleteproctree(&ptree1);
@@ -612,6 +613,7 @@ if(tst==3){
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
 	d_c_bpack_printstats(&stats2,&ptree2);
+	d_c_bpack_printstats(&stats,&ptree);
 
 	d_c_bpack_deletestats(&stats2);
 	d_c_bpack_deleteproctree(&ptree2);
