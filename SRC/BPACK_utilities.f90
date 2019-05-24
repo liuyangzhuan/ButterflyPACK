@@ -462,7 +462,7 @@ subroutine SetDefaultOptions(option)
 	option%sample_para=2.0d0
 	option%pat_comp=3
 	option%elem_extract=0
-	option%knn=3
+	option%knn=0
 	option%cpp=0
 
 end subroutine SetDefaultOptions
