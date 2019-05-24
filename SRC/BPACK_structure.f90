@@ -714,19 +714,19 @@ recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,fla
 	integer ii,jj
 
 	if(group_m*2+1>size(msh%basis_group))then
-		if(group_m==group_n)then
+		! if(group_m==group_n)then
 			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
 			if(flag==1)then
 				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
 			endif
-		else
-			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
-			msh%basis_group(group_n)%nn=msh%basis_group(group_n)%nn+1
-			if(flag==1)then
-				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
-				msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn)=group_m
-			endif
-		endif
+		! else
+			! msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
+			! msh%basis_group(group_n)%nn=msh%basis_group(group_n)%nn+1
+			! if(flag==1)then
+				! msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
+				! msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn)=group_m
+			! endif
+		! endif
 	else
 		do ii=1,2
 		do jj=1,2

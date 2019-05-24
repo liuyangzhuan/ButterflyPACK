@@ -193,7 +193,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
    !***********************************************************************
-   if(ptree_sh%MyID==Main_ID)then
+   if(ptree_A%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'EFIE computing'
    write (*,*) 'frequency:',quant%freq
