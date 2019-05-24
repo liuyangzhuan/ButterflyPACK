@@ -2604,6 +2604,29 @@ subroutine PIKSRT_DBLE_Multi(N,M,ARR)
 end subroutine PIKSRT_DBLE_Multi
 
 
+!*** remove the duplicates in an integer array
+subroutine remove_dup_int(array,nin,nout)
+	implicit none
+	integer array(nin)
+	real(kind=8) array1(nin)
+	integer order(nin)
+	integer nin,nout,last,ii
+
+	array1(1:nin)=array(1:nin)
+	call quick_sort(array1,order,nin)
+
+	nout=0
+	last=0
+	do ii=1,nin
+		if(NINT(array1(ii))/=last)then
+			nout=nout+1
+			last = NINT(array1(ii))
+			array(nout)=last
+		endif
+	enddo
+end subroutine remove_dup_int
+
+
 subroutine quick_sort(list, order, n)
 
 ! Quick sort routine from:

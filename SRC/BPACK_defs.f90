@@ -127,6 +127,8 @@ module BPACK_DEFS
          real(kind=8):: radius=0 ! geomerical radius of this group
 		 real(kind=8):: boundary(2)=0 ! seperators used to split this group into children group
          real(kind=8),allocatable:: center(:) ! geometrical center of this group
+		 integer,allocatable:: nlist(:) ! list of nearfield groups
+		 integer::nn=0 ! # of nearfield groups
      end type basisgroup
 
 
@@ -370,6 +372,7 @@ module BPACK_DEFS
 		integer::rmax ! maximum rank truncation
 		integer:: elem_extract ! 1: use user-defined element extraction 0: use user-defined formula
 		integer:: cpp ! 1: use user-defined c/cpp functions 0: use user-defined fortran functions
+		integer:: knn ! #of nearest neighbour points for each point
 
 		! options for inversion
 		real(kind=8) tol_LS       ! tolerance in pseudo inverse
@@ -396,6 +399,9 @@ module BPACK_DEFS
 		integer::ErrSol ! check solution quality by using artificially generated true solution vector
 		integer::BACA_Batch ! batch size in batch ACA
 		integer::LR_BLK_NUM ! sqrt of #of bottom-level subblocks in blocked LR
+
+
+
 	 end type Hoption
 
 
@@ -424,6 +430,7 @@ module BPACK_DEFS
 		integer,allocatable:: new2old(:) ! index mapping from new ordering to old ordering
 		! integer,allocatable:: old2new(:) ! index mapping from old ordering to new ordering
 		integer,allocatable::pretree(:) ! dimension 2**Maxlevel containing box size of each leaf node
+		integer,allocatable::nns(:,:) ! index (after permutation) of k-nearest neighbours for each point
 		type(basisgroup),allocatable:: basis_group(:)
 	end type mesh
 

@@ -201,12 +201,15 @@ type(mesh)::msh
 integer ii
 
 if(allocated(msh%xyz))deallocate(msh%xyz)
+if(allocated(msh%nns))deallocate(msh%nns)
 if(allocated(msh%new2old))deallocate(msh%new2old)
 ! if(allocated(msh%old2new))deallocate(msh%old2new)
 if(allocated(msh%pretree))deallocate(msh%pretree)
 if(allocated(msh%basis_group))then
 do ii=1,msh%Maxgroup
 	if(allocated(msh%basis_group(ii)%center))deallocate(msh%basis_group(ii)%center)
+	if(allocated(msh%basis_group(ii)%nlist))deallocate(msh%basis_group(ii)%nlist)
+	msh%basis_group(ii)%nn=0
 enddo
 deallocate(msh%basis_group)
 endif
@@ -459,6 +462,7 @@ subroutine SetDefaultOptions(option)
 	option%sample_para=2.0d0
 	option%pat_comp=3
 	option%elem_extract=0
+	option%knn=3
 	option%cpp=0
 
 end subroutine SetDefaultOptions
@@ -542,6 +546,8 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%pat_comp
 				else if	(trim(strings)=='--elem_extract')then
 					read(strings1,*)option%elem_extract
+				else if	(trim(strings)=='--knn')then
+					read(strings1,*)option%knn
 				else if	(trim(strings)=='--cpp')then
 					read(strings1,*)option%cpp
 				else
@@ -600,6 +606,7 @@ subroutine CopyOptions(option,option1)
 	option1%pat_comp = option%pat_comp
 	option1%elem_extract = option%elem_extract
 	option1%cpp = option%cpp
+	option1%knn = option%knn
 
 end subroutine CopyOptions
 

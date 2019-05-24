@@ -62,7 +62,7 @@ logical function near_or_far(group_m,group_n,msh,para)
 end function near_or_far
 
 
-real(kind=8) function euclidean_distance(node1,node2,msh)
+real(kind=8) function euclidean_distance(node1,node2,ker,msh,option,ptree,stats)
 
     use BPACK_DEFS
     implicit none
@@ -72,6 +72,11 @@ real(kind=8) function euclidean_distance(node1,node2,msh)
     integer i, j
     integer Dimn
 	type(mesh)::msh
+	type(kernelquant)::ker
+	type(Hoption)::option
+	type(proctree)::ptree
+	type(Hstat)::stats
+
 
 	Dimn = 0
 	if(allocated(msh%xyz))Dimn = size(msh%xyz,1)
@@ -258,7 +263,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
     implicit none
 
 	integer Cflag
-    integer i, j, ii, jj, iii, jjj
+    integer i, j, ii, jj, iii, jjj, kk
     integer level, edge, node, patch, group, group_m, group_n,col_group,row_group,fidx
     integer blocks
     integer center_edge
@@ -274,7 +279,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	real(kind=8) t1,t2
 	integer Maxgroup,nlevel_pre,passflag
 	character(len=1024)  :: strings
-    integer, allocatable :: order(:), edge_temp(:,:),map_temp(:)
+    integer, allocatable :: order(:), edge_temp(:),map_temp(:)
 	integer dimn,groupsize,idxstart,Nsmp
 	type(Hoption)::option
 	type(Hstat)::stats
@@ -527,7 +532,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				distance(1:mm)=Bigvalue
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),msh)
+					distance(i-msh%basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
 				enddo
 				!$omp end parallel do
 
@@ -541,7 +546,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius2=0
 					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
-						radius2 = radius2 + gram_distance(edge,perms(ii)+msh%basis_group(group)%head-1,ker,msh,option,ptree,stats)
+						radius2 = radius2 + gram_distance(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
 					enddo
 					! call assert(radius2>0,'radius2<0 cannot take square root')
 					! radius2 = sqrt(radius2)
@@ -560,7 +565,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=gram_distance(i,center_edge,ker,msh,option,ptree,stats)
+					distance(i-msh%basis_group(group)%head+1)=gram_distance(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
 				enddo
 				!$omp end parallel do
 
@@ -585,7 +590,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 			!$omp end parallel do
 
 
-			! deallocate(edge_temp)
+
 			deallocate(map_temp)
 			deallocate(order)
 
@@ -600,14 +605,11 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				msh%basis_group(2*group)%tail=int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)
 				msh%basis_group(2*group+1)%head=msh%basis_group(2*group)%tail+1
 				msh%basis_group(2*group+1)%tail=msh%basis_group(group)%tail
-
 				if(option%xyzsort==CKD)then
 					seperator = msh%xyz(sortdirec,msh%new2old(msh%basis_group(2*group)%tail))
 				end if
-
 				msh%basis_group(group)%boundary(1) = sortdirec
 				msh%basis_group(group)%boundary(2) = seperator
-
 			endif
 		enddo
 	enddo
@@ -646,9 +648,94 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 #endif
 
 
+
+
+!**** construct a list of k-nearest neighbours for each point
+if(option%knn>0)then
+	do ii=1,size(msh%basis_group,1)
+		msh%basis_group(ii)%nn=0
+	enddo
+	call append_nlist(ker,option,stats,msh,ptree,1,1,0)
+	do ii=1,size(msh%basis_group,1)
+		if(msh%basis_group(ii)%nn>0)then
+			allocate(msh%basis_group(ii)%nlist(msh%basis_group(ii)%nn))
+			msh%basis_group(ii)%nn=0
+		endif
+	enddo
+	call append_nlist(ker,option,stats,msh,ptree,1,1,1)
+
+	allocate(msh%nns(msh%Nunk,option%knn))
+	msh%nns=0
+
+	allocate(distance(msh%Nunk))
+	allocate (order(msh%Nunk))
+	allocate (edge_temp(msh%Nunk))
+	distance=Bigvalue
+
+
+	do ii=1,size(msh%basis_group,1)
+		do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
+			kk=0
+			do jj=1,msh%basis_group(ii)%nn
+				do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
+					if(iii/=jjj)then
+					kk=kk+1
+					distance(kk)=euclidean_distance(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
+					edge_temp(kk)=jjj
+					endif
+				enddo
+			enddo
+			call quick_sort(distance,order,kk)
+			kk=min(kk,option%knn)
+			msh%nns(iii,1:kk)=edge_temp(order(1:kk))
+		enddo
+	enddo
+
+	deallocate(distance)
+	deallocate(edge_temp)
+	deallocate(order)
+endif
+
     return
 
 end subroutine Cluster_partition
+
+
+
+recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,flag)
+    use BPACK_DEFS
+    implicit none
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(proctree)::ptree
+	type(kernelquant)::ker
+	integer flag,group_m,group_n
+	integer ii,jj
+
+	if(group_m*2+1>size(msh%basis_group))then
+		if(group_m==group_n)then
+			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
+			if(flag==1)then
+				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
+			endif
+		else
+			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
+			msh%basis_group(group_n)%nn=msh%basis_group(group_n)%nn+1
+			if(flag==1)then
+				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
+				msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn)=group_m
+			endif
+		endif
+	else
+		do ii=1,2
+		do jj=1,2
+			if(.not. near_or_far(group_m*2+ii-1,group_n*2+jj-1,msh,option%near_para))call append_nlist(ker,option,stats,msh,ptree,group_m*2+ii-1,group_n*2+jj-1,flag)
+		enddo
+		enddo
+	endif
+end subroutine append_nlist
+
 
 
 subroutine BPACK_structuring(bmat,option,msh,ptree,stats)

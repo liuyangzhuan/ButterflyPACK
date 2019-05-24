@@ -208,7 +208,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
 
 			rank_new=0
 			flops=0
-			!$omp parallel do default(shared) private(index_ij,index_i,index_j,rank_new1,flops1) reduction(MAX:rank_new,flops)
+			!$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
 			do index_ij=1, nr*nc
 				index_j_loc = (index_ij-1)/nr+1
 				index_i_loc= mod(index_ij-1,nr) + 1
@@ -271,12 +271,12 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
    implicit none
 	type(mesh)::msh
 	type(kernelquant)::ker
-    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer i, j,jjj, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_r1,rankmax_c,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j, index_j_loc_k,index_j_loc_s, ii, jj,ij
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
-	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1,last
     real(kind=8) flop,flops
     DT ctemp
 	type(matrixblock)::blocks
@@ -284,8 +284,8 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 	type(Hstat)::stats
 	type(proctree)::ptree
 
-    integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
-    integer,allocatable:: select_row_rr(:), select_column_rr(:)
+    integer,allocatable:: select_row(:),select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+    integer,allocatable:: select_row_rr(:), select_column_rr(:),order(:)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
@@ -323,15 +323,39 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 	endif
 
 
-	! select skeletons here
-	rankmax_r = min(ceiling_safe(option%sample_para*nn),mm)
+	! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
+	rankmax_r1 = min(ceiling_safe(option%sample_para*nn),mm)
 	rankmax_c = nn
-	allocate(select_row(rankmax_r),select_column(rankmax_c))
+	allocate(select_row(rankmax_r1+nn*option%knn))
+	allocate(select_column(rankmax_c))
 	do i=1, rankmax_c
 		select_column(i)=i
 	enddo
+	call linspaceI(1,mm,rankmax_r1,select_row(1:rankmax_r1))
+	header_m=msh%basis_group(group_m)%head
+	header_n=msh%basis_group(group_n)%head
+	if(2*group_n+1<=size(msh%basis_group,1))header_n2=msh%basis_group(2*group_n+1)%head
+	if(level/=level_butterfly+1)then
+	do j=1,nn
+		if(level==0)then
+			edge_n = header_n+j-1
+		elseif(level<level_butterfly+1)then
+			if (j<=nn1) then
+				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(j)+header_n-1
+			else
+				edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
+			endif
+		endif
+		do jjj=1,option%knn
+			if(msh%nns(edge_n,jjj)>=msh%basis_group(group_m)%head .and. msh%nns(edge_n,jjj)<=msh%basis_group(group_m)%tail)then
+				rankmax_r1=rankmax_r1+1
+				select_row(rankmax_r1)=msh%nns(edge_n,jjj)+1-header_m
+			endif
+		enddo
+	enddo
+	endif
+	call remove_dup_int(select_row,rankmax_r1,rankmax_r)
 
-	call linspaceI(1,mm,rankmax_r,select_row(1:rankmax_r))
 
 
 	if(level==0)then
@@ -1147,7 +1171,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
    implicit none
 	type(mesh)::msh
 	type(kernelquant)::ker
-    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer i, j,iii, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_c1,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_j,index_i_loc_k,index_j_loc_k,index_i_loc_s,index_i_loc_s1,index_j_loc_s,index_j_loc_s1, ii, jj,ij
     integer level, level_final, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
@@ -1200,15 +1224,39 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
 	endif
 
 
-	! select skeletons here
+	! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
 	rankmax_r = mm
-	rankmax_c = min(nn,ceiling_safe(option%sample_para*mm))
-	allocate(select_row(rankmax_r),select_column(rankmax_c))
+	rankmax_c1 = min(nn,ceiling_safe(option%sample_para*mm))
+	allocate(select_row(rankmax_r))
+	allocate(select_column(rankmax_c1+option%knn*mm))
 	do i=1, rankmax_r
 		select_row(i)=i
 	enddo
+	call linspaceI(1,nn,rankmax_c1,select_column(1:rankmax_c1))
+	header_m=msh%basis_group(group_m)%head
+	header_n=msh%basis_group(group_n)%head
+	if(2*group_m+1<=size(msh%basis_group,1))header_m2=msh%basis_group(2*group_m+1)%head
+	if(level/=0)then
+	do i=1,mm
+		if(level==level_butterfly+1)then
+			edge_m = header_m+i-1
+		elseif(level>0)then
+			if (i<=mm1) then
+				edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m-1
+			else
+				edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
+			endif
+		endif
+		do iii=1,option%knn
+			if(msh%nns(edge_m,iii)>=msh%basis_group(group_n)%head .and. msh%nns(edge_m,iii)<=msh%basis_group(group_n)%tail)then
+				rankmax_c1=rankmax_c1+1
+				select_column(rankmax_c1)=msh%nns(edge_m,iii)+1-header_n
+			endif
+		enddo
+	enddo
+	endif
+	call remove_dup_int(select_column,rankmax_c1,rankmax_c)
 
-	call linspaceI(1,nn,rankmax_c,select_column(1:rankmax_c))
 
 
 	if(level==level_butterfly+1)then

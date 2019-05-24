@@ -506,6 +506,13 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	valid_opt=1
 	endif
 
+	if(trim(str)=='knn')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%knn=val_i
+	valid_opt=1
+	endif
+
+
 	if(trim(str)=='cpp')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%cpp=val_i
