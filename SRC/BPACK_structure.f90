@@ -289,6 +289,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	type(kernelquant)::ker
 	type(proctree)::ptree
 	integer,allocatable:: perms(:)
+	integer Navr,Bidxs,Bidxe,ierr
 
 
 
@@ -652,6 +653,44 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 
 !**** construct a list of k-nearest neighbours for each point
 if(option%knn>0)then
+	call FindKNNs(option,msh,ker,stats,ptree)
+endif
+
+    return
+
+end subroutine Cluster_partition
+
+subroutine FindKNNs(option,msh,ker,stats,ptree)
+	implicit none
+	real(kind=8), allocatable :: distance(:,:)
+	integer, allocatable :: order(:,:), edge_temp(:,:)
+
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	integer ii,iii,jjj,kk,jj,Bidxs,Bidxe,Navr,Maxgroup,Maxlevel,ierr
+    integer num_threads
+	integer,save:: my_tid=0
+!$omp threadprivate(my_tid)
+
+!$omp parallel default(shared)
+!$omp master
+	num_threads = omp_get_num_threads()
+!$omp end master
+	my_tid=omp_get_thread_num()
+!$omp end parallel
+
+	allocate(distance(msh%Nunk,num_threads))
+	allocate(order(msh%Nunk,num_threads))
+	allocate(edge_temp(msh%Nunk,num_threads))
+	distance=Bigvalue
+
+	Maxgroup=size(msh%basis_group,1)
+	Maxlevel=GetTreelevel(Maxgroup)-1
+
+
 	do ii=1,size(msh%basis_group,1)
 		msh%basis_group(ii)%nn=0
 	enddo
@@ -664,42 +703,40 @@ if(option%knn>0)then
 	enddo
 	call append_nlist(ker,option,stats,msh,ptree,1,1,1)
 
+
 	allocate(msh%nns(msh%Nunk,option%knn))
 	msh%nns=0
+	Navr = 2**Maxlevel/ptree%nproc
+	Bidxs = 2**Maxlevel+ptree%MyID*Navr
+	Bidxe = 2**Maxlevel+(ptree%MyID+1)*Navr-1
+	if(ptree%MyID==ptree%nproc-1)Bidxe=2**(Maxlevel+1)-1
 
-	allocate(distance(msh%Nunk))
-	allocate (order(msh%Nunk))
-	allocate (edge_temp(msh%Nunk))
-	distance=Bigvalue
-
-
-	do ii=1,size(msh%basis_group,1)
+	!$omp parallel do default(shared) private(ii,iii,kk,jj,jjj)
+	do ii=Bidxs,Bidxe
 		do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
 			kk=0
 			do jj=1,msh%basis_group(ii)%nn
 				do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
 					if(iii/=jjj)then
 					kk=kk+1
-					distance(kk)=euclidean_distance(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
-					edge_temp(kk)=jjj
+					distance(kk,my_tid+1)=euclidean_distance(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
+					edge_temp(kk,my_tid+1)=jjj
 					endif
 				enddo
 			enddo
-			call quick_sort(distance,order,kk)
+			call quick_sort(distance(:,my_tid+1),order(:,my_tid+1),kk)
 			kk=min(kk,option%knn)
-			msh%nns(iii,1:kk)=edge_temp(order(1:kk))
+			msh%nns(iii,1:kk)=edge_temp(order(1:kk,my_tid+1),my_tid+1)
 		enddo
 	enddo
+	!$omp end parallel do
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,msh%nns,msh%Nunk*option%knn,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 
 	deallocate(distance)
-	deallocate(edge_temp)
 	deallocate(order)
-endif
-
-    return
-
-end subroutine Cluster_partition
-
+	deallocate(edge_temp)
+end subroutine FindKNNs
 
 
 recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,flag)
@@ -730,7 +767,7 @@ recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,fla
 	else
 		do ii=1,2
 		do jj=1,2
-			if(.not. near_or_far(group_m*2+ii-1,group_n*2+jj-1,msh,option%near_para))call append_nlist(ker,option,stats,msh,ptree,group_m*2+ii-1,group_n*2+jj-1,flag)
+			if(.not. near_or_far(group_m*2+ii-1,group_n*2+jj-1,msh,knn_near_para))call append_nlist(ker,option,stats,msh,ptree,group_m*2+ii-1,group_n*2+jj-1,flag)
 		enddo
 		enddo
 	endif

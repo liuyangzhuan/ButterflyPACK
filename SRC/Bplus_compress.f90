@@ -4582,15 +4582,15 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
     implicit none
 
 	integer rank, rankup, ranknew, row, column, rankmax,N,M,rmax
-	DT,allocatable:: row_R(:,:),row_Rtmp(:,:),column_R(:,:),column_RT(:,:),fullmat(:,:),fullmat1(:,:)
+	DT,allocatable:: row_R(:,:),row_R_knn(:,:),row_Rtmp(:,:),row_Rtmp_knn(:,:),column_R(:,:),column_R_knn(:,:),column_RT(:,:),fullmat(:,:),fullmat1(:,:)
 	DT::matU(M,rmax),matV(rmax,N)
-	DT, allocatable :: core(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
+	DT, allocatable :: core(:,:),core_knn(:,:),core_inv(:,:),tau(:),matUtmp(:,:),matVtmp(:,:)
 	real(kind=8):: normA,normUV,flop,maxvalue
-	integer itr,itrmax,r_est,Nqr,bsize
-	integer,allocatable:: select_column(:), select_column1(:), select_row(:), perms(:),rows(:),columns(:)
+	integer itr,itrmax,r_est,r_est_knn_r,r_est_knn,r_est_knn_c,r_est_tmp,Nqr,bsize
+	integer,allocatable:: select_column(:),select_column_knn(:),select_row_knn(:), select_column1(:), select_row(:), perms(:),rows(:),columns(:)
 	integer,allocatable :: jpvt(:)
 
-    integer i, j, ii, jj, indx, rank_1, rank_2
+    integer i, j, ii, jj, iii, jjj, indx, rank_1, rank_2
     real(kind=8) tolerance,SVD_tolerance
     integer edge_m, edge_n, header_m, header_n,mn
     real(kind=8) inner_UV,n1,n2,a,error
@@ -4643,10 +4643,126 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 	itr=0
 	rank=0
 
-	do while (normUV>=tolerance*normA .and. itr<itrmax)
+	!**** if nearest neighbour is available, select them first
+	if(option%knn>0)then
+		allocate(select_column_knn(M*option%knn))
+		allocate(select_row_knn(N*option%knn))
+		r_est_knn_r=0
+		r_est_knn_c=0
+
+		do i=1,M
+			edge_m = header_m + i - 1
+			do iii=1,option%knn
+				if(msh%nns(edge_m,iii)>=header_n .and. msh%nns(edge_m,iii)<=header_n+N-1)then
+					r_est_knn_c=r_est_knn_c+1
+					select_column_knn(r_est_knn_c)=msh%nns(edge_m,iii)+1-header_n
+				endif
+			enddo
+		enddo
+		r_est_tmp=r_est_knn_c
+		if(r_est_knn_c>0)call remove_dup_int(select_column_knn,r_est_tmp,r_est_knn_c)
+		allocate(column_R_knn(M,r_est_knn_c))
+
+		do j=1,N
+			edge_n = header_n + j - 1
+			do jjj=1,option%knn
+				if(msh%nns(edge_n,jjj)>=header_m .and. msh%nns(edge_n,jjj)<=header_m+M-1)then
+					r_est_knn_r=r_est_knn_r+1
+					select_row_knn(r_est_knn_r)=msh%nns(edge_n,jjj)+1-header_m
+				endif
+			enddo
+		enddo
+		r_est_tmp=r_est_knn_r
+		if(r_est_knn_r>0)call remove_dup_int(select_row_knn,r_est_tmp,r_est_knn_r)
+		allocate(row_R_knn(r_est_knn_r,N))
+		allocate(row_Rtmp_knn(r_est_knn_r,N))
+		allocate(core_knn(r_est_knn_r,r_est_knn_c))
+		if(r_est_knn_r>0 .and. r_est_knn_c>0)then
+			do i=1,M
+				mrange(i)=header_m + i - 1
+			enddo
+			do j=1,r_est_knn_c
+				nrange(j)=header_n + select_column_knn(j) - 1
+			enddo
+			call element_Zmn_block_user(M,r_est_knn_c,mrange,nrange,column_R_knn,msh,option,ker,0,passflag,ptree,stats)
+
+			do i=1,r_est_knn_r
+				mrange(i)=header_m + select_row_knn(i) - 1
+			enddo
+			do j=1,N
+				nrange(j)=header_n + j - 1
+			enddo
+			call element_Zmn_block_user(r_est_knn_r,N,mrange,nrange,row_R_knn,msh,option,ker,0,passflag,ptree,stats)
+
+
+			!**** Compute the skeleton matrix in CUR
+			do i=1,r_est_knn_r
+				core_knn(i,:)=column_R_knn(select_row_knn(i),:)
+			enddo
+
+			jpvt=0
+			call geqp3modf90(core_knn,jpvt,tau,tolerance,SafeUnderflow,ranknew,flop=flop)
+			stats%Flop_Fill = stats%Flop_Fill + flop
+			rankup = ranknew
+			if(rankup>0)then
+
+				row_Rtmp_knn = row_R_knn
+				call un_or_mqrf90(core_knn,tau,row_Rtmp_knn,'L','C',r_est_knn_r,N,rankup,flop=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop
+				call trsmf90(core_knn,row_Rtmp_knn,'L','U','N','N',rankup,N,flop=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop
+
+				if(rank+rankup>rmax)rankup=rmax-rank
+
+				columns(rank+1:rankup+rank) = select_column_knn(jpvt(1:rankup))
+				rows(rank+1:rankup+rank) = select_row_knn(1:rankup)
+
+				! call assert(rank+rankup<=rmax,'try to increase rmax')
+				do j=1,rankup
+				matU(:,rank+j) = column_R_knn(:,jpvt(j))
+				enddo
+				matV(rank+1:rank+rankup,:) = row_Rtmp_knn(1:rankup,:)
+
+				rank = rank + rankup
+
+
+				if(rank==rmax)goto 10 !*** skip ACA iteration
+
+
+				!**** update fnorm of UV and matUmatV
+				call LR_Fnorm(column_R_knn,row_Rtmp_knn,M,N,rankup,normUV,tolerance*1e-2,Flops=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop
+				call LR_FnormUp(matU,matV,M,N,rank-rankup,rankup,rmax,normA,normUV,tolerance*1e-2,Flops=flop)
+
+				stats%Flop_Fill = stats%Flop_Fill + flop
+
+				if(normA>SafeUnderflow)then
+					error = normUV/normA
+				else
+					error = 0
+				endif
+
+
+				!**** Find column pivots for the next iteration
+				jpvt=0
+				row_Rtmp_knn = row_R_knn
+				if(rank>0)row_Rtmp_knn(:,columns(1:rank))=0
+				! call geqp3modf90(row_Rtmp_knn,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+				call geqp3f90(row_Rtmp_knn,jpvt,tau,flop=flop)
+				stats%Flop_Fill = stats%Flop_Fill + flop
+				select_column(1:r_est) = jpvt(1:r_est)
+			else
+				error = 0
+				goto 20   !*** no effective rank found using KNN, go to ACA iteration
+			endif
+		endif
+	endif
+
+
+20	do while (normUV>=tolerance*normA .and. itr<itrmax)
 
 		!**** create random column index for the first iteration
-		if(rank==0)then
+		if(rank==0 .and. option%knn==0)then
 			call rperm(N, perms)
 			select_column = perms(1:r_est)
 		endif
@@ -4654,16 +4770,6 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 		select_column1=select_column
 
 		!**** Compute columns column_R to find a new set of rows and columns
-		!$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		! do i=1,M
-		! do j=1,r_est
-			! edge_m = header_m + i - 1
-			! edge_n = header_n + select_column(j) - 1
-			! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
-		! enddo
-		! enddo
-		! !$omp end parallel do
-
 		do i=1,M
 			mrange(i)=header_m + i - 1
 		enddo
@@ -4692,14 +4798,6 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 
 		!**** Compute rows row_R in CUR
-		! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-		! do j=1,N
-		! do i=1,r_est
-			! edge_m = header_m + select_row(i) - 1
-			! edge_n = header_n + j - 1
-			! call element_Zmn(edge_m,edge_n,row_R(i,j),msh,option,ker)
-		! enddo
-		! enddo
 		! !$omp end parallel do
 		do i=1,r_est
 			mrange(i)=header_m + select_row(i) - 1
@@ -4791,6 +4889,16 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 	! write(*,*)normUV,normA
 
+
+10	if(allocated(row_R_knn))deallocate(row_R_knn)
+	if(allocated(row_Rtmp_knn))deallocate(row_Rtmp_knn)
+	if(allocated(column_R_knn))deallocate(column_R_knn)
+	if(allocated(core_knn))deallocate(core_knn)
+	if(allocated(select_column_knn))deallocate(select_column_knn)
+	if(allocated(select_row_knn))deallocate(select_row_knn)
+
+
+
 	if(rank>0)then
 		call LR_ReCompression(matU,matV,M,N,rank,ranknew,SVD_tolerance,Flops=flop)
 		stats%Flop_Fill = stats%Flop_Fill + flop
@@ -4818,7 +4926,6 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 
 	n2 = OMP_get_wtime()
 	! time_tmp = time_tmp + n2 - n1
-
 
     return
 

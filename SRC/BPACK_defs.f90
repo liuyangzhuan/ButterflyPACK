@@ -36,6 +36,7 @@ module BPACK_DEFS
 	integer,parameter :: MPI_Header=11 ! number of integers in the MPI header
 	integer,parameter :: INDEX_Header=4 ! number of integers in header of Butterfly_index_MPI
 	integer,parameter:: msg_chunk=100000 ! used to determine message tag and hence the massage size
+	real(kind=8),parameter::knn_near_para=3.0d0 ! used to search in the tree to find knns
 
 	!**** parameters for CEM
 	real(kind=8),parameter :: cd = 299792458d0 ! free-space speed of light
