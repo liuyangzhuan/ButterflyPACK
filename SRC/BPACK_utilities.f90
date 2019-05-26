@@ -442,7 +442,7 @@ subroutine SetDefaultOptions(option)
     option%schulzlevel=3000
 	option%LRlevel=0
 	option%ErrFillFull=0
-	option%BACA_Batch=64
+	option%BACA_Batch=16
 	option%RecLR_leaf=BACA
 	option%nogeo=0
 	option%ErrSol=0

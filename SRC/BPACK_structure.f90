@@ -649,7 +649,10 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 #endif
 
 
-
+if(option%nogeo==1 .and. option%knn>0)then
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "no geometrical information or distance function provided, force option%knn to be 0"
+	option%knn=0
+endif
 
 !**** construct a list of k-nearest neighbours for each point
 if(option%knn>0)then
