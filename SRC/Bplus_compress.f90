@@ -4762,7 +4762,7 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 20	do while (normUV>=tolerance*normA .and. itr<itrmax)
 
 		!**** create random column index for the first iteration
-		if(rank==0 .and. option%knn==0)then
+		if(rank==0)then
 			call rperm(N, perms)
 			select_column = perms(1:r_est)
 		endif
