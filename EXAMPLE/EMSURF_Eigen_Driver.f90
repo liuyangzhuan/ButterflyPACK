@@ -40,7 +40,7 @@ PROGRAM ButterflyPACK_IE_3D
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r,theta,phi
+	real(kind=8) t1,t2,x,y,z,r
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -73,6 +73,8 @@ PROGRAM ButterflyPACK_IE_3D
     integer ido, n, nx, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
     complex(kind=8) sigma
     real(kind=8) tol
+    real(kind=8) dtheta,theta,phi,rcs
+	complex(kind=8) ctemp_loc,ctemp_1,ctemp
     logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
 	character(len=1024)  :: substring,substring1
@@ -123,7 +125,7 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** default parameters for the eigen solvers
 	quant%CMmode=0
 	quant%SI=0
-	quant%shift=(0d0, 0d0)
+	quant%shift=(1d0, 0d0)
 	quant%nev=1
 	quant%tol_eig=1d-13
 	quant%which='LM'
@@ -313,6 +315,31 @@ PROGRAM ButterflyPACK_IE_3D
 	write(substring , *) ii
 	write(substring1 , *) quant%freq
 	call current_node_patch_mapping('EigVec_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
+
+	if(quant%CMmode==1)then
+		if(ptree_A%MyID==Main_ID)open (100, file='VV_bistatic_'//'EigVec_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.txt')
+		dtheta=180./quant%RCS_Nsample
+		phi=0
+		do i=0, quant%RCS_Nsample
+			theta=i*dtheta
+			ctemp_loc=(0.,0.)
+			rcs=0
+			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
+			do edge=msh_A%idxs,msh_A%idxe
+				call VV_polar_SURF(theta,phi,msh_A%new2old(edge),ctemp_1,eigvec(edge-msh_A%idxs+1,ii),quant)
+				ctemp_loc=ctemp_loc+ctemp_1
+			enddo
+			!$omp end parallel do
+
+			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
+
+			rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+			!rcs=rcs/quant%wavelength
+			rcs=10*log10(rcs)
+			if(ptree_A%MyID==Main_ID)write(100,*)theta,rcs
+		enddo
+		if(ptree_A%MyID==Main_ID)close(100)
+	endif
 	enddo
 	deallocate(eigval)
 	deallocate(eigvec)
