@@ -4,10 +4,10 @@ cut_pec=-50000%-0.1011%-0.42;
 eks_pec=2;
 below_pec=0;
 
-
-fid1 = fopen ('EigVec_1.out','r');
-fid2=fopen('pillbox_1000_node.inp','r');
-fid3=fopen('pillbox_1000_elem.inp','r');
+ith=5;
+fid1 = fopen (['EigVec_',num2str(ith),'_freq_10600000000.000000.out'],'r');
+fid2=fopen('pillbox_100000_node.inp','r');
+fid3=fopen('pillbox_100000_elem.inp','r');
 
 nnod2=fscanf(fid2,'%d',1);
 npat=fscanf(fid3,'%d',1);
@@ -84,7 +84,8 @@ shading interp;
 axis off;
 grid off;
 view(-55,40);
-fname=sprintf('%d.%s',1,'jpg');
+
+fname=sprintf('%s%d.%s','curr_mode_',num2str(ith),'jpg');
 print ('-djpeg','-r300',fname)
 
 
