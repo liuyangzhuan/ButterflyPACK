@@ -41,6 +41,7 @@ target_link_libraries(ctest ${all_link_libs_d})
 set(FDEXM1 FULLMAT_Driver.f90)
 add_executable(full ${FDEXM1})
 target_link_libraries(full ${all_link_libs_d})
+target_link_libraries(full ${all_link_libs_z})
 
 set(FDEXM2 KERREG_Driver.f90)
 add_executable(krr ${FDEXM2})

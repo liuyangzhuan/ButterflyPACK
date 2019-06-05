@@ -25,10 +25,12 @@ implicit none
 
 	!**** define your application-related variables here
 	type quant_app
-		real(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
-		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
+		DT, allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
+		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
+		real(kind=8), allocatable :: locations(:,:) ! geometrical points
 		integer:: rank
 		integer:: Nunk
+		integer:: Ndim
 		real(kind=8):: lambda
 		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
 		type(mesh),pointer::msh   ! Use this metadata in matvec
@@ -36,6 +38,7 @@ implicit none
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
 		CHARACTER (LEN=1000) DATA_DIR
+		CHARACTER (LEN=1000) GEO_DIR
 		integer:: tst=1
 	end type quant_app
 
@@ -48,10 +51,9 @@ contains
 
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		real(kind=8)::value_e
+		DT::value_e
 		integer ii
 
-		real(kind=8) r_mn
 		integer dimn
 
 		select TYPE(quant)
@@ -79,10 +81,9 @@ contains
 
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		real(kind=8)::value_e
+		DT::value_e
 		integer ii
 
-		real(kind=8) r_mn
 		integer dimn
 
 		select TYPE(quant)
@@ -101,12 +102,11 @@ contains
 		use BPACK_Solve_Mul
 		implicit none
 		character trans
-		real(kind=8) Vin(:,:),Vout(:,:)
-		real(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
-		real(kind=8) ctemp,a,b
+		DT Vin(:,:),Vout(:,:)
+		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
-		real(kind=8) n1,n2,tmp(2)
+		real(kind=8) n1,n2
 		! type(mesh)::msh
 		! type(proctree)::ptree
 		integer idxs_o,idxe_o,N
@@ -146,15 +146,13 @@ PROGRAM ButterflyPACK_FULL
 	use BPACK_randomMVP
     implicit none
 
-    real(kind=8) para
     real(kind=8) tolerance
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
     integer i,j,k, threads_num
 	integer seemyid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r,theta,phi,error,memory
-	real(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
-	real(kind=8),allocatable:: datain(:)
+	real(kind=8) t1,t2,x,y,z,r,theta,phi,error,memory,rtemp1,rtemp2
+	DT,allocatable:: datain(:)
 
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings,strings1
@@ -208,8 +206,9 @@ PROGRAM ButterflyPACK_FULL
 
 
 	quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv'
-
-
+	quant%Nunk = 4096
+	quant%rank = 2
+	quant%Ndim = 0
 
 	nargs = iargc()
 	ii=1
@@ -228,6 +227,13 @@ PROGRAM ButterflyPACK_FULL
 							read(strings1,*)quant%tst
 						else if	(trim(strings)=='--data_dir')then
 							quant%data_dir=trim(strings1)
+						else if	(trim(strings)=='--geo_dir')then
+							quant%geo_dir=trim(strings1)
+							option%nogeo=0  ! geometry points available
+						else if	(trim(strings)=='--nunk')then
+							read(strings1,*)quant%Nunk
+						else if	(trim(strings)=='--ndim')then
+							read(strings1,*)quant%Ndim
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -251,16 +257,14 @@ PROGRAM ButterflyPACK_FULL
 ! generate a LR matrix as two matrix product
 	if(quant%tst==1)then
 		!**** Get matrix size and rank and create the matrix
-		quant%Nunk = 10000
-		quant%rank = 2
 		quant%lambda = 1d5
 		allocate(quant%matU_glo(quant%Nunk,quant%rank))
 		call RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
-		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
 
 		allocate(quant%matV_glo(quant%rank,quant%Nunk))
 		call RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
-		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
@@ -287,16 +291,50 @@ PROGRAM ButterflyPACK_FULL
 
 
 		!**** Get matrix size and rank and create the matrix
-		quant%Nunk = 4096
 		allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
+
+#if DAT==1
+		!***** assuming reading one row every time
 		allocate(datain(quant%Nunk))
 		open(10, file=quant%DATA_DIR)
 		do ii=1,quant%Nunk
 			read(10,*) datain(:)
-			quant%matZ_glo(:,ii)=datain
+			quant%matZ_glo(ii,:)=datain(:)
 		enddo
 		close(10)
-		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		deallocate(datain)
+#else
+		!***** assuming reading one row every time
+		allocate(datain(quant%Nunk))
+		open(10, file=quant%DATA_DIR)
+		do ii=1,quant%Nunk
+			read(10,*) datain
+			quant%matZ_glo(ii,:)=datain(:)
+		enddo
+		do ii=1,quant%Nunk
+			read(10,*) datain
+			quant%matZ_glo(ii,:)=quant%matZ_glo(ii,:)+datain(:)*junit
+		enddo
+		close(10)
+#endif
+
+
+		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DT,Main_ID,ptree%Comm,ierr)
+
+		if(option%nogeo==0)then
+			!***** assuming reading one row every time
+			allocate(quant%locations(quant%Ndim,quant%Nunk))
+			quant%locations=0
+			allocate(datain(quant%Nunk))
+			open(10, file=quant%GEO_DIR)
+			do ii=1,quant%Ndim
+				read(10,*) datain(:)
+				quant%locations(ii,:)=datain(:)
+			enddo
+			close(10)
+			deallocate(datain)
+		endif
+
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
@@ -311,7 +349,7 @@ PROGRAM ButterflyPACK_FULL
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 
 	endif

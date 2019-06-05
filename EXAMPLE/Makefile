@@ -49,7 +49,7 @@ ie3deigen: $(FZEXM6) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FZEXM6) $(LIBS) -lm -o $@
 
 
-full: $(FDEXM1) $(DButterflyPACKLIB)
+full: $(FDEXM1) $(DButterflyPACKLIB) $(ZButterflyPACKLIB)
 	$(FLOADER) $(FLOADOPTS) $(FDEXM1) $(LIBS) -lm -o $@
 
 krr: $(FDEXM2) $(DButterflyPACKLIB)
