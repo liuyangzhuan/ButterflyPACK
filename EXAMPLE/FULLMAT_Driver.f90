@@ -268,8 +268,9 @@ PROGRAM ButterflyPACK_FULL
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
-	   write (*,*) 'FullMat computing'
-	   write (*,*) ''
+	   write (*,*) 'Random LR Kernel computing'
+	   write (*,*) 'Matrix size:', quant%Nunk
+       write (*,*) ''
 	   endif
 	   !***********************************************************************
 
@@ -338,7 +339,8 @@ PROGRAM ButterflyPACK_FULL
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
-	   write (*,*) 'Random LR Kernel computing'
+	   write (*,*) 'FullMat computing'
+	   write (*,*) 'Matrix size:', quant%Nunk
 	   write (*,*) ''
 	   endif
 	   !***********************************************************************
