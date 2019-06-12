@@ -3593,7 +3593,7 @@ integer :: numroc ! blacs routine
 numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
 end function numroc_wp
 
-! get my row and column index in a 2D grid that is row major consisting of contiguous proc ids
+! get my row and column index in a 2D grid that is column major consisting of contiguous proc ids
 subroutine Gridinfo_2D(pmap,MyID,myrow,mycol)
 implicit none
 integer pmap(3)
@@ -3605,8 +3605,8 @@ idend=pmap(3)+nprow*npcol-1
 myrow=-1
 mycol=-1
 if(MyID>=idstart .and. MyID<=idend)then
-	myrow = (MyID-idstart)/npcol
-	mycol = mod(MyID-idstart,npcol)
+	mycol = (MyID-idstart)/nprow
+	myrow = mod(MyID-idstart,nprow)
 endif
 end subroutine Gridinfo_2D
 

@@ -1512,7 +1512,7 @@ subroutine BPACK_all2all_inters(inters, lstblk, stats,ptree,nproc,Npmap,pmaps)
 			do jj=1,blocks%inters(nn)%nc
 				ci = blocks%inters(nn)%cols(jj)
 				call g2l(ci,inters(idx)%nc,npcol,nbslpk,jproc,myj)
-				pp = iproc*npcol+jproc+idstart+1
+				pp = jproc*nprow+iproc+idstart+1
 				if(sendquant(pp)%active==0)then
 					sendquant(pp)%active=1
 					sendactive(pp)=1
@@ -1586,7 +1586,7 @@ subroutine BPACK_all2all_inters(inters, lstblk, stats,ptree,nproc,Npmap,pmaps)
 			do jj=1,blocks%inters(nn)%nc
 				ci = blocks%inters(nn)%cols(jj)
 				call g2l(ci,inters(idx)%nc,npcol,nbslpk,jproc,myj)
-				pp = iproc*npcol+jproc+idstart+1
+				pp = jproc*nprow+iproc+idstart+1
 				sendquant(pp)%dat(sendquant(pp)%size+1,1)=myi
 				sendquant(pp)%dat(sendquant(pp)%size+2,1)=myj
 				sendquant(pp)%dat(sendquant(pp)%size+3,1)=idx
