@@ -550,6 +550,10 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%knn
 				else if	(trim(strings)=='--cpp')then
 					read(strings1,*)option%cpp
+				else if	(trim(strings)=='--lnobp')then
+					read(strings1,*)option%lnoBP
+				else if	(trim(strings)=='--touch_para')then
+					read(strings1,*)option%touch_para
 				else
 					if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown option: ', trim(strings)
 				endif

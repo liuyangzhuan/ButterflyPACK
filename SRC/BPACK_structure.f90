@@ -1140,8 +1140,6 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 											! write(*,*)'wocaoo',group_m,Isboundary_M(index_i_m),CNT,sortdirec,seperator
 										! endif
 
-										write(*,*)'Bplus for other sorting not considered yet'
-										stop
 									end if
 								end do
 
@@ -1168,8 +1166,6 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 											end if
 										end do
 										if(Isboundary_N(index_j_m)==1)Centroid_N(index_j_m,:) = Centroid_N(index_j_m,:)/CNT
-										write(*,*)'Bplus for other sorting not considered yet'
-										stop
 									end if
 								end do
 
