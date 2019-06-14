@@ -874,11 +874,16 @@ end subroutine un_or_gqrf90
 
 
 
-subroutine pun_or_gqrf90(Matrix,tau,m,n,k,desca,ia,ja,flop)
+subroutine pun_or_gqrf90(ctxt,Matrix,tau,m,n,k,desca,ia,ja,flop)
 class(*) Matrix(:,:),tau(:)
 real(kind=8),optional::flop
 integer m,n,k,ia,ja
 integer desca(9)
+character ROWBTOP,COLBTOP
+integer ctxt
+
+CALL PB_TOPGET( ctxt, 'Broadcast', 'Rowwise', ROWBTOP )
+CALL PB_TOPGET( ctxt, 'Broadcast', 'Columnwise', COLBTOP )
 
 select type(Matrix)
 type is (real(kind=8))
@@ -894,6 +899,8 @@ type is (complex(kind=8))
 	end select
 end select
 
+CALL PB_TOPSET( ctxt, 'Broadcast', 'Rowwise', ROWBTOP )
+CALL PB_TOPSET( ctxt, 'Broadcast', 'Columnwise', COLBTOP )
 
 end subroutine pun_or_gqrf90
 

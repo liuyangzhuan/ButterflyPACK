@@ -642,7 +642,7 @@ integer:: M_p(:,:)
 integer,allocatable:: M_p_1D(:,:)
 type(proctree)::ptree
 integer pgno,proc,nproc,nb1Dc,nb1Dr,ctxt1D,ctxt,idxs_o,idxe_o,ierr
-integer myArows,myAcols,info,nprow,npcol,myrow,mycol
+integer myArows,myAcols,info,nprow,npcol,myrow,mycol,taun
 integer::descsMat1D(9),descsMat2D(9)
 real(kind=8),optional:: Flops
 
@@ -687,7 +687,8 @@ if(present(Flops))Flops=0d0
 		if(myrow/=-1 .and. mycol/=-1)then
 			allocate(ipiv(myAcols))
 			ipiv=0
-			allocate(tau(myAcols))
+			taun=numroc_wp(mn, nbslpk, mycol, 0, npcol)
+			allocate(tau(taun))
 			tau=0
 			allocate(jpiv(N))
 			jpiv=0
@@ -697,11 +698,11 @@ if(present(Flops))Flops=0d0
 			if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
 
 			if(rank>0)then
-				call pun_or_gqrf90(mat2D,tau,M,rank,rank,descsMat2D,1,1,flop=flop)
+				call pun_or_gqrf90(ctxt,mat2D,tau,M,rank,rank,descsMat2D,1,1,flop=flop)
 				if(present(Flops))Flops = Flops + flop/dble(nprow*npcol)
 			else
 				rank=1
-				mat2D(1:M,1)=0d0
+				if(myArows>0 .and. myAcols>0)mat2D=0d0
 			endif
 
 			deallocate(ipiv)

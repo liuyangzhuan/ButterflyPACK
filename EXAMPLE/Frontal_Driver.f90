@@ -112,6 +112,7 @@ contains
 		select TYPE(quant)
 		type is (quant_app)
 
+
 		pgno=1
 		nproc = quant%ptree%pgrp(pgno)%nproc
 		N = quant%N_p(nproc,2)
@@ -135,6 +136,9 @@ contains
 			descsVin2D(2)=-1
 			descsVout2D(2)=-1
 			descsMat2D(2)=-1
+			allocate(Vin_tmp_2D(1,1))
+			allocate(Vout_tmp_2D(1,1))
+			Vout_tmp_2D=0
 		endif
 
 
@@ -153,10 +157,10 @@ contains
 
 
 		!!!!**** deallocation buffers
-		if(myrow/=-1 .and. mycol/=-1)then
+		! if(myrow/=-1 .and. mycol/=-1)then
 			deallocate(Vin_tmp_2D)
 			deallocate(Vout_tmp_2D)
-		endif
+		! endif
 
 
 		end select
@@ -303,8 +307,8 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	quant%explicitflag=0
 	!**** initialize the user-defined derived type quant
 	!*********** Construct the first HODLR by read-in the full matrix and (if explicitflag=0) use it as a matvec or (if explicitflag=1) use it as a fast entry evaluation
-	quant%Nunk = 50
-	quant%DATA_DIR='../EXAMPLE/FULLMAT_DATA/Frontal_poisson_50.mat'
+	quant%Nunk = 100
+	quant%DATA_DIR='../EXAMPLE/FULLMAT_DATA/F100.mat'
 
 
 	nargs = iargc()
@@ -367,11 +371,11 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
-	! allocate(tree(16))
-	! tree = (/3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4/)
+	allocate(tree(32))
+	tree = (/3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4 /)
 
-	allocate(tree(1))
-	tree(1) = quant%Nunk
+	! allocate(tree(1))
+	! tree(1) = quant%Nunk
 
 	if(quant%explicitflag ==1)then
 
