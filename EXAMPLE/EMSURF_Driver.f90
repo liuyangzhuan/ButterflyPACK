@@ -104,7 +104,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%CFIE_alpha=1
 
 	option%ErrSol=1
-	option%format=  HMAT!  HODLR !
+	option%format=  HODLR !HMAT!
 	option%near_para=2.01d0
 	option%verbosity=1
 	option%ILU=0
@@ -112,6 +112,7 @@ PROGRAM ButterflyPACK_IE_3D
 	option%LRlevel=100
 	option%tol_itersol=1d-5
 	option%sample_para=4d0
+	option%knn=50
 
 	nargs = iargc()
 	ii=1
@@ -153,7 +154,7 @@ PROGRAM ButterflyPACK_IE_3D
 	enddo
 
     quant%wavenum=2*pi/quant%wavelength
-	! option%touch_para = 3* quant%minedgelength
+
 
    !***********************************************************************
 	if(ptree%MyID==Main_ID)then
@@ -169,7 +170,7 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** geometry generalization and discretization
 	call geo_modeling_SURF(quant,ptree%Comm,quant%DATA_DIR)
 
-
+	option%touch_para = 3* quant%minedgelength
 
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant

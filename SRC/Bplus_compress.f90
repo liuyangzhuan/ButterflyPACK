@@ -24,10 +24,15 @@ use BPACK_structure
 contains
 
 
-subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
+subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option, Memory,stats,msh,ker,ptree)
 
    use BPACK_DEFS
    implicit none
+
+ 	integer Nboundall
+	integer boundary_map(:)
+	integer groupm_start
+
 	type(mesh)::msh
 	type(kernelquant)::ker
     integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new,rank_new1
@@ -142,7 +147,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
 				index_i_loc= mod(index_ij-1,nr) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new1,flops1)
+				call BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new1,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -214,7 +219,7 @@ subroutine BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
 				index_i_loc= mod(index_ij-1,nr) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new1,flops1)
+				call BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new1,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -265,14 +270,19 @@ end subroutine BF_compress_NlogN
 
 
 
-subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new,flops)
 
    use BPACK_DEFS
    implicit none
+
+ 	integer Nboundall
+	integer boundary_map(:)
+	integer groupm_start
+
 	type(mesh)::msh
 	type(kernelquant)::ker
     integer i, j,jjj, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_r1,rankmax_c,rankmax_min,rank_new
-    integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j, index_j_loc_k,index_j_loc_s, ii, jj,ij
+    integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j, index_j_loc_k,index_j_loc_s, ii, jj,ij
     integer level, length_1, length_2, level_blocks
     integer rank, rankmax, butterflyB_inuse, rank1, rank2
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -289,7 +299,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer Nlayer,passflag
+	integer Nlayer,passflag,levelm
 
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:)
 
@@ -322,6 +332,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 		nn=nn1+nn2
 	endif
 
+	levelm=floor_safe(dble(level_butterfly)/2d0)
 
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
 	rankmax_r1 = min(ceiling_safe(option%sample_para*nn),mm)
@@ -402,6 +413,21 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 			nrange(j)=header_n+j-1
 		enddo
 		call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
+
+		if(Nboundall>0)then
+		do i=1,rankmax_r
+			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+			if(group_n_mid/=-1)then
+			idxstart=msh%basis_group(group_n_mid)%head
+			idxend=msh%basis_group(group_n_mid)%tail
+			do j=1,nn
+				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V(i,j)=0d0
+			enddo
+			endif
+		enddo
+		endif
+
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -471,6 +497,22 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
 		enddo
 		call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
+
+		if(Nboundall>0)then
+		do i=1,mm
+			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+			if(group_n_mid/=-1)then
+			idxstart=msh%basis_group(group_n_mid)%head
+			idxend=msh%basis_group(group_n_mid)%tail
+			do j=1,rank_new
+				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=0d0
+			enddo
+			endif
+		enddo
+		endif
+
+
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -535,6 +577,21 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,option,stats,msh,ker,ptree,index_
 			endif
 		enddo
 		call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
+
+		if(Nboundall>0)then
+		do i=1,rankmax_r
+			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+			if(group_n_mid/=-1)then
+			idxstart=msh%basis_group(group_n_mid)%head
+			idxend=msh%basis_group(group_n_mid)%tail
+			do j=1,nn
+				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V(i,j)=0d0
+			enddo
+			endif
+		enddo
+		endif
+
 		deallocate(mrange)
 		deallocate(nrange)
 
@@ -1165,10 +1222,15 @@ end subroutine BF_all2all_skel
 
 
 
-subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new,flops)
 
    use BPACK_DEFS
    implicit none
+
+ 	integer Nboundall
+	integer boundary_map(:)
+	integer groupm_start
+
 	type(mesh)::msh
 	type(kernelquant)::ker
     integer i, j,iii, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_c1,rankmax_min,rank_new
@@ -1189,10 +1251,11 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:),mrange(:),nrange(:)
-	integer Nlayer
+	integer Nlayer,levelm,group_m_mid,group_n_mid,idxstart,idxend
 
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
 	integer::passflag=0
+
 
 	flops=0
 	level_butterfly=blocks%level_butterfly
@@ -1223,6 +1286,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
 		mm=mm1+mm2
 	endif
 
+	levelm=floor_safe(dble(level_butterfly)/2d0)
 
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
 	rankmax_r = mm
@@ -1282,6 +1346,22 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
 			enddo
 
 			call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
+
+			if(Nboundall>0)then
+			do i=1,mm
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,rank_new
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=0d0
+				enddo
+				endif
+			enddo
+			endif
+
+
 			deallocate(mrange)
 			deallocate(nrange)
 
@@ -1326,6 +1406,22 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
 				nrange(j)=header_n+select_column(j)-1
 			enddo
 			call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+			if(Nboundall>0)then
+			do i=1,mm
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,rankmax_c
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+				enddo
+				endif
+			enddo
+			endif
+
+
 			deallocate(mrange)
 			deallocate(nrange)
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
@@ -1397,6 +1493,21 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,option,stats,msh,ker,ptree,index_
 			nrange(j) = j+header_n-1
 		enddo
 		call element_Zmn_block_user(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+		if(Nboundall>0)then
+		do i=1,rank_new
+			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+			if(group_n_mid/=-1)then
+			idxstart=msh%basis_group(group_n_mid)%head
+			idxend=msh%basis_group(group_n_mid)%tail
+			do j=1,nn
+				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+			enddo
+			endif
+		enddo
+		endif
+
 		deallocate(mrange)
 		deallocate(nrange)
 		call copymatT(matrix_V_tmp,blocks%ButterflyV%blocks(index_j_loc_k)%matrix,rank_new,nn)
@@ -1632,31 +1743,23 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 		bplus%LL(ll)%rankmax=0
 
 		do bb = 1,bplus%LL(ll)%Nbound
-			! write(*,*)bplus%level,ll,bb
-			if(bplus%LL(ll+1)%Nbound==0)then
 
-				! bplus%LL(ll)%matrices_block(bb)%level_butterfly = int((Maxlevel_for_blocks-bplus%LL(ll)%matrices_block(bb)%level)/2)*2
-				! if(option%TwoLayerOnly==1 .and. bplus%Lplus==2)bplus%LL(ll)%matrices_block(bb)%level_butterfly = 0
+			level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
+			level_BP = bplus%level
 
-				if(option%forwardN15flag==1)then
-					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,ptree)
-					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
-				else
-					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),option,rtemp,stats,msh,ker,ptree)
-				end if
-				Memory = Memory + rtemp
-			else
-				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
-				level_BP = bplus%level
-
-				bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
-				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
-				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
-				Nboundall = 2**(bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)
-				call BF_compress_N15_withoutBoundary(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree)
+			bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
+			levelm=bplus%LL(ll)%matrices_block(bb)%level_half
+			groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+			Nboundall = 0
+			if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
+			if(option%forwardN15flag==1)then
+				call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree)
 				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
-				Memory = Memory + rtemp
+			else
+				call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree)
 			end if
+			Memory = Memory + rtemp
+
 			bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
 		end do
 	end do
@@ -2083,8 +2186,7 @@ subroutine BF_compress_N15_withoutBoundary(blocks,boundary_map,Nboundall, groupm
 
 end subroutine BF_compress_N15_withoutBoundary
 
-
-subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
+subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,ptree)
 
    use BPACK_DEFS
 
@@ -2092,9 +2194,14 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
    use misc
    implicit none
 
+	integer Nboundall
+	integer boundary_map(:)
+	integer groupm_start
+
+    integer inc_c,inc_r,nc,nr,idx_c,idx_r
     integer blocks_idx, i, j, level_butterfly,level_butterflyL,level_butterflyR, num_blocks, k, attempt
     integer group_m, group_n, mm, nn,mn, index_i, index_j,index_ij_loc,index_i_m, index_j_m,index_i_loc, index_j_loc, ii, jj,nn1,nn2,mm1,mm2,idxs_m,idxs_n
-    integer level,levelm,level_loc, length_1, length_2, level_blocks, index_ij,edge_m,edge_n
+    integer level,levelm,level_half,level_final, level_loc, length_1, length_2, level_blocks, index_ij,edge_m,edge_n
     integer rank, rankmax, butterflyB_inuse, rank1, rank2,rmax
     real(kind=8) rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
     real(kind=8) Memory,n1,n2
@@ -2116,6 +2223,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 	type(kernelquant)::ker
 	type(proctree)::ptree
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:)
+	integer emptyflag
 	cnt_tmp	= 0
 	rankFar = 0
 	rankNear = 0
@@ -2128,6 +2236,7 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 	! write(*,*)blocks%row_group,blocks%col_group,'In BF_compress_N15'
 
     level_blocks=blocks%level
+	level_butterfly = blocks%level_butterfly
     !level_butterfly=Maxlevel-level_blocks
     ! level_butterfly=int((Maxlevel_for_blocks-level_blocks)/2)*2
 
@@ -2136,12 +2245,14 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 !     endif
 	blocks%rankmax = -100000
 	blocks%rankmin = 100000
-	blocks%level_half = BF_Switchlevel(blocks%level_butterfly,option)
+	! blocks%level_half = BF_Switchlevel(blocks%level_butterfly,option)
+	blocks%level_half = floor_safe(dble(level_butterfly)/2d0)
 	levelm=blocks%level_half
+	level_half=blocks%level_half
 
     ! blocks%level_butterfly=level_butterfly
 
-	level_butterfly = blocks%level_butterfly
+
 
     num_blocks=2**level_butterfly
 
@@ -2432,8 +2543,12 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 		allocate(blocks%ButterflyMiddle(2**levelm,2**(level_butterfly-levelm)))
 
 
-		! construct the middle level and the left half
+		! assign block indices, this only works in sequential
 
+
+
+
+		! construct the middle level and the left half
 		do index_i_m=1, 2**levelm
 
 			level_loc = 0
@@ -2458,54 +2573,38 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
 
-				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,ptree,option,error)
-				! rank = min(rank,37)
+				emptyflag=0
+				if(Nboundall>0)then
+				if(boundary_map(group_m-groupm_start+1)==group_n)emptyflag=1
+				endif
 
-
-				! if(rank==53)then
-					! write(*,*)group_m,group_n,blocks%row_group,blocks%col_group,blocks%level_butterfly,blocks%level
-					! stop
-				! end if
-
-
-				! if(near_or_far(group_m,group_n,2d0))write(*,*)near_or_far(group_m,group_n,2d0),rank
-
-				! write(*,*)near_or_far(group_m,group_n,1.5d0),rank
-				! if(.not. near_or_far(group_m,group_n,1.5d0))then
-					! cnt_tmp = cnt_tmp+1
-					! rankNear = max(rankNear,rank)
-				! else
-					! rankFar= max(rankFar,rank)
-				! end if
-
-
-				! if(.not. near_or_far(group_m,group_n,2d0))then
-					! rank = 1
-					! Singular(1:rank) = 0
-					! ! if(blocks==342)write(111,*)Singular(1:rank)
-					! rankmax_for_butterfly(level_loc)=max(rank,rankmax_for_butterfly(level_loc))
-					! rankmin_for_butterfly(level_loc)=min(rank,rankmin_for_butterfly(level_loc))
-
-					! allocate(blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(rank,rank))
-					! blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix = 0
-					! do ii=1,rank
-						! blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(ii,ii) = 0d0
-					! end do
-				! else
-					! if(blocks==342)write(111,*)Singular(1:rank)
+				if(emptyflag==1)then
+					rank = 1
+					Singular(1:rank) = 0
 					rankmax_for_butterfly(level_loc)=max(rank,rankmax_for_butterfly(level_loc))
 					rankmin_for_butterfly(level_loc)=min(rank,rankmin_for_butterfly(level_loc))
-					blocks%rankmax = max(blocks%rankmax,rank)
-					blocks%rankmin = min(blocks%rankmin,rank)
 
+					allocate(blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(rank,rank))
+					blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix = 0
+					do ii=1,rank
+						blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(ii,ii) = 0d0
+					end do
+				else
+					frow=1
+					call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,ptree,option,error)
+					rankmax_for_butterfly(level_loc)=max(rank,rankmax_for_butterfly(level_loc))
+					rankmin_for_butterfly(level_loc)=min(rank,rankmin_for_butterfly(level_loc))
 
 					allocate(blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(rank,rank))
 					blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix = 0
 					do ii=1,rank
 						blocks%ButterflyMiddle(index_i_m,index_j_m)%matrix(ii,ii) = 1d0/Singular(ii)
 					end do
-				! end if
+				end if
+
+
+				blocks%rankmax = max(blocks%rankmax,rank)
+				blocks%rankmin = min(blocks%rankmin,rank)
 
 
 				allocate(mat_tmp(mm,rank))
@@ -2642,8 +2741,23 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 				allocate(matU(mm,rmax))
 				allocate(matV(rmax,nn))
 				allocate(Singular(rmax))
-				frow=1
-				call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,ptree,option,error)
+
+				emptyflag=0
+				if(Nboundall>0)then
+				if(boundary_map(group_m-groupm_start+1)==group_n)emptyflag=1
+				endif
+
+				if(emptyflag==1)then
+				! if(.not. near_or_far(group_m,group_n,2d0))then
+					rank = 1
+					Singular(1:rank) = 0
+					matV(1:rank,1:nn)=0
+					! if(blocks==342)write(111,*)Singular(1:rank)
+				else
+					frow=1
+					call LR_ACA(matU,matV,Singular,idxs_m,idxs_n,mm,nn,frow,rmax,rank,option%tol_comp*0.1,option%tol_comp,msh,ker,stats,ptree,option,error)
+				end if
+
 				! rank = min(rank,37)
 
 
@@ -2865,6 +2979,54 @@ subroutine BF_compress_N15(blocks,option,Memory,stats,msh,ker,ptree)
 
 
 	end if
+
+
+
+	do level=0, level_half
+		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+		if(level==0)then
+			blocks%ButterflyV%idx=idx_c
+			blocks%ButterflyV%inc=inc_c
+			blocks%ButterflyV%nblk_loc=nc
+		elseif(level==level_butterfly+1)then
+			blocks%ButterflyU%idx=idx_r
+			blocks%ButterflyU%inc=inc_r
+			blocks%ButterflyU%nblk_loc=nr
+		else
+			blocks%ButterflyKerl(level)%num_row=2**level
+			blocks%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+			blocks%ButterflyKerl(level)%idx_r=idx_r
+			blocks%ButterflyKerl(level)%inc_r=inc_r
+			blocks%ButterflyKerl(level)%nr=nr
+			blocks%ButterflyKerl(level)%idx_c=idx_c*2-1
+			blocks%ButterflyKerl(level)%inc_c=inc_c
+			blocks%ButterflyKerl(level)%nc=nc*2
+		endif
+	end do
+
+	level_final=level_half+1
+	do level=level_butterfly+1,level_final, -1
+		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+		if(level==0)then
+			blocks%ButterflyV%idx=idx_c
+			blocks%ButterflyV%inc=inc_c
+			blocks%ButterflyV%nblk_loc=nc
+		elseif(level==level_butterfly+1)then
+			blocks%ButterflyU%idx=idx_r
+			blocks%ButterflyU%inc=inc_r
+			blocks%ButterflyU%nblk_loc=nr
+		else
+			blocks%ButterflyKerl(level)%num_row=2**level
+			blocks%ButterflyKerl(level)%num_col=2**(level_butterfly-level+1)
+			blocks%ButterflyKerl(level)%idx_r=idx_r*2-1
+			blocks%ButterflyKerl(level)%inc_r=inc_r
+			blocks%ButterflyKerl(level)%nr=nr*2
+			blocks%ButterflyKerl(level)%idx_c=idx_c
+			blocks%ButterflyKerl(level)%inc_c=inc_c
+			blocks%ButterflyKerl(level)%nc=nc
+		endif
+	end do
+
 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
 	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))

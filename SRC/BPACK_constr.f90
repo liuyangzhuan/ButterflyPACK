@@ -256,6 +256,7 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
+	integer Maxlevel
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction......"
@@ -269,7 +270,14 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
 
-	call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
+
+	select case(option%format)
+	case(HODLR)
+		Maxlevel=bmat%ho_bf%Maxlevel
+	case(HMAT)
+		Maxlevel=bmat%h_mat%Maxlevel
+	end select
+	if(option%lnoBP>Maxlevel)call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 
 
 end subroutine BPACK_construction_Element
@@ -643,15 +651,23 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
+	integer,allocatable:: boundary_map(:)
+	integer level_butterfly,levelm,groupm_start,Nboundall
+
 	! t1=OMP_GET_WTIME()
     if (blocks%style==2) then
+
+		groupm_start=0
+		Nboundall = 0
+
 		if(option%forwardN15flag==1)then
-			call BF_compress_N15(blocks,option,Memory_tmp,stats,msh,ker,ptree)
+			call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree)
 			call BF_sym2asym(blocks)
 		else
-			call BF_compress_NlogN(blocks,option,Memory_tmp,stats,msh,ker,ptree)
+			call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree)
 		end if
 		Memory_far=Memory_far+Memory_tmp
+
     elseif (blocks%style==1) then
 		call Full_construction(blocks,msh,ker,stats,option,ptree)
 		Memory_near=Memory_near+SIZEOF(blocks%fullmat)/1024.0d3

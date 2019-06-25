@@ -650,6 +650,9 @@ rank=0
 
 if(present(Flops))Flops=0d0
 
+if(IOwnPgrp(ptree,pgno))then
+
+
 	proc = ptree%MyID - ptree%pgrp(pgno)%head
 	nproc = ptree%pgrp(pgno)%nproc
 	M_loc = M_p(proc+1,2)-M_p(proc+1,1)+1
@@ -724,6 +727,7 @@ if(present(Flops))Flops=0d0
 
 		deallocate(mat2D)
 	endif
+endif
 
 end subroutine PComputeRange
 

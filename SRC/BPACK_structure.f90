@@ -1239,6 +1239,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 									blocks%level = GetTreelevel(group_m)-1
 
 									blocks%pgno = msh%basis_group(group_m)%pgno
+									blocks%pgno_db = blocks%pgno
 									blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
 									blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
 									blocks%headm = msh%basis_group(group_m)%head
@@ -1250,6 +1251,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 
 									blocks%style = 2
 									call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
+									call ComputeParallelIndices(blocks,blocks%pgno_db,ptree,msh,1)
 								end if
 							end do
 						end if

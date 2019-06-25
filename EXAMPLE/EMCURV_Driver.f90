@@ -157,7 +157,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
     quant%wavenum=2*pi/quant%wavelength
-	! option%touch_para = 3* quant%minedgelength
+
 
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
@@ -171,6 +171,8 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** geometry generalization and discretization
     call geo_modeling_CURV(quant,ptree%Comm)
+
+	option%touch_para = 3* quant%minedgelength
 
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
@@ -190,85 +192,79 @@ PROGRAM ButterflyPACK_IE_2D
     call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 
-
-
-
-
-
-	!*********** Construct the second HODLR by using the first HODLR as parallel element extraction
-	call CopyOptions(option,option1)
-	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
-	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
-	option1%elem_extract=1 ! this indicates the second HOLDR construction uses user-defined parallel element extraction
-
-	!**** register the user-defined function and type in ker
-	ker1%FuncZmn=>Zelem_EMCURV
-	ker1%FuncZmnBlock=>Zelem_block_Extraction
-	ker1%QuantApp=>quant1
-
-	quant1%bmat=>bmat
-	quant1%msh=>msh
-	quant1%ptree=>ptree
-	quant1%stats=>stats
-	quant1%option=>option
-
-	msh1%Nunk = msh%Nunk
-
-	allocate(xyz(2,quant%Nunk))
-	do edge=1, quant%Nunk
-		xyz(:,edge) = quant%xyz(:,edge*2-1)
-	enddo
-	allocate(msh1%xyz(2,quant%Nunk)) ! xyz is used to compute group centers to determine admissibility
-	do edge=1,quant%Nunk
-		msh1%xyz(:,edge) = xyz(:,msh%new2old(edge))
-	enddo
-	deallocate(xyz)
-
-	call InitStat(stats1)
-
-	! !**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
-	! allocate(groupmembers(nmpi))
-	! do ii=1,nmpi
-		! groupmembers(ii)=(ii-1)
-	! enddo
-	! call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
-	! deallocate(groupmembers)
-
-
-	!**** use the clustering tree from the first HODLR
 	select case(option%format)
 	case(HODLR)
 		Maxlevel=bmat%ho_bf%Maxlevel
 	case(HMAT)
 		Maxlevel=bmat%h_mat%Maxlevel
 	end select
-	allocate (tree(2**Maxlevel))
-	do ii=1,2**Maxlevel
-		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
-	enddo
+	if(option%lnoBP>Maxlevel)then	 ! haven't implement the following for Bplus.
 
-	!**** initialization of the construction phase
-	allocate(Permutation(msh1%Nunk))
-	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree,tree=tree)
-	deallocate(Permutation) ! caller can use this permutation vector if needed
-	deallocate(tree)
+		!*********** Construct the second HODLR by using the first HODLR as parallel element extraction
+		call CopyOptions(option,option1)
+		option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
+		option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
+		option1%elem_extract=1 ! this indicates the second HOLDR construction uses user-defined parallel element extraction
 
-	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree)
+		!**** register the user-defined function and type in ker
+		ker1%FuncZmn=>Zelem_EMCURV
+		ker1%FuncZmnBlock=>Zelem_block_Extraction
+		ker1%QuantApp=>quant1
 
-	! call blacs_exit(1)
-	! call MPI_Finalize(ierr)
-	! return
+		quant1%bmat=>bmat
+		quant1%msh=>msh
+		quant1%ptree=>ptree
+		quant1%stats=>stats
+		quant1%option=>option
+
+		msh1%Nunk = msh%Nunk
+
+		allocate(xyz(2,quant%Nunk))
+		do edge=1, quant%Nunk
+			xyz(:,edge) = quant%xyz(:,edge*2-1)
+		enddo
+		allocate(msh1%xyz(2,quant%Nunk)) ! xyz is used to compute group centers to determine admissibility
+		do edge=1,quant%Nunk
+			msh1%xyz(:,edge) = xyz(:,msh%new2old(edge))
+		enddo
+		deallocate(xyz)
+
+		call InitStat(stats1)
+
+		! !**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
+		! allocate(groupmembers(nmpi))
+		! do ii=1,nmpi
+			! groupmembers(ii)=(ii-1)
+		! enddo
+		! call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+		! deallocate(groupmembers)
 
 
-    !t1 = OMP_get_wtime()
-    !call Test_BPACK_Mult(msh%idxe-msh%idxs+1,bmat,ptree,option,stats)
-    !t2 = OMP_get_wtime()
-    !t3=t2-t1
-    !call MPI_ALLREDUCE(MPI_IN_PLACE,t3,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    !if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'matvec time:',t3
-    !call MPI_ALLREDUCE(MPI_IN_PLACE,time_tmp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-    !if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'time_tmp:',time_tmp
+		!**** use the clustering tree from the first HODLR
+		allocate (tree(2**Maxlevel))
+		do ii=1,2**Maxlevel
+			tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+		enddo
+
+		!**** initialization of the construction phase
+		allocate(Permutation(msh1%Nunk))
+		call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree,tree=tree)
+		deallocate(Permutation) ! caller can use this permutation vector if needed
+		deallocate(tree)
+
+		!**** computation of the construction phase
+		call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree)
+
+
+		!**** deletion of quantities
+		! call delete_proctree(ptree1)
+		call delete_Hstat(stats1)
+		call delete_mesh(msh1)
+		call delete_kernelquant(ker1)
+		call BPACK_delete(bmat1)
+	endif
+
+
 
 	!**** factorization phase
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
@@ -290,14 +286,6 @@ PROGRAM ButterflyPACK_IE_2D
 	call delete_mesh(msh)
 	call delete_kernelquant(ker)
 	call BPACK_delete(bmat)
-
-
-	!**** deletion of quantities
-	! call delete_proctree(ptree1)
-	call delete_Hstat(stats1)
-	call delete_mesh(msh1)
-	call delete_kernelquant(ker1)
-	call BPACK_delete(bmat1)
 
 
 

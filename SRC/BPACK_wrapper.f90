@@ -1177,6 +1177,9 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
 	integer times(8)
 	real(kind=8) t1,t2,error,Memory
 	integer ierr
+	integer,allocatable:: boundary_map(:)
+	integer groupm_start,Nboundall
+
 
 	!**** allocate HODLR solver structures
 
@@ -1199,7 +1202,14 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction......"
 
 
-	call BF_compress_NlogN(blocks,option,Memory,stats,msh,ker,ptree)
+	groupm_start=0
+	Nboundall = 0
+	if(option%forwardN15flag==1)then
+		call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree)
+		call BF_sym2asym(blocks)
+	else
+		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree)
+	end if
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction finished"

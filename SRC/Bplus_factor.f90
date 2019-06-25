@@ -1246,7 +1246,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 	integer niter
 	real(kind=8):: error_inout,rate,rankrate_inner,rankrate_outter
 	integer itermax,ntry,cnt,cnt_partial
-	real(kind=8):: n1,n2,Memory
+	real(kind=8):: n1,n2,n3,n4,Memory
 	integer rank0,rank0_inner,rank0_outter,Lplus,level_BP,levelm,groupm_start,ij_loc,edge_s,edge_e,edge_first,idx_end_m_ref,idx_start_m_ref,idx_start_b,idx_end_b
 	DT,allocatable:: matin(:,:),matout(:,:),matin_tmp(:,:),matout_tmp(:,:)
 	DT:: ctemp1,ctemp2
@@ -1301,149 +1301,44 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 		do llplus =Lplus,1,-1
 			do bb=1,Bplus%LL(llplus)%Nbound
 				block_o => Bplus%LL(llplus)%matrices_block(bb)
+				if(IOwnPgrp(ptree,block_o%pgno))then
+					!!!!! partial update butterflies at level llplus from left B1 = D^-1xB
+					if(llplus/=Lplus)then
+						rank0 = block_o%rankmax
+						rate=1.2d0
+						level_butterfly = block_o%level_butterfly
+						call BF_randomized(level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_diagBinvB_dat,error,'L update',option,stats,ptree,msh)
+						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+						error_inout = max(error_inout, error)
+					endif
 
-				err_max=0
-
-
-				!!!!! partial update butterflies at level llplus from left B1 = D^-1xB
-				if(llplus/=Lplus)then
-
-					n1 = OMP_get_wtime()
-					call BF_MoveSingulartoLeft(block_o)
-					n2 = OMP_get_wtime()
-					! time_tmp = time_tmp + n2 - n1
-
-					level_butterfly = Bplus%LL(llplus)%matrices_block(1)%level_butterfly
-					level_BP = Bplus%level
-					levelm = ceiling_safe(dble(level_butterfly)/2d0)
-					level_butterfly_loc = levelm
-					groupm_start=block_o%row_group*2**levelm
-
-					! edge_s =msh%basis_group(block_o%row_group)%head
-					! edge_e =msh%basis_group(block_o%row_group)%tail
+					!!!!! invert I+B1 to be I+B2
+					level_butterfly=block_o%level_butterfly
+					call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)
+					error_inout = max(error_inout, error)
 
 
-					! write(*,*)'nidiao',llplus,Lplus,Bplus%LL(llplus+1)%Nbound,Bplus%LL(llplus)%matrices_block(1)%row_group,Bplus%LL(llplus)%matrices_block(1)%col_group
-
-					do ii=1,Bplus%LL(llplus+1)%Nbound
-						! edge_first = msh%basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
-						edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
-
-						if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
-							ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1
-							if(level_butterfly_loc==0)then
-								write(*,*)'level_butterfly_loc==0 not done'
-								stop
-							else
-
-								call BF_extract_partial(block_o,level_butterfly_loc,ij_loc,'L',agent_block)
-								call Bplus_extract_partial(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus,msh)
-
-
-
-								rank0 = agent_block%rankmax
-								rate=1.2d0
-								level_butterfly = agent_block%level_butterfly
-								call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BplusB_dat,error,'L small',option,stats,ptree,msh,agent_block)
-								stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
-								! write(*,*)error,level_butterfly,Bplus%LL(llplus+1)%matrices_block(ii)%level_butterfly,'nimade'
-								call BF_copy_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'L',Memory)
-
-								err_max = max(err_max, error)
-
-								call BF_delete(agent_block,1)
-								! deallocate(agent_block)
-								call Bplus_delete(agent_bplus)
-								! deallocate(agent_bplus)
-
-							end if
-						end if
-					end do
-
-
-				if(option%verbosity>=2)write(*,'(A30,I7,A6,I3,A11,Es14.7)')' L partial: ll ',llplus,' bb:',bb,' error:',err_max
-
-				end if
-
-				error_inout = max(error_inout, err_max)
-
-				! write(*,*)block_o%level_butterfly,'ahaha'
-
-				!!!!! invert I+B1 to be I+B2
-				level_butterfly=block_o%level_butterfly
-				call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)
-				error_inout = max(error_inout, error)
-
-
-				err_max=0
-				!!!!! partial update butterflies at level llplus from right B2xD^-1
-				if(llplus/=Lplus)then
-					! write(*,*)'hhe'
-					n1 = OMP_get_wtime()
-					call BF_MoveSingulartoRight(block_o)
-					n2 = OMP_get_wtime()
-					! time_tmp = time_tmp + n2 - n1
-					! write(*,*)'hhe1'
-					level_butterfly = Bplus%LL(llplus)%matrices_block(1)%level_butterfly
-					level_BP = Bplus%level
-					levelm = ceiling_safe(dble(level_butterfly)/2d0)
-					level_butterfly_loc = levelm
-					groupm_start=block_o%row_group*2**levelm
-					! edge_s =msh%basis_group(block_o%row_group)%head
-					! edge_e =msh%basis_group(block_o%row_group)%tail
-
-
-					do ii=1,Bplus%LL(llplus+1)%Nbound
-						! edge_first = msh%basis_group(Bplus%LL(llplus+1)%matrices_block(ii)%row_group)%head
-						edge_first = Bplus%LL(llplus+1)%matrices_block(ii)%headm
-						if(edge_first>=block_o%headm .and. edge_first<=block_o%headm+block_o%M-1)then
-							ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1
-							if(level_butterfly_loc==0)then
-								write(*,*)'level_butterfly_loc==0 not done'
-								stop
-							else
-	! write(*,*)'hhe2',level_butterfly_loc,ij_loc,block_o%level_butterfly
-								cnt_partial = cnt_partial + 1
-								! allocate(agent_block(1))
-
-								! allocate(agent_block(1))
-								! allocate(agent_bplus)
-
-								call BF_extract_partial(block_o,level_butterfly_loc,ij_loc,'R',agent_block)
-								call Bplus_extract_partial(Bplus,llplus+1,Bplus%LL(llplus+1)%matrices_block(ii)%row_group,agent_bplus,msh)
-
-
-
-
-								rank0 = agent_block%rankmax
-								rate=1.2d0
-								level_butterfly = agent_block%level_butterfly
-								call BF_randomized(level_butterfly,rank0,rate,agent_block,agent_bplus,Bplus_block_MVP_BBplus_dat,error,'R small',option,stats,ptree,msh,agent_block)
-								stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
-								call BF_copy_partial(agent_block,block_o,level_butterfly_loc,ij_loc,'R',Memory)
-
-								err_max = max(err_max, error)
-
-								call BF_delete(agent_block,1)
-								! deallocate(agent_block)
-								call Bplus_delete(agent_bplus)
-								! deallocate(agent_bplus)
-
-							end if
-						end if
-					end do
-
-					! call BF_sym2asym(block_o)
-
-					error_inout = max(error_inout, err_max)
-
-					if(option%verbosity>=2)write(*,'(A30,I7,A6,I3,A11,Es14.7)')' R partial: ll ',llplus,' bb:',bb,' error:',err_max
-
-				end if
+					if(llplus/=Lplus)then
+						rank0 = block_o%rankmax
+						rate=1.2d0
+						level_butterfly = block_o%level_butterfly
+						call BF_randomized(level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_BdiagBinv_dat,error,'R update',option,stats,ptree,msh)
+						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+						error_inout = max(error_inout, error)
+					endif
+				endif
 			end do
 		end do
 		n2 = OMP_get_wtime()
 		stats%Time_SMW=stats%Time_SMW + n2-n1
+
+
+		do ll=1,Bplus%Lplus
+		Bplus%LL(ll)%rankmax=0
+		do bb=1,Bplus%LL(ll)%Nbound
+			Bplus%LL(ll)%rankmax=max(Bplus%LL(ll)%rankmax,Bplus%LL(ll)%matrices_block(bb)%rankmax)
+		enddo
+		end do
 
 		rank_new_max = 0
 		do ll=1,Lplus
