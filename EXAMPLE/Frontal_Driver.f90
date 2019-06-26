@@ -371,11 +371,11 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	t2 = OMP_get_wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
-	allocate(tree(32))
-	tree = (/3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4 /)
+	! allocate(tree(32))
+	! tree = (/3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4 /)
 
-	! allocate(tree(1))
-	! tree(1) = quant%Nunk
+	allocate(tree(1))
+	tree(1) = quant%Nunk
 
 	if(quant%explicitflag ==1)then
 

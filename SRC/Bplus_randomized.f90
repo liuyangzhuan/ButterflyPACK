@@ -835,11 +835,13 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			rank_new_max = block_rand(1)%rankmax
 			call BF_delete(block_rand(1),1)
 			deallocate(block_rand)
-		else
+
 			if(rank_pre_max>=min(block_rand(1)%M,block_rand(1)%N))then
 				write(*,*)'rank_pre_max: ',rank_pre_max,' exceeding min(M,N): ',min(block_rand(1)%M,block_rand(1)%N)
 				stop
 			endif
+        
+        else
 
 			call BF_delete(blocks_o,1)
 			call BF_get_rank(block_rand(1),ptree)
@@ -4263,7 +4265,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 		block_o => Bplus_randomized%LL(2)%matrices_block(bb)
 		! ho_bf1%ind_lv = level_c
 		! ho_bf1%ind_bk = rowblock
-		rank0 = min(max(rank0_inner*2,rankthusfar),min(block_o%M,block_o%N))
+		rank0 = min(max(rank0_inner+3,rankthusfar),min(block_o%M,block_o%N))
 		call Bplus_MultiLrandomized_Onesubblock(rank0,rankrate_inner,block_o,operand,blackbox_MVP_dat_inner,error,strings,option,stats,ptree,msh,Bplus_randomized)
 		error_inout = max(error_inout, error)
 		! write(*,*)'go'

@@ -141,7 +141,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 			endif
 			rank_new=0
 			flops=0
-			!$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
+			! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
 			do index_ij=1, nr*nc
 				index_j_loc = (index_ij-1)/nr+1
 				index_i_loc= mod(index_ij-1,nr) + 1
@@ -151,7 +151,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
-			!$omp end parallel do
+			! !$omp end parallel do
 
 			if(level/=level_butterfly+1)then
 			if(level_half==level)then
@@ -213,7 +213,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 
 			rank_new=0
 			flops=0
-			!$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
+			! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
 			do index_ij=1, nr*nc
 				index_j_loc = (index_ij-1)/nr+1
 				index_i_loc= mod(index_ij-1,nr) + 1
@@ -223,7 +223,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
-			!$omp end parallel do
+			! !$omp end parallel do
 
 			if(level>level_final)then
 				call BF_exchange_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'C','B')
