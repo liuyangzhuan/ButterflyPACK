@@ -589,7 +589,7 @@ end subroutine C_BPACK_Setoption
 	!ptree_Cptr: the structure containing process tree
 	!C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
 	!C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
-	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
 subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmn,C_FuncZmnBlock,C_QuantApp) bind(c, name="c_bpack_construct_element_compute")
 	implicit none
 
@@ -669,7 +669,10 @@ end subroutine C_BPACK_Construct_Element_Compute
 	!msh_Cptr: the structure containing points and ordering information (out)
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bpack_construct_init")
+	!C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
+	!C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bpack_construct_init")
 	implicit none
 	integer N,Ndim
 	real(kind=8) Locations(*)
@@ -690,8 +693,9 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	type(c_ptr) :: msh_Cptr
 	type(c_ptr) :: ker_Cptr
 	type(c_ptr) :: ptree_Cptr
-	! type(c_ptr), intent(in),target :: C_QuantApp
-	! type(c_funptr), intent(in),value,target :: C_FuncHMatVec
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncDistmn
+	type(c_funptr), intent(in),value,target :: C_FuncNearFar
 
 	type(Hoption),pointer::option
 	type(Hstat),pointer::stats
@@ -749,10 +753,12 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
     write(*,*) "   "
 	endif
 
-	! !**** register the user-defined function and type in ker
-	! ker%C_QuantApp => C_QuantApp
-	! ker%C_FuncHMatVec => C_FuncHMatVec
-
+	!**** register the user-defined function and type in ker
+	if(option%nogeo==2)then
+		ker%C_QuantApp => C_QuantApp
+		ker%C_FuncDistmn => C_FuncDistmn
+		ker%C_FuncNearFar => C_FuncNearFar
+	endif
 
 	msh%Nunk = N
 
@@ -811,7 +817,7 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format......"
     call Cluster_partition(bmat,option,msh,ker,stats,ptree)
-	call BPACK_structuring(bmat,option,msh,ptree,stats)
+	call BPACK_structuring(bmat,option,msh,ker,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
@@ -853,7 +859,7 @@ end subroutine C_BPACK_Construct_Init
 	!ker_Cptr: the structure containing kernel quantities (inout)
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
 subroutine C_BPACK_Construct_Matvec_Compute(bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncHMatVec,C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")
 	implicit none
 
@@ -1063,7 +1069,7 @@ end subroutine C_BF_Construct_Init
 	!ker_Cptr: the structure containing kernel quantities (inout)
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncBMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
 subroutine C_BF_Construct_Matvec_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncBMatVec,C_QuantApp) bind(c, name="c_bf_construct_matvec_compute")
 	implicit none
 
@@ -1150,7 +1156,7 @@ end subroutine C_BF_Construct_Matvec_Compute
 	!ker_Cptr: the structure containing kernel quantities (inout)
 	!ptree_Cptr: the structure containing process tree (in)
 	!C_FuncZmnBlock: the C_pointer to user-provided function to extract a list of intersections from a block (in)
-	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation and sampling (in)
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
 subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncZmnBlock,C_QuantApp) bind(c, name="c_bf_construct_element_compute")
 	implicit none
 

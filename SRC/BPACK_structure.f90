@@ -21,11 +21,45 @@ use BPACK_DEFS
 contains
 
 
+! far is returning 1, near if returning 0
+integer function near_or_far_user(group_m,group_n,msh,option,ker,para)
+    implicit none
+	type(mesh)::msh
+	type(Hoption)::option
+	type(kernelquant)::ker
+    integer group_m, group_n
+    real*8 para
+	procedure(F_Compressibility), POINTER :: proc1
+	procedure(C_Compressibility), POINTER :: proc1_c
 
-logical function near_or_far(group_m,group_n,msh,para)
+	if(option%nogeo==0)then  ! geometrical information is provided
+		near_or_far_user = near_or_far_geo(group_m,group_n,msh,option,ker,para)
+	else if(option%nogeo==1)then ! no geometrical information is provided, ! only return 0 for self elements
+		if(group_m==group_n)then
+			near_or_far_user=0
+		else
+			near_or_far_user=1
+		endif
+	else if(option%nogeo==2)then  ! no geometrical information is provided, but user provides a compressibility function
+		if(option%cpp==1)then
+			call c_f_procpointer(ker%C_FuncNearFar, proc1_C)
+			call proc1_C(group_m,group_n,near_or_far_user,ker%C_QuantApp)
+		else
+			proc1 => ker%FuncNearFar
+			call proc1(group_m,group_n,near_or_far_user,ker%QuantApp)
+		endif
+	endif
+
+end function near_or_far_user
+
+
+! far is returning 1, near if returning 0
+integer function near_or_far_geo(group_m,group_n,msh,option,ker,para)
     implicit none
 
 	type(mesh)::msh
+	type(Hoption)::option
+	type(kernelquant)::ker
     integer group_m, group_n,farblock, level
     integer i, j, ii, jj
     real*8 dis, rad1, rad2, para
@@ -53,21 +87,68 @@ logical function near_or_far(group_m,group_n,msh,para)
 
     ! if (dis>para*max(rad1,rad2)) then
     if (dis>para*(rad1+rad2)/2) then
-        near_or_far=.true.
+        near_or_far_geo= 1
     else
-        near_or_far=.false.
+        near_or_far_geo= 0
     endif
     deallocate(a,b)
 
-end function near_or_far
+end function near_or_far_geo
 
 
-real(kind=8) function euclidean_distance(node1,node2,ker,msh,option,ptree,stats)
+
+real(kind=8) function distance_user(edgem,edgen,ker,msh,option,ptree,stats)
 
     use BPACK_DEFS
     implicit none
 
-    integer node1, node2
+    integer edgem, edgen
+    real(kind=8) dis
+    integer i, j
+    integer Dimn
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(Hoption)::option
+	type(proctree)::ptree
+	type(Hstat)::stats
+	procedure(F_Dist), POINTER :: proc1
+	procedure(C_Dist), POINTER :: proc1_c
+
+	if(option%nogeo==0)then  ! geometrical information is provided
+		distance_user = distance_geo(edgem,edgen,ker,msh,option,ptree,stats)
+	else if(option%nogeo==1)then ! no geometrical information is provided
+		if(option%xyzsort==TM_GRAM)then ! try gram distance
+			distance_user = distance_gram(edgem,edgen,ker,msh,option,ptree,stats)
+		else                  ! only return 0 for self elements
+			if(edgem==edgen)then
+				distance_user=0d0
+			else
+				distance_user=1d0
+			endif
+		endif
+	else if(option%nogeo==2)then  ! no geometrical information is provided, but user provides a distance function
+		if(option%cpp==1)then
+			call c_f_procpointer(ker%C_FuncDistmn, proc1_C)
+			call proc1_C(edgem-1,edgen-1,distance_user,ker%C_QuantApp)
+		else
+			proc1 => ker%FuncDistmn
+			call proc1(edgem,edgen,distance_user,ker%QuantApp)
+		endif
+	endif
+
+    return
+
+end function distance_user
+
+
+
+
+real(kind=8) function distance_geo(edgem,edgen,ker,msh,option,ptree,stats)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer edgem, edgen
     real(kind=8) dis
     integer i, j
     integer Dimn
@@ -83,14 +164,14 @@ real(kind=8) function euclidean_distance(node1,node2,ker,msh,option,ptree,stats)
 
     dis=0d0
     do i=1,Dimn
-        dis=dis+(msh%xyz(i,node1)-msh%xyz(i,node2))**2
+        dis=dis+(msh%xyz(i,edgem)-msh%xyz(i,edgen))**2
     enddo
 
-    euclidean_distance=dis
+    distance_geo=dis
 
     return
 
-end function euclidean_distance
+end function distance_geo
 
 
 !**** l2 gram distance^2 between element edgem and edgen is
@@ -100,7 +181,7 @@ end function euclidean_distance
 !     defined as 1-Z_ij^2/(Z_iiZ_jj)
 !     undefined otherwise
 !     Use with caution !!!
-real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,ptree,stats)
+real(kind=8) function distance_gram(edgem,edgen,ker,msh,option,ptree,stats)
 
     use BPACK_DEFS
     implicit none
@@ -122,21 +203,21 @@ real(kind=8) function gram_distance(edgem,edgen,ker,msh,option,ptree,stats)
 	call element_Zmn_block_user(1,1,cols,cols,r2,msh,option,ker,0,passflag,ptree,stats)
 	call element_Zmn_block_user(1,1,rows,cols,r3,msh,option,ker,0,passflag,ptree,stats)
 	call element_Zmn_block_user(1,1,cols,rows,r4,msh,option,ker,0,passflag,ptree,stats)
-    gram_distance=dble(r1(1,1)+r2(1,1)-r3(1,1)-r4(1,1))
+    distance_gram=dble(r1(1,1)+r2(1,1)-r3(1,1)-r4(1,1))
 ! angular distance
 #else
 	call element_Zmn_block_user(1,1,rows,rows,r1,msh,option,ker,0,passflag,ptree,stats)
 	call element_Zmn_block_user(1,1,cols,cols,r2,msh,option,ker,0,passflag,ptree,stats)
 	call element_Zmn_block_user(1,1,rows,cols,r3,msh,option,ker,0,passflag,ptree,stats)
-    gram_distance=dble(1d0-r3(1,1)**2d0/(r1(1,1)*r2(1,1)))
+    distance_gram=dble(1d0-r3(1,1)**2d0/(r1(1,1)*r2(1,1)))
 #endif
     return
 
-end function gram_distance
+end function distance_gram
 
 
 
-recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Maxlevel)
+recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ker,ptree,Maxlevel)
 
     implicit none
 
@@ -146,6 +227,7 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Max
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(mesh)::msh
+	type(kernelquant)::ker
 	type(proctree)::ptree
 	integer Maxlevel
 
@@ -155,7 +237,7 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Max
     group_n=blocks%col_group
     level=blocks%level
 
-   if (level>=msh%Dist_level .and. near_or_far(group_m,group_n,msh,option%near_para).eqv. .true.) then
+   if (level>=msh%Dist_level .and. near_or_far_user(group_m,group_n,msh,option,ker,option%near_para) ==1) then
 		stats%leafs_of_level(level)=stats%leafs_of_level(level)+1
 		blocks%style=2
 		! blocks%prestyle=2
@@ -200,13 +282,13 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ptree,Max
                 enddo
             enddo
 			blocks_son=>blocks%sons(1,1)
-			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ptree,Maxlevel)
+			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ker,ptree,Maxlevel)
 			blocks_son=>blocks%sons(2,1)
-			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ptree,Maxlevel)
+			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ker,ptree,Maxlevel)
 			blocks_son=>blocks%sons(1,2)
-			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ptree,Maxlevel)
+			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ker,ptree,Maxlevel)
 			blocks_son=>blocks%sons(2,2)
-			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ptree,Maxlevel)
+			call Hmat_construct_local_tree(blocks_son,option,stats,msh,ker,ptree,Maxlevel)
 
         endif
     endif
@@ -533,7 +615,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				distance(1:mm)=Bigvalue
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=euclidean_distance(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
+					distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
 				enddo
 				!$omp end parallel do
 
@@ -547,7 +629,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 					radius2=0
 					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
-						radius2 = radius2 + gram_distance(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
+						radius2 = radius2 + distance_user(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
 					enddo
 					! call assert(radius2>0,'radius2<0 cannot take square root')
 					! radius2 = sqrt(radius2)
@@ -566,7 +648,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 
 				!$omp parallel do default(shared) private(i)
 				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=gram_distance(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
+					distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
 				enddo
 				!$omp end parallel do
 
@@ -722,7 +804,7 @@ subroutine FindKNNs(option,msh,ker,stats,ptree)
 				do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
 					if(iii/=jjj)then
 					kk=kk+1
-					distance(kk,my_tid+1)=euclidean_distance(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
+					distance(kk,my_tid+1)=distance_user(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
 					edge_temp(kk,my_tid+1)=jjj
 					endif
 				enddo
@@ -770,7 +852,7 @@ recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,fla
 	else
 		do ii=1,2
 		do jj=1,2
-			if(.not. near_or_far(group_m*2+ii-1,group_n*2+jj-1,msh,knn_near_para))call append_nlist(ker,option,stats,msh,ptree,group_m*2+ii-1,group_n*2+jj-1,flag)
+			if(near_or_far_user(group_m*2+ii-1,group_n*2+jj-1,msh,option,ker,knn_near_para)==0)call append_nlist(ker,option,stats,msh,ptree,group_m*2+ii-1,group_n*2+jj-1,flag)
 		enddo
 		enddo
 	endif
@@ -778,24 +860,25 @@ end subroutine append_nlist
 
 
 
-subroutine BPACK_structuring(bmat,option,msh,ptree,stats)
+subroutine BPACK_structuring(bmat,option,msh,ker,ptree,stats)
 implicit none
 	type(Hoption)::option
 	type(mesh)::msh
+	type(kernelquant)::ker
 	type(Hstat)::stats
 	type(Bmatrix)::bmat
 	type(proctree)::ptree
 
 	select case(option%format)
     case(HODLR)
-		call HODLR_structuring(bmat%ho_bf,option,msh,ptree,stats)
+		call HODLR_structuring(bmat%ho_bf,option,msh,ker,ptree,stats)
     case(HMAT)
-		call Hmat_structuring(bmat%h_mat,option,msh,ptree,stats)
+		call Hmat_structuring(bmat%h_mat,option,msh,ker,ptree,stats)
 	end select
 end subroutine BPACK_structuring
 
 
-subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
+subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 	use BPACK_DEFS
 	use misc
 	implicit none
@@ -815,6 +898,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ptree,stats)
 	integer Dimn,col_group,row_group,Maxgrp
 	type(Hoption)::option
 	type(mesh)::msh
+	type(kernelquant)::ker
 	type(Hstat)::stats
 	type(hobf)::ho_bf1
 	character(len=1024)  :: strings
@@ -1374,7 +1458,7 @@ end subroutine HODLR_structuring
 
 
 
-subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
+subroutine Hmat_structuring(h_mat,option,msh,ker,ptree,stats)
 	use BPACK_DEFS
 	use misc
 	implicit none
@@ -1382,6 +1466,7 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
 	type(Hmat)::h_mat
 	type(Hoption)::option
 	type(mesh)::msh
+	type(kernelquant)::ker
 	type(proctree)::ptree
 	type(Hstat)::stats
     integer i, j, ii, jj, iii, jjj, k, kk, kkk
@@ -1483,7 +1568,7 @@ subroutine Hmat_structuring(h_mat,option,msh,ptree,stats)
 			blocks%headm = msh%basis_group(row_group)%head
 			blocks%headn = msh%basis_group(col_group)%head
 			call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
-            call Hmat_construct_local_tree(blocks,option,stats,msh,ptree,h_mat%Maxlevel)
+            call Hmat_construct_local_tree(blocks,option,stats,msh,ker,ptree,h_mat%Maxlevel)
         enddo
     enddo
 

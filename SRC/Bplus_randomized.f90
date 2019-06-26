@@ -834,13 +834,11 @@ subroutine BF_randomized(level_butterfly,rank0,rankrate,blocks_o,operand,blackbo
 			call BF_get_rank(block_rand(1),ptree)
 			rank_new_max = block_rand(1)%rankmax
 			call BF_delete(block_rand(1),1)
-			deallocate(block_rand)
-
 			if(rank_pre_max>=min(block_rand(1)%M,block_rand(1)%N))then
 				write(*,*)'rank_pre_max: ',rank_pre_max,' exceeding min(M,N): ',min(block_rand(1)%M,block_rand(1)%N)
 				stop
 			endif
-        
+			deallocate(block_rand)
         else
 
 			call BF_delete(blocks_o,1)

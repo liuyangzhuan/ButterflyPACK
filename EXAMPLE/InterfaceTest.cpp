@@ -196,6 +196,18 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
   Q->Sample(*m,*n,val);
 }
 
+// The distance function wrapper required by the Fortran HODLR code
+inline void C_FuncDistmn(int *m, int *n, double *val, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;
+  // Q->Sample(*m,*n,val);
+}
+
+// The compressibility function wrapper required by the Fortran HODLR code
+inline void C_FuncNearFar(int *m, int *n, int *val, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;
+  // Q->Sample(*m,*n,val);
+}
+
 // The extraction sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
@@ -424,7 +436,7 @@ if(tst==3){
 
 
     // construct hodlr with geometrical points
-	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree);
+	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_element_compute(&bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 
 	// factor hodlr
@@ -481,7 +493,7 @@ if(tst==3){
 	int Ndim1=0; //data dimension
 	double* dat_ptr1;
 
-	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 
@@ -528,7 +540,7 @@ if(tst==3){
 	// d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 
-	d_c_bpack_construct_init(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1);
+	d_c_bpack_construct_init(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_element_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr1);
 
 
