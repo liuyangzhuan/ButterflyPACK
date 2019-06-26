@@ -1040,7 +1040,7 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 !!!!**** compute B^T=V^TS^TU^T
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
-		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_Rdetect,rank,ctxt,flop=flop)
 		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 		do ii=1,rank
 			call g2l(ii,rank,npcol,nbslpk,jproc,myj)
@@ -1172,7 +1172,7 @@ subroutine PSVDTruncateSigma(block_rand,matQcA_trans,rmax,rank,Singular,option,s
 !!!!**** compute singular values
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
-		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_comp,rank,ctxt,flop=flop)
+		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_Rdetect,rank,ctxt,flop=flop)
 		if(present(flops))flops = flops + flop/dble(nprow*npcol)
 	else
 	endif
