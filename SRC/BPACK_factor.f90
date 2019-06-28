@@ -1545,7 +1545,7 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
 		h_mat%blocks_1 => block1
 		h_mat%blocks_2 => block2
 		rank0 = block3%rankmax
-		call BF_randomized(block3%level_butterfly,rank0,option%rankrate,block3,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add_Multiply',option,stats,ptree,msh,chara)
+		call BF_randomized(block3%pgno,block3%level_butterfly,rank0,option%rankrate,block3,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add_Multiply',option,stats,ptree,msh,chara)
 		T1 = OMP_get_wtime()
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_Add_Multiply=stats%Time_Add_Multiply+T1-T0
@@ -1639,7 +1639,7 @@ recursive subroutine Hmat_LXM(blocks_l,blocks_m,h_mat,option,stats,ptree,msh)
     else if (blocks_m%style==2) then
 		T0 = OMP_get_wtime()
 		rank0 = blocks_m%rankmax
-		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_l,BF_block_MVP_XLM_dat,error,'XLM',option,stats,ptree,msh)
+		call BF_randomized(blocks_m%pgno,blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_l,BF_block_MVP_XLM_dat,error,'XLM',option,stats,ptree,msh)
 		T1 = OMP_get_wtime()
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_XLUM=stats%Time_XLUM+T1-T0
@@ -1744,7 +1744,7 @@ recursive subroutine Hmat_XUM(blocks_u,blocks_m,h_mat,option,stats,ptree,msh)
     else if (blocks_m%style==2) then
 		T0 = OMP_get_wtime()
 		rank0 = blocks_m%rankmax
-		call BF_randomized(blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_u,BF_block_MVP_XUM_dat,error,'XUM',option,stats,ptree,msh)
+		call BF_randomized(blocks_m%pgno,blocks_m%level_butterfly,rank0,option%rankrate,blocks_m,blocks_u,BF_block_MVP_XUM_dat,error,'XUM',option,stats,ptree,msh)
 		T1 = OMP_get_wtime()
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		stats%Time_XLUM=stats%Time_XLUM+T1-T0
@@ -1824,7 +1824,7 @@ subroutine Hmat_add_multiply_Hblock3(blocks,chara,block1,block2,h_mat,option,sta
 	h_mat%blocks_2=>block2
 
 	T0=OMP_get_wtime()
-	call BF_randomized(level_butterfly,rank0,option%rankrate,block_agent,h_mat,BF_block_MVP_Add_Multiply_dat,error_inout,'Multiply',option,stats,ptree,msh,'m')
+	call BF_randomized(block_agent%pgno,level_butterfly,rank0,option%rankrate,block_agent,h_mat,BF_block_MVP_Add_Multiply_dat,error_inout,'Multiply',option,stats,ptree,msh,'m')
 	T1=OMP_get_wtime()
 	stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 	stats%Time_Multiply=stats%Time_Multiply+T1-T0
@@ -1884,9 +1884,9 @@ else if(blocks_o%style==2)then
 	h_mat%blocks_1=>blocks_1
 	rank0 = blocks_o%rankmax
 	if(chara=='+')then
-		call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'a')
+		call BF_randomized(blocks_o%pgno,blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'a')
 	elseif(chara=='-')then
-		call BF_randomized(blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'s')
+		call BF_randomized(blocks_o%pgno,blocks_o%level_butterfly,rank0,option%rankrate,blocks_o,h_mat,BF_block_MVP_Add_Multiply_dat,error,'Add',option,stats,ptree,msh,'s')
 	endif
     T1=OMP_get_wtime()
 	stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp

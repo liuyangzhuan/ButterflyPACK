@@ -365,7 +365,7 @@ module BPACK_DEFS
 		integer forwardN15flag ! 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm
 		real(kind=8) tol_comp      ! matrix construction tolerance
 		integer::Nmin_leaf ! leaf sizes of HODLR tree
-		integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering	0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 
+		integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering	0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided.
 		integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
 		integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
 		real(kind=8):: near_para ! parameters used to determine whether two groups are nearfield or farfield pair
@@ -442,15 +442,15 @@ module BPACK_DEFS
 
 		class(*),pointer :: QuantApp=>null() ! Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
 		procedure(F_Zelem),nopass,pointer :: FuncZmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
-		procedure(F_Dist),nopass,pointer :: FuncDistmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing distance between one row and one column	
-		procedure(F_Compressibility),nopass,pointer :: FuncNearFar=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not 			
+		procedure(F_Dist),nopass,pointer :: FuncDistmn=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing distance between one row and one column
+		procedure(F_Compressibility),nopass,pointer :: FuncNearFar=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not
 		procedure(F_Zelem_block),nopass,pointer :: FuncZmnBlock=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
 		procedure(F_HMatVec),nopass,pointer :: FuncHMatVec=>null() ! Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
 		type(c_ptr),pointer :: C_QuantApp=>null() ! Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
 		type(c_funptr),pointer :: C_FuncZmn=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
 		type(c_funptr),pointer :: C_FuncDistmn=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing distance between one row and one column
-		type(c_funptr),pointer :: C_FuncNearFar=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z is compressible or not		
+		type(c_funptr),pointer :: C_FuncNearFar=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z is compressible or not
 		type(c_funptr),pointer :: C_FuncZmnBlock=>null() ! Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
 		type(c_funptr),pointer :: C_FuncHMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
 		type(c_funptr),pointer :: C_FuncBMatVec=>null() ! Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
@@ -534,20 +534,20 @@ module BPACK_DEFS
 		  integer, INTENT(IN):: m,n
 		  DT::val
 		end subroutine F_Zelem
-		
+
 		subroutine F_Dist(m,n,val,quant) ! interface of user-defined distance computation routine in Fortran. m,n represents indices in natural order
 		  import::mesh,kernelquant
 		  class(*),pointer :: quant
 		  integer, INTENT(IN):: m,n
 		  real(kind=8)::val
-		end subroutine F_Dist	
-		
+		end subroutine F_Dist
+
 		subroutine F_Compressibility(groupm,groupn,val,quant) ! interface of user-defined compressibility routine in Fortran. groupm,groupn represents groups in the permuted order
 		  import::mesh,kernelquant
 		  class(*),pointer :: quant
 		  integer, INTENT(IN):: groupm,groupn
 		  integer::val
-		end subroutine F_Compressibility			
+		end subroutine F_Compressibility
 
 
 		subroutine F_Zelem_block(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
@@ -566,22 +566,22 @@ module BPACK_DEFS
 		  integer(kind=C_INT), INTENT(IN):: m,n
 		  CBIND_DT::val
 		end subroutine C_Zelem
-		
+
 		subroutine C_Dist (m,n,val,quant) ! interface of user-defined distance computation routine in C. m,n represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
 		  integer(kind=C_INT), INTENT(IN):: m,n
 		  real(kind=C_DOUBLE)::val
-		end subroutine C_Dist	
+		end subroutine C_Dist
 
 		subroutine C_Compressibility (groupm,groupn,val,quant) ! interface of user-defined distance compressibility routine in C. groupm,groupn represents groups in the permuted order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant
 		  integer(kind=C_INT), INTENT(IN):: groupm,groupn
 		  integer(kind=C_INT)::val
-		end subroutine C_Compressibility	
-		
-		
+		end subroutine C_Compressibility
+
+
 		subroutine C_Zelem_block (Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,quant) ! interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
 		  USE, INTRINSIC :: ISO_C_BINDING
 		  type(c_ptr) :: quant

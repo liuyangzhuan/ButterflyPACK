@@ -566,7 +566,7 @@ subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_ino
 		ho_bf1%ind_bk=rowblock
 		rank0 = max(block_off1%rankmax,block_off2%rankmax)
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree,msh)
+		call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_inverse_minusBC_dat,error,'minusBC',option,stats,ptree,msh)
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 	endif
@@ -658,7 +658,7 @@ subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,sta
 		rank0 = block_Xn%rankmax
 
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,msh,ii)
+		call BF_randomized(block_Xn%pgno,level_butterfly,rank0,rate,block_Xn,schulz_op,BF_block_MVP_schulz_dat,error,'schulz iter'//TRIM(iternumber),option,stats,ptree,msh,ii)
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 
 		if(schulz_op%order==2)schulz_op%scale=schulz_op%scale*(2-schulz_op%scale)
@@ -915,7 +915,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 			call BF_get_rank_ABCD(partitioned_block,rank0)
 			rate=1.2d0
-			call BF_randomized(level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
+			call BF_randomized(blocks_A%pgno,level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
 			stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 			error_inout = max(error_inout, error)
 
@@ -936,7 +936,7 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 		level_butterfly = level_butterfly_target
 		rate=1.2d0
-		call BF_randomized(level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree,msh)
+		call BF_randomized(blocks_io%pgno,level_butterfly,rank0,rate,blocks_io,partitioned_block,BF_block_MVP_inverse_ABCD_dat,error,'ABCDinverse',option,stats,ptree,msh)
 		stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		error_inout = max(error_inout, error)
 
@@ -1186,7 +1186,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 			ho_bf1%ind_bk=rowblock
 			rank0 = block_o%rankmax
 			rate = 1.2d0
-			call BF_randomized(level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh,msh)
+			call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,ho_bf1,BF_block_MVP_Sblock_dat,error_inout,'Sblock',option,stats,ptree,msh,msh)
 			stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 		end if
 
@@ -1210,7 +1210,7 @@ subroutine Bplus_Sblock_randomized_memfree(ho_bf1,level_c,rowblock,option,stats,
 
 		block_o =>  ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1)
 
-		if(option%verbosity>=1)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'Mult No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout
+		if(option%verbosity>=1 .and. ptree%myid==ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%head)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'Mult No. ',rowblock,' rank:',block_o%rankmax,' L_butt:',block_o%level_butterfly,' error:',error_inout
 
 
 	end if
@@ -1232,7 +1232,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 
     implicit none
 
-	integer level_c,rowblock
+	integer level_c,rowblock,ierr
     integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks,level_butterfly_loc
     integer num_col, num_row, level, mm, nn, ii, jj,tt,ll,llplus,bb,mmb
     character chara
@@ -1307,14 +1307,14 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 						rank0 = block_o%rankmax
 						rate=1.2d0
 						level_butterfly = block_o%level_butterfly
-						call BF_randomized(level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_diagBinvB_dat,error,'L update',option,stats,ptree,msh)
+						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_diagBinvB_dat,error,'L update',option,stats,ptree,msh,msh)
 						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 						error_inout = max(error_inout, error)
 					endif
 
 					!!!!! invert I+B1 to be I+B2
 					level_butterfly=block_o%level_butterfly
-					call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,Bplus%LL(1)%matrices_block(1)%pgno)
+					call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,block_o%pgno)
 					error_inout = max(error_inout, error)
 
 
@@ -1322,7 +1322,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 						rank0 = block_o%rankmax
 						rate=1.2d0
 						level_butterfly = block_o%level_butterfly
-						call BF_randomized(level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_BdiagBinv_dat,error,'R update',option,stats,ptree,msh)
+						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_BdiagBinv_dat,error,'R update',option,stats,ptree,msh,msh)
 						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 						error_inout = max(error_inout, error)
 					endif
@@ -1338,6 +1338,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 		do bb=1,Bplus%LL(ll)%Nbound
 			Bplus%LL(ll)%rankmax=max(Bplus%LL(ll)%rankmax,Bplus%LL(ll)%matrices_block(bb)%rankmax)
 		enddo
+		call MPI_ALLREDUCE(MPI_IN_PLACE,Bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
 		end do
 
 		rank_new_max = 0
@@ -1345,8 +1346,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 			rank_new_max = max(rank_new_max,Bplus%LL(ll)%rankmax)
 		end do
 
-
-		if(option%verbosity>=1)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'Mult No. ',rowblock,' rank:',rank_new_max,' L_butt:',Bplus%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
+		if(option%verbosity>=1 .and. ptree%myid==ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%head)write(*,'(A10,I5,A6,I3,A8,I3,A11,Es14.7)')'Mult No. ',rowblock,' rank:',rank_new_max,' L_butt:',Bplus%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
 
 	endif
 

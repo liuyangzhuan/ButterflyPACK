@@ -1728,7 +1728,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
    implicit none
 
     type(blockplus)::bplus
-	integer:: ii,ll,bb
+	integer:: ii,ll,bb,ierr
     real(kind=8) Memory,rtemp
 	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall
 	type(Hoption)::option
@@ -1741,27 +1741,27 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 
 	do ll=1,bplus%Lplus
 		bplus%LL(ll)%rankmax=0
-
 		do bb = 1,bplus%LL(ll)%Nbound
+			if(IOwnPgrp(ptree,bplus%LL(ll)%matrices_block(1)%pgno))then
+				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
+				level_BP = bplus%level
 
-			level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
-			level_BP = bplus%level
-
-			bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
-			levelm=bplus%LL(ll)%matrices_block(bb)%level_half
-			groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
-			Nboundall = 0
-			if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
-			if(option%forwardN15flag==1)then
-				call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree)
-				call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
-			else
-				call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree)
-			end if
-			Memory = Memory + rtemp
-
-			bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
+				bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
+				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
+				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+				Nboundall = 0
+				if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
+				if(option%forwardN15flag==1)then
+					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree)
+					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+				else
+					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree)
+				end if
+				Memory = Memory + rtemp
+				bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
+			endif
 		end do
+		call MPI_ALLREDUCE(MPI_IN_PLACE,bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
 	end do
 	! if(bplus%LL(1)%matrices_block(1)%level==1)write(*,*)bplus%LL(1)%rankmax,'dfdfdfdf'
 
