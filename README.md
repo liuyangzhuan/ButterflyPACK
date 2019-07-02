@@ -53,12 +53,19 @@ make
 ## Reference
 
 [1] E. Michielssen and A. Boag, "A multilevel matrix decomposition algorithm for analyzing scattering from large structures," IEEE Trans. Antennas Propag., vol. 44, pp. 1086-1093, 1996.
+
 [2] H. Guo, J. Hu, and E. Michielssen, "On MLMDA/butterfly compressibility of inverse integral operators," IEEE Antenn. Wireless Propag. Lett., vol. 12, pp. 31-34, 2013.
+
 [3] Y. Li, and H. Yang, "Interpolative butterfly factorization," SIAM Journal on Scientific Computing, vol. 39, pp. 503-531, 2016.
-[3] H. Guo, Y. Liu, J. Hu, and E. Michielssen, "A butterfly-based direct integral equation solver using hierarchical LU factorization for analyzing scattering from electrically large conducting objects", IEEE Trans. Antennas Propag., 2017.
-[4] Y. Liu, H. Guo, and E. Michielssen, "A HSS matrix-inspired butterfly-based direct solver for analyzing scattering from two-dimensional objects", IEEE AntennasWireless Propag. Lett., 2017.
-[5] H. Guo, Y. Liu, J. Hu, E. Michielssen, "A butterfly-based direct solver using hierarchical LU factorization for Poggio-Miller-Chang-Harrington-Wu-Tsai equations", Microwave and Optical Technology Letters, 2018, 60:1381-1387.
-[6] Y. Liu, W. Sid-Lakhdar, E. Rebrova, P. Ghysels, X. Sherry Li, "A hierarchical low-rank decomposition algorithm based on blocked adaptive cross approximation algorithms", arXiv e-prints, January 1, 2019.
-[7] Y. Liu, H. Yang, "A hierarchical butterfly LU preconditioner for two-dimensional electromagnetic scattering problems involving open surfaces", arxiv e-preprint, February 1, 2019.
+
+[4] H. Guo, Y. Liu, J. Hu, and E. Michielssen, "A butterfly-based direct integral equation solver using hierarchical LU factorization for analyzing scattering from electrically large conducting objects", IEEE Trans. Antennas Propag., 2017.
+
+[5] Y. Liu, H. Guo, and E. Michielssen, "A HSS matrix-inspired butterfly-based direct solver for analyzing scattering from two-dimensional objects", IEEE AntennasWireless Propag. Lett., 2017.
+
+[6] H. Guo, Y. Liu, J. Hu, E. Michielssen, "A butterfly-based direct solver using hierarchical LU factorization for Poggio-Miller-Chang-Harrington-Wu-Tsai equations", Microwave and Optical Technology Letters, 2018, 60:1381-1387.
+
+[7] Y. Liu, W. Sid-Lakhdar, E. Rebrova, P. Ghysels, X. Sherry Li, "A hierarchical low-rank decomposition algorithm based on blocked adaptive cross approximation algorithms", arXiv e-prints, January 1, 2019.
+
+[8] Y. Liu, H. Yang, "A hierarchical butterfly LU preconditioner for two-dimensional electromagnetic scattering problems involving open surfaces", arxiv e-preprint, February 1, 2019.
 
 
