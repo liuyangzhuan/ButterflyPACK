@@ -11,7 +11,7 @@ rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
 	-DCMAKE_CXX_FLAGS="" \
-	-DBUILD_SHARED_LIBS=ON \
+	-DBUILD_SHARED_LIBS=OFF \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so" \
 	-DTPL_SCALAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libscalapack.so" \

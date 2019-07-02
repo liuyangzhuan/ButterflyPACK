@@ -64,7 +64,7 @@ make
 
 [6] H. Guo, Y. Liu, J. Hu, E. Michielssen, "A butterfly-based direct solver using hierarchical LU factorization for Poggio-Miller-Chang-Harrington-Wu-Tsai equations", Microwave and Optical Technology Letters, 2018, 60:1381-1387.
 
-[7] Y. Liu, W. Sid-Lakhdar, E. Rebrova, P. Ghysels, X. Sherry Li, "A hierarchical low-rank decomposition algorithm based on blocked adaptive cross approximation algorithms", arXiv e-prints, January 1, 2019.
+[7] Y. Liu, W. Sid-Lakhdar, E. Rebrova, P. Ghysels, X. Sherry Li, "A parallel hierarchical blocked adaptive cross approximation algorithm", arXiv e-prints, January 1, 2019.
 
 [8] Y. Liu, H. Yang, "A hierarchical butterfly LU preconditioner for two-dimensional electromagnetic scattering problems involving open surfaces", arxiv e-preprint, February 1, 2019.
 

@@ -409,6 +409,10 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 		Maxlevel = ptree%nlevel
 	endif
 
+	! the following is needed when bplus is used as bplus only support even number of levels for now.
+	if(Maxlevel==ptree%nlevel .and. option%lnoBP<Maxlevel)then
+		Maxlevel = ptree%nlevel+1
+	endif
 
 	select case(option%format)
     case(HODLR)

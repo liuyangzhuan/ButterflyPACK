@@ -1742,13 +1742,13 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 	do ll=1,bplus%Lplus
 		bplus%LL(ll)%rankmax=0
 		do bb = 1,bplus%LL(ll)%Nbound
-			if(IOwnPgrp(ptree,bplus%LL(ll)%matrices_block(1)%pgno))then
-				level_butterfly = bplus%LL(ll)%matrices_block(1)%level_butterfly
+			if(IOwnPgrp(ptree,bplus%LL(ll)%matrices_block(bb)%pgno))then
+				level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
 				level_BP = bplus%level
 
 				bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
 				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
-				groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+				groupm_start=bplus%LL(ll)%matrices_block(bb)%row_group*2**levelm
 				Nboundall = 0
 				if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
 				if(option%forwardN15flag==1)then
