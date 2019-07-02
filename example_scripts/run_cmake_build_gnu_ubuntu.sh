@@ -15,7 +15,7 @@ cmake .. \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so" \
 	-DTPL_SCALAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libscalapack.so" \
-	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/software/arpack-ng/build/lib/libparpack.so" \
+	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/software/arpack-ng-gnu/build/lib/libarpack.so;/home/administrator/Desktop/software/arpack-ng-gnu/build/lib/libparpack.so" \
 	-DCMAKE_Fortran_COMPILER=mpif90 \
 	-DCMAKE_CXX_COMPILER=mpicxx \
 	-DCMAKE_C_COMPILER=mpicc \
