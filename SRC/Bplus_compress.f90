@@ -24,12 +24,12 @@ use BPACK_structure
 contains
 
 
-subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option, Memory,stats,msh,ker,ptree)
+subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option, Memory,stats,msh,ker,ptree,statflag)
 
    use BPACK_DEFS
    implicit none
 
- 	integer Nboundall
+ 	integer Nboundall,statflag
 	integer boundary_map(:)
 	integer groupm_start
 
@@ -240,8 +240,9 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 
 	endif
 
-
+	if(statflag==1)then
 	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
+	endif
 
     deallocate (rankmax_for_butterfly)
     deallocate (rankmin_for_butterfly)
@@ -1730,7 +1731,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
     type(blockplus)::bplus
 	integer:: ii,ll,bb,ierr
     real(kind=8) Memory,rtemp
-	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall
+	integer:: level_butterfly,level_BP,levelm,groupm_start,Nboundall,statflag
 	type(Hoption)::option
 	type(Hstat)::stats
 	type(mesh)::msh
@@ -1738,9 +1739,10 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 	type(proctree)::ptree
 
 	Memory = 0
-
 	do ll=1,bplus%Lplus
 		bplus%LL(ll)%rankmax=0
+		statflag=0
+		if(ll==1 .or. option%bp_cnt_lr==1)statflag=1  !!! only record the rank of the top-layer butterfly in a bplus
 		do bb = 1,bplus%LL(ll)%Nbound
 			if(IOwnPgrp(ptree,bplus%LL(ll)%matrices_block(bb)%pgno))then
 				level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
@@ -1752,10 +1754,10 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 				Nboundall = 0
 				if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
 				if(option%forwardN15flag==1)then
-					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree)
+					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree,statflag)
 					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 				else
-					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree)
+					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree,statflag)
 				end if
 				Memory = Memory + rtemp
 				bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
@@ -1771,7 +1773,7 @@ end subroutine Bplus_compress_N15
 
 
 
-subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,ptree)
+subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Memory,stats,msh,ker,ptree,statflag)
 
    use BPACK_DEFS
 
@@ -1779,7 +1781,7 @@ subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Me
    use misc
    implicit none
 
-	integer Nboundall
+	integer Nboundall,statflag
 	integer boundary_map(:)
 	integer groupm_start
 
@@ -2614,8 +2616,9 @@ subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Me
 
 
 	! write(*,*)rankmax_for_butterfly,level_butterfly,blocks%level,Maxlevel_for_blocks
+	if(statflag==1)then
 	if(allocated(stats%rankmax_of_level))stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly),stats%rankmax_of_level(level_blocks))
-
+	endif
 	! write(*,*)stats%rankmax_of_level,'nitaima',rankmax_for_butterfly
 	! stop
 

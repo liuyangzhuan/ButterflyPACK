@@ -464,6 +464,7 @@ subroutine SetDefaultOptions(option)
 	option%elem_extract=0
 	option%knn=0
 	option%cpp=0
+	option%bp_cnt_lr=0
 
 end subroutine SetDefaultOptions
 
@@ -552,6 +553,8 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%cpp
 				else if	(trim(strings)=='--lnobp')then
 					read(strings1,*)option%lnoBP
+				else if	(trim(strings)=='--bp_cnt_lr')then
+					read(strings1,*)option%bp_cnt_lr
 				else if	(trim(strings)=='--touch_para')then
 					read(strings1,*)option%touch_para
 				else
@@ -583,6 +586,7 @@ subroutine CopyOptions(option,option1)
 	option1%precon = option%precon
 	option1%xyzsort = option%xyzsort
 	option1%lnoBP = option%lnoBP
+	option1%bp_cnt_lr = option%bp_cnt_lr
 	option1%TwoLayerOnly = option%TwoLayerOnly
 	option1%touch_para = option%touch_para
     option1%schulzorder = option%schulzorder

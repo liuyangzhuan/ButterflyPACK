@@ -393,6 +393,11 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	option%lnoBP=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='bp_cnt_lr')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%bp_cnt_lr=val_i
+	valid_opt=1
+	endif
 	if(trim(str)=='TwoLayerOnly')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%TwoLayerOnly=val_i
@@ -1211,10 +1216,10 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
 	groupm_start=0
 	Nboundall = 0
 	if(option%forwardN15flag==1)then
-		call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree)
+		call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,0)
 		call BF_sym2asym(blocks)
 	else
-		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree)
+		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,0)
 	end if
 
 

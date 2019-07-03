@@ -661,10 +661,10 @@ recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,optio
 		Nboundall = 0
 
 		if(option%forwardN15flag==1)then
-			call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree)
+			call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree,0)
 			call BF_sym2asym(blocks)
 		else
-			call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree)
+			call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory_tmp,stats,msh,ker,ptree,0)
 		end if
 		Memory_far=Memory_far+Memory_tmp
 

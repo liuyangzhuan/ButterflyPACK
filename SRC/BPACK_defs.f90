@@ -356,6 +356,7 @@ module BPACK_DEFS
 		! options for Bplus, Butterfly or LR
 		integer::LRlevel  ! The top LRlevel level blocks are butterfly or Bplus
 		integer:: lnoBP ! the bottom lnoBP levels are either Butterfly or LR, but not Bplus
+		integer:: bp_cnt_lr ! only print the rank in the top-layer butterfly of a Bplus
 		integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
 		real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator
 		real(kind=8) sample_para   ! parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank

@@ -4316,7 +4316,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
 
 	rank_new_max = 0
 	do ll=1,bplus_o%Lplus
-		rank_new_max = max(rank_new_max,bplus_o%LL(ll)%rankmax)
+		if(ll==1 .or. option%bp_cnt_lr==1)rank_new_max = max(rank_new_max,bplus_o%LL(ll)%rankmax)
 	end do
 
 

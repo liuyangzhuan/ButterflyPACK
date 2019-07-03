@@ -130,6 +130,19 @@ ${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.18e-1 -clmax 0
 mv node.geo ${name}_node.inp
 mv elem.geo ${name}_elem.inp
 
+name=plate_128000
+${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.09e-1 -clmax 0.09e-1  -string "Mesh.BdfFieldFormat = 2;" #  patches
+./con_all ${name}.nas
+mv node.geo ${name}_node.inp
+mv elem.geo ${name}_elem.inp
+
+
+name=plate_512000
+${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.045e-1 -clmax 0.045e-1  -string "Mesh.BdfFieldFormat = 2;" #  patches
+./con_all ${name}.nas
+mv node.geo ${name}_node.inp
+mv elem.geo ${name}_elem.inp
+
 #${GMSH_DIR}/gmsh plate.geo -2 -o plate_580000.nas -algo front2d -clmin 0.4e-2 -clmax 0.4e-2   # 583016 patches
 # ${GMSH_DIR}/gmsh plate.geo -2 -o plate_2300000.nas -algo front2d -clmin 0.2e-2 -clmax 0.2e-2   # 2314782 patches
 #${GMSH_DIR}/gmsh plate.geo -2 -o plate_10000000.nas -algo front2d -clmin 0.1e-2 -clmax 0.1e-2   # 2314782 patches
