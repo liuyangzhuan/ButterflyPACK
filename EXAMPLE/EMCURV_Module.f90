@@ -782,7 +782,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     elseif (quant%model2d==12) then   !************ spiral line *****************
 		angle=2*pi
 		r_st=1d0
-		r_ed=2d0
+		r_ed=1d0+angle/pi
 		delta_r = (r_ed-r_st)/Maxedge
         quant%Delta_ll=angle/Maxedge
         quant%maxnode=2*Maxedge+1
