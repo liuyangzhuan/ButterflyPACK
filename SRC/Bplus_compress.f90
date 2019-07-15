@@ -1564,6 +1564,20 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
 			enddo
 			call element_Zmn_block_user(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+			if(Nboundall>0)then
+			do i=1,mm1+mm2
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,rank_new
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+				enddo
+				endif
+			enddo
+			endif				
+			
 			deallocate(mrange)
 			deallocate(nrange)
 			if(mm1>0)blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix = matrix_V_tmp(1:mm1,:)
@@ -1657,6 +1671,20 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			enddo
 
 			call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+			if(Nboundall>0)then
+			do i=1,mm
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,rankmax_c
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+				enddo
+				endif
+			enddo
+			endif					
+			
 			deallocate(mrange)
 			deallocate(nrange)
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)

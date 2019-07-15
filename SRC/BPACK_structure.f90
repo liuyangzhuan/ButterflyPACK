@@ -596,13 +596,13 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				sortdirec = maxloc(xyzrange(1:Dimn),1)
 				! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
 
-				! if(ker%Kernel==EMSURF)then
+				! ! if(ker%Kernel==EMSURF)then
 				! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
-					! sortdirec=2
+					! sortdirec=1
 				! else
-					! sortdirec=3
+					! sortdirec=2
 				! end if
-				! endif
+				! ! endif
 
 
 				!$omp parallel do default(shared) private(i)
@@ -887,7 +887,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 	use misc
 	implicit none
 
-    integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch
+    integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch,pgno_bplus
     integer level, edge, patch, node, group, group_touch
     integer rank, index_near, m, n, length, flag, itemp,cnt,detection
     real T0
@@ -1148,7 +1148,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 				block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
 				block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
 				block_f%pgno=msh%basis_group(block_f%row_group)%pgno
-
+				pgno_bplus=block_f%pgno
 
 
 				! compute the partial indices when BP is shared by double number of processes
@@ -1325,17 +1325,20 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 									blocks%row_group = group_m
 									blocks%col_group = group_n
 									blocks%level = GetTreelevel(group_m)-1
+									! blocks%level_butterfly = int((ho_bf1%Maxlevel - blocks%level)/2)*2
+									blocks%level_butterfly = 0 ! only two layer butterfly plus here
 
 									blocks%pgno = msh%basis_group(group_m)%pgno
+									do while (blocks%pgno>pgno_bplus)
+										if(level_butterfly<ptree%nlevel-GetTreelevel(blocks%pgno))exit
+										blocks%pgno=blocks%pgno/2
+									enddo
+
 									blocks%pgno_db = blocks%pgno
 									blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
 									blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
 									blocks%headm = msh%basis_group(group_m)%head
 									blocks%headn = msh%basis_group(group_n)%head
-
-
-									! blocks%level_butterfly = int((ho_bf1%Maxlevel - blocks%level)/2)*2
-									blocks%level_butterfly = 0 ! only two layer butterfly plus here
 
 									blocks%style = 2
 									call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)

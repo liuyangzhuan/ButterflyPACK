@@ -1216,10 +1216,10 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
 	groupm_start=0
 	Nboundall = 0
 	if(option%forwardN15flag==1)then
-		call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,0)
+		call BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,1)
 		call BF_sym2asym(blocks)
 	else
-		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,0)
+		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,1)
 	end if
 
 
