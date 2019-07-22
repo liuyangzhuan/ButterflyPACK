@@ -619,4 +619,61 @@ subroutine CopyOptions(option,option1)
 end subroutine CopyOptions
 
 
+
+subroutine PrintOptions(option,ptree)
+	implicit none
+	type(Hoption)::option
+	type(proctree)::ptree
+
+	if(ptree%MyID==Main_ID)then
+		write(*,*) ' '
+		write(*,*) '***************************'
+		write(*,'(A25)') 'Printing Solver Options:'
+		write(*,'(A15,I8)') 'Nmin_leaf',option%Nmin_leaf
+		write(*,'(A15,I8)') 'n_iter', option%n_iter
+		write(*,'(A15,I8)') 'level_check', option%level_check
+		write(*,'(A15,I8)') 'precon', option%precon
+		write(*,'(A15,I8)') 'xyzsort', option%xyzsort
+		write(*,'(A15,I8)') 'lnoBP', option%lnoBP
+		write(*,'(A15,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+		write(*,'(A15,I8)') 'TwoLayerOnly', option%TwoLayerOnly
+		write(*,'(A15,I8)') 'schulzorder', option%schulzorder
+		write(*,'(A15,I8)') 'schulzlevel', option%schulzlevel
+		write(*,'(A15,I8)') 'LRlevel', option%LRlevel
+		write(*,'(A15,I8)') 'BACA_Batch', option%BACA_Batch
+		write(*,'(A15,I8)') 'RecLR_leaf', option%RecLR_leaf
+		write(*,'(A15,I8)') 'nogeo', option%nogeo
+		write(*,'(A15,I8)') 'LR_BLK_NUM', option%LR_BLK_NUM
+		write(*,'(A15,I8)') 'rank0', option%rank0
+		write(*,'(A15,I8)') 'itermax', option%itermax
+		write(*,'(A15,I8)') 'powiter', option%powiter
+		write(*,'(A15,I8)') 'ILU', option%ILU
+		write(*,'(A15,I8)') 'Nbundle', option%Nbundle
+		write(*,'(A15,I8)') 'verbosity', option%verbosity
+		write(*,'(A15,I8)') 'rmax', option%rmax
+		write(*,'(A15,I8)') 'forwardN15flag', option%forwardN15flag
+		write(*,'(A15,I8)') 'pat_comp', option%pat_comp
+		write(*,'(A15,I8)') 'elem_extract', option%elem_extract
+		write(*,'(A15,I8)') 'cpp', option%cpp
+		write(*,'(A15,I8)') 'knn', option%knn
+		write(*,'(A15,I8)') 'ErrFillFull', option%ErrFillFull
+		write(*,'(A15,I8)') 'ErrSol', option%ErrSol
+
+		write(*,'(A15,Es14.7)') 'rankrate', option%rankrate
+		write(*,'(A15,Es14.7)') 'tol_comp', option%tol_comp
+		write(*,'(A15,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+		write(*,'(A15,Es14.7)') 'tol_LS', option%tol_LS
+		write(*,'(A15,Es14.7)') 'tol_itersol', option%tol_itersol
+		write(*,'(A15,Es14.7)') 'tol_rand', option%tol_rand
+		write(*,'(A15,Es14.7)') 'touch_para', option%touch_para
+		write(*,'(A15,Es14.7)') 'near_para', option%near_para
+		write(*,'(A15,Es14.7)') 'scale_factor', option%scale_factor
+		write(*,'(A15,Es14.7)') 'sample_para', option%sample_para
+		write(*,*) '***************************'
+		write(*,*) ' '
+	endif
+end subroutine PrintOptions
+
+
+
 end module BPACK_Utilities

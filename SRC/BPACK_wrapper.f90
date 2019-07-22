@@ -345,6 +345,25 @@ end subroutine C_BPACK_Copyoption
 
 
 
+
+!**** C interface of printing option
+	!option_Cptr: the structure containing option
+	!ptree_Cptr: the structure containing process tree
+subroutine C_BPACK_Printoption(option_Cptr,ptree_Cptr) bind(c, name="c_bpack_printoption")
+	implicit none
+	type(c_ptr) :: option_Cptr
+	type(c_ptr):: ptree_Cptr
+	type(Hoption),pointer::option
+	type(proctree),pointer::ptree
+
+	call c_f_pointer(option_Cptr, option)
+	call c_f_pointer(ptree_Cptr, ptree)
+	call PrintOptions(option,ptree)
+
+end subroutine C_BPACK_Printoption
+
+
+
 !**** C interface of set one entry in option
 	!option_Cptr: the structure containing option
 subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_setoption")

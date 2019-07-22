@@ -1576,8 +1576,8 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 				enddo
 				endif
 			enddo
-			endif				
-			
+			endif
+
 			deallocate(mrange)
 			deallocate(nrange)
 			if(mm1>0)blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix = matrix_V_tmp(1:mm1,:)
@@ -1683,8 +1683,8 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 				enddo
 				endif
 			enddo
-			endif					
-			
+			endif
+
 			deallocate(mrange)
 			deallocate(nrange)
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)

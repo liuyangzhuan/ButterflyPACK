@@ -2393,7 +2393,7 @@ end subroutine BF_exchange_matvec
 
 
 
-!*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!*********** all to all communication of extraction results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
 subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode_new)
 
    use BPACK_DEFS
@@ -6243,8 +6243,9 @@ subroutine LR_block_extraction(blocks,inters,ptree,msh,stats)
 	type(Hstat)::stats
 	integer nn,ri,ci,nng,headm,headn,head,tail,pp,row_group,col_group
 	type(intersect)::inters(:)
-	integer ii,jj,rank,ncol,nrow,iidx,pgno,ierr
-	DT,allocatable::Vpartial(:,:)
+	integer ii,jj,rank,ncol,nrow,iidx,pgno,ierr,nr_loc
+	DT,allocatable::Vpartial(:,:),matU(:,:)
+	real(kind=8)::t1,t2,t3,t4
 
 	headm = blocks%headm
 	headn = blocks%headn
@@ -6254,42 +6255,328 @@ subroutine LR_block_extraction(blocks,inters,ptree,msh,stats)
 	head=blocks%N_p(pp,1)
 	tail=blocks%N_p(pp,2)
 
-
+	t1 = OMP_get_wtime()
 	rank=size(blocks%ButterflyU%blocks(1)%matrix,2)
 	ncol=0
 	do nn=1,size(blocks%inters,1)
 		ncol = ncol + blocks%inters(nn)%nc
 	enddo
 	allocate(Vpartial(rank,ncol))
-	Vpartial=0
+	t2 = OMP_get_wtime()
+	call LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,msh)
+	t3 = OMP_get_wtime()
+
+	nr_loc=0
+	do nn=1,size(blocks%inters,1)
+	nr_loc = max(nr_loc,blocks%inters(nn)%nr_loc)
+	enddo
+	allocate(matU(nr_loc,rank))
 
 	iidx=0
 	do nn=1,size(blocks%inters,1)
-	nng=blocks%inters(nn)%idx
-	do jj=1,blocks%inters(nn)%nc
-		iidx=iidx+1
-		ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
-		if(ci>=head .and. ci<=tail)then
-			Vpartial(:,iidx) = blocks%ButterflyV%blocks(1)%matrix(ci-head+1,:)
+		nng=blocks%inters(nn)%idx
+		if(blocks%inters(nn)%nr_loc>0)then
+			do ii=1,blocks%inters(nn)%nr_loc
+				ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1-blocks%M_p(pp,1)+1
+				matU(ii,:)=blocks%ButterflyU%blocks(1)%matrix(ri,:)
+			enddo
+
+			call gemmf77('N','N',blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc,rank, cone, matU, nr_loc,Vpartial(1,iidx+1),rank,czero,blocks%inters(nn)%dat_loc(1,1),blocks%inters(nn)%nr_loc)
+			stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc,rank)
 		endif
-	enddo
-	enddo
-	call MPI_ALLREDUCE(MPI_IN_PLACE,Vpartial,rank*ncol,MPI_DT,MPI_SUM,ptree%pgrp(pgno)%Comm, ierr)
-
-	iidx=0
-	do nn=1,size(blocks%inters,1)
-	nng=blocks%inters(nn)%idx
-	do ii=1,blocks%inters(nn)%nr_loc
-		ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1-blocks%M_p(pp,1)+1
-		call gemmf77('N','N',1,blocks%inters(nn)%nc,rank, cone, blocks%ButterflyU%blocks(1)%matrix(ri,1), blocks%M_loc,Vpartial(1,iidx+1),rank,czero,blocks%inters(nn)%dat_loc(ii,1),blocks%inters(nn)%nr_loc)
-		stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(1,blocks%inters(nn)%nc,rank)
-	enddo
-	iidx = iidx + blocks%inters(nn)%nc
+		iidx = iidx + blocks%inters(nn)%nc
 	enddo
 
 	deallocate(Vpartial)
+	deallocate(matU)
+
+	t4 = OMP_get_wtime()
+	! time_tmp = time_tmp + t3 - t2
 
 end subroutine LR_block_extraction
+
+
+
+
+
+
+!*********** all to all communication of columns in the V factor from the 1D block column layout to that needed by the 1D block row layout
+subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,msh)
+
+   use BPACK_DEFS
+   implicit none
+    integer i, j, level_butterfly, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
+    integer group_m, group_n, mm, nn, index_i, index_i_loc_k,index_i_loc_s, index_j,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
+    integer level, length_1, length_2, level_blocks
+    integer level_p, ncol, rank, rankmax, butterflyB_inuse, rank1, rank2
+    real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
+    real(kind=8) flop
+    DT ctemp
+	type(matrixblock)::blocks
+	DT::Vpartial(rank,ncol)
+	type(Hstat)::stats
+	type(proctree)::ptree
+	type(mesh)::msh
+	type(intersect)::inters(:)
+	integer ri,ci,nng,head,tail,row_group,col_group
+    integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+    integer,allocatable:: select_row_rr(:), select_column_rr(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+
+	integer,allocatable::jpvt(:)
+	integer ierr,nsendrecv,pid,tag,nproc,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
+
+	type(commquant1D),allocatable::sendquant(:),recvquant(:)
+	integer,allocatable::S_req(:),R_req(:)
+	integer,allocatable:: statuss(:,:),statusr(:,:)
+	character::mode,mode_new
+	real(kind=8)::n1,n2,n3,n4
+	integer,allocatable::sendIDactive(:),recvIDactive(:),send_map_inters(:,:)
+	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
+	type(butterfly_kerl)::kerls,kerls1
+	integer rr,cc
+	logical all2all
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
+	integer::dist,pgno,ncol_loc,iidx
+	integer::headm,headn
+
+	n1 = OMP_get_wtime()
+
+	nproc = ptree%pgrp(blocks%pgno)%nproc
+	tag = blocks%pgno
+	level_p = ptree%nlevel-GetTreelevel(blocks%pgno)
+	headm = blocks%headm
+	headn = blocks%headn
+	pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+	head=blocks%N_p(pp,1)
+	tail=blocks%N_p(pp,2)
+
+	! allocation of communication quantities
+	allocate(statuss(MPI_status_size,nproc))
+	allocate(statusr(MPI_status_size,nproc))
+	allocate(S_req(nproc))
+	allocate(R_req(nproc))
+	allocate(sendquant(nproc))
+	do ii=1,nproc
+		sendquant(ii)%size=0
+		sendquant(ii)%active=0
+	enddo
+	allocate(recvquant(nproc))
+	do ii=1,nproc
+		recvquant(ii)%size=0
+		recvquant(ii)%active=0
+	enddo
+	allocate(sendIDactive(nproc))
+	allocate(recvIDactive(nproc))
+	Nsendactive=0
+	Nrecvactive=0
+
+	allocate(send_map_inters(nproc,size(blocks%inters,1)))
+	send_map_inters=0
+
+	! calculate send buffer sizes in the first pass
+	iidx=0
+	do nn=1,size(blocks%inters,1)
+		nng=blocks%inters(nn)%idx
+		do ii=1,blocks%inters(nn)%nr
+			ri=inters(nng)%rows(blocks%inters(nn)%rows(ii))
+			pgno = findpggroup(ri,msh,ptree,blocks%row_group,blocks%pgno)
+			pp = ptree%pgrp(pgno)%head -ptree%pgrp(blocks%pgno)%head+1
+			if(send_map_inters(pp,nn)==0)then
+			do jj=1,blocks%inters(nn)%nc
+				ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+				if(ci>=head .and. ci<=tail)then
+					if(sendquant(pp)%active==0)then
+						sendquant(pp)%active=1
+						Nsendactive=Nsendactive+1
+						sendIDactive(Nsendactive)=pp
+					endif
+					sendquant(pp)%size=sendquant(pp)%size+(1+rank)
+					send_map_inters(pp,nn)=1
+				endif
+			enddo
+			endif
+		enddo
+		iidx = iidx + blocks%inters(nn)%nc
+	enddo
+	send_map_inters=0
+
+
+	do nn=1,size(blocks%inters,1)
+		nng=blocks%inters(nn)%idx
+		if(blocks%inters(nn)%nr_loc>0)then
+			do jj=1,blocks%inters(nn)%nc
+				ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))
+				pgno = findpggroup(ci,msh,ptree,blocks%col_group,blocks%pgno)
+				pp = ptree%pgrp(pgno)%head -ptree%pgrp(blocks%pgno)%head+1
+				if(recvquant(pp)%active==0)then
+					recvquant(pp)%active=1
+					Nrecvactive=Nrecvactive+1
+					recvIDactive(Nrecvactive)=pp
+				endif
+				recvquant(pp)%size=recvquant(pp)%size+(1+rank)
+			enddo
+		endif
+	enddo
+
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
+		sendquant(pp)%size=0
+	enddo
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
+	enddo
+
+n2 = OMP_get_wtime()
+
+
+	! pack the send buffer in the second pass
+	iidx=0
+	do nn=1,size(blocks%inters,1)
+		nng=blocks%inters(nn)%idx
+		do ii=1,blocks%inters(nn)%nr
+			ri=inters(nng)%rows(blocks%inters(nn)%rows(ii))
+			pgno = findpggroup(ri,msh,ptree,blocks%row_group,blocks%pgno)
+			pp = ptree%pgrp(pgno)%head -ptree%pgrp(blocks%pgno)%head+1
+			if(send_map_inters(pp,nn)==0)then
+			do jj=1,blocks%inters(nn)%nc
+				ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+				if(ci>=head .and. ci<=tail)then
+					sendquant(pp)%dat(sendquant(pp)%size+1,1)=iidx+jj
+					sendquant(pp)%size=sendquant(pp)%size+1
+					sendquant(pp)%dat(sendquant(pp)%size+1:sendquant(pp)%size+rank,1)=blocks%ButterflyV%blocks(1)%matrix(ci-head+1,:)
+					sendquant(pp)%size=sendquant(pp)%size+rank
+					send_map_inters(pp,nn)=1
+				endif
+			enddo
+			endif
+		enddo
+		iidx = iidx + blocks%inters(nn)%nc
+	enddo
+	send_map_inters=0
+
+n3 = OMP_get_wtime()
+
+
+	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(blocks%pgno)%Comm,ierr)
+#if 0
+	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
+#else
+	all2all=.false.
+#endif
+	if(all2all)then ! if truly all-to-all, use MPI_ALLTOALLV
+		allocate(sdispls(nproc))
+		allocate(sendcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			sendcounts(pp)=sendquant(pp)%size
+			sdispls(pp)=dist
+			dist = dist + sendquant(pp)%size
+		enddo
+		allocate(sendbufall2all(dist))
+		do pp=1,nproc
+			if(sendquant(pp)%size>0)sendbufall2all(sdispls(pp)+1:sdispls(pp)+sendcounts(pp))=sendquant(pp)%dat(:,1)
+		enddo
+
+		allocate(rdispls(nproc))
+		allocate(recvcounts(nproc))
+		dist=0
+		do pp=1,nproc
+			recvcounts(pp)=recvquant(pp)%size
+			rdispls(pp)=dist
+			dist = dist + recvquant(pp)%size
+		enddo
+		allocate(recvbufall2all(dist))
+
+		call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts,rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
+
+		do pp=1,nproc
+			if(recvquant(pp)%size>0)recvquant(pp)%dat(:,1) = recvbufall2all(rdispls(pp)+1:rdispls(pp)+recvcounts(pp))
+		enddo
+
+		deallocate(sdispls)
+		deallocate(sendcounts)
+		deallocate(sendbufall2all)
+		deallocate(rdispls)
+		deallocate(recvcounts)
+		deallocate(recvbufall2all)
+	else
+		Nreqs=0
+		do tt=1,Nsendactive
+			pp=sendIDactive(tt)
+			recvid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(recvid/=ptree%MyID)then
+				Nreqs=Nreqs+1
+				call MPI_Isend(sendquant(pp)%dat,sendquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,S_req(Nreqs),ierr)
+			else
+				if(sendquant(pp)%size>0)recvquant(pp)%dat=sendquant(pp)%dat
+			endif
+		enddo
+
+		Nreqr=0
+		do tt=1,Nrecvactive
+			pp=recvIDactive(tt)
+			sendid=pp-1+ptree%pgrp(blocks%pgno)%head
+			if(sendid/=ptree%MyID)then
+				Nreqr=Nreqr+1
+				call MPI_Irecv(recvquant(pp)%dat,recvquant(pp)%size,MPI_DT,pp-1,tag+1,ptree%pgrp(blocks%pgno)%Comm,R_req(Nreqr),ierr)
+			endif
+		enddo
+
+		if(Nreqs>0)then
+			call MPI_waitall(Nreqs,S_req,statuss,ierr)
+		endif
+		if(Nreqr>0)then
+			call MPI_waitall(Nreqr,R_req,statusr,ierr)
+		endif
+	endif
+
+	! copy data from buffer to target
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		i=0
+		do while(i<recvquant(pp)%size)
+			i=i+1
+			iidx=NINT(dble(recvquant(pp)%dat(i,1)))
+			Vpartial(:,iidx) = recvquant(pp)%dat(i+1:i+rank,1)
+			i=i+rank
+		enddo
+	enddo
+
+n4 = OMP_get_wtime()
+	! deallocation
+	deallocate(S_req)
+	deallocate(R_req)
+	deallocate(statuss)
+	deallocate(statusr)
+	do tt=1,Nsendactive
+		pp=sendIDactive(tt)
+		if(allocated(sendquant(pp)%dat))deallocate(sendquant(pp)%dat)
+	enddo
+	deallocate(sendquant)
+	do tt=1,Nrecvactive
+		pp=recvIDactive(tt)
+		if(allocated(recvquant(pp)%dat))deallocate(recvquant(pp)%dat)
+	enddo
+	deallocate(recvquant)
+	deallocate(sendIDactive)
+	deallocate(recvIDactive)
+	deallocate(send_map_inters)
+
+
+	! time_tmp = time_tmp + n4 - n3
+
+end subroutine LR_all2all_extraction
+
+
+
+
 
 
 
@@ -7203,6 +7490,37 @@ integer function findgroup(idx,msh,level,group)
 
 end function findgroup
 
+
+
+!*** Find the process group index of point idx in a group
+integer function findpggroup(idx,msh,ptree,group,pgno)
+    use BPACK_DEFS
+    implicit none
+	integer idx,ll,group,group1
+	type(mesh)::msh
+	type(proctree)::ptree
+	integer level_p,pgno,pgno1
+
+	level_p = ptree%nlevel-GetTreelevel(pgno)
+
+	group1=group
+	pgno1=pgno
+	if(idx<msh%basis_group(group1)%head .or. idx>msh%basis_group(group1)%tail)then
+		findpggroup=-1
+	else
+		do ll=1,level_p
+			if(idx<=msh%basis_group(2*group1)%tail)then
+				group1=group1*2
+				pgno1=pgno1*2
+			else
+				group1=group1*2+1
+				pgno1=pgno1*2+1
+			endif
+		enddo
+		findpggroup=pgno1
+	endif
+
+end function findpggroup
 
 
 subroutine BF_value(mi,nj,blocks,value)

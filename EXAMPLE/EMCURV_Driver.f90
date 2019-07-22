@@ -94,7 +94,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** intialize the user-defined derived type quant
 	quant%RCS_static=1
-    quant%RCS_Nsample=2000
+    quant%RCS_Nsample=1
 	quant%model2d=10
 	quant%wavelength=0.08
 	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
@@ -184,6 +184,7 @@ PROGRAM ButterflyPACK_IE_2D
 		xyz(:,edge) = quant%xyz(:,edge*2-1)
 	enddo
     allocate(Permutation(quant%Nunk))
+	call PrintOptions(option,ptree)
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
@@ -271,7 +272,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 	!**** solve phase
-   call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+   ! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
 
 
