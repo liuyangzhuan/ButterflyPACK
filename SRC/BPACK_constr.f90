@@ -1029,7 +1029,7 @@ implicit none
 			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
 			allocate(inters(nn)%dat_loc(myArows,myAcols))
-			inters(nn)%dat_loc=0
+			! inters(nn)%dat_loc=0
 		endif
 		if(nprow*npcol>1)flag2D=1
 		allocate(inters(nn)%rows(nr))
@@ -1247,6 +1247,7 @@ implicit none
 
 	n5 = OMP_get_wtime()
 
+	! time_tmp = time_tmp + n2- n1
 	! if(ptree%MyID==Main_ID)then
 		! write(*,*)n1-n0,n2-n1,n3-n2,n4-n3,n5-n4
 	! endif
@@ -1731,6 +1732,7 @@ end subroutine BPACK_all2all_inters
 
 
 
+
 !*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
 subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npmap,pmaps)
 
@@ -1744,8 +1746,8 @@ subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npma
 	integer ierr,nsendrecv,pid,tag,nproc,Nreqr,Nreqs,recvid,sendid
 	type(commquant1D)::sendquant(nproc),recvquant(nproc)
 	integer::sendactive(nproc),recvactive(nproc)
-	integer::S_req(nproc),R_req(nproc)
-	integer:: statuss(MPI_status_size,nproc),statusr(MPI_status_size,nproc)
+	integer::S_req(nproc),R_req(nproc),Req
+	integer:: statuss(MPI_status_size,nproc),statusr(MPI_status_size,nproc),status(MPI_status_size)
 	real(kind=8)::n1,n2,n3,n4,n5
 	integer::sendIDactive(nproc),recvIDactive(nproc)
 	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
@@ -1817,7 +1819,9 @@ subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npma
 	enddo
 
 	! compute recvquant(pp)%active by doing alltoall since receivers don't know where the data come from
-	call MPI_ALLTOALL(sendactive, 1, MPI_INTEGER, recvactive, 1,MPI_INTEGER, ptree%pgrp(pgno)%Comm, ierr)
+	call MPI_IALLTOALL(sendactive, 1, MPI_INTEGER, recvactive, 1,MPI_INTEGER, ptree%pgrp(pgno)%Comm, Req,ierr)
+	call MPI_wait(Req,status,ierr)
+	
 	do pp=1,nproc
 		if(recvactive(pp)==1)then
 			recvquant(pp)%active=1
@@ -1844,6 +1848,7 @@ subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npma
 	if(Nrecvactive>0)then
 		call MPI_waitall(Nrecvactive,R_req,statusr,ierr)
 	endif
+
 
 	do tt=1,Nsendactive
 		pp=sendIDactive(tt)
@@ -1896,9 +1901,11 @@ subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npma
 
 n3 = OMP_get_wtime()
 
+
+#if 0
 	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
 	call MPI_ALLREDUCE(Nrecvactive,Nrecvactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
-#if 0
+	 
 	all2all=(nproc==Nsendactive_min .and. Nsendactive_min==Nrecvactive_min)
 #else
 	all2all=.false.
@@ -2039,8 +2046,9 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 	type(nod),pointer::cur
 	class(*),pointer::ptr
 	type(matrixblock),pointer::blocks
-	integer flag
+	integer flag,num_nods
 	type(block_ptr)::blk_ptr
+	real(kind=8)::n1,n0
 
 
 	if(flag==0)then ! inverse blocks
@@ -2053,44 +2061,55 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 		else
 			clstr(1)%idx=nth
 			clstr(2)%idx=nth
+			allocate(clstr(1)%dat(lstr%num_nods))
+			allocate(clstr(2)%dat(lstr%num_nods))
 			clstr(1)%num_nods=0
 			clstr(2)%num_nods=0
+			n0 = OMP_get_wtime()
 
-			do ii=1,lstr%num_nods
-				ll=2
-				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
-				clstr(ll)%num_nods=clstr(ll)%num_nods+1
-			enddo
-			allocate(clstr(1)%dat(clstr(1)%num_nods))
-			allocate(clstr(2)%dat(clstr(2)%num_nods))
-			clstr(1)%num_nods=0
-			clstr(2)%num_nods=0
-			do ii=1,lstr%num_nods
-				ll=2
-				if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
-				clstr(ll)%num_nods=clstr(ll)%num_nods+1
-				clstr(ll)%dat(clstr(ll)%num_nods)=lstr%dat(ii)
-			enddo
+			num_nods = msh%basis_group(row_group*2)%tail-msh%basis_group(row_group*2)%head+1
+			if(lstr%num_nods==msh%basis_group(row_group)%tail-msh%basis_group(row_group)%head+1)then
+				clstr(1)%num_nods=num_nods
+				clstr(1)%dat(1:clstr(1)%num_nods)=lstr%dat(1:clstr(1)%num_nods)
+				clstr(2)%num_nods=lstr%num_nods-num_nods
+				clstr(2)%dat(1:clstr(2)%num_nods)=lstr%dat(1+clstr(1)%num_nods:lstr%num_nods)
+			else
+				do ii=1,lstr%num_nods
+					ll=2
+					if(inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group*2)%tail)ll=1
+					clstr(ll)%num_nods=clstr(ll)%num_nods+1
+					clstr(ll)%dat(clstr(ll)%num_nods)=lstr%dat(ii)
+				enddo
+			endif
+			n1 = OMP_get_wtime()
+			time_tmp = time_tmp + n1 - n0
 
 			clstc(1)%idx=nth
 			clstc(2)%idx=nth
+			allocate(clstc(1)%dat(lstc%num_nods))
+			allocate(clstc(2)%dat(lstc%num_nods))
 			clstc(1)%num_nods=0
 			clstc(2)%num_nods=0
-			do ii=1,lstc%num_nods
-				ll=2
-				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
-				clstc(ll)%num_nods=clstc(ll)%num_nods+1
-			enddo
-			allocate(clstc(1)%dat(clstc(1)%num_nods))
-			allocate(clstc(2)%dat(clstc(2)%num_nods))
-			clstc(1)%num_nods=0
-			clstc(2)%num_nods=0
-			do ii=1,lstc%num_nods
-				ll=2
-				if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
-				clstc(ll)%num_nods=clstc(ll)%num_nods+1
-				clstc(ll)%dat(clstc(ll)%num_nods)=lstc%dat(ii)
-			enddo
+			n0 = OMP_get_wtime()
+
+			num_nods = msh%basis_group(col_group*2)%tail-msh%basis_group(col_group*2)%head+1
+			if(lstc%num_nods==msh%basis_group(col_group)%tail-msh%basis_group(col_group)%head+1)then
+				clstc(1)%num_nods=num_nods
+				clstc(1)%dat(1:clstc(1)%num_nods)=lstc%dat(1:clstc(1)%num_nods)
+				clstc(2)%num_nods=lstc%num_nods-num_nods
+				clstc(2)%dat(1:clstc(2)%num_nods)=lstc%dat(1+clstc(1)%num_nods:lstc%num_nods)
+			else
+				do ii=1,lstc%num_nods
+					ll=2
+					if(inters(nth)%cols(lstc%dat(ii))<=msh%basis_group(col_group*2)%tail)ll=1
+					clstc(ll)%num_nods=clstc(ll)%num_nods+1
+					clstc(ll)%dat(clstc(ll)%num_nods)=lstc%dat(ii)
+				enddo
+			endif
+
+			n1 = OMP_get_wtime()
+			time_tmp = time_tmp + n1 - n0
+
 			if(clstr(1)%num_nods>0 .and. clstc(2)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(1),clstc(2),lstblk,level_c,2*bidx-1,1)
 			if(clstr(2)%num_nods>0 .and. clstc(1)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(2),clstc(1),lstblk,level_c,2*bidx,1)
 			if(clstr(1)%num_nods>0 .and. clstc(1)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(1),clstc(1),lstblk,level_c+1,2*bidx-1,0)
@@ -2143,14 +2162,7 @@ subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,l
 			clstc_g(jj)%num_nods=0
 		enddo
 
-
-		do ii=1,lstr%num_nods
-			row_group = h_mat%Local_blocks(1,1)%row_group
-			if(inters(nth)%rows(lstr%dat(ii))>=msh%basis_group(row_group)%head .and. inters(nth)%rows(lstr%dat(ii))<=msh%basis_group(row_group)%tail)then
-				clstr_g%num_nods=clstr_g%num_nods+1
-			endif
-		enddo
-		allocate(clstr_g%dat(clstr_g%num_nods))
+		allocate(clstr_g%dat(lstr%num_nods))
 		clstr_g%num_nods=0
 		do ii=1,lstr%num_nods
 			row_group = h_mat%Local_blocks(1,1)%row_group
@@ -2160,12 +2172,8 @@ subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,l
 			endif
 		enddo
 
-		do ii=1,lstc%num_nods
-			jj = findgroup(inters(nth)%cols(lstc%dat(ii)),msh,msh%Dist_level,1)-2**msh%Dist_level+1
-			clstc_g(jj)%num_nods=clstc_g(jj)%num_nods+1
-		enddo
 		do jj=1,num_blocks
-			allocate(clstc_g(jj)%dat(clstc_g(jj)%num_nods))
+			allocate(clstc_g(jj)%dat(lstc%num_nods))
 			clstc_g(jj)%num_nods=0
 		enddo
 		do ii=1,lstc%num_nods

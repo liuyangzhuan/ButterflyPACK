@@ -6300,6 +6300,7 @@ end subroutine LR_block_extraction
 
 
 
+
 !*********** all to all communication of columns in the V factor from the 1D block column layout to that needed by the 1D block row layout
 subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,msh)
 
@@ -6333,15 +6334,16 @@ subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,ms
 	integer,allocatable:: statuss(:,:),statusr(:,:)
 	character::mode,mode_new
 	real(kind=8)::n1,n2,n3,n4
-	integer,allocatable::sendIDactive(:),recvIDactive(:),send_map_inters(:,:)
+	integer,allocatable::sendIDactive(:),recvIDactive(:)
 	integer Nsendactive,Nrecvactive,Nsendactive_min,Nrecvactive_min
 	type(butterfly_kerl)::kerls,kerls1
 	integer rr,cc
 	logical all2all
-	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:)
+	integer,allocatable::sdispls(:),sendcounts(:),rdispls(:),recvcounts(:),col_idx_loc(:),activeproc(:,:),row_idx(:,:)
 	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
 	integer::dist,pgno,ncol_loc,iidx
-	integer::headm,headn
+	integer::headm,headn,nc_loc,ncmax,nrmax,head1,tail1
+
 
 	n1 = OMP_get_wtime()
 
@@ -6374,35 +6376,72 @@ subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,ms
 	Nsendactive=0
 	Nrecvactive=0
 
-	allocate(send_map_inters(nproc,size(blocks%inters,1)))
-	send_map_inters=0
 
 	! calculate send buffer sizes in the first pass
-	iidx=0
+
+	ncmax=0
+	nrmax=0
 	do nn=1,size(blocks%inters,1)
+		ncmax = max(blocks%inters(nn)%nc,ncmax)
+		nrmax = max(blocks%inters(nn)%nr,nrmax)
+	enddo
+	allocate(col_idx_loc(ncmax))
+	allocate(row_idx(nrmax,1))
+	allocate(activeproc(nproc,size(blocks%inters,1)))
+	activeproc=0
+
+	! iidx=0
+	do nn=1,size(blocks%inters,1)
+
 		nng=blocks%inters(nn)%idx
+		nc_loc=0
+		do jj=1,blocks%inters(nn)%nc
+			ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+			if(ci>=head .and. ci<=tail)then
+				nc_loc=nc_loc+1
+				col_idx_loc(nc_loc)=jj
+			endif
+		enddo
+
+		row_idx(1:blocks%inters(nn)%nr,1)=0
 		do ii=1,blocks%inters(nn)%nr
-			ri=inters(nng)%rows(blocks%inters(nn)%rows(ii))
-			pgno = findpggroup(ri,msh,ptree,blocks%row_group,blocks%pgno)
-			pp = ptree%pgrp(pgno)%head -ptree%pgrp(blocks%pgno)%head+1
-			if(send_map_inters(pp,nn)==0)then
-			do jj=1,blocks%inters(nn)%nc
-				ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
-				if(ci>=head .and. ci<=tail)then
-					if(sendquant(pp)%active==0)then
-						sendquant(pp)%active=1
-						Nsendactive=Nsendactive+1
-						sendIDactive(Nsendactive)=pp
-					endif
-					sendquant(pp)%size=sendquant(pp)%size+(1+rank)
-					send_map_inters(pp,nn)=1
+			ri=inters(nng)%rows(blocks%inters(nn)%rows(ii))-headm+1
+			row_idx(ii,1)=ri
+		enddo
+		call PIKSRT_INT_Multi(blocks%inters(nn)%nr,1,row_idx)
+
+
+		ii=1
+		do pp=1,nproc
+			head1=blocks%M_p(pp,1)
+			tail1=blocks%M_p(pp,2)
+			do while(row_idx(ii,1)<head1)
+			ii=ii+1
+			if(ii>blocks%inters(nn)%nr)exit
+			enddo
+			if(ii<=blocks%inters(nn)%nr)then
+			if(tail1>=row_idx(ii,1))activeproc(pp,nn)=1
+			else
+			exit
+			endif
+		enddo
+
+		do pp=1,nproc
+			if(activeproc(pp,nn)==1)then
+			do jj=1,nc_loc
+				ci=inters(nng)%cols(blocks%inters(nn)%cols(col_idx_loc(jj)))-headn+1
+				if(sendquant(pp)%active==0)then
+					sendquant(pp)%active=1
+					Nsendactive=Nsendactive+1
+					sendIDactive(Nsendactive)=pp
 				endif
+				sendquant(pp)%size=sendquant(pp)%size+(1+rank)
 			enddo
 			endif
 		enddo
-		iidx = iidx + blocks%inters(nn)%nc
+
 	enddo
-	send_map_inters=0
+	deallocate(row_idx)
 
 
 	do nn=1,size(blocks%inters,1)
@@ -6422,6 +6461,9 @@ subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,ms
 		endif
 	enddo
 
+n2 = OMP_get_wtime()
+
+
 	do tt=1,Nsendactive
 		pp=sendIDactive(tt)
 		allocate(sendquant(pp)%dat(sendquant(pp)%size,1))
@@ -6432,33 +6474,36 @@ subroutine LR_all2all_extraction(blocks,inters,Vpartial,rank,ncol,stats,ptree,ms
 		allocate(recvquant(pp)%dat(recvquant(pp)%size,1))
 	enddo
 
-n2 = OMP_get_wtime()
-
-
 	! pack the send buffer in the second pass
 	iidx=0
 	do nn=1,size(blocks%inters,1)
 		nng=blocks%inters(nn)%idx
-		do ii=1,blocks%inters(nn)%nr
-			ri=inters(nng)%rows(blocks%inters(nn)%rows(ii))
-			pgno = findpggroup(ri,msh,ptree,blocks%row_group,blocks%pgno)
-			pp = ptree%pgrp(pgno)%head -ptree%pgrp(blocks%pgno)%head+1
-			if(send_map_inters(pp,nn)==0)then
-			do jj=1,blocks%inters(nn)%nc
-				ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
-				if(ci>=head .and. ci<=tail)then
-					sendquant(pp)%dat(sendquant(pp)%size+1,1)=iidx+jj
-					sendquant(pp)%size=sendquant(pp)%size+1
-					sendquant(pp)%dat(sendquant(pp)%size+1:sendquant(pp)%size+rank,1)=blocks%ButterflyV%blocks(1)%matrix(ci-head+1,:)
-					sendquant(pp)%size=sendquant(pp)%size+rank
-					send_map_inters(pp,nn)=1
-				endif
+		nc_loc=0
+		do jj=1,blocks%inters(nn)%nc
+			ci=inters(nng)%cols(blocks%inters(nn)%cols(jj))-headn+1
+			if(ci>=head .and. ci<=tail)then
+				nc_loc=nc_loc+1
+				col_idx_loc(nc_loc)=jj
+			endif
+		enddo
+
+		do pp=1,nproc
+			if(activeproc(pp,nn)==1)then
+			do jj=1,nc_loc
+				ci=inters(nng)%cols(blocks%inters(nn)%cols(col_idx_loc(jj)))-headn+1
+				sendquant(pp)%dat(sendquant(pp)%size+1,1)=iidx+col_idx_loc(jj)
+				sendquant(pp)%size=sendquant(pp)%size+1
+				sendquant(pp)%dat(sendquant(pp)%size+1:sendquant(pp)%size+rank,1)=blocks%ButterflyV%blocks(1)%matrix(ci-head+1,:)
+				sendquant(pp)%size=sendquant(pp)%size+rank
 			enddo
 			endif
 		enddo
 		iidx = iidx + blocks%inters(nn)%nc
 	enddo
-	send_map_inters=0
+	deallocate(col_idx_loc)
+	deallocate(activeproc)
+
+
 
 n3 = OMP_get_wtime()
 
@@ -6567,10 +6612,10 @@ n4 = OMP_get_wtime()
 	deallocate(recvquant)
 	deallocate(sendIDactive)
 	deallocate(recvIDactive)
-	deallocate(send_map_inters)
 
 
-	! time_tmp = time_tmp + n4 - n3
+
+	! time_tmp = time_tmp + n4 - n1
 
 end subroutine LR_all2all_extraction
 

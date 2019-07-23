@@ -29,7 +29,7 @@ export EXEC=./EXAMPLE/ie2d
 
 # for CORE_VAL in 16 18 32 50 64 98 128 200 256 512 1024
 #for CORE_VAL in  512 
-for CORE_VAL in  32
+for CORE_VAL in  32 64 128 256
 # for CORE_VAL in  32 64
 do
 
@@ -52,25 +52,25 @@ do
 
 # ######## half cyclinder
 #Ns=(50000 500000 5000000)
-Ns=(5000)
-wavelengths=(0.02)
+Ns=(100000)
+wavelengths=(0.016)
 
 for ((i = 0; i < ${#Ns[@]}; i++)); do
 N=${Ns[i]}
 wavelength=${wavelengths[i]}
 
 blknum=1
-model=7
+model=10
 # N=5000
 # wavelength=0.08
 # wavelength=0.01
 tol=1d-4
 errcheck=0
-lrcomp=2
+lrcomp=4
 bACAbatch=16
 LRlevel=0
-xyzsort=0
-leafsize=50
+xyzsort=2
+leafsize=200
 para=0.01
 schulzlevel=100		  
 Nbundle=1		  
@@ -78,7 +78,7 @@ format=1
 
 export OMP_NUM_THREADS=$OMP_NUM_THREADS
 
-jsrun -n $RS_VAL -a $RANK_PER_RS -c $TH_PER_RS -g $GPU_PER_RS -b packed:$NTH $EXEC -quant --model2d $model --nunk $N --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${nmpi}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_pat_${pat_comp}
+jsrun -n $RS_VAL -a $RANK_PER_RS -c $TH_PER_RS -g $GPU_PER_RS -b packed:$NTH $EXEC -quant --model2d $model --nunk $N --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format | tee hcylindar_N_${N}_w_${wavelength}_tol_${tol}_mpi_${CORE_VAL}_nth_${OMP_NUM_THREADS}_LRlevel_${LRlevel}_precon_${precon}_sort_${xyzsort}_pat_${pat_comp}
 
 done
 done

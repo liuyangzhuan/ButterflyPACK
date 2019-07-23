@@ -2609,6 +2609,27 @@ subroutine PIKSRT_DBLE_Multi(N,M,ARR)
 end subroutine PIKSRT_DBLE_Multi
 
 
+! sort the first dimension of the array
+subroutine PIKSRT_INT_Multi(N,M,ARR)
+  implicit none
+  integer j,i,N,M
+  integer ARR(N,M)
+  integer,allocatable::a(:)
+  allocate(a(M))
+  do j=2, N
+    a=ARR(j,:)
+    do i=j-1,1,-1
+      if (ARR(i,1)<=a(1)) goto 11
+      ARR(i+1,:)=ARR(i,:)
+    end do
+	i=0
+11  ARR(i+1,:)=a
+  end do
+  deallocate(a)
+  return
+end subroutine PIKSRT_INT_Multi
+
+
 !*** remove the duplicates in an integer array
 subroutine remove_dup_int(array,nin,nout)
 	implicit none
