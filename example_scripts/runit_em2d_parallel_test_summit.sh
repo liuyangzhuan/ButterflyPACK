@@ -29,7 +29,7 @@ export EXEC=./EXAMPLE/ie2d
 
 # for CORE_VAL in 16 18 32 50 64 98 128 200 256 512 1024
 #for CORE_VAL in  512 
-for CORE_VAL in  32 64 128 256
+for CORE_VAL in  4 16
 # for CORE_VAL in  32 64
 do
 
@@ -53,14 +53,14 @@ do
 # ######## half cyclinder
 #Ns=(50000 500000 5000000)
 Ns=(100000)
-wavelengths=(0.016)
+wavelengths=(0.001)
 
 for ((i = 0; i < ${#Ns[@]}; i++)); do
 N=${Ns[i]}
 wavelength=${wavelengths[i]}
 
 blknum=1
-model=10
+model=7
 # N=5000
 # wavelength=0.08
 # wavelength=0.01
@@ -68,7 +68,7 @@ tol=1d-4
 errcheck=0
 lrcomp=4
 bACAbatch=16
-LRlevel=0
+LRlevel=100
 xyzsort=2
 leafsize=200
 para=0.01

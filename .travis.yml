@@ -63,7 +63,7 @@ before_install:
   - printf "${BLUE} GC; Done installing gfortran via apt\n"
 
   - printf "${BLUE} GC; Installing openmpi\n"
-  - sudo apt-get install openmpi-bin libopenmpi-dev
+  - sudo apt-get install openmpi-common libopenmpi3
   - printf "${BLUE} GC; Done installing openmpi\n"
 
   - printf "${BLUE} GC; Installing dos2unixfrom apt\n"

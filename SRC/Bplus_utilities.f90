@@ -6626,6 +6626,7 @@ end subroutine LR_all2all_extraction
 
 
 
+
 subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
     use BPACK_DEFS
     implicit none
@@ -6652,6 +6653,11 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 	DT,allocatable::Vpartial(:,:)
 	DT::val
 	integer idxr,idxc
+	integer,allocatable::num_nods_i(:),num_nods_j(:)
+	real(kind=8)::n1,n2,n3,n4,n5
+
+
+	n1 = OMP_get_wtime()
 
 	headm = blocks%headm
 	headn = blocks%headn
@@ -6797,6 +6803,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		g_idx_m(level)%inc_c=1
 		g_idx_m(level)%nc=1
 		allocate(g_idx_m(level)%blocks(g_idx_m(level)%nr,g_idx_m(level)%nc))
+		allocate(g_idx_m(level)%index(iidx,1))
 
 		g_idx_n(level)%idx_c=BFvec%vec(level)%idx_c
 		g_idx_n(level)%inc_c=BFvec%vec(level)%inc_c
@@ -6805,74 +6812,64 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		g_idx_n(level)%inc_r=1
 		g_idx_n(level)%nr=1
 		allocate(g_idx_n(level)%blocks(g_idx_n(level)%nr,g_idx_n(level)%nc))
+		allocate(g_idx_n(level)%index(jidx,1))
 	enddo
 
 	iidx=0
 	jidx=0
+	allocate(num_nods_i(0:level_half+1))
+	allocate(num_nods_j(0:level_half+1))
 	do nn=1,size(blocks%inters,1)
 		!*** for each index in each intersection, traverse the row and column tree
-		do ii=1,blocks%inters(nn)%nr
-			iidx = iidx + 1
-			do level=level_butterfly+2,0,-1
+		num_nods_i=0
+		num_nods_j=0
+		do level=level_butterfly+2,0,-1
+			do ii=1,blocks%inters(nn)%nr
+
 				if(level<=level_half+1)then
-				index_i_s = group_ms1(iidx)
+				index_i_s = group_ms1(iidx+ii)
 				index_i_loc_s = (index_i_s-g_idx_m(level)%idx_r)/g_idx_m(level)%inc_r+1
 				if(index_i_s>=g_idx_m(level)%idx_r .and. mod(index_i_s-g_idx_m(level)%idx_r,g_idx_m(level)%inc_r)==0 .and. index_i_loc_s<=g_idx_m(level)%nr)then
 					if(g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx/=nn)then ! not seen this index_i_loc_s before
-						call append(g_idx_m(level)%lst,index_i_loc_s)
+						num_nods_i(level) = num_nods_i(level)+1
+						g_idx_m(level)%index(num_nods_i(level),1)=index_i_loc_s
 						g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx=nn
 					endif
 				endif
 				endif
-				if(level>0 .and. level<level_butterfly+2)group_ms1(iidx) = floor_safe((group_ms1(iidx)+1)/2d0)
+
 			enddo
+			if(level>0 .and. level<level_butterfly+2)group_ms1(iidx+1:iidx+blocks%inters(nn)%nr) = floor((group_ms1(iidx+1:iidx+blocks%inters(nn)%nr)+1)/2d0)
 		enddo
-		do jj=1,blocks%inters(nn)%nc
-			jidx = jidx + 1
-			do level=0, level_butterfly+2
+		iidx = iidx + blocks%inters(nn)%nr
+
+		do level=0, level_butterfly+2
+			do jj=1,blocks%inters(nn)%nc
 				if(level<=level_half+1)then
-				index_j_s = group_ns1(jidx)
+				index_j_s = group_ns1(jidx+jj)
 				index_j_loc_s = (index_j_s-g_idx_n(level)%idx_c)/g_idx_n(level)%inc_c+1
 				if(index_j_s>=g_idx_n(level)%idx_c .and. mod(index_j_s-g_idx_n(level)%idx_c,g_idx_n(level)%inc_c)==0 .and. index_j_loc_s<=g_idx_n(level)%nc)then
 					if(g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx/=nn)then ! not seen this index_j_loc_s before
-						call append(g_idx_n(level)%lst,index_j_loc_s)
+						num_nods_j(level) = num_nods_j(level)+1
+						g_idx_n(level)%index(num_nods_j(level),1)=index_j_loc_s
 						g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx=nn
 					endif
 					if(level==0)BFvec%vec(level)%blocks(1,index_j_loc_s)%ndim = BFvec%vec(level)%blocks(1,index_j_loc_s)%ndim+1
 				endif
 				endif
-				if(level>0 .and. level<level_butterfly+2)group_ns1(jidx) = floor_safe((group_ns1(jidx)+1)/2d0)
+
 			enddo
+			if(level>0 .and. level<level_butterfly+2)group_ns1(jidx+1:jidx+blocks%inters(nn)%nc) = floor((group_ns1(jidx+1:jidx+blocks%inters(nn)%nc)+1)/2d0)
+
 		enddo
+		jidx = jidx + blocks%inters(nn)%nc
+
 
 		!**** construct BFvec%vec(level)%lst for active BF blocks and BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
 		do level=0, level_half+1
-			allocate(g_idx_m(level)%index(g_idx_m(level)%lst%num_nods,1))
-			cur=>g_idx_m(level)%lst%head
-			do ii=1,g_idx_m(level)%lst%num_nods
-			select type(ptr=>cur%item)
-			type is(integer)
-				g_idx_m(level)%index(ii,1)=ptr
-			end select
-			cur=>cur%next
-			enddo
-			call list_finalizer(g_idx_m(level)%lst)
-
-			allocate(g_idx_n(level)%index(g_idx_n(level)%lst%num_nods,1))
-			cur=>g_idx_n(level)%lst%head
-			do jj=1,g_idx_n(level)%lst%num_nods
-			select type(ptr=>cur%item)
-			type is(integer)
-				g_idx_n(level)%index(jj,1)=ptr
-			end select
-			cur=>cur%next
-			enddo
-			call list_finalizer(g_idx_n(level)%lst)
-
-
-			do ii=1,size(g_idx_m(level)%index,1)
+			do ii=1,num_nods_i(level)
 			index_i_loc_s=g_idx_m(level)%index(ii,1)
-				do jj=1,size(g_idx_n(level)%index,1)
+				do jj=1,num_nods_j(level)
 				index_j_loc_s=g_idx_n(level)%index(jj,1)
 					if(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods==0)then ! first see this block
 						p%i=index_i_loc_s
@@ -6883,16 +6880,21 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					call append(BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst,nn)
 				enddo
 			enddo
-
-			deallocate(g_idx_m(level)%index)
-			deallocate(g_idx_n(level)%index)
 		enddo
+
 	enddo
 
+	do level=0, level_half+1
+		deallocate(g_idx_m(level)%index)
+		deallocate(g_idx_n(level)%index)
+	enddo
 	deallocate(g_idx_m)
 	deallocate(g_idx_n)
 	deallocate(group_ms1)
 	deallocate(group_ns1)
+	deallocate(num_nods_i)
+	deallocate(num_nods_j)
+
 
 	!**** copy *%lst to *%index
 	do level=0, level_half+1
@@ -6942,6 +6944,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		g_idx_m(level)%inc_c=1
 		g_idx_m(level)%nc=1
 		allocate(g_idx_m(level)%blocks(g_idx_m(level)%nr,g_idx_m(level)%nc))
+		allocate(g_idx_m(level)%index(iidx,1))
 
 		g_idx_n(level)%idx_c=BFvec1%vec(level)%idx_c
 		g_idx_n(level)%inc_c=BFvec1%vec(level)%inc_c
@@ -6950,77 +6953,66 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		g_idx_n(level)%inc_r=1
 		g_idx_n(level)%nr=1
 		allocate(g_idx_n(level)%blocks(g_idx_n(level)%nr,g_idx_n(level)%nc))
+		allocate(g_idx_n(level)%index(jidx,1))
 	enddo
 
 
 	!**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
 	iidx=0
 	jidx=0
+	allocate(num_nods_i(level_half+1:level_butterfly+2))
+	allocate(num_nods_j(level_half+1:level_butterfly+2))
 	do nn=1,size(blocks%inters,1)
+		num_nods_i=0
+		num_nods_j=0
 		!*** for each index in each intersection, traverse the row and column tree
-		do ii=1,blocks%inters(nn)%nr
-			iidx = iidx + 1
-			do level=level_butterfly+2,0,-1
+		do level=level_butterfly+2,0,-1
+			do ii=1,blocks%inters(nn)%nr
+
+
 				if(level>=level_half+1)then
-				index_i_s = group_ms1(iidx)
+				index_i_s = group_ms1(iidx+ii)
 				index_i_loc_s = (index_i_s-g_idx_m(level)%idx_r)/g_idx_m(level)%inc_r+1
 				if(index_i_s>=g_idx_m(level)%idx_r .and. mod(index_i_s-g_idx_m(level)%idx_r,g_idx_m(level)%inc_r)==0 .and. index_i_loc_s<=g_idx_m(level)%nr)then
 					if(g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx/=nn)then ! not seen this index_i_loc_s before
-						call append(g_idx_m(level)%lst,index_i_loc_s)
+						num_nods_i(level) = num_nods_i(level)+1
+						g_idx_m(level)%index(num_nods_i(level),1)=index_i_loc_s
 						g_idx_m(level)%blocks(index_i_loc_s,1)%lst%idx=nn
 					endif
 				endif
 				endif
-				if(level>0 .and. level<level_butterfly+2)group_ms1(iidx) = floor_safe((group_ms1(iidx)+1)/2d0)
+
 			enddo
+			if(level>0 .and. level<level_butterfly+2)group_ms1(iidx+1:iidx+blocks%inters(nn)%nr) = floor((group_ms1(iidx+1:iidx+blocks%inters(nn)%nr)+1)/2d0)
 		enddo
-		do jj=1,blocks%inters(nn)%nc
-			jidx = jidx + 1
-			do level=0, level_butterfly+2
+		iidx = iidx + blocks%inters(nn)%nr
+
+		do level=0, level_butterfly+2
+			do jj=1,blocks%inters(nn)%nc
 				if(level>=level_half+1)then
-				index_j_s = group_ns1(jidx)
+				index_j_s = group_ns1(jidx+jj)
 				index_j_loc_s = (index_j_s-g_idx_n(level)%idx_c)/g_idx_n(level)%inc_c+1
 				if(index_j_s>=g_idx_n(level)%idx_c .and. mod(index_j_s-g_idx_n(level)%idx_c,g_idx_n(level)%inc_c)==0 .and. index_j_loc_s<=g_idx_n(level)%nc)then
 					if(g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx/=nn)then ! not seen this index_j_loc_s before
-						call append(g_idx_n(level)%lst,index_j_loc_s)
+						num_nods_j(level) = num_nods_j(level)+1
+						g_idx_n(level)%index(num_nods_j(level),1)=index_j_loc_s
 						g_idx_n(level)%blocks(1,index_j_loc_s)%lst%idx=nn
 
 					endif
 					if(level==0)BFvec1%vec(level)%blocks(1,index_j_loc_s)%ndim = BFvec1%vec(level)%blocks(1,index_j_loc_s)%ndim+1
 				endif
 				endif
-				if(level>0 .and. level<level_butterfly+2)group_ns1(jidx) = floor_safe((group_ns1(jidx)+1)/2d0)
+
 			enddo
+			if(level>0 .and. level<level_butterfly+2)group_ns1(jidx+1:jidx+blocks%inters(nn)%nc) = floor((group_ns1(jidx+1:jidx+blocks%inters(nn)%nc)+1)/2d0)
 		enddo
+		jidx = jidx + blocks%inters(nn)%nc
 
 		!**** construct BFvec1%vec(level)%lst for active BF blocks and BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
 		do level=level_half+1, level_butterfly+2
-			allocate(g_idx_m(level)%index(g_idx_m(level)%lst%num_nods,1))
-			cur=>g_idx_m(level)%lst%head
-			do ii=1,g_idx_m(level)%lst%num_nods
-			select type(ptr=>cur%item)
-			type is(integer)
-				g_idx_m(level)%index(ii,1)=ptr
-			end select
-			cur=>cur%next
-			enddo
-			call list_finalizer(g_idx_m(level)%lst)
-
-			allocate(g_idx_n(level)%index(g_idx_n(level)%lst%num_nods,1))
-			cur=>g_idx_n(level)%lst%head
-			do jj=1,g_idx_n(level)%lst%num_nods
-			select type(ptr=>cur%item)
-			type is(integer)
-				g_idx_n(level)%index(jj,1)=ptr
-			end select
-			cur=>cur%next
-			enddo
-			call list_finalizer(g_idx_n(level)%lst)
-
-
-			do ii=1,size(g_idx_m(level)%index,1)
+			do ii=1,num_nods_i(level)
 			index_i_loc_s=g_idx_m(level)%index(ii,1)
-				do jj=1,size(g_idx_n(level)%index,1)
+				do jj=1,num_nods_j(level)
 				index_j_loc_s=g_idx_n(level)%index(jj,1)
 					if(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst%num_nods==0)then ! first see this block
 						p%i=index_i_loc_s
@@ -7030,15 +7022,18 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					call append(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst,nn)
 				enddo
 			enddo
-
-			deallocate(g_idx_m(level)%index)
-			deallocate(g_idx_n(level)%index)
 		enddo
+	enddo
+	do level=level_half+1, level_butterfly+2
+		deallocate(g_idx_m(level)%index)
+		deallocate(g_idx_n(level)%index)
 	enddo
 	deallocate(g_idx_m)
 	deallocate(g_idx_n)
 	deallocate(group_ms1)
 	deallocate(group_ns1)
+	deallocate(num_nods_i)
+	deallocate(num_nods_j)
 
 	!**** copy *%lst to *%index
 	do level=level_half+1, level_butterfly+2
@@ -7115,6 +7110,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		call list_finalizer(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst)
 	enddo
 
+	n2 = OMP_get_wtime()
 
 
 	!**** generate data in BFvec%vec(0)
@@ -7255,10 +7251,14 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 		endif
 	enddo
 
+	n3 = OMP_get_wtime()
+
 	! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'before all2all'
 	! all2all communication from BFvec%vec(level_half+1) to BFvec1%vec(level_half+1)
 	call BF_all2all_extraction(blocks,BFvec%vec(level_half+1),BFvec1%vec(level_half+1),stats,ptree,level_half,'R','C')
 	! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'after all2all'
+
+	n4 = OMP_get_wtime()
 
 	!**** multiply BF with BFvec1
 	do level=level_half+1,level_butterfly+1
@@ -7325,8 +7325,6 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 							! write(*,*)'seq:',abs(val)
 						! enddo
 					! enddo
-
-
 
 					deallocate(Vpartial)
 					deallocate(mat)
@@ -7509,8 +7507,11 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 	enddo
 	deallocate(BFvec%vec)
 
+	n5 = OMP_get_wtime()
+	time_tmp = time_tmp + n5 - n1
 
 end subroutine BF_block_extraction
+
 
 
 !*** Find the group index of point idx at the (group%level+level) level
@@ -8919,6 +8920,7 @@ end function node_score_block_ptr_row
 
 
 
+
 subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,myflag,passflag,ptree,stats)
 
 	use BPACK_DEFS
@@ -8943,7 +8945,8 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 	type(intersect),allocatable::inters(:)
 	integer myArows,myAcols,Npmap
 	real(kind=8)::t1,t2,t3,t4
-
+	integer reqm,reqn
+	integer statusm(MPI_status_size),statusn(MPI_status_size)
 
 	if(option%elem_extract==0)then
 
@@ -8993,7 +8996,8 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 
 		allocate(flags(ptree%nproc))
 
-		call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
+		call MPI_IALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
+		call MPI_Wait(reqm,statusm,ierr)
 		passflag=minval(flags)
 
 		t1 = OMP_get_wtime()
@@ -9004,8 +9008,8 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 			allocate(rowidx1(ptree%nproc))
 			allocate(disps(ptree%nproc))
 
-			call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
-			call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+			call MPI_IALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
+			call MPI_IALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, reqn, ierr)
 
 
 			Npmap=ptree%nproc
@@ -9026,6 +9030,9 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 			allocate(colidx(Ninter))
 			allocate(rowidx(Ninter))
 			allocate(pgidx(Ninter))
+
+			call MPI_Wait(reqm,statusm,ierr)
+			call MPI_Wait(reqn,statusn,ierr)
 
 			!***** Count number of active intersections Ninter
 			Ninter=0
@@ -9065,7 +9072,7 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				disps(pp)=idx
 				idx=idx+rowidx1(pp)
 			enddo
-			call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+			call MPI_IALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, reqm, ierr)
 
 			idx_col=sum(colidx)
 			allocate(allcols(idx_col))
@@ -9074,7 +9081,9 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				disps(pp)=idx
 				idx=idx+colidx1(pp)
 			enddo
-			call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+			call MPI_IALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, reqn, ierr)
+			call MPI_Wait(reqm,statusm,ierr)
+			call MPI_Wait(reqn,statusn,ierr)
 
 			if(option%cpp==1)then
 				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
@@ -9120,10 +9129,8 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 			deallocate(pmaps)
 
 		endif
-
 		t2 = OMP_get_wtime()
 		stats%Time_Entry=stats%Time_Entry+t2-t1
-
 		deallocate(flags)
 	endif
 
