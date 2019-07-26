@@ -297,12 +297,14 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 
     integer,allocatable:: select_row(:),select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:),order(:)
-    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer Nlayer,passflag,levelm
+	integer Nlayer,passflag,levelm,nrow,ncol
 
-	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:)
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:),mrange1(:),nrange1(:),mmap(:),nmap(:),mnmap(:,:)
+	real(kind=8)::n2,n1
+
 
 	flops=0
 	level_butterfly=blocks%level_butterfly
@@ -337,6 +339,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
 	rankmax_r1 = min(ceiling_safe(option%sample_para*nn),mm)
+	if(level==0)rankmax_r1=min(ceiling_safe(min(0.5d0,option%sample_para)*nn),mm)
 	rankmax_c = nn
 	allocate(select_row(rankmax_r1+nn*option%knn))
 	allocate(select_column(rankmax_c))
@@ -413,21 +416,63 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		do j=1,nn
 			nrange(j)=header_n+j-1
 		enddo
-		call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
 
 		if(Nboundall>0)then
-		do i=1,rankmax_r
+
+			allocate(mnmap(rankmax_r,nn))
+			allocate(mmap(rankmax_r))
+			allocate(nmap(nn))
+			allocate(mrange1(rankmax_r))
+			allocate(nrange1(nn))
+			mnmap=1
+			do i=1,rankmax_r
 			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
 			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
 			if(group_n_mid/=-1)then
 			idxstart=msh%basis_group(group_n_mid)%head
 			idxend=msh%basis_group(group_n_mid)%tail
 			do j=1,nn
-				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V(i,j)=0d0
+				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
 			enddo
 			endif
-		enddo
+			enddo
+
+			nrow=0
+			do i=1,rankmax_r
+				if(sum(mnmap(i,:))/=0)then
+					nrow = nrow + 1
+					mmap(nrow)=i
+					mrange1(nrow)=mrange(i)
+				endif
+			enddo
+			ncol=0
+			do j=1,nn
+				if(sum(mnmap(:,j))/=0)then
+					ncol = ncol + 1
+					nmap(ncol)=j
+					nrange1(ncol)=nrange(j)
+				endif
+			enddo
+			allocate(matrix_tmp(nrow,ncol))
+			call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+			matrix_V=0
+			do i=1,nrow
+			do j=1,ncol
+				matrix_V(mmap(i),nmap(j))=matrix_tmp(i,j)
+			enddo
+			enddo
+			deallocate(mnmap)
+			deallocate(mmap)
+			deallocate(nmap)
+			deallocate(mrange1)
+			deallocate(nrange1)
+			deallocate(matrix_tmp)
+		else
+			call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
 		endif
+
+
 
 		deallocate(mrange)
 		deallocate(nrange)
@@ -497,20 +542,64 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		do j=1,rank_new
 			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
 		enddo
-		call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
+
+
 
 		if(Nboundall>0)then
-		do i=1,mm
-			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-			if(group_n_mid/=-1)then
-			idxstart=msh%basis_group(group_n_mid)%head
-			idxend=msh%basis_group(group_n_mid)%tail
-			do j=1,rank_new
-				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=0d0
+
+			allocate(mnmap(mm,rank_new))
+			allocate(mmap(mm))
+			allocate(nmap(rank_new))
+			allocate(mrange1(mm))
+			allocate(nrange1(rank_new))
+			mnmap=1
+
+
+			do i=1,mm
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,rank_new
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+				enddo
+				endif
 			enddo
-			endif
-		enddo
+
+			nrow=0
+			do i=1,mm
+				if(sum(mnmap(i,:))/=0)then
+					nrow = nrow + 1
+					mmap(nrow)=i
+					mrange1(nrow)=mrange(i)
+				endif
+			enddo
+			ncol=0
+			do j=1,rank_new
+				if(sum(mnmap(:,j))/=0)then
+					ncol = ncol + 1
+					nmap(ncol)=j
+					nrange1(ncol)=nrange(j)
+				endif
+			enddo
+			allocate(matrix_tmp(nrow,ncol))
+			call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+			blocks%ButterflyU%blocks(index_i_loc_k)%matrix=0
+			do i=1,nrow
+			do j=1,ncol
+				blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mmap(i),nmap(j))=matrix_tmp(i,j)
+			enddo
+			enddo
+			deallocate(mnmap)
+			deallocate(mmap)
+			deallocate(nmap)
+			deallocate(mrange1)
+			deallocate(nrange1)
+			deallocate(matrix_tmp)
+		else
+			call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
 		endif
 
 
@@ -577,20 +666,64 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
 			endif
 		enddo
-		call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
+
+
 
 		if(Nboundall>0)then
-		do i=1,rankmax_r
-			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-			if(group_n_mid/=-1)then
-			idxstart=msh%basis_group(group_n_mid)%head
-			idxend=msh%basis_group(group_n_mid)%tail
-			do j=1,nn
-				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V(i,j)=0d0
+
+			allocate(mnmap(rankmax_r,nn))
+			allocate(mmap(rankmax_r))
+			allocate(nmap(nn))
+			allocate(mrange1(rankmax_r))
+			allocate(nrange1(nn))
+			mnmap=1
+
+
+			do i=1,rankmax_r
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,nn
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+				enddo
+				endif
 			enddo
-			endif
-		enddo
+
+			nrow=0
+			do i=1,rankmax_r
+				if(sum(mnmap(i,:))/=0)then
+					nrow = nrow + 1
+					mmap(nrow)=i
+					mrange1(nrow)=mrange(i)
+				endif
+			enddo
+			ncol=0
+			do j=1,nn
+				if(sum(mnmap(:,j))/=0)then
+					ncol = ncol + 1
+					nmap(ncol)=j
+					nrange1(ncol)=nrange(j)
+				endif
+			enddo
+			allocate(matrix_tmp(nrow,ncol))
+			call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+			matrix_V=0
+			do i=1,nrow
+			do j=1,ncol
+				matrix_V(mmap(i),nmap(j))=matrix_tmp(i,j)
+			enddo
+			enddo
+			deallocate(mnmap)
+			deallocate(mmap)
+			deallocate(nmap)
+			deallocate(mrange1)
+			deallocate(nrange1)
+			deallocate(matrix_tmp)
+		else
+			call element_Zmn_block_user(rankmax_r,nn,mrange,nrange,matrix_V,msh,option,ker,0,passflag,ptree,stats)
 		endif
 
 		deallocate(mrange)
@@ -1249,13 +1382,13 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:)
-    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
-	integer,allocatable::jpvt(:),mrange(:),nrange(:)
-	integer Nlayer,levelm,group_m_mid,group_n_mid,idxstart,idxend
-
-	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
+	integer,allocatable::jpvt(:)
+	integer Nlayer,levelm,group_m_mid,group_n_mid,idxstart,idxend,nrow,ncol
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:),mrange1(:),nrange1(:),mmap(:),nmap(:),mnmap(:,:)
 	integer::passflag=0
+	real(kind=8)::n2,n1
 
 
 	flops=0
@@ -1292,6 +1425,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
 	rankmax_r = mm
 	rankmax_c1 = min(nn,ceiling_safe(option%sample_para*mm))
+	if(level==level_butterfly+1)rankmax_c1=min(ceiling_safe(min(0.5d0,option%sample_para)*mm),nn)
 	allocate(select_row(rankmax_r))
 	allocate(select_column(rankmax_c1+option%knn*mm))
 	do i=1, rankmax_r
@@ -1346,21 +1480,65 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
 			enddo
 
-			call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
 
 			if(Nboundall>0)then
-			do i=1,mm
-				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-				if(group_n_mid/=-1)then
-				idxstart=msh%basis_group(group_n_mid)%head
-				idxend=msh%basis_group(group_n_mid)%tail
-				do j=1,rank_new
-					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=0d0
+
+				allocate(mnmap(mm,rank_new))
+				allocate(mmap(mm))
+				allocate(nmap(rank_new))
+				allocate(mrange1(mm))
+				allocate(nrange1(rank_new))
+				mnmap=1
+
+
+				do i=1,mm
+					group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+					group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+					if(group_n_mid/=-1)then
+					idxstart=msh%basis_group(group_n_mid)%head
+					idxend=msh%basis_group(group_n_mid)%tail
+					do j=1,rank_new
+						if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+					enddo
+					endif
 				enddo
-				endif
-			enddo
+
+				nrow=0
+				do i=1,mm
+					if(sum(mnmap(i,:))/=0)then
+						nrow = nrow + 1
+						mmap(nrow)=i
+						mrange1(nrow)=mrange(i)
+					endif
+				enddo
+				ncol=0
+				do j=1,rank_new
+					if(sum(mnmap(:,j))/=0)then
+						ncol = ncol + 1
+						nmap(ncol)=j
+						nrange1(ncol)=nrange(j)
+					endif
+				enddo
+				allocate(matrix_tmp(nrow,ncol))
+				call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+				blocks%ButterflyU%blocks(index_i_loc_k)%matrix=0
+				do i=1,nrow
+				do j=1,ncol
+					blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mmap(i),nmap(j))=matrix_tmp(i,j)
+				enddo
+				enddo
+				deallocate(mnmap)
+				deallocate(mmap)
+				deallocate(nmap)
+				deallocate(mrange1)
+				deallocate(nrange1)
+				deallocate(matrix_tmp)
+			else
+				call element_Zmn_block_user(mm,rank_new,mrange,nrange,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,msh,option,ker,0,passflag,ptree,stats)
 			endif
+
+
 
 
 			deallocate(mrange)
@@ -1406,21 +1584,65 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			do j=1,rankmax_c
 				nrange(j)=header_n+select_column(j)-1
 			enddo
-			call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
 
 			if(Nboundall>0)then
-			do i=1,mm
-				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-				if(group_n_mid/=-1)then
-				idxstart=msh%basis_group(group_n_mid)%head
-				idxend=msh%basis_group(group_n_mid)%tail
-				do j=1,rankmax_c
-					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+
+				allocate(mnmap(mm,rankmax_c))
+				allocate(mmap(mm))
+				allocate(nmap(rankmax_c))
+				allocate(mrange1(mm))
+				allocate(nrange1(rankmax_c))
+				mnmap=1
+
+
+				do i=1,mm
+					group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+					group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+					if(group_n_mid/=-1)then
+					idxstart=msh%basis_group(group_n_mid)%head
+					idxend=msh%basis_group(group_n_mid)%tail
+					do j=1,rankmax_c
+						if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+					enddo
+					endif
 				enddo
-				endif
-			enddo
+
+				nrow=0
+				do i=1,mm
+					if(sum(mnmap(i,:))/=0)then
+						nrow = nrow + 1
+						mmap(nrow)=i
+						mrange1(nrow)=mrange(i)
+					endif
+				enddo
+				ncol=0
+				do j=1,rankmax_c
+					if(sum(mnmap(:,j))/=0)then
+						ncol = ncol + 1
+						nmap(ncol)=j
+						nrange1(ncol)=nrange(j)
+					endif
+				enddo
+				allocate(matrix_tmp(nrow,ncol))
+				call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+				matrix_V_tmp=0
+				do i=1,nrow
+				do j=1,ncol
+					matrix_V_tmp(mmap(i),nmap(j))=matrix_tmp(i,j)
+				enddo
+				enddo
+				deallocate(mnmap)
+				deallocate(mmap)
+				deallocate(nmap)
+				deallocate(mrange1)
+				deallocate(nrange1)
+				deallocate(matrix_tmp)
+			else
+				call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			endif
+
 
 
 			deallocate(mrange)
@@ -1493,21 +1715,65 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 		do j=1,nn
 			nrange(j) = j+header_n-1
 		enddo
-		call element_Zmn_block_user(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
 
 		if(Nboundall>0)then
-		do i=1,rank_new
-			group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-			group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-			if(group_n_mid/=-1)then
-			idxstart=msh%basis_group(group_n_mid)%head
-			idxend=msh%basis_group(group_n_mid)%tail
-			do j=1,nn
-				if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+
+			allocate(mnmap(rank_new,nn))
+			allocate(mmap(rank_new))
+			allocate(nmap(nn))
+			allocate(mrange1(rank_new))
+			allocate(nrange1(nn))
+			mnmap=1
+
+
+			do i=1,rank_new
+				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+				if(group_n_mid/=-1)then
+				idxstart=msh%basis_group(group_n_mid)%head
+				idxend=msh%basis_group(group_n_mid)%tail
+				do j=1,nn
+					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+				enddo
+				endif
 			enddo
-			endif
-		enddo
+
+			nrow=0
+			do i=1,rank_new
+				if(sum(mnmap(i,:))/=0)then
+					nrow = nrow + 1
+					mmap(nrow)=i
+					mrange1(nrow)=mrange(i)
+				endif
+			enddo
+			ncol=0
+			do j=1,nn
+				if(sum(mnmap(:,j))/=0)then
+					ncol = ncol + 1
+					nmap(ncol)=j
+					nrange1(ncol)=nrange(j)
+				endif
+			enddo
+			allocate(matrix_tmp(nrow,ncol))
+			call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+			matrix_V_tmp=0
+			do i=1,nrow
+			do j=1,ncol
+				matrix_V_tmp(mmap(i),nmap(j))=matrix_tmp(i,j)
+			enddo
+			enddo
+			deallocate(mnmap)
+			deallocate(mmap)
+			deallocate(nmap)
+			deallocate(mrange1)
+			deallocate(nrange1)
+			deallocate(matrix_tmp)
+		else
+			call element_Zmn_block_user(rank_new,nn,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 		endif
+
 
 		deallocate(mrange)
 		deallocate(nrange)
@@ -1563,20 +1829,65 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			do j=1,rank_new
 				nrange(j)=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
 			enddo
-			call element_Zmn_block_user(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+
 			if(Nboundall>0)then
-			do i=1,mm1+mm2
-				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-				if(group_n_mid/=-1)then
-				idxstart=msh%basis_group(group_n_mid)%head
-				idxend=msh%basis_group(group_n_mid)%tail
-				do j=1,rank_new
-					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+
+				allocate(mnmap(mm1+mm2,rank_new))
+				allocate(mmap(mm1+mm2))
+				allocate(nmap(rank_new))
+				allocate(mrange1(mm1+mm2))
+				allocate(nrange1(rank_new))
+				mnmap=1
+
+
+				do i=1,mm1+mm2
+					group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+					group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+					if(group_n_mid/=-1)then
+					idxstart=msh%basis_group(group_n_mid)%head
+					idxend=msh%basis_group(group_n_mid)%tail
+					do j=1,rank_new
+						if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+					enddo
+					endif
 				enddo
-				endif
-			enddo
+
+				nrow=0
+				do i=1,mm1+mm2
+					if(sum(mnmap(i,:))/=0)then
+						nrow = nrow + 1
+						mmap(nrow)=i
+						mrange1(nrow)=mrange(i)
+					endif
+				enddo
+				ncol=0
+				do j=1,rank_new
+					if(sum(mnmap(:,j))/=0)then
+						ncol = ncol + 1
+						nmap(ncol)=j
+						nrange1(ncol)=nrange(j)
+					endif
+				enddo
+				allocate(matrix_tmp(nrow,ncol))
+				call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+				matrix_V_tmp=0
+				do i=1,nrow
+				do j=1,ncol
+					matrix_V_tmp(mmap(i),nmap(j))=matrix_tmp(i,j)
+				enddo
+				enddo
+				deallocate(mnmap)
+				deallocate(mmap)
+				deallocate(nmap)
+				deallocate(mrange1)
+				deallocate(nrange1)
+				deallocate(matrix_tmp)
+			else
+				call element_Zmn_block_user(mm1+mm2,rank_new,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			endif
+
 
 			deallocate(mrange)
 			deallocate(nrange)
@@ -1670,20 +1981,67 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 				nrange(j)=select_column(j)+header_n-1
 			enddo
 
-			call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+
+
 			if(Nboundall>0)then
-			do i=1,mm
-				group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
-				group_n_mid = boundary_map(group_m_mid-groupm_start+1)
-				if(group_n_mid/=-1)then
-				idxstart=msh%basis_group(group_n_mid)%head
-				idxend=msh%basis_group(group_n_mid)%tail
-				do j=1,rankmax_c
-					if(nrange(j)>=idxstart .and. nrange(j)<=idxend)matrix_V_tmp(i,j)=0d0
+
+				allocate(mnmap(mm,rankmax_c))
+				allocate(mmap(mm))
+				allocate(nmap(rankmax_c))
+				allocate(mrange1(mm))
+				allocate(nrange1(rankmax_c))
+				mnmap=1
+
+
+				do i=1,mm
+					group_m_mid = findgroup(mrange(i),msh,levelm,blocks%row_group)
+					group_n_mid = boundary_map(group_m_mid-groupm_start+1)
+					if(group_n_mid/=-1)then
+					idxstart=msh%basis_group(group_n_mid)%head
+					idxend=msh%basis_group(group_n_mid)%tail
+					do j=1,rankmax_c
+						if(nrange(j)>=idxstart .and. nrange(j)<=idxend)mnmap(i,j)=0
+					enddo
+					endif
 				enddo
-				endif
-			enddo
+
+				nrow=0
+				do i=1,mm
+					if(sum(mnmap(i,:))/=0)then
+						nrow = nrow + 1
+						mmap(nrow)=i
+						mrange1(nrow)=mrange(i)
+					endif
+				enddo
+				ncol=0
+				do j=1,rankmax_c
+					if(sum(mnmap(:,j))/=0)then
+						ncol = ncol + 1
+						nmap(ncol)=j
+						nrange1(ncol)=nrange(j)
+					endif
+				enddo
+				allocate(matrix_tmp(nrow,ncol))
+				call element_Zmn_block_user(nrow,ncol,mrange1,nrange1,matrix_tmp,msh,option,ker,0,passflag,ptree,stats)
+
+				matrix_V_tmp=0
+				do i=1,nrow
+				do j=1,ncol
+					matrix_V_tmp(mmap(i),nmap(j))=matrix_tmp(i,j)
+				enddo
+				enddo
+				deallocate(mnmap)
+				deallocate(mmap)
+				deallocate(nmap)
+				deallocate(mrange1)
+				deallocate(nrange1)
+				deallocate(matrix_tmp)
+			else
+				call element_Zmn_block_user(mm,rankmax_c,mrange,nrange,matrix_V_tmp,msh,option,ker,0,passflag,ptree,stats)
 			endif
+
+
 
 			deallocate(mrange)
 			deallocate(nrange)

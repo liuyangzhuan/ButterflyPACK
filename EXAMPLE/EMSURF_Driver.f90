@@ -183,6 +183,7 @@ PROGRAM ButterflyPACK_IE_3D
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 	enddo
     allocate(Permutation(quant%Nunk))
+	call PrintOptions(option,ptree)
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
