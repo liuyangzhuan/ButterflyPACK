@@ -9,6 +9,10 @@ export DATA_FOLDER=$TRAVIS_BUILD_DIR/EXAMPLE
 export EXAMPLE_FOLDER=$TRAVIS_BUILD_DIR/build/EXAMPLE
 # export TEST_FOLDER=$TRAVIS_BUILD_DIR/build/TEST
 
+echo $PATH
+echo $LD_LIBRARY_PATH
+which mpirun
+
 case "${TEST_NUMBER}" in
 1) cd $DATA_FOLDER/FULLMAT_DATA
    sh file_merge.sh Smatrix.mat
