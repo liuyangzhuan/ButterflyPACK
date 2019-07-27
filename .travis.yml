@@ -69,8 +69,8 @@ before_install:
   - cd openmpi-3.1.4/
   - mkdir -p install
   - ./configure --prefix=$PWD/install
-  - make -j 4 > openmpi_make.log 2>&1
-  - make install > openmpi_install.log 2>&1
+  - make -j 4 
+  - make install 
   - export PATH="$PATH:$PWD/install/bin"
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$PWD/install/lib/" 
   - printf "${BLUE} GC; Done installing OpenMPI from source\n"

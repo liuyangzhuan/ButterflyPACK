@@ -9,9 +9,8 @@ export DATA_FOLDER=$TRAVIS_BUILD_DIR/EXAMPLE
 export EXAMPLE_FOLDER=$TRAVIS_BUILD_DIR/build/EXAMPLE
 # export TEST_FOLDER=$TRAVIS_BUILD_DIR/build/TEST
 
-echo $PATH
-echo $LD_LIBRARY_PATH
-which mpirun
+export PATH="$PATH:$TRAVIS_BUILD_DIR/installDir/openmpi-3.1.4/install/bin"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TRAVIS_BUILD_DIR/installDir/openmpi-3.1.4/install/lib/" 
 
 case "${TEST_NUMBER}" in
 1) cd $DATA_FOLDER/FULLMAT_DATA
