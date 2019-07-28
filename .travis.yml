@@ -74,12 +74,12 @@ before_install:
 
   - printf "${BLUE} GC; Installing BLASfrom apt\n"
   - sudo apt-get install libblas-dev
-  - export BLAS_LIB=/usr/lib/libblas/libblas.so
+  - export BLAS_LIB=/usr/lib/x86_64-linux-gnu/libblas.so
   - printf "${BLUE} GC; Done installing BLASfrom apt\n"
 
   - printf "${BLUE} GC; Installing LAPACKfrom apt\n"
   - sudo apt-get install liblapack-dev
-  - export LAPACK_LIB=/usr/lib/liblapack.so
+  - export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
   - printf "${BLUE} GC; Done installing LAPACKfrom apt\n"
 
   - printf "${BLUE} GC; Installing ScaLAPACK from source\n"
