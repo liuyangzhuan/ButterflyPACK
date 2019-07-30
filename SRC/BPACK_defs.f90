@@ -51,10 +51,11 @@ module BPACK_DEFS
 	integer,parameter:: NOPRECON=2  ! use compressed HODLR as fast matvec
 	integer,parameter:: HODLRPRECON=3	! use factored HODLR as preconditioner
 
-	integer,parameter:: LplusMax=3
+	integer,parameter:: LplusMax=10
 
 	integer,parameter:: HODLR=1  ! use hodlr solver
 	integer,parameter:: HMAT=2  ! use H matrix solver
+	integer,parameter:: HSS=3  ! use hss_bf solver
 
 
 	!**** construction parameters
@@ -328,9 +329,18 @@ module BPACK_DEFS
 		type(list),allocatable::lstblks(:) ! lstblks(level) is the list of blocks at that level
 	end type Hmat
 
+	!**** HSS structure
+	type hssbf
+		integer Maxlevel,N ! HSS levels and sizes
+		! ! integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
+		type(blockplus)::BP,BP_inverse ! a single butterfly plus for the entire matrix
+	end type hssbf
+
+
 	type Bmatrix
 		type(hobf),pointer::ho_bf=>null()
 		type(Hmat),pointer::h_mat=>null()
+		type(hssbf),pointer::hss_bf=>null()
 	end type Bmatrix
 
 

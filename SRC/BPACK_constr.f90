@@ -266,6 +266,8 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 		call HODLR_construction(bmat%ho_bf,option,stats,msh,ker,ptree)
     case(HMAT)
 		call Hmat_construction(bmat%h_mat,option,stats,msh,ker,ptree)
+    case(HSS)
+		call HSS_construction(bmat%hss_bf,option,stats,msh,ker,ptree)
 	end select
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Matrix construction finished"
@@ -591,50 +593,87 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,ptree)
 end subroutine HODLR_construction
 
 
-subroutine Full_construction(blocks,msh,ker,stats,option,ptree)
+
+
+
+
+subroutine HSS_construction(hss_bf1,option,stats,msh,ker,ptree)
+
 
     use BPACK_DEFS
     implicit none
-
-    integer group_m, group_n, i, j
-    integer mm, nn
-    integer head_m, head_n, tail_m, tail_n
-    DT value_Z
-	type(matrixblock)::blocks
-	type(mesh)::msh
+	real(kind=8) n1,n2,n3,n4,n5
+    integer i, j, ii, ii_inv, jj, kk, iii, jjj,ll
+    integer level, blocks, edge, patch, node, group
+    integer rank, index_near, m, n, length, flag, itemp,rank0_inner,rank0_outter,ierr
+    real T0
+	real(kind=8):: rtemp,rel_error,error,t1,t2,tim_tmp,rankrate_inner,rankrate_outter
+	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2
+	type(matrixblock)::block_tmp,block_tmp1
+	DT,allocatable::fullmat(:,:)
+	integer level_c,iter,level_cc,level_butterfly,Bidxs,Bidxe
 	type(Hoption)::option
-	type(proctree)::ptree
 	type(Hstat)::stats
+	type(hssbf)::hss_bf1
+	type(mesh)::msh
 	type(kernelquant)::ker
-	integer,allocatable::mrange(:),nrange(:)
-	integer passflag
+	type(proctree)::ptree
+	integer::passflag=0
+	integer::mrange_dummy(1),nrange_dummy(1)
+	DT::mat_dummy(1,1)
 
-    mm=blocks%M
-	head_m=blocks%headm
-	tail_m=mm+head_m-1
-    nn=blocks%N
-	head_n=blocks%headn
-	tail_n=nn+head_n-1
-	allocate(mrange(mm))
-	do i=head_m, tail_m
-		mrange(i-head_m+1)=i
-	enddo
-	allocate(nrange(nn))
-	do j=head_n, tail_n
-		nrange(j-head_n+1)=j
-	enddo
+    ! Memory_direct_forward=0
+    ! Memory_butterfly_forward=0
+	tim_tmp = 0
+    !tolerance=0.001
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+    ! write (*,*) 'ACA error threshold',tolerance
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'SVD error threshold',option%tol_comp
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 
-    allocate (blocks%fullmat(mm,nn))
-	if(blocks%row_group==blocks%col_group)allocate(blocks%ipiv(mm))
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "constructing HSS-BF......"
 
-	call element_Zmn_block_user(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree,stats)
+    n1 = OMP_get_wtime()
 
-	deallocate(mrange)
-	deallocate(nrange)
+	allocate (stats%rankmax_of_level(0:hss_bf1%Maxlevel))
+	stats%rankmax_of_level = 0
+	allocate (stats%rankmax_of_level_global(0:hss_bf1%Maxlevel))
+	stats%rankmax_of_level_global = 0
+
+
+	call Bplus_compress_N15(hss_bf1%BP,option,rtemp,stats,msh,ker,ptree)
+	stats%Mem_Comp_for=stats%Mem_Comp_for+rtemp
+
+	n2 = OMP_get_wtime()
+	stats%Time_Fill = stats%Time_Fill + n2-n1
+
+	stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+
+	call MPI_ALLREDUCE(stats%rankmax_of_level(0:hss_bf1%Maxlevel),stats%rankmax_of_level_global(0:hss_bf1%Maxlevel),hss_bf1%Maxlevel+1,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)  'rankmax_of_level:',stats%rankmax_of_level_global
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+	call MPI_ALLREDUCE(stats%Time_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total construction time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Time_Entry,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Total entry eval time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Flop_Fill,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A26Es14.2)') 'Total construction flops:',rtemp
+	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
+	call MPI_ALLREDUCE(stats%Mem_Comp_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)rtemp,'MB costed for butterfly forward blocks'
+	call MPI_ALLREDUCE(stats%Mem_Direct_for,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)rtemp,'MB costed for direct forward blocks'
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
+	! stop
 
     return
 
-end subroutine Full_construction
+end subroutine HSS_construction
+
 
 
 recursive subroutine Hmat_block_construction(blocks,Memory_far,Memory_near,option,stats,msh,ker,ptree)

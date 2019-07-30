@@ -421,6 +421,9 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
     case(HMAT)
 		allocate(bmat%h_mat)
 		bmat%h_mat%Maxlevel=Maxlevel
+    case(HSS)
+		allocate(bmat%hss_bf)
+		bmat%hss_bf%Maxlevel=Maxlevel
 	end select
 
 
@@ -878,8 +881,171 @@ implicit none
 		call HODLR_structuring(bmat%ho_bf,option,msh,ker,ptree,stats)
     case(HMAT)
 		call Hmat_structuring(bmat%h_mat,option,msh,ker,ptree,stats)
+    case(HSS)
+		call HSS_structuring(bmat%hss_bf,option,msh,ker,ptree,stats)
 	end select
 end subroutine BPACK_structuring
+
+
+
+
+subroutine HSS_structuring(hss_bf1,option,msh,ker,ptree,stats)
+	use BPACK_DEFS
+	use misc
+	implicit none
+
+    integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch,pgno_bplus
+    integer level, edge, patch, node, group, group_touch
+    integer rank, index_near, m, n, length, flag, itemp,cnt,detection
+    real T0
+	real(kind=8):: tolerance, rtemp,rel_error,seperator,dist
+    real(kind=8) Memory_direct_forward,Memory_butterfly_forward
+	integer mm,nn,header_m,header_n,edge_m,edge_n,group_m,group_n,group_m1,group_n1,group_m2,group_n2,levelm,groupm_start,index_i_m,index_j_m
+	integer level_c,iter,level_cc,level_BP,Nboundall,level_butterfly
+	type(matrixblock),pointer::blocks,block_f,block_sch,block_inv
+	real(kind=8)::minbound,theta,phi,r,rmax,phi_tmp,measure
+	real(kind=8),allocatable::Centroid_M(:,:),Centroid_N(:,:)
+	integer,allocatable::Isboundary_M(:),Isboundary_N(:)
+	integer Dimn,col_group,row_group,Maxgrp
+	type(Hoption)::option
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(Hstat)::stats
+	type(hssbf)::hss_bf1
+	character(len=1024)  :: strings
+	type(proctree)::ptree
+
+	Maxgrp=2**(ptree%nlevel)-1
+
+	msh%basis_group(1)%pgno=1
+	do level=0, hss_bf1%Maxlevel
+		do group=2**level, 2**(level+1)-1
+			if(level<hss_bf1%Maxlevel)then
+			if(msh%basis_group(group)%pgno*2<=Maxgrp)then
+				msh%basis_group(2*group)%pgno=msh%basis_group(group)%pgno*2
+			else
+				msh%basis_group(2*group)%pgno=msh%basis_group(group)%pgno
+			endif
+			if(msh%basis_group(group)%pgno*2+1<=Maxgrp)then
+				msh%basis_group(2*group+1)%pgno=msh%basis_group(group)%pgno*2+1
+			else
+				msh%basis_group(2*group+1)%pgno=msh%basis_group(group)%pgno
+			endif
+			endif
+		enddo
+	enddo
+
+
+	hss_bf1%N=msh%Nunk
+	hss_bf1%BP%level = 0
+	hss_bf1%BP%col_group = 1
+	hss_bf1%BP%row_group = 1
+	hss_bf1%BP%pgno = 1
+
+	allocate(hss_bf1%BP%LL(LplusMax))
+	do ll=1,LplusMax
+		hss_bf1%BP%LL(ll)%Nbound=0
+	end do
+
+	hss_bf1%BP%LL(1)%Nbound = 1
+	allocate(hss_bf1%BP%LL(1)%matrices_block(1))
+	block_f => hss_bf1%BP%LL(1)%matrices_block(1)
+	block_f%level = hss_bf1%BP%level
+	block_f%level_butterfly = int((hss_bf1%Maxlevel - block_f%level )/2)*2 ! butterfly plus needs even number of levels
+
+
+	block_f%col_group = hss_bf1%BP%col_group
+	block_f%row_group = hss_bf1%BP%row_group
+	block_f%pgno=hss_bf1%BP%pgno
+	! pgno_bplus=block_f%pgno
+
+	block_f%M = msh%basis_group(block_f%row_group)%tail - msh%basis_group(block_f%row_group)%head + 1
+	block_f%N = msh%basis_group(block_f%col_group)%tail - msh%basis_group(block_f%col_group)%head + 1
+	block_f%headm = msh%basis_group(block_f%row_group)%head
+	block_f%headn = msh%basis_group(block_f%col_group)%head
+
+	call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh,0)
+
+
+	block_f%style = 2
+	allocate(hss_bf1%BP%LL(1)%boundary_map(1))
+	hss_bf1%BP%LL(1)%boundary_map(1) = block_f%col_group
+	hss_bf1%BP%Lplus=0
+
+	do ll=1,LplusMax-1
+		if(hss_bf1%BP%LL(ll)%Nbound>0)then
+			hss_bf1%BP%Lplus = hss_bf1%BP%Lplus + 1
+			call assert(hss_bf1%BP%Lplus<=LplusMax,'increase LplusMax')
+
+			block_f => hss_bf1%BP%LL(ll)%matrices_block(1)
+
+			if(ll==LplusMax-1 .or. block_f%level_butterfly==0)then
+				hss_bf1%BP%LL(ll+1)%Nbound=0
+			else
+				level_butterfly = block_f%level_butterfly
+				level_BP = hss_bf1%BP%level
+				levelm = ceiling_safe(dble(level_butterfly)/2d0)
+				groupm_start=block_f%row_group*2**levelm
+				Nboundall = 2**(block_f%level+levelm-level_BP)
+				allocate(hss_bf1%BP%LL(ll+1)%boundary_map(Nboundall))
+				do bb=1,Nboundall
+					hss_bf1%BP%LL(ll+1)%boundary_map(bb)=bb+groupm_start-1
+				enddo
+				hss_bf1%BP%LL(ll+1)%Nbound=Nboundall
+
+				allocate(hss_bf1%BP%LL(ll+1)%matrices_block(hss_bf1%BP%LL(ll+1)%Nbound))
+				cnt = 0
+				do bb = 1,	Nboundall
+					if(hss_bf1%BP%LL(ll+1)%boundary_map(bb)/=-1)then
+						cnt = cnt + 1
+						group_m = bb+groupm_start-1
+						group_n = hss_bf1%BP%LL(ll+1)%boundary_map(bb)
+						blocks => hss_bf1%BP%LL(ll+1)%matrices_block(cnt)
+						blocks%row_group = group_m
+						blocks%col_group = group_n
+						blocks%level = GetTreelevel(group_m)-1
+						blocks%level_butterfly = int((hss_bf1%Maxlevel - blocks%level)/2)*2
+						blocks%pgno = msh%basis_group(group_m)%pgno
+
+						blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+						blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+						blocks%headm = msh%basis_group(group_m)%head
+						blocks%headn = msh%basis_group(group_n)%head
+
+						if(blocks%level_butterfly>0)then
+							blocks%style = 2
+							call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
+						else
+							blocks%style = 1  ! leaflevel or leaflevel+1 is dense
+						endif
+
+					end if
+				end do
+			end if
+		else
+			exit
+		end if
+	end do
+
+	call Bplus_copy(hss_bf1%BP,hss_bf1%BP_inverse)
+
+	stats%Mem_Peak = stats%Mem_Peak + SIZEOF(hss_bf1%BP)/1024.0d3
+	stats%Mem_Peak = stats%Mem_Peak + SIZEOF(hss_bf1%BP_inverse)/1024.0d3
+
+
+
+
+	msh%idxs = hss_bf1%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,1)
+	msh%idxe = hss_bf1%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1,2)
+
+
+	if(allocated(msh%xyz))then
+	stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+	deallocate(msh%xyz)
+	endif
+
+end subroutine HSS_structuring
+
 
 
 subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)

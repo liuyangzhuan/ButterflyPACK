@@ -2131,22 +2131,28 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 		if(ll==1 .or. option%bp_cnt_lr==1)statflag=1  !!! only record the rank of the top-layer butterfly in a bplus
 		do bb = 1,bplus%LL(ll)%Nbound
 			if(IOwnPgrp(ptree,bplus%LL(ll)%matrices_block(bb)%pgno))then
-				level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
-				level_BP = bplus%level
-
-				bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
-				levelm=bplus%LL(ll)%matrices_block(bb)%level_half
-				groupm_start=bplus%LL(ll)%matrices_block(bb)%row_group*2**levelm
-				Nboundall = 0
-				if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
-				if(option%forwardN15flag==1)then
-					call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree,statflag)
-					call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+				if(bplus%LL(ll)%matrices_block(bb)%style==1)then
+					call Full_construction(bplus%LL(ll)%matrices_block(bb),msh,ker,stats,option,ptree)
+					Memory = Memory + SIZEOF(bplus%LL(ll)%matrices_block(bb)%fullmat)/1024.0d3
 				else
-					call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree,statflag)
-				end if
-				Memory = Memory + rtemp
-				bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
+
+					level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
+					level_BP = bplus%level
+
+					bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly,option)
+					levelm=bplus%LL(ll)%matrices_block(bb)%level_half
+					groupm_start=bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+					Nboundall = 0
+					if(allocated(bplus%LL(ll+1)%boundary_map))Nboundall=size(bplus%LL(ll+1)%boundary_map,1)
+					if(option%forwardN15flag==1)then
+						call BF_compress_N15(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start, option, rtemp,stats,msh,ker,ptree,statflag)
+						call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+					else
+						call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb),bplus%LL(ll+1)%boundary_map,Nboundall,groupm_start,option,rtemp,stats,msh,ker,ptree,statflag)
+					end if
+					Memory = Memory + rtemp
+					bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax,bplus%LL(ll)%matrices_block(bb)%rankmax)
+				endif
 			endif
 		end do
 		call MPI_ALLREDUCE(MPI_IN_PLACE,bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
@@ -5809,6 +5815,54 @@ type(mesh)::msh
 	! endif
 
 end subroutine LocalButterflySVD_Right
+
+
+
+
+subroutine Full_construction(blocks,msh,ker,stats,option,ptree)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer group_m, group_n, i, j
+    integer mm, nn
+    integer head_m, head_n, tail_m, tail_n
+    DT value_Z
+	type(matrixblock)::blocks
+	type(mesh)::msh
+	type(Hoption)::option
+	type(proctree)::ptree
+	type(Hstat)::stats
+	type(kernelquant)::ker
+	integer,allocatable::mrange(:),nrange(:)
+	integer passflag
+
+    mm=blocks%M
+	head_m=blocks%headm
+	tail_m=mm+head_m-1
+    nn=blocks%N
+	head_n=blocks%headn
+	tail_n=nn+head_n-1
+	allocate(mrange(mm))
+	do i=head_m, tail_m
+		mrange(i-head_m+1)=i
+	enddo
+	allocate(nrange(nn))
+	do j=head_n, tail_n
+		nrange(j-head_n+1)=j
+	enddo
+
+    allocate (blocks%fullmat(mm,nn))
+	if(blocks%row_group==blocks%col_group)allocate(blocks%ipiv(mm))
+
+	call element_Zmn_block_user(mm,nn,mrange,nrange,blocks%fullmat,msh,option,ker,0,passflag,ptree,stats)
+
+	deallocate(mrange)
+	deallocate(nrange)
+
+    return
+
+end subroutine Full_construction
 
 
 
