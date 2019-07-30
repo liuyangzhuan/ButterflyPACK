@@ -1,7 +1,7 @@
 module swap PrgEnv-intel PrgEnv-gnu
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
-bash PrecisionPreprocessing.sh
+# bash PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic

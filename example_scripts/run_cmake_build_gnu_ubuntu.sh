@@ -1,6 +1,6 @@
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
-bash PrecisionPreprocessing.sh
+# bash PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 rm -rf CMakeCache.txt
@@ -20,7 +20,7 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=mpicxx \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
 

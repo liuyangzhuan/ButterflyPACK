@@ -242,6 +242,11 @@ include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 #
 ######################################################################
 
+execute_process (
+    COMMAND bash PrecisionPreprocessing.sh
+	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(EXAMPLE)

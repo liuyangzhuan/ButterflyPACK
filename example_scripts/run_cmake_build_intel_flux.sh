@@ -1,6 +1,6 @@
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
-bash PrecisionPreprocessing.sh
+# bash PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 rm -rf CMakeCache.txt
