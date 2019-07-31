@@ -675,5 +675,14 @@ subroutine PrintOptions(option,ptree)
 end subroutine PrintOptions
 
 
+subroutine BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+use BPACK_DEFS
+implicit none
+integer v_major,v_minor,v_bugfix
+v_major=BPACK_MAJOR_VERSION
+v_minor=BPACK_MINOR_VERSION
+v_bugfix=BPACK_PATCH_VERSION
+
+end subroutine BPACK_GetVersionNumber
 
 end module BPACK_Utilities

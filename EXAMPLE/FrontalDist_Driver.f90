@@ -276,7 +276,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	integer nprow, npcol, myrow, mycol, nprow1, npcol1, myrow1, mycol1, M1,N1,Mloc1,Nloc1,Mbslpk1,Nbslpk1
 	character(len=1024)  :: smyrow,smycol
 	integer nargs,flag
-
+	integer v_major,v_minor,v_bugfix
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -292,7 +292,8 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
+	if(ptree%MyID==Main_ID)write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
 	!**** initialize stats and option
 	call InitStat(stats)

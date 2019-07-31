@@ -1838,5 +1838,16 @@ subroutine C_BPACK_Deleteoption(option_Cptr) bind(c, name="c_bpack_deleteoption"
 end subroutine C_BPACK_Deleteoption
 
 
+
+!**** C interface of getting the version number of ButterflyPACK
+subroutine C_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix) bind(c, name="c_bpack_getversionnumber")
+	implicit none
+	integer::v_major,v_minor,v_bugfix
+
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+
+end subroutine C_BPACK_GetVersionNumber
+
+
 end module BPACK_wrapper
 

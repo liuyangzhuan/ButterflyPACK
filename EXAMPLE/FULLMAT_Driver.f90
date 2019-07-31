@@ -174,6 +174,7 @@ PROGRAM ButterflyPACK_FULL
 	integer Nunk_loc
 	integer,allocatable::tree(:)
 	integer nargs,flag
+	integer v_major,v_minor,v_bugfix
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -191,6 +192,8 @@ PROGRAM ButterflyPACK_FULL
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_FULL"
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 

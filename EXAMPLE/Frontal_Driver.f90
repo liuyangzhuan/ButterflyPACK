@@ -270,7 +270,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	real(kind=8),allocatable::xyz(:,:)
 	integer Nunk_loc
 	integer nargs,flag
-
+	integer v_major,v_minor,v_bugfix
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -284,9 +284,12 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
+    if(ptree%MyID==Main_ID)write(*,*) "-------------------------------Program Start----------------------------------"
+    if(ptree%MyID==Main_ID)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
+
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	if(ptree%MyID==Main_ID)write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
+	if(ptree%MyID==Main_ID)write(*,*) "   "
 
 	!**** initialize stats and option
 	call InitStat(stats)

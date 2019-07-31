@@ -197,18 +197,7 @@ if(SCALAPACK_FOUND)
  endif()
 
 
-  # #--------------------- ARPACK ---------------------
-
-if(TPL_ARPACK_LIBRARIES)
-	set(ARPACK_FOUND TRUE)
-else()
-	find_package(ArpackNg)
-	if(SCALAPACK_FOUND)
-	  set(TPL_SCALAPACK_LIBRARIES "${SCALAPACK_LIBRARIES}" CACHE FILEPATH
-		"Set from FindSCALAPACK.cmake SCALAPACK_LIBRARIES." FORCE)
-	endif()
-endif()
-
+# #--------------------- ARPACK ---------------------
 if(TPL_ARPACK_LIBRARIES)
 	set(CMAKE_Fortran_FLAGS "-DHAVE_ARPACK ${CMAKE_Fortran_FLAGS}")
     message("-- Using TPL_ARPACK_LIBRARIES='${TPL_ARPACK_LIBRARIES}'")
@@ -236,6 +225,25 @@ FOREACH(_lib ${_fortran_libs})
 ENDFOREACH()
 
 
+#Test MPI3
+check_cxx_source_compiles(
+"#include <mpi.h>
+#include <iostream>
+int main(int argc, char *argv[])  {
+int x=0;
+MPI_Request req;
+
+MPI_Init(&argc,&argv);
+MPI_Ibcast(&x, 1, MPI_INT, 0, MPI_COMM_WORLD,&req);
+MPI_Finalize();
+
+return 0;
+}" BUTTERFLYPACK_USE_MPI3)
+
+if(BUTTERFLYPACK_USE_MPI3 )
+	set(CMAKE_Fortran_FLAGS "-DHAVE_MPI3 ${CMAKE_Fortran_FLAGS}")
+	message("-- Using MPI3 features")
+endif()
 
 ######################################################################
 #

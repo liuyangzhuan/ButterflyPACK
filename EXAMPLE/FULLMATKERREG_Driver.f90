@@ -111,6 +111,7 @@ PROGRAM ButterflyPACK_FullKRR
 	CHARACTER (LEN=1000) DATA_DIR
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
+	integer v_major,v_minor,v_bugfix
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -164,6 +165,8 @@ PROGRAM ButterflyPACK_FullKRR
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'FULLKER computing'
+   call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+   write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
    write (*,*) ''
    endif
    !***********************************************************************

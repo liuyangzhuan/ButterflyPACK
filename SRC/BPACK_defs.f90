@@ -21,6 +21,10 @@ module BPACK_DEFS
 	implicit none
     INCLUDE 'mpif.h'
 
+	integer,parameter:: BPACK_MAJOR_VERSION=1
+	integer,parameter:: BPACK_MINOR_VERSION=0
+	integer,parameter:: BPACK_PATCH_VERSION=0
+
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)
 	real(kind=8),parameter :: pi = 4d0*atan(1d0)

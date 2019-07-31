@@ -78,7 +78,7 @@ PROGRAM ButterflyPACK_IE_3D
     logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
 	character(len=1024)  :: substring,substring1
-
+	integer v_major,v_minor,v_bugfix
 
 	integer nargs,flag
 
@@ -97,6 +97,8 @@ PROGRAM ButterflyPACK_IE_3D
 	if(ptree_A%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_3D"
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 

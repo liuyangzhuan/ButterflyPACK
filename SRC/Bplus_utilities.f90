@@ -8996,8 +8996,17 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 
 		allocate(flags(ptree%nproc))
 
+
+#ifdef HAVE_MPI3
 		call MPI_IALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
 		call MPI_Wait(reqm,statusm,ierr)
+#else
+		call MPI_ALLGATHER(myflag, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
+#endif
+
+
+
+
 		passflag=minval(flags)
 
 		t1 = OMP_get_wtime()
@@ -9008,8 +9017,15 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 			allocate(rowidx1(ptree%nproc))
 			allocate(disps(ptree%nproc))
 
+
+#ifdef HAVE_MPI3
 			call MPI_IALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
 			call MPI_IALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, reqn, ierr)
+#else
+			call MPI_ALLGATHER(nrow, 1, MPI_INTEGER, rowidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+			call MPI_ALLGATHER(ncol, 1, MPI_INTEGER, colidx1, 1, MPI_INTEGER, ptree%Comm, ierr)
+#endif
+
 
 
 			Npmap=ptree%nproc
@@ -9031,9 +9047,10 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 			allocate(rowidx(Ninter))
 			allocate(pgidx(Ninter))
 
+#ifdef HAVE_MPI3
 			call MPI_Wait(reqm,statusm,ierr)
 			call MPI_Wait(reqn,statusn,ierr)
-
+#endif
 			!***** Count number of active intersections Ninter
 			Ninter=0
 			do pp=1,ptree%nproc
@@ -9072,7 +9089,12 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				disps(pp)=idx
 				idx=idx+rowidx1(pp)
 			enddo
+
+#ifdef HAVE_MPI3
 			call MPI_IALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, reqm, ierr)
+#else
+			call MPI_ALLGATHERV(mrange, nrow, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+#endif
 
 			idx_col=sum(colidx)
 			allocate(allcols(idx_col))
@@ -9081,10 +9103,13 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				disps(pp)=idx
 				idx=idx+colidx1(pp)
 			enddo
+#ifdef HAVE_MPI3
 			call MPI_IALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, reqn, ierr)
 			call MPI_Wait(reqm,statusm,ierr)
 			call MPI_Wait(reqn,statusn,ierr)
-
+#else
+			call MPI_ALLGATHERV(nrange, ncol, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+#endif
 			if(option%cpp==1)then
 				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
 				! !***** parallel extraction of the data

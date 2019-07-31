@@ -123,7 +123,7 @@ PROGRAM ButterflyPACK_KRR
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer nargs,flag
-
+	integer v_major,v_minor,v_bugfix
 
 	call MPI_Init(ierr)
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
@@ -139,6 +139,8 @@ PROGRAM ButterflyPACK_KRR
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_KRR"
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 

@@ -1858,8 +1858,12 @@ subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats,ptree,nproc,Npma
 	enddo
 
 	! compute recvquant(pp)%active by doing alltoall since receivers don't know where the data come from
+#ifdef HAVE_MPI3
 	call MPI_IALLTOALL(sendactive, 1, MPI_INTEGER, recvactive, 1,MPI_INTEGER, ptree%pgrp(pgno)%Comm, Req,ierr)
 	call MPI_wait(Req,status,ierr)
+#else
+	call MPI_ALLTOALL(sendactive, 1, MPI_INTEGER, recvactive, 1,MPI_INTEGER, ptree%pgrp(pgno)%Comm, ierr)
+#endif
 
 	do pp=1,nproc
 		if(recvactive(pp)==1)then
