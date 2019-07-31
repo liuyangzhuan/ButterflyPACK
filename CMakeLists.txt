@@ -198,6 +198,17 @@ if(SCALAPACK_FOUND)
 
 
   # #--------------------- ARPACK ---------------------
+
+if(TPL_ARPACK_LIBRARIES)
+	set(ARPACK_FOUND TRUE)
+else()
+	find_package(ArpackNg)
+	if(SCALAPACK_FOUND)
+	  set(TPL_SCALAPACK_LIBRARIES "${SCALAPACK_LIBRARIES}" CACHE FILEPATH
+		"Set from FindSCALAPACK.cmake SCALAPACK_LIBRARIES." FORCE)
+	endif()
+endif()
+
 if(TPL_ARPACK_LIBRARIES)
 	set(CMAKE_Fortran_FLAGS "-DHAVE_ARPACK ${CMAKE_Fortran_FLAGS}")
     message("-- Using TPL_ARPACK_LIBRARIES='${TPL_ARPACK_LIBRARIES}'")

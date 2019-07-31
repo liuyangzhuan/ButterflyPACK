@@ -143,7 +143,6 @@ install:
   - cd $TRAVIS_BUILD_DIR
   - rm -rf build
   - mkdir -p build
-  - bash PrecisionPreprocessing.sh
   - cd build
   - export CRAYPE_LINK_TYPE=dynamic
   - rm -rf CMakeCache.txt

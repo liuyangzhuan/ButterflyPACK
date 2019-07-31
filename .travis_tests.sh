@@ -16,7 +16,7 @@ case "${TEST_NUMBER}" in
 1) cd $DATA_FOLDER/FULLMAT_DATA
    sh file_merge.sh Smatrix.mat
    cd $TRAVIS_BUILD_DIR/build
-   mpirun --allow-run-as-root "-n" "8" "$EXAMPLE_FOLDER/smat" "-quant" "--data_dir" "$DATA_FOLDER/FULLMAT_DATA" "--explicitflag" "0" "-option" "--lrlevel" "0" ;;# test sampling-based construction of HODLR with LR for an EM scattering matrix stored in file
+   mpirun --allow-run-as-root "-n" "1" "$EXAMPLE_FOLDER/smat" "-quant" "--data_dir" "$DATA_FOLDER/FULLMAT_DATA" "--explicitflag" "0" "-option" "--lrlevel" "0" ;;# test sampling-based construction of HODLR with LR for an EM scattering matrix stored in file
 2) mpirun --allow-run-as-root "-n" "2" "$EXAMPLE_FOLDER/krr" "-quant" "--data_dir" "$DATA_FOLDER/KRR_DATA/susy_10Kn" "--dimn" "8" "--ntrain" "10000" "--ntest" "1000" "--sigma" "0.1" "--lambda" "1.0" "-option" "--xyzsort" "2" "--reclr_leaf" "2";; # test HODLR with LR for KRR
 3) mpirun --allow-run-as-root "-n" "4" "$EXAMPLE_FOLDER/ie2d" "-quant" "--model2d" "10" "--nunk" "5000" "--wavelength" "0.08" "-option" "--lr_blk_num" "1" "--tol_comp" "1d-4" "--errfillfull" "0" "--reclr_leaf" "4" "--baca_batch" "16" "--lrlevel" "0" "--precon" "1" "--xyzsort" "2" "--nmin_leaf" "200" "--near_para" "0.01d0" "--pat_comp" "3" "--schulzlevel" "100" "--nbundle" "1" "--format" "1"
    mpirun --allow-run-as-root "-n" "4" "$EXAMPLE_FOLDER/ie2d" "-quant" "--model2d" "10" "--nunk" "5000" "--wavelength" "0.08" "-option" "--lr_blk_num" "1" "--tol_comp" "1d-4" "--errfillfull" "0" "--reclr_leaf" "4" "--baca_batch" "16" "--lrlevel" "100" "--precon" "1" "--xyzsort" "2" "--nmin_leaf" "200" "--near_para" "0.01d0" "--pat_comp" "3" "--schulzlevel" "100" "--nbundle" "1" "--format" "1";;   # test HODLR with BF and LR for 2d IE
