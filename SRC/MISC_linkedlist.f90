@@ -15,7 +15,7 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 #include "ButterflyPACK_config.fi"
-module linkedlist
+module BPACK_linkedlist
 
 !**** declarations for list type with unlimited polymorphism
 type :: nod
@@ -520,4 +520,4 @@ end subroutine FrontBackSplit
 
 
 
-end module linkedlist
+end module BPACK_linkedlist

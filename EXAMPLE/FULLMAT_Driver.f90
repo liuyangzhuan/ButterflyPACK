@@ -97,8 +97,8 @@ contains
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use BPACK_DEFS
-		use DenseLA
-		use misc
+		use MISC_DenseLA
+		use MISC_Utilities
 		use BPACK_Solve_Mul
 		implicit none
 		character trans
@@ -141,7 +141,7 @@ PROGRAM ButterflyPACK_FULL
 	use BPACK_factor
 	use BPACK_constr
 	use omp_lib
-	use misc
+	use MISC_Utilities
 	use BPACK_constr
 	use BPACK_randomMVP
     implicit none

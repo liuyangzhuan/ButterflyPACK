@@ -64,8 +64,8 @@ contains
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use BPACK_DEFS
-		use DenseLA
-		use misc
+		use MISC_DenseLA
+		use MISC_Utilities
 		use BPACK_Solve_Mul
 		implicit none
 		character trans
@@ -94,8 +94,8 @@ contains
 
 	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
 		use BPACK_DEFS
-		use DenseLA
-		use misc
+		use MISC_DenseLA
+		use MISC_Utilities
 		implicit none
 		character trans
 		DT Vin(:,:),Vout(:,:)
@@ -166,8 +166,8 @@ contains
 
 	subroutine CreateDistDenseMat(N,msh,ptree,quant)
 		use BPACK_DEFS
-		use DenseLA
-		use misc
+		use MISC_DenseLA
+		use MISC_Utilities
 		implicit none
 		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
 		DT ctemp,a,b

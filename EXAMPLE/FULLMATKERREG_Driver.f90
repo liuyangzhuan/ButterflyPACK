@@ -79,7 +79,7 @@ PROGRAM ButterflyPACK_FullKRR
 	use BPACK_factor
 	use BPACK_constr
 	use omp_lib
-	use misc
+	use MISC_Utilities
 
     implicit none
 
@@ -235,7 +235,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	use APPLICATION_MODULE
 	use omp_lib
 	use BPACK_Solve_Mul
-	use misc
+	use MISC_Utilities
 
     implicit none
 

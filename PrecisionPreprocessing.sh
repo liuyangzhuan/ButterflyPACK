@@ -77,7 +77,7 @@ done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/_Complex double /g' $ZSRCDIR/*.h
 sed -i -e 's/c_bpack_/z_c_bpack_/g' $ZSRCDIR/*.h
 sed -i -e 's/c_bf_/z_c_bf_/g' $ZSRCDIR/*.h
-sed -i -e 's/HODLR_WRAP/z_HODLR_WRAP/g' $ZSRCDIR/*.h
+sed -i -e 's/BPACK_WRAP/z_BPACK_WRAP/g' $ZSRCDIR/*.h
 sed -i -e 's/c_bpack_/z_c_bpack_/g' $ZSRCDIR/*.f90
 sed -i -e 's/c_bf_/z_c_bf_/g' $ZSRCDIR/*.f90
 
@@ -91,7 +91,7 @@ done < "$TMP_FILE"
 sed -i -e 's/\<C_DT\>/double/g' $DSRCDIR/*.h
 sed -i -e 's/c_bpack_/d_c_bpack_/g' $DSRCDIR/*.h
 sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.h
-sed -i -e 's/HODLR_WRAP/d_HODLR_WRAP/g' $DSRCDIR/*.h
+sed -i -e 's/BPACK_WRAP/d_BPACK_WRAP/g' $DSRCDIR/*.h
 sed -i -e 's/c_bpack_/d_c_bpack_/g' $DSRCDIR/*.f90
 sed -i -e 's/c_bf_/d_c_bf_/g' $DSRCDIR/*.f90
 

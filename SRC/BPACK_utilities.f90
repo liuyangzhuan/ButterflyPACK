@@ -16,7 +16,7 @@
 
 #include "ButterflyPACK_config.fi"
 module BPACK_Utilities
-use misc
+use MISC_Utilities
 use Bplus_Utilities
 
 contains
@@ -25,7 +25,7 @@ contains
 
 subroutine copy_HOBF(ho_bf_i,ho_bf_o)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 
 type(hobf)::ho_bf_i,ho_bf_o
@@ -97,7 +97,7 @@ end subroutine Hmat_delete_global_tree
 
 subroutine Hmat_delete(h_mat)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 
 type(Hmat)::h_mat
@@ -141,7 +141,7 @@ end subroutine Hmat_delete
 
 subroutine HODLR_delete(ho_bf_o)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 
 type(hobf)::ho_bf_o
@@ -186,7 +186,7 @@ end subroutine BPACK_delete
 
 subroutine delete_kernelquant(ker)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(kernelquant)::ker
 if(allocated(ker%matZ_glo))deallocate(ker%matZ_glo)
@@ -195,7 +195,7 @@ end subroutine delete_kernelquant
 
 subroutine delete_mesh(msh)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(mesh)::msh
 integer ii
@@ -221,7 +221,7 @@ end subroutine delete_mesh
 
 subroutine delete_proctree(ptree)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(proctree)::ptree
 integer ii,Maxgrp
@@ -249,7 +249,7 @@ end subroutine delete_proctree
 
 recursive subroutine delete_grid(gd)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(grid)::gd
 integer ierr
@@ -269,7 +269,7 @@ end subroutine delete_grid
 
 subroutine delete_Hstat(stats)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(Hstat)::stats
 

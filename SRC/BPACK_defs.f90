@@ -17,7 +17,7 @@
 #include "ButterflyPACK_config.fi"
 module BPACK_DEFS
 	use iso_c_binding
-	use linkedlist
+	use BPACK_linkedlist
 	implicit none
     INCLUDE 'mpif.h'
 

@@ -18,9 +18,9 @@
 module BPACK_factor
 use Bplus_factor
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 use omp_lib
-use block_sendrecv
+use BPACK_block_sendrecv
 use BPACK_Utilities
 use Bplus_randomized
 use BPACK_Solve_Mul

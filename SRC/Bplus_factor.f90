@@ -185,7 +185,7 @@ subroutine LR_minusBC(ho_bf1,level_c,rowblock,ptree,stats)
 
     use BPACK_DEFS
 
-	use misc
+	use MISC_Utilities
     implicit none
 
 	integer level_c,rowblock
@@ -411,7 +411,7 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 
     use BPACK_DEFS
 
-	use misc
+	use MISC_Utilities
     implicit none
 
 	integer level_c,rowblock
@@ -521,7 +521,7 @@ end subroutine LR_Sblock
 subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree,msh)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib
@@ -597,7 +597,7 @@ end subroutine BF_inverse_schur_partitionedinverse
 subroutine BF_inverse_schulziteration_IplusButter(block_o,error_inout,option,stats,ptree,msh)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib
@@ -732,7 +732,7 @@ end subroutine BF_inverse_schulziteration_IplusButter
 subroutine BF_compute_schulz_init(schulz_op,option,ptree,stats)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib
@@ -846,7 +846,7 @@ end subroutine BF_compute_schulz_init
 recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_butterfly_target,recurlevel,option,error_inout,stats,ptree,msh,pgno)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib
@@ -959,7 +959,7 @@ end subroutine BF_inverse_partitionedinverse_IplusButter
 
 subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib
@@ -1224,7 +1224,7 @@ end subroutine Bplus_Sblock_randomized_memfree
 subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     use omp_lib

@@ -298,13 +298,13 @@ int main(int argc, char* argv[])
     int tst = 1;
 	if(argc>1)tst = stoi(argv[1]);
 
-	
+
 if(myrank==master_rank){
 	d_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
 	std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
-}	
-	
-	
+}
+
+
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
 if(tst==1){

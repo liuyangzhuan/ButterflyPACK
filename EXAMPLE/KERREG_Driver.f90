@@ -91,7 +91,7 @@ PROGRAM ButterflyPACK_KRR
 	use BPACK_factor
 	use BPACK_constr
 	use omp_lib
-	use misc
+	use MISC_Utilities
 
     implicit none
 

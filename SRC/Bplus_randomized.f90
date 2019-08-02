@@ -18,7 +18,7 @@
 module Bplus_randomized
 ! use Utilites_randomized
 
-use misc
+use MISC_Utilities
 use BPACK_Utilities
 
 contains
@@ -751,7 +751,7 @@ end subroutine BF_OneBlock_RR
 subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     use omp_lib
 
     implicit none
@@ -1442,7 +1442,7 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 
     use BPACK_DEFS
 
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk
@@ -2186,7 +2186,7 @@ subroutine BF_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,Vou
 
     use BPACK_DEFS
 
-	use misc
+	use MISC_Utilities
     implicit none
 
 	integer level_c,rowblock,unique_nth
@@ -4104,7 +4104,7 @@ subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,blocks,operand,blac
    use BPACK_DEFS
 
 
-   use misc
+   use MISC_Utilities
    implicit none
 
     type(blockplus),pointer::bplus
@@ -4231,7 +4231,7 @@ subroutine Bplus_randomized_constr(level_butterfly,bplus_o,operand,rank0_inner,r
    use BPACK_DEFS
 
 
-   use misc
+   use MISC_Utilities
    implicit none
 
     ! type(blockplus),pointer::bplus
@@ -4330,7 +4330,7 @@ end subroutine Bplus_randomized_constr
 
 
 subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized,msh,ptree,option)
-	use misc
+	use MISC_Utilities
     use BPACK_DEFS
 
 

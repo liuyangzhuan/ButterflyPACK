@@ -16,7 +16,7 @@
 
 
 #include "ButterflyPACK_config.fi"
-module DenseLA
+module MISC_DenseLA
 use BPACK_DEFS
 use omp_lib
 
@@ -2278,4 +2278,4 @@ end function flops_dgemm
 
 
 
-end module DenseLA
+end module MISC_DenseLA

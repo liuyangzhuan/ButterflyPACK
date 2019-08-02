@@ -1036,7 +1036,7 @@ subroutine HODLR_Randomized_Vectors(side,ho_bf1,block_rand,RandVectIn,RandVectOu
 
     use BPACK_DEFS
 
-	use misc
+	use MISC_Utilities
     implicit none
 
 	integer level_c,rowblock,unique_nth

@@ -22,7 +22,7 @@ use BPACK_factor
 use BPACK_constr
 use BPACK_randomMVP
 use omp_lib
-use misc
+use MISC_Utilities
 use BPACK_Solve_Mul
 use iso_c_binding
 

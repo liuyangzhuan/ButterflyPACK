@@ -29,7 +29,7 @@ PROGRAM ButterflyPACK_IE_3D
 	use BPACK_constr
 	use BPACK_Solve_Mul
 	use omp_lib
-	use misc
+	use MISC_Utilities
     implicit none
 
 	! include "mkl_vml.fi"

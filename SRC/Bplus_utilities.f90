@@ -16,13 +16,13 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_Utilities
-use misc
+use MISC_Utilities
 contains
 
 
 subroutine Bplus_delete(bplus)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block
 type(blockplus)::bplus
@@ -53,7 +53,7 @@ end subroutine Bplus_delete
 
 subroutine Bplus_copy(bplus_i,bplus_o,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block_i,block_o
 type(blockplus)::bplus_i,bplus_o
@@ -103,7 +103,7 @@ end subroutine Bplus_copy
 
 subroutine Bplus_copy_delete(bplus_i,bplus_o,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block_i,block_o
 type(blockplus)::bplus_i,bplus_o
@@ -149,7 +149,7 @@ end subroutine Bplus_copy_delete
 
 subroutine Bplus_extract_partial(bplus_i,ll_s,row_group,agent_bplus,msh)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block_i,block_o
 type(blockplus)::bplus_i,agent_bplus
@@ -209,7 +209,7 @@ end subroutine Bplus_extract_partial
 
 subroutine Bplus_ComputeMemory(bplus_i,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block_i,block_o
 type(blockplus)::bplus_i,bplus_o
@@ -238,7 +238,7 @@ end subroutine Bplus_ComputeMemory
 
 logical function Bplus_checkNAN(bplus_i)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock),pointer::block_i,block_o
 type(blockplus)::bplus_i,bplus_o
@@ -265,7 +265,7 @@ end function Bplus_checkNAN
 subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats,level_start,level_end)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer M,N, Nrnd,index_i, index_j, na, nb, index_start, num_vectors
@@ -626,7 +626,7 @@ end subroutine BF_delete
 
 subroutine BF_copy(trans,block_i,block_o,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i,block_o
 
@@ -915,7 +915,7 @@ end subroutine BF_copy
 
 subroutine BF_copy_delete(block_i,block_o,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i,block_o
 
@@ -1071,7 +1071,7 @@ end subroutine BF_copy_delete
 
 subroutine BF_ComputeMemory(block_i,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i
 
@@ -1117,7 +1117,7 @@ end subroutine BF_ComputeMemory
 
 integer function BF_Switchlevel(level_butterfly,option)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(Hoption)::option
 integer::level_butterfly
@@ -1131,7 +1131,7 @@ end function BF_Switchlevel
 
 logical function BF_checkNAN(block_i)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i
 
@@ -1204,7 +1204,7 @@ end function BF_checkNAN
 
 subroutine BF_print_size_rank(block_i,tolerance)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i
 
@@ -1282,7 +1282,7 @@ end subroutine BF_print_size_rank
 
 
 subroutine BF_extract_partial(block_o,level_butterfly_loc,ij_loc,LR,agent_block)
-	use misc
+	use MISC_Utilities
     use BPACK_DEFS
     implicit none
 
@@ -1425,7 +1425,7 @@ end subroutine BF_extract_partial
 
 subroutine BF_copy_partial(block_i,block_o,level_butterfly_loc,ij_loc,LR,memory)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_o,block_i
 
@@ -5067,7 +5067,7 @@ end subroutine BF_all2all_V_split
 subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stats)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer M,N, Nrnd,index_i, index_j, na, nb, index_start, num_vectors
@@ -5872,7 +5872,7 @@ end subroutine BF_block_MVP_dat
 subroutine BF_block_MVP_partial(blocks,chara,num_vectors,VectIn,BFvec,level_end,ptree,msh,stats)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer index_i, index_j, na, nb, index_start, num_vectors
@@ -7685,7 +7685,7 @@ end subroutine BF_value
 
 subroutine BF_get_rank(block_i,ptree)
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 type(matrixblock)::block_i
 
@@ -7749,7 +7749,7 @@ end subroutine BF_get_rank
 subroutine BF_sym2asym(blocks)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     implicit none
@@ -7950,7 +7950,7 @@ end subroutine BF_sym2asym
 subroutine BF_MoveSingulartoLeft(blocks)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     implicit none
@@ -8128,7 +8128,7 @@ end subroutine BF_MoveSingulartoLeft
 subroutine BF_MoveSingulartoRight(blocks)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 
 
     implicit none
@@ -8766,7 +8766,7 @@ subroutine Full_block_MVP_dat(blocks,chara,M,N,random1,random2,a,b)
 	use BPACK_DEFS
 
 
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start, num_vectors

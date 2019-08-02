@@ -2111,7 +2111,7 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
    use BPACK_DEFS
 
 
-   use misc
+   use MISC_Utilities
    implicit none
 
     type(blockplus)::bplus
@@ -2170,7 +2170,7 @@ subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Me
    use BPACK_DEFS
 
 
-   use misc
+   use MISC_Utilities
    implicit none
 
 	integer Nboundall,statflag
@@ -5565,7 +5565,7 @@ end subroutine LR_CheckError
 
 
 subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)
-use misc
+use MISC_Utilities
 implicit none
 integer index_i_loc,index_j_loc,level_loc,level_butterflyL,index_i_m,index_i,index_j,level,group_m,mm,nn,nn1,nn2,j,i,mn,rank,mm1
 type(butterfly_kerl)ButterflyP_old,ButterflyP
@@ -5694,7 +5694,7 @@ end subroutine  LocalButterflySVD_Left
 
 
 subroutine LocalButterflySVD_Right(index_i_loc,index_j_loc,level_loc,level_butterflyR,level,level_butterfly,index_j_m,blocks,option,msh,ButterflyP_old,ButterflyP)
-use misc
+use MISC_Utilities
 implicit none
 integer index_i_loc,index_j_loc,level_loc,level_butterflyR,level_butterfly,index_j_m,index_i,index_j,level,group_n,mm,nn,nn1,mm1,mm2,j,i,mn,rank
 type(butterfly_kerl)ButterflyP_old,ButterflyP

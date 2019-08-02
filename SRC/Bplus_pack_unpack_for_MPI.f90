@@ -17,10 +17,10 @@
 
 
 #include "ButterflyPACK_config.fi"
-module block_sendrecv
+module BPACK_block_sendrecv
 use BPACK_DEFS
 use BPACK_Utilities
-use misc
+use MISC_Utilities
 contains
 
 subroutine MPI_verbose_barrier(msg,ptree)
@@ -37,7 +37,7 @@ end subroutine MPI_verbose_barrier
 
 subroutine blocks_partial_bcast(block_s,block_r,send,recv,send_ID,msh,ptree,option)
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 	type(matrixblock),pointer :: block_s,block_r
 	integer send,recv,send_ID
@@ -121,7 +121,7 @@ end subroutine blocks_partial_bcast
 subroutine blocks_send(block,indices,recv_ID,send_count,msh,ptree,option)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
 	type(proctree)::ptree
@@ -180,7 +180,7 @@ end subroutine blocks_send
 recursive subroutine blocks_structure2buff(block,send_count_ind,send_count_dat,flag,msh,ptree)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer count1, count2, requests, rank, group_m, group_n
@@ -264,7 +264,7 @@ end subroutine blocks_structure2buff
 subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree,option)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
 
@@ -327,7 +327,7 @@ end subroutine blocks_recv
 recursive subroutine blocks_buff2structure(block,recv_count_ind,recv_count_dat,msh,ptree)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
     type(proctree)::ptree
     type(mesh)::msh
@@ -919,6 +919,6 @@ recursive subroutine unpack_all_blocks_one_node(block,Maxlevel,ptree,msh,pgno)
 end subroutine unpack_all_blocks_one_node
 
 
-end module block_sendrecv
+end module BPACK_block_sendrecv
 
 

@@ -341,7 +341,7 @@ end subroutine Hmat_construct_global_tree
 subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
 	integer Cflag
@@ -891,7 +891,7 @@ end subroutine BPACK_structuring
 
 subroutine HSS_structuring(hss_bf1,option,msh,ker,ptree,stats)
 	use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 	implicit none
 
     integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch,pgno_bplus
@@ -1050,7 +1050,7 @@ end subroutine HSS_structuring
 
 subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 	use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 	implicit none
 
     integer i, j, ii, jj, kk, iii, jjj,ll,bb,sortdirec,ii_sch,pgno_bplus
@@ -1633,7 +1633,7 @@ end subroutine HODLR_structuring
 
 subroutine Hmat_structuring(h_mat,option,msh,ker,ptree,stats)
 	use BPACK_DEFS
-	use misc
+	use MISC_Utilities
 	implicit none
 
 	type(Hmat)::h_mat

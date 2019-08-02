@@ -15,8 +15,8 @@
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
 
-#ifndef HODLR_WRAP /* allow multiple inclusions */
-#define HODLR_WRAP
+#ifndef BPACK_WRAP /* allow multiple inclusions */
+#define BPACK_WRAP
 
 // #include "ButterflyPACK_config.fi"
 

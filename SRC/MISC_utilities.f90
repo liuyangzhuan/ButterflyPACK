@@ -20,14 +20,14 @@ include "mkl_vsl.f90"
 #endif
 
 
-module misc
+module MISC_Utilities
 use BPACK_DEFS
 #ifdef Intel
 USE IFPORT
 #endif
 use omp_lib
-use DenseLA
-use linkedlist
+use MISC_DenseLA
+use BPACK_linkedlist
 
 
 integer, parameter :: int64 = selected_int_kind(18)
@@ -3639,4 +3639,4 @@ end subroutine Gridinfo_2D
 
 
 
-end module misc
+end module MISC_Utilities

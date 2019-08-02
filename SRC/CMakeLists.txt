@@ -5,17 +5,17 @@ set(headers
 )
 
 set(sources
-dgeqp3mod.f
-zgeqp3mod.f
+LAPACK_dgeqp3mod.f
+LAPACK_zgeqp3mod.f
 SCALAPACK_pdgeqpfmod.f
 SCALAPACK_pzgeqpfmod.f
-linkedlist.f90
-DenseLA.f90
+MISC_linkedlist.f90
+MISC_DenseLA.f90
 BPACK_defs.f90
-misc.f90
+MISC_utilities.f90
 Bplus_utilities.f90
 BPACK_utilities.f90
-blocks_pack_unpack_for_MPI.f90
+Bplus_pack_unpack_for_MPI.f90
 BPACK_structure.f90
 Bplus_randomized.f90
 Bplus_compress.f90

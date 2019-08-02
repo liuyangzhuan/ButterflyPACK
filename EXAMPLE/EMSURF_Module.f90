@@ -22,7 +22,7 @@
 
 module EMSURF_MODULE
 use BPACK_DEFS
-use misc
+use MISC_Utilities
 implicit none
 
 	!**** define your application-related variables here
@@ -1165,7 +1165,7 @@ end subroutine RCS_monostatic_HH_SURF
 
 subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     use BPACK_DEFS
-	use misc
+	use MISC_Utilities
     implicit none
 
     integer i,j,ii,jj,iii,jjj
