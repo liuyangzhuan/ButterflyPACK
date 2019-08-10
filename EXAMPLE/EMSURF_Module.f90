@@ -27,6 +27,13 @@ implicit none
 
 	!**** define your application-related variables here
 
+	
+	!**** edges of each node 
+	type edge_node
+		integer Nedge
+		integer,allocatable::edges(:,:)
+	end type edge_node
+	
 	!**** quantities related to geometries, meshes, unknowns and points
 	type quant_EMSURF
 		real(kind=8) wavenum    ! CEM: wave number
@@ -53,6 +60,7 @@ implicit none
 		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
 		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
+		type(edge_node),allocatable:: edge_of_node(:) ! edges of each vertice
 		CHARACTER (LEN=1000) DATA_DIR
 		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
 		integer::SI=0 ! 0: regular mode 1: shift-invert mode
@@ -1168,10 +1176,10 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	use MISC_Utilities
     implicit none
 
-    integer i,j,ii,jj,iii,jjj
+    integer i,j,ii,jj,nn,iii,jjj
     integer intemp
-    integer node, patch, edge, flag
-    integer node1, node2
+    integer node, patch, edge,edge1, flag
+    integer node1, node2,found
     integer node_temp(2)
     real(kind=8) a(3),b(3),c(3),r0
 	! type(mesh)::msh
@@ -1180,7 +1188,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	integer MPIcomm,MyID,ierr
 	CHARACTER (*) DATA_DIR
 	integer Maxedge
-
+	integer,parameter:: NperNode=10
+	integer,allocatable::tmpint(:,:)
+	integer,allocatable:: info_unk(:,:)
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 
     open(11,file=trim(DATA_DIR)//'_node.inp')
@@ -1188,16 +1198,19 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
     read(11,*)quant%maxnode
     read(111,*)quant%maxpatch
-    Maxedge=quant%maxpatch*3/2
+    Maxedge=quant%maxpatch*3
 
 
 
     allocate(quant%xyz(3,quant%maxnode+Maxedge))
-    allocate(quant%node_of_patch(0:3,quant%maxpatch),quant%info_unk(0:6,maxedge+1000))
+    allocate(quant%node_of_patch(0:3,quant%maxpatch),quant%info_unk(0:6,maxedge))
 	quant%info_unk=-1
 	quant%node_of_patch=-1
     allocate(quant%normal_of_patch(3,quant%maxpatch))
-
+	allocate(quant%edge_of_node(quant%maxnode))
+	do i=1,quant%maxnode
+		quant%edge_of_node(i)%Nedge=0
+	enddo
 
     !************quant%xyz****************
     i=1
@@ -1242,35 +1255,132 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     !************quant%info_unk****************
 
     edge=0
-    do i=1,quant%maxpatch-1
-        do j=i+1,quant%maxpatch
-            flag=0;node1=0;node2=0;iii=1
-            do ii=1,3
-                do jj=1,3
-	     	         if(quant%node_of_patch(ii,i)==quant%node_of_patch(jj,j))then
-                        flag=flag+1
-                        node_temp(iii)=quant%node_of_patch(ii,i)
-                        iii=iii+1
-                    endif
-                enddo
-            enddo
-            if(flag==2)then
-                edge=edge+1
+    do i=1,quant%maxpatch
+		do ii=1,3
+			jj=ii+1
+			if(jj==4)jj=1
+			node_temp(1)=quant%node_of_patch(ii,i)
+			node_temp(2)=quant%node_of_patch(jj,i)
+			
+			found=0
+			do nn=1,quant%edge_of_node(node_temp(1))%Nedge
+			if(quant%edge_of_node(node_temp(1))%edges(nn,2)==node_temp(2))then
+				found=1
+				edge1=quant%edge_of_node(node_temp(1))%edges(nn,1)
+				exit
+			endif
+			enddo
+			if(found==0)then
+				edge=edge+1
                 if(node_temp(1)<node_temp(2)) then
                     quant%info_unk(1,edge)=node_temp(1)
                     quant%info_unk(2,edge)=node_temp(2)
                 else
                     quant%info_unk(1,edge)=node_temp(2)
                     quant%info_unk(2,edge)=node_temp(1)
-                endif
+                endif			
                 quant%info_unk(3,edge)=i
-                quant%info_unk(4,edge)=j       ! notice that : i<j
-                quant%info_unk(0,edge)=0
-            endif
-        enddo
-    enddo
+                quant%info_unk(0,edge)=0				
+				
+				if(mod(quant%edge_of_node(node_temp(1))%Nedge,NperNode)==0)then
+					allocate(tmpint(quant%edge_of_node(node_temp(1))%Nedge+NperNode,2))
+					if(quant%edge_of_node(node_temp(1))%Nedge>0)then
+						tmpint(1:quant%edge_of_node(node_temp(1))%Nedge,:)=quant%edge_of_node(node_temp(1))%edges
+						deallocate(quant%edge_of_node(node_temp(1))%edges)
+					endif
+					allocate(quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge+NperNode,2))
+					quant%edge_of_node(node_temp(1))%edges=tmpint
+					deallocate(tmpint)
+				endif					
+				quant%edge_of_node(node_temp(1))%Nedge=quant%edge_of_node(node_temp(1))%Nedge+1
+				quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge,1)=edge
+				quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge,2)=node_temp(2)
+			else
+				quant%info_unk(4,edge1)=i
+			endif
+			
+			
+			found=0
+			do nn=1,quant%edge_of_node(node_temp(2))%Nedge
+			if(quant%edge_of_node(node_temp(2))%edges(nn,2)==node_temp(1))then
+				found=1
+				edge1=quant%edge_of_node(node_temp(2))%edges(nn,1)
+				exit
+			endif
+			enddo
+			if(found==0)then				
+				if(mod(quant%edge_of_node(node_temp(2))%Nedge,NperNode)==0)then
+					allocate(tmpint(quant%edge_of_node(node_temp(2))%Nedge+NperNode,2))
+					if(quant%edge_of_node(node_temp(2))%Nedge>0)then
+						tmpint(1:quant%edge_of_node(node_temp(2))%Nedge,:)=quant%edge_of_node(node_temp(2))%edges
+						deallocate(quant%edge_of_node(node_temp(2))%edges)
+					endif
+					allocate(quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge+NperNode,2))
+					quant%edge_of_node(node_temp(2))%edges=tmpint
+					deallocate(tmpint)
+				endif					
+				quant%edge_of_node(node_temp(2))%Nedge=quant%edge_of_node(node_temp(2))%Nedge+1
+				quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge,1)=edge
+				quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge,2)=node_temp(1)
+			endif			
+			
+		enddo
+	enddo	
+	do ii=1,quant%maxnode
+		if(quant%edge_of_node(ii)%Nedge>0)deallocate(quant%edge_of_node(ii)%edges)
+	enddo
+	deallocate(quant%edge_of_node)
+	
+	allocate(info_unk(0:6,edge))
+	edge=0
+	do ii=1,size(info_unk,2)
+		if(quant%info_unk(4,ii)/=-1)then
+			edge=edge+1
+			info_unk(0:6,edge)=quant%info_unk(0:6,ii)
+			if(info_unk(3,edge)>info_unk(4,edge))then
+				intemp= info_unk(3,edge)
+				info_unk(3,edge)=info_unk(4,edge)
+				info_unk(4,edge)=intemp
+			endif
+		endif
+	enddo
+	Maxedge=edge
+	deallocate(quant%info_unk)
+	allocate(quant%info_unk(0:6,Maxedge))
+	quant%info_unk(0:6,1:Maxedge)=info_unk(0:6,1:Maxedge)
+	deallocate(info_unk)
+	
+	
+    ! edge=0
+    ! do i=1,quant%maxpatch-1
+        ! do j=i+1,quant%maxpatch
+            ! flag=0;node1=0;node2=0;iii=1
+            ! do ii=1,3
+                ! do jj=1,3
+	     	         ! if(quant%node_of_patch(ii,i)==quant%node_of_patch(jj,j))then
+                        ! flag=flag+1
+                        ! node_temp(iii)=quant%node_of_patch(ii,i)
+                        ! iii=iii+1
+                    ! endif
+                ! enddo
+            ! enddo
+            ! if(flag==2)then
+                ! edge=edge+1
+                ! if(node_temp(1)<node_temp(2)) then
+                    ! quant%info_unk(1,edge)=node_temp(1)
+                    ! quant%info_unk(2,edge)=node_temp(2)
+                ! else
+                    ! quant%info_unk(1,edge)=node_temp(2)
+                    ! quant%info_unk(2,edge)=node_temp(1)
+                ! endif
+                ! quant%info_unk(3,edge)=i
+                ! quant%info_unk(4,edge)=j       ! notice that : i<j
+                ! quant%info_unk(0,edge)=0
+            ! endif
+        ! enddo
+    ! enddo
 
-    Maxedge=edge
+    ! Maxedge=edge
 
     !$omp parallel do default(shared) private(edge,node_temp,jj,iii,jjj)
     do edge=1,maxedge

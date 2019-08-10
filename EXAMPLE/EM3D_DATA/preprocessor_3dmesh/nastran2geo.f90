@@ -85,9 +85,9 @@ PROGRAM nastran2geo
     enddo
     
     do i= 1, num_patches
-        read (10,*) chartemp1, intemp1, intemp2, node_patches(1,i), node_patches(2,i), node_patches(3,i)     
+        read (10,'(A8,5I8)') chartemp1, intemp1, intemp2, node_patches(1,i), node_patches(2,i), node_patches(3,i)  
     enddo
-    
+     
     close (10)
     
     open(15,file='node.geo')

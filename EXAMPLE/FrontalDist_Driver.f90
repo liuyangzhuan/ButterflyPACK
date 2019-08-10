@@ -268,7 +268,8 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	integer,allocatable:: groupmembers(:)
 	integer :: ierr
 	integer :: nmpi
-	type(quant_app),target::quant,quant1
+	type(quant_app),target::quant
+	type(quant_bmat),target::quant1
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
 	real(kind=8),allocatable::xyz(:,:)
@@ -292,6 +293,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
+	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	if(ptree%MyID==Main_ID)write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
@@ -378,54 +380,58 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	allocate(tree(1))
 	tree(1) = quant%Nunk
 
-	if(quant%explicitflag ==1)then
-		write(*,*)'Entry evaluation on distributed-memory matrix is not implemented'
-		stop
-	else if(quant%explicitflag ==0)then
+							   
+																										
+	  
+									
 
-		!**** register the user-defined function and type in ker
-		ker%QuantApp => quant
-		ker%FuncHMatVec=>HODLR_MVP_Fullmat
+	!**** register the user-defined function and type in ker
+	ker%QuantApp => quant
+	ker%FuncHMatVec=>HODLR_MVP_Fullmat
 
-		!**** initialization of the construction phase
-	    allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,tree=tree)
-		deallocate(Permutation) ! caller can use this permutation vector if needed
+	!**** initialization of the construction phase
+	allocate(Permutation(quant%Nunk))
+	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,tree=tree)
+	deallocate(Permutation) ! caller can use this permutation vector if needed
 
-		!**** define other quantities in quant using information returned by BPACK_construction_Init
-		call CreateDistDenseMat(quant%Nunk,msh,ptree,quant,option,quant%DATA_DIR)
-
-
-		!**** computation of the construction phase
-		call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
+	!**** define other quantities in quant using information returned by BPACK_construction_Init
+	call CreateDistDenseMat(quant%Nunk,msh,ptree,quant,option,quant%DATA_DIR)
 
 
-	end if
+	!**** computation of the construction phase
+	call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
+
+
+	   
 
 	deallocate(tree)
 
 
-	call BPACK_Factorization(bmat,option,stats,ptree,msh)
+	! call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 	call PrintStat(stats,ptree)
 
-	!*********** Construct the second HODLR by using the first HODLR as a matvec
+	!*********** Construct the second HODLR by using the first HODLR as a matvec or entry extraction
 
 	call CopyOptions(option,option1)
 	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
 	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
+	option1%elem_extract=1 ! this indicates the second HOLDR construction uses user-defined parallel element extraction
+
 
 	!**** register the user-defined function and type in ker
 	! ker1%FuncZmn=>Zelem_FULL
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1
+	ker1%FuncZmnBlock=>Zelem_block_Extraction
 
 	quant1%bmat=>bmat
 	quant1%msh=>msh
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
-	quant1%Nunk=quant%Nunk
+					   
+
 
 	msh1%Nunk = msh%Nunk
 	call InitStat(stats1)
@@ -454,14 +460,21 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 	!**** initialization of the construction phase
-	allocate(Permutation(quant1%Nunk))
-	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	allocate(Permutation(msh1%Nunk))
+	call PrintOptions(option1,ptree1)
+	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(tree)
 
 
-	!**** computation of the construction phase
-	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
+
+	if(quant%explicitflag ==1)then
+		!**** computation of the construction phase
+		call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree1)
+	else if(quant%explicitflag ==0)then
+		!**** computation of the construction phase
+		call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
+	endif
 
 
 	call PrintStat(stats1,ptree)
