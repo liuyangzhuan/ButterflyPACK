@@ -306,11 +306,20 @@ include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 # Add subdirectories
 #
 ######################################################################
-
+if(APPLE)
+execute_process (
+    COMMAND sed -i -e 's/sed -i/sed -i ""/g' PrecisionPreprocessing.sh
+    COMMAND bash PrecisionPreprocessing.sh
+	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+elseif(UNIX)
 execute_process (
     COMMAND bash PrecisionPreprocessing.sh
 	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
+else()
+	message(FATAL_ERROR "The current OS is not yet supported")
+endif()
 
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
