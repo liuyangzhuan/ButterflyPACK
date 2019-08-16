@@ -271,6 +271,26 @@ if(BUTTERFLYPACK_USE_Finalizer )
 endif()
 
 
+#Test OPENMP TASKLOOP
+check_fortran_source_compiles(
+"PROGRAM TEST
+integer i
+!$omp parallel
+!$omp single
+!$omp taskloop default(shared) private(i)
+do i=1,10
+write(*,*)'iter:',i
+enddo
+!$omp end taskloop
+!$omp end single
+!$omp end parallel
+END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
+
+if(BUTTERFLYPACK_USE_TASKLOOP )
+	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
+	message("-- Using Fortran Finalizer features")
+endif()
+
 ######################################################################
 #
 # Include directories

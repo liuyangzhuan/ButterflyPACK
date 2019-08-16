@@ -8954,9 +8954,13 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 
 		if(option%cpp==1)then
 			call c_f_procpointer(ker%C_FuncZmn, proc1_C)
+#ifdef HAVE_TASKLOOP
 			!$omp parallel
 			!$omp single
 			!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+#else
+			!$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 			do ij=1,ncol*nrow
 				jj = (ij-1)/nrow+1
 				ii = mod(ij-1,nrow) + 1
@@ -8965,15 +8969,23 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				value_e =value_e*option%scale_factor
 				values(ii,jj) = value_e
 			enddo
+#ifdef HAVE_TASKLOOP
 			!$omp end taskloop
 			!$omp end single
 			!$omp end parallel
+#else
+			!$omp end parallel do
+#endif
 		else
 			proc1 => ker%FuncZmn
 			if(nrow*ncol>0)then
+#ifdef HAVE_TASKLOOP
 				!$omp parallel
 				!$omp single
 				!$omp taskloop default(shared) private(ij,ii,jj,value_e)
+#else
+				!$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 				do ij=1,ncol*nrow
 					jj = (ij-1)/nrow+1
 					ii = mod(ij-1,nrow) + 1
@@ -8982,9 +8994,14 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 					value_e =value_e*option%scale_factor
 					values(ii,jj)=value_e
 				enddo
-				!$omp end taskloop
-				!$omp end single
-				!$omp end parallel
+#ifdef HAVE_TASKLOOP
+			!$omp end taskloop
+			!$omp end single
+			!$omp end parallel
+#else
+			!$omp end parallel do
+#endif
+
 			endif
 		endif
 

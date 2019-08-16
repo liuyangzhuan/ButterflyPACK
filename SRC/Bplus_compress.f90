@@ -780,7 +780,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 
 
 		allocate (blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(rank_new))
-		!$omp taskloop default(shared) private(j)
+		! !$omp taskloop default(shared) private(j)
 		do j=1, rank_new
 			if (select_column(jpvt(j))<=nn1) then
 				blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(select_column(jpvt(j)))
@@ -788,7 +788,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 				blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(j)=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(select_column(jpvt(j))-nn1)+nnn1
 			endif
 		enddo
-		!$omp end taskloop
+		! !$omp end taskloop
 	endif
 
 	if(allocated(core))deallocate (core)
@@ -2078,7 +2078,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 
 
 			allocate (blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(rank_new))
-			!$omp taskloop default(shared) private(j)
+			! !$omp taskloop default(shared) private(j)
 			do j=1, rank_new
 				if (select_row(jpvt(j))<=mm1) then
 					blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(j)=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(select_row(jpvt(j)))
@@ -2086,7 +2086,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 					blocks%ButterflySkel(level)%inds(index_i_loc_s,index_j_loc_s)%array(j)=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(select_row(jpvt(j))-mm1)+mmm1
 				endif
 			enddo
-			!$omp end taskloop
+			! !$omp end taskloop
 		endif
 
 	endif
