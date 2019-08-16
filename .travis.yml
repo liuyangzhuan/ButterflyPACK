@@ -2,7 +2,7 @@ language: cpp
 
 compiler: gcc
 
-os: linux
+os: osx 
 
 dist: bionic
 
