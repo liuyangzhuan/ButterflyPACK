@@ -27,13 +27,13 @@ implicit none
 
 	!**** define your application-related variables here
 
-	
-	!**** edges of each node 
+
+	!**** edges of each node
 	type edge_node
 		integer Nedge
 		integer,allocatable::edges(:,:)
 	end type edge_node
-	
+
 	!**** quantities related to geometries, meshes, unknowns and points
 	type quant_EMSURF
 		real(kind=8) wavenum    ! CEM: wave number
@@ -1261,7 +1261,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 			if(jj==4)jj=1
 			node_temp(1)=quant%node_of_patch(ii,i)
 			node_temp(2)=quant%node_of_patch(jj,i)
-			
+
 			found=0
 			do nn=1,quant%edge_of_node(node_temp(1))%Nedge
 			if(quant%edge_of_node(node_temp(1))%edges(nn,2)==node_temp(2))then
@@ -1278,10 +1278,10 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
                 else
                     quant%info_unk(1,edge)=node_temp(2)
                     quant%info_unk(2,edge)=node_temp(1)
-                endif			
+                endif
                 quant%info_unk(3,edge)=i
-                quant%info_unk(0,edge)=0				
-				
+                quant%info_unk(0,edge)=0
+
 				if(mod(quant%edge_of_node(node_temp(1))%Nedge,NperNode)==0)then
 					allocate(tmpint(quant%edge_of_node(node_temp(1))%Nedge+NperNode,2))
 					if(quant%edge_of_node(node_temp(1))%Nedge>0)then
@@ -1291,15 +1291,15 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 					allocate(quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge+NperNode,2))
 					quant%edge_of_node(node_temp(1))%edges=tmpint
 					deallocate(tmpint)
-				endif					
+				endif
 				quant%edge_of_node(node_temp(1))%Nedge=quant%edge_of_node(node_temp(1))%Nedge+1
 				quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge,1)=edge
 				quant%edge_of_node(node_temp(1))%edges(quant%edge_of_node(node_temp(1))%Nedge,2)=node_temp(2)
 			else
 				quant%info_unk(4,edge1)=i
 			endif
-			
-			
+
+
 			found=0
 			do nn=1,quant%edge_of_node(node_temp(2))%Nedge
 			if(quant%edge_of_node(node_temp(2))%edges(nn,2)==node_temp(1))then
@@ -1308,7 +1308,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 				exit
 			endif
 			enddo
-			if(found==0)then				
+			if(found==0)then
 				if(mod(quant%edge_of_node(node_temp(2))%Nedge,NperNode)==0)then
 					allocate(tmpint(quant%edge_of_node(node_temp(2))%Nedge+NperNode,2))
 					if(quant%edge_of_node(node_temp(2))%Nedge>0)then
@@ -1318,19 +1318,19 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 					allocate(quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge+NperNode,2))
 					quant%edge_of_node(node_temp(2))%edges=tmpint
 					deallocate(tmpint)
-				endif					
+				endif
 				quant%edge_of_node(node_temp(2))%Nedge=quant%edge_of_node(node_temp(2))%Nedge+1
 				quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge,1)=edge
 				quant%edge_of_node(node_temp(2))%edges(quant%edge_of_node(node_temp(2))%Nedge,2)=node_temp(1)
-			endif			
-			
+			endif
+
 		enddo
-	enddo	
+	enddo
 	do ii=1,quant%maxnode
 		if(quant%edge_of_node(ii)%Nedge>0)deallocate(quant%edge_of_node(ii)%edges)
 	enddo
 	deallocate(quant%edge_of_node)
-	
+
 	allocate(info_unk(0:6,edge))
 	edge=0
 	do ii=1,size(info_unk,2)
@@ -1349,8 +1349,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	allocate(quant%info_unk(0:6,Maxedge))
 	quant%info_unk(0:6,1:Maxedge)=info_unk(0:6,1:Maxedge)
 	deallocate(info_unk)
-	
-	
+
+
     ! edge=0
     ! do i=1,quant%maxpatch-1
         ! do j=i+1,quant%maxpatch

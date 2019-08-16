@@ -245,6 +245,32 @@ if(BUTTERFLYPACK_USE_MPI3 )
 	message("-- Using MPI3 features")
 endif()
 
+
+#Test Fortran Destructor
+check_fortran_source_compiles(
+"module MOD
+	type quant
+		contains
+		final :: finalizer
+	end type quant
+
+	contains
+
+	subroutine finalizer( this )
+		type(quant), intent(inout) :: this
+	end subroutine finalizer
+end module MOD
+
+PROGRAM TEST
+	use MOD
+END PROGRAM TEST" BUTTERFLYPACK_USE_Finalizer SRC_EXT F90)
+
+if(BUTTERFLYPACK_USE_Finalizer )
+	set(CMAKE_Fortran_FLAGS "-DHAVE_FINAL ${CMAKE_Fortran_FLAGS}")
+	message("-- Using Fortran Finalizer features")
+endif()
+
+
 ######################################################################
 #
 # Include directories

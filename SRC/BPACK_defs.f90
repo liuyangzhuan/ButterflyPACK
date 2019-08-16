@@ -69,7 +69,7 @@ module BPACK_DEFS
 	integer,parameter:: BACA=4
 	integer,parameter:: BACANOVER=5
 	integer,parameter:: PS=6
-
+	integer,parameter:: ACANMERGE=7
 	integer,parameter:: NATURAL=0  ! natural order
 	integer,parameter:: CKD=1  ! cartesian kd tree
 	integer,parameter:: TM=2   ! cobble-like ordering
@@ -275,7 +275,7 @@ module BPACK_DEFS
          integer row_group ! row group number
 		 integer pgno   ! process group number
          integer Lplus  ! Number of Bplus layers, 2 if option%TwoLayerOnly=1
-		 real(kind=8):: boundary(2) ! A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value
+		 real(kind=8):: boundary(2)=0 ! A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value
 		 type(onelplus),pointer:: LL(:)=>null() !
 	 end type blockplus
 
@@ -496,7 +496,9 @@ module BPACK_DEFS
 		integer:: idx=0 ! user-defined index
 		integer,allocatable::dat(:)
 		contains
+#ifdef HAVE_FINAL
 		final :: iarray_finalizer
+#endif
 	end type iarray
 
 	!*** a derived type for a pair of integers

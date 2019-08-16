@@ -22,7 +22,9 @@ type :: nod
 	type(nod), pointer :: next => null()
 	class(*), allocatable :: item
 	contains
+#ifdef HAVE_FINAL
 	final :: nod_finalizer
+#endif
 end type nod
 
 type :: list
@@ -32,7 +34,9 @@ type :: list
 	type(nod), pointer :: tail => null()
 	procedure(nod_score),nopass,pointer :: FuncScore=>null()
 	contains
+#ifdef HAVE_FINAL
 	final :: list_finalizer
+#endif
 	procedure :: len => list_length
 end type list
 

@@ -1600,8 +1600,79 @@ if(present(flop))flop = flops_zunmqr(side,m,n,k)
 end subroutine pzunmqrf90
 
 
+subroutine pgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+implicit none
+integer M,N,ia,ja
+class(*) Matrix(:,:),tau(:)
+integer rank
+integer desca(9)
+real(kind=8),optional::flop
+
+select type(Matrix)
+type is (real(kind=8))
+	select type(tau)
+	type is (real(kind=8))
+	call pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+	end select
+type is (complex(kind=8))
+	select type(tau)
+	type is (complex(kind=8))
+	call pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+	end select
+end select
+
+end subroutine pgeqrff90
 
 
+
+subroutine pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+implicit none
+
+integer M,N,ia,ja
+class(*) Matrix(:,:),tau(:)
+integer rank
+integer desca(9)
+integer LWORK,INFO,ierr
+complex(kind=8):: TEMP(1)
+complex(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+LWORK=-1
+call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))
+WORK=0
+call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
+
+deallocate(WORK)
+
+if(present(flop))flop = flops_zgeqpfmod(m,n,min(m,n))
+end subroutine pzgeqrff90
+
+
+subroutine pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+implicit none
+
+integer M,N,ia,ja
+class(*) Matrix(:,:),tau(:)
+integer rank
+integer desca(9)
+integer LWORK,INFO,ierr
+real(kind=8):: TEMP(1)
+real(kind=8),allocatable:: WORK(:)
+real(kind=8),optional::flop
+
+LWORK=-1
+call PDGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
+lwork=NINT(dble(TEMP(1)*2.001))
+allocate(WORK(lwork))
+WORK=0
+call PDGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
+
+deallocate(WORK)
+
+if(present(flop))flop = flops_dgeqpfmod(m,n,min(m,n))
+end subroutine pdgeqrff90
 
 
 subroutine pgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank,rtol, atol,flop)

@@ -697,9 +697,9 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 				msh%basis_group(2*group+1)%tail=msh%basis_group(group)%tail
 				if(option%xyzsort==CKD)then
 					seperator = msh%xyz(sortdirec,msh%new2old(msh%basis_group(2*group)%tail))
+					msh%basis_group(group)%boundary(1) = sortdirec
+					msh%basis_group(group)%boundary(2) = seperator
 				end if
-				msh%basis_group(group)%boundary(1) = sortdirec
-				msh%basis_group(group)%boundary(2) = seperator
 			endif
 		enddo
 	enddo
