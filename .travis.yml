@@ -12,6 +12,7 @@ branches:
   only:
   - master
   - hodlrHmat
+  - portability_test
 
 notifications:
   email:
