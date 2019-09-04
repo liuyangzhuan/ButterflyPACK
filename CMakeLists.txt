@@ -125,16 +125,16 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
   "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
 #--------------------- OpenMP ---------------------
-find_package(OpenMP)
+find_package(OPENMP)
 ## include(FindOpenMP)  # Strumpack uses this
-if(OPENMP_FOUND)
+#if(OPENMP_FOUND)
   set(CMAKE_Fortran_FLAGS "${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
-# On edison, OpenMP_EXE_LINKER_FLAGS is empty
-#  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+#  set(CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_Fortran_FLAGS}")
+#  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_CXX_FLAGS}")
  message("-- OpenMP_EXE_LINKER_FLAGS='${OpenMP_EXE_LINKER_FLAGS}'")
  message("-- CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
-endif()
+#endif()
 
 
 
@@ -246,19 +246,19 @@ if(BUTTERFLYPACK_USE_MPI3 )
 endif()
 
 
-#Test Fortran Destructor
+#Test Fortran Destructo
 check_fortran_source_compiles(
 "module MOD
 	type quant
 		contains
-		final :: finalizer
+		final :: finalize
 	end type quant
 
 	contains
 
 	subroutine finalizer( this )
 		type(quant), intent(inout) :: this
-	end subroutine finalizer
+	end subroutine finalize
 end module MOD
 
 PROGRAM TEST
@@ -306,16 +306,24 @@ include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 # Add subdirectories
 #
 ######################################################################
+
+find_program (SED_TOOL NAMES sed)
+if (NOT SED_TOOL)
+	message (FATAL_ERROR "Unable to find sed")
+endif (NOT SED_TOOL)
+
 if(APPLE)
 execute_process (
-    COMMAND sed -i -e 's/sed -i/sed -i ""/g' PrecisionPreprocessing.sh
-    COMMAND bash PrecisionPreprocessing.sh
-	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+     COMMAND cp PrecisionPreprocessing.sh PrecisionPreprocessing_mac.sh
+     COMMAND LC_ALL=C ${SED_TOOL} -i "" -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i "" -e "/\r\"/d" PrecisionPreprocessing_mac.sh
+     COMMAND bash PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 elseif(UNIX)
 execute_process (
     COMMAND bash PrecisionPreprocessing.sh
-	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+    WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 else()
 	message(FATAL_ERROR "The current OS is not yet supported")
