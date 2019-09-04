@@ -243,7 +243,7 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
   for (int ii=0; ii<cnt; ii++){
 	xout[ii] = *b*xout[ii] + *a*xout1[ii];
   }
-  delete xout1;
+  delete[] xout1;
 }
 
 
@@ -514,8 +514,8 @@ if(tst==3){
 	d_c_bpack_delete(&bmat1);
 	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
-	delete perms1;
-	delete tree1;
+	delete[] perms1;
+	delete[] tree1;
 
 
 
@@ -562,8 +562,8 @@ if(tst==3){
 	d_c_bpack_delete(&bmat1);
 	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
-	delete perms1;
-	delete tree1;
+	delete[] perms1;
+	delete[] tree1;
 
 
 
@@ -661,8 +661,8 @@ if(tst==3){
 	d_c_bpack_deleteoption(&option);
 
 	delete quant_ptr;
-	delete perms;
-	delete tree;
+	delete[] perms;
+	delete[] tree;
 
 
 
