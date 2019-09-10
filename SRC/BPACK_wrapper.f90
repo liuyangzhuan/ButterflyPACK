@@ -958,7 +958,10 @@ end subroutine C_BPACK_Construct_Matvec_Compute
 	!mshc_Cptr: the structure containing points and ordering information for the column dimension (in)
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bf_construct_init")
+	!C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
+	!C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bf_construct_init")
 	implicit none
 	integer M,N
 
@@ -985,6 +988,10 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
 	integer Maxgroup_rc
+
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncDistmn
+	type(c_funptr), intent(in),value,target :: C_FuncNearFar
 
 	!**** allocate HODLR solver structures
 	allocate(blocks)
@@ -1020,9 +1027,12 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
     ! write(*,*) "   "
 	! endif
 
-	! !**** register the user-defined function and type in ker
-	! ker%C_QuantApp => C_QuantApp
-	! ker%C_FuncHMatVec => C_FuncHMatVec
+	!**** register the user-defined function and type in ker
+	if(option%nogeo==2)then
+		ker%C_QuantApp => C_QuantApp
+		ker%C_FuncDistmn => C_FuncDistmn
+		ker%C_FuncNearFar => C_FuncNearFar
+	endif
 
 	call assert(mshr%Nunk==M,'mshr%Nunk\=M')
 	call assert(mshc%Nunk==N,'mshc%Nunk\=N')
@@ -1045,6 +1055,10 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 	do ii=1+M,N+M
 		msh%new2old(ii)=ii-M
 	enddo
+
+	call FindKNNs(option,msh,ker,stats,ptree)
+
+
 	blocks%level=1
 	blocks%col_group=3
 	blocks%row_group=2

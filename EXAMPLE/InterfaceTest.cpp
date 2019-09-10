@@ -599,7 +599,7 @@ if(tst==3){
 	int myrow=0;     // local number of rows
 	int mycol=0;     // local number of columns
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh1, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fourth BF: "<<std::endl;
@@ -631,7 +631,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering
 	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
