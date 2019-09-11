@@ -1875,7 +1875,7 @@ subroutine C_BPACK_TreeIndex_Merged2Child(idx_merge,idx_child) bind(c, name="c_b
 	level_c=level-1
 	nth = idx_merge - 2**level+1
 	nth_c=nth
-	if(nth_c>2**level)nth_c=nth_c-2**level ! this is an index in the right child tree
+	if(nth_c>2**(level-1))nth_c=nth_c-2**(level-1) ! this is an index in the right child tree
 
 	idx_child = 2**level_c + nth_c-1
 
