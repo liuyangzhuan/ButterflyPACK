@@ -1863,5 +1863,25 @@ subroutine C_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix) bind(c, name="c_bp
 end subroutine C_BPACK_GetVersionNumber
 
 
+!**** C interface of converting the tree index to the index in one of its two child trees
+subroutine C_BPACK_TreeIndex_Merged2Child(idx_merge,idx_child) bind(c, name="c_bpack_treeindex_merged2child")
+	implicit none
+	integer idx_merge,idx_child ! node index in the merged and child tree
+	integer level,nth  ! level and the order on that level in the merged tree
+	integer level_c,nth_c ! level and the order on that level in the child tree
+	level = GetTreelevel(idx_merge)-1
+	call assert(level>=1,'cannot convert the root node')
+
+	level_c=level-1
+	nth = idx_merge - 2**level+1
+	nth_c=nth
+	if(nth_c>2**level)nth_c=nth_c-2**level ! this is an index in the right child tree
+
+	idx_child = 2**level_c + nth_c-1
+
+end subroutine C_BPACK_TreeIndex_Merged2Child
+
+
+
 end module BPACK_wrapper
 

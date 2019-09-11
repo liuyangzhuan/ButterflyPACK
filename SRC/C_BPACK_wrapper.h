@@ -59,6 +59,7 @@ extern "C" {
 	void c_bpack_printoption(F2Cptr* option,F2Cptr* ptree);
 
 	void c_bpack_getversionnumber(int* v_major,int* v_minor,int* v_bugfix);
+	void c_bpack_treeindex_merged2child(int* idx_merge,int* idx_child);
 
 	void c_bpack_deletestats(F2Cptr* stats);
 	void c_bpack_deleteproctree(F2Cptr* ptree);
