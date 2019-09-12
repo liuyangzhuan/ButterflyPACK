@@ -1056,8 +1056,10 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 		msh%new2old(ii)=ii-M
 	enddo
 
-	call FindKNNs(option,msh,ker,stats,ptree)
-
+	!**** construct a list of k-nearest neighbours for each point
+	if(option%knn>0)then
+		call FindKNNs(option,msh,ker,stats,ptree,2,3)
+	endif
 
 	blocks%level=1
 	blocks%col_group=3

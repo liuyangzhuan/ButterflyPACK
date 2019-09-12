@@ -745,14 +745,14 @@ endif
 
 !**** construct a list of k-nearest neighbours for each point
 if(option%knn>0)then
-	call FindKNNs(option,msh,ker,stats,ptree)
+	call FindKNNs(option,msh,ker,stats,ptree,1,1)
 endif
 
     return
 
 end subroutine Cluster_partition
 
-subroutine FindKNNs(option,msh,ker,stats,ptree)
+subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	implicit none
 	real(kind=8), allocatable :: distance(:,:)
 	integer, allocatable :: order(:,:), edge_temp(:,:)
@@ -765,6 +765,8 @@ subroutine FindKNNs(option,msh,ker,stats,ptree)
 	integer ii,iii,jjj,kk,jj,Bidxs,Bidxe,Navr,Maxgroup,Maxlevel,ierr
     integer num_threads
 	integer,save:: my_tid=0
+	integer groupm_start,groupn_start
+
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)
@@ -786,14 +788,14 @@ subroutine FindKNNs(option,msh,ker,stats,ptree)
 	do ii=1,size(msh%basis_group,1)
 		msh%basis_group(ii)%nn=0
 	enddo
-	call append_nlist(ker,option,stats,msh,ptree,1,1,0)
+	call append_nlist(ker,option,stats,msh,ptree,groupm_start,groupn_start,0)
 	do ii=1,size(msh%basis_group,1)
 		if(msh%basis_group(ii)%nn>0)then
 			allocate(msh%basis_group(ii)%nlist(msh%basis_group(ii)%nn))
 			msh%basis_group(ii)%nn=0
 		endif
 	enddo
-	call append_nlist(ker,option,stats,msh,ptree,1,1,1)
+	call append_nlist(ker,option,stats,msh,ptree,groupm_start,groupn_start,1)
 
 
 	allocate(msh%nns(msh%Nunk,option%knn))
@@ -843,19 +845,19 @@ recursive subroutine append_nlist(ker,option,stats,msh,ptree,group_m,group_n,fla
 	integer ii,jj
 
 	if(group_m*2+1>size(msh%basis_group))then
-		! if(group_m==group_n)then
+		if(group_m==group_n)then
 			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
 			if(flag==1)then
 				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
 			endif
-		! else
-			! msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
-			! msh%basis_group(group_n)%nn=msh%basis_group(group_n)%nn+1
-			! if(flag==1)then
-				! msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
-				! msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn)=group_m
-			! endif
-		! endif
+		else if(group_m<group_n)then ! only search in the upper block triangular matrix
+			msh%basis_group(group_m)%nn=msh%basis_group(group_m)%nn+1
+			msh%basis_group(group_n)%nn=msh%basis_group(group_n)%nn+1
+			if(flag==1)then
+				msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
+				msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn)=group_m
+			endif
+		endif
 	else
 		do ii=1,2
 		do jj=1,2
