@@ -707,7 +707,7 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	real(kind=8),parameter :: cd = 299792458d0
 	integer,allocatable:: groupmembers(:)
 	integer nlevel,level
-	integer Permutation(*),tree(*)
+	integer Permutation(N),tree(*)
 	integer N_loc
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
@@ -1053,7 +1053,7 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 		msh%new2old(ii)=ii
 	enddo
 	do ii=1+M,N+M
-		msh%new2old(ii)=-ii
+		msh%new2old(ii)=-(ii-M)
 	enddo
 
 	!**** construct a list of k-nearest neighbours for each point
