@@ -129,7 +129,7 @@ real(kind=8) function distance_user(edgem,edgen,ker,msh,option,ptree,stats)
 	else if(option%nogeo==2)then  ! no geometrical information is provided, but user provides a distance function
 		if(option%cpp==1)then
 			call c_f_procpointer(ker%C_FuncDistmn, proc1_C)
-			call proc1_C(edgem-1,edgen-1,distance_user,ker%C_QuantApp)
+			call proc1_C(edgem,edgen,distance_user,ker%C_QuantApp)
 		else
 			proc1 => ker%FuncDistmn
 			call proc1(edgem,edgen,distance_user,ker%QuantApp)
@@ -766,7 +766,7 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
     integer num_threads
 	integer,save:: my_tid=0
 	integer groupm_start,groupn_start
-
+	
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)
