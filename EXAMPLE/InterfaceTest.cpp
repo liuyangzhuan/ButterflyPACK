@@ -193,19 +193,19 @@ public:
 inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 
   C_QuantApp* Q = (C_QuantApp*) quant;
-  Q->Sample(*m,*n,val);
+  Q->Sample(*m-1,*n-1,val);
 }
 
 // The distance function wrapper required by the Fortran HODLR code
 inline void C_FuncDistmn(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  // Q->Sample(*m,*n,val);
+
 }
 
 // The compressibility function wrapper required by the Fortran HODLR code
 inline void C_FuncNearFar(int *m, int *n, int *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  // Q->Sample(*m,*n,val);
+
 }
 
 // The extraction sampling function wrapper required by the Fortran HODLR code

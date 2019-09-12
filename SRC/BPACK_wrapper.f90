@@ -685,7 +685,7 @@ end subroutine C_BPACK_Construct_Element_Compute
 	!Locations: coordinates used for clustering (not used if nogeo=1)
 	!nlevel: the number of top levels that have been ordered (in)
 	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
-	!Permutation: return the permutation vector new2old (indexed from 0) (out)
+	!Permutation: return the permutation vector new2old (indexed from 1) (out)
 	!N_loc: number of local row/column indices (out)
 	!bmat_Cptr: the structure containing HODLR (out)
 	!option_Cptr: the structure containing option (in)
@@ -859,7 +859,7 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	N_loc = msh%idxe-msh%idxs+1
 	if(ptree%MyID==Main_ID)then
 		do edge=1,N
-			Permutation(edge) = msh%new2old(edge)-1
+			Permutation(edge) = msh%new2old(edge)
 		enddo
 	endif
 
@@ -1053,7 +1053,7 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 		msh%new2old(ii)=ii
 	enddo
 	do ii=1+M,N+M
-		msh%new2old(ii)=ii-M
+		msh%new2old(ii)=-ii
 	enddo
 
 	!**** construct a list of k-nearest neighbours for each point
@@ -1515,10 +1515,10 @@ implicit none
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
-	allrows1=allrows+1
+	allrows1=allrows
 	idx_col=sum(colidx)
 	allocate(allcols1(idx_col))
-	allcols1=allcols+1+blocks_o%M
+	allcols1=allcols+blocks_o%M
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
 
@@ -1589,10 +1589,10 @@ implicit none
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
-	allrows1=allrows+1
+	allrows1=allrows
 	idx_col=sum(colidx)
 	allocate(allcols1(idx_col))
-	allcols1=allcols+1
+	allcols1=allcols
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
 
@@ -1871,15 +1871,21 @@ subroutine C_BPACK_TreeIndex_Merged2Child(idx_merge,idx_child) bind(c, name="c_b
 	integer idx_merge,idx_child ! node index in the merged and child tree
 	integer level,nth  ! level and the order on that level in the merged tree
 	integer level_c,nth_c ! level and the order on that level in the child tree
+	integer l_or_r ! 1: left 0: right
 	level = GetTreelevel(idx_merge)-1
 	call assert(level>=1,'cannot convert the root node')
 
 	level_c=level-1
 	nth = idx_merge - 2**level+1
 	nth_c=nth
-	if(nth_c>2**(level-1))nth_c=nth_c-2**(level-1) ! this is an index in the right child tree
+	l_or_r=1
+	if(nth_c>2**(level-1))then
+		nth_c=nth_c-2**(level-1) ! this is an index in the right child tree
+		l_or_r=0
+	endif
 
 	idx_child = 2**level_c + nth_c-1
+	if(l_or_r==0) idx_child=-idx_child
 
 end subroutine C_BPACK_TreeIndex_Merged2Child
 
