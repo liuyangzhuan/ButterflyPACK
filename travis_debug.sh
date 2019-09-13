@@ -17,6 +17,6 @@ curl -s -X POST \
 -H "Content-Type: application/json" \
 -H "Accept: application/json" \
 -H "Travis-API-Version: 3" \
--H "Authorization: token <token>" \
+-H "Authorization: token SQf8BFJHgY4im2WoT-s-pg" \
 -d '{ "quiet": true }' \
-https://api.travis-ci.com/job/<jobid>/debug
+https://api.travis-ci.com/job/225747268/debug
