@@ -9131,10 +9131,10 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
 				! !***** parallel extraction of the data
 				do ii=1,idx_row
-					allrows(ii)=msh%new2old(allrows(ii))
+					allrows(ii)=abs(msh%new2old(allrows(ii)))
 				enddo
 				do jj=1,idx_col
-					allcols(jj)=msh%new2old(allcols(jj))
+					allcols(jj)=abs(msh%new2old(allcols(jj)))
 				enddo
 				pgidx=pgidx-1
 				call proc_C(Ninter,idx_row,idx_col,idx_dat,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%C_QuantApp)
@@ -9142,10 +9142,10 @@ subroutine element_Zmn_block_user(nrow,ncol,mrange,nrange,values,msh,option,ker,
 				proc => ker%FuncZmnBlock
 				! !***** parallel extraction of the data
 				do ii=1,idx_row
-					allrows(ii)=msh%new2old(allrows(ii))
+					allrows(ii)=abs(msh%new2old(allrows(ii)))
 				enddo
 				do jj=1,idx_col
-					allcols(jj)=msh%new2old(allcols(jj))
+					allcols(jj)=abs(msh%new2old(allcols(jj)))
 				enddo
 				call proc(Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps,ker%QuantApp)
 			endif
