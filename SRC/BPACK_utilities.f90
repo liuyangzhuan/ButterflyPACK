@@ -459,7 +459,7 @@ subroutine SetDefaultOptions(option)
 	option%scale_factor=1d0
 	option%rmax=3000
 	option%forwardN15flag=0
-	option%sample_para=2.0d0
+	option%sample_para=1.2d0
 	option%pat_comp=3
 	option%elem_extract=0
 	option%knn=0
