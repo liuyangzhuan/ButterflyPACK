@@ -685,7 +685,7 @@ end subroutine C_BPACK_Construct_Element_Compute
 	!Locations: coordinates used for clustering (not used if nogeo=1)
 	!nlevel: the number of top levels that have been ordered (in)
 	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
-	!Permutation: return the permutation vector new2old (indexed from 0) (out)
+	!Permutation: return the permutation vector new2old (indexed from 1) (out)
 	!N_loc: number of local row/column indices (out)
 	!bmat_Cptr: the structure containing HODLR (out)
 	!option_Cptr: the structure containing option (in)
@@ -707,7 +707,7 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	real(kind=8),parameter :: cd = 299792458d0
 	integer,allocatable:: groupmembers(:)
 	integer nlevel,level
-	integer Permutation(*),tree(*)
+	integer Permutation(N),tree(*)
 	integer N_loc
 	! type(matricesblock), pointer :: blocks_i
 	integer groupm
@@ -859,7 +859,7 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
 	N_loc = msh%idxe-msh%idxs+1
 	if(ptree%MyID==Main_ID)then
 		do edge=1,N
-			Permutation(edge) = msh%new2old(edge)-1
+			Permutation(edge) = msh%new2old(edge)
 		enddo
 	endif
 
@@ -958,7 +958,10 @@ end subroutine C_BPACK_Construct_Matvec_Compute
 	!mshc_Cptr: the structure containing points and ordering information for the column dimension (in)
 	!ker_Cptr: the structure containing kernel quantities (out)
 	!ptree_Cptr: the structure containing process tree (in)
-subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr) bind(c, name="c_bf_construct_init")
+	!C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
+	!C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bf_construct_init")
 	implicit none
 	integer M,N
 
@@ -985,6 +988,10 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 	real(kind=8) t1,t2
 	character(len=1024)  :: strings
 	integer Maxgroup_rc
+
+	type(c_ptr), intent(in),target :: C_QuantApp
+	type(c_funptr), intent(in),value,target :: C_FuncDistmn
+	type(c_funptr), intent(in),value,target :: C_FuncNearFar
 
 	!**** allocate HODLR solver structures
 	allocate(blocks)
@@ -1020,9 +1027,12 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
     ! write(*,*) "   "
 	! endif
 
-	! !**** register the user-defined function and type in ker
-	! ker%C_QuantApp => C_QuantApp
-	! ker%C_FuncHMatVec => C_FuncHMatVec
+	!**** register the user-defined function and type in ker
+	if(option%nogeo==2)then
+		ker%C_QuantApp => C_QuantApp
+		ker%C_FuncDistmn => C_FuncDistmn
+		ker%C_FuncNearFar => C_FuncNearFar
+	endif
 
 	call assert(mshr%Nunk==M,'mshr%Nunk\=M')
 	call assert(mshc%Nunk==N,'mshc%Nunk\=N')
@@ -1043,8 +1053,14 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 		msh%new2old(ii)=ii
 	enddo
 	do ii=1+M,N+M
-		msh%new2old(ii)=ii-M
+		msh%new2old(ii)=-(ii-M)
 	enddo
+
+	!**** construct a list of k-nearest neighbours for each point
+	if(option%knn>0)then
+		call FindKNNs(option,msh,ker,stats,ptree,2,3)
+	endif
+
 	blocks%level=1
 	blocks%col_group=3
 	blocks%row_group=2
@@ -1499,10 +1515,10 @@ implicit none
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
-	allrows1=allrows+1
+	allrows1=allrows
 	idx_col=sum(colidx)
 	allocate(allcols1(idx_col))
-	allcols1=allcols+1+blocks_o%M
+	allcols1=allcols+blocks_o%M
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
 
@@ -1573,10 +1589,10 @@ implicit none
 
 	idx_row=sum(rowidx)
 	allocate(allrows1(idx_row))
-	allrows1=allrows+1
+	allrows1=allrows
 	idx_col=sum(colidx)
 	allocate(allcols1(idx_col))
-	allcols1=allcols+1
+	allcols1=allcols
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
 
@@ -1847,6 +1863,32 @@ subroutine C_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix) bind(c, name="c_bp
 	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 
 end subroutine C_BPACK_GetVersionNumber
+
+
+!**** C interface of converting the tree index to the index in one of its two child trees
+subroutine C_BPACK_TreeIndex_Merged2Child(idx_merge,idx_child) bind(c, name="c_bpack_treeindex_merged2child")
+	implicit none
+	integer idx_merge,idx_child ! node index in the merged and child tree
+	integer level,nth  ! level and the order on that level in the merged tree
+	integer level_c,nth_c ! level and the order on that level in the child tree
+	integer l_or_r ! 1: left 0: right
+	level = GetTreelevel(idx_merge)-1
+	call assert(level>=1,'cannot convert the root node')
+
+	level_c=level-1
+	nth = idx_merge - 2**level+1
+	nth_c=nth
+	l_or_r=1
+	if(nth_c>2**(level-1))then
+		nth_c=nth_c-2**(level-1) ! this is an index in the right child tree
+		l_or_r=0
+	endif
+
+	idx_child = 2**level_c + nth_c-1
+	if(l_or_r==0) idx_child=-idx_child
+
+end subroutine C_BPACK_TreeIndex_Merged2Child
+
 
 
 end module BPACK_wrapper

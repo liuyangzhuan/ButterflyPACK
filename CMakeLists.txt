@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "1")
 set(VERSION_MINOR "0")
-set(VERSION_BugFix "0")
+set(VERSION_BugFix "2")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 ######################################################################
@@ -127,15 +127,16 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
 #--------------------- OpenMP ---------------------
 find_package(OpenMP)
 ## include(FindOpenMP)  # Strumpack uses this
-if(OPENMP_FOUND)
+
+if(OPENMP_FORTRAN_FOUND)
   set(CMAKE_Fortran_FLAGS "${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
-# On edison, OpenMP_EXE_LINKER_FLAGS is empty
-#  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_Fortran_FLAGS}")
- message("-- OpenMP_EXE_LINKER_FLAGS='${OpenMP_EXE_LINKER_FLAGS}'")
- message("-- CMAKE_EXE_LINKER_FLAGS='${CMAKE_EXE_LINKER_FLAGS}'")
+  set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
 endif()
 
+if(OPENMP_CXX_FOUND)
+  set(CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
+  set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "${CMAKE_CXX_IMPLICIT_LINK_LIBRARIES} ${OpenMP_CXX_FLAGS}")
+endif()
 
 
  # #--------------------- BLAS ---------------------
@@ -246,19 +247,19 @@ if(BUTTERFLYPACK_USE_MPI3 )
 endif()
 
 
-#Test Fortran Destructor
+#Test Fortran Destructo
 check_fortran_source_compiles(
 "module MOD
 	type quant
 		contains
-		final :: finalizer
+		final :: finalize
 	end type quant
 
 	contains
 
 	subroutine finalizer( this )
 		type(quant), intent(inout) :: this
-	end subroutine finalizer
+	end subroutine finalize
 end module MOD
 
 PROGRAM TEST
@@ -307,10 +308,27 @@ include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 #
 ######################################################################
 
+find_program (SED_TOOL NAMES sed)
+if (NOT SED_TOOL)
+	message (FATAL_ERROR "Unable to find sed")
+endif (NOT SED_TOOL)
+
+if(APPLE)
+execute_process (
+     COMMAND cp PrecisionPreprocessing.sh PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i "" -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i "" -e "/\r\"/d" PrecisionPreprocessing_mac.sh
+     COMMAND bash PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+elseif(UNIX)
 execute_process (
     COMMAND bash PrecisionPreprocessing.sh
-	WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+    WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
+else()
+	message(FATAL_ERROR "The current OS is not yet supported")
+endif()
 
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)

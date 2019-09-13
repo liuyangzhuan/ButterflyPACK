@@ -59,6 +59,7 @@ extern "C" {
 	void c_bpack_printoption(F2Cptr* option,F2Cptr* ptree);
 
 	void c_bpack_getversionnumber(int* v_major,int* v_minor,int* v_bugfix);
+	void c_bpack_treeindex_merged2child(int* idx_merge,int* idx_child);
 
 	void c_bpack_deletestats(F2Cptr* stats);
 	void c_bpack_deleteproctree(F2Cptr* ptree);
@@ -76,7 +77,7 @@ extern "C" {
 
 	void c_bf_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 
-	void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree);
+	void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 
 	void c_bf_construct_element_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,void (*C_FuncZmnBlock)(int*, int*, int*, int*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 

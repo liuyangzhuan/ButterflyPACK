@@ -339,7 +339,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
 	rankmax_r1 = min(ceiling_safe(option%sample_para*nn),mm)
-	if(level==0)rankmax_r1=min(ceiling_safe(min(0.5d0,option%sample_para)*nn),mm)
+	if(level==0)rankmax_r1=min(ceiling_safe(option%sample_para*nn),mm)
 	rankmax_c = nn
 	allocate(select_row(rankmax_r1+nn*option%knn))
 	allocate(select_column(rankmax_c))
@@ -1425,7 +1425,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 	! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
 	rankmax_r = mm
 	rankmax_c1 = min(nn,ceiling_safe(option%sample_para*mm))
-	if(level==level_butterfly+1)rankmax_c1=min(ceiling_safe(min(0.5d0,option%sample_para)*mm),nn)
+	if(level==level_butterfly+1)rankmax_c1=min(ceiling_safe(option%sample_para*mm),nn)
 	allocate(select_row(rankmax_r))
 	allocate(select_column(rankmax_c1+option%knn*mm))
 	do i=1, rankmax_r

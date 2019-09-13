@@ -193,19 +193,19 @@ public:
 inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 
   C_QuantApp* Q = (C_QuantApp*) quant;
-  Q->Sample(*m,*n,val);
+  Q->Sample(*m-1,*n-1,val);
 }
 
 // The distance function wrapper required by the Fortran HODLR code
 inline void C_FuncDistmn(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  // Q->Sample(*m,*n,val);
+
 }
 
 // The compressibility function wrapper required by the Fortran HODLR code
 inline void C_FuncNearFar(int *m, int *n, int *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  // Q->Sample(*m,*n,val);
+
 }
 
 // The extraction sampling function wrapper required by the Fortran HODLR code
@@ -243,7 +243,7 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
   for (int ii=0; ii<cnt; ii++){
 	xout[ii] = *b*xout[ii] + *a*xout1[ii];
   }
-  delete xout1;
+  delete[] xout1;
 }
 
 
@@ -514,8 +514,8 @@ if(tst==3){
 	d_c_bpack_delete(&bmat1);
 	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
-	delete perms1;
-	delete tree1;
+	delete[] perms1;
+	delete[] tree1;
 
 
 
@@ -562,8 +562,8 @@ if(tst==3){
 	d_c_bpack_delete(&bmat1);
 	d_c_bpack_deleteoption(&option1);
 	delete quant_ptr1;
-	delete perms1;
-	delete tree1;
+	delete[] perms1;
+	delete[] tree1;
 
 
 
@@ -599,7 +599,7 @@ if(tst==3){
 	int myrow=0;     // local number of rows
 	int mycol=0;     // local number of columns
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh1, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fourth BF: "<<std::endl;
@@ -631,7 +631,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering
 	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
@@ -661,8 +661,8 @@ if(tst==3){
 	d_c_bpack_deleteoption(&option);
 
 	delete quant_ptr;
-	delete perms;
-	delete tree;
+	delete[] perms;
+	delete[] tree;
 
 
 
