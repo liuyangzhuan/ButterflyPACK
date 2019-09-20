@@ -726,6 +726,209 @@ end subroutine Hmat_block_construction
 
 
 
+
+
+
+!!!!!!! check error of BF construction using parallel element extraction
+subroutine BF_checkError(blocks,option,msh,ker,stats,ptree)
+use BPACK_DEFS
+implicit none
+
+	type(Hoption)::option
+	type(Hstat)::stats
+	! type(Bmatrix)::bmat
+	type(mesh)::msh
+	type(kernelquant)::ker
+	type(proctree)::ptree
+	type(intersect),allocatable::inters(:)
+	real(kind=8)::n1,n2,n3,n4
+	integer Ntest,passflag
+	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,rank1,rank2,ierr,MyID
+	integer:: cridx,info
+	integer,allocatable::rows(:),cols(:)
+	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Mat(:,:)
+	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)
+	integer N,M,i,j,ii,jj,nn,pp,myi,myj,iproc,jproc,rmax
+	integer edge_n,edge_m, rank
+	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
+	real(kind=8):: a,v1,v2,v3
+	DT:: value1,value2,value3
+	type(list)::lstr,lstc,lst,lstblk
+	type(nod),pointer::cur,curr,curc,curri,curci
+	class(*),pointer::ptr,ptrr,ptrc,ptrri,ptrci
+	integer::head,tail,idx,pgno,ctxt,nr_loc,nc_loc
+	type(matrixblock),pointer::blocks
+	integer num_blocks,idx_row,idx_col,idx_dat
+	integer,allocatable:: allrows(:),allcols(:),pmaps(:,:)
+	integer,allocatable::datidx(:),colidx(:),rowidx(:),pgidx(:)
+	DT,allocatable::alldat_loc(:)
+	integer:: Ninter,nr,nc,ntot_loc,level,Npmap,nproc,npavr,np
+
+
+	! Ninter=2**level
+	! nr=2500
+	! nc=2500
+
+	Ninter=4
+
+	nr=100
+	nc=100
+
+	allocate(colidx(Ninter))
+	allocate(rowidx(Ninter))
+	allocate(pgidx(Ninter))
+	! allocate(datidx(Ninter))
+
+	allocate(allrows(Ninter*nr))
+	allocate(allcols(Ninter*nc))
+
+	! pgno=1
+	! ctxt = ptree%pgrp(pgno)%ctxt
+	! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+	! nprow = ptree%pgrp(pgno)%nprow
+	! npcol = ptree%pgrp(pgno)%npcol
+
+	nproc = ptree%nproc
+	Npmap=min(Ninter,nproc)
+	npavr=nproc/Npmap
+	allocate(pmaps(Npmap,3))
+	do nn=1,Npmap
+		nprow = floor_safe(sqrt(dble(npavr)))
+		npcol = floor_safe(npavr/dble(nprow))
+		pmaps(nn,1)=nprow
+		pmaps(nn,2)=npcol
+		pmaps(nn,3)=(nn-1)*npavr
+	enddo
+
+	idx_row=0
+	idx_col=0
+	idx_dat=0
+	! ntot_loc=0
+	pp=0
+	do nn=1,Ninter
+		rowidx(nn)=nr
+		colidx(nn)=nc
+		pp=pp+1
+		pp=mod(pp-1,Npmap)+1
+		pgidx(nn)=pp
+		nprow=pmaps(pgidx(nn),1)
+		npcol=pmaps(pgidx(nn),2)
+		call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
+		! datidx(nn)=ntot_loc
+		if(myrow/=-1 .and. mycol/=-1)then
+			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
+			idx_dat = idx_dat + myArows*myAcols
+		endif
+
+		do ii=1,nr
+		call random_number(a)
+		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+
+		allrows(idx_row+1)=max(floor_safe(blocks%M*a),1)
+		! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
+		idx_row=idx_row+1
+		enddo
+
+		do ii=1,nc
+		call random_number(a)
+		call MPI_Bcast(a,1,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
+		allcols(idx_col+1)=max(floor_safe(blocks%N*a),1)+blocks%M
+		! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
+		idx_col=idx_col+1
+		enddo
+	enddo
+
+	allocate(alldat_loc(idx_dat))
+	if(idx_dat>0)alldat_loc=0
+
+	n1 = OMP_get_wtime()
+	call BF_ExtractElement(blocks,option,msh,stats,ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps)
+	n2 = OMP_get_wtime()
+
+
+
+
+	! compare extracted values with element_Zmn
+	v1=0
+	v2=0
+	v3=0
+	idx_row=0
+	idx_col=0
+	idx_dat=0
+	do nn=1,Ninter
+		nr = rowidx(nn)
+		nc = colidx(nn)
+		nprow=pmaps(pgidx(nn),1)
+		npcol=pmaps(pgidx(nn),2)
+		call Gridinfo_2D(pmaps(pgidx(nn),:),ptree%MyID,myrow,mycol)
+		if(myrow/=-1 .and. mycol/=-1)then
+			nr_loc = numroc_wp(nr, nbslpk, myrow, 0, nprow)
+			nc_loc = numroc_wp(nc, nbslpk, mycol, 0, npcol)
+			allocate(rows(nr_loc))
+			allocate(cols(nc_loc))
+			allocate(Mat(nr_loc,nc_loc))
+			do myi=1,nr_loc
+				call l2g(myi,myrow,nr,nprow,nbslpk,ii)
+				rows(myi) = allrows(ii+idx_row)
+			enddo
+			do myj=1,nc_loc
+				call l2g(myj,mycol,nc,npcol,nbslpk,jj)
+				cols(myj) = allcols(jj+idx_col)
+			enddo
+			call element_Zmn_block_user(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,0,passflag,ptree,stats)
+
+			do myi=1,nr_loc
+			do myj=1,nc_loc
+				value2 = alldat_loc(idx_dat+myi+(myj-1)*nr_loc)
+				value1 = Mat(myi,myj)
+				v1 =v1+abs(value1)**2d0
+				v2 =v2+abs(value2)**2d0
+				v3 =v3+abs(value2-value1)**2d0
+				! if(abs(value2-value1)**2d0/abs(value1)**2d0>1D-3)write(*,*)ptree%MyID,nn,myi,myj,abs(value2-value1)**2d0/abs(value1)**2d0,value2,value1
+			enddo
+			enddo
+			idx_dat	= idx_dat + nr_loc*nc_loc
+		else
+			nr_loc=0
+			nc_loc=0
+			allocate(rows(nr_loc))
+			allocate(cols(nc_loc))
+			allocate(Mat(nr_loc,nc_loc))
+			call element_Zmn_block_user(nr_loc,nc_loc,rows,cols,Mat,msh,option,ker,2,passflag,ptree,stats)
+		endif
+		deallocate(rows)
+		deallocate(cols)
+		deallocate(Mat)
+		idx_row=idx_row+nr
+		idx_col=idx_col+nc
+	enddo
+
+
+
+
+	deallocate(rowidx)
+	deallocate(colidx)
+	deallocate(pgidx)
+	! deallocate(datidx)
+	deallocate(allrows)
+	deallocate(allcols)
+	deallocate(alldat_loc)
+	deallocate(pmaps)
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,v1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,v2,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,v3,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BF_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
+
+	!stop
+
+end subroutine BF_checkError
+
+
+
+
 !!!!!!! extract a list of intersections from a block
 subroutine BF_ExtractElement(blocks_o,option,msh,stats,ptree,Ninter,allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps)
 use BPACK_DEFS

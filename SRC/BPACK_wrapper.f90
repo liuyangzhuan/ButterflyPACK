@@ -661,7 +661,7 @@ subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr,option_Cptr,stats_Cptr,ms
 	t1 = OMP_get_wtime()
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
-	call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
+	! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 	t2 = OMP_get_wtime()
 
 	!**** return the C address of hodlr structures to C caller
@@ -1257,6 +1257,8 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
 		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,1)
 	end if
 
+	call BF_checkError(blocks,option,msh,ker,stats,ptree)
+
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction finished"
 
@@ -1521,6 +1523,15 @@ implicit none
 	allcols1=allcols+blocks_o%M
 	allocate(pgidx1(Ninter))
 	pgidx1=pgidx+1
+
+	! do ii=1,idx_row
+	! write(*,*)'row',ii,allrows1(ii)
+	! enddo
+
+
+	! do jj=1,idx_col
+	! write(*,*)'col',jj,allcols1(jj)
+	! enddo
 
 	call BF_ExtractElement(blocks_o,option,msh,stats,ptree,Ninter,allrows1,allcols1,alldat_loc,rowidx,colidx,pgidx1,Npmap,pmaps)
 
