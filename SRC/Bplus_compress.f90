@@ -2157,6 +2157,12 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 		end do
 		call MPI_ALLREDUCE(MPI_IN_PLACE,bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
 	end do
+	
+	
+	! !!!!!!! check error
+	if(option%ErrFillFull==1)call Bplus_CheckError_Full(bplus,option,msh,ker,stats,ptree)
+	! !!!!!!! check error	
+	
 	! if(bplus%LL(1)%matrices_block(1)%level==1)write(*,*)bplus%LL(1)%rankmax,'dfdfdfdf'
 
     return
@@ -3270,9 +3276,6 @@ implicit none
 
 	if(.not. (min(blocks%M,blocks%N)>leafsize .or. (associated(gd%gdc))))then ! reach bottom level
 		! !!!!!!! check error
-		if(cridx==0)then
-		call LR_CheckError(blocks,option,msh,ker,stats,ptree,pgno,gd)
-		endif
 	else
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is alreay built in parallel
 			rank=blocks%rankmax
@@ -3601,10 +3604,6 @@ implicit none
 			blocks%rankmax = rank
 			blocks%rankmin = rank
 
-
-			! !!!!!!! check error
-			call LR_CheckError(blocks,option,msh,ker,stats,ptree,pgno,gd)
-			! !!!!!!! check error
 
 			! distribute UV factor into 1D grid
 			! write(*,*)rank,'wocanide',ptree%MyID
@@ -5912,135 +5911,103 @@ end subroutine LR_SeudoSkeleton
 
 
 
-!!!!!!! check error of LR compression of blocks by comparing the full block, assuming 2D block-cyclic distribution
-subroutine LR_CheckError(blocks,option,msh,ker,stats,ptree,pgno,gd)
+!!!!!!! check error of Bplus compression of blocks by comparing the full block, assuming final distribution
+subroutine Bplus_CheckError_Full(bplus,option,msh,ker,stats,ptree)
 use BPACK_DEFS
 implicit none
 
-	type(matrixblock)::blocks
+	type(blockplus)::bplus
+	type(matrixblock),pointer::blocks
 	type(mesh)::msh
 	type(Hoption)::option
 	type(kernelquant)::ker
 	type(Hstat)::stats
 	type(proctree)::ptree
-	integer pgno
-	type(grid),pointer::gd
+	integer pgno,pp
 	integer Ntest
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr,MyID
 	integer:: cridx,info
-	DT,allocatable:: Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:)
+	DT,allocatable:: Vin_glo(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:),Vout_glo(:,:),Vinter(:,:),Fullmat(:,:)
 	integer::descVin(9),descVout(9),descVinter(9),descFull(9),descButterflyU(9),descButterflyV(9)
 	integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax
-	integer edge_n,edge_m, rank
+	integer edge_n,edge_m, rank,head_n
 	real(kind=8):: fnorm1,fnorm0,rtemp1=0,rtemp0=0
 	integer,allocatable::mrange(:),nrange(:)
 	integer::mrange_dummy(1),nrange_dummy(1)
 	DT:: mat_dummy(1,1)
 	integer:: passflag=0
 
-	if(option%ErrFillFull==1)then
-
+		blocks=>bplus%LL(1)%matrices_block(1)
+		pgno = blocks%pgno
+		pp = ptree%MyID - ptree%pgrp(pgno)%head + 1
+	
 		Ntest=32
 		! Ntest=blocks%N/2
-		call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
-		if(myrow/=-1 .and. mycol/=-1)then
+		allocate(Vin_glo(blocks%N,Ntest))
+		if(pp==1)then
+		do ii=1,blocks%N
+		do jj=1,Ntest
+			call random_dp_number(Vin_glo(ii,jj))
+		end do
+		end do		
+		endif		
+		call MPI_Bcast(Vin_glo,blocks%N*Ntest,MPI_DT,pp-1,ptree%pgrp(pgno)%Comm,ierr)
+		
+		allocate(Vin(blocks%N_loc,Ntest))
+		head_n = blocks%N_p(pp,1) -1
+		
+		Vin(:,:) = Vin_glo(head_n+1:head_n+blocks%N_loc,:)
+		
 
-			rank = blocks%rankmax
+		allocate(Vout1(blocks%M_loc,Ntest))
+		allocate(Vout2(blocks%M_loc,Ntest))
+		Vout1=0
+		Vout2=0
+		
+		call Bplus_block_MVP_dat(bplus,'N',blocks%M_loc,blocks%N_loc,Ntest,Vin,Vout2,cone,czero,ptree,stats)
+		
 
-
-			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-			call descinit( descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			call assert(info==0,'descinit fail for descButterflyV')
-
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-			call descinit( descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			call assert(info==0,'descinit fail for descButterflyU')
-
-			myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)
-			call descinit( descVin, blocks%N, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Vin(myArows,myAcols))
-			do ii=1,myArows
-			do jj=1,myAcols
-				call random_dp_number(Vin(ii,jj))
-			end do
-			end do
-
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(blocks%N, nbslpk, mycol, 0, npcol)
-			call descinit( descFull, blocks%M, blocks%N, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Fullmat(myArows,myAcols))
-			allocate(mrange(myArows))
-			allocate(nrange(myAcols))
-			do myi=1,myArows
-				call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
-				mrange(myi)=blocks%headm + ii - 1
-			enddo
-			do myj=1,myAcols
-				call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
-				nrange(myj) = blocks%headn + jj - 1
-			enddo
-			call element_Zmn_block_user(myArows,myAcols,mrange,nrange,Fullmat,msh,option,ker,0,passflag,ptree,stats)
-			deallocate(mrange)
-			deallocate(nrange)
-
-			! do myi=1,myArows
-				! call l2g(myi,myrow,blocks%M,nprow,nbslpk,ii)
-				! do myj=1,myAcols
-					! call l2g(myj,mycol,blocks%N,npcol,nbslpk,jj)
-					! edge_m = blocks%headm + ii - 1
-					! edge_n = blocks%headn + jj - 1
-					! call element_Zmn(edge_m,edge_n,Fullmat(myi,myj),msh,option,ker)
-				! enddo
-			! enddo
-
-			! compute the exact results
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)
-			call descinit( descVout, blocks%M, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Vout1(myArows,myAcols))
-			allocate(Vout2(myArows,myAcols))
-			Vout1=0
-			Vout2=0
-			call pgemmf90('N','N',blocks%M,Ntest,blocks%N,cone, Fullmat,1,1,descFull,Vin,1,1,descVin,czero,Vout1,1,1,descVout)
-
-			! compute the approximate results
-			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)
-			call descinit( descVinter, rank, Ntest, nbslpk, nbslpk, 0, 0, gd%ctxt, max(myArows,1), info )
-			allocate(Vinter(myArows,myAcols))
-			Vinter=0
-			call pgemmf90('T','N',rank,Ntest,blocks%N,cone, blocks%ButterflyV%blocks(1)%matrix,1,1,descButterflyV,Vin,1,1,descVin,czero,Vinter,1,1,descVinter)
-			call pgemmf90('N','N',blocks%M,Ntest,rank,cone, blocks%ButterflyU%blocks(1)%matrix,1,1,descButterflyU,Vinter,1,1,descVinter,czero,Vout2,1,1,descVout)
-
-			myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(Ntest, nbslpk, mycol, 0, npcol)
-			Vout2 = Vout2-Vout1
-			rtemp1 = fnorm(Vout2,myArows,myAcols)**2d0
-			rtemp0 = fnorm(Vout1,myArows,myAcols)**2d0
-			deallocate(Vin,Vout1,Vout2,Vinter,Fullmat)
-		endif
-
+		allocate(Fullmat(blocks%M_loc,blocks%N))
+		allocate(mrange(blocks%M_loc))
+		allocate(nrange(blocks%N))
+		do myi=1,blocks%M_loc
+			mrange(myi)=blocks%M_p(pp,1) + blocks%headm -1 +myi - 1
+		enddo
+		do myj=1,blocks%N			
+			nrange(myj) = blocks%headn + myj - 1   
+		enddo
+		call element_Zmn_block_user(blocks%M_loc,blocks%N,mrange,nrange,Fullmat,msh,option,ker,0,passflag,ptree,stats)
+		deallocate(mrange)
+		deallocate(nrange)		
+		
 		passflag=0
 		do while(passflag==0)
 			call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
-		enddo
+		enddo		
+
+		
+		call gemmf90(Fullmat, blocks%M_loc,Vin_glo,blocks%N,Vout1,blocks%M_loc,'N','N',blocks%M_loc,Ntest,blocks%N,cone,czero)
+		
+		Vout2 = Vout2-Vout1
+		
+		rtemp1 = fnorm(Vout2,blocks%M_loc,Ntest)**2d0
+		rtemp0 = fnorm(Vout1,blocks%M_loc,Ntest)**2d0
+		
+		
+		
+		deallocate(Vout2,Vout1,Vin_glo)
 
 		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 		call MPI_ALLREDUCE(rtemp1,fnorm1,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
 
 		call MPI_Comm_rank(ptree%pgrp(pgno)%Comm,MyID,ierr)
 
-
-
 		if(MyID==0)then
-			write(*,*)blocks%row_group,blocks%col_group,'LR_HBACA error:',sqrt(fnorm1/fnorm0)
+			write(*,*)blocks%row_group,blocks%col_group,'CheckError_Full error:',sqrt(fnorm1/fnorm0)
 		endif
-	endif
 
-end subroutine LR_CheckError
+
+end subroutine Bplus_CheckError_Full
 
 
 subroutine LocalButterflySVD_Left(index_i_loc,index_j_loc,level_loc,level_butterflyL,level,index_i_m,blocks,option,msh,ButterflyP_old,ButterflyP)
