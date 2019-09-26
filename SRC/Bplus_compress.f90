@@ -6087,7 +6087,7 @@ implicit none
 		end do
 		end do
 		endif
-		call MPI_Bcast(Vin_glo,blocks%N*Ntest,MPI_DT,pp-1,ptree%pgrp(pgno)%Comm,ierr)
+		call MPI_Bcast(Vin_glo,blocks%N*Ntest,MPI_DT,Main_ID,ptree%pgrp(pgno)%Comm,ierr)
 
 		allocate(Vin(blocks%N_loc,Ntest))
 		head_n = blocks%N_p(pp,1) -1
@@ -6138,7 +6138,7 @@ implicit none
 
 		call MPI_Comm_rank(ptree%pgrp(pgno)%Comm,MyID,ierr)
 
-		if(MyID==0)then
+		if(MyID==Main_ID)then
 			write(*,*)blocks%row_group,blocks%col_group,'CheckError_Full error:',sqrt(fnorm1/fnorm0)
 		endif
 
