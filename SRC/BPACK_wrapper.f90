@@ -543,6 +543,11 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	valid_opt=1
 	endif
 
+	if(trim(str)=='sample_heuristic')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%sample_heuristic=val_i
+	valid_opt=1
+	endif
 
 
 !**** double parameters

@@ -56,7 +56,8 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 	integer,allocatable::jpvt(:)
 	integer Nlayer,level_half,level_final,idx_r,inc_r,nr,idx_c,inc_c,nc
 
-	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:)
+	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),select_row_pre(:),select_col_pre(:)
+	integer::Nrow_pre,Ncol_pre
     Memory=0.
 
 	blocks%rankmax = -100000
@@ -72,7 +73,8 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
     rankmax_for_butterfly=-100000
 	allocate (rankmin_for_butterfly(0:level_butterfly))
 	rankmin_for_butterfly=100000
-
+	allocate(select_row_pre(blocks%M))
+	allocate(select_col_pre(blocks%N))
     num_blocks=2**level_butterfly
 
 
@@ -141,13 +143,34 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 			endif
 			rank_new=0
 			flops=0
+			Nrow_pre=0
 			! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
 			do index_ij=1, nr*nc
-				index_j_loc = (index_ij-1)/nr+1
-				index_i_loc= mod(index_ij-1,nr) + 1
+				index_i_loc = (index_ij-1)/nc+1
+				index_j_loc= mod(index_ij-1,nc) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new1,flops1)
+				
+				! if(option%sample_heuristic==1)then
+				! if(index_j_loc==1)then
+
+					! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here
+					! if(level==level_butterfly+1)then
+						! group_m=group_m*2**level_butterfly-1+index_i
+					! else
+						! group_m=group_m*2**level-1+index_i
+					! endif
+					! header_m=msh%basis_group(group_m)%head
+
+					! ! Nrow_pre=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
+					! Nrow_pre=0
+					! do ii=1,Nrow_pre
+						! select_row_pre(ii)=header_m+ii-1
+					! enddo
+				! endif
+				! endif
+				
+				call BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new1,Nrow_pre,select_row_pre,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -213,13 +236,34 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 
 			rank_new=0
 			flops=0
+			Ncol_pre=0
 			! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
 			do index_ij=1, nr*nc
 				index_j_loc = (index_ij-1)/nr+1
 				index_i_loc= mod(index_ij-1,nr) + 1
 				index_i=(index_i_loc-1)*inc_r+idx_r
 				index_j=(index_j_loc-1)*inc_c+idx_c
-				call BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new1,flops1)
+				
+				! if(option%sample_heuristic==1)then
+				! if(index_i_loc==1)then
+							
+					! group_n=blocks%col_group
+					! if(level==0)then
+						! group_n=group_n*2**level_butterfly-1+index_j
+					! else
+						! group_n=group_n*2**(level_butterfly-level+1)-1+index_j
+					! endif
+					! header_n=msh%basis_group(group_n)%head
+
+					! ! Ncol_pre=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
+					! Ncol_pre=0
+					! do ii=1,Ncol_pre
+						! select_col_pre(ii)=header_n+ii-1
+					! enddo				
+				! endif
+				! endif
+
+				call BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new1,Ncol_pre,select_col_pre,flops1)
 				rank_new = MAX(rank_new,rank_new1)
 				flops = MAX(flops,flops1)
 			enddo
@@ -246,6 +290,8 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 
     deallocate (rankmax_for_butterfly)
     deallocate (rankmin_for_butterfly)
+	 deallocate (select_row_pre)
+	 deallocate (select_col_pre)
 
     if (level_butterfly/=0) then
         do level=0, level_butterfly+1
@@ -271,7 +317,7 @@ end subroutine BF_compress_NlogN
 
 
 
-subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,rank_new,Nrow_pre,select_row_pre,flops)
 
    use BPACK_DEFS
    implicit none
@@ -297,10 +343,12 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 
     integer,allocatable:: select_row(:),select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:),order(:)
-    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),core_tmp(:,:),core_tmp1(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
 	integer Nlayer,passflag,levelm,nrow,ncol
+	integer Nrow_pre
+	integer select_row_pre(:)
 
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:),mrange1(:),nrange1(:),mmap(:),nmap(:),mnmap(:,:)
 	real(kind=8)::n2,n1
@@ -341,7 +389,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 	rankmax_r1 = min(ceiling_safe(option%sample_para*nn),mm)
 	if(level==0)rankmax_r1=min(ceiling_safe(option%sample_para*nn),mm)
 	rankmax_c = nn
-	allocate(select_row(rankmax_r1+nn*option%knn))
+	allocate(select_row(rankmax_r1+nn*option%knn+Nrow_pre))
 	allocate(select_column(rankmax_c))
 	do i=1, rankmax_c
 		select_column(i)=i
@@ -369,6 +417,12 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		enddo
 	enddo
 	endif
+
+	do ii=1,Nrow_pre
+		rankmax_r1=rankmax_r1+1
+		select_row(rankmax_r1)=select_row_pre(ii)+1-header_m
+	enddo
+
 	call remove_dup_int(select_row,rankmax_r1,rankmax_r)
 
 
@@ -478,9 +532,11 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		deallocate(nrange)
 
 		allocate (core(rankmax_r,rankmax_c))
+		allocate (core_tmp(rankmax_c,rankmax_r))
 		do j=1,rankmax_c
 			core(:,j)=matrix_V(:,select_column(j))
 		enddo
+		call copymatT(core,core_tmp,rankmax_r,rankmax_c)
 
 
 		! ! !$omp parallel
@@ -524,6 +580,21 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		do j=1, rank_new
 			blocks%ButterflySkel(0)%inds(1,index_j_loc_s)%array(j)=select_column(jpvt(j))
 		enddo
+
+		if(option%sample_heuristic==1)then
+		allocate (core_tmp1(rank_new,rankmax_r))
+		do i=1,rank_new
+			core_tmp1(i,:)=core_tmp(jpvt(i),:)
+		enddo
+		jpvt=0
+		call geqp3modf90(core_tmp1,jpvt,tau,option%tol_comp,SafeUnderflow,Nrow_pre,flop=flop)
+		flops = flops + flop
+		Nrow_pre=rank_new
+		do i=1,Nrow_pre
+			select_row_pre(i)=header_m+select_row(jpvt(i))-1
+		enddo
+		deallocate(core_tmp1)
+		endif
 
 
 	elseif (level==level_butterfly+1) then
@@ -730,9 +801,11 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 		deallocate(nrange)
 
 		allocate (core(rankmax_r,rankmax_c))
+		allocate (core_tmp(rankmax_c,rankmax_r))
 		do j=1,rankmax_c
 			core(:,j)=matrix_V(:,select_column(j))
 		enddo
+		call copymatT(core,core_tmp,rankmax_r,rankmax_c)
 
 		! ! !$omp parallel
 		! ! !$omp single
@@ -789,15 +862,32 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
 			endif
 		enddo
 		! !$omp end taskloop
+
+		if(option%sample_heuristic==1)then
+		allocate (core_tmp1(rank_new,rankmax_r))
+		do i=1,rank_new
+			core_tmp1(i,:)=core_tmp(jpvt(i),:)
+		enddo
+		jpvt=0
+		call geqp3modf90(core_tmp1,jpvt,tau,option%tol_comp,SafeUnderflow,Nrow_pre,flop=flop)
+		flops = flops + flop
+		Nrow_pre=rank_new
+		do i=1,Nrow_pre
+			select_row_pre(i)=header_m+select_row(jpvt(i))-1
+		enddo
+		deallocate(core_tmp1)
+		endif
+
+
 	endif
 
 	if(allocated(core))deallocate (core)
+	if(allocated(core_tmp))deallocate (core_tmp)
 	if(allocated(tau))deallocate (tau)
 	if(allocated(jpvt))deallocate (jpvt)
 	if(allocated(matrix_V))deallocate (matrix_V)
 	if(allocated(select_row))deallocate (select_row)
 	if(allocated(select_column))deallocate (select_column)
-
 
 end subroutine BF_compress_NlogN_oneblock_R
 
@@ -1356,7 +1446,7 @@ end subroutine BF_all2all_skel
 
 
 
-subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new,flops)
+subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_start,option,stats,msh,ker,ptree,index_i,index_j,level,level_final,rank_new,Ncol_pre,select_col_pre,flops)
 
    use BPACK_DEFS
    implicit none
@@ -1382,13 +1472,15 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 
     integer,allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
     integer,allocatable:: select_row_rr(:), select_column_rr(:)
-    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
+    DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:),matrix_tmp(:,:), matrix_little_cc(:,:),core(:,:),core_tmp(:,:),core_tmp1(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
 	integer Nlayer,levelm,group_m_mid,group_n_mid,idxstart,idxend,nrow,ncol
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),mrange(:),nrange(:),mrange1(:),nrange1(:),mmap(:),nmap(:),mnmap(:,:)
 	integer::passflag=0
 	real(kind=8)::n2,n1
+	integer::Ncol_pre
+	integer::select_col_pre(:)
 
 
 	flops=0
@@ -1427,7 +1519,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 	rankmax_c1 = min(nn,ceiling_safe(option%sample_para*mm))
 	if(level==level_butterfly+1)rankmax_c1=min(ceiling_safe(option%sample_para*mm),nn)
 	allocate(select_row(rankmax_r))
-	allocate(select_column(rankmax_c1+option%knn*mm))
+	allocate(select_column(rankmax_c1+option%knn*mm+Ncol_pre))
 	do i=1, rankmax_r
 		select_row(i)=i
 	enddo
@@ -1454,6 +1546,12 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 		enddo
 	enddo
 	endif
+	
+	do ii=1,Ncol_pre
+		rankmax_c1=rankmax_c1+1
+		select_column(rankmax_c1)=select_col_pre(ii)+1-header_n
+	enddo	
+	
 	call remove_dup_int(select_column,rankmax_c1,rankmax_c)
 
 
@@ -1651,9 +1749,12 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			deallocate(matrix_V_tmp)
 
 			allocate (core(rankmax_c,rankmax_r))
+			allocate (core_tmp(rankmax_r,rankmax_c))
 			do i=1,rankmax_r
 				core(:,i)=matrix_V(:,select_row(i))
-			enddo
+			enddo	
+			call copymatT(core,core_tmp,rankmax_c,rankmax_r)
+			
 
 			! ! !$omp parallel
 			! ! !$omp single
@@ -1696,6 +1797,23 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			do j=1, rank_new
 				blocks%ButterflySkel(level_butterfly+1)%inds(index_i_loc_s,1)%array(j)=select_row(jpvt(j))
 			enddo
+			
+			if(option%sample_heuristic==1)then
+			allocate (core_tmp1(rank_new,rankmax_c))
+			do i=1,rank_new
+				core_tmp1(i,:)=core_tmp(jpvt(i),:)
+			enddo			
+			jpvt=0
+			call geqp3modf90(core_tmp1,jpvt,tau,option%tol_comp,SafeUnderflow,Ncol_pre,flop=flop)
+			flops = flops + flop
+			Ncol_pre=rank_new
+			do i=1,Ncol_pre
+				select_col_pre(i)=header_n+select_column(jpvt(i))-1
+			enddo
+			deallocate(core_tmp1)
+			endif
+			
+			
 		endif
 
 	elseif (level==0) then
@@ -2048,9 +2166,12 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 			call copymatT(matrix_V_tmp,matrix_V,mm,rankmax_c)
 			deallocate(matrix_V_tmp)
 			allocate (core(rankmax_c,rankmax_r))
+			allocate (core_tmp(rankmax_r,rankmax_c))
 			do i=1,rankmax_r
-			core(:,i)=matrix_V(:,select_row(i))
-			enddo
+				core(:,i)=matrix_V(:,select_row(i))
+			enddo	
+			call copymatT(core,core_tmp,rankmax_c,rankmax_r)			
+			
 
 
 			allocate(jpvt(max(rankmax_c,rankmax_r)))
@@ -2087,18 +2208,33 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
 				endif
 			enddo
 			! !$omp end taskloop
+			
+			if(option%sample_heuristic==1)then
+			allocate (core_tmp1(rank_new,rankmax_c))
+			do i=1,rank_new
+				core_tmp1(i,:)=core_tmp(jpvt(i),:)
+			enddo			
+			jpvt=0
+			call geqp3modf90(core_tmp1,jpvt,tau,option%tol_comp,SafeUnderflow,Ncol_pre,flop=flop)
+			flops = flops + flop
+			Ncol_pre=rank_new
+			do i=1,Ncol_pre
+				select_col_pre(i)=header_n+select_column(jpvt(i))-1
+			enddo
+			deallocate(core_tmp1)
+			endif
+			
 		endif
 
 	endif
 
 	if(allocated(core))deallocate (core)
+	if(allocated(core_tmp))deallocate (core_tmp)
 	if(allocated(tau))deallocate (tau)
 	if(allocated(jpvt))deallocate (jpvt)
 	if(allocated(matrix_V))deallocate (matrix_V)
 	if(allocated(select_row))deallocate (select_row)
 	if(allocated(select_column))deallocate (select_column)
-
-
 end subroutine BF_compress_NlogN_oneblock_C
 
 
@@ -2157,12 +2293,12 @@ subroutine Bplus_compress_N15(bplus,option,Memory,stats,msh,ker,ptree)
 		end do
 		call MPI_ALLREDUCE(MPI_IN_PLACE,bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
 	end do
-	
-	
+
+
 	! !!!!!!! check error
 	if(option%ErrFillFull==1)call Bplus_CheckError_Full(bplus,option,msh,ker,stats,ptree)
-	! !!!!!!! check error	
-	
+	! !!!!!!! check error
+
 	! if(bplus%LL(1)%matrices_block(1)%level==1)write(*,*)bplus%LL(1)%rankmax,'dfdfdfdf'
 
     return
@@ -5940,7 +6076,7 @@ implicit none
 		blocks=>bplus%LL(1)%matrices_block(1)
 		pgno = blocks%pgno
 		pp = ptree%MyID - ptree%pgrp(pgno)%head + 1
-	
+
 		Ntest=32
 		! Ntest=blocks%N/2
 		allocate(Vin_glo(blocks%N,Ntest))
@@ -5949,23 +6085,23 @@ implicit none
 		do jj=1,Ntest
 			call random_dp_number(Vin_glo(ii,jj))
 		end do
-		end do		
-		endif		
+		end do
+		endif
 		call MPI_Bcast(Vin_glo,blocks%N*Ntest,MPI_DT,pp-1,ptree%pgrp(pgno)%Comm,ierr)
-		
+
 		allocate(Vin(blocks%N_loc,Ntest))
 		head_n = blocks%N_p(pp,1) -1
-		
+
 		Vin(:,:) = Vin_glo(head_n+1:head_n+blocks%N_loc,:)
-		
+
 
 		allocate(Vout1(blocks%M_loc,Ntest))
 		allocate(Vout2(blocks%M_loc,Ntest))
 		Vout1=0
 		Vout2=0
-		
+
 		call Bplus_block_MVP_dat(bplus,'N',blocks%M_loc,blocks%N_loc,Ntest,Vin,Vout2,cone,czero,ptree,stats)
-		
+
 
 		allocate(Fullmat(blocks%M_loc,blocks%N))
 		allocate(mrange(blocks%M_loc))
@@ -5973,28 +6109,28 @@ implicit none
 		do myi=1,blocks%M_loc
 			mrange(myi)=blocks%M_p(pp,1) + blocks%headm -1 +myi - 1
 		enddo
-		do myj=1,blocks%N			
-			nrange(myj) = blocks%headn + myj - 1   
+		do myj=1,blocks%N
+			nrange(myj) = blocks%headn + myj - 1
 		enddo
 		call element_Zmn_block_user(blocks%M_loc,blocks%N,mrange,nrange,Fullmat,msh,option,ker,0,passflag,ptree,stats)
 		deallocate(mrange)
-		deallocate(nrange)		
-		
+		deallocate(nrange)
+
 		passflag=0
 		do while(passflag==0)
 			call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
-		enddo		
+		enddo
 
-		
+
 		call gemmf90(Fullmat, blocks%M_loc,Vin_glo,blocks%N,Vout1,blocks%M_loc,'N','N',blocks%M_loc,Ntest,blocks%N,cone,czero)
-		
+
 		Vout2 = Vout2-Vout1
-		
+
 		rtemp1 = fnorm(Vout2,blocks%M_loc,Ntest)**2d0
 		rtemp0 = fnorm(Vout1,blocks%M_loc,Ntest)**2d0
-		
-		
-		
+
+
+
 		deallocate(Vout2,Vout1,Vin_glo)
 
 		call MPI_ALLREDUCE(rtemp0,fnorm0,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
