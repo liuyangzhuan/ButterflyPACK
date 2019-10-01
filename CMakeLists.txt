@@ -324,6 +324,7 @@ if(APPLE)
 execute_process (
      COMMAND cp PrecisionPreprocessing.sh PrecisionPreprocessing_mac.sh
      COMMAND ${SED_TOOL} -i "" -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i "" -e "s/eval//g" PrecisionPreprocessing_mac.sh
      COMMAND ${SED_TOOL} -i "" -e "/\r\"/d" PrecisionPreprocessing_mac.sh
      COMMAND bash PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
