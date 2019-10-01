@@ -350,7 +350,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 			ii=ii+1
 		endif
 	enddo
-
+	call PrintOptions(option,ptree)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)'Blackbox HODLR for frontal matrix compression'
 

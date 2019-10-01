@@ -32,6 +32,7 @@ PROGRAM ButterflyPACK_IE_2D
 	use BPACK_Utilities
 	use omp_lib
 	use MISC_Utilities
+	use BPACK_wrapper
     implicit none
 
 	! include "mkl_vml.fi"
@@ -114,6 +115,11 @@ PROGRAM ButterflyPACK_IE_2D
        ! option%level_check=1
     option%tol_itersol=1d-5
     ! option%sample_para=4d0
+
+	! do ii=2,15
+	! call C_BPACK_TreeIndex_Merged2Child(ii,jj)
+	! write(*,*)ii,jj
+	! enddo
 
 	nargs = iargc()
 	ii=1

@@ -386,7 +386,7 @@ PROGRAM ButterflyPACK_ScatteringMatrix_Matvec
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
 
-
+	call PrintOptions(option,ptree)
 
 	if(quant%explicitflag ==1)then
 

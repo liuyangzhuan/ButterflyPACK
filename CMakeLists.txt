@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "1")
 set(VERSION_MINOR "0")
-set(VERSION_BugFix "2")
+set(VERSION_BugFix "3")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 ######################################################################
@@ -130,11 +130,13 @@ find_package(OpenMP)
 
 if(OPENMP_FORTRAN_FOUND)
   set(CMAKE_Fortran_FLAGS "${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
+  set(OpenMP_Fortran_FLAGS_EXPORT "${OpenMP_Fortran_FLAGS}")
   set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
 endif()
 
 if(OPENMP_CXX_FOUND)
   set(CMAKE_CXX_FLAGS "${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
+  set(OpenMP_CXX_FLAGS_EXPORT "${OpenMP_CXX_FLAGS}")
   set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "${CMAKE_CXX_IMPLICIT_LINK_LIBRARIES} ${OpenMP_CXX_FLAGS}")
 endif()
 

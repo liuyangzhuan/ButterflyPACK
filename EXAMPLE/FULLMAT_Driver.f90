@@ -255,6 +255,7 @@ PROGRAM ButterflyPACK_FULL
 		endif
 	enddo
 
+	call PrintOptions(option,ptree)
 
 !******************************************************************************!
 ! generate a LR matrix as two matrix product

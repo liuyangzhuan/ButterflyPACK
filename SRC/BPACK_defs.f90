@@ -23,7 +23,7 @@ module BPACK_DEFS
 
 	integer,parameter:: BPACK_MAJOR_VERSION=1
 	integer,parameter:: BPACK_MINOR_VERSION=0
-	integer,parameter:: BPACK_PATCH_VERSION=0
+	integer,parameter:: BPACK_PATCH_VERSION=3
 
 	!**** common parameters
 	integer,parameter::dp=kind(0.0d0),sp=kind(0.0)

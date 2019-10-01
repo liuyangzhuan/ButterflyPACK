@@ -201,7 +201,7 @@ PROGRAM ButterflyPACK_KRR
 		endif
 	enddo
 
-
+	call PrintOptions(option,ptree)
 
 
 	quant%trainfile_p=trim(quant%DATA_DIR)//'_train.csv'

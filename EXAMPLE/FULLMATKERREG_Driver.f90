@@ -171,6 +171,9 @@ PROGRAM ButterflyPACK_FullKRR
    endif
    !***********************************************************************
 
+   call PrintOptions(option,ptree)
+
+
 	t1 = OMP_get_wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix......"
 	allocate(quant%perms(quant%ntrain+quant%ntest))

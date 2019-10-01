@@ -357,7 +357,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		endif
 	enddo
 
-
+	call PrintOptions(option,ptree)
 
 	call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
 	write(smyrow , *) myrow
@@ -380,10 +380,10 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	allocate(tree(1))
 	tree(1) = quant%Nunk
 
-							   
-																										
-	  
-									
+
+
+
+
 
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
@@ -402,7 +402,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
 
 
-	   
+
 
 	deallocate(tree)
 
@@ -430,7 +430,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
-					   
+
 
 
 	msh1%Nunk = msh%Nunk

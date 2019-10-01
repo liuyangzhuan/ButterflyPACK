@@ -190,7 +190,7 @@ PROGRAM ButterflyPACK_IE_2D
 		endif
 	enddo
 
-
+	call PrintOptions(option_A,ptree_A)
 
     quant%wavenum=2*pi/quant%wavelength
 

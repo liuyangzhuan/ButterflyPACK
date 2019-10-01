@@ -16,7 +16,7 @@ cmake .. \
 	-DTPL_LAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_intel_lp64.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_intel_thread.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_core.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/compiler/lib/intel64/libiomp5.a" \
 	-DTPL_SCALAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_scalapack_lp64.a" \
 	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/software/arpack-ng-intel/build/lib/libparpack.a;/home/administrator/Desktop/software/arpack-ng-intel/build/lib/libarpack.a" \
-	-DBUILD_SHARED_LIBS=ON \
+	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_Fortran_COMPILER=mpiifort \
 	-DCMAKE_EXE_LINKER_FLAGS="-qopenmp -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64 -lmkl_intel_thread -lmkl_intel_lp64 -lmkl_core" \
 	-DCMAKE_CXX_COMPILER=mpiicpc \
