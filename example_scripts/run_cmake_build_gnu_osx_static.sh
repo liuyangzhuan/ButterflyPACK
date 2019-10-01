@@ -10,11 +10,11 @@ rm -rf CMakeFiles
 /Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/cmake-3.15.1-fg3vqdb6wqkb7vwi7vdlnvi5qhuyvd34/bin/cmake .. \
 	-DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
 	-DCMAKE_CXX_FLAGS="" \
-	-DBUILD_SHARED_LIBS=ON \
-	-DTPL_BLAS_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openblas-0.3.7-pmh2e7ebbmrdk65p34rpqyb3lhlbduo5/lib/libopenblas.dylib" \
-	-DTPL_LAPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openblas-0.3.7-pmh2e7ebbmrdk65p34rpqyb3lhlbduo5/lib/libopenblas.dylib" \
-	-DTPL_SCALAPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/netlib-scalapack-2.0.2-3xcgrjzdj32awb5fifhed3bn6n7qd3hh/lib/libscalapack.dylib" \
-	-DTPL_ARPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/arpack-ng-3.7.0-tp6enbmmgupgdzyacydjbfvykqhynmnp/lib/libparpack.dylib;/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/arpack-ng-3.7.0-tp6enbmmgupgdzyacydjbfvykqhynmnp/lib/libarpack.dylib" \
+	-DBUILD_SHARED_LIBS=OFF \
+	-DTPL_BLAS_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openblas-0.3.7-pmh2e7ebbmrdk65p34rpqyb3lhlbduo5/lib/libopenblas.a" \
+	-DTPL_LAPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openblas-0.3.7-pmh2e7ebbmrdk65p34rpqyb3lhlbduo5/lib/libopenblas.a" \
+	-DTPL_SCALAPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/netlib-scalapack-2.0.2-ypegolhyyp3frhjp3g3fukpt3owiktig/lib/libscalapack.a" \
+	-DTPL_ARPACK_LIBRARIES="/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/arpack-ng-3.7.0-pmqotzmyxyyujrhbbazz66l54zwlxt7c/lib/libparpack.a;/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/arpack-ng-3.7.0-pmqotzmyxyyujrhbbazz66l54zwlxt7c/lib/libarpack.a" \
 	-DCMAKE_Fortran_COMPILER=/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openmpi-3.1.4-yyoaovisks4oywyfecxlz2gl4v5mrnp2/bin/mpif90 \
 	-DMPI_Fortran_COMPILER=/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openmpi-3.1.4-yyoaovisks4oywyfecxlz2gl4v5mrnp2/bin/mpif90 \
 	-DCMAKE_CXX_COMPILER=/Users/yangliu/Desktop/my_software/spack/opt/spack/darwin-highsierra-x86_64/clang-10.0.0-apple/openmpi-3.1.4-yyoaovisks4oywyfecxlz2gl4v5mrnp2/bin/mpic++ \
