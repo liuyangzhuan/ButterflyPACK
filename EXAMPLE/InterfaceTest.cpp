@@ -25,7 +25,6 @@
 #include <string>
 #include <iomanip>
 
-#include <omp.h>
 #include <pthread.h>
 
 #include <cmath>

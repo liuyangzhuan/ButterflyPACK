@@ -15,7 +15,7 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 #include "ButterflyPACK_config.fi"
-module Bplus_randomized
+module Bplus_randomizedop
 ! use Utilites_randomized
 
 use MISC_Utilities
@@ -4422,4 +4422,4 @@ end subroutine Bplus_Init_FromInput
 
 
 
-end module Bplus_randomized
+end module Bplus_randomizedop

@@ -70,9 +70,9 @@ grep -h "end module" --include='*.f90' --include='*.f' $SRCDIR/* |sed "s/[[:blan
 rm -rf $ZSRCDIR
 cp -r $SRCDIR $ZSRCDIR
 while IFS= read -r line; do
-    eval sed -i -e "s/$line/z_$line/g" $ZSRCDIR/*.f90
-    eval sed -i -e "s/$line/z_$line/g" $ZSRCDIR/*.f
-    eval sed -i -e "s/$line/z_$line/g" $ZSRCDIR/*.h
+    sed -i -e "s/[[:<:]]$line[[:>:]]/z_$line/g" $ZSRCDIR/*.f90
+    sed -i -e "s/[[:<:]]$line[[:>:]]/z_$line/g" $ZSRCDIR/*.f
+    sed -i -e "s/[[:<:]]$line[[:>:]]/z_$line/g" $ZSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex double /g" $ZSRCDIR/*.h
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.h
@@ -84,9 +84,9 @@ sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.f90
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
 while IFS= read -r line; do
-	eval sed -i -e "s/$line/d_$line/g" $DSRCDIR/*.f90
-	eval sed -i -e "s/$line/d_$line/g" $DSRCDIR/*.f
-	eval sed -i -e "s/$line/d_$line/g" $DSRCDIR/*.h
+	sed -i -e "s/[[:<:]]$line[[:>:]]/d_$line/g" $DSRCDIR/*.f90
+	sed -i -e "s/[[:<:]]$line[[:>:]]/d_$line/g" $DSRCDIR/*.f
+	sed -i -e "s/[[:<:]]$line[[:>:]]/d_$line/g" $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/double/g" $DSRCDIR/*.h
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.h
@@ -102,9 +102,9 @@ cd $ZSRCDIR
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
-		eval sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
+		sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
 		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
+		sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
 		mv "$file" "z${file}"
 	fi
 done
@@ -119,9 +119,9 @@ for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
 		mv "$file" "d${file}"
-		eval sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
+		sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
 		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
+		sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
 	fi
 done
 sed -i -e "s/butterflypack/dbutterflypack/g" $DSRCDIR/CMakeLists.txt

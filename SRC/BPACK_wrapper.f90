@@ -1327,7 +1327,7 @@ subroutine C_BPACK_Factor(bmat_Cptr,option_Cptr,stats_Cptr,ptree_Cptr,msh_Cptr) 
 	stats%Time_Factor=0
 
 
-    call BPACK_factorization(bmat,option,stats,ptree,msh)
+    call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 	! return the C address of hodlr structures to C caller
 	bmat_Cptr=c_loc(bmat)

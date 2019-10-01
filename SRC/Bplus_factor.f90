@@ -16,7 +16,7 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_factor
-use Bplus_randomized
+use Bplus_randomizedop
 
 contains
 

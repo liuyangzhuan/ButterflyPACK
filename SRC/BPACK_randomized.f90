@@ -16,7 +16,7 @@
 
 #include "ButterflyPACK_config.fi"
 module BPACK_randomMVP
-use Bplus_randomized
+use Bplus_randomizedop
 use BPACK_Solve_Mul
 use Bplus_compress
 

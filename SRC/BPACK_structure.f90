@@ -766,7 +766,7 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
     integer num_threads
 	integer,save:: my_tid=0
 	integer groupm_start,groupn_start
-	
+
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)

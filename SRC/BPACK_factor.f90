@@ -22,7 +22,7 @@ use MISC_Utilities
 use omp_lib
 use BPACK_block_sendrecv
 use BPACK_Utilities
-use Bplus_randomized
+use Bplus_randomizedop
 use BPACK_Solve_Mul
 contains
 

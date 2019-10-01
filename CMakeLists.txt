@@ -124,6 +124,18 @@ endif()
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
   "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+
+#---------------------- Additional Fortran linker library ---------
+#if(APPLE)
+#else()
+SET(_fortran_libs ${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES})
+FOREACH(_lib ${_fortran_libs})
+  # FIND_SYSTEM_LIBRARY(${_lib}_LIBRARY NAMES ${_lib})
+  set(EXTRA_LIB "-l${_lib} ${EXTRA_LIB}")
+ENDFOREACH()
+#endif()
+
+
 #--------------------- OpenMP ---------------------
 find_package(OpenMP)
 ## include(FindOpenMP)  # Strumpack uses this
@@ -219,13 +231,6 @@ if(MPI_Fortran_FOUND )
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MPI_C_LINK_FLAGS}" )
 endif()
 
-#---------------------- Additional Fortran linker library ---------
-SET(_fortran_libs ${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES})
-# SET_IF_EMPTY(_fortran_libs gfortran m quadmath c)
-FOREACH(_lib ${_fortran_libs})
-  # FIND_SYSTEM_LIBRARY(${_lib}_LIBRARY NAMES ${_lib})
-  set(EXTRA_LIB "-l${_lib} ${EXTRA_LIB}")
-ENDFOREACH()
 
 
 #Test MPI3
@@ -323,11 +328,13 @@ execute_process (
      COMMAND bash PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
+set(PREPROC_EXPORT "PrecisionPreprocessing_mac.sh")
 elseif(UNIX)
 execute_process (
     COMMAND bash PrecisionPreprocessing.sh
     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
+set(PREPROC_EXPORT "PrecisionPreprocessing.sh")
 else()
 	message(FATAL_ERROR "The current OS is not yet supported")
 endif()

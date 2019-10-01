@@ -19,7 +19,7 @@ module BPACK_constr
 
 ! use Butterfly_exact
 use Bplus_compress
-use Bplus_randomized
+use Bplus_randomizedop
 
 
 contains
