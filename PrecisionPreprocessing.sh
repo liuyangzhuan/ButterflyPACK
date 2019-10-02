@@ -6,8 +6,8 @@ ZSRCDIR=$ROOTDIR/SRC_DOUBLECOMPLEX
 
 MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
 TMP_FILE=$PWD/tmp.txt
-lb=\b
-rb=\b
+lb="\b"
+rb="\b"
 
 ######## The following takes care of windows to linux conversion
 declare -a StringArray=("*.*" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
@@ -72,9 +72,9 @@ grep -h "end module" --include='*.f90' --include='*.f' $SRCDIR/* |sed "s/[[:blan
 rm -rf $ZSRCDIR
 cp -r $SRCDIR $ZSRCDIR
 while IFS= read -r line; do
-    eval sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f90
-    eval sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f
-    eval sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.h
+    sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f90
+    sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f
+    sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex double /g" $ZSRCDIR/*.h
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.h
@@ -86,9 +86,9 @@ sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.f90
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
 while IFS= read -r line; do
-	eval sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f90
-	eval sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f
-	eval sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.h
+	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f90
+	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f
+	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/double/g" $DSRCDIR/*.h
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.h
