@@ -15,9 +15,9 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 #include "ButterflyPACK_config.fi"
-#ifdef Intel
-include "mkl_vsl.f90"
-#endif
+!#ifdef Intel
+!include "mkl_vsl.f90"
+!#endif
 
 
 module MISC_Utilities
