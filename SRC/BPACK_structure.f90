@@ -767,8 +767,6 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	integer,save:: my_tid=0
 	integer groupm_start,groupn_start
 	real(kind=8) t1,t2
-
-	t1 = OMP_get_wtime()
 	
 !$omp threadprivate(my_tid)
 
@@ -778,6 +776,8 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 !$omp end master
 	my_tid=omp_get_thread_num()
 !$omp end parallel
+
+	t1 = OMP_get_wtime()
 
 	allocate(distance(msh%Nunk,num_threads))
 	allocate(order(msh%Nunk,num_threads))
