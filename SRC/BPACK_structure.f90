@@ -766,7 +766,10 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
     integer num_threads
 	integer,save:: my_tid=0
 	integer groupm_start,groupn_start
+	real(kind=8) t1,t2
 
+	t1 = OMP_get_wtime()
+	
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)
@@ -830,6 +833,11 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	deallocate(distance)
 	deallocate(order)
 	deallocate(edge_temp)
+	
+	t2 = OMP_get_wtime()
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Finding neighbours time: ",t2-t1 	
+	
+	
 end subroutine FindKNNs
 
 
