@@ -5462,13 +5462,13 @@ subroutine LR_BACA_noOverlap(matU,matV,header_m,header_n,M,N,rmax,rank,tolerance
 			rankup = ranknew
 			if(rankup>0)then
 
+				if(rank+rankup>rmax)rankup=rmax-rank
+
 				row_Rtmp_knn = row_R_knn
 				call un_or_mqrf90(core_knn,tau,row_Rtmp_knn,'L','C',r_est_knn_r,N,rankup,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop
 				call trsmf90(core_knn,row_Rtmp_knn,'L','U','N','N',rankup,N,flop=flop)
 				stats%Flop_Fill = stats%Flop_Fill + flop
-
-				if(rank+rankup>rmax)rankup=rmax-rank
 
 				columns(rank+1:rankup+rank) = select_column_knn(jpvt(1:rankup))
 				rows(rank+1:rankup+rank) = select_row_knn(1:rankup)
