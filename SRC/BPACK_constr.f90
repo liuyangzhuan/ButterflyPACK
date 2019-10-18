@@ -173,7 +173,11 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
 		allocate(msh%nns(msh%Nunk,option%knn))
 		do ii=1,msh%Nunk
 		do kk=1,option%knn
-			msh%nns(ii,kk)=msh%old2new(nns(kk,msh%new2old(ii)))
+			if(nns(kk,msh%new2old(ii))/=0)then
+				msh%nns(ii,kk)=msh%old2new(nns(kk,msh%new2old(ii)))
+			else
+				msh%nns(ii,kk)=0
+			endif
 		enddo
 		enddo
 	endif
