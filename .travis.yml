@@ -87,19 +87,25 @@ before_install:
   - wget http://www.netlib.org/scalapack/scalapack-2.0.2.tgz
   - tar -xf scalapack-2.0.2.tgz
   - cd scalapack-2.0.2
-  - cp SLmake.inc.example SLmake.inc
-  - sed -i "s/BLASLIB/#BLASLIB/" SLmake.inc
-  - sed -i "s/LAPACKLIB/#LAPACKLIB/" SLmake.inc
-  - sed -i "s/LIBS/#LIBS/" SLmake.inc
-  - printf "BLASLIB=$BLAS_LIB\n" >> SLmake.inc
-  - printf "LAPACKLIB=$LAPACK_LIB\n" >> SLmake.inc
-  - printf "LIBS=$BLAS_LIB $LAPACK_LIB\n" >> SLmake.inc
-  - sed -i "s/SCA#LAPACKLIB/#SCA#LAPACKLIB/" SLmake.inc
-  - printf "SCALAPACKLIB=libscalapack.a\n" >> SLmake.inc
-  - make lib  > tempMakeOutput.txt 2>&1
-  - export SCALAPACK_LIB=$TRAVIS_BUILD_DIR/installDir/scalapack-2.0.2/libscalapack.a
+  - rm -rf build
+  - mkdir -p build
+  - cd build
+  - |
+    cmake .. \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_C_COMPILER=mpicc \
+    -DCMAKE_Fortran_COMPILER=mpif90 \
+    -DCMAKE_INSTALL_PREFIX=. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
+    -DCMAKE_Fortran_FLAGS="-fopenmp" \
+    -DTPL_BLAS_LIBRARIES="$BLAS_LIB" \
+    -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB"
+  - make
+  - export SCALAPACK_LIB="$TRAVIS_BUILD_DIR/installDir/scalapack-2.0.2/build/lib/libscalapack.so"  
   - printf "${BLUE} GC; Done installing ScaLAPACK from source\n"
 
+  
   - printf "${BLUE} GC; Installing ParMetis-4.0 from source\n"
   - cd $TRAVIS_BUILD_DIR/installDir
   - wget http://glaros.dtc.umn.edu/gkhome/fetch/sw/parmetis/parmetis-4.0.3.tar.gz
