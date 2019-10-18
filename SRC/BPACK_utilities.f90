@@ -203,7 +203,7 @@ integer ii
 if(allocated(msh%xyz))deallocate(msh%xyz)
 if(allocated(msh%nns))deallocate(msh%nns)
 if(allocated(msh%new2old))deallocate(msh%new2old)
-! if(allocated(msh%old2new))deallocate(msh%old2new)
+if(allocated(msh%old2new))deallocate(msh%old2new)
 if(allocated(msh%pretree))deallocate(msh%pretree)
 if(allocated(msh%basis_group))then
 do ii=1,msh%Maxgroup

@@ -688,6 +688,7 @@ end subroutine C_BPACK_Construct_Element_Compute
 	!N: matrix size (in)
 	!Ndim: data set dimensionality (not used if nogeo=1)
 	!Locations: coordinates used for clustering (not used if nogeo=1)
+	!nns: nearest neighbours provided by user (referenced if nogeo=3)
 	!nlevel: the number of top levels that have been ordered (in)
 	!tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
 	!Permutation: return the permutation vector new2old (indexed from 1) (out)
@@ -701,14 +702,15 @@ end subroutine C_BPACK_Construct_Element_Compute
 	!C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
 	!C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bpack_construct_init")
+subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nns,nlevel,tree,Permutation,N_loc,bmat_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bpack_construct_init")
 	implicit none
 	integer N,Ndim
 	real(kind=8) Locations(*)
+	integer nns(*)
     real(kind=8) para
     real(kind=8) tolerance,h,lam
     integer Primary_block, nn, mm, MyID_old,Maxlevel,give,need
-    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+    integer i,j,k,ii,kk,edge, threads_num,nth,Dimn,nmpi,ninc, acam
 	real(kind=8),parameter :: cd = 299792458d0
 	integer,allocatable:: groupmembers(:)
 	integer nlevel,level
@@ -851,6 +853,16 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nlevel,tree,Permutation,N_loc
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
 
+
+	if(option%nogeo==3 .and. option%knn>0)then
+		allocate(msh%nns(msh%Nunk,option%knn))
+		do ii=1,msh%Nunk
+		do kk=1,option%knn
+			msh%nns(ii,kk)=msh%old2new(nns(kk+(msh%new2old(ii))-1)*option%knn)
+		enddo
+		enddo
+	endif
+
 	!**** return the permutation vector
 	select case(option%format)
 	case(HODLR)
@@ -955,6 +967,8 @@ end subroutine C_BPACK_Construct_Matvec_Compute
 !**** C interface of BF construction via blackbox matvec or entry extraction
 	!M,N: matrix size (in)
 	!M_loc,N_loc: number of local row/column indices (out)
+	!nnsr: (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3)
+	!nnsc: (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3)
 	!bf_Cptr: the structure containing the block (out)
 	!option_Cptr: the structure containing option (in)
 	!stats_Cptr: the structure containing statistics (inout)
@@ -966,15 +980,16 @@ end subroutine C_BPACK_Construct_Matvec_Compute
 	!C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
 	!C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
 	!C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bf_construct_init")
+subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,nnsr,nnsc,mshr_Cptr,mshc_Cptr,bf_Cptr,option_Cptr,stats_Cptr,msh_Cptr,ker_Cptr,ptree_Cptr,C_FuncDistmn,C_FuncNearFar,C_QuantApp) bind(c, name="c_bf_construct_init")
 	implicit none
 	integer M,N
 
     integer Maxlevel
-    integer i,j,k,ii,edge, threads_num,nth,Dimn,nmpi,ninc, acam
+    integer i,j,k,ii,kk,edge, threads_num,nth,Dimn,nmpi,ninc, acam
 	integer,allocatable:: groupmembers(:)
 	integer level
 	integer M_loc,N_loc
+	integer nnsr(*),nnsc(*)
 	type(c_ptr) :: bf_Cptr
 	type(c_ptr) :: option_Cptr
 	type(c_ptr) :: stats_Cptr
@@ -1062,9 +1077,25 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,mshr_Cptr,mshc_Cptr,bf_Cptr,optio
 	enddo
 
 	!**** construct a list of k-nearest neighbours for each point
-	if(option%knn>0)then
+	if(option%nogeo/=3 .and. option%knn>0)then
 		call FindKNNs(option,msh,ker,stats,ptree,2,3)
 	endif
+
+	if(option%nogeo==3 .and. option%knn>0)then
+		allocate(msh%nns(msh%Nunk,option%knn))
+		do ii=1,M
+		do kk=1,option%knn
+			msh%nns(ii,kk)=nnsr(kk+(ii-1)*option%knn)+M
+		enddo
+		enddo
+		do ii=1,N
+		do kk=1,option%knn
+			msh%nns(ii+M,kk)=nnsc(kk+(ii-1)*option%knn)
+		enddo
+		enddo
+	endif
+
+
 
 	blocks%level=1
 	blocks%col_group=3

@@ -61,15 +61,17 @@ end subroutine Zelem_block_Extraction
 	! clustertree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
 	! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.
 	! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
-subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates,tree)
+    ! nns(optional) of dimension option%knn*N is the array of user provided nearest neighbours
+subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates,tree,nns)
 	implicit none
 	integer Nunk,Ndim
 	real(kind=8),optional:: Coordinates(:,:)
+	integer,optional:: nns(:,:)
 
     real(kind=8) para
     real(kind=8) tolerance
     integer nn, mm,Maxlevel,give,need
-    integer i,j,k,ii,edge,Dimn
+    integer i,j,k,ii,edge,Dimn,kk
 	integer nlevel,level
 	integer Permutation(Nunk)
 	integer,optional:: tree(:)
@@ -165,6 +167,17 @@ subroutine BPACK_construction_Init(Nunk,Permutation,Nunk_loc,bmat,option,stats,m
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Hierarchical format finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()
+
+	if(option%nogeo==3 .and. option%knn>0)then
+		call assert(present(nns),'nearest neighbours should be provided if option%nogeo==3')
+		allocate(msh%nns(msh%Nunk,option%knn))
+		do ii=1,msh%Nunk
+		do kk=1,option%knn
+			msh%nns(ii,kk)=msh%old2new(nns(kk,msh%new2old(ii)))
+		enddo
+		enddo
+	endif
+
 
 
 	!**** return the permutation vector

@@ -15,9 +15,12 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 #include "ButterflyPACK_config.fi"
-!#ifdef Intel
-!include "mkl_vsl.f90"
-!#endif
+#ifdef Intel
+#ifndef USEVSL
+#define USEVSL
+include "mkl_vsl.f90"
+#endif
+#endif
 
 
 module MISC_Utilities
@@ -1988,7 +1991,7 @@ subroutine RandomMat(m,n,k,A,Oflag)
 
 	!
 	!
-#ifdef Intel
+#ifdef USEVSL
 	use mkl_vsl_type
 	use mkl_vsl
 #endif
@@ -2003,7 +2006,7 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	complex(kind=8),allocatable:: UU(:,:),VV(:,:)
 	integer ii,jj,kk,i,j,flag0,rank
 	integer:: Oflag
-#ifdef Intel
+#ifdef USEVSL
 	type(VSL_STREAM_STATE) ::stream(2)
 #endif
 	integer brng, method, seedd,ierror
@@ -2021,7 +2024,7 @@ subroutine RandomMat(m,n,k,A,Oflag)
 	call assert(k<=min(m,n),'k too large in RandomMat')
 
 
-#ifdef Intel
+#ifdef USEVSL
 
 	select type(A)
 	type is (complex(kind=8))

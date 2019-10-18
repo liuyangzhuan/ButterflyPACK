@@ -280,6 +280,7 @@ int main(int argc, char* argv[])
 	int Ndim=1; //data dimension
 	double starttime, endtime;
 	double* dat_ptr;
+	int* nns_ptr;
 	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
 
 
@@ -442,7 +443,7 @@ if(tst==3){
 
 
     // construct hodlr with geometrical points
-	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, &nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
+	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_element_compute(&bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 
 	// factor hodlr
@@ -499,7 +500,7 @@ if(tst==3){
 	int Ndim1=0; //data dimension
 	double* dat_ptr1;
 
-	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
+	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, nns_ptr,&nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 
@@ -546,7 +547,7 @@ if(tst==3){
 	// d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
 
 
-	d_c_bpack_construct_init(&Npo1, &Ndim, dat_ptr, &nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
+	d_c_bpack_construct_init(&Npo1, &Ndim, dat_ptr, nns_ptr,&nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_element_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr1);
 
 
@@ -598,7 +599,7 @@ if(tst==3){
 	int myrow=0;     // local number of rows
 	int mycol=0;     // local number of columns
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, nns_ptr, nns_ptr, &msh, &msh, &bf, &option2, &stats2, &msh1, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_matvec_compute(&bf, &option2, &stats2, &msh1, &kerquant2, &ptree2, &C_FuncBMatVec, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fourth BF: "<<std::endl;
@@ -630,7 +631,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option2, "xyzsort", 0);// natural ordering
 	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
 
-	d_c_bf_construct_init(&M, &N, &myrow, &mycol, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
+	d_c_bf_construct_init(&M, &N, &myrow, &mycol, nns_ptr, nns_ptr, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
 	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;

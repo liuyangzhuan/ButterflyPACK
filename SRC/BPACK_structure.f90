@@ -713,10 +713,10 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	deallocate(groupcenter)
 	endif
 
-	! allocate(msh%old2new(msh%Nunk))
-	! do ii=1,msh%Nunk
-		! msh%old2new(msh%new2old(ii)) = ii
-	! end do
+	allocate(msh%old2new(msh%Nunk))
+	do ii=1,msh%Nunk
+		msh%old2new(msh%new2old(ii)) = ii
+	end do
 
 
 
@@ -744,7 +744,7 @@ if(option%nogeo==1 .and. option%knn>0)then
 endif
 
 !**** construct a list of k-nearest neighbours for each point
-if(option%knn>0)then
+if(option%knn>0 .and. option%nogeo/=3)then
 	call FindKNNs(option,msh,ker,stats,ptree,1,1)
 endif
 
@@ -767,7 +767,7 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	integer,save:: my_tid=0
 	integer groupm_start,groupn_start
 	real(kind=8) t1,t2
-	
+
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)
@@ -833,11 +833,11 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	deallocate(distance)
 	deallocate(order)
 	deallocate(edge_temp)
-	
+
 	t2 = OMP_get_wtime()
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Finding neighbours time: ",t2-t1 	
-	
-	
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Finding neighbours time: ",t2-t1
+
+
 end subroutine FindKNNs
 
 
