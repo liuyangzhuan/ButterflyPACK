@@ -858,8 +858,8 @@ subroutine C_BPACK_Construct_Init(N,Ndim,Locations,nns,nlevel,tree,Permutation,N
 		allocate(msh%nns(msh%Nunk,option%knn))
 		do ii=1,msh%Nunk
 		do kk=1,option%knn
-			if(nns(kk+(msh%new2old(ii))-1)*option%knn/=0)then
-				msh%nns(ii,kk)=msh%old2new(nns(kk+(msh%new2old(ii))-1)*option%knn)
+			if(nns(kk+(msh%new2old(ii)-1)*option%knn)/=0)then
+				msh%nns(ii,kk)=msh%old2new(nns(kk+(msh%new2old(ii)-1)*option%knn))
 			else
 				msh%nns(ii,kk)=0
 			endif
