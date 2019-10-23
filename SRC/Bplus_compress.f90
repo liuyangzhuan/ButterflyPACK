@@ -55,9 +55,11 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 
 	integer,allocatable::jpvt(:)
 	integer Nlayer,level_half,level_final,idx_r,inc_r,nr,idx_c,inc_c,nc
-
+	integer passflag
 	integer, allocatable :: rankmax_for_butterfly(:),rankmin_for_butterfly(:),select_row_pre(:),select_col_pre(:)
 	integer::Nrow_pre,Ncol_pre
+	integer::mrange_dummy(1),nrange_dummy(1)
+	DT:: mat_dummy(1,1)
     Memory=0.
 
 	blocks%rankmax = -100000
@@ -176,6 +178,10 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 			enddo
 			! !$omp end parallel do
 
+			passflag=0
+			do while(passflag==0)
+			call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
+			enddo
 			if(level/=level_butterfly+1)then
 			if(level_half==level)then
 				call BF_all2all_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'R','C')
@@ -269,6 +275,10 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 			enddo
 			! !$omp end parallel do
 
+			passflag=0
+			do while(passflag==0)
+			call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
+			enddo
 			if(level>level_final)then
 				call BF_exchange_skel(blocks,blocks%ButterflySkel(level),option,stats,msh,ptree,level,'C','B')
 			endif
