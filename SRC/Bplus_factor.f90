@@ -518,6 +518,220 @@ subroutine LR_Sblock(ho_bf1,level_c,rowblock,ptree,stats)
 end subroutine LR_Sblock
 
 
+
+subroutine LR_A_minusBDinvC(partitioned_block,ptree,option,stats)
+   use BPACK_DEFS
+
+
+   implicit none
+   integer level, ii, num_vect_sub,mv,nv
+   DT,allocatable :: V_tmp(:,:),V_tmp2(:,:),Vin_tmp(:,:),Vinter_tmp(:,:),Vout_tmp(:,:),U_tmp(:,:)
+   DT :: ctemp1,ctemp2,a,b
+   type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
+   integer groupn,groupm,mm,nn,rank
+   type(matrixblock)::partitioned_block
+	type(proctree)::ptree
+	type(Hstat)::stats
+	type(Hoption)::option
+	integer ctxt, nprow, npcol, myrow, mycol,pgno,myArows,myAcols,iproc,myi,jproc,myj,info
+	DT,allocatable:: matU(:,:),matV(:,:),matU2D(:,:),matV2D(:,:),matU2Dnew(:,:),matV2Dnew(:,:)
+	integer::descsMatU2D(9),descsMatV2D(9),descsMatSml(9),descsMatSmlRR1(9),descsMatSmlRR2(9),descsMatU2Dnew(9),descsMatV2Dnew(9),descsUUSml(9),descsVVSml(9)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
+	real(kind=8), allocatable :: Singularsml(:)
+	real(kind=8)::flop
+	integer ierr,mn1,mn2,jj,ranknew
+
+
+		blocks_A => partitioned_block%sons(1,1)
+		blocks_B => partitioned_block%sons(1,2)
+		blocks_C => partitioned_block%sons(2,1)
+		blocks_D => partitioned_block%sons(2,2)
+
+
+		groupn=blocks_B%col_group    ! Note: row_group and col_group interchanged here
+		nn=blocks_B%N
+		groupm=blocks_B%row_group    ! Note: row_group and col_group interchanged here
+		mm=blocks_B%M
+		num_vect_sub = blocks_B%rankmax
+		allocate(Vin_tmp(blocks_B%N_loc,num_vect_sub))
+		Vin_tmp = blocks_B%ButterflyV%blocks(1)%matrix
+		allocate(Vout_tmp(blocks_B%M_loc,num_vect_sub))
+		Vout_tmp=0
+		allocate(Vinter_tmp(blocks_B%N_loc,num_vect_sub))
+		Vinter_tmp=0
+
+
+		ctemp1=1.0d0 ; ctemp2=0.0d0
+		call BF_block_MVP_dat(blocks_D,'T',nn,nn,num_vect_sub,Vin_tmp,Vinter_tmp,ctemp1,ctemp2,ptree,stats)
+		Vinter_tmp = Vinter_tmp + Vin_tmp
+		ctemp1=1.0d0 ; ctemp2=0.0d0
+		call BF_block_MVP_dat(blocks_C,'T',nn,mm,num_vect_sub,Vinter_tmp,Vout_tmp,ctemp1,ctemp2,ptree,stats)
+		rank = blocks_B%rankmax + blocks_A%rankmax
+		allocate(matU(blocks_A%M_loc,rank))
+		matU(:,1:blocks_A%rankmax)=blocks_A%ButterflyU%blocks(1)%matrix
+		matU(:,1+blocks_A%rankmax:rank)=blocks_B%ButterflyU%blocks(1)%matrix
+		allocate(matV(blocks_A%N_loc,rank))
+		matV(:,1:blocks_A%rankmax)=blocks_A%ButterflyV%blocks(1)%matrix
+		matV(:,1+blocks_A%rankmax:rank)=Vout_tmp
+
+
+! SVD recompression
+
+	!!!!**** generate 2D grid blacs quantities for matU
+	pgno = blocks_A%pgno
+	ctxt = ptree%pgrp(pgno)%ctxt
+	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+	if(myrow/=-1 .and. mycol/=-1)then
+		myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsMatU2D, blocks_A%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(matU2D(myArows,myAcols))
+		matU2D=0
+
+	else
+		descsMatU2D(2)=-1
+		allocate(matU2D(1,1))
+		matU2D=0
+	endif
+	!!!!**** redistribution of input matrix
+	call Redistribute1Dto2D(matU,blocks_A%M_p,0,pgno,matU2D,blocks_A%M,0,pgno,rank,ptree)
+
+	!!!!**** generate 2D grid blacs quantities for matV transpose
+	! ctxt = ptree%pgrp(pgno)%ctxt
+	call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+	if(myrow/=-1 .and. mycol/=-1)then
+		myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsMatV2D, blocks_A%N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(matV2D(myArows,myAcols))
+		matV2D=0
+	else
+		descsMatV2D(2)=-1
+		allocate(matV2D(1,1))
+		matV2D=0
+	endif
+	!!!!**** redistribution of input matrix
+	allocate(matV1(blocks_A%N_loc,rank))
+	call copymatT(matV,matV1,rank,blocks_A%N_loc)
+	call Redistribute1Dto2D(matV1,blocks_A%N_p,0,pgno,matV2D,blocks_A%N,0,pgno,rank,ptree)
+	deallocate(matV1)
+
+	if(myrow/=-1 .and. mycol/=-1)then
+		mn1=min(blocks_A%M,rank)
+		myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn1, nbslpk, mycol, 0, npcol)
+		allocate (tau_Q(myAcols))
+		call pgeqrff90(blocks_A%M,mn1,matU2D,1,1,descsMatU2D,tau_Q,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsMatSmlRR1, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate (RR1(myArows,myAcols))
+		RR1=0d0
+		do myj=1,myAcols
+			call l2g(myj,mycol,mn1,npcol,nbslpk,jj)
+			do myi=1,myArows
+				call l2g(myi,myrow,rank,nprow,nbslpk,ii)
+				if(ii<=jj)RR1(myi,myj)=matU2D(myi,myj)
+			enddo
+		enddo
+		call pun_or_gqrf90(ctxt,matU2D,tau_Q,blocks_A%M,mn1,mn1,descsMatU2D,1,1,flop=flop)
+		deallocate(tau_Q)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		mn2=min(blocks_A%N,rank)
+		myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
+		allocate (tau_Q(myAcols))
+		call pgeqrff90(blocks_A%N,mn2,matV2D,1,1,descsMatV2D,tau_Q,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsMatSmlRR2, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate (RR2(myArows,myAcols))
+		RR2=0d0
+		do myj=1,myAcols
+			call l2g(myj,mycol,mn2,npcol,nbslpk,jj)
+			do myi=1,myArows
+				call l2g(myi,myrow,rank,nprow,nbslpk,ii)
+				if(ii<=jj)RR2(myi,myj)=matV2D(myi,myj)
+			enddo
+		enddo
+		call pun_or_gqrf90(ctxt,matV2D,tau_Q,blocks_A%N,mn2,mn2,descsMatV2D,1,1,flop=flop)
+		deallocate(tau_Q)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
+		allocate(mattemp(myArows,myAcols))
+		mattemp=0
+		call descinit( descsMatSml, mn1, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','T',mn1,mn2,rank,cone,RR1,1,1,descsMatSmlRR1,RR2,1,1,descsMatSmlRR2,czero,mattemp,1,1,descsMatSml,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(min(mn1,mn2), nbslpk, mycol, 0, npcol)
+		call descinit( descsUUSml, mn1, min(mn1,mn2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(UUsml(myArows,myAcols))
+		myArows = numroc_wp(min(mn1,mn2), nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
+		call descinit( descsVVSml, min(mn1,mn2), mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(VVsml(myArows,myAcols))
+
+		allocate(Singularsml(min(mn1,mn2)))
+		call PSVD_Truncate(mn1,mn2,mattemp,descsMatSml,UUsml,VVsml,descsUUSml,descsVVSml,Singularsml,option%tol_rand,ranknew,ctxt,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
+		allocate(matU2Dnew(myArows,myAcols))
+		matU2Dnew=0
+		call descinit( descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','N',blocks_A%M,ranknew,mn1,cone,matU2D,1,1,descsMatU2D,UUsml,1,1,descsUUSml,czero,matU2Dnew,1,1,descsMatU2Dnew,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		do myj=1,myAcols
+			call l2g(myj,mycol,ranknew,npcol,nbslpk,jj)
+			matU2Dnew(:,myj)=matU2Dnew(:,myj)*Singularsml(jj)
+		enddo
+
+
+		myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
+		allocate(matV2Dnew(myArows,myAcols))
+		matV2Dnew=0
+		call descinit( descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','T',blocks_A%N,ranknew,mn2,cone,matV2D,1,1,descsMatV2D,VVsml,1,1,descsVVSml,czero,matV2Dnew,1,1,descsMatV2Dnew,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		rank = ranknew
+
+		deallocate(mattemp,RR1,UUsml,VVsml,Singularsml)
+		deallocate(RR2)
+	else
+		allocate(matU2Dnew(1,1))
+		allocate(matV2Dnew(1,1))
+	endif
+	call MPI_Bcast(rank,1,MPI_INTEGER,Main_ID,ptree%pgrp(pgno)%Comm,ierr)
+
+	deallocate(blocks_A%ButterflyU%blocks(1)%matrix)
+	deallocate(blocks_A%ButterflyV%blocks(1)%matrix)
+	blocks_A%rankmax=rank
+	blocks_A%rankmin=rank
+	allocate(blocks_A%ButterflyU%blocks(1)%matrix(blocks_A%M_loc,rank))
+	allocate(blocks_A%ButterflyV%blocks(1)%matrix(blocks_A%N_loc,rank))
+
+	call Redistribute2Dto1D(matU2Dnew,blocks_A%M,0,pgno,blocks_A%ButterflyU%blocks(1)%matrix,blocks_A%M_p,0,pgno,rank,ptree)
+	call Redistribute2Dto1D(matV2Dnew,blocks_A%N,0,pgno,blocks_A%ButterflyV%blocks(1)%matrix,blocks_A%N_p,0,pgno,rank,ptree)
+
+	deallocate(matU2D)
+	deallocate(matV2D)
+	deallocate(Vin_tmp,Vout_tmp,Vinter_tmp)
+	deallocate(matU,matV)
+	deallocate(matU2Dnew,matV2Dnew)
+
+
+
+end subroutine LR_A_minusBDinvC
+
 subroutine BF_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,error_inout,option,stats,ptree,msh)
 
     use BPACK_DEFS
@@ -914,11 +1128,14 @@ recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io,level_b
 
 
 			call BF_get_rank_ABCD(partitioned_block,rank0)
-			rate=1.2d0
-			call BF_randomized(blocks_A%pgno,level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
-			stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
-			error_inout = max(error_inout, error)
-
+			if(level_butterfly==0)then
+				call LR_A_minusBDinvC(partitioned_block,ptree,option,stats)
+			else
+				rate=1.2d0
+				call BF_randomized(blocks_A%pgno,level_butterfly,rank0,rate,blocks_A,partitioned_block,BF_block_MVP_inverse_A_minusBDinvC_dat,error,'A-BD^-1C',option,stats,ptree,msh)
+				stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+				error_inout = max(error_inout, error)
+			endif
 			! write(*,*)'ddd1'
 			! partitioned inverse of the schur complement
 			! level_butterfly=level_butterfly_target-1
