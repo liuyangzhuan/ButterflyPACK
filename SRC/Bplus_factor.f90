@@ -572,7 +572,16 @@ subroutine LR_A_minusBDinvC(partitioned_block,ptree,option,stats)
 		matU(:,1+blocks_A%rankmax:rank)=blocks_B%ButterflyU%blocks(1)%matrix
 		allocate(matV(blocks_A%N_loc,rank))
 		matV(:,1:blocks_A%rankmax)=blocks_A%ButterflyV%blocks(1)%matrix
-		matV(:,1+blocks_A%rankmax:rank)=Vout_tmp
+		matV(:,1+blocks_A%rankmax:rank)=-Vout_tmp
+
+		! deallocate(blocks_A%ButterflyU%blocks(1)%matrix)
+		! deallocate(blocks_A%ButterflyV%blocks(1)%matrix)
+		! blocks_A%rankmax=rank
+		! blocks_A%rankmin=rank
+		! allocate(blocks_A%ButterflyU%blocks(1)%matrix(blocks_A%M_loc,rank))
+		! allocate(blocks_A%ButterflyV%blocks(1)%matrix(blocks_A%N_loc,rank))
+		! blocks_A%ButterflyU%blocks(1)%matrix=matU
+		! blocks_A%ButterflyV%blocks(1)%matrix=matV
 
 
 ! SVD recompression
@@ -611,10 +620,10 @@ subroutine LR_A_minusBDinvC(partitioned_block,ptree,option,stats)
 		matV2D=0
 	endif
 	!!!!**** redistribution of input matrix
-	allocate(matV1(blocks_A%N_loc,rank))
-	call copymatT(matV,matV1,rank,blocks_A%N_loc)
-	call Redistribute1Dto2D(matV1,blocks_A%N_p,0,pgno,matV2D,blocks_A%N,0,pgno,rank,ptree)
-	deallocate(matV1)
+
+
+	call Redistribute1Dto2D(matV,blocks_A%N_p,0,pgno,matV2D,blocks_A%N,0,pgno,rank,ptree)
+
 
 	if(myrow/=-1 .and. mycol/=-1)then
 		mn1=min(blocks_A%M,rank)
@@ -727,8 +736,6 @@ subroutine LR_A_minusBDinvC(partitioned_block,ptree,option,stats)
 	deallocate(Vin_tmp,Vout_tmp,Vinter_tmp)
 	deallocate(matU,matV)
 	deallocate(matU2Dnew,matV2Dnew)
-
-
 
 end subroutine LR_A_minusBDinvC
 
@@ -1203,7 +1210,7 @@ subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
 	blocks_D=>blocks_o%sons(2,2)
 
 	if(blocks_i%level_butterfly==0)then
-		level_butterfly=GetTreelevel(msh%Maxgroup)-1-blocks_i%level-1
+		level_butterfly=0
 	else
 		level_butterfly=max(blocks_i%level_butterfly-2,0)
 	endif
