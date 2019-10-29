@@ -1123,7 +1123,7 @@ subroutine C_BF_Construct_Init(M,N,M_loc,N_loc,nnsr,nnsc,mshr_Cptr,mshc_Cptr,bf_
 		blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly
 	endif
 
-	call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
+	call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
 
 
 

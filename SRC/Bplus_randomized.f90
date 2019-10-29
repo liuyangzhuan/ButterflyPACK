@@ -226,9 +226,7 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 
 
 	block_rand%M_loc = block%M_loc
-	block_rand%M_loc_db = block%M_loc_db
 	block_rand%N_loc = block%N_loc
-	block_rand%N_loc_db = block%N_loc_db
 	block_rand%pgno = block%pgno
 	block_rand%pgno_db = block%pgno_db
 
@@ -241,14 +239,7 @@ subroutine BF_Init_randomized(level_butterfly,rankmax,groupm,groupn,block,block_
 		allocate(block_rand%M_p(size(block%M_p,1),2))
 		block_rand%M_p = block%M_p
 	endif
-	if(associated(block%N_p_db))then
-		allocate(block_rand%N_p_db(size(block%N_p_db,1),2))
-		block_rand%N_p_db = block%N_p_db
-	endif
-	if(associated(block%M_p_db))then
-		allocate(block_rand%M_p_db(size(block%M_p_db,1),2))
-		block_rand%M_p_db = block%M_p_db
-	endif
+
 
 	if(IOwnPgrp(ptree,block%pgno))then
 
@@ -3629,7 +3620,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 							endif
 						enddo
 						block_tmp%pgno=pgno
-						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh,0)
+						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh)
 
 						if(blocks_sml%M_loc>0)then
 						allocate(Vin_sml(blocks_sml%M_loc,num_vect_sub))
@@ -3710,7 +3701,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 							endif
 						enddo
 						block_tmp%pgno=pgno
-						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh,0)
+						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh)
 
 						if(blocks_sml%M_loc>0)then
 						allocate(Vin_sml(blocks_sml%M_loc,num_vect_sub))
@@ -3956,7 +3947,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 							endif
 						enddo
 						block_tmp%pgno=pgno
-						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh,0)
+						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh)
 
 						if(blocks_sml%M_loc>0)then
 						allocate(Vin_sml(blocks_sml%M_loc,num_vect_sub))
@@ -4036,7 +4027,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 							endif
 						enddo
 						block_tmp%pgno=pgno
-						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh,0)
+						call ComputeParallelIndices(block_tmp,block_tmp%pgno,ptree,msh)
 
 						if(blocks_sml%M_loc>0)then
 						allocate(Vin_sml(blocks_sml%M_loc,num_vect_sub))

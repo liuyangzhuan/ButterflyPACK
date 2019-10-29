@@ -1235,7 +1235,7 @@ subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
 		blocks%headn = msh%basis_group(blocks%col_group)%head
 		blocks%N = msh%basis_group(blocks%col_group)%tail-msh%basis_group(blocks%col_group)%head+1
 		blocks%pgno = pgno
-		call ComputeParallelIndices(blocks,pgno,ptree,msh,0)
+		call ComputeParallelIndices(blocks,pgno,ptree,msh)
 	enddo
 	enddo
 
@@ -1337,6 +1337,9 @@ subroutine BF_split(blocks_i,blocks_o,ptree,stats,msh)
 
 
 end subroutine BF_split
+
+
+
 
 
 subroutine BF_get_rank_ABCD(partitioned_block,rankmax)

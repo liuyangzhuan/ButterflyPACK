@@ -277,7 +277,7 @@ recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ker,ptree
 					blocks%sons(i,j)%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
 					blocks%sons(i,j)%headm = msh%basis_group(group_m)%head
 					blocks%sons(i,j)%headn = msh%basis_group(group_n)%head
-					call ComputeParallelIndices(blocks%sons(i,j),blocks%sons(i,j)%pgno,ptree,msh,0)
+					call ComputeParallelIndices(blocks%sons(i,j),blocks%sons(i,j)%pgno,ptree,msh)
 
                 enddo
             enddo
@@ -974,7 +974,7 @@ subroutine HSS_structuring(hss_bf1,option,msh,ker,ptree,stats)
 	block_f%headm = msh%basis_group(block_f%row_group)%head
 	block_f%headn = msh%basis_group(block_f%col_group)%head
 
-	call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh,0)
+	call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh)
 
 
 	block_f%style = 2
@@ -1024,7 +1024,7 @@ subroutine HSS_structuring(hss_bf1,option,msh,ker,ptree,stats)
 
 						if(blocks%level_butterfly>0)then
 							blocks%style = 2
-							call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
+							call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
 						else
 							blocks%style = 1  ! leaflevel or leaflevel+1 is dense
 						endif
@@ -1170,7 +1170,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 
 			block_inv%level_butterfly = ho_bf1%Maxlevel - block_inv%level
 
-			call ComputeParallelIndices(block_inv,block_inv%pgno,ptree,msh,0)
+			call ComputeParallelIndices(block_inv,block_inv%pgno,ptree,msh)
 
 			if(IOwnPgrp(ptree,block_inv%pgno))then
 				ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
@@ -1265,7 +1265,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 				block_f%headm = msh%basis_group(block_f%row_group)%head
 				block_f%headn = msh%basis_group(block_f%col_group)%head
 				block_f%level_butterfly=0
-				! call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh,0)  ! block_f%level= Maxlevel+1 causes a bug in ComputeParallelIndices
+				! call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh)  ! block_f%level= Maxlevel+1 causes a bug in ComputeParallelIndices
 				block_f%M_loc = block_f%M
 				block_f%N_loc = block_f%N
 				allocate(block_f%M_p(1,2))
@@ -1295,7 +1295,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 				block_inv%headm = msh%basis_group(block_inv%row_group)%head
 				block_inv%headn = msh%basis_group(block_inv%col_group)%head
 				block_inv%level_butterfly=0
-				call ComputeParallelIndices(block_inv,block_inv%pgno,ptree,msh,0)
+				call ComputeParallelIndices(block_inv,block_inv%pgno,ptree,msh)
 				if(IOwnPgrp(ptree,block_inv%pgno))then
 					ho_bf1%levels(level_c)%Bidxs = min(ho_bf1%levels(level_c)%Bidxs,ii)
 					ho_bf1%levels(level_c)%Bidxe = max(ho_bf1%levels(level_c)%Bidxe,ii)
@@ -1340,8 +1340,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 				block_f%headm = msh%basis_group(block_f%row_group)%head
 				block_f%headn = msh%basis_group(block_f%col_group)%head
 
-				call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh,0)
-				call ComputeParallelIndices(block_f,block_f%pgno_db,ptree,msh,1)
+				call ComputeParallelIndices(block_f,block_f%pgno,ptree,msh)
+				! call ComputeParallelIndices(block_f,block_f%pgno_db,ptree,msh,1)
 				! if(block_f%M==2500)write(*,*)ptree%myID,block_f%pgno,block_f%pgno_db,block_f%N_loc,block_f%N_loc_db,'eref'
 
 				block_f%style = 2
@@ -1517,8 +1517,8 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 									blocks%headn = msh%basis_group(group_n)%head
 
 									blocks%style = 2
-									call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
-									call ComputeParallelIndices(blocks,blocks%pgno_db,ptree,msh,1)
+									call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
+									! call ComputeParallelIndices(blocks,blocks%pgno_db,ptree,msh,1)
 								end if
 							end do
 						end if
@@ -1576,7 +1576,7 @@ subroutine HODLR_structuring(ho_bf1,option,msh,ker,ptree,stats)
 								block_sch%N = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
 								block_sch%headm = msh%basis_group(row_group)%head
 								block_sch%headn = msh%basis_group(row_group)%head
-								call ComputeParallelIndices(block_sch,block_sch%pgno,ptree,msh,0)
+								call ComputeParallelIndices(block_sch,block_sch%pgno,ptree,msh)
 							end do
 
 
@@ -1750,7 +1750,7 @@ subroutine Hmat_structuring(h_mat,option,msh,ker,ptree,stats)
 			blocks%N = msh%basis_group(col_group)%tail - msh%basis_group(col_group)%head + 1
 			blocks%headm = msh%basis_group(row_group)%head
 			blocks%headn = msh%basis_group(col_group)%head
-			call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh,0)
+			call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
             call Hmat_construct_local_tree(blocks,option,stats,msh,ker,ptree,h_mat%Maxlevel)
         enddo
     enddo

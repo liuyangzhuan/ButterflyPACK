@@ -147,8 +147,8 @@ subroutine HODLR_factorization(ho_bf1,option,stats,ptree,msh)
 
 			pgno =  ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno
 			if(IOwnPgrp(ptree,pgno))then
-				call Bplus_DoubleDistribute(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree)
-				call Bplus_DoubleDistribute(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2),stats,ptree)
+				call Bplus_ReDistribute_Inplace(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2-1),stats,ptree,msh)
+				call Bplus_ReDistribute_Inplace(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2),stats,ptree,msh)
 
 				call Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option,stats,ptree,msh)
 				call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock),rtemp)

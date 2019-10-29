@@ -358,11 +358,12 @@ end subroutine Bplus_block_MVP_dat
 
 
 ! redistribute Bplus
-subroutine Bplus_DoubleDistribute(bplus_o,stats,ptree)
+subroutine Bplus_ReDistribute_Inplace(bplus_o,stats,ptree,msh)
 implicit none
 
 integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj,level
 type(proctree)::ptree
+type(mesh)::msh
 integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax
@@ -380,7 +381,7 @@ do ll=1,LplusMax
 		if(associated(bplus_o%LL(ll)%matrices_block))then
 		do bb=1,bplus_o%LL(ll)%Nbound
 			pgno = bplus_o%LL(ll)%matrices_block(bb)%pgno_db
-			if(IOwnPgrp(ptree,pgno))call BF_DoubleDistribute(bplus_o%LL(ll)%matrices_block(bb),stats,ptree)
+			if(IOwnPgrp(ptree,pgno))call BF_ReDistribute_Inplace(bplus_o%LL(ll)%matrices_block(bb),pgno,stats,ptree,msh)
 		end do
 		endif
 		call MPI_ALLREDUCE(MPI_IN_PLACE,bplus_o%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(bplus_o%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
@@ -388,70 +389,74 @@ do ll=1,LplusMax
 end do
 endif
 
-end subroutine Bplus_DoubleDistribute
+end subroutine Bplus_ReDistribute_Inplace
 
 
 
 ! redistribute Butterfly
-subroutine BF_DoubleDistribute(blocks,stats,ptree)
+subroutine BF_ReDistribute_Inplace(blocks,pgno_new,stats,ptree,msh)
 implicit none
 
 integer nproc_i, nproc_o,idxs_i,idxs_o,idxe_i,idxe_o,ii,jj,iii,jjj,level
 type(proctree)::ptree
 integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
-integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax
-type(matrixblock)::blocks
+integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,rank,rankmax,pgno_new
+type(matrixblock)::blocks,blocks_dummy
 DT,pointer::dat_new(:,:),dat_old(:,:)
 real(kind=8)::n1,n2
 type(Hstat)::stats
+type(mesh)::msh
 
 dat_new=>null()
 dat_old=>null()
 
 
-	! call MPI_barrier(ptree%pgrp(blocks%pgno_db)%Comm,ierr)
+	! call MPI_barrier(ptree%pgrp(pgno_new)%Comm,ierr)
 	n1 = OMP_get_wtime()
 
 	if(blocks%level_butterfly==0)then
 
-		if(blocks%pgno/=blocks%pgno_db)then
+		if(blocks%pgno/=pgno_new)then
 			! communicate block sizes first
 			if(blocks%M_loc>0)then
 				rank = blocks%rankmax
 			else
 				rank = 0
 			endif
-			call assert(MPI_COMM_NULL/=ptree%pgrp(blocks%pgno_db)%Comm,'communicator should not be null 4')
+			call assert(MPI_COMM_NULL/=ptree%pgrp(pgno_new)%Comm,'communicator should not be null 4')
 			rankmax=0
-			call MPI_ALLREDUCE(rank,rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(blocks%pgno_db)%Comm,ierr)
+			call MPI_ALLREDUCE(rank,rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno_new)%Comm,ierr)
 			rank=rankmax
+
+
+			blocks_dummy%level=blocks%level
+			blocks_dummy%M=blocks%M
+			blocks_dummy%N=blocks%N
+			blocks_dummy%row_group=blocks%row_group
+			blocks_dummy%col_group=blocks%col_group
+			call ComputeParallelIndices(blocks_dummy,pgno_new,ptree,msh)
 
 			! redistribute U
 			if(blocks%M_loc>0)then
 				allocate(dat_old(blocks%M_loc,rank))
 				dat_old=blocks%ButterflyU%blocks(1)%matrix
 			endif
-			if(blocks%M_loc_db>0)then
-				allocate(dat_new(blocks%M_loc_db,rank))
+			if(blocks_dummy%M_loc>0)then
+				allocate(dat_new(blocks_dummy%M_loc,rank))
 				dat_new=0
 			endif
-			call Redistribute1Dto1D(dat_old,blocks%M_p,0,blocks%pgno,dat_new,blocks%M_p_db,0,blocks%pgno_db,rank,ptree)
+			call Redistribute1Dto1D(dat_old,blocks%M_p,0,blocks%pgno,dat_new,blocks_dummy%M_p,0,pgno_new,rank,ptree)
 			if(blocks%M_loc>0)then
 				deallocate(blocks%ButterflyU%blocks(1)%matrix)
 				deallocate(dat_old)
-				deallocate(blocks%M_p)
 			endif
-			if(blocks%M_loc_db>0)then
+			if(blocks_dummy%M_loc>0)then
 				if(.not.allocated(blocks%ButterflyU%blocks))allocate(blocks%ButterflyU%blocks(1))
-				if(.not.allocated(blocks%ButterflyU%blocks(1)%matrix))allocate(blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc_db,rank))
+				if(.not.allocated(blocks%ButterflyU%blocks(1)%matrix))allocate(blocks%ButterflyU%blocks(1)%matrix(blocks_dummy%M_loc,rank))
 				blocks%ButterflyU%blocks(1)%matrix = dat_new
 				deallocate(dat_new)
-				blocks%M_loc =blocks%M_loc_db
-				blocks%M_p=>blocks%M_p_db
-				blocks%M_p_db=>NULL()
 			endif
-
 
 
 			! redistribute V
@@ -459,32 +464,33 @@ dat_old=>null()
 				allocate(dat_old(blocks%N_loc,rank))
 				dat_old=blocks%ButterflyV%blocks(1)%matrix
 			endif
-			if(blocks%N_loc_db>0)then
-				allocate(dat_new(blocks%N_loc_db,rank))
+			if(blocks_dummy%N_loc>0)then
+				allocate(dat_new(blocks_dummy%N_loc,rank))
 				dat_new=0
 			endif
-			call Redistribute1Dto1D(dat_old,blocks%N_p,0,blocks%pgno,dat_new,blocks%N_p_db,0,blocks%pgno_db,rank,ptree)
+			call Redistribute1Dto1D(dat_old,blocks%N_p,0,blocks%pgno,dat_new,blocks_dummy%N_p,0,pgno_new,rank,ptree)
 			if(blocks%N_loc>0)then
 				deallocate(blocks%ButterflyV%blocks(1)%matrix)
 				deallocate(dat_old)
-				deallocate(blocks%N_p)
 			endif
 
-
-			if(blocks%N_loc_db>0)then
+			if(blocks_dummy%N_loc>0)then
 				if(.not.allocated(blocks%ButterflyV%blocks))allocate(blocks%ButterflyV%blocks(1))
-				if(.not.allocated(blocks%ButterflyV%blocks(1)%matrix))allocate(blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc_db,rank))
+				if(.not.allocated(blocks%ButterflyV%blocks(1)%matrix))allocate(blocks%ButterflyV%blocks(1)%matrix(blocks_dummy%N_loc,rank))
 				blocks%ButterflyV%blocks(1)%matrix = dat_new
 				deallocate(dat_new)
-				blocks%N_loc =blocks%N_loc_db
-				blocks%N_p=>blocks%N_p_db
-				blocks%N_p_db=>NULL()
 				blocks%rankmax = rank
-				blocks%pgno=blocks%pgno_db
 			endif
+
+			blocks%pgno=pgno_new
+			if(IOwnPgrp(ptree,blocks%pgno))call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
+
+			deallocate(blocks_dummy%M_p)
+			deallocate(blocks_dummy%N_p)
+
 		endif
 	else
-		if(blocks%pgno/=blocks%pgno_db)then
+		if(blocks%pgno/=pgno_new)then
 
 			!*** make sure every process has blocks%ButterflyKerl allocated
 			if(.not. allocated(blocks%ButterflyKerl))then
@@ -493,41 +499,22 @@ dat_old=>null()
 
 			do level=0,blocks%level_butterfly+1
 				if(level==0)then
-					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyV,level,blocks,blocks%pgno_db,blocks%ButterflyV,level,stats,ptree)
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyV,level,blocks,pgno_new,blocks%ButterflyV,level,stats,ptree)
 				elseif(level==blocks%level_butterfly+1)then
-					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyU,level,blocks,blocks%pgno_db,blocks%ButterflyU,level,stats,ptree)
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyU,level,blocks,pgno_new,blocks%ButterflyU,level,stats,ptree)
 				else
-					call BF_all2all_ker(blocks,blocks%pgno,blocks%ButterflyKerl(level),level,blocks,blocks%pgno_db,blocks%ButterflyKerl(level),level,stats,ptree)
+					call BF_all2all_ker(blocks,blocks%pgno,blocks%ButterflyKerl(level),level,blocks,pgno_new,blocks%ButterflyKerl(level),level,stats,ptree)
 				endif
 			enddo
 
 
 			!*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
-			if(.not. IOwnPgrp(ptree,blocks%pgno_db))then
+			if(.not. IOwnPgrp(ptree,pgno_new))then
 				deallocate(blocks%ButterflyKerl)
 			endif
 
-
-			if(blocks%M_loc>0)then
-				deallocate(blocks%M_p)
-			endif
-			if(blocks%M_loc_db>0)then
-				blocks%M_loc =blocks%M_loc_db
-				blocks%M_p=>blocks%M_p_db
-				blocks%M_p_db=>NULL()
-				blocks%pgno=blocks%pgno_db
-			endif
-
-			if(blocks%N_loc>0)then
-				deallocate(blocks%N_p)
-			endif
-			if(blocks%N_loc_db>0)then
-				blocks%N_loc =blocks%N_loc_db
-				blocks%N_p=>blocks%N_p_db
-				blocks%N_p_db=>NULL()
-				blocks%pgno=blocks%pgno_db
-			endif
-
+			blocks%pgno=pgno_new
+			if(IOwnPgrp(ptree,blocks%pgno))call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
 			call BF_get_rank(blocks,ptree)
 
 		endif
@@ -538,7 +525,7 @@ dat_old=>null()
 
 
 
-end subroutine BF_DoubleDistribute
+end subroutine BF_ReDistribute_Inplace
 
 
 
@@ -616,8 +603,6 @@ subroutine BF_delete(blocks,allflag)
 		if(allflag==1)then
 			if(associated(blocks%N_p))deallocate(blocks%N_p)
 			if(associated(blocks%M_p))deallocate(blocks%M_p)
-			if(associated(blocks%M_p_db))deallocate(blocks%M_p_db)
-			if(associated(blocks%N_p_db))deallocate(blocks%N_p_db)
 		endif
     return
 
@@ -655,13 +640,9 @@ if(trans=='N')then
 	block_o%headn = block_i%headn
 
 	block_o%M_loc = block_i%M_loc
-	block_o%M_loc_db = block_i%M_loc_db
 	block_o%N_loc = block_i%N_loc
-	block_o%N_loc_db = block_i%N_loc_db
 	block_o%pgno = block_i%pgno
 	block_o%pgno_db = block_i%pgno_db
-
-
 
 	if(associated(block_i%N_p))then
 		if(associated(block_o%N_p))deallocate(block_o%N_p)
@@ -675,18 +656,7 @@ if(trans=='N')then
 		if(present(memory))memory = memory + SIZEOF(block_o%M_p)/1024.0d3
 		block_o%M_p = block_i%M_p
 	endif
-	if(associated(block_i%N_p_db))then
-		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
-		allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
-		if(present(memory))memory = memory + SIZEOF(block_o%N_p_db)/1024.0d3
-		block_o%N_p_db = block_i%N_p_db
-	endif
-	if(associated(block_i%M_p_db))then
-		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
-		allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
-		if(present(memory))memory = memory + SIZEOF(block_o%M_p_db)/1024.0d3
-		block_o%M_p_db = block_i%M_p_db
-	endif
+
 
 
 
@@ -799,9 +769,7 @@ stop
 	block_o%headn = block_i%headm
 
 	block_o%M_loc = block_i%N_loc
-	block_o%M_loc_db = block_i%N_loc_db
 	block_o%N_loc = block_i%M_loc
-	block_o%N_loc_db = block_i%M_loc_db
 	block_o%pgno = block_i%pgno
 	block_o%pgno_db = block_i%pgno_db
 
@@ -819,18 +787,7 @@ stop
 		if(present(memory))memory = memory + SIZEOF(block_o%N_p)/1024.0d3
 		block_o%N_p = block_i%M_p
 	endif
-	if(associated(block_i%N_p_db))then
-		if(associated(block_o%M_p_db))deallocate(block_o%M_p_db)
-		allocate(block_o%M_p_db(size(block_i%N_p_db,1),2))
-		if(present(memory))memory = memory + SIZEOF(block_o%N_p_db)/1024.0d3
-		block_o%M_p_db = block_i%N_p_db
-	endif
-	if(associated(block_i%M_p_db))then
-		if(associated(block_o%N_p_db))deallocate(block_o%N_p_db)
-		allocate(block_o%N_p_db(size(block_i%M_p_db,1),2))
-		if(present(memory))memory = memory + SIZEOF(block_o%M_p_db)/1024.0d3
-		block_o%N_p_db = block_i%M_p_db
-	endif
+
 
 
 
@@ -938,9 +895,7 @@ block_o%headm = block_i%headm
 block_o%headn = block_i%headn
 
 block_o%M_loc = block_i%M_loc
-block_o%M_loc_db = block_i%M_loc_db
 block_o%N_loc = block_i%N_loc
-block_o%N_loc_db = block_i%N_loc_db
 block_o%pgno = block_i%pgno
 block_o%pgno_db = block_i%pgno_db
 
@@ -952,14 +907,7 @@ if(associated(block_i%M_p))then
 	allocate(block_o%M_p(size(block_i%M_p,1),2))
 	block_o%M_p = block_i%M_p
 endif
-if(associated(block_i%N_p_db))then
-	allocate(block_o%N_p_db(size(block_i%N_p_db,1),2))
-	block_o%N_p_db = block_i%N_p_db
-endif
-if(associated(block_i%M_p_db))then
-	allocate(block_o%M_p_db(size(block_i%M_p_db,1),2))
-	block_o%M_p_db = block_i%M_p_db
-endif
+
 
 
 level_butterfly = block_i%level_butterfly
@@ -8824,21 +8772,19 @@ end subroutine Full_block_MVP_dat
 
 
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
-subroutine ComputeParallelIndices(block,pgno,ptree,msh,flag)
+subroutine ComputeParallelIndices(block,pgno,ptree,msh)
 implicit none
 	type(matrixblock)::block
-	integer pgno,level,level_p,level_butterfly,flag,nproc,num_blocks,proc,gg,ii,ii_new,Maxlevel
+	integer pgno,level,level_p,level_butterfly,nproc,num_blocks,proc,gg,ii,ii_new,Maxlevel
 	type(proctree)::ptree
 	integer,pointer::M_p(:,:),N_p(:,:)
 	type(mesh)::msh
 
-	if(flag==0)block%M_loc = 0
-	if(flag==1)block%M_loc_db = 0
-	if(flag==0)block%N_loc = 0
-	if(flag==1)block%N_loc_db = 0
+	block%M_loc = 0
+	block%N_loc = 0
 
 	Maxlevel = GetTreelevel(msh%Maxgroup)-1
-	! write(*,*)msh%Maxgroup,GetTreelevel(msh%Maxgroup),Maxlevel-block%level,block%level,ptree%nlevel-GetTreelevel(pgno),pgno
+	! write(*,*)msh%Maxgroup,GetTreelevel(msh%Maxgroup),Maxlevel-block%level,block%level,ptree%nlevel-GetTreelevel(pgno),pgno,Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),pgno
 	call assert(Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),'too many process sharing this group')
 
 	! if(IOwnPgrp(ptree,pgno))then
@@ -8848,21 +8794,12 @@ implicit none
 		nproc = ptree%pgrp(pgno)%nproc
 		num_blocks = 2**level_p
 
-		if(flag==0)then
-			if(associated(block%M_p))deallocate(block%M_p)
-			if(associated(block%N_p))deallocate(block%N_p)
-			allocate(block%M_p(nproc,2))
-			allocate(block%N_p(nproc,2))
-			M_p => block%M_p
-			N_p => block%N_p
-		else
-			if(associated(block%M_p_db))deallocate(block%M_p_db)
-			if(associated(block%N_p_db))deallocate(block%N_p_db)
-			allocate(block%M_p_db(nproc,2))
-			allocate(block%N_p_db(nproc,2))
-			M_p => block%M_p_db
-			N_p => block%N_p_db
-		endif
+		if(associated(block%M_p))deallocate(block%M_p)
+		if(associated(block%N_p))deallocate(block%N_p)
+		allocate(block%M_p(nproc,2))
+		allocate(block%N_p(nproc,2))
+		M_p => block%M_p
+		N_p => block%N_p
 
 		M_p(:,1) = block%M+1
 		N_p(:,1) = block%N+1
@@ -8892,10 +8829,8 @@ implicit none
 
 		if(IOwnPgrp(ptree,pgno))then
 			ii = ptree%myid-ptree%pgrp(pgno)%head+1
-			if(flag==0)block%M_loc = M_p(ii,2)-M_p(ii,1)+1
-			if(flag==1)block%M_loc_db = M_p(ii,2)-M_p(ii,1)+1
-			if(flag==0)block%N_loc = N_p(ii,2)-N_p(ii,1)+1
-			if(flag==1)block%N_loc_db = N_p(ii,2)-N_p(ii,1)+1
+			block%M_loc = M_p(ii,2)-M_p(ii,1)+1
+			block%N_loc = N_p(ii,2)-N_p(ii,1)+1
 		endif
 		! write(*,*)level_butterfly,level_p,block%M_loc,block%N_loc,'nima',M_p,N_p,block%M,block%N,block%row_group,block%col_group
 	! endif

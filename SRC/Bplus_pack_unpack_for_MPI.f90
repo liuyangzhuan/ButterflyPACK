@@ -879,7 +879,7 @@ recursive subroutine unpack_all_blocks_one_node(block,Maxlevel,ptree,msh,pgno)
 	block%N = msh%basis_group(block%col_group)%tail - msh%basis_group(block%col_group)%head + 1
 	block%headm = msh%basis_group(block%row_group)%head
 	block%headn = msh%basis_group(block%col_group)%head
-	call ComputeParallelIndices(block,block%pgno,ptree,msh,0)
+	call ComputeParallelIndices(block,block%pgno,ptree,msh)
 
 
 

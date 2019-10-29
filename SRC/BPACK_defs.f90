@@ -227,12 +227,10 @@ module BPACK_DEFS
 		 integer rankmax,rankmin ! maximum and minimum butterfly ranks
 		 integer dimension_rank ! estimated maximum rank
 		 integer M,N ! size of the block
-		 integer M_loc,N_loc,M_loc_db,N_loc_db ! local size of the block
+		 integer M_loc,N_loc ! local size of the block
 		 integer headm,headn ! header indices in row and column dimension
          integer,pointer:: M_p(:,:)=>null() ! row sizes of all processes sharing this block
          integer,pointer:: N_p(:,:)=>null() ! column sizes of all processes sharing this block
-         integer,pointer:: M_p_db(:,:)=>null()
-         integer,pointer:: N_p_db(:,:)=>null()
 		 DT,allocatable :: fullmat(:,:) ! full matrix entries
 		 type(butterfly_UV) :: ButterflyU ! leftmost factor
          type(butterfly_UV) :: ButterflyV ! rightmost factor
