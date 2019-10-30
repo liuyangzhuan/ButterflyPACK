@@ -3122,7 +3122,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 
 				! write(*,*)ptree%MyID,group,ptree%pgrp(group)%Comm,ptree%pgrp(group)%Comm==MPI_COMM_NULL,ierr
 
-				call MPI_barrier(MPI_Comm_parent,ierr)
+				! call MPI_barrier(MPI_Comm_parent,ierr)
 
 			endif
 
@@ -3155,7 +3155,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				pid=0
 				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, pid, 1, 1, 1 )
 				deallocate(pmap)
-				call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
+				! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
 
 			endif
 
@@ -3180,7 +3180,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			ptree%pgrp(group)%gd%hpcol=0
 			ptree%pgrp(group)%gd%gprow=1
 			ptree%pgrp(group)%gd%gpcol=1
-			call CreateNewGrid(ptree%pgrp(group)%gd,0,ptree,ptreerow,ptreecol,group,MPI_Group_H_sml(group),ptree%pgrp(group)%Comm)
+			call CreateNewGrid(ptree%pgrp(group)%gd,0,ptree,ptreerow,ptreecol,nspcol,MPI_Group_H_sml(group),ptree%pgrp(group)%Comm)
 
 			deallocate(ptreecol%pgrp)
 			deallocate(ptreerow%pgrp)
@@ -3188,13 +3188,13 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			! call MPI_barrier(ptree%Comm,ierr)
 		enddo
 
-		call MPI_barrier(ptree%Comm,ierr)
+		! call MPI_barrier(ptree%Comm,ierr)
 		do group=1,Maxgrp
 			if(MPI_Group_H_sml(group)/=MPI_GROUP_NULL)call MPI_Group_Free(MPI_Group_H_sml(group),ierr)
 		enddo
 		deallocate(MPI_Group_H_sml)
 
-		call MPI_barrier(ptree%Comm,ierr)
+		! call MPI_barrier(ptree%Comm,ierr)
 
 		! if(ptree%MyID==Main_ID)then
 		! do group=1,Maxgrp
@@ -3204,7 +3204,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 
 	end if
 
-	call MPI_barrier(ptree%Comm,ierr)
+	! call MPI_barrier(ptree%Comm,ierr)
 
 	call MPI_Group_Free(MPI_Group_base,ierr)
 	call MPI_Group_Free(MPI_Group_H,ierr)
@@ -3216,34 +3216,20 @@ end subroutine CreatePtree
 
 !******** Create a new square grid gd.
 ! Note: Ideally, MPI_Comm_parent should involve smaller process counts with increasing recursion level, but I haven't figured out the local numbering in groupmembers_sml and pmap
-recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,MPI_Group_parent,MPI_Comm_parent)
+recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,nspcol_parent,MPI_Group_parent,MPI_Comm_parent)
 	implicit none
 	type(grid)::gd
-	integer cridx,Iown
+	integer cridx,Iown,nproc
 	type(proctree)::ptree,ptreerow,ptreecol
-	integer group,ii,jj,kk,nsproc
+	integer nspcol_parent,ii,jj,kk,nsproc
 	integer MPI_Group_parent,MPI_Group_H_sml,ierr,MPI_Comm_parent
 	integer,allocatable::pmap(:,:),groupmembers_sml(:)
 	integer,external :: sys2blacs_handle
 
 	gd%ctxt=-1
 	gd%Comm=MPI_COMM_NULL
+	MPI_Group_H_sml=MPI_GROUP_NULL
 	if(MPI_Comm_parent/=MPI_COMM_NULL)then
-
-		allocate(pmap(gd%nsprow,gd%nspcol))
-		do jj=1,gd%nspcol
-		do ii=1,gd%nsprow   ! 'row major here'
-			kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
-			pmap(ii,jj)=kk-1
-		enddo
-		enddo
-
-
-		! the context involving 2D grids
-		gd%ctxt = sys2blacs_handle(MPI_Comm_parent)
-		call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
-		deallocate(pmap)
-
 
 		! create the local communicator for this grid
 		nsproc = gd%nsprow*gd%nspcol
@@ -3251,49 +3237,67 @@ recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,group,MPI_Gr
 		allocate(groupmembers_sml(nsproc))
 		do jj=1,gd%nspcol
 		do ii=1,gd%nsprow   ! 'row major here'
-			kk=ptree%pgrp(group)%gd%nspcol*(gd%hprow+ii-1)+jj+gd%hpcol
+			kk=nspcol_parent*(gd%hprow+ii-1)+jj+gd%hpcol
 			groupmembers_sml(jj+(ii-1)*gd%nspcol)=kk-1
 			! if(kk+ptree%pgrp(group)%head-1==31)Iown=1
 		enddo
 		enddo
 		! if(ptree%MyID==0 )write(*,*)'size',nsproc,'cridx',cridx
+		call MPI_Comm_size(MPI_Comm_parent,nproc,ierr)
 		call MPI_Group_incl(MPI_Group_parent, nsproc, groupmembers_sml, MPI_Group_H_sml, ierr)
 		call MPI_Comm_Create(MPI_Comm_parent,MPI_Group_H_sml,gd%Comm,ierr)
 		deallocate(groupmembers_sml)
-		call MPI_Group_Free(MPI_Group_H_sml,ierr)
-
+		! call MPI_Group_Free(MPI_Group_H_sml,ierr)
 	endif
 
+	if(gd%Comm/=MPI_COMM_NULL)then
+		allocate(pmap(gd%nsprow,gd%nspcol))
+		do jj=1,gd%nspcol
+		do ii=1,gd%nsprow   ! 'row major here'
+			kk=gd%nspcol*(ii-1)+jj
+			pmap(ii,jj)=kk-1
+		enddo
+		enddo
 
+		! the context involving 2D grids
+		gd%ctxt = sys2blacs_handle(gd%Comm)
+		call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
+		deallocate(pmap)
+	endif
 
 	if(cridx<ptreerow%nlevel+ptreecol%nlevel-2)then
 		allocate(gd%gdc(2))
 		if(mod(cridx+1,2)==1)then
 			do ii=1,2
 				gd%gdc(ii)%gprow=gd%gprow
-				gd%gdc(ii)%hprow=gd%hprow
+				gd%gdc(ii)%hprow=0
 				gd%gdc(ii)%nsprow=gd%nsprow
 				gd%gdc(ii)%gpcol=gd%gpcol*2+ii-1
-				gd%gdc(ii)%hpcol= ptreecol%pgrp(gd%gdc(ii)%gpcol)%head
+				gd%gdc(ii)%hpcol=0
+				if(ii==2 .and. ptreecol%pgrp(gd%gpcol)%nproc>1)then
+					gd%gdc(ii)%hpcol= ptreecol%pgrp(gd%gpcol*2)%nproc
+				endif
 				gd%gdc(ii)%nspcol=ptreecol%pgrp(gd%gdc(ii)%gpcol)%nproc
 			enddo
 		else
 			do ii=1,2
 				gd%gdc(ii)%gpcol=gd%gpcol
-				gd%gdc(ii)%hpcol=gd%hpcol
+				gd%gdc(ii)%hpcol=0
 				gd%gdc(ii)%nspcol=gd%nspcol
 				gd%gdc(ii)%gprow=gd%gprow*2+ii-1
-				gd%gdc(ii)%hprow= ptreerow%pgrp(gd%gdc(ii)%gprow)%head
+				gd%gdc(ii)%hprow=0
+				if(ii==2 .and. ptreerow%pgrp(gd%gprow)%nproc>1)then
+					gd%gdc(ii)%hprow= ptreerow%pgrp(gd%gprow*2)%nproc
+				endif
 				gd%gdc(ii)%nsprow=ptreerow%pgrp(gd%gdc(ii)%gprow)%nproc
 			enddo
 		endif
 
 		do ii=1,2
-			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,group,MPI_Group_parent,MPI_Comm_parent)
+			call CreateNewGrid(gd%gdc(ii),cridx+1,ptree,ptreerow,ptreecol,gd%nspcol,MPI_Group_H_sml,gd%Comm)
 		enddo
-	else
-		return
 	endif
+	if(MPI_Group_H_sml/=MPI_GROUP_NULL)call MPI_Group_Free(MPI_Group_H_sml,ierr)
 
 end subroutine CreateNewGrid
 
