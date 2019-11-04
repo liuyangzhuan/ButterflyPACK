@@ -15,12 +15,14 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
 #include "ButterflyPACK_config.fi"
-#ifdef Intel
-#ifndef USEVSL
-#define USEVSL
-include "mkl_vsl.f90"
-#endif
-#endif
+
+! ! ! ! ! ! ! the following is commented out to avoid multiple definition for intel compilers, which means for now I'm not using VSL at all.
+! #ifdef Intel
+! #ifndef USEVSL
+! #define USEVSL
+! include "mkl_vsl.f90"
+! #endif
+! #endif
 
 
 module MISC_Utilities

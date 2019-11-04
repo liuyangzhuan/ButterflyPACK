@@ -4607,7 +4607,7 @@ subroutine LR_ACA_Parallel(blocks,header_m,header_n,M,N,frow,rmax,rank,tolerance
     real(kind=8) norm_Z,norm_U,norm_V,tolerance,SVD_tolerance,dist
     integer edgefine_m,edgefine_n, level_butterfly, level_blocks
     integer edge_m, edge_n, header_m, header_n,Dimn,mn,Navr,itr
-    integer rank, ranknew, row, column, rankmax,N,M,rankmax_min,rmax,idxs_r,idxs_c,frow
+    integer rank,rank1,rank2, ranknew, row, column, rankmax,N,M,rankmax_min,rmax,idxs_r,idxs_c,frow,mn1,mn2
     DT value_Z,maxvalue
     DT inner_U,inner_V,ctemp,value_UVs
     real(kind=8) inner_UV,n1,n2,a,error,flop
@@ -4623,8 +4623,8 @@ subroutine LR_ACA_Parallel(blocks,header_m,header_n,M,N,frow,rmax,rank,tolerance
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:)
-	real(kind=8), allocatable :: Singularsml(:)
+	DT, allocatable :: QQ1(:,:), RR1(:,:),QQ2(:,:), RR2(:,:), UUsml(:,:), VVsml(:,:),tau_Q(:),mattemp(:,:),matU1(:,:),matV1(:,:),UUu(:,:),UUv(:,:), VVu(:,:),VVv(:,:)
+	real(kind=8), allocatable :: Singularsml(:),Singularuv(:)
 	integer::mrange(M),nrange(N)
 	type(Hstat)::stats
 	type(Hoption)::option
@@ -4634,7 +4634,7 @@ subroutine LR_ACA_Parallel(blocks,header_m,header_n,M,N,frow,rmax,rank,tolerance
 	integer::headm_loc,headn_loc,pp
 	integer::ierr
 	integer myArows,myAcols,info,nprow,npcol,myrow,mycol,taun
-	integer::descsMatU2D(9),descsMatV2D(9),descsMatSml(9),descsMatU2Dnew(9),descsMatV2Dnew(9)
+	integer::descsMatU2D(9),descsMatV2D(9),descsMatSml(9),descsMatU2Dnew(9),descsMatV2Dnew(9),descsUUSml(9),descsVVSml(9),descsUU_u(9),descsVV_u(9),descsUU_v(9),descsVV_v(9)
 
 	pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
 	headm_loc=blocks%M_p(pp,1)
@@ -4959,6 +4959,10 @@ subroutine LR_ACA_Parallel(blocks,header_m,header_n,M,N,frow,rmax,rank,tolerance
 		! allocate(blocks%ButterflyV%blocks(1)%matrix(myArows,myAcols))
 		! blocks%ButterflyV%blocks(1)%matrix=matV2D
 
+
+! GCC 9 was segfaulting when using PXGEQRF when it calls PXGEQR2 ->PXLARFG->PXSCAL
+#if __GNUC__ < 9
+
 		mn=min(M,rank)
 		myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
 		myAcols = numroc_wp(mn, nbslpk, mycol, 0, npcol)
@@ -5042,6 +5046,94 @@ subroutine LR_ACA_Parallel(blocks,header_m,header_n,M,N,frow,rmax,rank,tolerance
 
 		deallocate(mattemp,RR1,UUsml,VVsml,Singularsml)
 		deallocate(RR2)
+
+#else
+		mn1=min(M,rank)
+		myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn1, nbslpk, mycol, 0, npcol)
+		call descinit( descsUU_u, M, mn1, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(UUu(myArows,myAcols))
+		myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(VVu(myArows,myAcols))
+		allocate(Singularuv(mn1))
+		call PSVD_Truncate(M,rank,matU2D,descsMatU2D,UUu,VVu,descsUU_u,descsVV_u,Singularuv,SVD_tolerance,rank1,ctxt,flop=flop)
+		do ii=1,rank1
+			call g2l(ii,rank1,nprow,nbslpk,iproc,myi)
+			if(iproc==myrow)then
+				VVu(myi,:) = VVu(myi,:)*Singularuv(ii)
+			endif
+		enddo
+		deallocate(Singularuv)
+
+
+		mn2=min(N,rank)
+		myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
+		call descinit( descsUU_v, N, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(UUv(myArows,myAcols))
+		myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+		call descinit( descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(VVv(myArows,myAcols))
+		allocate(Singularuv(mn1))
+		call PSVD_Truncate(N,rank,matV2D,descsMatV2D,UUv,VVv,descsUU_v,descsVV_v,Singularuv,SVD_tolerance,rank2,ctxt,flop=flop)
+		do ii=1,rank2
+			call g2l(ii,rank2,nprow,nbslpk,iproc,myi)
+			if(iproc==myrow)then
+				VVv(myi,:) = VVv(myi,:)*Singularuv(ii)
+			endif
+		enddo
+		deallocate(Singularuv)
+
+
+		myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
+		allocate(mattemp(myArows,myAcols))
+		mattemp=0
+		call descinit( descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','T',rank1,rank2,rank,cone,VVu,1,1,descsVV_u,VVv,1,1,descsVV_v,czero,mattemp,1,1,descsMatSml,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(min(rank1,rank2), nbslpk, mycol, 0, npcol)
+		call descinit( descsUUSml, rank1, min(rank1,rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(UUsml(myArows,myAcols))
+		myArows = numroc_wp(min(rank1,rank2), nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
+		call descinit( descsVVSml, min(rank1,rank2), rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		allocate(VVsml(myArows,myAcols))
+		allocate(Singularsml(min(rank1,rank2)))
+		call PSVD_Truncate(rank1,rank2,mattemp,descsMatSml,UUsml,VVsml,descsUUSml,descsVVSml,Singularsml,SVD_tolerance,ranknew,ctxt,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
+		allocate(blocks%ButterflyU%blocks(1)%matrix(myArows,myAcols))
+		blocks%ButterflyU%blocks(1)%matrix=0
+		call descinit( descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','N',M,ranknew,rank1,cone,UUu,1,1,descsUU_u,UUsml,1,1,descsUUSml,czero,blocks%ButterflyU%blocks(1)%matrix,1,1,descsMatU2Dnew,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		do myj=1,myAcols
+			call l2g(myj,mycol,ranknew,npcol,nbslpk,jj)
+			blocks%ButterflyU%blocks(1)%matrix(:,myj)=blocks%ButterflyU%blocks(1)%matrix(:,myj)*Singularsml(jj)
+		enddo
+
+
+		myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+		myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
+		allocate(blocks%ButterflyV%blocks(1)%matrix(myArows,myAcols))
+		blocks%ButterflyV%blocks(1)%matrix=0
+		call descinit( descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+		call pgemmf90('N','T',N,ranknew,rank2,cone,UUv,1,1,descsUU_v,VVsml,1,1,descsVVSml,czero,blocks%ButterflyV%blocks(1)%matrix,1,1,descsMatV2Dnew,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+		rank = ranknew
+
+		deallocate(mattemp,UUsml,VVsml,Singularsml)
+		deallocate(UUu,VVu,UUv,VVv)
+
+
+#endif
+
 
 	endif
 	call MPI_Bcast(rank,1,MPI_INTEGER,Main_ID,ptree%pgrp(pgno)%Comm,ierr)
