@@ -3360,8 +3360,10 @@ else
 			if(idxs_o<=idxe_i .and. idxe_o>=idxs_i)then
 				sendquant(jj)%offset=max(idxs_i,idxs_o) - idxs_i
 				sendquant(jj)%size = min(idxe_i,idxe_o) - max(idxs_i,idxs_o) + 1
+				if(sendquant(jj)%size>0)then
 				allocate(sendquant(jj)%dat(sendquant(jj)%size,N))
 				sendquant(jj)%dat = dat_i(sendquant(jj)%offset+1:sendquant(jj)%offset+sendquant(jj)%size,1:N)
+				endif
 			endif
 		enddo
 	endif
@@ -3433,11 +3435,11 @@ else
 	deallocate(statuss)
 	deallocate(statusr)
 	do jj=1,nproc_o
-		if(sendquant(jj)%size>0)deallocate(sendquant(jj)%dat)
+		if(allocated(sendquant(jj)%dat))deallocate(sendquant(jj)%dat)
 	enddo
 	deallocate(sendquant)
 	do ii=1,nproc_i
-		if(recvquant(ii)%size>0)deallocate(recvquant(ii)%dat)
+		if(allocated(recvquant(ii)%dat))deallocate(recvquant(ii)%dat)
 	enddo
 	deallocate(recvquant)
 endif
