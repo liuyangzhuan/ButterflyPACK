@@ -499,11 +499,11 @@ dat_old=>null()
 
 			do level=0,blocks%level_butterfly+1
 				if(level==0)then
-					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyV,level,blocks,pgno_new,blocks%ButterflyV,level,stats,ptree)
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyV,level,0,blocks,pgno_new,blocks%ButterflyV,level,stats,ptree)
 				elseif(level==blocks%level_butterfly+1)then
-					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyU,level,blocks,pgno_new,blocks%ButterflyU,level,stats,ptree)
+					call BF_all2all_UV(blocks,blocks%pgno,blocks%ButterflyU,level,0,blocks,pgno_new,blocks%ButterflyU,level,stats,ptree)
 				else
-					call BF_all2all_ker(blocks,blocks%pgno,blocks%ButterflyKerl(level),level,blocks,pgno_new,blocks%ButterflyKerl(level),level,stats,ptree)
+					call BF_all2all_ker(blocks,blocks%pgno,blocks%ButterflyKerl(level),level,0,0,blocks,pgno_new,blocks%ButterflyKerl(level),level,stats,ptree)
 				endif
 			enddo
 
@@ -2946,7 +2946,7 @@ end subroutine BF_all2all_matvec
 
 !*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
-subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,level_o,stats,ptree)
+subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,offset_r,offset_c,block_o,pgno_o,kerls_o,level_o,stats,ptree)
 
    use BPACK_DEFS
    implicit none
@@ -2980,6 +2980,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 	DT,allocatable::sendbufall2all(:),recvbufall2all(:)
 	integer::dist
 	character::mode
+	integer offset_r,offset_c
 
 
 
@@ -3059,8 +3060,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 	! calculate send buffer sizes in the first pass
 	do ii=1,nr
 	do jj=1,nc
-		index_i = (ii-1)*inc_r+idx_r
-		index_j = (jj-1)*inc_c+idx_c
+		index_i = (ii-1)*inc_r+idx_r-offset_r
+		index_j = (jj-1)*inc_c+idx_c-offset_c
 		if(mode=='R')then
 			index_j0=floor_safe((index_j-1)/2d0)+1
 			index_i0=index_i
@@ -3070,11 +3071,13 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 			index_j0=index_j
 		endif
 		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pid)
+		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
 			Nrecvactive=Nrecvactive+1
 			recvIDactive(Nrecvactive)=pp
+		endif
 		endif
 	enddo
 	enddo
@@ -3082,8 +3085,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 
 	do ii=1,kerls_i%nr
 	do jj=1,kerls_i%nc
-		index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r
-		index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c
+		index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r+offset_r
+		index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c+offset_c
 		if(mode=='R')then
 			index_j0=floor_safe((index_j-1)/2d0)+1
 			index_i0=index_i
@@ -3093,6 +3096,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 			index_j0=index_j
 		endif
 		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
+		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -3100,6 +3104,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 			sendIDactive(Nsendactive)=pp
 		endif
 		sendquant(pp)%size=sendquant(pp)%size+4+size(kerls_i%blocks(ii,jj)%matrix,1)*size(kerls_i%blocks(ii,jj)%matrix,2)
+		endif
 	enddo
 	enddo
 
@@ -3136,8 +3141,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 	! pack the send buffer in the second pass
 	do ii=1,kerls_i%nr
 	do jj=1,kerls_i%nc
-			index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r
-			index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c
+			index_i = (ii-1)*kerls_i%inc_r+kerls_i%idx_r+offset_r
+			index_j = (jj-1)*kerls_i%inc_c+kerls_i%idx_c+offset_c
 
 			if(mode=='R')then
 				index_j0=floor_safe((index_j-1)/2d0)+1
@@ -3149,7 +3154,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 			endif
 
 			call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
-
+			if(pid/=-1)then
 			pp=pid-ptree%pgrp(pgno)%head+1
 			Nrow=size(kerls_i%blocks(ii,jj)%matrix,1)
 			Ncol=size(kerls_i%blocks(ii,jj)%matrix,2)
@@ -3166,6 +3171,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 			enddo
 			sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
 			deallocate(kerls_i%blocks(ii,jj)%matrix)
+			endif
 	enddo
 	enddo
 	if(allocated(kerls_i%blocks))deallocate(kerls_i%blocks)
@@ -3179,7 +3185,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,
 	kerls_o%nc=nc
 	kerls_o%num_row=num_row
 	kerls_o%num_col=num_col
-	allocate(kerls_o%blocks(kerls_o%nr,kerls_o%nc))
+	if(.not. allocated(kerls_o%blocks))allocate(kerls_o%blocks(kerls_o%nr,kerls_o%nc))
 	endif
 
 
@@ -3876,7 +3882,7 @@ end subroutine BF_all2all_ker_split
 
 !*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
-subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,level_o,stats,ptree)
+subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,offset,block_o,pgno_o,kerls_o,level_o,stats,ptree)
 
    use BPACK_DEFS
    implicit none
@@ -3892,6 +3898,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 	type(matrixblock)::block_i,block_o
 	type(Hstat)::stats
 	type(proctree)::ptree
+	integer offset
 
 	integer,allocatable::jpvt(:)
 	integer ierr,nsendrecv,pid,tag,nproc,Nrow,Ncol,Nreqr,Nreqs,recvid,sendid,tmpi
@@ -3988,17 +3995,19 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 		! convert indices from output to input
 		if(mode=='R')then
 			index_i = 1
-			index_j = (ii-1)*inc+idx
+			index_j = (ii-1)*inc+idx-offset
 		elseif(mode=='C')then
-			index_i = (ii-1)*inc+idx
+			index_i = (ii-1)*inc+idx-offset
 			index_j = 1
 		endif
 		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pid)
+		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
 			Nrecvactive=Nrecvactive+1
 			recvIDactive(Nrecvactive)=pp
+		endif
 		endif
 	enddo
 
@@ -4006,12 +4015,13 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 		! convert indices from input to output
 		if(mode=='R')then
 			index_i = 1
-			index_j = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_j = (ii-1)*kerls_i%inc+kerls_i%idx+offset
 		elseif(mode=='C')then
-			index_i = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_i = (ii-1)*kerls_i%inc+kerls_i%idx+offset
 			index_j = 1
 		endif
 		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
+		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -4019,6 +4029,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 			sendIDactive(Nsendactive)=pp
 		endif
 		sendquant(pp)%size=sendquant(pp)%size+4+size(kerls_i%blocks(ii)%matrix,1)*size(kerls_i%blocks(ii)%matrix,2)
+		endif
 	enddo
 
 	! communicate receive buffer sizes
@@ -4056,14 +4067,14 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 	   ! convert indices from input to output
 		if(mode=='R')then
 			index_i = 1
-			index_j = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_j = (ii-1)*kerls_i%inc+kerls_i%idx+offset
 		elseif(mode=='C')then
-			index_i = (ii-1)*kerls_i%inc+kerls_i%idx
+			index_i = (ii-1)*kerls_i%inc+kerls_i%idx+offset
 			index_j = 1
 		endif
 
 		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
-
+		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		Nrow=size(kerls_i%blocks(ii)%matrix,1)
 		Ncol=size(kerls_i%blocks(ii)%matrix,2)
@@ -4080,6 +4091,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 		enddo
 		sendquant(pp)%size=sendquant(pp)%size+Nrow*Ncol
 		deallocate(kerls_i%blocks(ii)%matrix)
+		endif
 	enddo
 	if(allocated(kerls_i%blocks))deallocate(kerls_i%blocks)
 
@@ -4088,7 +4100,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,block_o,pgno_o,kerls_o,l
 	kerls_o%inc=inc
 	kerls_o%nblk_loc=nblk_loc
 	kerls_o%num_blk=num_blk
-	allocate(kerls_o%blocks(kerls_o%nblk_loc))
+	if(.not. allocated(kerls_o%blocks))allocate(kerls_o%blocks(kerls_o%nblk_loc))
 	endif
 
 	call MPI_ALLREDUCE(Nsendactive,Nsendactive_min,1,MPI_INTEGER,MPI_MIN,ptree%pgrp(pgno)%Comm,ierr)
@@ -7229,7 +7241,6 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					nr=nr+1
 					if(idxr+1+nr>size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1))exit
 					enddo
-
 					if(blocks%inters(idx)%nc==0)then  ! this takes care of the case where the intersection idx has 0 columns (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
 						nc=0
 						goto 111
@@ -7239,10 +7250,10 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					idx1=NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1)))
 
 					if(idx/=idx1)then
-					if(blocks%inters(idx1)%nr==0)then  ! this takes care of the case where the intersection idx has 0 rows (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
-						nr=0
-						goto 111
-					endif
+						if(blocks%inters(idx1)%nr==0)then  ! this takes care of the case where the intersection idx has 0 rows (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
+							nr=0
+							goto 111
+						endif
 					endif
 
 					call assert(idx==idx1,'row and column intersection# not match')
@@ -7290,7 +7301,6 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 
 					deallocate(Vpartial)
 					deallocate(mat)
-
 111					idxr = idxr + nr
 					idxc = idxc + nc
 				enddo

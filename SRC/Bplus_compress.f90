@@ -3376,21 +3376,20 @@ implicit none
 	call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
 	enddo
 
-	call LR_HBACA_Merge(blocks,leafsize,rank,option,msh,ker,stats,ptree,pgno,gd,cridx)
+	call LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,gd,cridx)
 
 
 end subroutine LR_HBACA
 
 
-recursive subroutine LR_HBACA_Merge(blocks,leafsize,rank,option,msh,ker,stats,ptree,pgno,gd,cridx)
+recursive subroutine LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,gd,cridx)
 use BPACK_DEFS
 implicit none
-    integer rank,ranktmp,leafsize
+    integer rank,ranktmp
     integer header_m, header_n
     integer N,M,i,j,ii,jj,myi,myj,iproc,jproc,rmax,mn
 	type(mesh)::msh
 	type(Hoption)::option
-	type(kernelquant)::ker
 	type(matrixblock)::blocks,blockc(2)
 	type(proctree)::ptree
 	integer pgno
@@ -3420,10 +3419,10 @@ implicit none
 	blocks%ButterflyV%inc=1
 	blocks%ButterflyV%nblk_loc=1
 
-	if(.not. (min(blocks%M,blocks%N)>leafsize .or. (associated(gd%gdc))))then ! reach bottom level
+	if(.not. (associated(blocks%sons)) .and. option%RecLR_leaf/=ACANMERGE)then ! reach bottom level
 		! !!!!!!! check error
 	else
-		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is alreay built in parallel
+		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is already built in parallel
 			rank=blocks%rankmax
 			goto 101
 		endif
@@ -3445,7 +3444,7 @@ implicit none
 
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow1,npcol1,myrow1,mycol1,'dddd'
 			if(nprow1/=-1 .and. npcol1/=-1)then
-				call LR_HBACA_Merge(blocks%sons(1,1),leafsize,rank,option,msh,ker,stats,ptree,pgno,gdc1,cridx+1)
+				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno,gdc1,cridx+1)
 				dims_tmp(1)=blocks%sons(1,1)%M
 				dims_tmp(2)=blocks%sons(1,1)%N
 				dims_tmp(3)=blocks%sons(1,1)%rankmax
@@ -3455,7 +3454,7 @@ implicit none
 			call blacs_gridinfo(gdc2%ctxt, nprow2, npcol2, myrow2, mycol2)
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow2,npcol2,myrow2,mycol2,'dddd2'
 			if(nprow2/=-1 .and. npcol2/=-1)then
-				call LR_HBACA_Merge(blocks%sons(2,1),leafsize,rank,option,msh,ker,stats,ptree,pgno,gdc2,cridx+1)
+				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno,gdc2,cridx+1)
 				dims_tmp(4)=blocks%sons(2,1)%M
 				dims_tmp(5)=blocks%sons(2,1)%N
 				dims_tmp(6)=blocks%sons(2,1)%rankmax
@@ -3798,7 +3797,7 @@ implicit none
 	endif
 
 
-end subroutine LR_HBACA_Merge
+end subroutine LR_HMerge
 
 
 
