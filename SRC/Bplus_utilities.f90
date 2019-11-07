@@ -7229,8 +7229,22 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					nr=nr+1
 					if(idxr+1+nr>size(BFvec1%vec(level+1)%blocks(index_i_loc_s,index_j_loc_s)%index,1))exit
 					enddo
+
+					if(blocks%inters(idx)%nc==0)then  ! this takes care of the case where the intersection idx has 0 columns (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
+						nc=0
+						goto 111
+					endif
+
 					! if(ptree%MyID>=2)write(*,*)'id',ptree%MyID,index_i_loc_s,index_j_loc_s,idx,'shape',shape(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),idxc
 					idx1=NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1)))
+
+					if(idx/=idx1)then
+					if(blocks%inters(idx1)%nr==0)then  ! this takes care of the case where the intersection idx has 0 rows (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
+						nr=0
+						goto 111
+					endif
+					endif
+
 					call assert(idx==idx1,'row and column intersection# not match')
 					nc=0
 					do while(NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1,idxc+1+nc)))==idx)
@@ -7277,7 +7291,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 					deallocate(Vpartial)
 					deallocate(mat)
 
-					idxr = idxr + nr
+111					idxr = idxr + nr
 					idxc = idxc + nc
 				enddo
 			enddo
