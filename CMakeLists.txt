@@ -12,8 +12,8 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 # Project version numbers
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "1")
-set(VERSION_MINOR "0")
-set(VERSION_BugFix "3")
+set(VERSION_MINOR "1")
+set(VERSION_BugFix "0")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 ######################################################################
