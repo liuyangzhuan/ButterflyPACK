@@ -3419,7 +3419,8 @@ implicit none
 	blocks%ButterflyV%inc=1
 	blocks%ButterflyV%nblk_loc=1
 
-	if(.not. (associated(blocks%sons)) .and. option%RecLR_leaf/=ACANMERGE)then ! reach bottom level
+	call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
+	if(.not. (associated(blocks%sons)) .and. (myrow/=-1 .and. mycol/=-1) .and. option%RecLR_leaf/=ACANMERGE)then !  reach bottom level
 		! !!!!!!! check error
 	else
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is already built in parallel
@@ -3434,7 +3435,6 @@ implicit none
 			gdc2=>gd%gdc(2)
 		endif
 
-		call blacs_gridinfo(gd%ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 			nsproc1 = gdc1%nsprow*gdc1%nspcol
 			nsproc2 = gdc2%nsprow*gdc2%nspcol
