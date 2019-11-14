@@ -3375,13 +3375,13 @@ implicit none
 	call element_Zmn_block_user(0,0,mrange_dummy,nrange_dummy,mat_dummy,msh,option,ker,1,passflag,ptree,stats)
 	enddo
 
-	call LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,cridx)
+	call LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,cridx,1)
 
 
 end subroutine LR_HBACA
 
 
-recursive subroutine LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,cridx)
+recursive subroutine LR_HMerge(blocks,rank,option,msh,stats,ptree,pgno,cridx,hbacaflag)
 use BPACK_DEFS
 implicit none
     integer rank,ranktmp
@@ -3408,6 +3408,7 @@ implicit none
 	type(Hstat)::stats
 	integer::passflag=0
 	integer::Maxgrp
+	integer::hbacaflag
 	Maxgrp=2**(ptree%nlevel)-1
 
 	rank=0
@@ -3419,7 +3420,7 @@ implicit none
 	blocks%ButterflyV%nblk_loc=1
 
 
-	if(.not. (associated(blocks%sons)) .and. (.not. IOwnPgrp(ptree,pgno)) .and. option%RecLR_leaf/=ACANMERGE)then !  reach bottom level
+	if(.not. (associated(blocks%sons)) .and. (hbacaflag/=1 .or. (.not. IOwnPgrp(ptree,pgno)) .and. option%RecLR_leaf/=ACANMERGE))then !  reach bottom level
 		! !!!!!!! check error
 	else
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is already built in parallel
@@ -3427,7 +3428,7 @@ implicit none
 			goto 101
 		endif
 
-		if(pgno*2>Maxgrp)then
+		if(pgno*2>Maxgrp .or. hbacaflag/=1)then
 			pgno1=pgno
 			pgno2=pgno
 		else
@@ -3444,7 +3445,7 @@ implicit none
 			dims_tmp(1:3)=0
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow1,npcol1,myrow1,mycol1,'dddd'
 			if(IOwnPgrp(ptree,pgno1))then
-				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno1,cridx+1)
+				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno1,cridx+1,1)
 				dims_tmp(1)=blocks%sons(1,1)%M
 				dims_tmp(2)=blocks%sons(1,1)%N
 				dims_tmp(3)=blocks%sons(1,1)%rankmax
@@ -3454,7 +3455,7 @@ implicit none
 
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow2,npcol2,myrow2,mycol2,'dddd2'
 			if(IOwnPgrp(ptree,pgno2))then
-				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno2,cridx+1)
+				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno2,cridx+1,1)
 				dims_tmp(4)=blocks%sons(2,1)%M
 				dims_tmp(5)=blocks%sons(2,1)%N
 				dims_tmp(6)=blocks%sons(2,1)%rankmax
@@ -3499,6 +3500,9 @@ implicit none
 					descsmatU(2)=-1
 					descsmatV1(2)=-1
 					descsmatV2(2)=-1
+					allocate(matU(1,1))
+					allocate(matV1(1,1))
+					allocate(matV2(1,1))
 				endif
 
 
@@ -3612,11 +3616,13 @@ implicit none
 					call pgemmf90('N','T',N2,rank,rank2,cone, matV2,1,1,descsmatV2,VV,1,1+rank1,descVV,czero,blocks%ButterflyV%blocks(1)%matrix,1+N1,1,descButterflyV,flop=flop)
 					stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 					deallocate(UU,VV,Singular,matV1,matV2,matU)
-					deallocate(blocks%sons)
 				else
 					blocks%rankmax = 0
 					blocks%rankmin = 0
+					deallocate(matV1,matV2,matU)
 				endif
+				deallocate(blocks%sons)
+
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmin,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 
@@ -3644,6 +3650,9 @@ implicit none
 					descsmatV(2)=-1
 					descsmatU1(2)=-1
 					descsmatU2(2)=-1
+					allocate(matV(1,1))
+					allocate(matU1(1,1))
+					allocate(matU2(1,1))
 				endif
 
 
@@ -3754,13 +3763,13 @@ implicit none
 
 					call pgemmf90('N','T',M2,rank,rank2,cone, matU2,1,1,descsmatU2,VV,1,1+rank1,descVV,czero,blocks%ButterflyU%blocks(1)%matrix,1+M1,1,descButterflyU,flop=flop)
 					stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
-
-					deallocate(blocks%sons)
 					deallocate(UU,VV,Singular,matU1,matU2,matV)
 				else
 					blocks%rankmax = 0
 					blocks%rankmin = 0
+					deallocate(matU1,matU2,matV)
 				endif
+				deallocate(blocks%sons)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmin,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 			endif
