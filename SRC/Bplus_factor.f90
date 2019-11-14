@@ -1350,7 +1350,7 @@ implicit none
 
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow1,npcol1,myrow1,mycol1,'dddd'
 			if(nprow1/=-1 .and. npcol1/=-1)then
-				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno,gdc1,cridx+1)
+				call LR_ABCDMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno,gdc1,cridx+1)
 				dims_tmp(1)=blocks%sons(1,1)%M
 				dims_tmp(2)=blocks%sons(1,1)%N
 				dims_tmp(3)=blocks%sons(1,1)%rankmax
@@ -1360,7 +1360,7 @@ implicit none
 			call blacs_gridinfo(gdc2%ctxt, nprow2, npcol2, myrow2, mycol2)
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow2,npcol2,myrow2,mycol2,'dddd2'
 			if(nprow2/=-1 .and. npcol2/=-1)then
-				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno,gdc2,cridx+1)
+				call LR_ABCDMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno,gdc2,cridx+1)
 				dims_tmp(4)=blocks%sons(2,1)%M
 				dims_tmp(5)=blocks%sons(2,1)%N
 				dims_tmp(6)=blocks%sons(2,1)%rankmax
