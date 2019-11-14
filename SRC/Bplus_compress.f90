@@ -92,7 +92,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 		! H-BACA
 		leafsize = max(blocks%M,blocks%N)/option%LR_BLK_NUM
 
-		call LR_HBACA(blocks,leafsize,rank_new,option,msh,ker,stats,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
+		call LR_HBACA(blocks,leafsize,rank_new,option,msh,ker,stats,ptree,blocks%pgno,0)
 
 		rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
 		rankmin_for_butterfly(0)=min(blocks%rankmin,rankmin_for_butterfly(0))
@@ -2413,7 +2413,7 @@ subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Me
 
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))deallocate(blocks%ButterflyU%blocks(1)%matrix)
 		if(allocated(blocks%ButterflyV%blocks(1)%matrix))deallocate(blocks%ButterflyV%blocks(1)%matrix)
-		call LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,ptree,blocks%pgno,ptree%pgrp(blocks%pgno)%gd,0)
+		call LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,ptree,blocks%pgno,0)
 
 		rankmax_for_butterfly(0)=max(blocks%rankmax,rankmax_for_butterfly(0))
 		rankmin_for_butterfly(0)=min(blocks%rankmin,rankmin_for_butterfly(0))
@@ -3348,7 +3348,7 @@ subroutine BF_compress_test(blocks,msh,ker,element_Zmn,ptree,option,stats)
 end subroutine BF_compress_test
 
 
-subroutine LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,ptree,pgno,gd,cridx)
+subroutine LR_HBACA(blocks,leafsize,rank,option,msh,ker,stats,ptree,pgno,cridx)
 use BPACK_DEFS
 implicit none
     integer rank,ranktmp,leafsize
@@ -3360,7 +3360,6 @@ implicit none
 	type(matrixblock)::blocks
 	type(proctree)::ptree
 	integer pgno
-	type(grid),pointer::gd
 	integer:: cridx,info
 	integer::mrange_dummy(1),nrange_dummy(1)
 	type(Hstat)::stats

@@ -230,11 +230,11 @@ integer ierr
 if(allocated(ptree%pgrp))then
 Maxgrp=2**(ptree%nlevel)-1
 do ii=1,Maxgrp
-	if(associated(ptree%pgrp(ii)%gd))then
-		call delete_grid(ptree%pgrp(ii)%gd)
-		deallocate(ptree%pgrp(ii)%gd)
-		ptree%pgrp(ii)%gd=>null()
-	endif
+	! if(associated(ptree%pgrp(ii)%gd))then
+		! call delete_grid(ptree%pgrp(ii)%gd)
+		! deallocate(ptree%pgrp(ii)%gd)
+		! ptree%pgrp(ii)%gd=>null()
+	! endif
 	if(ptree%pgrp(ii)%ctxt/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt)
 	if(ptree%pgrp(ii)%ctxt1D/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1D)
 	if(ptree%pgrp(ii)%ctxt1DCol/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1DCol)
@@ -248,24 +248,24 @@ if(ptree%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%Comm,ierr)
 end subroutine delete_proctree
 
 
-recursive subroutine delete_grid(gd)
-use BPACK_DEFS
-use MISC_Utilities
-implicit none
-type(grid)::gd
-integer ierr
+! recursive subroutine delete_grid(gd)
+! use BPACK_DEFS
+! use MISC_Utilities
+! implicit none
+! type(grid)::gd
+! integer ierr
 
-if(.not. associated(gd%gdc))then
-	if(gd%ctxt/=-1)call blacs_gridexit(gd%ctxt)
-	if(gd%Comm/=MPI_COMM_NULL)call MPI_Comm_free(gd%Comm,ierr)
-	return
-else
-	call delete_grid(gd%gdc(1))
-	call delete_grid(gd%gdc(2))
-	deallocate(gd%gdc)
-	gd%gdc=>null()
-endif
-end subroutine delete_grid
+! if(.not. associated(gd%gdc))then
+	! if(gd%ctxt/=-1)call blacs_gridexit(gd%ctxt)
+	! if(gd%Comm/=MPI_COMM_NULL)call MPI_Comm_free(gd%Comm,ierr)
+	! return
+! else
+	! call delete_grid(gd%gdc(1))
+	! call delete_grid(gd%gdc(2))
+	! deallocate(gd%gdc)
+	! gd%gdc=>null()
+! endif
+! end subroutine delete_grid
 
 
 subroutine delete_Hstat(stats)
