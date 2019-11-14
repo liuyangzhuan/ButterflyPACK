@@ -237,6 +237,7 @@ do ii=1,Maxgrp
 	endif
 	if(ptree%pgrp(ii)%ctxt/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt)
 	if(ptree%pgrp(ii)%ctxt1D/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1D)
+	if(ptree%pgrp(ii)%ctxt1DCol/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt1DCol)
 	if(ptree%pgrp(ii)%ctxt_head/=-1)call blacs_gridexit(ptree%pgrp(ii)%ctxt_head)
 	if(ptree%pgrp(ii)%Comm/=MPI_COMM_NULL)call MPI_Comm_free(ptree%pgrp(ii)%Comm,ierr)
 enddo

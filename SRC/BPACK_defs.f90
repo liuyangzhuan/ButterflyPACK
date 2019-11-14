@@ -93,6 +93,7 @@ module BPACK_DEFS
 		integer :: head,tail ! start and end process in the Comm of proctree
 		integer :: ctxt ! blacs context
 		integer :: ctxt1D ! blacs context 1D Row noncyclic (used to distribute from 2D grids to customized noncyclic 1D grid)
+		integer :: ctxt1Dcol ! blacs context 1D Col noncyclic (used to pass into pgemr2df90, otherwise pgemr2d will create an internal 1D col grid, see http://www.netlib.org/scalapack/explore-html/dd/dcd/pdgemr_8c_source.html)
 		integer :: ctxt_head ! blacs context only involving the head process (used to gather and broadcast)
 		integer :: Comm = MPI_COMM_NULL  ! MPI communicator for all processes in this node
 		type(grid),pointer::gd=>null() ! the hierarchical process grid structure associated with each process group

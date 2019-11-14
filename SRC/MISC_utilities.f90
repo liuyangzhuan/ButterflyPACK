@@ -3102,6 +3102,7 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			ptree%pgrp(group)%npcol=npcol
 			ptree%pgrp(group)%ctxt=-1
 			ptree%pgrp(group)%ctxt1D=-1
+			ptree%pgrp(group)%ctxt1DCol=-1
 			ptree%pgrp(group)%ctxt_head=-1
 			ptree%pgrp(group)%Comm=MPI_COMM_NULL
 
@@ -3144,19 +3145,31 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 				call blacs_gridmap( ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol )
 				deallocate(pmap)
 
+				! the context involving 1D grids non-cyclic row
 				allocate(pmap(nproc,1))
 				do kk=1,nproc
 					pmap(kk,1)=kk-1
 				enddo
 
-				! the context involving 1D grids non-cyclic
+
 				ptree%pgrp(group)%ctxt1D = sys2blacs_handle(ptree%pgrp(group)%Comm)
 				call blacs_gridmap( ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1 )
+				deallocate(pmap)
+
+				! the context involving 1D grids non-cyclic column
+				allocate(pmap(1,nproc))
+				do kk=1,nproc
+					pmap(1,kk)=kk-1
+				enddo
+				ptree%pgrp(group)%ctxt1DCol = sys2blacs_handle(ptree%pgrp(group)%Comm)
+				call blacs_gridmap( ptree%pgrp(group)%ctxt1DCol, pmap, 1, 1, nproc )
+				deallocate(pmap)
+
 				! the context involving head proc only
 				ptree%pgrp(group)%ctxt_head = sys2blacs_handle(ptree%pgrp(group)%Comm)
 				pid=0
 				call blacs_gridmap( ptree%pgrp(group)%ctxt_head, pid, 1, 1, 1 )
-				deallocate(pmap)
+
 				! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
 
 			endif
@@ -3463,11 +3476,12 @@ integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
 integer,allocatable:: M_p_1D(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
-integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
+integer ctxt1D,ctxt1DCol,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
 integer::desc1D(9),desc2D(9)
 integer::ctxt,info
 
 ctxt1D = ptree%pgrp(pgno_o)%ctxt1D
+ctxt1DCol = ptree%pgrp(pgno_o)%ctxt1DCol
 nproc = ptree%pgrp(pgno_o)%nproc
 nb1Dc=N
 nb1Dr=ceiling_safe(M/dble(nproc))
@@ -3500,7 +3514,7 @@ endif
 call Redistribute1Dto1D(dat_i,M_p_i,head_i,pgno_i,dat_1D,M_p_1D,head_o,pgno_o,N,ptree)
 
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'2D'
-call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1D)
+call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1DCol)
 
 deallocate(M_p_1D)
 if(allocated(dat_1D))deallocate(dat_1D)
@@ -3522,11 +3536,12 @@ integer,allocatable::S_req(:),R_req(:)
 integer,allocatable:: statuss(:,:),statusr(:,:)
 integer,allocatable:: M_p_1D(:,:)
 integer tag,Nreqs,Nreqr,recvid,sendid,ierr,head_i,head_o,sizes,sizer,offs,offr
-integer ctxt1D,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
+integer ctxt1D,ctxt1DCol,nproc,nprow,npcol,myrow,mycol,nb1Dc,nb1Dr,myArows,myAcols
 integer::desc1D(9),desc2D(9)
 integer::ctxt,info
 
 ctxt1D = ptree%pgrp(pgno_i)%ctxt1D
+ctxt1DCol = ptree%pgrp(pgno_o)%ctxt1DCol
 nproc = ptree%pgrp(pgno_i)%nproc
 nb1Dc=N
 nb1Dr=ceiling_safe(M/dble(nproc))
@@ -3559,7 +3574,7 @@ else
 endif
 
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),myrow,mycol,pgno_i,ctxt
-call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
+call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1DCol)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'1D1D',isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),isnanMat(dat_o,size(dat_o,1),size(dat_o,2)),myrow,mycol
 call Redistribute1Dto1D(dat_1D,M_p_1D,head_i,pgno_i,dat_o,M_p_o,head_o,pgno_o,N,ptree)
 
