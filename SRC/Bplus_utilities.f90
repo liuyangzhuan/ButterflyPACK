@@ -6240,8 +6240,9 @@ subroutine LR_block_extraction(blocks,inters,ptree,msh,stats)
 				ri=inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii)))-headm+1-blocks%M_p(pp,1)+1
 				matU(ii,:)=blocks%ButterflyU%blocks(1)%matrix(ri,:)
 			enddo
-
+			if(blocks%inters(nn)%nc>0)then
 			call gemmf77('N','N',blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc,rank, cone, matU, nr_loc,Vpartial(1,iidx+1),rank,czero,blocks%inters(nn)%dat_loc(1,1),blocks%inters(nn)%nr_loc)
+			endif
 			stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(blocks%inters(nn)%nr_loc,blocks%inters(nn)%nc,rank)
 		endif
 		iidx = iidx + blocks%inters(nn)%nc

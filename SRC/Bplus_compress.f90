@@ -3420,7 +3420,7 @@ implicit none
 	blocks%ButterflyV%nblk_loc=1
 
 
-	if(.not. (associated(blocks%sons)) .and. (hbacaflag/=1 .or. (.not. IOwnPgrp(ptree,pgno)) .and. option%RecLR_leaf/=ACANMERGE))then !  reach bottom level
+	if(.not. (associated(blocks%sons)) .and. (hbacaflag/=1 .or. ((.not. IOwnPgrp(ptree,pgno)) .and. option%RecLR_leaf/=ACANMERGE)))then !  reach bottom level
 		! !!!!!!! check error
 	else
 		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is already built in parallel
@@ -3515,7 +3515,6 @@ implicit none
 
 					call pgemr2df90(M1, rank1, blocks%sons(1,1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(1,1)%ButterflyU%blocks(1)%matrix)
-					deallocate(blocks%sons(1,1)%ButterflyU%blocks)
 
 					! redistribute V1
 					myArows = numroc_wp(N1, nbslpk, myrow1, 0, nprow1)
@@ -3524,13 +3523,14 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatV1c')
 					call pgemr2df90(N1, rank1, blocks%sons(1,1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(1,1)%ButterflyV%blocks(1)%matrix)
-					deallocate(blocks%sons(1,1)%ButterflyV%blocks)
 				else
 					descsmatU1c(2)=-1
 					call pgemr2df90(M1, rank1, tmp, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
 					descsmatV1c(2)=-1
 					call pgemr2df90(N1, rank1, tmp, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, ptree%pgrp(pgno)%ctxt1DCol)
 				endif
+				if(allocated(blocks%sons(1,1)%ButterflyU%blocks))deallocate(blocks%sons(1,1)%ButterflyU%blocks)
+				if(allocated(blocks%sons(1,1)%ButterflyV%blocks))deallocate(blocks%sons(1,1)%ButterflyV%blocks)
 
 				if(nprow2/=-1 .and. npcol2/=-1)then
 					! redistribute U2
@@ -3540,7 +3540,6 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatU2c')
 					call pgemr2df90(M2, rank2, blocks%sons(2,1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(2,1)%ButterflyU%blocks(1)%matrix)
-					deallocate(blocks%sons(2,1)%ButterflyU%blocks)
 
 					! redistribute V2
 					myArows = numroc_wp(N2, nbslpk, myrow2, 0, nprow2)
@@ -3549,7 +3548,6 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatV2c')
 					call pgemr2df90(N2, rank2, blocks%sons(2,1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(2,1)%ButterflyV%blocks(1)%matrix)
-					deallocate(blocks%sons(2,1)%ButterflyV%blocks)
 				else
 					descsmatU2c(2)=-1
 					call pgemr2df90(M2, rank2, tmp, 1, 1, descsmatU2c, matU, 1, 1+rank1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
@@ -3557,7 +3555,8 @@ implicit none
 					call pgemr2df90(N2, rank2, tmp, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, ptree%pgrp(pgno)%ctxt1DCol)
 				endif
 
-
+				if(allocated(blocks%sons(2,1)%ButterflyU%blocks))deallocate(blocks%sons(2,1)%ButterflyU%blocks)
+				if(allocated(blocks%sons(2,1)%ButterflyV%blocks))deallocate(blocks%sons(2,1)%ButterflyV%blocks)
 
 				if(nprow/=-1 .and. npcol/=-1)then
 					! compute truncated SVD on matU
@@ -3665,7 +3664,6 @@ implicit none
 					! write(*,*)shape(blocks%sons(1,1)%ButterflyU%blocks(1)%matrix),shape(matU1),rank1,M1,blocks%sons(1,1)%rankmax
 					call pgemr2df90(M1, rank1, blocks%sons(1,1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(1,1)%ButterflyU%blocks(1)%matrix)
-					deallocate(blocks%sons(1,1)%ButterflyU%blocks)
 
 					! redistribute V1
 					myArows = numroc_wp(N1, nbslpk, myrow1, 0, nprow1)
@@ -3674,13 +3672,14 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatV1c')
 					call pgemr2df90(N1, rank1, blocks%sons(1,1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(1,1)%ButterflyV%blocks(1)%matrix)
-					deallocate(blocks%sons(1,1)%ButterflyV%blocks)
 				else
 					descsmatU1c(2)=-1
 					call pgemr2df90(M1, rank1, tmp, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, ptree%pgrp(pgno)%ctxt1DCol)
 					descsmatV1c(2)=-1
 					call pgemr2df90(N1, rank1, tmp, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
 				endif
+				if(allocated(blocks%sons(1,1)%ButterflyU%blocks))deallocate(blocks%sons(1,1)%ButterflyU%blocks)
+				if(allocated(blocks%sons(1,1)%ButterflyV%blocks))deallocate(blocks%sons(1,1)%ButterflyV%blocks)
 
 				if(nprow2/=-1 .and. npcol2/=-1)then
 					! redistribute U2
@@ -3690,7 +3689,6 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatU2c')
 					call pgemr2df90(M2, rank2, blocks%sons(2,1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(2,1)%ButterflyU%blocks(1)%matrix)
-					deallocate(blocks%sons(2,1)%ButterflyU%blocks)
 
 					! redistribute V2
 					myArows = numroc_wp(N2, nbslpk, myrow2, 0, nprow2)
@@ -3699,7 +3697,6 @@ implicit none
 					call assert(info==0,'descinit fail for descsmatV2c')
 					call pgemr2df90(N2, rank2, blocks%sons(2,1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
 					deallocate(blocks%sons(2,1)%ButterflyV%blocks(1)%matrix)
-					deallocate(blocks%sons(2,1)%ButterflyV%blocks)
 				else
 					descsmatU2c(2)=-1
 					call pgemr2df90(M2, rank2, tmp, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, ptree%pgrp(pgno)%ctxt1DCol)
@@ -3707,6 +3704,8 @@ implicit none
 					call pgemr2df90(N2, rank2, tmp, 1, 1, descsmatV2c, matV, 1, 1+rank1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
 				endif
 
+				if(allocated(blocks%sons(2,1)%ButterflyU%blocks))deallocate(blocks%sons(2,1)%ButterflyU%blocks)
+				if(allocated(blocks%sons(2,1)%ButterflyV%blocks))deallocate(blocks%sons(2,1)%ButterflyV%blocks)
 				if(nprow/=-1 .and. npcol/=-1)then
 					! compute truncated SVD on matV
 					mnmax=max(N1,rank1+rank2)
