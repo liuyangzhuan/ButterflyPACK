@@ -93,10 +93,10 @@ PROGRAM ButterflyPACK_FullKRR
 	real(kind=8) t1,t2,x,y,z,r,theta,phi
 
 	character(len=:),allocatable  :: string
-	character(len=1024)  :: strings
+	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length
-	integer :: edge_m,edge_n
+	integer :: edge_m,edge_n,flag,nargs
 	integer :: ierr
 	integer*8 oldmode,newmode
 	type(Hoption)::option
@@ -112,6 +112,7 @@ PROGRAM ButterflyPACK_FullKRR
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer v_major,v_minor,v_bugfix
+	real(kind=8),allocatable:: tmpline(:)
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -132,35 +133,6 @@ PROGRAM ButterflyPACK_FullKRR
     write(*,*) "   "
 	endif
 
-	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
-
-
-    !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters
-	CALL getarg(1, DATA_DIR)
-	quant%trainfile_p=trim(DATA_DIR)//'/QM7-gramian-Zm-1.00-Kv-0.50-Ke-0.05-q-5.0e-02.txt'
-	quant%trainfile_l=trim(DATA_DIR)//'/QM7-atomization-energy.txt'
-	call getarg(2,strings)
-	read(strings,*)quant%ntrain
-	quant%Nunk = quant%ntrain
-	call getarg(3,strings)
-	read(strings,*)quant%ntest
-	call getarg(4,strings)
-	read(strings,*)option%RecLR_leaf
-	call getarg(5,strings)
-	read(strings,*)option%tol_comp
-	option%tol_rand=option%tol_comp
-	option%tol_Rdetect=option%tol_comp*1d-1
-
-    !**** set solver parameters
-	option%xyzsort=NATURAL
-	option%nogeo=1
-	option%Nmin_leaf=500
-	option%ErrFillFull=1
-	option%ErrSol=1
-
-
    !***********************************************************************
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
@@ -171,7 +143,69 @@ PROGRAM ButterflyPACK_FullKRR
    endif
    !***********************************************************************
 
-   call PrintOptions(option,ptree)
+
+
+	!**** initialize stats and option
+	call InitStat(stats)
+	call SetDefaultOptions(option)
+
+	!**** set solver parameters
+	option%xyzsort=NATURAL
+	option%nogeo=1
+	option%Nmin_leaf=500
+	option%ErrFillFull=0
+	option%ErrSol=1
+
+
+	!**** intialize the user-defined derived type quant
+	quant%trainfile_p='../EXAMPLE/FULLMAT_DATA/FullMatKrr/kernel_train5k_test10k.txt'
+	quant%trainfile_l='../EXAMPLE/FULLMAT_DATA/FullMatKrr/label_train5k_test10k.txt'
+    quant%ntrain=5000
+    quant%ntest=10000
+
+
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters   !**** read data file directory, data set dimension, size of training and testing sets, RBF parameters and solver parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--trainfile_p')then
+							quant%trainfile_p=trim(strings1)
+						else if	(trim(strings)=='--trainfile_l')then
+							read(strings1,*)quant%trainfile_l
+						else if	(trim(strings)=='--ntrain')then
+							read(strings1,*)quant%ntrain
+						else if	(trim(strings)=='--ntest')then
+							read(strings1,*)quant%ntest
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
+
+	quant%Nunk = quant%ntrain
+
+	call PrintOptions(option,ptree)
 
 
 	t1 = OMP_get_wtime()
@@ -181,14 +215,18 @@ PROGRAM ButterflyPACK_FullKRR
 		quant%perms(ii)=ii
 	enddo
 	! call rperm(quant%ntrain+quant%ntest,quant%perms)
+
+	allocate(tmpline(quant%ntrain))
 	open (90,file=quant%trainfile_p)
-	allocate (quant%matZ_glo(quant%ntrain+quant%ntest,quant%ntrain+quant%ntest))
+	allocate (quant%matZ_glo(quant%ntrain+quant%ntest,quant%ntrain))
 	do edge_m=1,quant%ntrain+quant%ntest
-	do edge_n=1,quant%ntrain+quant%ntest
-		read (90,*) quant%matZ_glo(quant%perms(edge_m),quant%perms(edge_n))
+	read (90,*) tmpline
+	do edge_n=1,quant%ntrain
+		quant%matZ_glo(quant%perms(edge_m),quant%perms(edge_n)) = tmpline(edge_n)
 	enddo
 	enddo
 	close(90)
+	deallocate(tmpline)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 	t2 = OMP_get_wtime()

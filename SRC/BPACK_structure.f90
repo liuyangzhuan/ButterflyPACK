@@ -538,7 +538,169 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	enddo
 
 
-	!**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
+	if(ptree%MyID==Main_ID)then
+
+		!**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
+		do level=nlevel_pre, Maxlevel
+			do group=2**level, 2**(level+1)-1
+				! msh%basis_group(group)%level=level
+
+				if(allocated(msh%xyz))then
+				if(.not. allocated(msh%basis_group(group)%center))then
+					groupcenter(1:dimn)=0.0d0
+					! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
+					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						do ii=1,dimn
+							groupcenter(ii)=groupcenter(ii)+msh%xyz(ii,msh%new2old(edge))
+						enddo
+					enddo
+					! !$omp end parallel do
+					do ii=1,dimn
+						groupcenter(ii)=groupcenter(ii)/(msh%basis_group(group)%tail-msh%basis_group(group)%head+1)
+					enddo
+
+					radiusmax=0.
+					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						radius=0
+						do ii=1,dimn
+							radius=radius+(msh%xyz(ii,msh%new2old(edge))-groupcenter(ii))**2
+						enddo
+						radius=sqrt(radius)
+						if (radius>radiusmax) then
+							radiusmax=radius
+							center_edge=edge
+						endif
+					enddo
+
+					allocate(msh%basis_group(group)%center(dimn))
+					msh%basis_group(group)%center = groupcenter
+					msh%basis_group(group)%radius = radiusmax
+				endif
+				endif
+
+				if(option%xyzsort==NATURAL)then !natural ordering
+					mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+					allocate (distance(mm))
+					do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						distance(i-msh%basis_group(group)%head+1)=dble(i)
+					enddo
+
+				else if(option%xyzsort==CKD)then !msh%xyz sort
+					xyzmin= 1d300
+					xyzmax= -1d300
+					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						do ii=1,Dimn
+							xyzmax(ii) = max(xyzmax(ii),msh%xyz(ii,msh%new2old(edge)))
+							xyzmin(ii) = min(xyzmin(ii),msh%xyz(ii,msh%new2old(edge)))
+						enddo
+					enddo
+					xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
+
+					mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+					allocate (distance(mm))
+					sortdirec = maxloc(xyzrange(1:Dimn),1)
+					! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
+
+					! ! if(ker%Kernel==EMSURF)then
+					! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
+						! sortdirec=1
+					! else
+						! sortdirec=2
+					! end if
+					! ! endif
+
+
+					!$omp parallel do default(shared) private(i)
+					do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						distance(i-msh%basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
+					enddo
+					!$omp end parallel do
+
+				else if(option%xyzsort==TM)then !cobblestone sort
+
+					mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+					allocate (distance(mm))
+
+					distance(1:mm)=Bigvalue
+					!$omp parallel do default(shared) private(i)
+					do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
+					enddo
+					!$omp end parallel do
+
+				else if(option%xyzsort==TM_GRAM)then !GRAM-distance-based cobblestone sort
+
+					Nsmp = min(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,50)
+					allocate(perms(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
+					call rperm(msh%basis_group(group)%tail-msh%basis_group(group)%head+1, perms)
+
+					radiusmax2=0.
+					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						radius2=0
+						do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
+							radius2 = radius2 + distance_user(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
+						enddo
+						! call assert(radius2>0,'radius2<0 cannot take square root')
+						! radius2 = sqrt(radius2)
+						radius2 = radius2/Nsmp
+						if (radius2>radiusmax2) then
+							radiusmax2=radius2
+							center_edge=edge
+						endif
+					enddo
+
+					mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+					allocate (distance(mm))
+
+					distance(1:mm)=Bigvalue
+
+
+					!$omp parallel do default(shared) private(i)
+					do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
+					enddo
+					!$omp end parallel do
+
+					deallocate(perms)
+
+				end if
+
+				allocate (order(mm))
+				allocate(map_temp(mm))
+
+				call quick_sort(distance,order,mm)
+				!$omp parallel do default(shared) private(ii)
+				do ii=1, mm
+					map_temp(ii) = msh%new2old(order(ii)+msh%basis_group(group)%head-1)
+				enddo
+				!$omp end parallel do
+
+				!$omp parallel do default(shared) private(ii)
+				do ii=1, mm
+					msh%new2old(ii+msh%basis_group(group)%head-1) = map_temp(ii)
+				enddo
+				!$omp end parallel do
+				deallocate(map_temp)
+				deallocate(order)
+
+				deallocate(distance)
+
+				if (level<Maxlevel) then
+
+					call assert(msh%basis_group(group)%tail/=msh%basis_group(group)%head,'detected zero-sized group, try larger leafsizes or smaller MPI counts')
+					msh%basis_group(2*group)%head=msh%basis_group(group)%head
+					msh%basis_group(2*group)%tail=int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)
+					msh%basis_group(2*group+1)%head=msh%basis_group(2*group)%tail+1
+					msh%basis_group(2*group+1)%tail=msh%basis_group(group)%tail
+				endif
+			enddo
+		enddo
+	endif
+
+	call MPI_Bcast(msh%new2old,msh%Nunk,MPI_integer,Main_ID,ptree%Comm,ierr)
+
+
+	!**** generate tree structures on other processes
 	do level=nlevel_pre, Maxlevel
 		do group=2**level, 2**(level+1)-1
 			! msh%basis_group(group)%level=level
@@ -566,7 +728,6 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 					radius=sqrt(radius)
 					if (radius>radiusmax) then
 						radiusmax=radius
-						center_edge=edge
 					endif
 				enddo
 
@@ -576,14 +737,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 			endif
 			endif
 
-			if(option%xyzsort==NATURAL)then !natural ordering
-				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
-				allocate (distance(mm))
-				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=dble(i)
-				enddo
-
-			else if(option%xyzsort==CKD)then !msh%xyz sort
+			if(option%xyzsort==CKD)then !msh%xyz sort
 				xyzmin= 1d300
 				xyzmax= -1d300
 				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
@@ -593,116 +747,23 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 					enddo
 				enddo
 				xyzrange(1:Dimn) = xyzmax(1:Dimn)-xyzmin(1:Dimn)
-
-				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
-				allocate (distance(mm))
 				sortdirec = maxloc(xyzrange(1:Dimn),1)
-				! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
-
-				! ! if(ker%Kernel==EMSURF)then
-				! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
-					! sortdirec=1
-				! else
-					! sortdirec=2
-				! end if
-				! ! endif
-
-
-				!$omp parallel do default(shared) private(i)
-				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=msh%xyz(sortdirec,msh%new2old(i))
-				enddo
-				!$omp end parallel do
-
-			else if(option%xyzsort==TM)then !cobblestone sort
-
-				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
-				allocate (distance(mm))
-
-				distance(1:mm)=Bigvalue
-				!$omp parallel do default(shared) private(i)
-				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
-				enddo
-				!$omp end parallel do
-
-			else if(option%xyzsort==TM_GRAM)then !GRAM-distance-based cobblestone sort
-
-				Nsmp = min(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,50)
-				allocate(perms(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
-				call rperm(msh%basis_group(group)%tail-msh%basis_group(group)%head+1, perms)
-
-				radiusmax2=0.
-				do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					radius2=0
-					do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
-						radius2 = radius2 + distance_user(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
-					enddo
-					! call assert(radius2>0,'radius2<0 cannot take square root')
-					! radius2 = sqrt(radius2)
-					radius2 = radius2/Nsmp
-					if (radius2>radiusmax2) then
-						radiusmax2=radius2
-						center_edge=edge
-					endif
-				enddo
-
-				mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
-				allocate (distance(mm))
-
-				distance(1:mm)=Bigvalue
-
-
-				!$omp parallel do default(shared) private(i)
-				do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-					distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
-				enddo
-				!$omp end parallel do
-
-				deallocate(perms)
-
+				seperator = msh%xyz(sortdirec,msh%new2old(int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)))
+				msh%basis_group(group)%boundary(1) = sortdirec
+				msh%basis_group(group)%boundary(2) = seperator
 			end if
-
-			allocate (order(mm))
-			allocate(map_temp(mm))
-
-			call quick_sort(distance,order,mm)
-			!$omp parallel do default(shared) private(ii)
-			do ii=1, mm
-				map_temp(ii) = msh%new2old(order(ii)+msh%basis_group(group)%head-1)
-			enddo
-			!$omp end parallel do
-
-			!$omp parallel do default(shared) private(ii)
-			do ii=1, mm
-				msh%new2old(ii+msh%basis_group(group)%head-1) = map_temp(ii)
-			enddo
-			!$omp end parallel do
-
-
-
-			deallocate(map_temp)
-			deallocate(order)
-
-			deallocate(distance)
 
 
 			if (level<Maxlevel) then
-
 				call assert(msh%basis_group(group)%tail/=msh%basis_group(group)%head,'detected zero-sized group, try larger leafsizes or smaller MPI counts')
-
 				msh%basis_group(2*group)%head=msh%basis_group(group)%head
 				msh%basis_group(2*group)%tail=int((msh%basis_group(group)%head+msh%basis_group(group)%tail)/2)
 				msh%basis_group(2*group+1)%head=msh%basis_group(2*group)%tail+1
 				msh%basis_group(2*group+1)%tail=msh%basis_group(group)%tail
-				if(option%xyzsort==CKD)then
-					seperator = msh%xyz(sortdirec,msh%new2old(msh%basis_group(2*group)%tail))
-					msh%basis_group(group)%boundary(1) = sortdirec
-					msh%basis_group(group)%boundary(2) = seperator
-				end if
 			endif
 		enddo
 	enddo
+
 
 
 	if(dimn>0)then

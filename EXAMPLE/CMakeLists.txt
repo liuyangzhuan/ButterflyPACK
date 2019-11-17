@@ -58,10 +58,10 @@ add_executable(frontal ${FDEXM3})
 target_link_libraries(frontal ${all_link_libs_d})
 add_dependencies(frontal krr)
 
-# set(FDEXM4 FULLMATKERREG_Driver.f90)
-# add_executable(fullkrr ${FDEXM4})
-# target_link_libraries(fullkrr ${all_link_libs_d})
-# add_dependencies(fullkrr frontal)
+set(FDEXM4 FULLMATKERREG_Driver.f90)
+add_executable(fullkrr ${FDEXM4})
+target_link_libraries(fullkrr ${all_link_libs_d})
+add_dependencies(fullkrr frontal)
 
 
 

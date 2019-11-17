@@ -39,6 +39,10 @@ case "${TEST_NUMBER}" in
    sh file_merge.sh Frontal_elastic
    cd $TRAVIS_BUILD_DIR/build
     mpirun --allow-run-as-root "-n" "4" "$EXAMPLE_FOLDER/frontaldist" "-quant" "--nunk" "2500" "--data_dir" "$DATA_FOLDER/FULLMAT_DATA/Frontal_elastic/Frontal_elastic_2500" "--explicitflag" "0" "-option" "--nmin_leaf" "100" "--tol_comp" "1e-3" "--lrlevel" "100";; # test sampling-based construction of HODLR with BF for an 3D elastic Helmholtz frontal matrix stored parallel in file
+15) cd $DATA_FOLDER/FULLMAT_DATA
+   sh file_merge.sh FullMatKrr
+   cd $TRAVIS_BUILD_DIR/build
+    mpirun --allow-run-as-root "-n" "8" "$EXAMPLE_FOLDER/fullkrr" "-quant" "-option" "--reclr_leaf" "5" "--tol_comp" "1e-7" "--xyzsort" "3";; # test full matrix kernel regression with entry-based construction of HODLR with LR for a kernel matrix stored in file, with angular gram distance-based reordering and H-BACA
 *) printf "${RED} ###GC: Unknown test\n" ;;
 esac
 
