@@ -3085,12 +3085,12 @@ subroutine CreatePtree(nmpi,groupmembers,MPI_Comm_base,ptree)
 			nprow = floor_safe(sqrt(dble(nproc)))
 			npcol = floor_safe(nproc/dble(nprow))
 
-			! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier
-			nlevelrow = ceiling_safe(log(dble(nprow)) / log(2d0))+1
-			nlevelcol = ceiling_safe(log(dble(npcol)) / log(2d0))+1
-			if(nlevelcol>nlevelrow+1)then
-				npcol = 2**nprow
-			endif
+			! ! the following guarantees column dimension is at most one more level than row dimension, this makes parallel ACA implementation easier
+			! nlevelrow = ceiling_safe(log(dble(nprow)) / log(2d0))+1
+			! nlevelcol = ceiling_safe(log(dble(npcol)) / log(2d0))+1
+			! if(nlevelcol>nlevelrow+1)then
+				! npcol = 2**nprow
+			! endif
 
 			! ! trail to power of 2 grids, the following two lines can be removed
 			! nproc_tmp = 2**floor_safe(log10(dble(nproc))/log10(2d0))

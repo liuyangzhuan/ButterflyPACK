@@ -296,7 +296,7 @@ subroutine BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 	case(HMAT)
 		Maxlevel=bmat%h_mat%Maxlevel
 	end select
-	if(option%lnoBP>Maxlevel)call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
+	if(option%lnoBP>Maxlevel .and. option%verbosity>=0)call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
 
 
 end subroutine BPACK_construction_Element
@@ -938,6 +938,10 @@ implicit none
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v3,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BF_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
+	if(sqrt(v3/v1)>0.5)then
+		write(*,*)'BF err ', sqrt(v3/v1)
+		stop
+	endif
 
 	!stop
 
@@ -1710,7 +1714,10 @@ implicit none
 	call MPI_ALLREDUCE(MPI_IN_PLACE,v3,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,'(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)')'BPACK_CheckError: fnorm:', sqrt(v1),sqrt(v2),' acc: ',sqrt(v3/v1),' time: ',n2-n1
-
+	if(sqrt(v3/v1)>0.5)then
+		write(*,*)'BPACK err ', sqrt(v3/v1)
+		stop
+	endif
 	!stop
 
 end subroutine BPACK_CheckError

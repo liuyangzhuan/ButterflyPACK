@@ -1301,7 +1301,7 @@ subroutine C_BF_Construct_Element_Compute(bf_Cptr,option_Cptr,stats_Cptr,msh_Cpt
 		call BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option,Memory,stats,msh,ker,ptree,1)
 	end if
 
-	call BF_checkError(blocks,option,msh,ker,stats,ptree)
+	if(option%verbosity>=0)call BF_checkError(blocks,option,msh,ker,stats,ptree)
 
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EntryExtraction-based BF construction finished"
