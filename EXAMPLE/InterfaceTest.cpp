@@ -284,7 +284,7 @@ int main(int argc, char* argv[])
 	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
 
 
-	int Nmin=50; //finest leafsize
+	int Nmin=200; //finest leafsize
 	double tol=1e-4; //compression tolerance
 	int com_opt=5; //1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton
 	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
 	C_QuantApp *quant_ptr;
 	int v_major,v_minor,v_bugfix; //version numbers
 
-    int tst = 3;
+    int tst = 1;
 	if(argc>1)tst = stoi(argv[1]);
 
 
@@ -438,7 +438,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
 	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
 	d_c_bpack_set_I_option(&option, "cpp", cpp);
-	d_c_bpack_set_I_option(&option, "LRlevel", 100);
+	d_c_bpack_set_I_option(&option, "LRlevel", 0);
 	d_c_bpack_set_I_option(&option, "knn", knn);
 	d_c_bpack_set_I_option(&option, "verbosity", 2);
 	//d_c_bpack_set_I_option(&option, "powiter", 5);
