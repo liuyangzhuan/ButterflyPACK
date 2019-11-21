@@ -3393,7 +3393,8 @@ implicit none
 	type(proctree)::ptree
 	integer pgno,pgno1,pgno2
 	integer:: cridx,info
-	DT,allocatable:: UU(:,:), VV(:,:),matU(:,:),matV(:,:),matU1(:,:),matV1(:,:),matU2(:,:),matV2(:,:),tmp(:,:),matU1D(:,:),matV1D(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:),QQ1(:,:),matU2D(:,:),matV2D(:,:)
+	DT::tmp(1,1)
+	DT,allocatable:: UU(:,:), VV(:,:),matU(:,:),matV(:,:),matU1(:,:),matV1(:,:),matU2(:,:),matV2(:,:),matU1D(:,:),matV1D(:,:),Vin(:,:),Vout1(:,:),Vout2(:,:),Vinter(:,:),Fullmat(:,:),QQ1(:,:),matU2D(:,:),matV2D(:,:)
 	real(kind=8),allocatable::Singular(:)
 	integer nsproc1,nsproc2,nprow,npcol,nprow1D,npcol1D,myrow,mycol,nprow1,npcol1,myrow1,mycol1,nprow2,npcol2,myrow2,mycol2,myArows,myAcols,M1,N1,M2,N2,rank1,rank2,ierr
 	integer::descsmatU(9),descsmatV(9),descsmatU1(9),descsmatV1(9),descsmatU2(9),descsmatV2(9),descUU(9),descVV(9),descsmatU1c(9),descsmatU2c(9),descsmatV1c(9),descsmatV2c(9),descButterflyV(9),descButterflyU(9),descButterU1D(9),descButterV1D(9),descVin(9),descVout(9),descVinter(9),descFull(9)
@@ -3409,6 +3410,7 @@ implicit none
 	integer::passflag=0
 	integer::Maxgrp
 	integer::hbacaflag
+	logical::built=.false.
 	Maxgrp=2**(ptree%nlevel)-1
 
 	rank=0
@@ -3419,11 +3421,11 @@ implicit none
 	blocks%ButterflyV%inc=1
 	blocks%ButterflyV%nblk_loc=1
 
-
-	if(.not. (associated(blocks%sons)) .and. (hbacaflag/=1 .or. ((.not. IOwnPgrp(ptree,pgno)) .and. option%RecLR_leaf/=ACANMERGE)))then !  reach bottom level
+	built = (hbacaflag==1 .and. option%RecLR_leaf==ACANMERGE)
+	if((.not. (associated(blocks%sons))) .and. (.not. built))then !  reach bottom level
 		! !!!!!!! check error
 	else
-		if(allocated(blocks%ButterflyU%blocks(1)%matrix))then  ! no need to do merge as LR is already built in parallel
+		if(built)then  ! no need to do merge as LR is already built in parallel
 			rank=blocks%rankmax
 			goto 101
 		endif
@@ -3474,7 +3476,7 @@ implicit none
 
 			call blacs_gridinfo(ptree%pgrp(pgno)%ctxt, nprow, npcol, myrow, mycol)
 
-			if(mod(cridx+1,2)==1)then  ! merge along column dimension
+			if(mod(cridx+1,2)==0)then  ! merge along column dimension
 
 				call assert(M1==M2,'M1/=M2 in column merge')
 
@@ -3618,12 +3620,15 @@ implicit none
 				else
 					blocks%rankmax = 0
 					blocks%rankmin = 0
+					rank = 0
 					deallocate(matV1,matV2,matU)
 				endif
 				deallocate(blocks%sons)
 
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmin,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+				call MPI_ALLREDUCE(MPI_IN_PLACE,rank,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+
 
 			else
 				if(nprow/=-1 .and. npcol/=-1)then
@@ -3764,6 +3769,7 @@ implicit none
 					stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 					deallocate(UU,VV,Singular,matU1,matU2,matV)
 				else
+					rank = 0
 					blocks%rankmax = 0
 					blocks%rankmin = 0
 					deallocate(matU1,matU2,matV)
@@ -3771,6 +3777,7 @@ implicit none
 				deallocate(blocks%sons)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmin,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
+				call MPI_ALLREDUCE(MPI_IN_PLACE,rank,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 			endif
 		endif
 
@@ -3884,7 +3891,7 @@ implicit none
 		blocks%ButterflyV%inc=1
 		blocks%ButterflyV%nblk_loc=1
 
-		if(.not. (min(blocks%M,blocks%N)>leafsize .or. (pgno*2<=Maxgrp)))then ! reach bottom level, call sequential aca
+		if(mod(cridx,2)==0 .and. (min(blocks%M,blocks%N)<=leafsize .and. (pgno*2>Maxgrp)))then ! reach bottom level, call sequential aca,rrqr etc.
 
 			if(option%RecLR_leaf==PS)then
 				! !!!!! CUR
@@ -4150,7 +4157,7 @@ implicit none
 				if(IOwnPgrp(ptree,pgno1))then
 
 					! proportional mapping along row or column dimensions
-					if(mod(cridx+1,2)==1)then  ! split along column dimension
+					if(mod(cridx+1,2)==0)then  ! split along column dimension
 						blocks%sons(1,1)%headm = blocks%headm
 						blocks%sons(1,1)%M = blocks%M
 						blocks%sons(1,1)%headn = blocks%headn
@@ -4173,7 +4180,7 @@ implicit none
 				if(IOwnPgrp(ptree,pgno2))then
 
 					! proportional mapping along row or column dimensions
-					if(mod(cridx+1,2)==1)then  ! split along column dimension
+					if(mod(cridx+1,2)==0)then  ! split along column dimension
 						blocks%sons(2,1)%headm = blocks%headm
 						blocks%sons(2,1)%M = blocks%M
 						blocks%sons(2,1)%headn = blocks%headn + INT(blocks%N*dble(nsproc1)/(dble(nsproc1+nsproc2)))

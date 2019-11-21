@@ -1030,15 +1030,22 @@ subroutine PQxSVDTruncate(block_rand,matQ,matQcA_trans,rmax,rank,option,stats,pt
 	call Redistribute1Dto2D(matQcA_trans,block_rand%N_p,0,block_rand%pgno,matQcA_trans2D,block_rand%N,0,block_rand%pgno,rmax,ptree)
 
 
-!!!!**** compute B^T=V^TS^TU^T
+!!!!**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
 	rank=0
 	if(myrow/=-1 .and. mycol/=-1)then
 		call PSVD_Truncate(block_rand%N, rmax,matQcA_trans2D,descQcA_trans2D,UU,VV,descUU,descVV,Singular,option%tol_Rdetect,rank,ctxt,flop=flop)
 		if(present(flops))flops = flops + flop/dble(nprow*npcol)
+		! do ii=1,rank
+			! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
+			! if(jproc==mycol)then
+				! UU(:,myj) = UU(:,myj)*Singular(ii)
+			! endif
+		! enddo
+
 		do ii=1,rank
-			call g2l(ii,rank,npcol,nbslpk,jproc,myj)
-			if(jproc==mycol)then
-				UU(:,myj) = UU(:,myj)*Singular(ii)
+			call g2l(ii,rank,nprow,nbslpk,iproc,myi)
+			if(iproc==myrow)then
+				VV(myi,:) = VV(myi,:)*Singular(ii)
 			endif
 		enddo
 

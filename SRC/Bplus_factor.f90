@@ -1495,7 +1495,7 @@ implicit none
 		else
 			if(IOwnPgrp(ptree,pgno))then
 			allocate(blocks%sons(2,1))
-			if(mod(cridx+1,2)==1)then  ! split along column dimension
+			if(mod(cridx+1,2)==0)then  ! split along column dimension
 				blocks%sons(1,1)%row_group=blocks%row_group
 				blocks%sons(1,1)%headm = blocks%headm
 				blocks%sons(1,1)%col_group=blocks%col_group*2
@@ -1511,7 +1511,7 @@ implicit none
 			blocks%sons(1,1)%N = msh%basis_group(blocks%sons(1,1)%col_group)%tail-msh%basis_group(blocks%sons(1,1)%col_group)%head+1
 			call LR_BuildABCD(blocks%sons(1,1),partitioned_block,option,msh,stats,ptree,pgno,cridx+1)
 
-			if(mod(cridx+1,2)==1)then  ! split along column dimension
+			if(mod(cridx+1,2)==0)then  ! split along column dimension
 				blocks%sons(2,1)%row_group=blocks%row_group
 				blocks%sons(2,1)%headm = blocks%headm
 				blocks%sons(2,1)%col_group=blocks%col_group*2+1
