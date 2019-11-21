@@ -43,6 +43,8 @@ case "${TEST_NUMBER}" in
    sh file_merge.sh FullMatKrr
    cd $TRAVIS_BUILD_DIR/build
     mpirun --allow-run-as-root "-n" "8" "$EXAMPLE_FOLDER/fullkrr" "-quant" "-option" "--reclr_leaf" "5" "--tol_comp" "1e-7" "--xyzsort" "3";; # test full matrix kernel regression with entry-based construction of HODLR with LR for a kernel matrix stored in file, with angular gram distance-based reordering and H-BACA
+16) mpirun --allow-run-as-root "-n" "8" "$EXAMPLE_FOLDER/go2d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1" # test the taylor-expansion-based 2D approximate Green function 
+    mpirun --allow-run-as-root "-n" "8" "$EXAMPLE_FOLDER/go3d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1";; # test the taylor-expansion-based 3D approximate Green function 
 *) printf "${RED} ###GC: Unknown test\n" ;;
 esac
 

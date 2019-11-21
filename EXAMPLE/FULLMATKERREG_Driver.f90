@@ -26,13 +26,14 @@ implicit none
 
 	!**** define your application-related variables here
 	type quant_app
-		integer ntrain,ntest ! size of training points and test points
-		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
+		integer ntrain,ntest,diagflag ! size of training points and test points
+		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,trainfile_d,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
 
 		integer Nunk ! size of the matrix
 		! real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		real(kind=8),allocatable:: matZ_glo(:,:)
 		integer,allocatable:: perms(:)
+		real(kind=8),allocatable:: diags(:)
 	end type quant_app
 
 contains
@@ -163,7 +164,7 @@ PROGRAM ButterflyPACK_FullKRR
     quant%ntrain=5000
     quant%ntest=10000
 
-
+	quant%diagflag=0
 	nargs = iargc()
 	ii=1
 	do while(ii<=nargs)
@@ -180,7 +181,10 @@ PROGRAM ButterflyPACK_FullKRR
 						if(trim(strings)=='--trainfile_p')then
 							quant%trainfile_p=trim(strings1)
 						else if	(trim(strings)=='--trainfile_l')then
-							read(strings1,*)quant%trainfile_l
+							quant%trainfile_l=trim(strings1)
+						else if	(trim(strings)=='--trainfile_d')then
+							quant%trainfile_d=trim(strings1)
+							quant%diagflag=1
 						else if	(trim(strings)=='--ntrain')then
 							read(strings1,*)quant%ntrain
 						else if	(trim(strings)=='--ntest')then
@@ -346,6 +350,21 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
 
 	!**** prediction on the test sets
+
+	if(quant%diagflag==1)then
+		allocate(quant%diags(quant%ntrain))
+		open (92,file=quant%trainfile_d)
+		! read(91,*)N_unk,Dimn
+		do ii=1,quant%ntrain
+			read(92,*)quant%diags(quant%perms(ii))
+		enddo
+		close(92)
+		do edge=1, N_unk_loc
+			x(edge,1) = x(edge,1)*quant%diags(msh%new2old(edge+msh%idxs-1))
+		enddo
+		deallocate(quant%diags)
+	endif
+
 
 
 	T1=secnds(0.0)

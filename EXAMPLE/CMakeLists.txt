@@ -40,6 +40,16 @@ target_link_libraries(frontaldist ${all_link_libs_z})
 add_dependencies(frontaldist smat)
 
 
+set(FZEXM7 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp)
+add_executable(go2d ${FZEXM7})
+target_link_libraries(go2d ${all_link_libs_z})
+add_dependencies(go2d frontaldist)
+
+set(FZEXM8 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_nonfinite.cpp)
+add_executable(go3d ${FZEXM8})
+target_link_libraries(go3d ${all_link_libs_z})
+add_dependencies(go3d go2d)
+
 ########################################### double Fortran drivers
 
 set(FDEXM1 FULLMAT_Driver.f90)
