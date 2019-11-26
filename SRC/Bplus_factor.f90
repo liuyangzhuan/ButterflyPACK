@@ -287,12 +287,12 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
     real(kind=8) a,b,c,d,Memory,flop
     DT ctemp,TEMP(1)
 	type(matrixblock)::block_o
-	DT, allocatable::matrixtemp(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:),matU(:,:)
+	DT, allocatable::matrixtemp(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp3(:,:),UU(:,:),VV(:,:),matrix_small(:,:),vin(:,:),vout1(:,:),vout2(:,:),vout3(:,:),matU(:,:),matU2D(:,:),matU2D1(:,:),matV2D(:,:)
 	real(kind=8), allocatable:: Singular(:)
     integer, allocatable :: ipiv(:),iwork(:)
 	type(proctree)::ptree
 	integer pgno,ctxt,ctxt_head,myrow,mycol,myArows,myAcols,iproc,myi,jproc,myj,info
-	integer descUV(9),descsmall(9),desctemp(9),TEMPI(1)
+	integer descUV(9),descU(9),descV(9),descsmall(9),desctemp(9),TEMPI(1)
 
 	integer lwork,liwork,lcmrc,ierr
 	DT,allocatable:: work(:)
@@ -302,30 +302,28 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 	ctxt_head = ptree%pgrp(pgno)%ctxt_head
 
 	rank = size(block_o%ButterflyU%blocks(1)%matrix,2)
-	allocate(matrixtemp(rank,rank))
-	matrixtemp=0
-	allocate(matrixtemp1(rank,rank))
-	matrixtemp1=0
-	allocate(matU(block_o%M_loc,rank))
-	matU = block_o%ButterflyU%blocks(1)%matrix
-
-	! write(*,*)fnorm(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),fnorm(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2)),ptree%MyID,'re',shape(block_o%ButterflyV%blocks(1)%matrix),shape(block_o%ButterflyU%blocks(1)%matrix),shape(matrixtemp),isnanMat(block_o%ButterflyV%blocks(1)%matrix,size(block_o%ButterflyV%blocks(1)%matrix,1),size(block_o%ButterflyV%blocks(1)%matrix,2)),isnanMat(block_o%ButterflyU%blocks(1)%matrix,size(block_o%ButterflyU%blocks(1)%matrix,1),size(block_o%ButterflyU%blocks(1)%matrix,2))
-
-	call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop=flop)
-	stats%Flop_Factor = stats%Flop_Factor + flop
-
-	! write(*,*)'goog1'
-	call assert(MPI_COMM_NULL/=ptree%pgrp(pgno)%Comm,'communicator should not be null 1')
-	call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*rank,MPI_DT,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
-	! write(*,*)'goog2'
-	do ii=1,rank
-		matrixtemp1(ii,ii) = matrixtemp1(ii,ii)+1
-	enddo
-
-	! write(*,*)abs(matrixtemp1),rank,'gggddd'
 
 	if(rank<=nbslpk)then
+		allocate(matrixtemp(rank,rank))
+		matrixtemp=0
+		allocate(matrixtemp1(rank,rank))
+		matrixtemp1=0
+		allocate(matU(block_o%M_loc,rank))
+		matU = block_o%ButterflyU%blocks(1)%matrix
 
+
+		call gemmf90(block_o%ButterflyV%blocks(1)%matrix,block_o%M_loc,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,matrixtemp,rank,'T','N',rank,rank,block_o%M_loc,cone,czero,flop=flop)
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		! write(*,*)'goog1'
+		call assert(MPI_COMM_NULL/=ptree%pgrp(pgno)%Comm,'communicator should not be null 1')
+		call MPI_ALLREDUCE(matrixtemp,matrixtemp1,rank*rank,MPI_DT,MPI_SUM,ptree%pgrp(pgno)%Comm,ierr)
+		! write(*,*)'goog2'
+		do ii=1,rank
+			matrixtemp1(ii,ii) = matrixtemp1(ii,ii)+1
+		enddo
+
+		! write(*,*)abs(matrixtemp1),rank,'gggddd'
 #if 0
 		allocate(ipiv(rank))
 		ipiv=0
@@ -340,36 +338,58 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 		stats%Flop_Factor = stats%Flop_Factor + flop
 #endif
 
+
+		call gemmf90(matU,block_o%M_loc,matrixtemp1,rank,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,'N','N',block_o%M_loc,rank,rank,cone,czero,flop=flop)
+		block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
+		stats%Flop_Factor = stats%Flop_Factor + flop
+
+		deallocate(matrixtemp,matrixtemp1,matU)
+
 	else
-
-		!!!!!! the SVD-based pseudo inverse needs to be implemented later
-
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
-			if(ptree%MyID==ptree%pgrp(pgno)%head)then
-				call blacs_gridinfo(ctxt_head, nprow, npcol, myrow, mycol)
-				myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
-				call descinit( desctemp, rank, rank, nbslpk, nbslpk, 0, 0, ctxt_head, max(myArows,1), info )
-				call assert(info==0,'descinit fail for desctemp')
-			else
-				desctemp(2)=-1
-			endif
+			myArows = numroc_wp(block_o%M, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+			allocate(matU2D(myArows,myAcols))
+			matU2D=0
+			allocate(matU2D1(myArows,myAcols))
+			matU2D1=0
+			call descinit( descU, block_o%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call assert(info==0,'descinit fail for descU')
+			myArows = numroc_wp(block_o%N, nbslpk, myrow, 0, nprow)
+			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+			allocate(matV2D(myArows,myAcols))
+			matV2D=0
+			call descinit( descV, block_o%N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call assert(info==0,'descinit fail for descV')
+		else
+			allocate(matU2D(1,1))
+			allocate(matU2D1(1,1))
+			descU(2)=-1
+			allocate(matV2D(1,1))
+			descV(2)=-1
+		endif
+		call Redistribute1Dto2D(block_o%ButterflyU%blocks(1)%matrix,block_o%M_p,0,pgno,matU2D,block_o%M,0,pgno,rank,ptree)
+		call Redistribute1Dto2D(block_o%ButterflyV%blocks(1)%matrix,block_o%N_p,0,pgno,matV2D,block_o%N,0,pgno,rank,ptree)
 
-			call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+
+		if(myrow/=-1 .and. mycol/=-1)then
 			myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-
 			allocate(matrix_small(myArows,myAcols))
 			matrix_small=0
-
 			call descinit( descsmall, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
-			! if(info/=0)then
-				! write(*,*)'nneref',rank,nbslpk,myArows,myAcols,max(myArows,1),ptree%pgrp(pgno)%nproc,ptree%MyID,ptree%pgrp(pgno)%head,pgno,ptree%pgrp(pgno)%nprow,ptree%pgrp(pgno)%npcol,info
-			! endif
 			call assert(info==0,'descinit fail for descsmall')
 
-			call pgemr2df90(rank, rank, matrixtemp1, 1, 1, desctemp, matrix_small, 1, 1, descsmall, ctxt)
-
+			call pgemmf90('T','N',rank,rank,block_o%N,cone, matV2D,1,1,descV,matU2D,1,1,descU,czero,matrix_small,1,1,descsmall,flop=flop)
+			stats%Flop_Factor = stats%Flop_Factor + flop
+			do ii=1,rank
+				call g2l(ii,rank,nprow,nbslpk,iproc,myi)
+				call g2l(ii,rank,npcol,nbslpk,jproc,myj)
+				if(iproc==myrow .and. jproc==mycol)then
+					matrix_small(myi,myj) = matrix_small(myi,myj)+1
+				endif
+			enddo
 			allocate(ipiv(myArows+nbslpk))
 			ipiv=0
 			call pgetrff90(rank,rank,matrix_small,1,1,descsmall,ipiv,info,flop=flop)
@@ -379,24 +399,19 @@ subroutine LR_SMW(block_o,Memory,ptree,stats,pgno)
 			stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 
 			deallocate(ipiv)
-
-
-			call pgemr2df90(rank, rank, matrix_small, 1, 1, descsmall,matrixtemp1, 1, 1, desctemp, ctxt)
+			call pgemmf90('N','N',block_o%M,rank,rank, cone, matU2D,1,1,descU,matrix_small,1,1,descsmall,czero,matU2D1,1,1,descU,flop=flop)
+			stats%Flop_Factor = stats%Flop_Factor + flop
+			matU2D1 = -matU2D1
 			deallocate(matrix_small)
 		endif
 
-		call MPI_Bcast(matrixtemp1,rank*rank,MPI_DT,0,ptree%pgrp(pgno)%Comm,ierr)
+		call Redistribute2Dto1D(matU2D1,block_o%M,0,pgno,block_o%ButterflyU%blocks(1)%matrix,block_o%M_p,0,pgno,rank,ptree)
+
+		deallocate(matU2D)
+		deallocate(matU2D1)
+		deallocate(matV2D)
 
 	endif
-
-
-	call gemmf90(matU,block_o%M_loc,matrixtemp1,rank,block_o%ButterflyU%blocks(1)%matrix,block_o%M_loc,'N','N',block_o%M_loc,rank,rank,cone,czero,flop=flop)
-	block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
-	stats%Flop_Factor = stats%Flop_Factor + flop
-
-	deallocate(matrixtemp,matrixtemp1,matU)
-
-
 
 	Memory = 0
 	Memory = Memory + SIZEOF(block_o%ButterflyV%blocks(1)%matrix)/1024.0d3
