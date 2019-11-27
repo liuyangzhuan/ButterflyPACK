@@ -28,7 +28,7 @@ implicit none
 	type quant_app
 		integer ntrain,ntest,diagflag ! size of training points and test points
 		character(LEN=500)::trainfile_p,trainfile_tree,trainfile_l,trainfile_d,testfile_p,testfile_l !Kernel Regression: file pointers to train data, preordered tree, train labels, test data, and test labels
-
+		real(kind=8)::lambda
 		integer Nunk ! size of the matrix
 		! real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		real(kind=8),allocatable:: matZ_glo(:,:)
@@ -59,7 +59,7 @@ contains
 			else
 			value_e = quant%matZ_glo(n,m)
 			endif
-			! if(m==n)value_e = value_e + 1d-4
+			if(m==n)value_e = value_e +quant%lambda
 		class default
 			write(*,*)"unexpected type"
 			stop
@@ -163,6 +163,7 @@ PROGRAM ButterflyPACK_FullKRR
 	quant%trainfile_l='../EXAMPLE/FULLMAT_DATA/FullMatKrr/label_train5k_test10k.txt'
     quant%ntrain=5000
     quant%ntest=10000
+    quant%lambda=0
 
 	quant%diagflag=0
 	nargs = iargc()
@@ -189,6 +190,8 @@ PROGRAM ButterflyPACK_FullKRR
 							read(strings1,*)quant%ntrain
 						else if	(trim(strings)=='--ntest')then
 							read(strings1,*)quant%ntest
+						else if	(trim(strings)=='--lambda')then
+							read(strings1,*)quant%lambda
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
