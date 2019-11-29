@@ -457,6 +457,11 @@ subroutine C_BPACK_Setoption(option_Cptr,nam,val_Cptr) bind(c, name="c_bpack_set
 	option%nogeo=val_i
 	valid_opt=1
 	endif
+	if(trim(str)=='less_adapt')then
+	call c_f_pointer(val_Cptr, val_i)
+	option%less_adapt=val_i
+	valid_opt=1
+	endif
 	if(trim(str)=='RecLR_leaf')then
 	call c_f_pointer(val_Cptr, val_i)
 	option%RecLR_leaf=val_i

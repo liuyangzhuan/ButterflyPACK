@@ -467,6 +467,7 @@ subroutine SetDefaultOptions(option)
 	option%knn=0
 	option%cpp=0
 	option%bp_cnt_lr=0
+	option%less_adapt=0
 
 end subroutine SetDefaultOptions
 
@@ -519,6 +520,8 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%RecLR_leaf
 				else if	(trim(strings)=='--nogeo')then
 					read(strings1,*)option%nogeo
+				else if	(trim(strings)=='--less_adapt')then
+					read(strings1,*)option%less_adapt
 				else if	(trim(strings)=='--errsol')then
 					read(strings1,*)option%ErrSol
 				else if	(trim(strings)=='--lr_blk_num')then
@@ -620,6 +623,7 @@ subroutine CopyOptions(option,option1)
 	option1%elem_extract = option%elem_extract
 	option1%cpp = option%cpp
 	option1%knn = option%knn
+	option1%less_adapt = option%less_adapt
 
 end subroutine CopyOptions
 
@@ -664,6 +668,7 @@ subroutine PrintOptions(option,ptree)
 		write(*,'(A18,I8)') 'ErrFillFull', option%ErrFillFull
 		write(*,'(A18,I8)') 'ErrSol', option%ErrSol
 		write(*,'(A18,I8)') 'sample_heuristic', option%sample_heuristic
+		write(*,'(A18,I8)') 'less_adapt', option%less_adapt
 
 		write(*,'(A18,Es14.7)') 'rankrate', option%rankrate
 		write(*,'(A18,Es14.7)') 'tol_comp', option%tol_comp

@@ -439,6 +439,91 @@ end subroutine BF_Resolving_Butterfly_LL_dat
 
 
 
+
+subroutine BF_GetNumVectEstimate_LL(num_vect,nth_s,nth_e,Ng,level,blocks,option,ptree,msh,stats)
+
+   use BPACK_DEFS
+
+
+   implicit none
+
+   integer nth_s,nth_e,level
+   integer i,j,k,num_blocks,num_row,num_col,ii,jj,mm,kk, rs,re,rank
+   integer index_i, index_j,index_ii,index_jj,index_ii_loc,index_jj_loc, iter, vector1, vector2, direction, round, flag
+   real(kind=8) a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
+   DT ctemp
+   integer kmax
+   type(Hoption)::option
+   type(proctree)::ptree
+   type(mesh)::msh
+   type(Hstat)::stats
+   DT,allocatable::RandVectTmp(:,:)
+
+   real(kind=8), allocatable :: Singular(:)
+   DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
+   DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect
+   real(kind=8)::n1,n2
+   type(matrixblock) :: blocks
+   type(butterfly_vec) :: BFvec
+   integer idx_r,inc_r,nr,idx_c,inc_c,nc,ierr
+
+   if(option%less_adapt==0 .or. level==0)then
+	   num_vect = blocks%dimension_rank+5
+   else
+
+	   level_butterfly=blocks%level_butterfly
+
+		!********* multiply BF^C with vectors to get the local block dimensions, this can be improved
+		allocate(RandVectTmp(blocks%N_loc,1))
+		RandVectTmp=0
+		call BF_block_MVP_partial(blocks,'N',1,RandVectTmp,BFvec,level-1,ptree,msh,stats)
+		deallocate(RandVectTmp)
+
+
+		num_vect = 0
+		!********* get the rank upper bound
+		do nth = nth_s,nth_e
+			num_col=blocks%ButterflyKerl(level)%num_col
+			index_i = ceiling_safe(nth*Ng*2d0/num_col)
+
+			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+			if(mod(index_i-idx_r,inc_r)==0 .and. index_i>=idx_r .and. index_i<=idx_r+(nr-1)*inc_r)then ! I own this block row number
+				do j=1,nc
+					index_j=idx_c+(j-1)*inc_c
+
+					index_ii=int((index_i+1)/2) ; index_jj=2*index_j-1 !index_ii is global index in BFvec%vec(level)
+					index_ii_loc=(index_ii-BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level)
+					index_jj_loc=(index_jj-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
+
+					nn1 = size(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc)%matrix,1)
+					nn2 = size(BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix,1)
+					num_vect = max(num_vect,nn1+nn2)
+				enddo
+			endif
+		enddo
+
+		call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1,MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm,ierr)
+
+		!********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+		do j=1, BFvec%vec(level)%nc
+			do i=1, BFvec%vec(level)%nr
+				deallocate(BFvec%vec(level)%blocks(i,j)%matrix)
+			enddo
+		enddo
+		deallocate(BFvec%vec(level)%blocks)
+		deallocate(BFvec%vec)
+
+	endif
+   return
+
+end subroutine BF_GetNumVectEstimate_LL
+
+
+
+
+
+
 subroutine BF_OneBlock_LL(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,blocks,BFvec,option,stats)
    use BPACK_DEFS
 
@@ -495,7 +580,7 @@ subroutine BF_OneBlock_LL(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 		matB(1+nn1:nn2+nn1,1:mm) = BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
 		call ComputeRange(nn1+nn2,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 		Flops = Flops + flop
-		if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+		! if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 		allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(rank,nn1))
 		allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix(rank,nn2))
 
@@ -612,6 +697,88 @@ end subroutine BF_Resolving_Butterfly_RR_dat
 
 
 
+subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,ptree,msh,stats)
+
+   use BPACK_DEFS
+
+
+   implicit none
+
+   integer nth_s,nth_e,level
+   integer i,j,k,num_blocks,num_row,num_col,ii,jj,mm,kk, rs,re,rank
+   integer index_i, index_j,index_ii,index_jj,index_ii_loc,index_jj_loc, iter, vector1, vector2, direction, round, flag
+   real(kind=8) a,b,c,d,norm1,norm2,norm3,norm4,norm1L,norm2L,norm3L,norm4L,norm1R,norm2R,norm3R,norm4R,error,errorL,errorR,rtemp,error0,error1,error2
+   DT ctemp
+   integer kmax
+   type(Hoption)::option
+   type(proctree)::ptree
+   type(mesh)::msh
+   type(Hstat)::stats
+   DT,allocatable::RandVectTmp(:,:)
+
+   real(kind=8), allocatable :: Singular(:)
+   DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
+   DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
+   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect
+   real(kind=8)::n1,n2
+   type(matrixblock) :: blocks
+   type(butterfly_vec) :: BFvec
+   integer idx_r,inc_r,nr,idx_c,inc_c,nc,ierr
+
+   level_butterfly=blocks%level_butterfly
+   if(option%less_adapt==0 .or. level==level_butterfly+1)then
+	   num_vect = blocks%dimension_rank+5
+   else
+
+
+
+		!********* multiply BF^C with vectors to get the local block dimensions, this can be improved
+		allocate(RandVectTmp(blocks%M_loc,1))
+		RandVectTmp=0
+		call BF_block_MVP_partial(blocks,'T',1,RandVectTmp,BFvec,level+1,ptree,msh,stats)
+		deallocate(RandVectTmp)
+
+
+		num_vect = 0
+		!********* get the rank upper bound
+		do nth = nth_s,nth_e
+
+			num_row=blocks%ButterflyKerl(level)%num_row
+			index_j = ceiling_safe(nth*Ng*2d0/num_row)
+
+			call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+			if(mod(index_j-idx_c,inc_c)==0 .and. index_j>=idx_c .and. index_j<=idx_c+(nc-1)*inc_c)then ! I own this block column number
+				do i=1,nr
+					index_i=idx_r+(i-1)*inc_r
+					index_ii=2*index_i-1; index_jj=int((index_j+1)/2) ;  !index_ii is global index in BFvec%vec(level_butterfly-level+1)
+
+					index_ii_loc=(index_ii-BFvec%vec(level_butterfly-level+1)%idx_r)/BFvec%vec(level_butterfly-level+1)%inc_r+1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+					index_jj_loc=(index_jj-BFvec%vec(level_butterfly-level+1)%idx_c)/BFvec%vec(level_butterfly-level+1)%inc_c+1
+
+					nn1 = size(BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,index_jj_loc)%matrix,1)
+					nn2 = size(BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc+1,index_jj_loc)%matrix,1)
+					num_vect = max(num_vect,nn1+nn2)
+				enddo
+			endif
+		enddo
+
+		call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1,MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm,ierr)
+
+		!********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
+		do j=1, BFvec%vec(level_butterfly-level+1)%nc
+			do i=1, BFvec%vec(level_butterfly-level+1)%nr
+				deallocate(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
+			enddo
+		enddo
+		deallocate(BFvec%vec(level_butterfly-level+1)%blocks)
+		deallocate(BFvec%vec)
+
+	endif
+   return
+
+end subroutine BF_GetNumVectEstimate_RR
+
+
 
 subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,blocks,BFvec,BFvec1,option,stats)
    use BPACK_DEFS
@@ -667,8 +834,8 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 			! write(*,*)fnorm(matB,dimension_mm,mm),'Ubeforerange',dimension_mm,mm
 			call ComputeRange(dimension_mm,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 			Flops = Flops + flop
-			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
-
+			! if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+			if(allocated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix))deallocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
 			allocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix(dimension_mm,rank))
 			blocks%ButterflyU%blocks(index_i_loc_k)%matrix=matB(1:dimension_mm,1:rank)
 			! write(*,*)fnorm(matB(1:dimension_mm,1:rank),dimension_mm,rank),'U'
@@ -739,7 +906,7 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 end subroutine BF_OneBlock_RR
 
 
-subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
+subroutine BF_randomized_old(pgno_large,level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
 
     use BPACK_DEFS
 	use MISC_Utilities
@@ -807,10 +974,10 @@ subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,oper
 			n2 = OMP_get_wtime()
 			stats%Time_random(1) = stats%Time_random(1) + n2-n1
 			n1 = OMP_get_wtime()
-			call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+			call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,0,block_rand(1)%level_half)
 			n2 = OMP_get_wtime()
 			time_tmp = time_tmp + n2-n1
-			call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+			call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,level_butterfly+1,block_rand(1)%level_half+1)
 
 		endif
 
@@ -824,7 +991,7 @@ subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,oper
 		if(ptree%MyID==ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #sample:',rank_pre_max,' #nproc:',ptree%pgrp(block_rand(1)%pgno)%nproc
 
 		!!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec
-		if(error_inout>option%tol_rand .and. block_rand(1)%rankmax==rank_pre_max)then
+		if(error_inout>option%tol_rand .and. block_rand(1)%rankmax>=rank_pre_max)then
 			call BF_get_rank(block_rand(1),ptree)
 			rank_new_max = block_rand(1)%rankmax
 			call BF_delete(block_rand(1),1)
@@ -849,6 +1016,123 @@ subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,oper
 	if(converged==0)then
 		write(*,*)'randomized scheme not converged in '//TRIM(strings)//'. level: ',blocks_o%level_butterfly,error_inout,rank_new_max
 		stop
+	endif
+
+    return
+
+end subroutine BF_randomized_old
+
+
+
+
+
+
+subroutine BF_randomized(pgno_large,level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
+
+    use BPACK_DEFS
+	use MISC_Utilities
+    use omp_lib
+
+    implicit none
+
+	integer level_c,rowblock,ierr
+    integer blocks1, blocks2, blocks3, level_butterfly, rank0, i, j, k, num_blocks
+    integer num_col, num_row, level, mm, nn, ii, jj,tt,kk1,kk2,r1,r2,r3,r3tmp,mn,rank
+    character chara
+    real(kind=8) T0
+    type(matrixblock),pointer::block_o,block_off1,block_off2
+    type(matrixblock)::blocks_o
+    type(matrixblock),pointer::blocks_A, blocks_B, blocks_C, blocks_D,block_tmp
+    integer rank_new_max,rank_pre_max
+	real(kind=8):: rank_new_avr,error,rankrate
+	integer niter,groupm,groupn
+	real(kind=8):: error_inout
+	integer itermax,ntry
+	real(kind=8):: n1,n2,Memory
+	DT, allocatable::matrix_small(:,:),U1(:,:),V1(:,:),U2(:,:),V2(:,:),U3(:,:),V3(:,:),U3tmp(:,:),V3tmp(:,:),UUtmp(:,:),VVtmp(:,:),UU(:,:),VV(:,:),UUr(:,:),VVr(:,:)
+	real(kind=8),allocatable :: Singular(:)
+	DT, allocatable::Vin(:,:),Vout1(:,:),Vout2(:,:),Vout3(:,:),Vout4(:,:),Vout(:,:),Vinter(:,:)
+	DT::ctemp1,ctemp2
+	DT,allocatable:: matin(:,:),matout(:,:),matsub_tmp(:,:)
+	integer idx_start_m_ref
+	class(*):: operand
+	class(*),optional:: operand1
+	character(*)  :: strings
+	type(matrixblock),allocatable::block_rand(:)
+	type(Hoption)::option
+	type(Hstat)::stats
+	procedure(BMatVec)::blackbox_MVP_dat
+	type(proctree)::ptree
+	type(mesh)::msh
+	integer converged,rankmax1,rankmax2
+	integer pgno_large
+
+
+	if(option%less_adapt==0 .or. level_butterfly==0)then
+		call BF_randomized_old(pgno_large,level_butterfly,rank0,rankrate,blocks_o,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
+	else
+
+		Memory = 0
+		stats%Flop_Tmp=0
+
+		allocate (block_rand(1))
+		n1 = OMP_get_wtime()
+		groupm=blocks_o%row_group
+		groupn=blocks_o%col_group
+		call BF_Init_randomized(level_butterfly,rank_pre_max,groupm,groupn,blocks_o,block_rand(1),msh,ptree,option,0)
+		n2 = OMP_get_wtime()
+		stats%Time_random(1) = stats%Time_random(1) + n2-n1
+
+
+		converged=0
+		do tt = 1,option%itermax
+			rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt-1))+1
+			block_rand(1)%dimension_rank=rank_pre_max
+			n1 = OMP_get_wtime()
+			call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,0,0)
+			n2 = OMP_get_wtime()
+			time_tmp = time_tmp + n2-n1
+			call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,level_butterfly+1,level_butterfly+1)
+			call BF_get_rank(block_rand(1),ptree,0)
+			call MPI_ALLREDUCE(block_rand(1)%rankmax, rankmax1, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm,ierr)
+			call BF_get_rank(block_rand(1),ptree,level_butterfly+1)
+			call MPI_ALLREDUCE(block_rand(1)%rankmax, rankmax2, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm,ierr)
+			if(max(rankmax1,rankmax2)<rank_pre_max)then
+				converged=1
+				exit
+			endif
+		enddo
+
+		if(converged==0)then
+			write(*,*)'randomized scheme not converged in '//TRIM(strings)//'. level: ',blocks_o%level_butterfly,max(rankmax1,rankmax2),rank_pre_max
+			stop
+		endif
+
+
+		n1 = OMP_get_wtime()
+		call BF_Reconstruction_LL(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,1,block_rand(1)%level_half)
+		call BF_Reconstruction_RR(block_rand(1),blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,level_butterfly,block_rand(1)%level_half+1)
+		n2 = OMP_get_wtime()
+		time_tmp = time_tmp + n2-n1
+
+
+		n1 = OMP_get_wtime()
+		call BF_Test_Reconstruction_Error(block_rand(1),blocks_o,operand,blackbox_MVP_dat,error_inout,ptree,stats,operand1)
+		n2 = OMP_get_wtime()
+
+		call BF_get_rank(block_rand(1),ptree)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1,MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm,ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, block_rand(1)%rankmax, 1,MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm,ierr)
+
+		if(ptree%MyID==ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity>=2)write(*,'(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A8,I5)')' '//TRIM(strings)//' ',' rank:',block_rand(1)%rankmax,' Ntrial:',tt,' L_butt:',block_rand(1)%level_butterfly,' error:',error_inout,' #nproc:',ptree%pgrp(block_rand(1)%pgno)%nproc
+
+
+		call BF_delete(blocks_o,1)
+		call BF_get_rank(block_rand(1),ptree)
+		rank_new_max = block_rand(1)%rankmax
+		call BF_copy_delete(block_rand(1),blocks_o,Memory)
+		deallocate(block_rand)
+
 	endif
 
     return
@@ -1189,7 +1473,7 @@ end subroutine PSVDTruncateSigma
 
 
 
-subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,levels,levele)
 
     use BPACK_DEFS
     implicit none
@@ -1207,7 +1491,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
     ! type(matricesblock), pointer :: blocks
     type(RandomBlock), pointer :: random
     integer Nsub,Ng,nth,nth_s,nth_e
-	integer Nbind
+	integer Nbind,levels,levele
     real(kind=8)::n1,n2
 
     integer blocks1, blocks2, blocks3, level_butterfly
@@ -1230,36 +1514,38 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	procedure(BMatVec)::blackbox_MVP_dat
 	integer idx_r,inc_r,nr,idx_c,inc_c,nc
 
-	mm=block_rand%M_loc
-	nn=block_rand%N_loc
-
 	level_butterfly=block_rand%level_butterfly
     num_blocks=2**level_butterfly
-	dimension_rank =block_rand%dimension_rank
-	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	! dimension_rank =block_rand%dimension_rank
+	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
 
 	level_right_start = block_rand%level_half !  check here later
 
-	do level = 0,level_right_start
+	! do level = 0,level_right_start
+	do level=levels,levele
 
 		Nsub = NINT(2**ceiling_safe((level_butterfly-1)/2d0)/dble(2**(level_right_start-level)))   !  check here later
 		Ng = 2**level_butterfly/Nsub
 
 
 		Nbind = min(option%Nbundle,Nsub)
-		num_vect_sub = num_vect_subsub*Nbind
 
-		allocate(RandVectIn(block_rand%M_loc,num_vect_sub))
-		RandVectIn=0
-		allocate(RandVectOut(block_rand%N_loc,num_vect_sub))
-		RandVectOut=0
 
 		do ii = 1,Nsub/Nbind
+
 			nth_s = (ii-1)*Nbind+1
 			nth_e = ii*Nbind
 
-			n1 = OMP_get_wtime()
+			call BF_GetNumVectEstimate_LL(num_vect_subsub,nth_s,nth_e,Ng,level,block_rand,option,ptree,msh,stats)
+			num_vect_sub = num_vect_subsub*Nbind
 
+			allocate(RandVectIn(block_rand%M_loc,num_vect_sub))
+			RandVectIn=0
+			allocate(RandVectOut(block_rand%N_loc,num_vect_sub))
+			RandVectOut=0
+
+
+			n1 = OMP_get_wtime()
 			call BF_Randomized_Vectors_dat('L',block_rand,RandVectIn,RandVectOut,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,level,ptree,msh,stats,operand1)
 			n2 = OMP_get_wtime()
 			stats%Time_random(2) = stats%Time_random(2) + n2-n1
@@ -1269,10 +1555,11 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 			call BF_Resolving_Butterfly_LL_dat(num_vect_sub,nth_s,nth_e,Ng,level,block_rand,RandVectIn,RandVectOut,option,ptree,msh,stats)
 			n2 = OMP_get_wtime()
 			stats%Time_random(3) = stats%Time_random(3) + n2-n1
-		end do
 
-		deallocate(RandVectIn)
-		deallocate(RandVectOut)
+
+			deallocate(RandVectIn)
+			deallocate(RandVectOut)
+		end do
 
 	end do
 
@@ -1282,7 +1569,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 end subroutine BF_Reconstruction_LL
 
 
-subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh)
+subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,operand1,option,stats,ptree,msh,levels,levele)
 
     use BPACK_DEFS
     implicit none
@@ -1301,7 +1588,7 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	type(Hstat)::stats
 
     integer Nsub,Ng,nth,nth_s,nth_e
-	integer Nbind
+	integer Nbind,levels,levele
 
     integer blocks1, blocks2, blocks3, level_butterfly
     integer tt
@@ -1323,26 +1610,33 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	nn=block_rand%N_loc
 
     num_blocks=2**level_butterfly
-	dimension_rank =block_rand%dimension_rank
-	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	! dimension_rank =block_rand%dimension_rank
+	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
 
     level_left_start= block_rand%level_half+1   !  check here later
 
-	do level=level_butterfly+1,level_left_start,-1
+	! do level=level_butterfly+1,level_left_start,-1
+	do level=levels,levele,-1
 		Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(level-level_left_start)))    !  check here later
 		Ng = 2**level_butterfly/Nsub
 
 		Nbind = min(option%Nbundle,Nsub)
-		num_vect_sub = num_vect_subsub*Nbind
+		! num_vect_sub = num_vect_subsub*Nbind
 
-		allocate(RandVectIn(block_rand%N_loc,num_vect_sub))
-		RandVectIn=0
-		allocate(RandVectOut(block_rand%M_loc,num_vect_sub))
-		RandVectOut=0
+
 
 		do ii = 1,Nsub/Nbind
 			nth_s = (ii-1)*Nbind+1
 			nth_e = ii*Nbind
+
+			call BF_GetNumVectEstimate_RR(num_vect_subsub,nth_s,nth_e,Ng,level,block_rand,option,ptree,msh,stats)
+			num_vect_sub = num_vect_subsub*Nbind
+
+			allocate(RandVectIn(block_rand%N_loc,num_vect_sub))
+			RandVectIn=0
+			allocate(RandVectOut(block_rand%M_loc,num_vect_sub))
+			RandVectOut=0
+
 
 			n1 = OMP_get_wtime()
 			call BF_Randomized_Vectors_dat('R',block_rand,RandVectIn,RandVectOut,blocks_o,operand,blackbox_MVP_dat,nth_s,nth_e,num_vect_sub,level,ptree,msh,stats,operand1)
@@ -1355,10 +1649,11 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 			call BF_Resolving_Butterfly_RR_dat(num_vect_sub,nth_s,nth_e,Ng,level,block_rand,RandVectIn,RandVectOut,option,ptree,msh,stats)
 			n2 = OMP_get_wtime()
 			stats%Time_random(3) = stats%Time_random(3) + n2-n1
-		end do
 
-		deallocate(RandVectIn)
-		deallocate(RandVectOut)
+			deallocate(RandVectIn)
+			deallocate(RandVectOut)
+
+		end do
 
 	end do
 
@@ -1448,7 +1743,7 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 	character chara
 	integer*8 idx_start
 
-    integer groupm_start, groupn_start,dimension_rank
+    integer groupm_start, groupn_start
     integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 
@@ -1493,7 +1788,6 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 
 	RandVectIn=0
 	RandVectOut=0
-	dimension_rank =block_rand%dimension_rank
 
 	if(side=='L')then
 		trans='T'
@@ -2625,7 +2919,7 @@ subroutine Bplus_block_MVP_Exact_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vo
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	type(vectorsblock), pointer :: random1, random2
@@ -2749,7 +3043,7 @@ subroutine Bplus_block_MVP_minusBC_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	type(vectorsblock), pointer :: random1, random2
@@ -2893,7 +3187,7 @@ subroutine Bplus_block_MVP_Sblock_dat(ho_bf1,block_o,trans,M,N,num_vect_sub,Vin,
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	type(vectorsblock), pointer :: random1, random2
@@ -3464,7 +3758,7 @@ subroutine Bplus_block_MVP_BplusB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	! type(vectorsblock), pointer :: random1, random2
@@ -3564,7 +3858,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	! type(vectorsblock), pointer :: random1, random2
@@ -3791,7 +4085,7 @@ subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,V
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	type(vectorsblock), pointer :: random1, random2
@@ -3890,7 +4184,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 	integer*8 idx_start
 	integer level_blocks
-	integer groupm_start, groupn_start,dimension_rank
+	integer groupm_start, groupn_start
 	integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 	! type(vectorsblock), pointer :: random1, random2
@@ -4336,7 +4630,7 @@ subroutine Bplus_Init_FromInput(Bplus,Bplus_randomized,msh,ptree,option)
 
     integer level_c,rowblock
 	integer i,j,k,level,num_blocks,blocks3,num_row,num_col,ii,jj,kk,level_butterfly, mm, nn
-    integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn,tmpi,tmpj
+    integer dimension_m, dimension_n, blocks, groupm, groupn,tmpi,tmpj
     real(kind=8) a,b,c,d
     DT ctemp
 	DT, allocatable::matrixtemp1(:,:),UU(:,:),VV(:,:)

@@ -1101,7 +1101,7 @@ if(block_i%style==2)then
 				mm=size(block_i%ButterflyV%blocks(index_j)%matrix,1)
 				nn=size(block_i%ButterflyV%blocks(index_j)%matrix,2)
 				temp = temp + fnorm(block_i%ButterflyV%blocks(index_j)%matrix,mm,nn)
-				! write(*,*)'V',level_butterfly,index_j,fnorm(block_i%ButterflyV%blocks(index_j)%matrix,mm,nn),mm,nn
+				if(isnan(temp))write(*,*)'V',level_butterfly,index_j,fnorm(block_i%ButterflyV%blocks(index_j)%matrix,mm,nn),mm,nn
 				endif
 			enddo
 			endif
@@ -1112,7 +1112,7 @@ if(block_i%style==2)then
 				mm=size(block_i%ButterflyU%blocks(index_i)%matrix,1)
 				nn=size(block_i%ButterflyU%blocks(index_i)%matrix,2)
 				temp = temp + fnorm(block_i%ButterflyU%blocks(index_i)%matrix,mm,nn)
-				! write(*,*)'U',level_butterfly,index_i,fnorm(block_i%ButterflyU%blocks(index_i)%matrix,mm,nn),mm,nn
+				if(isnan(temp))write(*,*)'U',level_butterfly,index_i,fnorm(block_i%ButterflyU%blocks(index_i)%matrix,mm,nn),mm,nn
 				endif
 			enddo
 			endif
@@ -1125,7 +1125,7 @@ if(block_i%style==2)then
 					mm=size(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,1)
 					nn=size(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,2)
 					temp = temp + fnorm(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,mm,nn)
-					! write(*,*)'Ker',level_butterfly,level,index_i,index_j,fnorm(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,mm,nn),mm,nn
+					if(isnan(temp))write(*,*)'Ker',level_butterfly,level,index_i,index_j,fnorm(block_i%ButterflyKerl(level)%blocks(index_i,index_j)%matrix,mm,nn),mm,nn
 					endif
 				enddo
 			enddo
@@ -5113,10 +5113,10 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 
 		num_vectors=Nrnd
 
-		! if(BF_checkNAN(blocks))then
-			! write(*,*)'NAN in 0 BF_block_MVP_dat'
-			! stop
-		! end if
+		 if(BF_checkNAN(blocks))then
+			 write(*,*)'NAN in 0 BF_block_MVP_dat'
+			 stop
+		 end if
 
 		if (chara=='N') then
 
@@ -7656,7 +7656,7 @@ subroutine BF_value(mi,nj,blocks,value)
 end subroutine BF_value
 
 
-subroutine BF_get_rank(block_i,ptree)
+subroutine BF_get_rank(block_i,ptree,level_o)
 use BPACK_DEFS
 use MISC_Utilities
 implicit none
@@ -7665,8 +7665,10 @@ type(matrixblock)::block_i
 integer i, j, ii, jj, iii, jjj,index_ij,mm,nn,rank,index_i,index_j,levelm,index_i_m,index_j_m
 integer level, blocks, edge, patch, node, group,level_c
 integer::block_num,block_num_new,num_blocks,level_butterfly
-integer::ierr
+integer::ierr,levels,levelo
+integer,optional:: level_o
 type(proctree)::ptree
+integer lve,lvs
 
 block_i%rankmin = 100000
 block_i%rankmax = -100000
@@ -7677,8 +7679,14 @@ level_butterfly = block_i%level_butterfly
 num_blocks=2**level_butterfly
 
 
+lvs=0
+lve=level_butterfly+1
+if(present(level_o))then
+lvs=level_o
+lve=level_o
+endif
 
-do level=0, level_butterfly+1
+do level=lvs,lve
 	if(level==0)then
 		do jj=1,block_i%ButterflyV%nblk_loc
 			nn=size(block_i%ButterflyV%blocks(jj)%matrix,1)

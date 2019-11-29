@@ -395,6 +395,7 @@ module BPACK_DEFS
 		real(kind=8) tol_Rdetect  ! tolerance to detect numerical ranks
 		real(kind=8) tol_rand     ! tolerance for randomized contruction
 		integer powiter     ! order of power iteration in randomized LR
+		integer less_adapt     ! 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
 		integer::schulzorder ! order (2 or 3) of schultz iteration
 		integer::schulzlevel ! (I+B)^-1 is computed by schultz iteration for butterfly with more than schulzlevel levels
 		integer::rank0 ! intial guess of ranks
