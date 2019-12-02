@@ -725,12 +725,12 @@ subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,
    type(butterfly_vec) :: BFvec
    integer idx_r,inc_r,nr,idx_c,inc_c,nc,ierr
 
-   level_butterfly=blocks%level_butterfly									 
+   level_butterfly=blocks%level_butterfly
    if(option%less_adapt==0 .or. level==level_butterfly+1)then
 	   num_vect = blocks%dimension_rank+5
    else
 
-	   
+
 
 		!********* multiply BF^C with vectors to get the local block dimensions, this can be improved
 		allocate(RandVectTmp(blocks%M_loc,1))
@@ -1772,14 +1772,16 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 	call GetLocalBlockRange(ptree,block_rand%pgno,0,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
 	idx_n_s=idx_c
 	idx_n_e=idx_c+nc-1
-
-
+	idxs=msh%basis_group(groupn_start+idx_n_s-1)%head
+	idxe=msh%basis_group(groupn_start+idx_n_e-1)%tail
+	nn = idxe-idxs+1
 
 	call GetLocalBlockRange(ptree,block_rand%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
 	idx_m_s=idx_r
 	idx_m_e=idx_r+nr-1
-
-
+	idxs=msh%basis_group(groupm_start+idx_m_s-1)%head
+	idxe=msh%basis_group(groupm_start+idx_m_e-1)%tail
+	mm = idxe-idxs+1
 
 
 	RandVectIn=0
