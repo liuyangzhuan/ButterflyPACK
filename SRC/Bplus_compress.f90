@@ -927,7 +927,7 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,pid0,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
+	integer ierr,nsendrecv,pid,pgno_sub,pid0,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
@@ -984,7 +984,8 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 			if(mode=='R')then
 				index_j0 = index_j+2*mod(index_j,2)-1
@@ -993,7 +994,8 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 				index_i0 = index_i+2*mod(index_i,2)-1
 				index_j0=index_j
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -1062,7 +1064,8 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 			if(mode=='R')then
 				index_j0 = index_j+2*mod(index_j,2)-1
@@ -1071,7 +1074,8 @@ subroutine BF_exchange_skel(blocks,skels,option,stats,msh,ptree,level,mode,colle
 				index_i0 = index_i+2*mod(index_i,2)-1
 				index_j0=index_j
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -1182,7 +1186,7 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer ierr,nsendrecv,pid,pgno_sub,tag,nproc,Ncol,Nskel,Nreqr,Nreqs,recvid,sendid,tmpi
 	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
@@ -1241,7 +1245,8 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 	do jj=1,nc
 		index_i = (ii-1)*inc_r+idx_r
 		index_j = (jj-1)*inc_c+idx_c
-		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -1256,7 +1261,8 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 	do jj=1,skels%nc
 		index_i = (ii-1)*skels%inc_r+skels%idx_r
 		index_j = (jj-1)*skels%inc_c+skels%idx_c
-		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -1302,7 +1308,8 @@ subroutine BF_all2all_skel(blocks,skels,option,stats,msh,ptree,level,mode,mode_n
 	do jj=1,skels%nc
 			index_i = (ii-1)*skels%inc_r+skels%idx_r
 			index_j = (jj-1)*skels%inc_c+skels%idx_c
-			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 

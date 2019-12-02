@@ -1816,7 +1816,7 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pids,pidr,pid,pid0,tag,nproc,Ncol,Ncol1,Nrow,Nreqr,Nreqs,recvid,sendid
+	integer ierr,nsendrecv,pgno_subs,pgno_subr,pgno_sub,pids,pidr,pid,pid0,tag,nproc,Ncol,Ncol1,Nrow,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
@@ -1880,8 +1880,10 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pids)
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,modetrans,pidr)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_subs)
+			pids = ptree%pgrp(pgno_subs)%head
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,modetrans,pgno_subr)
+			pidr = ptree%pgrp(pgno_subr)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 			if(mode=='R')then
 				index_j0 = index_j+2*mod(index_j,2)-1
@@ -1891,8 +1893,10 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pids)
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,mode,pidr)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_subs)
+			pids = ptree%pgrp(pgno_subs)%head
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i1,index_j1,mode,pgno_subr)
+			pidr = ptree%pgrp(pgno_subr)%head
 		endif
 		sendflag = pids/=ptree%MyID
 		recvflag = pidr/=ptree%MyID
@@ -1965,7 +1969,8 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 
 			if(mode=='R')then
@@ -1974,7 +1979,8 @@ subroutine BF_exchange_extraction(blocks,kerls,stats,ptree,level,collect)
 			elseif(mode=='C')then
 				write(*,*)'mode=C not needed in BF_exchange_extraction'
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -2105,7 +2111,7 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,pid0,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid
+	integer ierr,nsendrecv,pgno_sub,pid,pid0,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
 	integer,allocatable::sendIDactive(:),recvIDactive(:)
@@ -2162,7 +2168,8 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 			if(mode=='R')then
 				index_j0 = index_j+2*mod(index_j,2)-1
@@ -2171,7 +2178,8 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 				index_i0 = index_i+2*mod(index_i,2)-1
 				index_j0=index_j
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -2240,7 +2248,8 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 				index_i0=2*index_i-mod(index_j,2)
 				index_j0=floor_safe((index_j-1)/2d0)+1
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,modetrans,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		elseif(collect=='B')then ! pair-wise broadcast
 			if(mode=='R')then
 				index_j0 = index_j+2*mod(index_j,2)-1
@@ -2249,7 +2258,8 @@ subroutine BF_exchange_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,collect)
 				index_i0 = index_i+2*mod(index_i,2)-1
 				index_j0=index_j
 			endif
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 		endif
 		sendflag = pid/=ptree%MyID
 
@@ -2363,7 +2373,7 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer ierr,nsendrecv,pid,pgno_sub,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
 	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
@@ -2426,7 +2436,8 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 		jj = kerls1%index(nn,2)
 		index_i = (ii-1)*kerls1%inc_r+kerls1%idx_r
 		index_j = (jj-1)*kerls1%inc_c+kerls1%idx_c
-		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -2441,7 +2452,8 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 		jj = kerls%index(nn,2)
 		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
 		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
-		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -2487,7 +2499,8 @@ subroutine BF_all2all_extraction(blocks,kerls,kerls1,stats,ptree,level,mode,mode
 		jj = kerls%index(nn,2)
 		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
 		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
-		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		Nrow=size(kerls%blocks(ii,jj)%matrix,1)
@@ -2659,7 +2672,7 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
     DT,allocatable:: UU(:,:), VV(:,:), matrix_little(:,:),matrix_little_inv(:,:), matrix_U(:,:), matrix_V(:,:),matrix_V_tmp(:,:), matrix_little_cc(:,:),core(:,:),tau(:)
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer ierr,nsendrecv,pgno_sub,pid,tag,nproc,Ncol,Nrow,Nreqr,Nreqs,recvid,sendid,tmpi
 	integer idx_r,idx_c,inc_r,inc_c,nr,nc,level_new
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
@@ -2721,7 +2734,8 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 	do jj=1,nc
 		index_i = (ii-1)*inc_r+idx_r
 		index_j = (jj-1)*inc_c+idx_c
-		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -2736,7 +2750,8 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 	do jj=1,kerls%nc
 		index_i = (ii-1)*kerls%inc_r+kerls%idx_r
 		index_j = (jj-1)*kerls%inc_c+kerls%idx_c
-		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+		call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(blocks%pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -2782,7 +2797,8 @@ subroutine BF_all2all_matvec(blocks,kerls,Ncol,stats,ptree,level,mode,mode_new)
 	do jj=1,kerls%nc
 			index_i = (ii-1)*kerls%inc_r+kerls%idx_r
 			index_j = (jj-1)*kerls%inc_c+kerls%idx_c
-			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pid)
+			call GetBlockPID(ptree,blocks%pgno,level_new,level_butterfly,index_i,index_j,mode_new,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 
 			pp=pid-ptree%pgrp(blocks%pgno)%head+1
 			Nrow=size(kerls%blocks(ii,jj)%matrix,1)
@@ -2964,7 +2980,7 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,offset_r,offset_c,block
 	type(proctree)::ptree
 
 	integer,allocatable::jpvt(:)
-	integer ierr,nsendrecv,pid,tag,nproc,Nrow,Ncol,Nreqr,Nreqs,recvid,sendid,tmpi
+	integer ierr,nsendrecv,pgno_sub,pid,tag,nproc,Nrow,Ncol,Nreqr,Nreqs,recvid,sendid,tmpi
 	integer idx_r,idx_c,inc_r,inc_c,nr,nc,num_row,num_col,level_new
 
 	type(commquant1D),allocatable::sendquant(:),recvquant(:)
@@ -3070,7 +3086,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,offset_r,offset_c,block
 			index_i0=floor_safe((index_i-1)/2d0)+1
 			index_j0=index_j
 		endif
-		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
@@ -3095,7 +3112,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,offset_r,offset_c,block
 			index_i0=floor_safe((index_i-1)/2d0)+1
 			index_j0=index_j
 		endif
-		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
@@ -3153,7 +3171,8 @@ subroutine BF_all2all_ker(block_i,pgno_i,kerls_i,level_i,offset_r,offset_c,block
 				index_j0=index_j
 			endif
 
-			call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 			if(pid/=-1)then
 			pp=pid-ptree%pgrp(pgno)%head+1
 			Nrow=size(kerls_i%blocks(ii,jj)%matrix,1)
@@ -3496,7 +3515,7 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 
    use BPACK_DEFS
    implicit none
-	integer pgno_i,pgno_o,pgno,level_i,level_o
+	integer pgno_sub,pgno_i,pgno_o,pgno,level_i,level_o
     integer i, j, level_butterfly_i,level_butterfly_o, level_butterfly_c_o,num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_ic, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_jc,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt, iii, jjj
     integer level, length_1, length_2, level_blocks
@@ -3631,7 +3650,8 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 			index_i0=floor_safe((index_i-1)/2d0)+1
 			index_j0=index_j
 		endif
-		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -3661,7 +3681,8 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 			index_i0=floor_safe((index_ic-1)/2d0)+1
 			index_j0=index_jc
 		endif
-		call GetBlockPID(ptree,pgno_o,level_o-1,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_o-1,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
 			sendquant(pp)%active=1
@@ -3722,7 +3743,8 @@ subroutine BF_all2all_ker_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,st
 				index_i0=floor_safe((index_ic-1)/2d0)+1
 				index_j0=index_jc
 			endif
-			call GetBlockPID(ptree,pgno_o,level_o-1,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+			call GetBlockPID(ptree,pgno_o,level_o-1,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 
 			pp=pid-ptree%pgrp(pgno)%head+1
 			Nrow=size(block_i%ButterflyKerl(level_i)%blocks(ii,jj)%matrix,1)
@@ -3886,7 +3908,7 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,offset,block_o,pgno_o,ke
 
    use BPACK_DEFS
    implicit none
-	integer pgno_i,pgno_o,pgno,level_i,level_o
+	integer pgno_sub,pgno_i,pgno_o,pgno,level_i,level_o
     integer i, j, level_butterfly_i,level_butterfly_o, num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
     integer level, length_1, length_2, level_blocks
@@ -4000,7 +4022,8 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,offset,block_o,pgno_o,ke
 			index_i = (ii-1)*inc+idx-offset
 			index_j = 1
 		endif
-		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
@@ -4020,7 +4043,8 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,offset,block_o,pgno_o,ke
 			index_i = (ii-1)*kerls_i%inc+kerls_i%idx+offset
 			index_j = 1
 		endif
-		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
@@ -4073,7 +4097,8 @@ subroutine BF_all2all_UV(block_i,pgno_i,kerls_i,level_i,offset,block_o,pgno_o,ke
 			index_j = 1
 		endif
 
-		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_o,level_butterfly_o,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		if(pid/=-1)then
 		pp=pid-ptree%pgrp(pgno)%head+1
 		Nrow=size(kerls_i%blocks(ii)%matrix,1)
@@ -4243,7 +4268,7 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 
    use BPACK_DEFS
    implicit none
-	integer pgno_i,pgno_o,pgno,level_i,level_o,level_c_o
+	integer pgno_sub,pgno_i,pgno_o,pgno,level_i,level_o,level_c_o
     integer i, j, level_butterfly_i,level_butterfly_o, level_butterfly_c_o,num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
     integer level, length_1, length_2, level_blocks
@@ -4380,7 +4405,8 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			index_i = (ii-1)*block_o%sons(iii,jjj)%ButterflyU%inc+block_o%sons(iii,jjj)%ButterflyU%idx
 			index_j = 1
 		endif
-		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -4407,7 +4433,8 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
 		endif
 
-		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
@@ -4465,7 +4492,8 @@ subroutine BF_all2all_U_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
 		endif
 
-		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 
 		pp=pid-ptree%pgrp(pgno)%head+1
 		Nrow=size(block_i%ButterflyU%blocks(ii)%matrix,1)
@@ -4640,7 +4668,7 @@ subroutine BF_all2all_V_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 
    use BPACK_DEFS
    implicit none
-	integer pgno_i,pgno_o,pgno,level_i,level_o,level_c_o
+	integer pgno_sub,pgno_i,pgno_o,pgno,level_i,level_o,level_c_o
     integer i, j, level_butterfly_i,level_butterfly_o, level_butterfly_c_o,num_blocks, k, attempt,edge_m,edge_n,header_m,header_n,leafsize,nn_start,rankmax_r,rankmax_c,rankmax_min,rank_new
     integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k,index_i_loc_s, index_j,index_j0,index_j_loc_k,index_j_loc_s, ii, jj,ij,pp,tt
     integer level, length_1, length_2, level_blocks
@@ -4774,7 +4802,8 @@ subroutine BF_all2all_V_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			index_i = (ii-1)*block_o%sons(iii,jjj)%ButterflyV%inc+block_o%sons(iii,jjj)%ButterflyV%idx
 			index_j = 1
 		endif
-		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pid)
+		call GetBlockPID(ptree,pgno_i,level_i,level_butterfly_i,index_i,index_j,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(recvquant(pp)%active==0)then
 			recvquant(pp)%active=1
@@ -4799,7 +4828,8 @@ subroutine BF_all2all_V_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			index_i0 = index_i
 			if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
 		endif
-		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 
 		pp=pid-ptree%pgrp(pgno)%head+1
 		if(sendquant(pp)%active==0)then
@@ -4855,7 +4885,8 @@ subroutine BF_all2all_V_split(block_i,pgno_i,level_i,block_o,pgno_o,level_o,stat
 			if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
 		endif
 
-		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pid)
+		call GetBlockPID(ptree,pgno_o,level_c_o,level_butterfly_c_o,index_i0,index_j0,mode,pgno_sub)
+		pid = ptree%pgrp(pgno_sub)%head
 
 		pp=pid-ptree%pgrp(pgno)%head+1
 		Nrow=size(block_i%ButterflyV%blocks(ii)%matrix,1)
@@ -6603,7 +6634,7 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
     integer level
     real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
 	integer header_n1,header_n2,nn1,nn2,mmm,index_ii,index_jj,index_ii_loc,index_jj_loc,nnn1
-	integer nsendrecv,pid,pid0,tag,nproc,Nreqr,Nreqs,recvid,sendid
+	integer nsendrecv,pid,pgno_sub,pid0,tag,nproc,Nreqr,Nreqs,recvid,sendid
 	type(butterfly_vec) :: BFvec,BFvec1
 	type(butterfly_kerl),allocatable::g_idx_m(:),g_idx_n(:)
 	integer,allocatable::group_ms(:),group_ns(:),group_ms1(:),group_ns1(:)
@@ -7104,7 +7135,8 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 			index_i_s = (index_i_loc_s-1)*BFvec%vec(level+1)%inc_r+BFvec%vec(level+1)%idx_r
 			index_j_loc_s = BFvec%vec(level+1)%index(nn,2)
 			index_j_s = (index_j_loc_s-1)*BFvec%vec(level+1)%inc_c+BFvec%vec(level+1)%idx_c
-			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i_s,index_j_s,'R',pid)
+			call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i_s,index_j_s,'R',pgno_sub)
+			pid = ptree%pgrp(pgno_sub)%head
 			if(pid==ptree%MyID)then
 				if(level==0)then
 					index_j = index_j_s
@@ -7332,7 +7364,8 @@ subroutine BF_block_extraction(blocks,inters,ptree,msh,stats)
 				do jjj=0,1
 					index_i=floor_safe((index_i_s-1)/2d0)+1
 					index_j=2*index_j_s-jjj
-					call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,'C',pid)
+					call GetBlockPID(ptree,blocks%pgno,level,level_butterfly,index_i,index_j,'C',pgno_sub)
+					pid = ptree%pgrp(pgno_sub)%head
 					if(pid==ptree%MyID)then
 						index_i_k = 2*index_i-mod(index_i_s,2)
 						index_j_k = index_j

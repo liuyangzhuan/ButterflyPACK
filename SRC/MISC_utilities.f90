@@ -2927,7 +2927,7 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 		pgno1=pgno
 		ith=1
 		do while(found==0)
-			if(ptree%pgrp(pgno1)%nproc==1)then
+			if(ptree%pgrp(pgno1)%nproc==1 .or. level_p==level_butterfly)then
 				found=1
 				exit
 			endif
@@ -2982,6 +2982,15 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 				endif
 			enddo
 		endif
+		
+		if(ptree%MyID/=ptree%pgrp(pgno1)%head .and. level>0 .and. level<level_butterfly+1)then ! for the kernel levels: if several processe own one block, only the head process has it. 
+			idx_r=0
+			inc_r=0
+			nr=0
+			idx_c=0
+			inc_c=0
+			nc=0			
+		endif
 	else
 		idx_r=0
 		inc_r=0
@@ -2994,7 +3003,7 @@ end subroutine GetLocalBlockRange
 
 
 
-!**** computation of the local butterfly block ranges owned by this MPI rank
+!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active  
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
 	!level_butterfly: number of butterfly levels
@@ -3002,14 +3011,14 @@ end subroutine GetLocalBlockRange
 	!index_i: row index of the block
 	!index_j: column index of the block
 	!dir: 'R': row-wise ordering (2^level row blocks and 2^(level_butterfly-level) column blocks) or 'C': column-wise ordering (2^(level-1) row blocks and 2^(level_butterfly-level+1) column blocks)
-	!pid: mpi rank that handles the target block
-subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
+	!pgno_sub: the process group number that shares the (index_i,index_j) block
+subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pgno_sub)
 	implicit none
 	type(proctree)::ptree
-	integer :: pid,level_p,num_blocks,level,ll,group,level_butterfly,idx_r,idx_c,idx,index_i,index_j,pgno,pgno1,found,nleaf,ith
+	integer :: pid,level_p,num_blocks,level,ll,group,level_butterfly,idx_r,idx_c,idx,index_i,index_j,pgno,pgno_sub,found,nleaf,ith
 	character::dir
 
-	level_p = ptree%nlevel-GetTreelevel(pgno)
+	level_p = min(level_butterfly,ptree%nlevel-GetTreelevel(pgno))
 	idx_r=index_i
 	idx_c=index_j
 
@@ -3035,12 +3044,12 @@ subroutine GetBlockPID(ptree,pgno,level,level_butterfly,index_i,index_j,dir,pid)
 		idx = floor_safe(idx/2d0)
 	enddo
 	idx = idx - 2**level_p +1 ! index of this group's ancestor group in the corresponding level_p-level tree
-	pgno1 = pgno*2**level_p ! index of the first process group at pgno's level + level_p of the process tree
-	pgno1 = pgno1 + idx -1 ! index of the process group that handles group idx in the process tree
+	pgno_sub = pgno*2**level_p ! index of the first process group at pgno's level + level_p of the process tree
+	pgno_sub = pgno_sub + idx -1 ! index of the process group that handles group idx in the process tree
 
 
 
-	pid = ptree%pgrp(pgno1)%head
+	! pid = ptree%pgrp(pgno_sub)%head
 end subroutine GetBlockPID
 
 
