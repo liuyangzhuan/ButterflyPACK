@@ -965,7 +965,7 @@ subroutine C_BPACK_Construct_Init_Gram(N,Ndim,Locations,nns,nlevel,tree,Permutat
 	call c_f_pointer(ptree_Cptr, ptree)
 
 
-	call assert(option%xyzsort/=TM_GRAM,'gram distance based clustering is not supported in this interface')
+	call assert(option%xyzsort==TM_GRAM,'only gram distance based clustering is supported in this interface')
 
 	!**** allocate HODLR solver structures
 	allocate(bmat)
