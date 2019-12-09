@@ -2982,14 +2982,14 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 				endif
 			enddo
 		endif
-		
-		if(ptree%MyID/=ptree%pgrp(pgno1)%head .and. level>0 .and. level<level_butterfly+1)then ! for the kernel levels: if several processe own one block, only the head process has it. 
+
+		if(ptree%MyID/=ptree%pgrp(pgno1)%head .and. level>0 .and. level<level_butterfly+1)then ! for the kernel levels: if several processe own one block, only the head process has it.
 			idx_r=0
 			inc_r=0
 			nr=0
 			idx_c=0
 			inc_c=0
-			nc=0			
+			nc=0
 		endif
 	else
 		idx_r=0
@@ -3003,7 +3003,7 @@ end subroutine GetLocalBlockRange
 
 
 
-!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active  
+!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
 	!level_butterfly: number of butterfly levels
