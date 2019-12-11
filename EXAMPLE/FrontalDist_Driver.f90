@@ -64,12 +64,15 @@ contains
 		type(Bmatrix),pointer::bmat
 
 		select TYPE(quant)
-		type is (quant_app)
+		type is (quant_bmat)
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 
 			bmat=>quant%bmat
 			call BPACK_Mult(trans,Nloc,num_vect,Vin,Vout,bmat,quant%ptree,quant%option,quant%stats)
+		class default
+			write(*,*)"unexpected quant type in HODLR_MVP_OneHODLR"
+			stop
 		end select
 
 	end subroutine HODLR_MVP_OneHODLR
@@ -357,7 +360,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 		endif
 	enddo
 
-	call PrintOptions(option,ptree)
+
 
 	call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
 	write(smyrow , *) myrow
@@ -430,6 +433,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	quant1%ptree=>ptree
 	quant1%stats=>stats
 	quant1%option=>option
+	! quant1%Nunk=quant%Nunk
 
 
 

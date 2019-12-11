@@ -505,7 +505,7 @@ subroutine BF_GetNumVectEstimate_LL(num_vect,nth_s,nth_e,Ng,level,blocks,option,
    integer idx_r,inc_r,nr,idx_c,inc_c,nc,ierr
 
    if(option%less_adapt==0 .or. level==0)then
-	   num_vect = blocks%dimension_rank+5
+	   num_vect = blocks%dimension_rank+vec_oversample
    else
 
 	   level_butterfly=blocks%level_butterfly
@@ -622,7 +622,7 @@ subroutine BF_OneBlock_LL(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 		matB(1+nn1:nn2+nn1,1:mm) = BFvec%vec(level)%blocks(index_ii_loc,index_jj_loc+1)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
 		call ComputeRange(nn1+nn2,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 		Flops = Flops + flop
-		! if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+		if(rank>blocks%dimension_rank .and. option%less_adapt==0)rank = blocks%dimension_rank
 		allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(rank,nn1))
 		allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k+1)%matrix(rank,nn2))
 
@@ -808,7 +808,7 @@ subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,
 
    level_butterfly=blocks%level_butterfly
    if(option%less_adapt==0 .or. level==level_butterfly+1)then
-	   num_vect = blocks%dimension_rank+5
+	   num_vect = blocks%dimension_rank+vec_oversample
    else
 
 
@@ -922,7 +922,7 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 			! write(*,*)fnorm(matB,dimension_mm,mm),'Ubeforerange',dimension_mm,mm
 			call ComputeRange(dimension_mm,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 			Flops = Flops + flop
-			! if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
 			if(allocated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix))deallocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
 			allocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix(dimension_mm,rank))
 			blocks%ButterflyU%blocks(index_i_loc_k)%matrix=matB(1:dimension_mm,1:rank)
@@ -975,7 +975,7 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 			matB(1+nn1:nn2+nn1,1:mm)=BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc+1,index_jj_loc)%matrix(1:nn2,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
 			call ComputeRange(nn1+nn2,mm,matB,rank,1,option%tol_Rdetect,Flops=flop)
 			Flops = Flops + flop
-			if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+			if(rank>blocks%dimension_rank .and. option%less_adapt==0)rank = blocks%dimension_rank
 
 			allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(nn1,rank))
 			allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix(nn2,rank))
@@ -1605,7 +1605,7 @@ subroutine BF_Reconstruction_LL(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 	level_butterfly=block_rand%level_butterfly
     num_blocks=2**level_butterfly
 	! dimension_rank =block_rand%dimension_rank
-	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	! num_vect_subsub= dimension_rank+vec_oversample ! be careful with the oversampling factor here
 
 	level_right_start = block_rand%level_half !  check here later
 
@@ -1699,7 +1699,7 @@ subroutine BF_Reconstruction_RR(block_rand,blocks_o,operand,blackbox_MVP_dat,ope
 
     num_blocks=2**level_butterfly
 	! dimension_rank =block_rand%dimension_rank
-	! num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	! num_vect_subsub= dimension_rank+vec_oversample ! be careful with the oversampling factor here
 
     level_left_start= block_rand%level_half+1   !  check here later
 
