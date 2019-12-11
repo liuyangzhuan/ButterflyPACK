@@ -102,6 +102,9 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 	rank_max_lastlevel = option%rank0
 	Nloc = msh%idxe-msh%idxs+1
 
+	call assert(option%less_adapt==0,'HODLR_randomized does not support less_adapt=1 currently')
+	
+	
 	n3 = OMP_get_wtime()
 	Memory = 0
 	do level_c = 1,ho_bf1%Maxlevel+1
@@ -753,7 +756,7 @@ subroutine HODLR_Reconstruction_LL(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,lev
 
     dimension_rank = block_rand(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly
-	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	num_vect_subsub= dimension_rank+vec_oversample ! be careful with the oversampling factor here
 	level_right_start = block_rand(1)%level_half
 	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 
@@ -858,7 +861,7 @@ subroutine HODLR_Reconstruction_RR(ho_bf1,block_rand,blackbox_HODLR_MVP,Nloc,lev
 
     dimension_rank = block_rand(1)%dimension_rank   ! be careful here
 	num_blocks=2**level_butterfly
-	num_vect_subsub= dimension_rank+5 ! be careful with the oversampling factor here
+	num_vect_subsub= dimension_rank+vec_oversample ! be careful with the oversampling factor here
 	level_left_start = block_rand(1)%level_half+1 !  check here later
 	Bidxs = ho_bf1%levels(level_c)%Bidxs*2-1
 
