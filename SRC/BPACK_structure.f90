@@ -217,6 +217,66 @@ end function distance_gram
 
 
 
+
+
+!**** l2 gram distance^2 between element edgem and edgen is
+!     defined as: Re{Z_ii+Z_jj-Z_ij-Z_ji} for SPD, HPD, general symmetric real, and hermitian matrices
+!     undefined otherwise
+!**** angular gram distance^2 is
+!     defined as 1-Z_ij^2/(Z_iiZ_jj)
+!     undefined otherwise
+!     Use with caution !!!
+subroutine distance_gram_block(nrow,ncol,rows,cols,dists,ker,msh,option,ptree,stats)
+
+    use BPACK_DEFS
+    implicit none
+
+	integer nrow,ncol,ii,jj
+    integer edgem, edgen,passflag,rows(nrow),cols(ncol),onerow(1),onecol(1)
+	type(mesh)::msh
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(proctree)::ptree
+	type(kernelquant)::ker
+	DT r1(nrow,1),r2(1,ncol)
+	DT r3(nrow,ncol),r4(ncol,nrow)
+	real*8:: dists(nrow,ncol)
+
+
+	do ii=1,nrow
+		onerow(1)=rows(ii)
+		call element_Zmn_block_user(1,1,onerow,onerow,r1(ii,1),msh,option,ker,0,passflag,ptree,stats)
+	enddo
+	do ii=1,ncol
+		onecol(1)=cols(ii)
+		call element_Zmn_block_user(1,1,onecol,onecol,r2(1,ii),msh,option,ker,0,passflag,ptree,stats)
+	enddo
+	call element_Zmn_block_user(nrow,ncol,rows,cols,r3,msh,option,ker,0,passflag,ptree,stats)
+	call element_Zmn_block_user(ncol,nrow,cols,rows,r4,msh,option,ker,0,passflag,ptree,stats)
+
+
+! l2 distance
+#if 0
+	do ii=1,nrow
+	do jj=1,ncol
+		dists(ii,jj)=dble(r1(ii,1)+r2(1,jj)-r3(ii,jj)-r4(jj,ii))
+	enddo
+	enddo
+! angular distance
+#else
+	do ii=1,nrow
+	do jj=1,ncol
+		dists(ii,jj)=dble(1d0-r3(ii,jj)**2d0/(r1(ii,1)*r2(1,jj)))
+	enddo
+	enddo
+#endif
+    return
+
+end subroutine distance_gram_block
+
+
+
+
 recursive subroutine Hmat_construct_local_tree(blocks,option,stats,msh,ker,ptree,Maxlevel)
 
     implicit none
@@ -356,7 +416,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
     real(kind=8) a, b, c, d, para, xmax,xmin,ymax,ymin,zmax,zmin,seperator,r,theta,phi,phi_tmp
     real(kind=8) radius, radiusmax, radius2, radiusmax2
     real(kind=8),allocatable:: xyzrange(:),xyzmin(:),xyzmax(:),auxpoint(:),groupcenter(:)
-    real(kind=8), allocatable :: distance(:),array(:,:)
+    real(kind=8), allocatable :: distance(:),array(:,:),dist_gram(:,:)
 	integer level_c,sortdirec,mm,phi_end,Ninfo_edge,ind_i,ind_j
 	real(kind=8) t1,t2
 	integer Maxgroup,nlevel_pre,passflag
@@ -370,7 +430,7 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 	type(mesh)::msh
 	type(kernelquant)::ker
 	type(proctree)::ptree
-	integer,allocatable:: perms(:)
+	integer,allocatable:: perms(:),rows_gram(:),cols_gram(:)
 	integer Navr,Bidxs,Bidxe,ierr
 
 
@@ -634,11 +694,22 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 					allocate(perms(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
 					call rperm(msh%basis_group(group)%tail-msh%basis_group(group)%head+1, perms)
 
+					allocate(dist_gram(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,Nsmp))
+					allocate(rows_gram(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
+					allocate(cols_gram(Nsmp))
+					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
+						rows_gram(edge-msh%basis_group(group)%head+1)=msh%new2old(edge)
+					enddo
+					do ii=1,Nsmp
+						cols_gram(ii) = msh%new2old(perms(ii)+msh%basis_group(group)%head-1)
+					enddo
+					call distance_gram_block(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,Nsmp,rows_gram,cols_gram,dist_gram,ker,msh,option,ptree,stats)
+
 					radiusmax2=0.
 					do edge=msh%basis_group(group)%head, msh%basis_group(group)%tail
 						radius2=0
 						do ii=1,Nsmp  ! take average of distance^2 to Nsmp samples as the distance^2 to the group center
-							radius2 = radius2 + distance_user(msh%new2old(edge),msh%new2old(perms(ii)+msh%basis_group(group)%head-1),ker,msh,option,ptree,stats)
+							radius2 = radius2 + dist_gram(edge-msh%basis_group(group)%head+1,ii)
 						enddo
 						! call assert(radius2>0,'radius2<0 cannot take square root')
 						! radius2 = sqrt(radius2)
@@ -648,18 +719,28 @@ subroutine Cluster_partition(bmat,option,msh,ker,stats,ptree)
 							center_edge=edge
 						endif
 					enddo
+					deallocate(dist_gram)
+					deallocate(rows_gram)
+					deallocate(cols_gram)
+
 
 					mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
 					allocate (distance(mm))
 
 					distance(1:mm)=Bigvalue
 
-
-					!$omp parallel do default(shared) private(i)
+					allocate(dist_gram(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,1))
+					allocate(rows_gram(msh%basis_group(group)%tail-msh%basis_group(group)%head+1))
+					allocate(cols_gram(1))
 					do i=msh%basis_group(group)%head, msh%basis_group(group)%tail
-						distance(i-msh%basis_group(group)%head+1)=distance_user(msh%new2old(i),msh%new2old(center_edge),ker,msh,option,ptree,stats)
+						rows_gram(i-msh%basis_group(group)%head+1)=msh%new2old(i)
 					enddo
-					!$omp end parallel do
+					cols_gram = msh%new2old(center_edge)
+					call distance_gram_block(msh%basis_group(group)%tail-msh%basis_group(group)%head+1,1,rows_gram,cols_gram,dist_gram,ker,msh,option,ptree,stats)
+					distance = dist_gram(:,1)
+					deallocate(dist_gram)
+					deallocate(rows_gram)
+					deallocate(cols_gram)
 
 					deallocate(perms)
 
@@ -829,6 +910,10 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	integer groupm_start,groupn_start
 	real(kind=8) t1,t2
 
+	real(kind=8), allocatable :: dist_gram(:,:)
+	integer,allocatable:: rows_gram(:),cols_gram(:)
+
+
 !$omp threadprivate(my_tid)
 
 !$omp parallel default(shared)
@@ -869,25 +954,77 @@ subroutine FindKNNs(option,msh,ker,stats,ptree,groupm_start,groupn_start)
 	Bidxe = 2**Maxlevel+(ptree%MyID+1)*Navr-1
 	if(ptree%MyID==ptree%nproc-1)Bidxe=2**(Maxlevel+1)-1
 
-	!$omp parallel do default(shared) private(ii,iii,kk,jj,jjj)
-	do ii=Bidxs,Bidxe
-		do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
+
+	if(option%xyzsort==3)then
+		do ii=Bidxs,Bidxe
+
+			kk=0
+			do jj=1,msh%basis_group(ii)%nn
+				kk=kk+msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail-msh%basis_group(msh%basis_group(ii)%nlist(jj))%head+1
+			enddo
+			allocate(dist_gram(msh%basis_group(ii)%tail-msh%basis_group(ii)%head+1,kk))
+			allocate(rows_gram(msh%basis_group(ii)%tail-msh%basis_group(ii)%head+1))
+			allocate(cols_gram(kk))
+
+
 			kk=0
 			do jj=1,msh%basis_group(ii)%nn
 				do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
-					if(iii/=jjj)then
 					kk=kk+1
-					distance(kk,my_tid+1)=distance_user(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
-					edge_temp(kk,my_tid+1)=jjj
-					endif
+					cols_gram(kk) = msh%new2old(jjj)
 				enddo
 			enddo
-			call quick_sort(distance(:,my_tid+1),order(:,my_tid+1),kk)
-			kk=min(kk,option%knn)
-			msh%nns(iii,1:kk)=edge_temp(order(1:kk,my_tid+1),my_tid+1)
+
+			do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
+				rows_gram(iii-msh%basis_group(ii)%head+1) = msh%new2old(iii)
+			enddo
+
+			call distance_gram_block(msh%basis_group(ii)%tail-msh%basis_group(ii)%head+1,kk,rows_gram,cols_gram,dist_gram,ker,msh,option,ptree,stats)
+
+			!$omp parallel do default(shared) private(iii,kk,jj,jjj)
+			do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
+				kk=0
+				do jj=1,msh%basis_group(ii)%nn
+					do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
+						kk=kk+1
+						distance(kk,my_tid+1)= dist_gram(iii-msh%basis_group(ii)%head+1,kk)
+						edge_temp(kk,my_tid+1)=jjj
+					enddo
+				enddo
+				call quick_sort(distance(:,my_tid+1),order(:,my_tid+1),kk)
+				kk=min(kk,option%knn)
+				msh%nns(iii,1:kk)=edge_temp(order(1:kk,my_tid+1),my_tid+1)
+			enddo
+			!$omp end parallel do
+
+			deallocate(dist_gram)
+			deallocate(rows_gram)
+			deallocate(cols_gram)
+
 		enddo
-	enddo
-	!$omp end parallel do
+	else
+		!$omp parallel do default(shared) private(ii,iii,kk,jj,jjj)
+		do ii=Bidxs,Bidxe
+			do iii=msh%basis_group(ii)%head,msh%basis_group(ii)%tail
+				kk=0
+				do jj=1,msh%basis_group(ii)%nn
+					do jjj=msh%basis_group(msh%basis_group(ii)%nlist(jj))%head,msh%basis_group(msh%basis_group(ii)%nlist(jj))%tail
+						if(iii/=jjj)then
+						kk=kk+1
+						distance(kk,my_tid+1)=distance_user(msh%new2old(iii),msh%new2old(jjj),ker,msh,option,ptree,stats)
+						edge_temp(kk,my_tid+1)=jjj
+						endif
+					enddo
+				enddo
+				call quick_sort(distance(:,my_tid+1),order(:,my_tid+1),kk)
+				kk=min(kk,option%knn)
+				msh%nns(iii,1:kk)=edge_temp(order(1:kk,my_tid+1),my_tid+1)
+			enddo
+		enddo
+		!$omp end parallel do
+	endif
+
+
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,msh%nns,msh%Nunk*option%knn,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 

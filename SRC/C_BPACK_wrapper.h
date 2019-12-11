@@ -35,6 +35,8 @@ extern "C" {
 
     void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 
+    void c_bpack_construct_init_gram(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr),  C2Fptr C_QuantApp);
+
     void c_bpack_construct_matvec_compute(F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncHMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), C2Fptr C_QuantApp);
 
 	void c_bpack_factor(F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree, F2Cptr* msh);

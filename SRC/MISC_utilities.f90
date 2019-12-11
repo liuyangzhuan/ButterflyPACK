@@ -3003,6 +3003,7 @@ end subroutine GetLocalBlockRange
 
 
 
+<<<<<<< HEAD
 
 
 
@@ -3042,6 +3043,8 @@ end subroutine GetPgno_Sub
 
 
 
+=======
+>>>>>>> b3d161313f0c8d6fbaf2dfd763819fe6abece753
 !**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
