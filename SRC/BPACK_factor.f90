@@ -1491,15 +1491,15 @@ recursive subroutine Hmat_add_multiply(block3,chara,block1,block2,h_mat,option,s
 			T0 = OMP_get_wtime()
 			if (style(1)/=4) then
 				allocate(block1%sons(2,2))
-				call BF_split(block1,block1,ptree,stats,msh)
+				call BF_split(block1,block1,ptree,stats,msh,option)
 			endif
 			if (style(2)/=4) then
 				allocate(block2%sons(2,2))
-				call BF_split(block2,block2,ptree,stats,msh)
+				call BF_split(block2,block2,ptree,stats,msh,option)
 			endif
 			if (style(3)/=4) then
 				allocate(block3%sons(2,2))
-				call BF_split(block3,block3,ptree,stats,msh)
+				call BF_split(block3,block3,ptree,stats,msh,option)
 			endif
 			T1 = OMP_get_wtime()
 			stats%Time_split = stats%Time_split + T1-T0
@@ -1609,7 +1609,7 @@ recursive subroutine Hmat_LXM(blocks_l,blocks_m,h_mat,option,stats,ptree,msh)
 		T0 = OMP_get_wtime()
         if (blocks_l%style/=4) then
 			allocate(blocks_l%sons(2,2))
-			call BF_split(blocks_l,blocks_l,ptree,stats,msh)
+			call BF_split(blocks_l,blocks_l,ptree,stats,msh,option)
         endif
         T1 = OMP_get_wtime()
 		stats%Time_Split=stats%Time_Split+T1-T0
@@ -1716,7 +1716,7 @@ recursive subroutine Hmat_XUM(blocks_u,blocks_m,h_mat,option,stats,ptree,msh)
 		T0 = OMP_get_wtime()
         if (blocks_u%style/=4) then
 			allocate(blocks_u%sons(2,2))
-			call BF_split(blocks_u,blocks_u,ptree,stats,msh)
+			call BF_split(blocks_u,blocks_u,ptree,stats,msh,option)
         endif
         T1 = OMP_get_wtime()
 		stats%Time_Split=stats%Time_Split+T1-T0
@@ -1861,7 +1861,7 @@ if(blocks_o%style==4)then
 	T0=OMP_get_wtime()
 	if (blocks_1%style/=4) then
 		allocate(blocks_1%sons(2,2))
-		call BF_split(blocks_1,blocks_1,ptree,stats,msh)
+		call BF_split(blocks_1,blocks_1,ptree,stats,msh,option)
 	endif
     T1 = OMP_get_wtime()
 	stats%Time_Split=stats%Time_Split+T1-T0
@@ -1879,6 +1879,13 @@ if(blocks_o%style==4)then
 	blocks_1_son => blocks_1%sons(2,2)
 	call Hmat_BF_add(blocks_o_son,chara,blocks_1_son,h_mat,option,stats,ptree,msh)
 
+	if (blocks_1%style/=4) then
+		call BF_delete(blocks_1%sons(1,1),1)
+		call BF_delete(blocks_1%sons(1,2),1)
+		call BF_delete(blocks_1%sons(2,1),1)
+		call BF_delete(blocks_1%sons(2,2),1)
+		deallocate(blocks_1%sons)
+	endif
 else if(blocks_o%style==2)then
 	T0=OMP_get_wtime()
 	h_mat%blocks_1=>blocks_1

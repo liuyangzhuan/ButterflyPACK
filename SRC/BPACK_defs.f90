@@ -30,6 +30,7 @@ module BPACK_DEFS
 	real(kind=8),parameter :: pi = 4d0*atan(1d0)
 	complex(kind=8),parameter :: junit=(0d0,1d0)
 	real(kind=8),parameter :: Bigvalue=1d300
+	integer,parameter :: BigINT=2147483647
 	real(kind=8),parameter:: SafeUnderflow=1D-30
 	real(kind=8),parameter:: SafeEps=1D-14
 	DT,parameter :: cone=1d0

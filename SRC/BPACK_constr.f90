@@ -1217,6 +1217,8 @@ implicit none
 	enddo
 	deallocate(inters)
 
+	call list_finalizer(lstr)
+	call list_finalizer(lstc)
 
 	n5 = OMP_get_wtime()
 
@@ -1506,6 +1508,8 @@ implicit none
 
 	n5 = OMP_get_wtime()
 
+	call list_finalizer(lstr)
+	call list_finalizer(lstc)
 	! time_tmp = time_tmp + n2- n1
 	! if(ptree%MyID==Main_ID)then
 		! write(*,*)n1-n0,n2-n1,n3-n2,n4-n3,n5-n4

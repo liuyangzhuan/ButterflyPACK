@@ -2982,14 +2982,14 @@ subroutine GetLocalBlockRange(ptree,pgno,level,level_butterfly,idx_r,inc_r,nr,id
 				endif
 			enddo
 		endif
-		
-		if(ptree%MyID/=ptree%pgrp(pgno1)%head .and. level>0 .and. level<level_butterfly+1)then ! for the kernel levels: if several processe own one block, only the head process has it. 
+
+		if(ptree%MyID/=ptree%pgrp(pgno1)%head .and. level>0 .and. level<level_butterfly+1)then ! for the kernel levels: if several processe own one block, only the head process has it.
 			idx_r=0
 			inc_r=0
 			nr=0
 			idx_c=0
 			inc_c=0
-			nc=0			
+			nc=0
 		endif
 	else
 		idx_r=0
@@ -3003,7 +3003,46 @@ end subroutine GetLocalBlockRange
 
 
 
-!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active  
+
+
+
+!**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
+	!ptree: process tree
+	!pgno: the process group number that shares this butterfly
+	!level_butterfly: number of butterfly levels
+	!pgno_sub: the sub process group number that shares one block of this butterfly
+subroutine GetPgno_Sub(ptree,pgno,level_butterfly,pgno_sub)
+	implicit none
+	type(proctree)::ptree
+	integer :: level_p,level,ll,group,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,pgno,pgno_sub,found,nleaf,ith
+	character::dir
+	pgno_sub=-1
+	if(IOwnPgrp(ptree,pgno))then
+		found=0
+		level_p=0
+		pgno_sub=pgno
+		do while(found==0)
+			if(ptree%pgrp(pgno_sub)%nproc==1 .or. level_p==level_butterfly)then
+				found=1
+				exit
+			endif
+			if(IOwnPgrp(ptree,pgno_sub*2))then
+				pgno_sub=pgno_sub*2
+			elseif(IOwnPgrp(ptree,pgno_sub*2+1))then
+				pgno_sub=pgno_sub*2+1
+			endif
+			level_p=level_p+1
+		enddo
+	endif
+end subroutine GetPgno_Sub
+
+
+
+
+
+
+
+!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
 	!level_butterfly: number of butterfly levels

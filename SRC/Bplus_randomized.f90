@@ -388,20 +388,26 @@ subroutine BF_Resolving_Butterfly_LL_dat(num_vect_sub,nth_s,nth_e,Ng,level,block
    real(kind=8)::n1,n2
    type(matrixblock) :: blocks
    type(butterfly_vec) :: BFvec
-   integer idx_r,inc_r,nr,idx_c,inc_c,nc
+   integer idx_r,inc_r,nr,idx_c,inc_c,nc,pgno_sub_mine,index_jj_loc,index_j_loc_k
+   integer,allocatable::N_p(:,:)
+   real(kind=8)::Flops
 
    level_butterfly=blocks%level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
    mm=num_vect_subsub !rank
 
+   call GetPgno_Sub(ptree,blocks%pgno,level_butterfly,pgno_sub_mine)
+
 	!********* multiply BF^C with vectors
 	RandVectOut = conjg(cmplx(RandVectOut,kind=8))
 	call BF_block_MVP_partial(blocks,'N',num_vect_sub,RandVectOut,BFvec,level-1,ptree,msh,stats)
+	if(allocated(BFvec%vec(level)%blocks))then
 	do j=1, BFvec%vec(level)%nc
 		do i=1, BFvec%vec(level)%nr
-			BFvec%vec(level)%blocks(i,j)%matrix=conjg(cmplx(BFvec%vec(level)%blocks(i,j)%matrix,kind=8))
+			if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))BFvec%vec(level)%blocks(i,j)%matrix=conjg(cmplx(BFvec%vec(level)%blocks(i,j)%matrix,kind=8))
 		enddo
 	enddo
+	endif
 
 
 	!********* compute row spaces and reconstruct blocks at level level
@@ -414,23 +420,53 @@ subroutine BF_Resolving_Butterfly_LL_dat(num_vect_sub,nth_s,nth_e,Ng,level,block
 		endif
 
 		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
+		if(nc>0 .and. nr>0)then
 		if(mod(index_i-idx_r,inc_r)==0 .and. index_i>=idx_r .and. index_i<=idx_r+(nr-1)*inc_r)then ! I own this block row number
-			!$omp parallel do default(shared) private(j,index_j)
-			do j=1,nc
-				index_j=idx_c+(j-1)*inc_c
-				call BF_OneBlock_LL(index_i, index_j, level,num_vect_sub,num_vect_subsub,nth,nth_s,blocks,BFvec,option,stats)
-			enddo
-			!$omp end parallel do
+
+			if(ptree%pgrp(pgno_sub_mine)%head==ptree%MyID .or. level==0)then
+
+				if(level==0 .and. ptree%pgrp(pgno_sub_mine)%nproc>1)then
+					allocate(N_p(ptree%pgrp(pgno_sub_mine)%nproc,2))
+					call ComputeParallelIndicesSub(blocks%col_group*2**level_butterfly+idx_c-1,pgno_sub_mine,ptree,msh,N_p)
+
+					index_j = idx_c
+					index_jj_loc=(index_j-BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c+1
+					index_j_loc_k=(index_j-blocks%ButterflyV%idx)/blocks%ButterflyV%inc+1
+					dimension_nn=size(BFvec%vec(level)%blocks(1,index_jj_loc)%matrix,1)
+					allocate(matB(dimension_nn,mm))
+					matB = BFvec%vec(level)%blocks(1,index_jj_loc)%matrix(1:dimension_nn,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
+					call PComputeRange(N_p,mm,matB,rank,option%tol_Rdetect,ptree,pgno_sub_mine,Flops=flops)
+					stats%Flop_Tmp = stats%Flop_Tmp + flops
+					if(rank>blocks%dimension_rank)rank = blocks%dimension_rank
+					if(allocated(blocks%ButterflyV%blocks(index_j_loc_k)%matrix))deallocate(blocks%ButterflyV%blocks(index_j_loc_k)%matrix)
+					allocate(blocks%ButterflyV%blocks(index_j_loc_k)%matrix(dimension_nn,rank))
+					blocks%ButterflyV%blocks(index_j_loc_k)%matrix = matB(1:dimension_nn,1:rank)
+					deallocate(matB)
+
+					deallocate(N_p)
+				else
+
+					!$omp parallel do default(shared) private(j,index_j)
+					do j=1,nc
+						index_j=idx_c+(j-1)*inc_c
+						call BF_OneBlock_LL(index_i, index_j, level,num_vect_sub,num_vect_subsub,nth,nth_s,blocks,BFvec,option,stats)
+					enddo
+					!$omp end parallel do
+				endif
+			endif
+		endif
 		endif
 	enddo
 
 	!********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+	if(allocated(BFvec%vec(level)%blocks))then
 	do j=1, BFvec%vec(level)%nc
 		do i=1, BFvec%vec(level)%nr
-			deallocate(BFvec%vec(level)%blocks(i,j)%matrix)
+			if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate(BFvec%vec(level)%blocks(i,j)%matrix)
 		enddo
 	enddo
 	deallocate(BFvec%vec(level)%blocks)
+	endif
 	deallocate(BFvec%vec)
 
    return
@@ -462,7 +498,7 @@ subroutine BF_GetNumVectEstimate_LL(num_vect,nth_s,nth_e,Ng,level,blocks,option,
    real(kind=8), allocatable :: Singular(:)
    DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
    DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
-   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect
+   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect,pgno_sub_mine
    real(kind=8)::n1,n2
    type(matrixblock) :: blocks
    type(butterfly_vec) :: BFvec
@@ -480,8 +516,11 @@ subroutine BF_GetNumVectEstimate_LL(num_vect,nth_s,nth_e,Ng,level,blocks,option,
 		call BF_block_MVP_partial(blocks,'N',1,RandVectTmp,BFvec,level-1,ptree,msh,stats)
 		deallocate(RandVectTmp)
 
+		call GetPgno_Sub(ptree,blocks%pgno,level_butterfly,pgno_sub_mine)
 
 		num_vect = 0
+
+		if(ptree%pgrp(pgno_sub_mine)%head==ptree%MyID)then
 		!********* get the rank upper bound
 		do nth = nth_s,nth_e
 			num_col=blocks%ButterflyKerl(level)%num_col
@@ -502,16 +541,19 @@ subroutine BF_GetNumVectEstimate_LL(num_vect,nth_s,nth_e,Ng,level,blocks,option,
 				enddo
 			endif
 		enddo
+		endif
 
 		call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1,MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm,ierr)
 
 		!********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+		if(allocated(BFvec%vec(level)%blocks))then
 		do j=1, BFvec%vec(level)%nc
 			do i=1, BFvec%vec(level)%nr
-				deallocate(BFvec%vec(level)%blocks(i,j)%matrix)
+				if(allocated(BFvec%vec(level)%blocks(i,j)%matrix))deallocate(BFvec%vec(level)%blocks(i,j)%matrix)
 			enddo
 		enddo
 		deallocate(BFvec%vec(level)%blocks)
+		endif
 		deallocate(BFvec%vec)
 
 	endif
@@ -619,18 +661,23 @@ subroutine BF_Resolving_Butterfly_RR_dat(num_vect_sub,nth_s,nth_e,Ng,level,block
    DT:: RandVectIn(:,:),RandVectOut(:,:)
 
    real(kind=8), allocatable :: Singular(:)
+   integer,allocatable::M_p(:,:)
    DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
    DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
-   integer num_vect_sub,num_vect_subsub,nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,level_left_start
+   integer num_vect_sub,num_vect_subsub,nth,ind_r,noe,Ng,dimension_nn,dimension_mm,nn1,nn2,ieo,level_butterfly,level_left_start
    real(kind=8)::n1,n2
    type(matrixblock) :: blocks
    type(butterfly_vec) :: BFvec
    type(butterfly_vec) :: BFvec1
-   integer idx_r,inc_r,nr,idx_c,inc_c,nc
+   integer idx_r,inc_r,nr,idx_c,inc_c,nc,pgno_sub_mine,index_i_loc_k,index_ii_loc
+   real(kind=8)::flops
+
 
    level_butterfly=blocks%level_butterfly
    num_vect_subsub = num_vect_sub/(nth_e-nth_s+1)
    mm=num_vect_subsub !rank
+
+   call GetPgno_Sub(ptree,blocks%pgno,level_butterfly,pgno_sub_mine)
 
    level_left_start= blocks%level_half+1    !  check here later
    if(level_left_start>0 .and. level_left_start==level)then
@@ -644,11 +691,13 @@ subroutine BF_Resolving_Butterfly_RR_dat(num_vect_sub,nth_s,nth_e,Ng,level,block
 	!********* multiply BF^C with vectors
 	RandVectOut = conjg(cmplx(RandVectOut,kind=8))
 	call BF_block_MVP_partial(blocks,'T',num_vect_sub,RandVectOut,BFvec,level+1,ptree,msh,stats)
+	if(allocated(BFvec%vec(level_butterfly-level+1)%blocks))then
 	do j=1, BFvec%vec(level_butterfly-level+1)%nc
 		do i=1, BFvec%vec(level_butterfly-level+1)%nr
-			BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix=conjg(cmplx(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix,kind=8))
+			if(allocated(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix))BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix=conjg(cmplx(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix,kind=8))
 		enddo
 	enddo
+	endif
 
 	!********* compute column spaces and reconstruct blocks at level level
 	do nth = nth_s,nth_e
@@ -660,33 +709,65 @@ subroutine BF_Resolving_Butterfly_RR_dat(num_vect_sub,nth_s,nth_e,Ng,level,block
 		endif
 
 		call GetLocalBlockRange(ptree,blocks%pgno,level,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
+		if(nc>0 .and. nr>0)then
 		if(mod(index_j-idx_c,inc_c)==0 .and. index_j>=idx_c .and. index_j<=idx_c+(nc-1)*inc_c)then ! I own this block column number
-			!$omp parallel do default(shared) private(i,index_i)
-			do i=1,nr
-				index_i=idx_r+(i-1)*inc_r
-				call BF_OneBlock_RR(index_i, index_j, level,num_vect_sub,num_vect_subsub,nth,nth_s,blocks,BFvec,BFvec1,option,stats)
-			enddo
-			!$omp end parallel do
+
+			if(ptree%pgrp(pgno_sub_mine)%head==ptree%MyID .or. level==level_butterfly+1)then
+
+				if(level==level_butterfly+1 .and. ptree%pgrp(pgno_sub_mine)%nproc>1)then
+
+					call assert(level_butterfly>0,'LR not tested here')
+
+					allocate(M_p(ptree%pgrp(pgno_sub_mine)%nproc,2))
+					call ComputeParallelIndicesSub(blocks%row_group*2**level_butterfly+idx_r-1,pgno_sub_mine,ptree,msh,M_p)
+					index_i = idx_r
+					index_ii_loc=(index_i-BFvec%vec(level_butterfly-level+1)%idx_r)/BFvec%vec(level_butterfly-level+1)%inc_r+1
+					index_i_loc_k=(index_i-blocks%ButterflyU%idx)/blocks%ButterflyU%inc+1
+					dimension_mm=size(BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,1)%matrix,1)
+					allocate(matB(dimension_mm,mm))
+					matB = BFvec%vec(level_butterfly-level+1)%blocks(index_ii_loc,1)%matrix(1:dimension_mm,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm)
+					call PComputeRange(M_p,mm,matB,rank,option%tol_Rdetect,ptree,pgno_sub_mine,flops)
+					stats%Flop_Tmp = stats%Flop_Tmp + flops
+					if(allocated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix))deallocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
+					allocate(blocks%ButterflyU%blocks(index_i_loc_k)%matrix(dimension_mm,rank))
+					blocks%ButterflyU%blocks(index_i_loc_k)%matrix=matB(1:dimension_mm,1:rank)
+					! write(*,*)fnorm(matB(1:dimension_mm,1:rank),dimension_mm,rank),'U'
+					deallocate(matB)
+					deallocate(M_p)
+				else
+					!$omp parallel do default(shared) private(i,index_i)
+					do i=1,nr
+						index_i=idx_r+(i-1)*inc_r
+						call BF_OneBlock_RR(index_i, index_j, level,num_vect_sub,num_vect_subsub,nth,nth_s,blocks,BFvec,BFvec1,option,stats)
+					enddo
+					!$omp end parallel do
+				endif
+			endif
+		endif
 		endif
 	enddo
 
 	!********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
+	if(allocated(BFvec%vec(level_butterfly-level+1)%blocks))then
 	do j=1, BFvec%vec(level_butterfly-level+1)%nc
 		do i=1, BFvec%vec(level_butterfly-level+1)%nr
-			deallocate(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
+			if(allocated(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix))deallocate(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
 		enddo
 	enddo
 	deallocate(BFvec%vec(level_butterfly-level+1)%blocks)
+	endif
 	deallocate(BFvec%vec)
 
 	!********* delete BFvec1%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
 	if(level_left_start>0 .and. level_left_start==level)then
+	if(allocated(BFvec1%vec(level)%blocks))then
 	do j=1, BFvec1%vec(level)%nc
 		do i=1, BFvec1%vec(level)%nr
-			deallocate(BFvec1%vec(level)%blocks(i,j)%matrix)
+			if(allocated(BFvec1%vec(level)%blocks(i,j)%matrix))deallocate(BFvec1%vec(level)%blocks(i,j)%matrix)
 		enddo
 	enddo
 	deallocate(BFvec1%vec(level)%blocks)
+	endif
 	deallocate(BFvec1%vec)
 	endif
 
@@ -719,7 +800,7 @@ subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,
    real(kind=8), allocatable :: Singular(:)
    DT, allocatable :: matrixtemp(:,:), vectortemp(:), vectorstemp(:,:), tau(:), vectorstemp1(:,:),vectorstemp2(:,:)
    DT, allocatable :: matrixtemp1(:,:),matA(:,:),matB(:,:),matC(:,:),matinv(:,:),matinv1(:,:),matinv2(:,:)
-   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect
+   integer nth,ind_r,noe,Ng,dimension_nn,nn1,nn2,ieo,level_butterfly,num_vect,pgno_sub_mine
    real(kind=8)::n1,n2
    type(matrixblock) :: blocks
    type(butterfly_vec) :: BFvec
@@ -739,7 +820,11 @@ subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,
 		deallocate(RandVectTmp)
 
 
+		call GetPgno_Sub(ptree,blocks%pgno,level_butterfly,pgno_sub_mine)
+
 		num_vect = 0
+
+		if(ptree%pgrp(pgno_sub_mine)%head==ptree%MyID)then
 		!********* get the rank upper bound
 		do nth = nth_s,nth_e
 
@@ -761,16 +846,19 @@ subroutine BF_GetNumVectEstimate_RR(num_vect,nth_s,nth_e,Ng,level,blocks,option,
 				enddo
 			endif
 		enddo
+		endif
 
 		call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1,MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm,ierr)
 
 		!********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
+		if(allocated(BFvec%vec(level_butterfly-level+1)%blocks))then
 		do j=1, BFvec%vec(level_butterfly-level+1)%nc
 			do i=1, BFvec%vec(level_butterfly-level+1)%nr
-				deallocate(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
+				if(allocated(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix))deallocate(BFvec%vec(level_butterfly-level+1)%blocks(i,j)%matrix)
 			enddo
 		enddo
 		deallocate(BFvec%vec(level_butterfly-level+1)%blocks)
+		endif
 		deallocate(BFvec%vec)
 
 	endif
@@ -821,7 +909,7 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 			call copymatT(BFvec1%vec(level)%blocks(index_i_loc_s,1)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
 			call LeastSquare(mm,rank,dimension_mm,matA,matB,matC,option%tol_LS,Flops=flop)
 			Flops = Flops + flop
-			! write(*,*)fnorm(matC,rank,dimension_mm),'U',level_left,level_butterfly
+			! write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,dimension_mm),fnorm(matC,rank,dimension_mm),'U',level,level_butterfly
 
 			call copymatT(matC,blocks%ButterflyU%blocks(index_i_loc_k)%matrix,rank,dimension_mm)
 			deallocate(matB,matC,matA)
@@ -874,7 +962,7 @@ subroutine BF_OneBlock_RR(index_i, index_j,level,num_vect_sub,mm,nth,nth_s,block
 			allocate(matC(rank,nn1+nn2),matA(mm,rank))
 			call copymatT(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix(1:rank,(nth-nth_s)*mm+1:(nth-nth_s+1)*mm),matA,rank,mm)
 			call LeastSquare(mm,rank,nn1+nn2,matA,matB,matC,option%tol_LS,Flops=flop)
-			! write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,nn1+nn2),fnorm(matC,rank,nn1+nn2),'Rker'
+			! write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,nn1+nn2),fnorm(matC,rank,nn1+nn2),'Rker',level,level_butterfly,index_i,index_j
 
 			Flops = Flops + flop
 			call copymatT(matC(1:rank,1:nn1),blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix,rank,nn1)
@@ -1678,7 +1766,7 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
     type(RandomBlock), pointer :: random
 	integer Nsub,Ng,num_vect,nth_s,nth_e,level_butterfly
 	integer*8 idx_start
-	real(kind=8)::error,tmp1,tmp2,norm1,norm2
+	real(kind=8)::error,tmp1,tmp2,tmp3,norm1,norm2,norm3
 	integer level_c,rowblock,dimension_m
 	DT,allocatable::Vdref(:,:),Id(:,:),Vd(:,:)
 	type(proctree)::ptree
@@ -1707,6 +1795,7 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 		Vd=0
 
 		call RandomMat(nn,num_vect,min(nn,num_vect),Id,0)
+		Id=1
 	endif
 
 		call blackbox_MVP_dat(operand,block_o,'N',mm,nn,num_vect,Id,Vdref,cone,czero,ptree,stats,operand1)
@@ -1718,6 +1807,9 @@ subroutine BF_Test_Reconstruction_Error(block_rand,block_o,operand,blackbox_MVP_
 		call MPI_ALLREDUCE(tmp1, norm1, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm,ierr)
 		tmp2 = fnorm(Vdref,mm,num_vect)**2d0
 		call MPI_ALLREDUCE(tmp2, norm2, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+		tmp3 = fnorm(Vd,mm,num_vect)**2d0
+		call MPI_ALLREDUCE(tmp3, norm3, 1,MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm,ierr)
+		! if(ptree%MyID==ptree%pgrp(block_rand%pgno)%head)write(*,*)'fnorm',block_rand%row_group,block_rand%col_group,norm2,norm3
 		error = sqrt(norm1)/sqrt(norm2)
 
 		deallocate(Vdref)
@@ -1747,7 +1839,7 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
     integer header_mm, header_nn
 	integer header_m, header_n, tailer_m, tailer_n
 
-	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_right_start,level_left_start
+	integer nth_s,nth_e,num_vect_sub,nth,num_vect_subsub,unique_nth,level_right_start,level_left_start,pgno_sub_mine
 	DT:: RandVectIn(:,:),RandVectOut(:,:)
 	integer Nsub,Ng
 	integer,allocatable:: mm_end(:),nn_end(:)
@@ -1772,16 +1864,15 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 	call GetLocalBlockRange(ptree,block_rand%pgno,0,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'R')
 	idx_n_s=idx_c
 	idx_n_e=idx_c+nc-1
-	idxs=msh%basis_group(groupn_start+idx_n_s-1)%head
-	idxe=msh%basis_group(groupn_start+idx_n_e-1)%tail
-	nn = idxe-idxs+1
 
 	call GetLocalBlockRange(ptree,block_rand%pgno,level_butterfly+1,level_butterfly,idx_r,inc_r,nr,idx_c,inc_c,nc,'C')
 	idx_m_s=idx_r
 	idx_m_e=idx_r+nr-1
-	idxs=msh%basis_group(groupm_start+idx_m_s-1)%head
-	idxe=msh%basis_group(groupm_start+idx_m_e-1)%tail
-	mm = idxe-idxs+1
+
+
+	call GetPgno_Sub(ptree,block_rand%pgno,level_butterfly,pgno_sub_mine)
+
+
 
 
 	RandVectIn=0
@@ -1797,8 +1888,13 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 			!$omp parallel do default(shared) private(i,mm1,idxs,idxe)
 			do i=(nth-1)*Ng+1, nth*Ng
 				if(i>=idx_m_s .and. i<=idx_m_e)then
-					idxs=msh%basis_group(groupm_start+i-1)%head-msh%basis_group(groupm_start+idx_m_s-1)%head+1
-					idxe=msh%basis_group(groupm_start+i-1)%tail-msh%basis_group(groupm_start+idx_m_s-1)%head+1
+					if(ptree%pgrp(pgno_sub_mine)%nproc>1)then
+						idxs=1
+						idxe=block_rand%M_loc
+					else
+						idxs=msh%basis_group(groupm_start+i-1)%head-msh%basis_group(groupm_start+idx_m_s-1)%head+1
+						idxe=msh%basis_group(groupm_start+i-1)%tail-msh%basis_group(groupm_start+idx_m_s-1)%head+1
+					endif
 					mm1 =idxe-idxs+1
 					call RandomSubMat(idxs,idxe,(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(mm1,num_vect_subsub),RandVectIn,0)
 				end if
@@ -1816,8 +1912,13 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 			!$omp parallel do default(shared) private(i,nn1,idxs,idxe)
 			do i=(nth-1)*Ng+1, nth*Ng
 				if(i>=idx_n_s .and. i<=idx_n_e)then
-					idxs=msh%basis_group(groupn_start+i-1)%head-msh%basis_group(groupn_start+idx_n_s-1)%head+1
-					idxe=msh%basis_group(groupn_start+i-1)%tail-msh%basis_group(groupn_start+idx_n_s-1)%head+1
+					if(ptree%pgrp(pgno_sub_mine)%nproc>1)then
+						idxs=1
+						idxe=block_rand%N_loc
+					else
+						idxs=msh%basis_group(groupn_start+i-1)%head-msh%basis_group(groupn_start+idx_n_s-1)%head+1
+						idxe=msh%basis_group(groupn_start+i-1)%tail-msh%basis_group(groupn_start+idx_n_s-1)%head+1
+					endif
 					nn1 =idxe-idxs+1
 					call RandomSubMat(idxs,idxe,(nth-nth_s)*num_vect_subsub+1,(nth-nth_s)*num_vect_subsub+num_vect_subsub,min(nn1,num_vect_subsub),RandVectIn,0)
 				end if
@@ -1828,6 +1929,8 @@ subroutine BF_Randomized_Vectors_dat(side,block_rand,RandVectIn,RandVectOut,bloc
 	endif
 
 	! get the left multiplied vectors
+	mm=blocks_o%M_loc
+	nn=blocks_o%N_loc
 	call blackbox_MVP_dat(operand,blocks_o,trans,mm,nn,num_vect_sub,RandVectIn,RandVectOut,cone,czero,ptree,stats,operand1)
 
     return
@@ -2040,12 +2143,13 @@ subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,tran
    DT,allocatable :: V_tmp1(:,:),V_tmp2(:,:),Vin_tmp(:,:),Vout_tmp(:,:)
    DT :: ctemp1,ctemp2,a,b
    type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
-   integer groupn,groupm,mm,nn
+   integer groupn,groupm,mm,nn,ierr
    class(*)::partitioned_block
    class(*),optional::operand1
 	type(matrixblock)::block_o
 	type(proctree)::ptree
 	type(Hstat)::stats
+	real(kind=8)::error,tmp1,tmp2,tmp3,norm1,norm2,norm3
 
    select TYPE(partitioned_block)
 
@@ -2059,9 +2163,9 @@ subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block,block_o,tran
 
 
 		groupn=blocks_B%col_group    ! Note: row_group and col_group interchanged here
-		nn=blocks_B%N
+		nn=blocks_B%N_loc
 		groupm=blocks_B%row_group    ! Note: row_group and col_group interchanged here
-		mm=blocks_B%M
+		mm=blocks_B%M_loc
 
 
 		mv=size(Vout,1)
@@ -3569,15 +3673,16 @@ subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,V
 	! allocate(Vin_tmp(N,num_vect_sub))
 	! Vin_tmp = Vin
 
+	allocate(Vin1(max(nin1,1),num_vect_sub))
+	allocate(Vout1(max(nout1,1),num_vect_sub))
+	Vin1=0
+	Vout1=0
 
-	if(mm1>0)then
-		allocate(Vin1(nin1,num_vect_sub))
-		allocate(Vout1(nout1,num_vect_sub))
-	endif
-	if(mm2>0)then
-		allocate(Vin2(nin2,num_vect_sub))
-		allocate(Vout2(nout2,num_vect_sub))
-	endif
+
+	allocate(Vin2(max(nin2,1),num_vect_sub))
+	allocate(Vout2(max(nout2,1),num_vect_sub))
+	Vin2=0
+	Vout2=0
 
 
 	n1 = OMP_get_wtime()
@@ -3603,14 +3708,13 @@ subroutine Bplus_block_MVP_twoforward_dat(ho_bf1,level,ii,trans,N,num_vect_sub,V
     stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
 
-	if(mm1>0)then
-		deallocate(Vin1)
-		deallocate(Vout1)
-	endif
-	if(mm2>0)then
-		deallocate(Vin2)
-		deallocate(Vout2)
-	endif
+	deallocate(Vin1)
+	deallocate(Vout1)
+
+
+	deallocate(Vin2)
+	deallocate(Vout2)
+
 
 
    ! Vin = Vin_tmp

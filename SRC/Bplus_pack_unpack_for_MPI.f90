@@ -281,6 +281,7 @@ subroutine blocks_recv(block,indices,send_ID,recv_count,msh,ptree,option)
     type(matrixblock), pointer :: blocks_son
     integer statuss(MPI_STATUS_SIZE)
 
+	recv_count_tot=0
 	mcnt = 0
 	do while(mcnt/=1)
 		call MPI_IPROBE(send_ID,MPI_ANY_TAG,ptree%Comm,rflag,statuss,ierr)

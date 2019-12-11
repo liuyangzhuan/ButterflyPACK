@@ -207,7 +207,7 @@ RWORK=0
 LWORK=-1
 call ZGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
+LWORK=NINT(dble(TEMP(1)*2.001+1))  ! increase this 2.001 factor when not converging
 allocate(WORK(LWORK))
 WORK=0
 
@@ -249,7 +249,7 @@ mn_min = min(m,n)
 LWORK=-1
 call DGESVD('S','S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))  ! increase this 2.001 factor when not converging
+LWORK=NINT(dble(TEMP(1)*2.001+1))  ! increase this 2.001 factor when not converging
 allocate(WORK(LWORK))
 WORK=0
 
@@ -328,7 +328,7 @@ LWORK=-1
 call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, IWORK, INFO)
 
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 
@@ -373,7 +373,7 @@ LWORK=-1
 call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, IWORK, INFO)
 
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 
@@ -440,7 +440,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call ZGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -483,7 +483,7 @@ mn_min = min(m,n)
 LWORK=-1
 call DGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call DGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
@@ -556,7 +556,7 @@ allocate(RWORK(2*max(m,n)))
 RWORK=0
 LWORK=-1
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
@@ -596,7 +596,7 @@ mn_min = min(m,n)
 
 LWORK=-1
 call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
@@ -668,7 +668,7 @@ LWORK=-1
 call DGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK,INFO, RANK, RTOL, ATOL)
 
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 ! call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
@@ -716,7 +716,7 @@ LWORK=-1
 call ZGEQP3mod( m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK,INFO, RANK, RTOL, ATOL)
 
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 ! call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
@@ -793,7 +793,7 @@ lda=size(a,1)
 
 LWORK=-1
 call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
@@ -831,7 +831,7 @@ lda=size(a,1)
 
 LWORK=-1
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
@@ -927,7 +927,7 @@ lda=size(Matrix,1)
 LWORK=-1
 call DORGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call DORGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
@@ -966,7 +966,7 @@ real(kind=8),optional::flop
 LWORK=-1
 call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
@@ -1004,7 +1004,7 @@ lda=size(Matrix,1)
 LWORK=-1
 call ZUNGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call ZUNGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
@@ -1041,7 +1041,7 @@ complex(kind=8),allocatable:: WORK(:)
 LWORK=-1
 call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
@@ -1268,7 +1268,7 @@ mn_min = min(m,n)
 LWORK=-1
 call DGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call DGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
@@ -1313,7 +1313,7 @@ mn_min = min(m,n)
 LWORK=-1
 call ZGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
 
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(LWORK))
 WORK=0
 call ZGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
@@ -1566,7 +1566,7 @@ real(kind=8):: TEMP(1)
 real(kind=8),optional::flop
 LWORK=-1
 call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call pdormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
@@ -1590,7 +1590,7 @@ real(kind=8),optional::flop
 
 LWORK=-1
 call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call pzunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
@@ -1639,7 +1639,7 @@ real(kind=8),optional::flop
 
 LWORK=-1
 call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
@@ -1664,7 +1664,7 @@ real(kind=8),optional::flop
 
 LWORK=-1
 call PDGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call PDGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
@@ -1720,10 +1720,10 @@ real(kind=8),optional::flop
 LWORK=-1
 LRWORK=-1
 call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank,rtol, atol)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
-lrwork=NINT(dble(RTEMP(1)*2.001))
+lrwork=NINT(dble(RTEMP(1)*2.001+1))
 allocate(RWORK(lrwork))
 RWORK=0
 call PZGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank,rtol, atol)
@@ -1751,7 +1751,7 @@ real(kind=8),optional::flop
 LWORK=-1
 
 call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank,rtol, atol)
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call PDGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank,rtol, atol)
@@ -1914,7 +1914,7 @@ real(kind=8),allocatable:: work(:)
 real(kind=8),optional::flop
 
 call pdgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(work(lwork))
 work=0
 liwork=TEMPI(1)
@@ -1947,7 +1947,7 @@ complex(kind=8),allocatable:: work(:)
 real(kind=8),optional::flop
 
 call pzgetri(n,a,1,1,desca,ipiv,TEMP,-1,TEMPI,-1,info)
-LWORK=NINT(dble(TEMP(1)*2.001))
+LWORK=NINT(dble(TEMP(1)*2.001+1))
 allocate(work(lwork))
 work=0
 liwork=TEMPI(1)
@@ -2017,7 +2017,7 @@ mnmin = min(m,n)
 lwork=-1
 call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, info)
 
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call pdgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, info)
@@ -2052,7 +2052,7 @@ rwork=0
 lwork=-1
 call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, rwork, info)
 
-lwork=NINT(dble(TEMP(1)*2.001))
+lwork=NINT(dble(TEMP(1)*2.001+1))
 allocate(WORK(lwork))
 WORK=0
 call pzgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, rwork, info)

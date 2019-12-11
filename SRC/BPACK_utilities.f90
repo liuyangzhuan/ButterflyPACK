@@ -106,6 +106,8 @@ integer bm,bn,ii,jj,level
 call Hmat_delete_global_tree(h_mat%blocks_root)
 deallocate(h_mat%blocks_root)
 
+
+if(associated(h_mat%First_block_eachlevel))deallocate(h_mat%First_block_eachlevel)
 if(associated(h_mat%Local_blocks))then
 	bm = size(h_mat%Local_blocks,1)
 	bn = size(h_mat%Local_blocks,2)

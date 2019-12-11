@@ -30,7 +30,7 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
    implicit none
 
  	integer Nboundall,statflag
-	integer boundary_map(:)
+	integer boundary_map(*)
 	integer groupm_start
 
 	type(mesh)::msh
@@ -76,7 +76,9 @@ subroutine BF_compress_NlogN(blocks,boundary_map,Nboundall, groupm_start, option
 	allocate (rankmin_for_butterfly(0:level_butterfly))
 	rankmin_for_butterfly=100000
 	allocate(select_row_pre(blocks%M))
+	select_row_pre=0
 	allocate(select_col_pre(blocks%N))
+	select_col_pre=0
     num_blocks=2**level_butterfly
 
 
@@ -333,7 +335,7 @@ subroutine BF_compress_NlogN_oneblock_R(blocks,boundary_map,Nboundall, groupm_st
    implicit none
 
  	integer Nboundall
-	integer boundary_map(:)
+	integer boundary_map(*)
 	integer groupm_start
 
 	type(mesh)::msh
@@ -1469,7 +1471,7 @@ subroutine BF_compress_NlogN_oneblock_C(blocks,boundary_map,Nboundall, groupm_st
    implicit none
 
  	integer Nboundall
-	integer boundary_map(:)
+	integer boundary_map(*)
 	integer groupm_start
 
 	type(mesh)::msh
@@ -2333,7 +2335,7 @@ subroutine BF_compress_N15(blocks,boundary_map,Nboundall, groupm_start,option,Me
    implicit none
 
 	integer Nboundall,statflag
-	integer boundary_map(:)
+	integer boundary_map(*)
 	integer groupm_start
 
     integer inc_c,inc_r,nc,nr,idx_c,idx_r
@@ -3454,7 +3456,7 @@ implicit none
 			dims_tmp(1:3)=0
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow1,npcol1,myrow1,mycol1,'dddd'
 			if(IOwnPgrp(ptree,pgno1))then
-				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno1,cridx+1,1)
+				call LR_HMerge(blocks%sons(1,1),rank,option,msh,stats,ptree,pgno1,cridx+1,hbacaflag)
 				dims_tmp(1)=blocks%sons(1,1)%M
 				dims_tmp(2)=blocks%sons(1,1)%N
 				dims_tmp(3)=blocks%sons(1,1)%rankmax
@@ -3464,7 +3466,7 @@ implicit none
 
 			! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow2,npcol2,myrow2,mycol2,'dddd2'
 			if(IOwnPgrp(ptree,pgno2))then
-				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno2,cridx+1,1)
+				call LR_HMerge(blocks%sons(2,1),rank,option,msh,stats,ptree,pgno2,cridx+1,hbacaflag)
 				dims_tmp(4)=blocks%sons(2,1)%M
 				dims_tmp(5)=blocks%sons(2,1)%N
 				dims_tmp(6)=blocks%sons(2,1)%rankmax
@@ -3491,6 +3493,7 @@ implicit none
 					myArows = numroc_wp(M1, nbslpk, myrow, 0, nprow)
 					myAcols = numroc_wp(rank1+rank2, nbslpk, mycol, 0, npcol)
 					allocate(matU(myArows,myAcols))
+					matU=0
 					call descinit( descsmatU, M1, rank1+rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows,1), info )
 					call assert(info==0,'descinit fail for descsmatU')
 
@@ -3510,6 +3513,7 @@ implicit none
 					descsmatV1(2)=-1
 					descsmatV2(2)=-1
 					allocate(matU(1,1))
+					matU=0
 					allocate(matV1(1,1))
 					allocate(matV2(1,1))
 				endif
@@ -3630,6 +3634,8 @@ implicit none
 					rank = 0
 					deallocate(matV1,matV2,matU)
 				endif
+				call BF_delete(blocks%sons(1,1),1)
+				call BF_delete(blocks%sons(2,1),1)
 				deallocate(blocks%sons)
 
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
@@ -3781,6 +3787,8 @@ implicit none
 					blocks%rankmin = 0
 					deallocate(matU1,matU2,matV)
 				endif
+				call BF_delete(blocks%sons(1,1),1)
+				call BF_delete(blocks%sons(2,1),1)
 				deallocate(blocks%sons)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
 				call MPI_ALLREDUCE(MPI_IN_PLACE,blocks%rankmin,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(pgno)%Comm,ierr)
