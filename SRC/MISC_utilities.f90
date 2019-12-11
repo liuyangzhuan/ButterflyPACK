@@ -3003,10 +3003,6 @@ end subroutine GetLocalBlockRange
 
 
 
-<<<<<<< HEAD
-
-
-
 !**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
@@ -3038,13 +3034,6 @@ subroutine GetPgno_Sub(ptree,pgno,level_butterfly,pgno_sub)
 end subroutine GetPgno_Sub
 
 
-
-
-
-
-
-=======
->>>>>>> b3d161313f0c8d6fbaf2dfd763819fe6abece753
 !**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
 	!ptree: process tree
 	!pgno: the process group number that shares this butterfly
