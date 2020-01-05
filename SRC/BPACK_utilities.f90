@@ -498,6 +498,11 @@ subroutine ReadOption(option,ptree,ii)
 					read(strings1,*)option%tol_comp
 					option%tol_rand=option%tol_comp
 					option%tol_Rdetect=option%tol_comp*1d-1
+				else if	(trim(strings)=='--tol_rand')then
+					read(strings1,*)option%tol_rand
+					option%tol_Rdetect=option%tol_rand*1d-1
+				else if	(trim(strings)=='--tol_Rdetect')then
+					read(strings1,*)option%tol_Rdetect
 				else if	(trim(strings)=='--tol_itersol')then
 					read(strings1,*)option%tol_itersol
 				else if	(trim(strings)=='--n_iter')then
