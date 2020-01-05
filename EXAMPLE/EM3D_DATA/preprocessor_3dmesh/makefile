@@ -1,4 +1,4 @@
-FC=ifort
+FC=gfortran 
 #FFLAGS=-O3 -static -ipo -xT #-C -O0 -traceback -g -fpe0 #
 #FFLAGS=-vec_report0 -O3 -no-prec-div -xHost -align records
 FFLAGS=-O0 -g 
