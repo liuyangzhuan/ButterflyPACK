@@ -1,3 +1,6 @@
+module load gcc/9.1.0
+module load openmpi/gcc-9.1.0/4.0.1
+module load scalapack-netlib/gcc-9.1.0/2.0.2 
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 # bash PrecisionPreprocessing.sh
@@ -14,18 +17,18 @@ cmake .. \
 	-DBUILD_SHARED_LIBS=ON \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so" \
-	-DTPL_SCALAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libscalapack.so" \
-	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/software/arpack-ng-gnu/build/lib/libarpack.so;/home/administrator/Desktop/software/arpack-ng-gnu/build/lib/libparpack.so" \
-	-DCMAKE_Fortran_COMPILER=/home/administrator/Desktop/software/openmpi-4.0.2/bin/mpif90 \
-	-DCMAKE_CXX_COMPILER=/home/administrator/Desktop/software/openmpi-4.0.2/bin/mpicxx \
-	-DCMAKE_C_COMPILER=/home/administrator/Desktop/software/openmpi-4.0.2/bin/mpicc \
+	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
+	-DCMAKE_Fortran_COMPILER=$MPIF90 \
+	-DCMAKE_CXX_COMPILER=$MPICXX \
+	-DCMAKE_C_COMPILER=$MPICC \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=DebWithRelInfo \
+	-DCMAKE_BUILD_TYPE=DebWithRelInfo\
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
 
 
 
+#	-DTPL_SCALAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libscalapack.so" \
 
 
 	#-DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check -finit-real=nan" \

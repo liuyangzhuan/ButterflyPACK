@@ -2658,6 +2658,34 @@ subroutine remove_dup_int(array,nin,nout)
 end subroutine remove_dup_int
 
 
+subroutine binary_search(N,x,val,mid)
+
+    implicit none
+	integer N
+    integer x(N)
+    integer :: range, start, finish, mid
+    integer :: val
+
+    start =  1
+    finish = N
+    range = finish - start
+    mid = (start + finish) /2
+
+    do while( x(mid) /= val .and. range >  0)
+      if (val > x(mid)) then
+        start = mid + 1
+      else
+        finish = mid - 1
+      end if
+      range = finish - start
+      mid = (start + finish)/2
+    end do
+
+    if( x(mid) /= val) then
+      mid=-1
+    end if
+end subroutine binary_search
+
 subroutine quick_sort(list, order, n)
 
 ! Quick sort routine from:

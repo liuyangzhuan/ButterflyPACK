@@ -538,6 +538,9 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,ptree)
 						t1=OMP_GET_WTIME()
 						call BF_randomized(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%pgno,level_butterfly,rank0_outter,rankrate_outter,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii),Bplus_block_MVP_Exact_dat,error,'Exact',option,stats,ptree,msh)
 
+						call BF_ComputeMemory(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),rtemp)
+
+
 						t2=OMP_GET_WTIME()
 						tim_tmp = tim_tmp + t2 - t1
 
@@ -545,8 +548,10 @@ subroutine HODLR_construction(ho_bf1,option,stats,msh,ker,ptree)
 						! call Bplus_randomized_constr(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree,msh)
 
 
-						if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp,'randomized_bf time,', tim_tmp,'stats%Time_random,',stats%Time_random
+						if(ptree%MyID==Main_ID .and. option%verbosity>=0)then
+						write (*,*)'time_tmp',time_tmp,'randomized_bf time,', tim_tmp,'stats%Time_random,',stats%Time_random, 'mem', rtemp
 						stop
+						endif
 					end if
 
 
@@ -1008,7 +1013,7 @@ implicit none
 			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
 			allocate(inters(nn)%dat_loc(myArows,myAcols))
-			inters(nn)%dat_loc=0
+			if(myArows>0 .and. myAcols>0)inters(nn)%dat_loc=0
 		endif
 		if(nprow*npcol>1)flag2D=1
 		allocate(inters(nn)%rows(nr))
@@ -1290,7 +1295,7 @@ implicit none
 			myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
 			myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
 			allocate(inters(nn)%dat_loc(myArows,myAcols))
-			! inters(nn)%dat_loc=0
+			if(myArows>0 .and. myAcols>0)inters(nn)%dat_loc=0
 		endif
 		if(nprow*npcol>1)flag2D=1
 		allocate(inters(nn)%rows(nr))
@@ -1335,6 +1340,8 @@ implicit none
 		case(HMAT)
 			num_blocks = 2**msh%Dist_level
 			call Hmat_MapIntersec2Block(bmat%h_mat,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk,num_blocks)
+		case(HSS)
+			call HSS_MapIntersec2Block(bmat%hss_bf,option,stats,msh,ptree,inters,nn,ptrr,ptrc,lstblk,1,bmat%hss_bf%BP%LL(1)%Nbound)
 		end select
 	end select
 	end select
@@ -1965,7 +1972,7 @@ n4 = OMP_get_wtime()
 			idx=NINT(dble(recvquant(pp)%dat(i,1)))
 			i=i+1
 			val=recvquant(pp)%dat(i,1)
-			inters(idx)%dat_loc(myi,myj)=val
+			inters(idx)%dat_loc(myi,myj)=inters(idx)%dat_loc(myi,myj)+val
 		enddo
 	enddo
 
@@ -2261,7 +2268,7 @@ n4 = OMP_get_wtime()
 			i=i+nc
 			do ii=1,nr
 			do jj=1,nc
-				inters(idx)%dat_loc(ridx(ii),cidx(jj))=recvquant(pp)%dat(i+(ii-1)*nc+jj,1)
+				inters(idx)%dat_loc(ridx(ii),cidx(jj))=inters(idx)%dat_loc(ridx(ii),cidx(jj))+recvquant(pp)%dat(i+(ii-1)*nc+jj,1)
 			enddo
 			enddo
 			i=i+nr*nc
@@ -2379,6 +2386,12 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 			if(clstr(2)%num_nods>0 .and. clstc(1)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(2),clstc(1),lstblk,level_c,2*bidx,1)
 			if(clstr(1)%num_nods>0 .and. clstc(1)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(1),clstc(1),lstblk,level_c+1,2*bidx-1,0)
 			if(clstr(2)%num_nods>0 .and. clstc(2)%num_nods>0)call HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inters,nth,clstr(2),clstc(2),lstblk,level_c+1,2*bidx,0)
+
+			deallocate(clstc(1)%dat)
+			deallocate(clstc(2)%dat)
+			deallocate(clstr(1)%dat)
+			deallocate(clstr(2)%dat)
+
 		endif
 		endif
 	else ! forward blocks
@@ -2398,6 +2411,115 @@ recursive subroutine HODLR_MapIntersec2Block(ho_bf1,option,stats,msh,ptree,inter
 
 
 end subroutine HODLR_MapIntersec2Block
+
+
+
+
+recursive subroutine HSS_MapIntersec2Block(hss_bf1,option,stats,msh,ptree,inters,nth,lstr,lstc,lstblk,ll,Nbound)
+    use BPACK_DEFS
+    implicit none
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(hssbf)::hss_bf1
+	type(mesh)::msh
+	type(proctree)::ptree
+	type(intersect)::inters(:)
+	integer nth,bidx,level_c
+	integer ii,ll,bb,row_group,col_group
+	type(list)::lstblk
+	type(iarray)::lstr,lstc
+	type(nod),pointer::cur
+	class(*),pointer::ptr
+	type(matrixblock),pointer::blocks
+	integer flag,num_nods
+	type(block_ptr)::blk_ptr
+	real(kind=8)::n1,n0
+	integer,allocatable::rowblocks(:),colblocks(:)
+	integer row0,col0,sort
+	integer Nbound,level1,level0
+	type(iarray)::clstr(Nbound),clstc(Nbound)
+
+	do bb=1,Nbound
+		allocate(clstr(bb)%dat(lstr%num_nods))
+		clstr(bb)%num_nods=0
+		clstr(bb)%idx=nth
+		allocate(clstc(bb)%dat(lstc%num_nods))
+		clstc(bb)%num_nods=0
+		clstc(bb)%idx=nth
+	enddo
+
+	allocate(rowblocks(hss_bf1%BP%LL(ll)%Nbound))
+	allocate(colblocks(hss_bf1%BP%LL(ll)%Nbound))
+	row0=0
+	col0=0
+	sort=0
+	do bb = 1,hss_bf1%BP%LL(ll)%Nbound
+		rowblocks(bb)=hss_bf1%BP%LL(ll)%matrices_block(bb)%row_group
+		colblocks(bb)=hss_bf1%BP%LL(ll)%matrices_block(bb)%col_group
+		if(rowblocks(bb)<row0 .or. colblocks(bb)<col0)then
+			sort=1
+			exit
+		endif
+		row0=rowblocks(bb)
+		col0=colblocks(bb)
+	enddo
+
+	call assert(sort==0,'the rowblocks and colblocks need sorting first')
+
+	level0 = hss_bf1%BP%LL(1)%matrices_block(1)%level
+	level1 = hss_bf1%BP%LL(ll)%matrices_block(1)%level
+
+	do ii=1,lstr%num_nods
+		row0 = findgroup(inters(nth)%rows(lstr%dat(ii)),msh,level1-level0,hss_bf1%BP%LL(1)%matrices_block(1)%row_group)
+		call binary_search(Nbound,rowblocks,row0,bb)
+		if(bb/=-1)then
+			clstr(bb)%num_nods=clstr(bb)%num_nods+1
+			clstr(bb)%dat(clstr(bb)%num_nods)=lstr%dat(ii)
+		endif
+	enddo
+
+	do ii=1,lstc%num_nods
+		col0 = findgroup(inters(nth)%cols(lstc%dat(ii)),msh,level1-level0,hss_bf1%BP%LL(1)%matrices_block(1)%col_group)
+		call binary_search(Nbound,colblocks,col0,bb)
+		if(bb/=-1)then
+			clstc(bb)%num_nods=clstc(bb)%num_nods+1
+			clstc(bb)%dat(clstc(bb)%num_nods)=lstc%dat(ii)
+		endif
+	enddo
+
+	do bb=1,Nbound
+		blocks=>hss_bf1%BP%LL(ll)%matrices_block(bb)
+		if(clstr(bb)%num_nods>0 .and. clstc(bb)%num_nods>0 .and. IOwnPgrp(ptree,blocks%pgno))then
+			if(blocks%lstr%num_nods==0)then
+				blk_ptr%ptr=>blocks
+				call append(lstblk,blk_ptr)
+			endif
+			call append(blocks%lstr,clstr(bb))
+			call append(blocks%lstc,clstc(bb))
+		endif
+	enddo
+
+
+
+	do bb=1,Nbound
+	deallocate(clstr(bb)%dat)
+	deallocate(clstc(bb)%dat)
+	enddo
+
+	deallocate(rowblocks)
+	deallocate(colblocks)
+
+
+	if(ll<hss_bf1%BP%Lplus)then
+		if(hss_bf1%BP%LL(ll+1)%Nbound>0)then
+			call HSS_MapIntersec2Block(hss_bf1,option,stats,msh,ptree,inters,nth,lstr,lstc,lstblk,ll+1,hss_bf1%BP%LL(ll+1)%Nbound)
+		endif
+	endif
+
+
+end subroutine HSS_MapIntersec2Block
+
+
 
 
 
@@ -2456,6 +2578,10 @@ subroutine Hmat_MapIntersec2Block(h_mat,option,stats,msh,ptree,inters,nth,lstr,l
 		enddo
 		endif
 
+		deallocate(clstr_g%dat)
+		do jj=1,num_blocks
+		deallocate(clstc_g(jj)%dat)
+		enddo
 end subroutine Hmat_MapIntersec2Block
 
 recursive subroutine Hmat_MapIntersec2Block_Loc(blocks,option,stats,msh,ptree,inters,nth,lstr,lstc,lstblk)
