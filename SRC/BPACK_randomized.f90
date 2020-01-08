@@ -103,8 +103,8 @@ subroutine HODLR_randomized(ho_bf1,blackbox_HODLR_MVP,Memory,error,option,stats,
 	Nloc = msh%idxe-msh%idxs+1
 
 	call assert(option%less_adapt==0,'HODLR_randomized does not support less_adapt=1 currently')
-	
-	
+
+
 	n3 = OMP_get_wtime()
 	Memory = 0
 	do level_c = 1,ho_bf1%Maxlevel+1

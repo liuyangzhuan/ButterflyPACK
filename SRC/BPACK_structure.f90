@@ -1220,9 +1220,9 @@ subroutine HSS_structuring(hss_bf1,option,msh,ker,ptree,stats)
 						blocks%headm = msh%basis_group(group_m)%head
 						blocks%headn = msh%basis_group(group_n)%head
 
+						call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
 						if(blocks%level_butterfly>0)then
 							blocks%style = 2
-							call ComputeParallelIndices(blocks,blocks%pgno,ptree,msh)
 						else
 							blocks%style = 1  ! leaflevel or leaflevel+1 is dense
 						endif
