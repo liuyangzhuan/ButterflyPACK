@@ -2476,6 +2476,7 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 	type(blockplus):: agent_bplus
 	type(proctree) :: ptree
 	type(mesh) :: msh
+	real(kind=8) flop
 
 
     bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)
@@ -2525,21 +2526,24 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
 						rank0 = block_o%rankmax
 						rate=1.2d0
 						level_butterfly = block_o%level_butterfly
+						Bplus%ind_ll=llplus
+						Bplus%ind_bk=bb
 						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_diagBinvB_dat,error,'L update',option,stats,ptree,msh,msh)
 						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 						error_inout = max(error_inout, error)
 					endif
 
-					!!!!! invert I+B1 to be I+B2
-					level_butterfly=block_o%level_butterfly
-					call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,block_o%pgno)
-					error_inout = max(error_inout, error)
-
+                    !!!!! invert I+B1 to be I+B2
+                    level_butterfly=block_o%level_butterfly
+                    call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,block_o%pgno)
+                    error_inout = max(error_inout, error)
 
 					if(llplus/=Lplus)then
 						rank0 = block_o%rankmax
 						rate=1.2d0
 						level_butterfly = block_o%level_butterfly
+						Bplus%ind_ll=llplus
+						Bplus%ind_bk=bb
 						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_BdiagBinv_dat,error,'R update',option,stats,ptree,msh,msh)
 						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
 						error_inout = max(error_inout, error)
@@ -2571,6 +2575,132 @@ subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1,level_c,rowblock,option
     return
 
 end subroutine Bplus_inverse_schur_partitionedinverse
+
+
+
+
+
+
+
+subroutine Bplus_inverse_schur_partitionedinverse_hss(bplus,option,stats,ptree,msh)
+
+    use BPACK_DEFS
+	use MISC_Utilities
+
+
+    use omp_lib
+    use Bplus_compress
+
+    implicit none
+
+	integer ierr
+    integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks,level_butterfly_loc
+    integer num_col, num_row, level, mm, nn, ii, jj,tt,ll,llplus,bb,mmb
+    character chara
+    real(kind=8) T0
+    type(matrixblock),pointer::block_o,block_off1,block_off2
+    type(matrixblock),pointer::blocks_o_D
+    type(matrixblock)::block_tmp
+	type(blockplus)::Bplus
+    integer rank_new_max
+	real(kind=8):: rank_new_avr,error,err_avr,err_max
+	integer niter
+	real(kind=8):: error_inout,rate,rankrate_inner,rankrate_outter
+	integer itermax,ntry,cnt,cnt_partial
+	real(kind=8):: n1,n2,n3,n4,Memory
+	integer rank0,rank0_inner,rank0_outter,Lplus,level_BP,levelm,groupm_start,ij_loc,edge_s,edge_e,edge_first,idx_end_m_ref,idx_start_m_ref,idx_start_b,idx_end_b
+	DT,allocatable:: matin(:,:),matout(:,:),matin_tmp(:,:),matout_tmp(:,:)
+	DT:: ctemp1,ctemp2
+	integer, allocatable :: ipiv(:)
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(matrixblock):: agent_block
+	type(blockplus):: agent_bplus
+	type(proctree) :: ptree
+	type(mesh) :: msh
+	real(kind=8) flop
+
+
+		ctemp1 = 1d0
+		ctemp2 = 0d0
+		Memory = 0
+		error_inout=0
+
+		n1 = OMP_get_wtime()
+		Lplus = Bplus%Lplus
+		do llplus =Lplus,1,-1
+			do bb=1,Bplus%LL(llplus)%Nbound
+				block_o => Bplus%LL(llplus)%matrices_block(bb)
+				if(IOwnPgrp(ptree,block_o%pgno))then
+					!!!!! partial update butterflies at level llplus from left B1 = D^-1xB
+					if(llplus/=Lplus)then
+						rank0 = block_o%rankmax
+						rate=1.2d0
+						level_butterfly = block_o%level_butterfly
+						Bplus%ind_ll=llplus
+						Bplus%ind_bk=bb
+						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_diagBinvBHSS_dat,error,'L update',option,stats,ptree,msh,msh)
+						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+						error_inout = max(error_inout, error)
+					endif
+
+					if(block_o%style==1)then
+						allocate(ipiv(block_o%M))
+						call getrff90(block_o%fullmat,ipiv,flop=flop)
+						stats%Flop_Factor = stats%Flop_Factor + flop
+						call getrif90(block_o%fullmat,ipiv,flop=flop)
+!						do ii=1,block_o%M
+!							block_o%fullmat(ii,ii) = block_o%fullmat(ii,ii)-1d0  ! this is needed for the later multplication as we assume the inverse is I+ something
+!						enddo
+						stats%Flop_Factor = stats%Flop_Factor + flop
+						deallocate(ipiv)
+					else
+						!!!!! invert I+B1 to be I+B2
+						level_butterfly=block_o%level_butterfly
+						call BF_inverse_partitionedinverse_IplusButter(block_o,level_butterfly,0,option,error,stats,ptree,msh,block_o%pgno)
+						error_inout = max(error_inout, error)
+					endif
+
+					if(llplus/=Lplus)then
+						rank0 = block_o%rankmax
+						rate=1.2d0
+						level_butterfly = block_o%level_butterfly
+						Bplus%ind_ll=llplus
+						Bplus%ind_bk=bb
+						call BF_randomized(block_o%pgno,level_butterfly,rank0,rate,block_o,Bplus,Bplus_block_MVP_BdiagBinvHSS_dat,error,'R update',option,stats,ptree,msh,msh)
+						stats%Flop_Factor=stats%Flop_Factor+stats%Flop_Tmp
+						error_inout = max(error_inout, error)
+					endif
+				endif
+			end do
+		end do
+		n2 = OMP_get_wtime()
+		stats%Time_SMW=stats%Time_SMW + n2-n1
+
+
+		do ll=1,Bplus%Lplus
+		Bplus%LL(ll)%rankmax=0
+		do bb=1,Bplus%LL(ll)%Nbound
+			Bplus%LL(ll)%rankmax=max(Bplus%LL(ll)%rankmax,Bplus%LL(ll)%matrices_block(bb)%rankmax)
+		enddo
+		call MPI_ALLREDUCE(MPI_IN_PLACE,Bplus%LL(ll)%rankmax,1,MPI_INTEGER,MPI_MAX,ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm,ierr)
+		end do
+
+		rank_new_max = 0
+		do ll=1,Lplus
+			rank_new_max = max(rank_new_max,Bplus%LL(ll)%rankmax)
+		end do
+
+		if(option%verbosity>=1 .and. ptree%myid==ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%head)write(*,'(A14,A6,I3,A8,I3,A11,Es14.7)')'HSS inverse: ',' rank:',rank_new_max,' L_butt:',Bplus%LL(1)%matrices_block(1)%level_butterfly,' error:',error_inout
+
+    return
+
+end subroutine Bplus_inverse_schur_partitionedinverse_hss
+
+
+
+
+
 
 
 

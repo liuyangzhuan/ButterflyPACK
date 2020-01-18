@@ -3953,7 +3953,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 	integer groupn,groupm,mm,nn
 
 	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,pp,test
-	integer level_butterfly,groupm_diag,edge_first
+	integer level_butterfly,groupm_diag,edge_first,ll
 	! real(kind=8) a,b,c,d
 	integer idx_start_glo_sml,idx_start_glo_tmp,idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,Maxgrp,pgno,row_group
 	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:),Vin_sml(:,:),Vout_sml(:,:),Vin_tmp1(:,:),Vout_tmp1(:,:)
@@ -3978,7 +3978,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
    type is (mesh)
    select TYPE(bplus)
    type is (blockplus)
-			blocks=> bplus%LL(1)%matrices_block(1)
+			blocks=> bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
 			mv=size(Vout,1)
 			nv=size(Vout,2)
@@ -3993,8 +3993,9 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 				ctemp1=1.0d0 ; ctemp2=0.0d0
 				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 
-				do ii=1,Bplus%LL(2)%Nbound
-					blocks_sml=>Bplus%LL(2)%matrices_block(ii)
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
 					edge_first = blocks_sml%headm
 					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
 
@@ -4044,14 +4045,13 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 						if(blocks_sml%M_loc>0 .or. block_tmp%M_loc>0)	call Redistribute1Dto1D(Vin_tmp1,block_tmp%M_p,0,block_tmp%pgno,Vin_sml,blocks_sml%M_p,0,blocks_sml%pgno,num_vect_sub,ptree)
 
 
-
 						if(IOwnPgrp(ptree,blocks_sml%pgno))then
 							call BF_block_MVP_dat(blocks_sml,trans,blocks_sml%M_loc,blocks_sml%N_loc,num_vect_sub,Vin_sml,Vout_sml,ctemp1,ctemp2,ptree,stats)
 						endif
 
 						if(blocks_sml%M_loc>0 .or. block_tmp%M_loc>0)	call Redistribute1Dto1D(Vout_sml,blocks_sml%M_p,0,blocks_sml%pgno,Vout_tmp1,block_tmp%M_p,0,block_tmp%pgno,num_vect_sub,ptree)
 						if(block_tmp%M_loc>0)then
-							Vout(idx_start_loc:idx_end_loc,:) = Vout_tmp1
+							Vout(idx_start_loc:idx_end_loc,:) = Vout(idx_start_loc:idx_end_loc,:) + Vout_tmp1
 							deallocate(Vin_tmp1)
 							deallocate(Vout_tmp1)
 						endif
@@ -4065,6 +4065,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 					endif
 				enddo
+				enddo
 				Vout = Vout + vec_new
 
 				deallocate(vec_new)
@@ -4072,8 +4073,9 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 		   else if(trans=='T')then
 				! get the left multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				do ii=1,Bplus%LL(2)%Nbound
-					blocks_sml=>Bplus%LL(2)%matrices_block(ii)
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
 					edge_first = blocks_sml%headm
 					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
 
@@ -4130,7 +4132,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 						if(blocks_sml%M_loc>0 .or. block_tmp%M_loc>0)	call Redistribute1Dto1D(Vout_sml,blocks_sml%M_p,0,blocks_sml%pgno,Vout_tmp1,block_tmp%M_p,0,block_tmp%pgno,num_vect_sub,ptree)
 						if(block_tmp%M_loc>0)then
-							vec_new(idx_start_loc:idx_end_loc,:) = Vout_tmp1
+							vec_new(idx_start_loc:idx_end_loc,:) = vec_new(idx_start_loc:idx_end_loc,:) + Vout_tmp1
 							deallocate(Vin_tmp1)
 							deallocate(Vout_tmp1)
 						endif
@@ -4142,6 +4144,7 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 						call BF_delete(block_tmp,1)
 
 					endif
+				enddo
 				enddo
 				vec_new = vec_new + Vin
 
@@ -4162,11 +4165,115 @@ subroutine Bplus_block_MVP_diagBinvB_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 end subroutine Bplus_block_MVP_diagBinvB_dat
 
 
+!* This is enssentially the same as Bplus_block_MVP_diagBinvB_dat, except that no redistriubtion is performed diagBinv
+subroutine Bplus_block_MVP_diagBinvBHSS_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,msh)
+	use BPACK_DEFS
 
 
+	implicit none
+	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
+	character trans
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
+	! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
+	integer groupn,groupm,mm,nn
 
+	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,pp,test
+	integer level_butterfly,groupm_diag,edge_first,ll
+	! real(kind=8) a,b,c,d
+	integer idx_start_glo_sml,idx_start_glo_tmp,idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,Maxgrp,pgno,row_group
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:),Vin_sml(:,:),Vout_sml(:,:),Vin_tmp1(:,:),Vout_tmp1(:,:)
 
+	integer*8 idx_start
+	integer level_blocks
+	integer groupm_start, groupn_start
+	integer header_mm, header_nn
+	integer header_m, header_n, tailer_m, tailer_n
+	! type(vectorsblock), pointer :: random1, random2
 
+	class(*):: bplus
+	type(matrixblock)::block_o,block_tmp
+	type(matrixblock),pointer::blocks,blocks_sml
+	class(*),optional::msh
+	type(proctree)::ptree
+	type(Hstat)::stats
+	real(kind=8)::n2,n1
+
+	call assert(present(msh),'operand1 cannot be skipped')
+   select TYPE(msh)
+   type is (mesh)
+   select TYPE(bplus)
+   type is (blockplus)
+			blocks=> bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
+
+			mv=size(Vout,1)
+			nv=size(Vout,2)
+			allocate(Vout_tmp(mv,nv))
+			Vout_tmp = Vout
+			Vout=0
+			allocate(vec_new(mv,nv))
+			vec_new = 0
+
+			if(trans=='N')then
+				! get the right multiplied vectors
+				ctemp1=1.0d0 ; ctemp2=0.0d0
+				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
+
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
+					edge_first = blocks_sml%headm
+					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
+						if(IOwnPgrp(ptree,blocks_sml%pgno))then
+							pp = ptree%myid-ptree%pgrp(blocks_sml%pgno)%head+1
+							idx_start_glo_tmp = blocks_sml%headm + blocks_sml%M_p(pp,1) -1
+							pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+							idx_start_glo = blocks%headm + blocks%M_p(pp,1) -1
+							idx_start_loc = idx_start_glo_tmp-idx_start_glo+1
+							idx_end_loc = idx_start_loc + blocks_sml%M_loc-1
+							call BF_block_MVP_dat(blocks_sml,trans,blocks_sml%M_loc,blocks_sml%N_loc,num_vect_sub,vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,cone,ptree,stats)
+						endif
+					endif
+				enddo
+				enddo
+
+				deallocate(vec_new)
+
+		   else if(trans=='T')then
+				! get the left multiplied vectors
+				ctemp1=1.0d0 ; ctemp2=0.0d0
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
+					edge_first = blocks_sml%headm
+					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
+						if(IOwnPgrp(ptree,blocks_sml%pgno))then
+							pp = ptree%myid-ptree%pgrp(blocks_sml%pgno)%head+1
+							idx_start_glo_tmp = blocks_sml%headm + blocks_sml%M_p(pp,1) -1
+							pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+							idx_start_glo = blocks%headm + blocks%M_p(pp,1) -1
+							idx_start_loc = idx_start_glo_tmp-idx_start_glo+1
+							idx_end_loc = idx_start_loc + blocks_sml%M_loc-1
+							call BF_block_MVP_dat(blocks_sml,trans,blocks_sml%M_loc,blocks_sml%N_loc,num_vect_sub,Vin(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,cone,ptree,stats)
+						endif
+					endif
+				enddo
+				enddo
+				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
+				deallocate(vec_new)
+		   end if
+
+		   Vout = a*Vout + b*Vout_tmp
+		   deallocate(Vout_tmp)
+
+    class default
+		write(*,*)"unexpected type"
+		stop
+
+   end select
+   end select
+
+end subroutine Bplus_block_MVP_diagBinvBHSS_dat
 subroutine Bplus_block_MVP_BBplus_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,operand1)
 	use BPACK_DEFS
 
@@ -4278,7 +4385,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 	! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
 	integer groupn,groupm,mm,nn
 
-	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,pp,test
+	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,pp,test,ll
 	integer level_butterfly,groupm_diag,edge_first
 	! real(kind=8) a,b,c,d
 	integer idx_start_glo_sml,idx_start_glo_tmp,idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,Maxgrp,pgno,row_group
@@ -4305,7 +4412,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
    type is (mesh)
    select TYPE(bplus)
    type is (blockplus)
-			blocks=> bplus%LL(1)%matrices_block(1)
+			blocks=> bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
 			mv=size(Vout,1)
 			nv=size(Vout,2)
@@ -4318,8 +4425,9 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 			if(trans=='N')then
 				! get the right multiplied vectors
 				ctemp1=1.0d0 ; ctemp2=0.0d0
-				do ii=1,Bplus%LL(2)%Nbound
-					blocks_sml=>Bplus%LL(2)%matrices_block(ii)
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
 					edge_first = blocks_sml%headm
 					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
 
@@ -4376,7 +4484,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 						if(blocks_sml%M_loc>0 .or. block_tmp%M_loc>0)	call Redistribute1Dto1D(Vout_sml,blocks_sml%M_p,0,blocks_sml%pgno,Vout_tmp1,block_tmp%M_p,0,block_tmp%pgno,num_vect_sub,ptree)
 						if(block_tmp%M_loc>0)then
-							vec_new(idx_start_loc:idx_end_loc,:) = Vout_tmp1
+							vec_new(idx_start_loc:idx_end_loc,:) =vec_new(idx_start_loc:idx_end_loc,:)+ Vout_tmp1
 							deallocate(Vin_tmp1)
 							deallocate(Vout_tmp1)
 						endif
@@ -4389,6 +4497,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 					endif
 				enddo
+				enddo
 				vec_new = vec_new + Vin
 
 				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
@@ -4400,8 +4509,9 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 				ctemp1=1.0d0 ; ctemp2=0.0d0
 				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
 
-				do ii=1,Bplus%LL(2)%Nbound
-					blocks_sml=>Bplus%LL(2)%matrices_block(ii)
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
 					edge_first = blocks_sml%headm
 					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
 
@@ -4458,7 +4568,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 						if(blocks_sml%M_loc>0 .or. block_tmp%M_loc>0)	call Redistribute1Dto1D(Vout_sml,blocks_sml%M_p,0,blocks_sml%pgno,Vout_tmp1,block_tmp%M_p,0,block_tmp%pgno,num_vect_sub,ptree)
 						if(block_tmp%M_loc>0)then
-							Vout(idx_start_loc:idx_end_loc,:) = Vout_tmp1
+							Vout(idx_start_loc:idx_end_loc,:) = Vout(idx_start_loc:idx_end_loc,:)+Vout_tmp1
 							deallocate(Vin_tmp1)
 							deallocate(Vout_tmp1)
 						endif
@@ -4471,6 +4581,7 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
 
 
 					endif
+				enddo
 				enddo
 				Vout = Vout + vec_new
 
@@ -4489,8 +4600,118 @@ subroutine Bplus_block_MVP_BdiagBinv_dat(bplus,block_o,trans,M,N,num_vect_sub,Vi
    end select
 end subroutine Bplus_block_MVP_BdiagBinv_dat
 
+!* This is enssentially the same as Bplus_block_MVP_BdiagBinv_dat, except that no redistriubtion is performed diagBinv
+subroutine Bplus_block_MVP_BdiagBinvHSS_dat(bplus,block_o,trans,M,N,num_vect_sub,Vin,Vout,a,b,ptree,stats,msh)
+	use BPACK_DEFS
+
+	implicit none
+	integer level_c, rowblock, num_vect_sub,M,N,mv,nv
+	character trans
+	DT :: Vin(:,:), Vout(:,:)
+	DT :: ctemp1,ctemp2,a,b
+	! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
+	integer groupn,groupm,mm,nn
+
+	integer i,j,k,level,num_blocks,num_row,num_col,ii,jj,kk,pp,test,ll
+	integer level_butterfly,groupm_diag,edge_first
+	! real(kind=8) a,b,c,d
+	integer idx_start_glo_sml,idx_start_glo_tmp,idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc,Maxgrp,pgno,row_group
+	DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),Vout_tmp(:,:),Vin_sml(:,:),Vout_sml(:,:),Vin_tmp1(:,:),Vout_tmp1(:,:)
+
+	integer*8 idx_start
+	integer level_blocks
+	integer groupm_start, groupn_start
+	integer header_mm, header_nn
+	integer header_m, header_n, tailer_m, tailer_n
+	! type(vectorsblock), pointer :: random1, random2
+
+	class(*):: bplus
+	type(matrixblock)::block_o,block_tmp
+	type(matrixblock),pointer::blocks,blocks_sml
+	class(*),optional::msh
+	type(proctree)::ptree
+	type(Hstat)::stats
+	real(kind=8)::n2,n1
 
 
+   call assert(present(msh),'operand1 cannot be skipped')
+   select TYPE(msh)
+   type is (mesh)
+   select TYPE(bplus)
+   type is (blockplus)
+			blocks=> bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
+
+			mv=size(Vout,1)
+			nv=size(Vout,2)
+			allocate(Vout_tmp(mv,nv))
+			Vout_tmp = Vout
+			Vout=0
+			allocate(vec_new(mv,nv))
+			vec_new = 0
+
+			if(trans=='N')then
+				! get the right multiplied vectors
+				ctemp1=1.0d0 ; ctemp2=0.0d0
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
+					edge_first = blocks_sml%headm
+					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
+						if(IOwnPgrp(ptree,blocks_sml%pgno))then
+							pp = ptree%myid-ptree%pgrp(blocks_sml%pgno)%head+1
+							idx_start_glo_tmp = blocks_sml%headm + blocks_sml%M_p(pp,1) -1
+							pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+							idx_start_glo = blocks%headm + blocks%M_p(pp,1) -1
+							idx_start_loc = idx_start_glo_tmp-idx_start_glo+1
+							idx_end_loc = idx_start_loc + blocks_sml%M_loc-1
+							call BF_block_MVP_dat(blocks_sml,trans,blocks_sml%M_loc,blocks_sml%N_loc,num_vect_sub,Vin(idx_start_loc:idx_end_loc,1:num_vect_sub),vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,cone,ptree,stats)
+						endif
+					endif
+				enddo
+				enddo
+
+				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,vec_new,Vout,ctemp1,ctemp2,ptree,stats)
+				deallocate(vec_new)
+
+		   else if(trans=='T')then
+				! get the left multiplied vectors
+
+				ctemp1=1.0d0 ; ctemp2=0.0d0
+				call BF_block_MVP_dat(blocks,trans,M,N,num_vect_sub,Vin,vec_new,ctemp1,ctemp2,ptree,stats)
+
+				do ll=bplus%ind_ll+1,bplus%Lplus
+				do ii=1,Bplus%LL(ll)%Nbound
+					blocks_sml=>Bplus%LL(ll)%matrices_block(ii)
+					edge_first = blocks_sml%headm
+					if(edge_first>=blocks%headm .and. edge_first<=blocks%headm+blocks%M-1)then
+						if(IOwnPgrp(ptree,blocks_sml%pgno))then
+							pp = ptree%myid-ptree%pgrp(blocks_sml%pgno)%head+1
+							idx_start_glo_tmp = blocks_sml%headm + blocks_sml%M_p(pp,1) -1
+							pp = ptree%myid-ptree%pgrp(blocks%pgno)%head+1
+							idx_start_glo = blocks%headm + blocks%M_p(pp,1) -1
+							idx_start_loc = idx_start_glo_tmp-idx_start_glo+1
+							idx_end_loc = idx_start_loc + blocks_sml%M_loc-1
+							call BF_block_MVP_dat(blocks_sml,trans,blocks_sml%M_loc,blocks_sml%N_loc,num_vect_sub,vec_new(idx_start_loc:idx_end_loc,1:num_vect_sub),Vout(idx_start_loc:idx_end_loc,1:num_vect_sub),cone,cone,ptree,stats)
+						endif
+					endif
+				enddo
+				enddo
+				! Vout = Vout + vec_new
+
+				deallocate(vec_new)
+
+		   end if
+
+		   Vout = a*Vout + b*Vout_tmp
+		   deallocate(Vout_tmp)
+
+    class default
+		write(*,*)"unexpected type"
+		stop
+
+   end select
+   end select
+end subroutine Bplus_block_MVP_BdiagBinvHSS_dat
 
 
 subroutine Bplus_MultiLrandomized_Onesubblock(rank0,rankrate,blocks,operand,blackbox_MVP_dat,error_inout,strings,option,stats,ptree,msh,operand1)
