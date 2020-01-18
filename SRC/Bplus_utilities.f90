@@ -326,15 +326,8 @@ subroutine Bplus_block_MVP_dat(bplus,chara,M,N,Nrnd,random1,random2,a,b,ptree,st
 			endif
 
 			if(blocks%N_loc>0 .or. blocks%M_loc>0)then
-				if(blocks%style==1)then
-					write(*,*)'style 1 not implemented'
-					stop
-				else
-					! write(*,*)'ddd1',ll,bb
-					call BF_block_MVP_dat(blocks,chara,blocks%M_loc,blocks%N_loc,Nrnd,&
-					&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree,stats)
-					! write(*,*)'ddd2'
-				end if
+				call BF_block_MVP_dat(blocks,chara,blocks%M_loc,blocks%N_loc,Nrnd,&
+				&Vin_loc,Vout_loc,ctemp1,ctemp2,ptree,stats)
 			endif
 
 			if (chara=='N')then
@@ -1040,7 +1033,7 @@ level_butterfly = block_i%level_butterfly
 num_blocks=2**level_butterfly
 
 if(block_i%style==2)then
-
+    if(block_i%M_loc>0)then
 	do level=0, level_butterfly+1
 		if(level==0)then
 			do jj=1,block_i%ButterflyV%nblk_loc
@@ -1058,6 +1051,7 @@ if(block_i%style==2)then
 			enddo
 		endif
 	enddo
+    endif
 
 else if(block_i%style==1)then
 	memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
@@ -5195,6 +5189,12 @@ subroutine BF_block_MVP_dat(blocks,chara,M,N,Nrnd,random1,random2,a,b,ptree,stat
 	endif
 
 	call assert(IOwnPgrp(ptree,pgno),'I do not share this block!')
+
+    if(blocks%style==1)then
+        call Full_block_MVP_dat(blocks,chara,M,Nrnd,random1,random2,a,b)
+        return
+    endif
+
 
 	if(level_butterfly==0)then
 		rank = size(blocks%ButterflyU%blocks(1)%matrix,2)

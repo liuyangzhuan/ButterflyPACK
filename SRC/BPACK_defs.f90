@@ -275,7 +275,8 @@ module BPACK_DEFS
          integer col_group ! column group number
          integer row_group ! row group number
 		 integer pgno   ! process group number
-         integer Lplus  ! Number of Bplus layers, 2 if option%TwoLayerOnly=1
+         integer Lplus  ! Number of Bplus layers
+		 integer ind_ll,ind_bk ! iterator of level and block number in a blockplus
 		 real(kind=8):: boundary(2)=0 ! A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value
 		 type(onelplus),pointer:: LL(:)=>null() !
 	 end type blockplus

@@ -40,6 +40,8 @@ subroutine BPACK_Factorization(bmat,option,stats,ptree,msh)
 		call HODLR_factorization(bmat%ho_bf,option,stats,ptree,msh)
     case(HMAT)
 		call Hmat_Factorization(bmat%h_mat,option,stats,ptree,msh)
+    case(HSS)
+		call HSS_factorization(bmat%hss_bf,option,stats,ptree,msh)
 	end select
 	endif
 
@@ -205,6 +207,90 @@ subroutine HODLR_factorization(ho_bf1,option,stats,ptree,msh)
     return
 
 end subroutine HODLR_factorization
+
+
+
+
+
+
+subroutine HSS_factorization(hss_bf1,option,stats,ptree,msh)
+
+    implicit none
+
+    integer i, j, ii, jj, iii, jjj,index_ij,mm,nn
+    integer level, blocks, edge, patch, node, group,level_c,groupm_diag
+    integer rank, index_near, m, n, length, flag, itemp
+    real T0
+	real(kind=8)::rtemp=0
+	real(kind=8) tmpfact
+    real(kind=8) Memory, Memory_near
+	integer,allocatable:: index_old(:),index_new(:)
+	integer::block_num,block_num_new,level_butterfly
+	integer, allocatable :: ipiv(:)
+	integer rowblock,pgno1,pgno2,pgno,ierr,rowblock_inv
+	type(matrixblock),pointer::block_o,block_off,block_off1,block_off2
+	type(matrixblock)::block_tmp
+	real(kind=8) n1,n2,nn1,nn2,flop
+	type(Hoption)::option
+	type(Hstat)::stats
+	type(hssbf)::hss_bf1
+	type(proctree)::ptree
+	type(mesh)::msh
+
+	nn1 = OMP_get_wtime()
+
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+
+	call MPI_barrier(ptree%Comm,ierr)
+
+
+	call Bplus_copy(hss_bf1%BP,hss_bf1%BP_inverse)
+
+	call Bplus_inverse_schur_partitionedinverse_hss(hss_bf1%BP_inverse,option,stats,ptree,msh)
+	call Bplus_ComputeMemory(hss_bf1%BP_inverse,rtemp)
+
+	stats%Mem_Factor = stats%Mem_Factor + rtemp
+
+
+	nn2 = OMP_get_wtime()
+	stats%Time_Inv = nn2-nn1
+	stats%Time_Factor=stats%Time_Inv
+
+	call MPI_ALLREDUCE(stats%Time_Inv,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'computing inverse block time:',rtemp,'Seconds'
+	call MPI_ALLREDUCE(stats%Time_random(1),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_Init:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(2),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_MVP:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(3),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_Reconstruct:', rtemp
+	call MPI_ALLREDUCE(stats%Time_random(4),rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_Onesub:', rtemp
+	call MPI_ALLREDUCE(stats%Time_SMW,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_SMW:', rtemp
+	call MPI_ALLREDUCE(stats%Time_RedistB,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_RedistB:', rtemp
+	call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_RedistV:', rtemp
+	call MPI_ALLREDUCE(time_tmp,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*)'time_tmp',time_tmp
+	call MPI_ALLREDUCE(stats%Flop_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A21Es14.2)') 'Factorization flops:',rtemp
+
+	stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
+
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
+	call MPI_ALLREDUCE(stats%Mem_Factor,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)rtemp,'MB costed for butterfly inverse blocks'
+	call MPI_ALLREDUCE(stats%Mem_int_vec,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)rtemp,'MB costed for storing intermidiate vectors'
+    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)''
+
+
+    return
+
+end subroutine HSS_factorization
+
 
 
 

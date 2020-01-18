@@ -655,6 +655,8 @@ subroutine BPACK_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 	select case(option%format)
     case(HODLR)
 		call HODLR_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%ho_bf,ptree,option,stats)
+    case(HSS)
+		call HSS_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%hss_bf,ptree,option,stats)
     case(HMAT)
 		call Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%h_mat,ptree,option,stats)
 	end select
@@ -708,6 +710,8 @@ subroutine BPACK_Mult(trans,Ns,num_vectors,Vin,Vout,bmat,ptree,option,stats)
 		call HODLR_Mult(trans,Ns,num_vectors,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,ptree,option,stats)
     case(HMAT)
 		call Hmat_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%h_mat,ptree,option,stats)
+    case(HSS)
+		call HSS_Mult(trans,Ns,num_vectors,Vin,Vout,bmat%hss_bf,ptree,option,stats)
 	end select
 
 
@@ -817,6 +821,60 @@ end subroutine HODLR_Inv_Mult
 
 
 
+subroutine HSS_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,hss_bf1,ptree,option,stats)
+
+    use BPACK_DEFS
+
+    implicit none
+
+	integer Ns
+	integer level_c,rowblock,head,tail
+    integer i,j,k,level,ii,jj,kk,test, num_vectors,pp
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character trans,trans_tmp
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
+	type(matrixblock),pointer::block_o
+
+    ! type(vectorsblock), pointer :: random1, random2
+
+    real(kind=8),allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_loc,idx_end_loc
+
+	DT,allocatable::vec_old(:,:),vec_new(:,:)
+	! complex(kind=8)::Vin(:),Vout(:)
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(hssbf)::hss_bf1
+    type(proctree)::ptree
+	type(Hstat)::stats
+	type(Hoption)::option
+	integer istart,iend,iinc
+
+
+	stats%Flop_Tmp=0
+
+	trans_tmp = trans
+	if(trans=='C')then
+		trans_tmp = 'T'
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+
+	call Bplus_block_MVP_dat(hss_bf1%BP_inverse,trans,Ns,Ns,num_vectors,Vin,Vout,cone,czero,ptree,stats)
+
+
+	if(trans=='C')then
+		Vout=conjg(cmplx(Vout,kind=8))
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+	Vout = Vout*option%scale_factor
+
+    return
+
+end subroutine HSS_Inv_Mult
+
+
+
+
 
 subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1,ptree,option,stats)
     use BPACK_DEFS
@@ -898,6 +956,58 @@ subroutine HODLR_Mult(trans,Ns,num_vectors,level_start,level_end,Vin,Vout,ho_bf1
     return
 
 end subroutine HODLR_Mult
+
+
+subroutine HSS_Mult(trans,Ns,num_vectors,Vin,Vout,hss_bf1,ptree,option,stats)
+    use BPACK_DEFS
+    implicit none
+
+	character trans,trans_tmp
+	integer Ns
+	integer level_c,rowblock
+    integer i,j,k,level,ii,jj,kk,test, num_vectors
+    integer mm,nn,mn,blocks1,blocks2,blocks3,level_butterfly,groupm,groupn,groupm_diag
+    character chara
+    real(kind=8) a,b,c,d
+    DT ctemp, ctemp1, ctemp2
+	! type(matrixblock),pointer::block_o
+	type(blockplus),pointer::bplus_o
+	type(proctree)::ptree
+    ! type(vectorsblock), pointer :: random1, random2
+    type(Hstat)::stats
+    type(Hoption)::option
+
+    real(kind=8),allocatable :: Singular(:)
+	integer idx_start_glo,N_diag,idx_start_diag,idx_start_m,idx_end_m,idx_start_n,idx_end_n,pp,head,tail,idx_start_loc,idx_end_loc
+
+	DT,allocatable::vec_old(:,:),vec_new(:,:)
+	! complex(kind=8)::Vin(:,:),Vout(:,:)
+	DT::Vin(Ns,num_vectors),Vout(Ns,num_vectors)
+	type(hssbf)::hss_bf1
+
+	trans_tmp = trans
+	if(trans=='C')then
+		trans_tmp = 'T'
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+
+	stats%Flop_Tmp =0
+	call Bplus_block_MVP_dat(hss_bf1%BP,trans,Ns,Ns,num_vectors,Vin,Vout,cone,czero,ptree,stats)
+
+	if(trans=='C')then
+		Vout=conjg(cmplx(Vout,kind=8))
+		Vin=conjg(cmplx(Vin,kind=8))
+	endif
+
+	Vout = Vout/option%scale_factor
+
+	! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+
+    return
+
+end subroutine HSS_Mult
+
 
 
 subroutine Hmat_Inv_Mult(trans,Ns,num_vectors,Vin,Vout,h_mat,ptree,option,stats)
