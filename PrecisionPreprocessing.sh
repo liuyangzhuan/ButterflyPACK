@@ -14,7 +14,7 @@ declare -a StringArray=("*.*" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
 for val in ${StringArray[@]}; do
    # echo $val
 #   sed -i "s/\r$/\r" $val
-   sed -i "s/[[:blank:]]*$//" $val
+   sed -i -e "s/[[:blank:]]*$//" $val
 done
 
 

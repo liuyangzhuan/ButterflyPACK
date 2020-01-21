@@ -325,11 +325,29 @@ endif (NOT SED_TOOL)
 if(APPLE)
 execute_process (
      COMMAND cp PrecisionPreprocessing.sh PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND ${SED_TOOL} -i "" -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND ${SED_TOOL} -i "" -e "s/eval//g" PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND ${SED_TOOL} -i "" -e "/\r\"/d" PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND ${SED_TOOL} -i "" -e "s/lb=.*/lb=\"[[:<:]]\"/g" PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND ${SED_TOOL} -i "" -e "s/rb=.*/rb=\"[[:>:]]\"/g" PrecisionPreprocessing_mac.sh
+     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
+)
+execute_process (
      COMMAND bash PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
