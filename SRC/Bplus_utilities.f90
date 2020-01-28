@@ -1006,7 +1006,7 @@ contains
          endif
 
       else if (block_i%style == 1) then
-         memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
+         if(allocated(block_i%fullmat))memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
       else
          write (*, *) 'block style not implemented'
          stop

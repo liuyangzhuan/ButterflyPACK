@@ -114,6 +114,7 @@ PROGRAM ButterflyPACK_IE_2D
         ! option%LRlevel=100
        ! option%level_check=1
     option%tol_itersol=1d-5
+    option%sample_heuristic=0
     ! option%sample_para=4d0
 
 	! do ii=2,15
@@ -207,6 +208,8 @@ PROGRAM ButterflyPACK_IE_2D
 		Maxlevel=bmat%ho_bf%Maxlevel
 	case(HMAT)
 		Maxlevel=bmat%h_mat%Maxlevel
+	case(HSS)
+		Maxlevel=bmat%hss_bf%Maxlevel
 	end select
 	if(option%lnoBP>Maxlevel)then	 ! haven't implement the following for Bplus.
 

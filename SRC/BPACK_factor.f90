@@ -236,7 +236,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         call Bplus_inverse_schur_partitionedinverse_hss(hss_bf1%BP_inverse, option, stats, ptree, msh)
         call Bplus_ComputeMemory(hss_bf1%BP_inverse, rtemp)
 
-        stats%Mem_Factor = stats%Mem_Factor + rtemp
+        stats%Mem_Factor = rtemp
 
         nn2 = OMP_get_wtime()
         stats%Time_Inv = nn2 - nn1
