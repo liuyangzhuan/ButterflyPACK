@@ -276,6 +276,8 @@ contains
          Maxlevel = bmat%ho_bf%Maxlevel
       case (HMAT)
          Maxlevel = bmat%h_mat%Maxlevel
+      case (HSS)
+         Maxlevel = bmat%hss_bf%Maxlevel
       end select
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
 

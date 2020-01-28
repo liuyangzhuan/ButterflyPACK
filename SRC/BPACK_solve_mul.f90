@@ -588,16 +588,16 @@ contains
       call BPACK_Mult('N', N_unk_loc, 1, x, b, bmat, ptree, option, stats)
       stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
 
-      rtemp1 = fnorm(xtrue - x, N_unk_loc, 1)**2d0; 
-      rtemp2 = fnorm(xtrue, N_unk_loc, 1)**2d0; 
+      rtemp1 = fnorm(xtrue - x, N_unk_loc, 1)**2d0;
+      rtemp2 = fnorm(xtrue, N_unk_loc, 1)**2d0;
       call MPI_ALLREDUCE(rtemp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(rtemp2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          write (*, *) '||X_t-H\(H*X_t)||_F/||X_t||_F: ', sqrt(norm1/norm2)
       endif
 
-      rtemp3 = fnorm(btrue - b, N_unk_loc, 1)**2d0; 
-      rtemp4 = fnorm(btrue, N_unk_loc, 1)**2d0; 
+      rtemp3 = fnorm(btrue - b, N_unk_loc, 1)**2d0;
+      rtemp4 = fnorm(btrue, N_unk_loc, 1)**2d0;
       call MPI_ALLREDUCE(rtemp3, norm3, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(rtemp4, norm4, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then

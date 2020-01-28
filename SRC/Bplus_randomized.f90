@@ -4458,7 +4458,7 @@ contains
          block_large => operand1%LL(1)%matrices_block(1)
 
          stats%Flop_tmp = 0
-         option%tol_rand = option%tol_rand*1d-1; 
+         option%tol_rand = option%tol_rand*1d-1;
          call BF_randomized(block_large%pgno, blocks%level_butterfly, rank0, rankrate, blocks, operand, Bplus_block_MVP_Onesubblock_dat, error_inout, 'Sub', option, stats, ptree, msh, operand1)
          option%tol_rand = option%tol_rand*1d1
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp

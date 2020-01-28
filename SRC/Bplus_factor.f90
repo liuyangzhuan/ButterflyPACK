@@ -2525,7 +2525,7 @@ contains
       do ll = 1, Bplus%Lplus
          Bplus%LL(ll)%rankmax = 0
          do bb = 1, Bplus%LL(ll)%Nbound
-            Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
+            if(IOwnPgrp(ptree,Bplus%LL(ll)%matrices_block(bb)%pgno))Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
          enddo
          call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
@@ -2535,7 +2535,7 @@ contains
          rank_new_max = max(rank_new_max, Bplus%LL(ll)%rankmax)
       end do
 
-      if (option%verbosity >= 1 .and. ptree%myid == ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%head) write (*, '(A14,A6,I3,A8,I3,A11,Es14.7)') 'HSS inverse: ', ' rank:', rank_new_max, ' L_butt:', Bplus%LL(1)%matrices_block(1)%level_butterfly, ' error:', error_inout
+      if (option%verbosity >= 1 .and. ptree%myid == ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%head) write (*, '(A14,A6,I6,A8,I3,A11,Es14.7)') 'HSS inverse: ', ' rank:', rank_new_max, ' L_butt:', Bplus%LL(1)%matrices_block(1)%level_butterfly, ' error:', error_inout
 
       return
 
