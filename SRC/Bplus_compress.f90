@@ -420,8 +420,10 @@ contains
       endif
 
       do ii = 1, Nrow_pre
+         if (select_row_pre(ii) >= msh%basis_group(group_m)%head .and. select_row_pre(ii) <= msh%basis_group(group_m)%tail) then
          rankmax_r1 = rankmax_r1 + 1
          select_row(rankmax_r1) = select_row_pre(ii) + 1 - header_m
+         endif
       enddo
 
       call remove_dup_int(select_row, rankmax_r1, rankmax_r)
@@ -1520,8 +1522,10 @@ contains
       endif
 
       do ii = 1, Ncol_pre
+         if (select_col_pre(ii) >= msh%basis_group(group_n)%head .and. select_col_pre(ii) <= msh%basis_group(group_n)%tail) then
          rankmax_c1 = rankmax_c1 + 1
          select_column(rankmax_c1) = select_col_pre(ii) + 1 - header_n
+         endif
       enddo
 
       call remove_dup_int(select_column, rankmax_c1, rankmax_c)
