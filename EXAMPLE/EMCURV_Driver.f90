@@ -98,7 +98,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** intialize the user-defined derived type quant
 	quant%RCS_static=1
-    quant%RCS_Nsample=1
+    quant%RCS_Nsample=1000
 	quant%model2d=10
 	quant%wavelength=0.08
 	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
@@ -114,9 +114,9 @@ PROGRAM ButterflyPACK_IE_2D
         ! option%LRlevel=100
        ! option%level_check=1
     option%tol_itersol=1d-5
-    option%sample_heuristic=0
+    ! option%sample_heuristic=1
     ! option%sample_para=4d0
-
+ß
 	! do ii=2,15
 	! call C_BPACK_TreeIndex_Merged2Child(ii,jj)
 	! write(*,*)ii,jj
@@ -211,7 +211,8 @@ PROGRAM ButterflyPACK_IE_2D
 	case(HSS)
 		Maxlevel=bmat%hss_bf%Maxlevel
 	end select
-	if(option%lnoBP>Maxlevel)then	 ! haven't implement the following for Bplus.
+	if(.false.)then
+	! if(option%lnoBP>Maxlevel)then	 ! haven't implement the following for Bplus.
 
 		!*********** Construct the second HODLR by using the first HODLR as parallel element extraction
 		call CopyOptions(option,option1)
@@ -283,8 +284,8 @@ PROGRAM ButterflyPACK_IE_2D
     call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
-	!**** solve phase
-   ! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+	! !**** solve phase
+	! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
 
 

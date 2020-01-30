@@ -1164,6 +1164,10 @@ contains
                         blocks%style = 2
                      else
                         blocks%style = 1  ! leaflevel or leaflevel+1 is dense
+                        if(ptree%pgrp(blocks%pgno)%nproc>1)then
+                           write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
+                           stop
+                        endif
                      endif
 
                   end if
