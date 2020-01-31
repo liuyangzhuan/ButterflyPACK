@@ -116,7 +116,7 @@ PROGRAM ButterflyPACK_IE_2D
     option%tol_itersol=1d-5
     ! option%sample_heuristic=1
     ! option%sample_para=4d0
-ß
+
 	! do ii=2,15
 	! call C_BPACK_TreeIndex_Merged2Child(ii,jj)
 	! write(*,*)ii,jj
