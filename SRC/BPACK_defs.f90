@@ -209,7 +209,8 @@ module BPACK_DEFS
         integer style ! 1: full block 2: compressed block 4: hierarchical block
         integer level_butterfly ! butterfly levels
         integer:: level_half = 0 ! the butterfly level where the row-wise and column-wise orderings meet
-        integer rankmax, rankmin ! maximum and minimum butterfly ranks
+        integer:: rankmax=0 ! maximum butterfly ranks
+        integer:: rankmin=BigINT ! minimum butterfly ranks
         integer dimension_rank ! estimated maximum rank
         integer M, N ! size of the block
         integer M_loc, N_loc ! local size of the block
