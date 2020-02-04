@@ -1757,7 +1757,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno
+      tag = blocks%pgno+level
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -2042,7 +2042,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno
+      tag = blocks%pgno+level
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -2304,7 +2304,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno
+      tag = blocks%pgno+level
 
       ! mode_new and level_new determine the block range in the new mode
       if (mode_new == 'R') then
@@ -2593,7 +2593,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno
+      tag = blocks%pgno+level
 
       ! mode_new and level_new determine the block range in the new mode
       if (mode_new == 'R') then
@@ -2891,7 +2891,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno
+      tag = pgno+level_i
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -3419,7 +3419,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno
+      tag = pgno+level_i
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -3823,7 +3823,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno
+      tag = pgno+level_i
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -4174,7 +4174,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno
+      tag = pgno+level_i
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -4590,7 +4590,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno
+      tag = pgno+level_i
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -7140,6 +7140,7 @@ contains
             index_j_s = (index_j_loc_s - 1)*BFvec%vec(level + 1)%inc_c + BFvec%vec(level + 1)%idx_c
             call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i_s, index_j_s, 'R', pgno_sub)
             pid = ptree%pgrp(pgno_sub)%head
+            call assert(ptree%pgrp(pgno_sub)%nproc==1,'pgno_sub can only has one proc here')
             if (pid == ptree%MyID) then
                if (level == 0) then
                   index_j = index_j_s
@@ -7267,6 +7268,12 @@ contains
                index_i_loc_s = BFvec1%vec(level + 1)%index(nn, 1)
                index_j_loc_s = BFvec1%vec(level + 1)%index(nn, 2)
 
+               index_i_s = (index_i_loc_s - 1)*BFvec1%vec(level + 1)%inc_r + BFvec1%vec(level + 1)%idx_r
+               index_j_s = (index_j_loc_s - 1)*BFvec1%vec(level + 1)%inc_c + BFvec1%vec(level + 1)%idx_c
+
+               index_ii_loc = (index_i_s - BFvec1%vec(level)%idx_r)/BFvec1%vec(level)%inc_r + 1 !index_ii_loc is local index in BFvec1%vec(level)
+               index_jj_loc = (index_j_s - BFvec1%vec(level)%idx_c)/BFvec1%vec(level)%inc_c + 1
+
                idxr = 0
                idxc = 0
 
@@ -7283,7 +7290,10 @@ contains
                   endif
 
                   ! if(ptree%MyID>=2)write(*,*)'id',ptree%MyID,index_i_loc_s,index_j_loc_s,idx,'shape',shape(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),allocated(BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%matrix),idxc
-                  idx1 = NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1, idxc + 1)))
+                  if(.not. allocated(BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix))then
+                     write(*,*)ptree%MyID,level,index_ii_loc, index_jj_loc,'nanina',BFvec1%vec(level)%index
+                     endif
+                     idx1 = NINT(dble(BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1, idxc + 1)))
 
                   if (idx /= idx1) then
                      if (blocks%inters(idx1)%nr == 0) then  ! this takes care of the case where the intersection idx has 0 rows (resulting from the 2D block-cyclic distribution before element_Zmn_block_user in BPACK_CheckError and BF_CheckError)
@@ -7291,12 +7301,14 @@ contains
                         goto 111
                      endif
                   endif
-
+                  if(idx/=idx1)then
+                     write(*,*)ptree%MyID,idx,idx1,blocks%inters(idx1)%nr,blocks%inters(idx)%nc,'nani',BFvec1%vec(level)%index
+                  endif
                   call assert(idx == idx1, 'row and column intersection# not match')
                   nc = 0
-                  do while (NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1, idxc + 1 + nc))) == idx)
+                  do while (NINT(dble(BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1, idxc + 1 + nc))) == idx)
                      nc = nc + 1
-                     if (idxc + 1 + nc > size(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix, 2)) exit
+                     if (idxc + 1 + nc > size(BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)) exit
                   enddo
 
                   rank = size(blocks%ButterflyU%blocks(index_i_loc_s)%matrix, 2)
@@ -7312,13 +7324,13 @@ contains
                      mat(ii, :) = blocks%ButterflyU%blocks(index_i_loc_s)%matrix(ri, :)
                   enddo
 
-                  call gemmf77('N', 'N', nr, nc, rank, cone, mat, nr, BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix(3, idxc + 1), rank + 2, czero, Vpartial, nr)
+                  call gemmf77('N', 'N', nr, nc, rank, cone, mat, nr, BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, czero, Vpartial, nr)
                   stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(nr, nc, rank)
 
                   do ii = 1, nr
                      iii = BFvec1%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%index(idxr + ii, 2)
                      do jj = 1, nc
-                        jjj = NINT(dble(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix(2, idxc + jj)))
+                        jjj = NINT(dble(BFvec1%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(2, idxc + jj)))
                         blocks%inters(idx)%dat_loc(iii, jjj) = Vpartial(ii, jj)
                      enddo
                   enddo
@@ -7365,6 +7377,7 @@ contains
                   index_i = floor_safe((index_i_s - 1)/2d0) + 1
                   index_j = 2*index_j_s - jjj
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i, index_j, 'C', pgno_sub)
+                  call assert(ptree%pgrp(pgno_sub)%nproc==1,'pgno_sub can only has one proc here')
                   pid = ptree%pgrp(pgno_sub)%head
                   if (pid == ptree%MyID) then
                      index_i_k = 2*index_i - mod(index_i_s, 2)
