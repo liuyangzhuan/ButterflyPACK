@@ -142,7 +142,7 @@ contains
             rank_new = 0
             flops = 0
             Nrow_pre = 0
-            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
+            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops) 
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
@@ -170,7 +170,7 @@ contains
 
                call BF_compress_NlogN_oneblock_R(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, rank_new1, Nrow_pre, select_row_pre, flops1)
                rank_new = MAX(rank_new, rank_new1)
-               flops = MAX(flops, flops1)
+               flops =flops+flops1
             enddo
             ! !$omp end parallel do
 
@@ -190,9 +190,9 @@ contains
             if (level < level_butterfly + 1) then
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
-               stats%Flop_Fill = stats%Flop_Fill + flops
             endif
             endif
+            stats%Flop_Fill = stats%Flop_Fill + flops            
          enddo
 
          level_final = level_half + 1
@@ -238,7 +238,7 @@ contains
             rank_new = 0
             flops = 0
             Ncol_pre = 0
-            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new,flops)
+            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
                index_i_loc = mod(index_ij - 1, nr) + 1
@@ -266,7 +266,7 @@ contains
 
                call BF_compress_NlogN_oneblock_C(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, level_final, rank_new1, Ncol_pre, select_col_pre, flops1)
                rank_new = MAX(rank_new, rank_new1)
-               flops = MAX(flops, flops1)
+               flops = flops+flops1
             enddo
             ! !$omp end parallel do
 
@@ -282,9 +282,9 @@ contains
             if (level > 0) then
             if (rank_new > rankmax_for_butterfly(level - 1)) then
                rankmax_for_butterfly(level - 1) = rank_new
-               stats%Flop_Fill = stats%Flop_Fill + flops
             endif
             endif
+            stats%Flop_Fill = stats%Flop_Fill + flops
          enddo
 
       endif
