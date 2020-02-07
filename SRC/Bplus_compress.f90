@@ -142,7 +142,7 @@ contains
             rank_new = 0
             flops = 0
             Nrow_pre = 0
-            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops) 
+            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
@@ -192,7 +192,7 @@ contains
                rankmax_for_butterfly(level) = rank_new
             endif
             endif
-            stats%Flop_Fill = stats%Flop_Fill + flops            
+            stats%Flop_Fill = stats%Flop_Fill + flops
          enddo
 
          level_final = level_half + 1
@@ -3242,8 +3242,9 @@ contains
       do while (passflag == 0)
          call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
       enddo
-
+      stats%Flop_tmp=0
       call LR_HMerge(blocks, rank, option, msh, stats, ptree, pgno, cridx, 1)
+      stats%Flop_Fill=stats%Flop_Fill+stats%Flop_tmp
 
    end subroutine LR_HBACA
 
@@ -3446,7 +3447,7 @@ contains
                   Singular = 0
 
                   call PSVD_Truncate(M1, rank1 + rank2, matU, descsmatU, UU, VV, descUU, descVV, Singular, option%tol_comp, rank, ptree%pgrp(pgno)%ctxt, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
 
                   do ii = 1, rank
                      call g2l(ii, rank, nprow, nbslpk, iproc, myi)
@@ -3475,9 +3476,9 @@ contains
                   blocks%ButterflyU%blocks(1)%matrix = UU(1:myArows, 1:myAcols)
 
                   call pgemmf90('N', 'T', N1, rank, rank1, cone, matV1, 1, 1, descsmatV1, VV, 1, 1, descVV, czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descButterflyV, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
                   call pgemmf90('N', 'T', N2, rank, rank2, cone, matV2, 1, 1, descsmatV2, VV, 1, 1 + rank1, descVV, czero, blocks%ButterflyV%blocks(1)%matrix, 1 + N1, 1, descButterflyV, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
                   deallocate (UU, VV, Singular, matV1, matV2, matU)
                else
                   blocks%rankmax = 0
@@ -3595,7 +3596,7 @@ contains
                   Singular = 0
 
                   call PSVD_Truncate(N1, rank1 + rank2, matV, descsmatV, UU, VV, descUU, descVV, Singular, option%tol_comp, rank, ptree%pgrp(pgno)%ctxt, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
                   do ii = 1, rank
                      call g2l(ii, rank, nprow, nbslpk, iproc, myi)
                      if (iproc == myrow) then
@@ -3623,10 +3624,10 @@ contains
                   blocks%ButterflyU%blocks(1)%matrix = 0
 
                   call pgemmf90('N', 'T', M1, rank, rank1, cone, matU1, 1, 1, descsmatU1, VV, 1, 1, descVV, czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descButterflyU, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
 
                   call pgemmf90('N', 'T', M2, rank, rank2, cone, matU2, 1, 1, descsmatU2, VV, 1, 1 + rank1, descVV, czero, blocks%ButterflyU%blocks(1)%matrix, 1 + M1, 1, descButterflyU, flop=flop)
-                  stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
+                  stats%Flop_tmp = stats%Flop_tmp + flop/dble(nprow*npcol)
                   deallocate (UU, VV, Singular, matU1, matU2, matV)
                else
                   rank = 0
