@@ -1262,8 +1262,9 @@ contains
 
       call LR_BuildABCD(blocks_o, partitioned_block, option, msh, stats, ptree, partitioned_block%sons(1, 1)%pgno, 0)
 
+      stats%Flop_tmp=0
       call LR_HMerge(blocks_o, rank, option, msh, stats, ptree, partitioned_block%sons(1, 1)%pgno, 0, 0)
-
+      stats%Flop_Factor=stats%Flop_Factor+stats%Flop_tmp
    end subroutine LR_ABCDinverse
 
 !**** Use low-rank arithmetic to form the four child LRs in inverse_ABCD
