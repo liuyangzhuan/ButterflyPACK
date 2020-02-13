@@ -975,7 +975,9 @@ contains
          !$omp end parallel do
       endif
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, msh%nns, msh%Nunk*option%knn, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      do ii=1,option%knn
+         call MPI_ALLREDUCE(MPI_IN_PLACE, msh%nns(:,ii), msh%Nunk, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      enddo
 
       deallocate (distance)
       deallocate (order)
