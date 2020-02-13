@@ -395,7 +395,7 @@ module BPACK_DEFS
     !**** statistics
     type Hstat
         real(kind=8) Time_random(5)  ! Intialization, MVP, Reconstruction, Reconstruction of one subblock
-      real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_C_Mult, Time_C_Extract, Time_Entry
+      real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_C_Mult, Time_C_Extract, Time_Entry
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_Tmp

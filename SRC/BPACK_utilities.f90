@@ -299,6 +299,7 @@ contains
       stats%Time_RedistB = 0
       stats%Time_RedistV = 0
       stats%Time_SMW = 0
+      stats%Time_PartialUpdate = 0
       stats%Time_Fill = 0
       stats%Time_Entry = 0
       stats%Mem_peak = 0

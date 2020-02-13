@@ -160,6 +160,10 @@ contains
          val_d = stats%Time_SMW
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_PartialUpdate') then
+         val_d = stats%Time_PartialUpdate
+         valid_opt = 1
+      endif
       if (trim(str) == 'Time_RedistB') then
          val_d = stats%Time_RedistB
          valid_opt = 1

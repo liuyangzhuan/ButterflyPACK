@@ -2369,13 +2369,13 @@ contains
 
          ! write(*,*)'good!!!!'
          ! stop
-         n1 = OMP_get_wtime()
          Bplus => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)
          Lplus = ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%Lplus
          do llplus = Lplus, 1, -1
             do bb = 1, Bplus%LL(llplus)%Nbound
                block_o => Bplus%LL(llplus)%matrices_block(bb)
                if (IOwnPgrp(ptree, block_o%pgno)) then
+                  n1 = OMP_get_wtime()
                   !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
@@ -2387,12 +2387,18 @@ contains
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
+                  n2 = OMP_get_wtime()
+                  stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
 
+                  n1 = OMP_get_wtime()
                   !!!!! invert I+B1 to be I+B2
                   level_butterfly = block_o%level_butterfly
                   call BF_inverse_partitionedinverse_IplusButter(block_o, level_butterfly, 0, option, error, stats, ptree, msh, block_o%pgno)
                   error_inout = max(error_inout, error)
+                  n2 = OMP_get_wtime()
+                  stats%Time_SMW = stats%Time_SMW + n2 - n1
 
+                  n1 = OMP_get_wtime()
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
                      rate = 1.2d0
@@ -2403,11 +2409,12 @@ contains
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
+                  n2 = OMP_get_wtime()
+                  stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
                endif
             end do
          end do
-         n2 = OMP_get_wtime()
-         stats%Time_SMW = stats%Time_SMW + n2 - n1
+
 
          do ll = 1, Bplus%Lplus
             Bplus%LL(ll)%rankmax = 0
@@ -2472,12 +2479,14 @@ contains
       Memory = 0
       error_inout = 0
 
-      n1 = OMP_get_wtime()
+
       Lplus = Bplus%Lplus
       do llplus = Lplus, 1, -1
          do bb = 1, Bplus%LL(llplus)%Nbound
             block_o => Bplus%LL(llplus)%matrices_block(bb)
             if (IOwnPgrp(ptree, block_o%pgno)) then
+
+               n1 = OMP_get_wtime()
                !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                if (llplus /= Lplus) then
                   rank0 = block_o%rankmax
@@ -2489,15 +2498,19 @@ contains
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
                endif
+               n2 = OMP_get_wtime()
+               stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
 
+
+               n1 = OMP_get_wtime()
                if (block_o%style == 1) then
                   allocate (ipiv(block_o%M))
                   call getrff90(block_o%fullmat, ipiv, flop=flop)
                   stats%Flop_Factor = stats%Flop_Factor + flop
                   call getrif90(block_o%fullmat, ipiv, flop=flop)
-!                                                do ii=1,block_o%M
-!                                                        block_o%fullmat(ii,ii) = block_o%fullmat(ii,ii)-1d0  ! this is needed for the later multplication as we assume the inverse is I+ something
-!                                                enddo
+                     ! do ii=1,block_o%M
+                     !          block_o%fullmat(ii,ii) = block_o%fullmat(ii,ii)-1d0  ! this is needed for the later multplication as we assume the inverse is I+ something
+                     ! enddo
                   stats%Flop_Factor = stats%Flop_Factor + flop
                   deallocate (ipiv)
                else
@@ -2506,7 +2519,10 @@ contains
                   call BF_inverse_partitionedinverse_IplusButter(block_o, level_butterfly, 0, option, error, stats, ptree, msh, block_o%pgno)
                   error_inout = max(error_inout, error)
                endif
+               n2 = OMP_get_wtime()
+               stats%Time_SMW = stats%Time_SMW + n2 - n1
 
+               n1 = OMP_get_wtime()
                if (llplus /= Lplus) then
                   rank0 = block_o%rankmax
                   rate = 1.2d0
@@ -2517,11 +2533,12 @@ contains
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
                endif
+               n2 = OMP_get_wtime()
+               stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
             endif
          end do
       end do
-      n2 = OMP_get_wtime()
-      stats%Time_SMW = stats%Time_SMW + n2 - n1
+
 
       do ll = 1, Bplus%Lplus
          Bplus%LL(ll)%rankmax = 0
