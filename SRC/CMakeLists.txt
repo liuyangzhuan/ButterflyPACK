@@ -35,17 +35,16 @@ target_link_libraries(butterflypack
 set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
-
+target_include_directories(butterflypack PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
+  $<INSTALL_INTERFACE:include>)
 
 # Define GNU standard installation directories
 include(GNUInstallDirs)
 
-install(TARGETS butterflypack
-# DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
-install(FILES ${headers}
-# DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+install(TARGETS butterflypack EXPORT MYBPACKTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
+install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
