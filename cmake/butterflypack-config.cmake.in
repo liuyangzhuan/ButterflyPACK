@@ -1,0 +1,4 @@
+# Our library dependencies (contains definitions for IMPORTED targets)
+if(NOT TARGET ButterflyPACK AND NOT ButterflyPACK_BINARY_DIR)
+  include(${CMAKE_CURRENT_LIST_DIR}/butterflypack-targets.cmake)
+endif()
