@@ -295,7 +295,7 @@ END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
 
 if(BUTTERFLYPACK_USE_TASKLOOP )
 	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
-	message("-- Using Fortran Finalizer features")
+	message("-- Using OpenMP taskloop")
 endif()
 
 ######################################################################
