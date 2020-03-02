@@ -76,7 +76,6 @@ endif()
 set(ButterflyPACK_VERSION "${PROJECT_VERSION}")
 set(ButterflyPACK_REV "${PROJECT_REV}")
 
-
 if (NOT CMAKE_INSTALL_PREFIX)
   set(CMAKE_INSTALL_PREFIX /usr/local)
 endif()
@@ -296,7 +295,7 @@ END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
 
 if(BUTTERFLYPACK_USE_TASKLOOP )
 	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
-	message("-- Using Fortran Finalizer features")
+	message("-- Using OpenMP taskloop")
 endif()
 
 ######################################################################
@@ -378,3 +377,21 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/butterflypack.pc.in ${CMAKE_CURRENT_B
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
+
+set(ConfigPackageLocation lib/cmake/ButterflyPACK)
+install(EXPORT MYBPACKTargets FILE butterflypack-targets.cmake
+  NAMESPACE ButterflyPACK:: DESTINATION ${ConfigPackageLocation})
+
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(butterflypack-config-version.cmake
+  VERSION ${PROJECT_VERSION} COMPATIBILITY AnyNewerVersion)
+install(FILES "${CMAKE_BINARY_DIR}/butterflypack-config-version.cmake"
+  DESTINATION ${ConfigPackageLocation})
+
+configure_package_config_file(
+  ${PROJECT_SOURCE_DIR}/cmake/butterflypack-config.cmake.in
+  ${CMAKE_BINARY_DIR}/butterflypack-config.cmake
+  INSTALL_DESTINATION ${ConfigPackageLocation})
+
+install(FILES "${CMAKE_BINARY_DIR}/butterflypack-config.cmake"
+  DESTINATION ${ConfigPackageLocation})
