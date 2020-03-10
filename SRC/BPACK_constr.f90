@@ -1562,6 +1562,9 @@ contains
             call random_number(a)
             call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
             allrows(idx_row + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allrows(idx_row + 1) = max(floor_safe(3125*a), 1)+3125*0
+            ! allrows(idx_row + 1) = max(floor_safe(7812*a), 1)+7812*0
+            ! allrows(idx_row + 1) = max(floor_safe(19531*a), 1)+19531*0
             ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
             idx_row = idx_row + 1
          enddo
@@ -1570,6 +1573,9 @@ contains
             call random_number(a)
             call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
             allcols(idx_col + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allcols(idx_col + 1) = max(floor_safe(3125*a), 1)+3125*1
+            ! allcols(idx_col + 1) = max(floor_safe(7812*a), 1)+7812*1
+            ! allcols(idx_col + 1) = max(floor_safe(19531*a), 1)+19531*1
             ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
             idx_col = idx_col + 1
          enddo

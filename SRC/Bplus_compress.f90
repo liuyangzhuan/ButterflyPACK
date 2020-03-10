@@ -167,8 +167,9 @@ contains
                ! enddo
                ! endif
                ! endif
-
+               if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
                call BF_compress_NlogN_oneblock_R(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, rank_new1, Nrow_pre, select_row_pre, flops1)
+               if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
@@ -264,7 +265,9 @@ contains
                ! endif
                ! endif
 
+               if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
                call BF_compress_NlogN_oneblock_C(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, level_final, rank_new1, Ncol_pre, select_col_pre, flops1)
+               if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
                rank_new = MAX(rank_new, rank_new1)
                flops = flops+flops1
             enddo
@@ -334,7 +337,7 @@ contains
       integer i, j, jjj, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_r1, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij
       integer level, length_1, length_2, level_blocks
-      integer rank, rankmax, butterflyB_inuse, rank1, rank2
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1, last
       real(kind=8) flop, flops
@@ -354,7 +357,7 @@ contains
       integer select_row_pre(:)
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), mnmap(:, :)
-      real(kind=8)::n2, n1
+      real(kind=8)::n2, n1,overrate
 
       flops = 0
       level_butterfly = blocks%level_butterfly
@@ -386,9 +389,26 @@ contains
 
       levelm = floor_safe(dble(level_butterfly)/2d0)
 
+      overrate=1
+      if(level<=levelm)then
+      group_n_mid = group_n
+      do i=1,levelm-level
+         group_n_mid = floor_safe(group_n_mid/2d0)
+      enddo
+      idxstart = msh%basis_group(group_n_mid)%head
+      idxend = msh%basis_group(group_n_mid)%tail
+      inter = min(msh%basis_group(group_n_mid)%tail,msh%basis_group(group_m)%tail)-max(msh%basis_group(group_n_mid)%head,msh%basis_group(group_m)%head)+1
+      if(inter>0)then
+         if(inter==mm)then
+         overrate = 1
+         else
+         overrate = dble(mm)/dble(mm-inter)
+         endif
+      endif
+      endif
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
-      rankmax_r1 = min(ceiling_safe(option%sample_para*nn), mm)
-      if (level == 0) rankmax_r1 = min(ceiling_safe(option%sample_para*nn), mm)
+      rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
+      if (level == 0) rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
       rankmax_c = nn
       allocate (select_row(rankmax_r1 + nn*option%knn + Nrow_pre))
       allocate (select_column(rankmax_c))
@@ -1436,7 +1456,7 @@ contains
       integer i, j, iii, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_c1, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_j, index_i_loc_k, index_j_loc_k, index_i_loc_s, index_i_loc_s1, index_j_loc_s, index_j_loc_s1, ii, jj, ij
       integer level, level_final, length_1, length_2, level_blocks
-      integer rank, rankmax, butterflyB_inuse, rank1, rank2
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
       integer header_m1, header_m2, mm1, mm2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, mmm1
       real(kind=8) flop, flops
@@ -1454,7 +1474,7 @@ contains
       integer Nlayer, levelm, group_m_mid, group_n_mid, idxstart, idxend, nrow, ncol
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), mnmap(:, :)
       integer::passflag = 0
-      real(kind=8)::n2, n1
+      real(kind=8)::n2, n1,overrate
       integer::Ncol_pre
       integer::select_col_pre(:)
 
@@ -1487,11 +1507,30 @@ contains
       endif
 
       levelm = floor_safe(dble(level_butterfly)/2d0)
+      overrate=1
+      if(level>levelm)then
+      group_m_mid = group_m
+      do i=1,level-levelm
+         group_m_mid = floor_safe(group_m_mid/2d0)
+      enddo
+      idxstart = msh%basis_group(group_m_mid)%head
+      idxend = msh%basis_group(group_m_mid)%tail
+      inter = min(msh%basis_group(group_m_mid)%tail,msh%basis_group(group_n)%tail)-max(msh%basis_group(group_m_mid)%head,msh%basis_group(group_n)%head)+1
+      if(inter>0)then
+         if(inter==nn)then
+         overrate = 1
+         else
+         overrate = dble(nn)/dble(nn-inter)
+         endif
+      endif
+      endif
+
+
 
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
       rankmax_r = mm
-      rankmax_c1 = min(nn, ceiling_safe(option%sample_para*mm))
-      if (level == level_butterfly + 1) rankmax_c1 = min(ceiling_safe(option%sample_para*mm), nn)
+      rankmax_c1 = min(nn, ceiling_safe(option%sample_para*mm*overrate))
+      if (level == level_butterfly + 1) rankmax_c1 = min(ceiling_safe(option%sample_para*mm*overrate), nn)
       allocate (select_row(rankmax_r))
       allocate (select_column(rankmax_c1 + option%knn*mm + Ncol_pre))
       do i = 1, rankmax_r
