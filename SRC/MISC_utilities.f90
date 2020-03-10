@@ -65,6 +65,33 @@ contains
 
    end subroutine linspaceI
 
+   subroutine copysubmat_assumeshape(A, B, m, n, trans)
+      implicit none
+      integer m, n
+      DT::A(m, n), B(m, n)
+      real(kind=8)::n1, n2
+      integer ii, jj, ijind
+      character trans
+
+      ! n1 = OMP_get_wtime()
+      if (trans == 'N') then
+         do ii = 1, m
+         do jj = 1, n
+            B(ii , jj ) = A(ii , jj )
+         end do
+         end do
+      elseif (trans == 'T') then
+         do ii = 1, m
+         do jj = 1, n
+            B(jj , ii ) = A(ii , jj )
+         end do
+         end do
+      endif
+      ! n2 = OMP_get_wtime()
+      ! time_memcopy = time_memcopy + n2-n1
+
+   end subroutine copysubmat_assumeshape
+
    subroutine copysubmat(A, ais, ajs, B, bis, bjs, m, n, trans)
       implicit none
       integer ais, ajs, bis, bjs, m, n

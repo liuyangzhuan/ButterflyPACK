@@ -5,7 +5,7 @@ sed -i 's/^M$//' PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
-export MKLROOT=/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl
+export MKLROOT=/opt/intel/compilers_and_libraries_2019.3.199/linux/mkl
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
 rm -rf CTestTestfile.cmake
