@@ -864,7 +864,7 @@ contains
       integer num_threads
       integer, save:: my_tid = 0
       integer groupm_start, groupn_start
-      real(kind=8) t1, t2
+      real(kind=8) t1, t2, tmp
 
       real(kind=8), allocatable :: dist_gram(:, :)
       integer, allocatable:: rows_gram(:), cols_gram(:)
@@ -878,34 +878,55 @@ contains
       my_tid = omp_get_thread_num()
 !$omp end parallel
 
+
+      tmp=0
+
       t1 = OMP_get_wtime()
+      allocate (msh%nns(msh%Nunk, option%knn))
+      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%nns)/1024.0d3
+      msh%nns = 0
+      call MPI_barrier(ptree%Comm, ierr)
+      ! if(ptree%MyID==Main_ID)write(*,*)'nn0',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3, msh%Nunk*option%knn*4/1024.0d3
+
 
       allocate (distance(msh%Nunk, num_threads))
       allocate (order(msh%Nunk, num_threads))
       allocate (edge_temp(msh%Nunk, num_threads))
       distance = Bigvalue
+      ! call MPI_barrier(ptree%Comm, ierr)
+      ! if(ptree%MyID==Main_ID)write(*,*)'nn0',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3, msh%Nunk*option%knn*4/1024.0d3
 
       Maxgroup = size(msh%basis_group, 1)
       Maxlevel = GetTreelevel(Maxgroup) - 1
-
-      do ii = 1, size(msh%basis_group, 1)
-         msh%basis_group(ii)%nn = 0
-      enddo
-      call append_nlist(ker, option, stats, msh, ptree, groupm_start, groupn_start, 0)
-      do ii = 1, size(msh%basis_group, 1)
-         if (msh%basis_group(ii)%nn > 0) then
-            allocate (msh%basis_group(ii)%nlist(msh%basis_group(ii)%nn))
-            msh%basis_group(ii)%nn = 0
-         endif
-      enddo
-      call append_nlist(ker, option, stats, msh, ptree, groupm_start, groupn_start, 1)
-
-      allocate (msh%nns(msh%Nunk, option%knn))
-      msh%nns = 0
       Navr = 2**Maxlevel/ptree%nproc
       Bidxs = 2**Maxlevel + ptree%MyID*Navr
       Bidxe = 2**Maxlevel + (ptree%MyID + 1)*Navr - 1
       if (ptree%MyID == ptree%nproc - 1) Bidxe = 2**(Maxlevel + 1) - 1
+
+
+      ! call MPI_barrier(ptree%Comm, ierr)
+      ! if(ptree%MyID==Main_ID)write(*,*)ptree%MyID,'nn1.0',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3,Bidxe-Bidxs+1,stats%Mem_Peak
+
+
+
+      do ii = Bidxs, Bidxe
+         msh%basis_group(ii)%nn = 0
+      enddo
+      call append_nlist(ker, option, stats, msh, ptree, groupm_start, groupn_start, 0,Bidxs, Bidxe)
+
+
+      do ii = Bidxs, Bidxe
+         if (msh%basis_group(ii)%nn > 0) then
+            allocate (msh%basis_group(ii)%nlist(msh%basis_group(ii)%nn))
+            tmp=tmp+SIZEOF(msh%basis_group(ii)%nlist)/1024.0d3
+            msh%basis_group(ii)%nn = 0
+         endif
+      enddo
+      call append_nlist(ker, option, stats, msh, ptree, groupm_start, groupn_start, 1,Bidxs, Bidxe)
+
+
+      ! if(ptree%MyID==Main_ID)write(*,*)'nn2',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3,stats%Mem_Peak
+      ! call MPI_barrier(ptree%Comm, ierr)
 
       if (option%xyzsort == 3) then
          do ii = Bidxs, Bidxe
@@ -979,6 +1000,10 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE, msh%nns(:,ii), msh%Nunk, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       enddo
 
+      do ii = Bidxs, Bidxe
+         if (msh%basis_group(ii)%nn > 0) deallocate(msh%basis_group(ii)%nlist)
+      enddo
+
       deallocate (distance)
       deallocate (order)
       deallocate (edge_temp)
@@ -988,7 +1013,7 @@ contains
 
    end subroutine FindKNNs
 
-   recursive subroutine append_nlist(ker, option, stats, msh, ptree, group_m, group_n, flag)
+   recursive subroutine append_nlist(ker, option, stats, msh, ptree, group_m, group_n, flag,Bidxs, Bidxe)
       use BPACK_DEFS
       implicit none
       type(Hoption)::option
@@ -997,26 +1022,29 @@ contains
       type(proctree)::ptree
       type(kernelquant)::ker
       integer flag, group_m, group_n
-      integer ii, jj
+      integer ii, jj,Bidxs, Bidxe
+
 
       if (group_m*2 + 1 > size(msh%basis_group)) then
          if (group_m == group_n) then
+            if(group_m>=Bidxs .and. group_m<=Bidxe)then
             msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
             if (flag == 1) then
                msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn) = group_n
             endif
+            endif
          else if (group_m < group_n) then ! only search in the upper block triangular matrix
-            msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
-            msh%basis_group(group_n)%nn = msh%basis_group(group_n)%nn + 1
+            if(group_m>=Bidxs .and. group_m<=Bidxe)msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
+            if(group_n>=Bidxs .and. group_n<=Bidxe)msh%basis_group(group_n)%nn = msh%basis_group(group_n)%nn + 1
             if (flag == 1) then
-               msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn) = group_n
-               msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn) = group_m
+               if(group_m>=Bidxs .and. group_m<=Bidxe)msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn) = group_n
+               if(group_n>=Bidxs .and. group_n<=Bidxe)msh%basis_group(group_n)%nlist(msh%basis_group(group_n)%nn) = group_m
             endif
          endif
       else
          do ii = 1, 2
          do jj = 1, 2
-            if (near_or_far_user(group_m*2 + ii - 1, group_n*2 + jj - 1, msh, option, ker, knn_near_para) == 0) call append_nlist(ker, option, stats, msh, ptree, group_m*2 + ii - 1, group_n*2 + jj - 1, flag)
+            if (near_or_far_user(group_m*2 + ii - 1, group_n*2 + jj - 1, msh, option, ker, knn_near_para) == 0) call append_nlist(ker, option, stats, msh, ptree, group_m*2 + ii - 1, group_n*2 + jj - 1, flag,Bidxs, Bidxe)
          enddo
          enddo
       endif
