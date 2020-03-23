@@ -9127,4 +9127,400 @@ contains
 
    end subroutine element_Zmn_block_user
 
+
+
+
+
+   subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats)
+
+      use BPACK_DEFS
+      implicit none
+
+
+      integer ii, jj, nn, pp, ij, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol
+      type(mesh)::msh
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      integer ierr, idx_row, idx_col, idx_dat
+      integer, allocatable:: flags(:), dests(:), colidx(:), rowidx(:), colidx1(:), rowidx1(:), allrows(:), allcols(:), disps(:), pgidx(:), pmaps(:, :),nsubs(:),mrange(:),nrange(:),nrows_loc(:),ncols_loc(:)
+      procedure(F_Zelem_block), POINTER :: proc
+      procedure(C_Zelem_block), POINTER :: proc_c
+      procedure(F_Zelem), POINTER :: proc1
+      procedure(C_Zelem), POINTER :: proc1_c
+      DT, allocatable::alldat_loc(:)
+      type(intersect), allocatable::inters(:)
+      integer myArows, myAcols, Npmap
+      real(kind=8)::t1, t2, t3, t4
+      integer reqm, reqn,empty
+      integer statusm(MPI_status_size), statusn(MPI_status_size)
+      type(intersect) :: submats(*)
+      type(intersect),allocatable :: submats1(:)
+      integer,allocatable:: new2old_sub(:)
+      DT:: value_e
+
+      allocate(submats1(Nsub))
+      allocate(new2old_sub(Nsub))
+
+      !!! copy submats into submats1 as submats can have zero elements in the masks
+      Ninter_loc=0
+      new2old_sub=-1
+      nr=0
+      nc=0
+      do nn=1,Nsub
+
+         nrow = 0
+         do i = 1, submats(nn)%nr
+            empty = 0
+            if(allocated(submats(nn)%masks))then
+               if (sum(submats(nn)%masks(i, :)) == 0) then
+                  empty=1
+               endif
+            endif
+            if (empty == 0) then
+               nrow = nrow + 1
+            endif
+         enddo
+         ncol = 0
+         do j = 1, submats(nn)%nc
+            empty = 0
+            if(allocated(submats(nn)%masks))then
+               if (sum(submats(nn)%masks(:, j)) == 0) then
+                  empty=1
+               endif
+            endif
+            if (empty == 0) then
+               ncol = ncol + 1
+            endif
+         enddo
+         if(ncol*nrow>0)then
+            Ninter_loc = Ninter_loc + 1
+            new2old_sub(Ninter_loc) = nn
+
+            allocate(submats1(Ninter_loc)%rows(nrow))
+            allocate(submats1(Ninter_loc)%mmap(nrow))
+            nrow = 0
+            do i = 1, submats(nn)%nr
+               empty = 0
+               if(allocated(submats(nn)%masks))then
+                  if (sum(submats(nn)%masks(i, :)) == 0) then
+                     empty=1
+                  endif
+               endif
+               if (empty == 0) then
+                  nrow = nrow + 1
+                  nr =nr +1
+                  submats1(Ninter_loc)%mmap(nrow) = i
+                  submats1(Ninter_loc)%rows(nrow) = submats(nn)%rows(i)
+               endif
+            enddo
+            submats1(Ninter_loc)%nr = nrow
+
+            allocate(submats1(Ninter_loc)%cols(ncol))
+            allocate(submats1(Ninter_loc)%nmap(ncol))
+            ncol = 0
+            do j = 1, submats(nn)%nc
+               empty = 0
+               if(allocated(submats(nn)%masks))then
+                  if (sum(submats(nn)%masks(:, j)) == 0) then
+                     empty=1
+                  endif
+               endif
+               if (empty == 0) then
+                  ncol = ncol + 1
+                  nc =nc+1
+                  submats1(Ninter_loc)%nmap(ncol) = j
+                  submats1(Ninter_loc)%cols(ncol) = submats(nn)%cols(j)
+               endif
+            enddo
+            submats1(Ninter_loc)%nc = ncol
+         endif
+      enddo
+      myflag1 = myflag
+      if(Ninter_loc==0)myflag1=max(myflag,1)
+
+      if (option%elem_extract == 0) then
+
+         t1 = OMP_get_wtime()
+
+         do nn=1,Ninter_loc
+            if (option%cpp == 1) then
+               call c_f_procpointer(ker%C_FuncZmn, proc1_C)
+#ifdef HAVE_TASKLOOP
+               !$omp parallel
+               !$omp single
+               !$omp taskloop default(shared) private(ij,ii,jj,value_e)
+#else
+               !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
+               do ij = 1, submats1(nn)%nc*submats1(nn)%nr
+                  jj = (ij - 1)/submats1(nn)%nr + 1
+                  ii = mod(ij - 1, submats1(nn)%nr) + 1
+                  value_e = 0
+                  call proc1_C(msh%new2old(submats1(nn)%rows(ii)), msh%new2old(submats1(nn)%cols(jj)), value_e, ker%C_QuantApp)
+                  value_e = value_e*option%scale_factor
+                  submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = value_e
+               enddo
+#ifdef HAVE_TASKLOOP
+               !$omp end taskloop
+               !$omp end single
+               !$omp end parallel
+#else
+               !$omp end parallel do
+#endif
+            else
+               proc1 => ker%FuncZmn
+               if (submats1(nn)%nr*submats1(nn)%nc > 0) then
+#ifdef HAVE_TASKLOOP
+                  !$omp parallel
+                  !$omp single
+                  !$omp taskloop default(shared) private(ij,ii,jj,value_e)
+#else
+                  !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
+                  do ij = 1, submats1(nn)%nc*submats1(nn)%nr
+                     jj = (ij - 1)/submats1(nn)%nr + 1
+                     ii = mod(ij - 1, submats1(nn)%nr) + 1
+                     value_e = 0
+                     call proc1(msh%new2old(submats1(nn)%rows(ii)), msh%new2old(submats1(nn)%cols(jj)), value_e, ker%QuantApp)
+                     value_e = value_e*option%scale_factor
+                     submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = value_e
+                  enddo
+#ifdef HAVE_TASKLOOP
+                  !$omp end taskloop
+                  !$omp end single
+                  !$omp end parallel
+#else
+                  !$omp end parallel do
+#endif
+
+               endif
+            endif
+         enddo
+         t2 = OMP_get_wtime()
+         stats%Time_Entry = stats%Time_Entry + t2 - t1
+
+         passflag = 2
+      else if (option%elem_extract == 1) then
+
+
+         ! write(*,*)ptree%MyID,'in',Nsub,nr,nc
+         allocate (flags(ptree%nproc))
+
+#ifdef HAVE_MPI3
+         call MPI_IALLGATHER(myflag1, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
+         call MPI_Wait(reqm, statusm, ierr)
+#else
+         call MPI_ALLGATHER(myflag1, 1, MPI_INTEGER, flags, 1, MPI_INTEGER, ptree%Comm, ierr)
+#endif
+
+         passflag = minval(flags)
+
+         t1 = OMP_get_wtime()
+
+         if (passflag == 0) then
+
+            allocate (disps(ptree%nproc))
+            allocate (nsubs(ptree%nproc))
+#ifdef HAVE_MPI3
+            call MPI_IALLGATHER(Ninter_loc, 1, MPI_INTEGER, nsubs, 1, MPI_INTEGER, ptree%Comm, reqm, ierr)
+            call MPI_Wait(reqm, statusm, ierr)
+#else
+            call MPI_ALLGATHER(Ninter_loc, 1, MPI_INTEGER, nsubs, 1, MPI_INTEGER, ptree%Comm, ierr)
+#endif
+
+
+            allocate(nrows_loc(max(1,Ninter_loc)))
+            allocate(ncols_loc(max(1,Ninter_loc)))
+            allocate(mrange(max(1,nr)))
+            allocate(nrange(max(1,nc)))
+            nr=0
+            nc=0
+            do nn=1,Ninter_loc
+               do i = 1, submats1(nn)%nr
+                  nr =nr +1
+                  mrange(nr)=submats1(nn)%rows(i)
+               enddo
+               nrows_loc(nn) = submats1(nn)%nr
+               do i = 1, submats1(nn)%nc
+                  nc =nc +1
+                  nrange(nc)=submats1(nn)%cols(i)
+               enddo
+               ncols_loc(nn) = submats1(nn)%nc
+            enddo
+
+            idx = 0
+            do pp = 1, ptree%nproc
+               disps(pp) = idx
+               idx = idx + nsubs(pp)
+            enddo
+
+            Ninter = sum(nsubs)
+
+            allocate (colidx(Ninter))
+            allocate (rowidx(Ninter))
+
+
+#ifdef HAVE_MPI3
+            call MPI_IALLGATHERV(nrows_loc, Ninter_loc, MPI_INTEGER, rowidx, nsubs, disps, MPI_INTEGER, ptree%comm, reqm, ierr)
+            call MPI_IALLGATHERV(ncols_loc, Ninter_loc, MPI_INTEGER, colidx, nsubs, disps, MPI_INTEGER, ptree%comm, reqn, ierr)
+            call MPI_Wait(reqm, statusm, ierr)
+            call MPI_Wait(reqn, statusn, ierr)
+#else
+            call MPI_ALLGATHERV(nrows_loc, Ninter_loc, MPI_INTEGER, rowidx, nsubs, disps, MPI_INTEGER, ptree%comm,ierr)
+            call MPI_ALLGATHERV(ncols_loc, Ninter_loc, MPI_INTEGER, colidx, nsubs, disps, MPI_INTEGER, ptree%comm,ierr)
+#endif
+
+            !***** Generate pmaps and pgidx for all intersections
+            Npmap = ptree%nproc
+            allocate (pmaps(Npmap, 3))
+            do pp = 1, Npmap
+               pmaps(pp, 1) = 1
+               pmaps(pp, 2) = 1
+               pmaps(pp, 3) = pp - 1
+            enddo
+
+            allocate (pgidx(Ninter))
+            Ninter = 0
+            do pp = 1, ptree%nproc
+               do nn = 1, nsubs(pp)
+                  Ninter = Ninter + 1
+                  pgidx(Ninter) = pp
+               enddo
+            enddo
+
+            !***** count number of local data
+            idx_dat = 0
+            do nn = 1, Ninter
+               nrow = rowidx(nn)
+               ncol = colidx(nn)
+               ! datidx(nn)=ntot_loc
+               nprow = pmaps(pgidx(nn), 1)
+               npcol = pmaps(pgidx(nn), 2)
+               call Gridinfo_2D(pmaps(pgidx(nn), :), ptree%MyID, myrow, mycol)
+               if (myrow /= -1 .and. mycol /= -1) then
+                  myArows = numroc_wp(nrow, nbslpk, myrow, 0, nprow)
+                  myAcols = numroc_wp(ncol, nbslpk, mycol, 0, npcol)
+                  idx_dat = idx_dat + myArows*myAcols
+               endif
+            enddo
+            allocate (alldat_loc(idx_dat))
+            if (idx_dat > 0) alldat_loc = 0
+
+            allocate (rowidx1(ptree%nproc))
+            allocate (colidx1(ptree%nproc))
+
+            Ninter = 0
+            do pp = 1, ptree%nproc
+               rowidx1(pp) = 0
+               colidx1(pp) = 0
+               do nn = 1, nsubs(pp)
+                  Ninter = Ninter + 1
+                  rowidx1(pp) = rowidx1(pp) + rowidx(Ninter)
+                  colidx1(pp) = colidx1(pp) + colidx(Ninter)
+               enddo
+            enddo
+
+
+            !***** Broadcast mrange and nrange for each intersection
+            idx_row = sum(rowidx1)
+            allocate (allrows(idx_row))
+            idx = 0
+            do pp = 1, ptree%nproc
+               disps(pp) = idx
+               idx = idx + rowidx1(pp)
+            enddo
+
+#ifdef HAVE_MPI3
+            call MPI_IALLGATHERV(mrange, nr, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, reqm, ierr)
+#else
+            call MPI_ALLGATHERV(mrange, nr, MPI_INTEGER, allrows, rowidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+#endif
+
+            idx_col = sum(colidx1)
+            allocate (allcols(idx_col))
+            idx = 0
+            do pp = 1, ptree%nproc
+               disps(pp) = idx
+               idx = idx + colidx1(pp)
+            enddo
+#ifdef HAVE_MPI3
+            call MPI_IALLGATHERV(nrange, nc, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, reqn, ierr)
+            call MPI_Wait(reqm, statusm, ierr)
+            call MPI_Wait(reqn, statusn, ierr)
+#else
+            call MPI_ALLGATHERV(nrange, nc, MPI_INTEGER, allcols, colidx1, disps, MPI_INTEGER, ptree%comm, ierr)
+#endif
+            if (option%cpp == 1) then
+               call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
+               ! !***** parallel extraction of the data
+               do ii = 1, idx_row
+                  allrows(ii) = abs(msh%new2old(allrows(ii)))
+               enddo
+               do jj = 1, idx_col
+                  allcols(jj) = abs(msh%new2old(allcols(jj)))
+               enddo
+               pgidx = pgidx - 1
+               call proc_C(Ninter, idx_row, idx_col, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
+            else
+               proc => ker%FuncZmnBlock
+               ! !***** parallel extraction of the data
+               do ii = 1, idx_row
+                  allrows(ii) = abs(msh%new2old(allrows(ii)))
+               enddo
+               do jj = 1, idx_col
+                  allcols(jj) = abs(msh%new2old(allcols(jj)))
+               enddo
+               call proc(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%QuantApp)
+            endif
+
+            idx = 0
+            do nn=1,Ninter_loc
+            do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
+            do ii = 1, submats1(nn)%nr
+               idx = idx + 1
+               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)
+            enddo
+            enddo
+            enddo
+
+            deallocate (allrows)
+            deallocate (allcols)
+            deallocate (colidx)
+            deallocate (rowidx)
+            deallocate (colidx1)
+            deallocate (rowidx1)
+            deallocate (disps)
+            deallocate (alldat_loc)
+            deallocate (pgidx)
+            deallocate (pmaps)
+            deallocate (nsubs)
+            deallocate (nrows_loc)
+            deallocate (ncols_loc)
+            deallocate (mrange)
+            deallocate (nrange)
+
+         endif
+         t2 = OMP_get_wtime()
+         stats%Time_Entry = stats%Time_Entry + t2 - t1
+         deallocate (flags)
+         ! write(*,*)ptree%MyID,'out'
+      endif
+
+
+      do nn = 1, Ninter_loc
+         if(allocated(submats1(nn)%mmap))deallocate(submats1(nn)%mmap)
+         if(allocated(submats1(nn)%nmap))deallocate(submats1(nn)%nmap)
+         if(allocated(submats1(nn)%rows))deallocate(submats1(nn)%rows)
+         if(allocated(submats1(nn)%cols))deallocate(submats1(nn)%cols)
+      enddo
+      deallocate(submats1)
+      deallocate(new2old_sub)
+
+      return
+
+   end subroutine element_Zmn_blocklist_user
+
+
 end module Bplus_Utilities

@@ -814,7 +814,7 @@ contains
          trans_tmp = 'T'
          Vin = conjg(cmplx(Vin, kind=8))
       endif
-
+      Vout=0
       call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Vout, cone, czero, ptree, stats)
 
       if (trans == 'C') then
@@ -939,7 +939,7 @@ contains
          trans_tmp = 'T'
          Vin = conjg(cmplx(Vin, kind=8))
       endif
-
+      Vout=0
       stats%Flop_Tmp = 0
       call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Vout, cone, czero, ptree, stats)
 

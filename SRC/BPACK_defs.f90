@@ -192,6 +192,9 @@ module BPACK_DEFS
         integer::idx
         integer::nc, nr
         integer::nr_loc
+        integer, allocatable:: mmap(:) ! map based on masks from the nonzero rows to original rows
+        integer, allocatable:: nmap(:) ! map based on masks from the nonzero columns to original columns
+        integer, allocatable::masks(:,:) ! store mask of each entry that determine whether to skip the evaluation
         integer, allocatable::rows(:), cols(:) ! store indices in bmat or global list of intersections
         integer, allocatable::rows_loc(:) ! store indices in rows
         integer, allocatable::glo2loc(:) ! store index mapping from rows to rows_loc
@@ -347,7 +350,7 @@ module BPACK_DEFS
         integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
         real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator
         real(kind=8) sample_para   ! parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
-        integer sample_heuristic   ! 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
+        ! integer sample_heuristic   ! 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp ! pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
 
         ! options for matrix construction

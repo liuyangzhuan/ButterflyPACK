@@ -573,20 +573,28 @@ contains
       real(kind=8)::rtol, atol
       integer rank
       real(kind=8), optional::flop
+      integer m,n,mn_min
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+      if(mn_min==0)then
+         rank=0
+      else
+         select type (Matrix)
          type is (real(kind=8))
-            call dgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
-         end select
+            select type (tau)
+            type is (real(kind=8))
+               call dgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+            end select
 
-      type is (complex(kind=8))
-         select type (tau)
          type is (complex(kind=8))
-            call zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+            select type (tau)
+            type is (complex(kind=8))
+               call zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+            end select
          end select
-      end select
+      endif
 
    end subroutine geqp3modf90
 
