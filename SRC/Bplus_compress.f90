@@ -1874,7 +1874,6 @@ contains
                endif
             endif
          end do
-         call MPI_ALLREDUCE(MPI_IN_PLACE, bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       ! !!!!!!! check error

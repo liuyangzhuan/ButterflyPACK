@@ -648,6 +648,7 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       integer::passflag = 0
+      type(intersect)::submats(1)
       integer::mrange_dummy(1), nrange_dummy(1)
       DT::mat_dummy(1, 1)
 
@@ -671,6 +672,17 @@ contains
 
       call Bplus_compress_N15(hss_bf1%BP, option, rtemp, stats, msh, ker, ptree)
       stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+
+      passflag = 0
+      do while (passflag < 2)
+         ! call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 2, passflag, ptree, stats)
+         call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
+      enddo
+
+      do ll = 1, hss_bf1%BP%Lplus
+         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+      enddo
+
 
       n2 = OMP_get_wtime()
       stats%Time_Fill = stats%Time_Fill + n2 - n1
