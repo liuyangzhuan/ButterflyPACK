@@ -121,7 +121,7 @@ contains
 
    subroutine copymatT(A, B, m, n)
       implicit none
-      integer m, n
+      integer m, n ! dimensions of A
       DT::A(:, :), B(:, :)
       real(kind=8)::n1, n2
       integer ii, jj, ijind

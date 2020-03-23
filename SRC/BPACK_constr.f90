@@ -205,6 +205,7 @@ contains
       integer N_unk_loc, N_unk_loc1, N_unk_locmax, ii, jj, pp
       integer, allocatable::mrange(:), nrange(:)
       integer ierr, passflag, myflag
+      type(intersect)::submats(1)
 
       N_unk_loc = msh%idxe - msh%idxs + 1
       allocate (fullmat(msh%Nunk, N_unk_loc))
@@ -216,7 +217,24 @@ contains
       do jj = 1, N_unk_loc
          nrange(jj) = jj - msh%idxs + 1
       enddo
-      call element_Zmn_block_user(msh%Nunk, N_unk_loc, mrange, nrange, fullmat, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = msh%Nunk
+      submats(1)%nc = N_unk_loc
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      fullmat = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+
+      ! call element_Zmn_block_user(msh%Nunk, N_unk_loc, mrange, nrange, fullmat, msh, option, ker, 0, passflag, ptree, stats)
+
+
 
       call MPI_ALLREDUCE(N_unk_loc, N_unk_locmax, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       allocate (fullmat_tmp(msh%Nunk, N_unk_locmax))
@@ -309,6 +327,7 @@ contains
       DT::mat_dummy(1, 1)
       type(nod), pointer::cur
       class(*), pointer::ptr
+      type(intersect)::submats(1)
 
       call MPI_barrier(ptree%Comm, ierr)
 
@@ -332,7 +351,24 @@ contains
          do ii = blocks%headm, blocks%headm + blocks%M - 1
             mrange(1) = ii
             nrange(1) = ii
-            call element_Zmn_block_user(1, 1, mrange, nrange, mat, msh, option, ker, 0, passflag, ptree, stats)
+
+
+            submats(1)%nr = 1
+            submats(1)%nc = 1
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            mat = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+
+            ! call element_Zmn_block_user(1, 1, mrange, nrange, mat, msh, option, ker, 0, passflag, ptree, stats)
+
             scale_factor = max(scale_factor, abs(mat(1, 1)/option%scale_factor))
             ! write(*,*)ii,abs(ctemp)
          enddo
@@ -341,7 +377,8 @@ contains
 
       passflag = 0
       do while (passflag == 0)
-         call element_Zmn_block_user(0, 0, mrange, nrange, mat, msh, option, ker, 2, passflag, ptree, stats)
+         call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
+         ! call element_Zmn_block_user(0, 0, mrange, nrange, mat, msh, option, ker, 2, passflag, ptree, stats)
       enddo
 
       option%scale_factor = 1d0/scale_factor
@@ -389,7 +426,8 @@ contains
 
          passflag = 0
          do while (passflag < 2)
-            call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 2, passflag, ptree, stats)
+            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
+            ! call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 2, passflag, ptree, stats)
          enddo
       enddo
 
@@ -451,6 +489,7 @@ contains
       integer::passflag = 0
       integer::mrange_dummy(1), nrange_dummy(1)
       DT::mat_dummy(1, 1)
+      type(intersect)::submats(1)
 
       ! Memory_direct_forward=0
       ! Memory_butterfly_forward=0
@@ -541,9 +580,15 @@ contains
             endif
          end do
 
+         ! call MPI_barrier(ptree%Comm, ierr)
+         ! do while(option%elem_extract == 1 .and. level==2)
+
+         ! enddo
          passflag = 0
          do while (passflag < 2)
-            call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 2, passflag, ptree, stats)
+            ! call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 2, passflag, ptree, stats)
+            ! write(*,*)ptree%MyID,level, 'level done'
+            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
          enddo
 
          n4 = OMP_get_wtime()
@@ -739,6 +784,7 @@ contains
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
       DT, allocatable::alldat_loc(:)
       integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
+      type(intersect)::submats(1)
 
       ! Ninter=2**level
       ! nr=2500
@@ -848,7 +894,22 @@ contains
                call l2g(myj, mycol, nc, npcol, nbslpk, jj)
                cols(myj) = allcols(jj + idx_col)
             enddo
-            call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 0, passflag, ptree, stats)
+
+
+            submats(1)%nr = nr_loc
+            submats(1)%nc = nc_loc
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = rows(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = cols(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            Mat = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 0, passflag, ptree, stats)
 
             do myi = 1, nr_loc
             do myj = 1, nc_loc
@@ -867,7 +928,8 @@ contains
             allocate (rows(nr_loc))
             allocate (cols(nc_loc))
             allocate (Mat(nr_loc, nc_loc))
-            call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 2, passflag, ptree, stats)
+            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
+            ! call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 2, passflag, ptree, stats)
          endif
          deallocate (rows)
          deallocate (cols)
@@ -1490,6 +1552,7 @@ contains
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
       DT, allocatable::alldat_loc(:)
       integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
+      type(intersect)::submats(1)
 
       ! select case(option%format)
       ! case(HODLR)
@@ -1615,7 +1678,21 @@ contains
                call l2g(myj, mycol, nc, npcol, nbslpk, jj)
                cols(myj) = allcols(jj + idx_col)
             enddo
-            call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 0, passflag, ptree, stats)
+
+            submats(1)%nr = nr_loc
+            submats(1)%nc = nc_loc
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = rows(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = cols(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            Mat = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 0, passflag, ptree, stats)
 
             do myi = 1, nr_loc
             do myj = 1, nc_loc
@@ -1634,7 +1711,8 @@ contains
             allocate (rows(nr_loc))
             allocate (cols(nc_loc))
             allocate (Mat(nr_loc, nc_loc))
-            call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 2, passflag, ptree, stats)
+            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
+            ! call element_Zmn_block_user(nr_loc, nc_loc, rows, cols, Mat, msh, option, ker, 2, passflag, ptree, stats)
          endif
          deallocate (rows)
          deallocate (cols)

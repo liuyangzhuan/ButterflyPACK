@@ -522,11 +522,11 @@ contains
          valid_opt = 1
       endif
 
-      if (trim(str) == 'sample_heuristic') then
-         call c_f_pointer(val_Cptr, val_i)
-         option%sample_heuristic = val_i
-         valid_opt = 1
-      endif
+      ! if (trim(str) == 'sample_heuristic') then
+      !    call c_f_pointer(val_Cptr, val_i)
+      !    option%sample_heuristic = val_i
+      !    valid_opt = 1
+      ! endif
 
 !**** double parameters
       if (trim(str) == 'tol_comp') then

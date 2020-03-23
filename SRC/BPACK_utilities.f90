@@ -432,7 +432,7 @@ contains
       option%rmax = 3000
       option%forwardN15flag = 0
       option%sample_para = 2.0d0
-      option%sample_heuristic = 1
+      ! option%sample_heuristic = 1
       option%pat_comp = 3
       option%elem_extract = 0
       option%knn = 0
@@ -523,8 +523,8 @@ contains
                   read (strings1, *) option%rmax
                else if (trim(strings) == '--sample_para') then
                   read (strings1, *) option%sample_para
-               else if (trim(strings) == '--sample_heuristic') then
-                  read (strings1, *) option%sample_heuristic
+               ! else if (trim(strings) == '--sample_heuristic') then
+               !    read (strings1, *) option%sample_heuristic
                else if (trim(strings) == '--pat_comp') then
                   read (strings1, *) option%pat_comp
                else if (trim(strings) == '--elem_extract') then
@@ -592,7 +592,7 @@ contains
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
       option1%sample_para = option%sample_para
-      option1%sample_heuristic = option%sample_heuristic
+      ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
       option1%elem_extract = option%elem_extract
       option1%cpp = option%cpp
@@ -639,7 +639,7 @@ contains
          write (*, '(A18,I8)') 'knn', option%knn
          write (*, '(A18,I8)') 'ErrFillFull', option%ErrFillFull
          write (*, '(A18,I8)') 'ErrSol', option%ErrSol
-         write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
+         ! write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
          write (*, '(A18,I8)') 'less_adapt', option%less_adapt
 
          write (*, '(A18,Es14.7)') 'rankrate', option%rankrate

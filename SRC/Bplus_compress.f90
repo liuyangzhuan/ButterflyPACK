@@ -39,7 +39,7 @@ contains
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e, flops, flops1
       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, nnn1, ierr
-      real(kind=8) Memory, flop
+      real(kind=8) Memory, flop,n2,n1
       DT ctemp
       type(matrixblock)::blocks
       type(Hoption)::option
@@ -54,8 +54,11 @@ contains
       integer Nlayer, level_half, level_final, idx_r, inc_r, nr, idx_c, inc_c, nc
       integer passflag
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
-      integer::Nrow_pre, Ncol_pre
       integer::mrange_dummy(1), nrange_dummy(1)
+      type(intersect), allocatable :: submats(:)
+      type(intersect) :: submats_dummy(1)
+
+
       DT:: mat_dummy(1, 1)
       Memory = 0.
 
@@ -141,44 +144,54 @@ contains
             endif
             rank_new = 0
             flops = 0
-            Nrow_pre = 0
-            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+
+            allocate(submats(nr*nc))
+            do index_ij = 1, nr*nc
+               submats(index_ij)%nr=0
+               submats(index_ij)%nc=0
+            enddo
+            n1 = OMP_get_wtime()
+
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
+               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, flops1)
+            enddo
+            n2 = OMP_get_wtime()
+            ! time_tmp = time_tmp + n2 - n1
 
-               ! if(option%sample_heuristic==1)then
-               ! if(index_j_loc==1)then
+            call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
 
-               ! group_m=blocks%row_group    ! Note: row_group and col_group interchanged here
-               ! if(level==level_butterfly+1)then
-               ! group_m=group_m*2**level_butterfly-1+index_i
-               ! else
-               ! group_m=group_m*2**level-1+index_i
-               ! endif
-               ! header_m=msh%basis_group(group_m)%head
-
-               ! ! Nrow_pre=msh%basis_group(group_m)%tail-msh%basis_group(group_m)%head+1
-               ! Nrow_pre=0
-               ! do ii=1,Nrow_pre
-               ! select_row_pre(ii)=header_m+ii-1
-               ! enddo
-               ! endif
-               ! endif
-               if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
-               call BF_compress_NlogN_oneblock_R(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, rank_new1, Nrow_pre, select_row_pre, flops1)
-               if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+            if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            do index_ij = 1, nr*nc
+               index_i_loc = (index_ij - 1)/nc + 1
+               index_j_loc = mod(index_ij - 1, nc) + 1
+               index_i = (index_i_loc - 1)*inc_r + idx_r
+               index_j = (index_j_loc - 1)*inc_c + idx_c
+               call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
-            ! !$omp end parallel do
+            !$omp end parallel do
+            if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+
+            do index_ij = 1, nr*nc
+               if(allocated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
+               if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
+               if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
+            enddo
+            deallocate(submats)
+
 
             passflag = 0
             do while (passflag == 0)
-               call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
+               call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
+
             if (level /= level_butterfly + 1) then
             if (level_half == level) then
                call BF_all2all_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'C')
@@ -236,46 +249,53 @@ contains
                allocate (blocks%ButterflySkel(level)%inds(blocks%ButterflySkel(level)%nr, blocks%ButterflySkel(level)%nc))
             endif
 
-            rank_new = 0
-            flops = 0
-            Ncol_pre = 0
-            ! !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            n1 = OMP_get_wtime()
+            allocate(submats(nr*nc))
+            do index_ij = 1, nr*nc
+               submats(index_ij)%nr=0
+               submats(index_ij)%nc=0
+            enddo
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
                index_i_loc = mod(index_ij - 1, nr) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
 
-               ! if(option%sample_heuristic==1)then
-               ! if(index_i_loc==1)then
+               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final)
+            enddo
+            ! !$omp end parallel do
+            n2 = OMP_get_wtime()
+            ! time_tmp = time_tmp + n2 - n1
+            call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
 
-               ! group_n=blocks%col_group
-               ! if(level==0)then
-               ! group_n=group_n*2**level_butterfly-1+index_j
-               ! else
-               ! group_n=group_n*2**(level_butterfly-level+1)-1+index_j
-               ! endif
-               ! header_n=msh%basis_group(group_n)%head
+            rank_new = 0
+            flops = 0
+            if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            do index_ij = 1, nr*nc
+               index_j_loc = (index_ij - 1)/nr + 1
+               index_i_loc = mod(index_ij - 1, nr) + 1
+               index_i = (index_i_loc - 1)*inc_r + idx_r
+               index_j = (index_j_loc - 1)*inc_c + idx_c
 
-               ! ! Ncol_pre=msh%basis_group(group_n)%tail-msh%basis_group(group_n)%head+1
-               ! Ncol_pre=0
-               ! do ii=1,Ncol_pre
-               ! select_col_pre(ii)=header_n+ii-1
-               ! enddo
-               ! endif
-               ! endif
-
-               if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
-               call BF_compress_NlogN_oneblock_C(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, level_final, rank_new1, Ncol_pre, select_col_pre, flops1)
-               if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+               call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops = flops+flops1
             enddo
-            ! !$omp end parallel do
+            !$omp end parallel do
+            if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+            do index_ij = 1, nr*nc
+               if(allocated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
+               if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
+               if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
+            enddo
+            deallocate(submats)
+
 
             passflag = 0
             do while (passflag == 0)
-               call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
+               call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
             if (level > level_final) then
                call BF_exchange_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'C', 'B')
@@ -323,7 +343,8 @@ contains
 
    end subroutine BF_compress_NlogN
 
-   subroutine BF_compress_NlogN_oneblock_R(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, rank_new, Nrow_pre, select_row_pre, flops)
+
+   subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, flops)
 
       use BPACK_DEFS
       implicit none
@@ -331,11 +352,11 @@ contains
       integer Nboundall
       integer boundary_map(*)
       integer groupm_start
-
+      type(intersect) :: submats(:)
       type(mesh)::msh
       type(kernelquant)::ker
-      integer i, j, jjj, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_r1, rankmax_c, rankmax_min, rank_new
-      integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij
+      integer i, j, jjj, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_r1, rankmax_c, rankmax_min
+      integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_ij, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij
       integer level, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -352,11 +373,9 @@ contains
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:)
-      integer Nlayer, passflag, levelm, nrow, ncol
-      integer Nrow_pre
-      integer select_row_pre(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
 
-      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), mnmap(:, :)
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       real(kind=8)::n2, n1,overrate
 
       flops = 0
@@ -410,11 +429,8 @@ contains
       rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
       if (level == 0) rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
       rankmax_c = nn
-      allocate (select_row(rankmax_r1 + nn*option%knn + Nrow_pre))
-      allocate (select_column(rankmax_c))
-      do i = 1, rankmax_c
-         select_column(i) = i
-      enddo
+      allocate (select_row(rankmax_r1 + nn*option%knn))
+
       call linspaceI(1, mm, rankmax_r1, select_row(1:rankmax_r1))
       header_m = msh%basis_group(group_m)%head
       header_n = msh%basis_group(group_n)%head
@@ -439,13 +455,6 @@ contains
       enddo
       endif
 
-      do ii = 1, Nrow_pre
-         if (select_row_pre(ii) >= msh%basis_group(group_m)%head .and. select_row_pre(ii) <= msh%basis_group(group_m)%tail) then
-         rankmax_r1 = rankmax_r1 + 1
-         select_row(rankmax_r1) = select_row_pre(ii) + 1 - header_m
-         endif
-      enddo
-
       call remove_dup_int(select_row, rankmax_r1, rankmax_r)
 
       if (level == 0) then
@@ -453,165 +462,35 @@ contains
          header_m = msh%basis_group(group_m)%head
          header_n = msh%basis_group(group_n)%head
 
-         ! allocate (core(rankmax_r,rankmax_c))
-         ! allocate(mrange(rankmax_r))
-         ! allocate(nrange(rankmax_c))
-         ! do i=1,rankmax_r
-         ! edge_m=header_m+select_row(i)-1
-         ! enddo
-         ! do j=1,rankmax_c
-         ! edge_n=header_n+select_column(j)-1
-         ! enddo
-         ! call element_Zmn_block_user(rankmax_r,rankmax_c,mrange,nrange,core,msh,option,ker,0,passflag,ptree,stats)
-         ! deallocate(mrange)
-         ! deallocate(nrange)
-
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-         ! do ij=1,rankmax_c*rankmax_r
-         ! j = (ij-1)/rankmax_r+1
-         ! i = mod(ij-1,rankmax_r) + 1
-         ! edge_m=header_m+select_row(i)-1
-         ! edge_n=header_n+select_column(j)-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! core(i,j)=ctemp
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
-
-         allocate (matrix_V(rankmax_r, nn))
-         allocate (mrange(rankmax_r))
-         allocate (nrange(nn))
+         allocate (submats(index_ij)%dat(rankmax_r, nn))
+         submats(index_ij)%dat=0
+         allocate (submats(index_ij)%rows(rankmax_r))
+         allocate (submats(index_ij)%cols(nn))
+         submats(index_ij)%nr = rankmax_r
+         submats(index_ij)%nc = nn
          do i = 1, rankmax_r
-            mrange(i) = header_m + select_row(i) - 1
+            submats(index_ij)%rows(i) = header_m + select_row(i) - 1
          enddo
          do j = 1, nn
-            nrange(j) = header_n + j - 1
+            submats(index_ij)%cols(j) = header_n + j - 1
          enddo
 
          if (Nboundall > 0) then
-
-            allocate (mnmap(rankmax_r, nn))
-            allocate (mmap(rankmax_r))
-            allocate (nmap(nn))
-            allocate (mrange1(rankmax_r))
-            allocate (nrange1(nn))
-            mnmap = 1
+            allocate (submats(index_ij)%masks(rankmax_r, nn))
+            submats(index_ij)%masks = 1
             do i = 1, rankmax_r
-               group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+               group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                if (group_n_mid /= -1) then
                   idxstart = msh%basis_group(group_n_mid)%head
                   idxend = msh%basis_group(group_n_mid)%tail
                   do j = 1, nn
-                     if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                   enddo
                endif
             enddo
-
-            nrow = 0
-            do i = 1, rankmax_r
-               if (sum(mnmap(i, :)) /= 0) then
-                  nrow = nrow + 1
-                  mmap(nrow) = i
-                  mrange1(nrow) = mrange(i)
-               endif
-            enddo
-            ncol = 0
-            do j = 1, nn
-               if (sum(mnmap(:, j)) /= 0) then
-                  ncol = ncol + 1
-                  nmap(ncol) = j
-                  nrange1(ncol) = nrange(j)
-               endif
-            enddo
-            allocate (matrix_tmp(nrow, ncol))
-            call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-            matrix_V = 0
-            do i = 1, nrow
-            do j = 1, ncol
-               matrix_V(mmap(i), nmap(j)) = matrix_tmp(i, j)
-            enddo
-            enddo
-            deallocate (mnmap)
-            deallocate (mmap)
-            deallocate (nmap)
-            deallocate (mrange1)
-            deallocate (nrange1)
-            deallocate (matrix_tmp)
-         else
-            call element_Zmn_block_user(rankmax_r, nn, mrange, nrange, matrix_V, msh, option, ker, 0, passflag, ptree, stats)
          endif
 
-         deallocate (mrange)
-         deallocate (nrange)
-
-         allocate (core(rankmax_r, rankmax_c))
-         allocate (core_tmp(rankmax_c, rankmax_r))
-         do j = 1, rankmax_c
-            core(:, j) = matrix_V(:, select_column(j))
-         enddo
-         call copymatT(core, core_tmp, rankmax_r, rankmax_c)
-
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-         ! do ij=1,nn*rankmax_r
-         ! j = (ij-1)/rankmax_r+1
-         ! i = mod(ij-1,rankmax_r) + 1
-
-         ! edge_m=header_m+select_row(i)-1
-         ! edge_n=header_n+j-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! matrix_V(i,j)=ctemp
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, matrix_V, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, matrix_V, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            matrix_V = 0
-         endif
-
-         index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
-         allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
-         call copymatT(matrix_V(1:rank_new, 1:nn), blocks%ButterflyV%blocks(index_j_loc_k)%matrix, rank_new, nn)
-
-         index_j_loc_s = (index_j - blocks%ButterflySkel(0)%idx_c)/blocks%ButterflySkel(0)%inc_c + 1
-         allocate (blocks%ButterflySkel(0)%inds(1, index_j_loc_s)%array(rank_new))
-         do j = 1, rank_new
-            blocks%ButterflySkel(0)%inds(1, index_j_loc_s)%array(j) = select_column(jpvt(j))
-         enddo
-
-         if (option%sample_heuristic == 1) then
-            allocate (core_tmp1(rank_new, rankmax_r))
-            do i = 1, rank_new
-               core_tmp1(i, :) = core_tmp(jpvt(i), :)
-            enddo
-            jpvt = 0
-            call geqp3modf90(core_tmp1, jpvt, tau, option%tol_comp, SafeUnderflow, Nrow_pre, flop=flop)
-            flops = flops + flop
-            Nrow_pre = rank_new
-            do i = 1, Nrow_pre
-               select_row_pre(i) = header_m + select_row(jpvt(i)) - 1
-            enddo
-            deallocate (core_tmp1)
-         endif
 
       elseif (level == level_butterfly + 1) then
          index_i_loc_s = (index_i - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
@@ -620,89 +499,37 @@ contains
          header_n = msh%basis_group(group_n)%head
          index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
 
-         allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
-         allocate (mrange(mm))
-         allocate (nrange(rank_new))
+         ! allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+         allocate (submats(index_ij)%dat(mm, rank_new))
+         submats(index_ij)%dat=0
+
+         allocate (submats(index_ij)%rows(mm))
+         allocate (submats(index_ij)%cols(rank_new))
+         submats(index_ij)%nr = mm
+         submats(index_ij)%nc = rank_new
          do i = 1, mm
-            mrange(i) = i + header_m - 1
+            submats(index_ij)%rows(i) = i + header_m - 1
          enddo
          do j = 1, rank_new
-            nrange(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s, 1)%array(j) + header_n - 1
+            submats(index_ij)%cols(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s, 1)%array(j) + header_n - 1
          enddo
 
          if (Nboundall > 0) then
-
-            allocate (mnmap(mm, rank_new))
-            allocate (mmap(mm))
-            allocate (nmap(rank_new))
-            allocate (mrange1(mm))
-            allocate (nrange1(rank_new))
-            mnmap = 1
-
+            allocate (submats(index_ij)%masks(mm, rank_new))
+            submats(index_ij)%masks = 1
             do i = 1, mm
-               group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+               group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                if (group_n_mid /= -1) then
                   idxstart = msh%basis_group(group_n_mid)%head
                   idxend = msh%basis_group(group_n_mid)%tail
                   do j = 1, rank_new
-                     if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                   enddo
                endif
             enddo
-
-            nrow = 0
-            do i = 1, mm
-               if (sum(mnmap(i, :)) /= 0) then
-                  nrow = nrow + 1
-                  mmap(nrow) = i
-                  mrange1(nrow) = mrange(i)
-               endif
-            enddo
-            ncol = 0
-            do j = 1, rank_new
-               if (sum(mnmap(:, j)) /= 0) then
-                  ncol = ncol + 1
-                  nmap(ncol) = j
-                  nrange1(ncol) = nrange(j)
-               endif
-            enddo
-            allocate (matrix_tmp(nrow, ncol))
-            call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-            blocks%ButterflyU%blocks(index_i_loc_k)%matrix = 0
-            do i = 1, nrow
-            do j = 1, ncol
-               blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mmap(i), nmap(j)) = matrix_tmp(i, j)
-            enddo
-            enddo
-            deallocate (mnmap)
-            deallocate (mmap)
-            deallocate (nmap)
-            deallocate (mrange1)
-            deallocate (nrange1)
-            deallocate (matrix_tmp)
-         else
-            call element_Zmn_block_user(mm, rank_new, mrange, nrange, blocks%ButterflyU%blocks(index_i_loc_k)%matrix, msh, option, ker, 0, passflag, ptree, stats)
          endif
 
-         deallocate (mrange)
-         deallocate (nrange)
-
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-         ! do ij=1,rank_new*mm
-         ! j = (ij-1)/mm+1
-         ! i = mod(ij-1,mm) + 1
-         ! edge_m=i+header_m-1
-         ! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s,1)%array(j)+header_n-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
       else
          index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
          index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1
@@ -713,175 +540,40 @@ contains
          header_n2 = msh%basis_group(2*group_n + 1)%head
          nnn1 = msh%basis_group(2*group_n)%tail - msh%basis_group(2*group_n)%head + 1
 
-         ! allocate (core(rankmax_r,rankmax_c))
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-         ! do ij=1,rankmax_c*rankmax_r
-         ! j = (ij-1)/rankmax_r+1
-         ! i = mod(ij-1,rankmax_r) + 1
-         ! if (select_column(j)<=nn1) then
-         ! edge_m=select_row(i)+header_m-1
-         ! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(select_column(j))+header_n1-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! core(i,j)=ctemp
-         ! else
-         ! edge_m=select_row(i)+header_m-1
-         ! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(select_column(j)-nn1)+header_n2-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! core(i,j)=ctemp
-         ! endif
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
 
-         allocate (matrix_V(rankmax_r, nn))
-         allocate (mrange(rankmax_r))
-         allocate (nrange(nn))
+         allocate (submats(index_ij)%dat(rankmax_r, nn))
+         submats(index_ij)%dat=0
+         allocate (submats(index_ij)%rows(rankmax_r))
+         allocate (submats(index_ij)%cols(nn))
+         submats(index_ij)%nr = rankmax_r
+         submats(index_ij)%nc = nn
          do i = 1, rankmax_r
-            mrange(i) = select_row(i) + header_m - 1
+            submats(index_ij)%rows(i) = select_row(i) + header_m - 1
          enddo
          do j = 1, nn
             if (j <= nn1) then
-               nrange(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(j) + header_n1 - 1
+               submats(index_ij)%cols(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(j) + header_n1 - 1
             else
-               nrange(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(j - nn1) + header_n2 - 1
+               submats(index_ij)%cols(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(j - nn1) + header_n2 - 1
             endif
          enddo
 
          if (Nboundall > 0) then
 
-            allocate (mnmap(rankmax_r, nn))
-            allocate (mmap(rankmax_r))
-            allocate (nmap(nn))
-            allocate (mrange1(rankmax_r))
-            allocate (nrange1(nn))
-            mnmap = 1
+            allocate (submats(index_ij)%masks(rankmax_r, nn))
+            submats(index_ij)%masks = 1
 
             do i = 1, rankmax_r
-               group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+               group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                if (group_n_mid /= -1) then
                   idxstart = msh%basis_group(group_n_mid)%head
                   idxend = msh%basis_group(group_n_mid)%tail
                   do j = 1, nn
-                     if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                   enddo
                endif
             enddo
-
-            nrow = 0
-            do i = 1, rankmax_r
-               if (sum(mnmap(i, :)) /= 0) then
-                  nrow = nrow + 1
-                  mmap(nrow) = i
-                  mrange1(nrow) = mrange(i)
-               endif
-            enddo
-            ncol = 0
-            do j = 1, nn
-               if (sum(mnmap(:, j)) /= 0) then
-                  ncol = ncol + 1
-                  nmap(ncol) = j
-                  nrange1(ncol) = nrange(j)
-               endif
-            enddo
-            allocate (matrix_tmp(nrow, ncol))
-            call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-            matrix_V = 0
-            do i = 1, nrow
-            do j = 1, ncol
-               matrix_V(mmap(i), nmap(j)) = matrix_tmp(i, j)
-            enddo
-            enddo
-            deallocate (mnmap)
-            deallocate (mmap)
-            deallocate (nmap)
-            deallocate (mrange1)
-            deallocate (nrange1)
-            deallocate (matrix_tmp)
-         else
-            call element_Zmn_block_user(rankmax_r, nn, mrange, nrange, matrix_V, msh, option, ker, 0, passflag, ptree, stats)
-         endif
-
-         deallocate (mrange)
-         deallocate (nrange)
-
-         allocate (core(rankmax_r, rankmax_c))
-         allocate (core_tmp(rankmax_c, rankmax_r))
-         do j = 1, rankmax_c
-            core(:, j) = matrix_V(:, select_column(j))
-         enddo
-         call copymatT(core, core_tmp, rankmax_r, rankmax_c)
-
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-         ! do ij=1,nn*rankmax_r
-         ! j = (ij-1)/rankmax_r+1
-         ! i = mod(ij-1,rankmax_r) + 1
-         ! if (j<=nn1) then
-         ! edge_m=select_row(i)+header_m-1
-         ! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc)%array(j)+header_n1-1
-         ! else
-         ! edge_m=select_row(i)+header_m-1
-         ! edge_n=blocks%ButterflySkel(level-1)%inds(index_ii_loc,index_jj_loc+1)%array(j-nn1)+header_n2-1
-         ! endif
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! matrix_V(i,j)=ctemp
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, matrix_V, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, matrix_V, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            matrix_V = 0
-         endif
-
-         allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(rank_new, nn1))
-         allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix(rank_new, nn2))
-
-         blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrix_V(1:rank_new, 1:nn1)
-         blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix = matrix_V(1:rank_new, 1 + nn1:nn)
-
-         allocate (blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(rank_new))
-         ! !$omp taskloop default(shared) private(j)
-         do j = 1, rank_new
-            if (select_column(jpvt(j)) <= nn1) then
-               blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(select_column(jpvt(j)))
-            else
-               blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(select_column(jpvt(j)) - nn1) + nnn1
-            endif
-         enddo
-         ! !$omp end taskloop
-
-         if (option%sample_heuristic == 1) then
-            allocate (core_tmp1(rank_new, rankmax_r))
-            do i = 1, rank_new
-               core_tmp1(i, :) = core_tmp(jpvt(i), :)
-            enddo
-            jpvt = 0
-            call geqp3modf90(core_tmp1, jpvt, tau, option%tol_comp, SafeUnderflow, Nrow_pre, flop=flop)
-            flops = flops + flop
-            Nrow_pre = rank_new
-            do i = 1, Nrow_pre
-               select_row_pre(i) = header_m + select_row(jpvt(i)) - 1
-            enddo
-            deallocate (core_tmp1)
          endif
 
       endif
@@ -894,7 +586,177 @@ contains
       if (allocated(select_row)) deallocate (select_row)
       if (allocated(select_column)) deallocate (select_column)
 
-   end subroutine BF_compress_NlogN_oneblock_R
+   end subroutine BF_compress_NlogN_oneblock_R_sample
+
+
+   subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops)
+
+      use BPACK_DEFS
+      implicit none
+
+      type(intersect) :: submats(:)
+      type(mesh)::msh
+      type(kernelquant)::ker
+      integer i, j, jjj, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_r1, rankmax_c, rankmax_min, rank_new
+      integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_ij, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij
+      integer level, length_1, length_2, level_blocks
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
+      real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+      integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1, last
+      real(kind=8) flop, flops
+      DT ctemp
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row(:), select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      group_m = blocks%row_group    ! Note: row_group and col_group interchanged here
+      group_n = blocks%col_group
+      if (level == level_butterfly + 1) then
+         group_m = group_m*2**level_butterfly - 1 + index_i
+         group_n = group_n - 1 + index_j
+      else
+         group_m = group_m*2**level - 1 + index_i
+         group_n = group_n*2**(level_butterfly - level) - 1 + index_j
+      endif
+
+      mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+      if (level == 0) then
+         nn = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+      elseif (level == level_butterfly + 1) then
+         index_ii_loc = (index_i - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+         index_jj_loc = (index_j - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
+         nn = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+      else
+         index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1
+         index_ii_loc = (index_ii - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+         index_jj_loc = (index_jj - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
+         nn1 = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+         nn2 = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array, 1)
+         nn = nn1 + nn2
+      endif
+
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+      rankmax_c = nn
+      allocate (select_column(rankmax_c))
+      do i = 1, rankmax_c
+         select_column(i) = i
+      enddo
+
+      rankmax_r = size(submats(index_ij)%dat,1)
+      if (level == 0) then
+
+         header_m = msh%basis_group(group_m)%head
+         header_n = msh%basis_group(group_n)%head
+
+         allocate (core(rankmax_r, rankmax_c))
+         do j = 1, rankmax_c
+            core(:, j) = submats(index_ij)%dat(:, select_column(j))
+         enddo
+
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         allocate (tau(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
+         flops = flops + flop
+
+         if (rank_new > 0) then
+            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
+            flops = flops + flop
+            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
+            flops = flops + flop
+         else
+            rank_new = 1
+            submats(index_ij)%dat = 0
+         endif
+
+         index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
+         allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
+         call copymatT(submats(index_ij)%dat(1:rank_new, 1:nn), blocks%ButterflyV%blocks(index_j_loc_k)%matrix, rank_new, nn)
+
+         index_j_loc_s = (index_j - blocks%ButterflySkel(0)%idx_c)/blocks%ButterflySkel(0)%inc_c + 1
+         allocate (blocks%ButterflySkel(0)%inds(1, index_j_loc_s)%array(rank_new))
+         do j = 1, rank_new
+            blocks%ButterflySkel(0)%inds(1, index_j_loc_s)%array(j) = select_column(jpvt(j))
+         enddo
+
+      elseif (level == level_butterfly + 1) then
+         index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
+         mm = size(submats(index_ij)%dat,1)
+         rank_new = size(submats(index_ij)%dat,2)
+         allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+         blocks%ButterflyU%blocks(index_i_loc_k)%matrix = submats(index_ij)%dat
+      else
+         index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
+         index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1
+         index_j_loc_s = (index_j - blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c + 1
+         index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+         header_m = msh%basis_group(group_m)%head
+         header_n1 = msh%basis_group(group_n)%head
+         header_n2 = msh%basis_group(2*group_n + 1)%head
+         nnn1 = msh%basis_group(2*group_n)%tail - msh%basis_group(2*group_n)%head + 1
+
+         allocate (core(rankmax_r, rankmax_c))
+         do j = 1, rankmax_c
+            core(:, j) = submats(index_ij)%dat(:, select_column(j))
+         enddo
+
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         allocate (tau(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
+         flops = flops + flop
+
+         if (rank_new > 0) then
+            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
+            flops = flops + flop
+            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
+            flops = flops + flop
+         else
+            rank_new = 1
+            submats(index_ij)%dat = 0
+         endif
+
+         allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(rank_new, nn1))
+         allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix(rank_new, nn2))
+
+         blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = submats(index_ij)%dat(1:rank_new, 1:nn1)
+         blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix = submats(index_ij)%dat(1:rank_new, 1 + nn1:nn)
+
+         allocate (blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(rank_new))
+         ! !$omp taskloop default(shared) private(j)
+         do j = 1, rank_new
+            if (select_column(jpvt(j)) <= nn1) then
+               blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(select_column(jpvt(j)))
+            else
+               blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(select_column(jpvt(j)) - nn1) + nnn1
+            endif
+         enddo
+         ! !$omp end taskloop
+
+      endif
+
+      if (allocated(core)) deallocate (core)
+      if (allocated(core_tmp)) deallocate (core_tmp)
+      if (allocated(tau)) deallocate (tau)
+      if (allocated(jpvt)) deallocate (jpvt)
+      if (allocated(matrix_V)) deallocate (matrix_V)
+      if (allocated(select_row)) deallocate (select_row)
+      if (allocated(select_column)) deallocate (select_column)
+
+   end subroutine BF_compress_NlogN_oneblock_R_rankreveal
 
    subroutine BF_exchange_skel(blocks, skels, option, stats, msh, ptree, level, mode, collect)
 
@@ -1442,11 +1304,12 @@ contains
 
    end subroutine BF_all2all_skel
 
-   subroutine BF_compress_NlogN_oneblock_C(blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, level, level_final, rank_new, Ncol_pre, select_col_pre, flops)
+   subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final)
 
       use BPACK_DEFS
       implicit none
 
+      type(intersect) :: submats(:)
       integer Nboundall
       integer boundary_map(*)
       integer groupm_start
@@ -1454,7 +1317,7 @@ contains
       type(mesh)::msh
       type(kernelquant)::ker
       integer i, j, iii, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_c1, rankmax_min, rank_new
-      integer group_m, group_n, mm, nn, index_i, index_j, index_i_loc_k, index_j_loc_k, index_i_loc_s, index_i_loc_s1, index_j_loc_s, index_j_loc_s1, ii, jj, ij
+      integer group_m, group_n, mm, nn, index_i, index_j, index_ij, index_i_loc_k, index_j_loc_k, index_i_loc_s, index_i_loc_s1, index_j_loc_s, index_j_loc_s1, ii, jj, ij
       integer level, level_final, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -1472,11 +1335,10 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, levelm, group_m_mid, group_n_mid, idxstart, idxend, nrow, ncol
-      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), mnmap(:, :)
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       integer::passflag = 0
       real(kind=8)::n2, n1,overrate
-      integer::Ncol_pre
-      integer::select_col_pre(:)
+
 
       flops = 0
       level_butterfly = blocks%level_butterfly
@@ -1531,11 +1393,7 @@ contains
       rankmax_r = mm
       rankmax_c1 = min(nn, ceiling_safe(option%sample_para*mm*overrate))
       if (level == level_butterfly + 1) rankmax_c1 = min(ceiling_safe(option%sample_para*mm*overrate), nn)
-      allocate (select_row(rankmax_r))
-      allocate (select_column(rankmax_c1 + option%knn*mm + Ncol_pre))
-      do i = 1, rankmax_r
-         select_row(i) = i
-      enddo
+      allocate (select_column(rankmax_c1 + option%knn*mm))
       call linspaceI(1, nn, rankmax_c1, select_column(1:rankmax_c1))
       header_m = msh%basis_group(group_m)%head
       header_n = msh%basis_group(group_n)%head
@@ -1560,12 +1418,6 @@ contains
       enddo
       endif
 
-      do ii = 1, Ncol_pre
-         if (select_col_pre(ii) >= msh%basis_group(group_n)%head .and. select_col_pre(ii) <= msh%basis_group(group_n)%tail) then
-         rankmax_c1 = rankmax_c1 + 1
-         select_column(rankmax_c1) = select_col_pre(ii) + 1 - header_n
-         endif
-      enddo
 
       call remove_dup_int(select_column, rankmax_c1, rankmax_c)
 
@@ -1579,240 +1431,70 @@ contains
 
             rank_new = size(blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array)
             index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
-            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+            ! allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+            allocate (submats(index_ij)%dat(mm, rank_new))
+            submats(index_ij)%dat=0
 
-            allocate (mrange(mm))
-            allocate (nrange(rank_new))
+            allocate (submats(index_ij)%rows(mm))
+            allocate (submats(index_ij)%cols(rank_new))
+            submats(index_ij)%nr = mm
+            submats(index_ij)%nc = rank_new
             do i = 1, mm
-               mrange(i) = header_m + i - 1
+               submats(index_ij)%rows(i) = header_m + i - 1
             enddo
             do j = 1, rank_new
-               nrange(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array(j) + header_n - 1
+               submats(index_ij)%cols(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array(j) + header_n - 1
             enddo
 
             if (Nboundall > 0) then
 
-               allocate (mnmap(mm, rank_new))
-               allocate (mmap(mm))
-               allocate (nmap(rank_new))
-               allocate (mrange1(mm))
-               allocate (nrange1(rank_new))
-               mnmap = 1
+               allocate (submats(index_ij)%masks(mm, rank_new))
+               submats(index_ij)%masks = 1
 
                do i = 1, mm
-                  group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+                  group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                   group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                   if (group_n_mid /= -1) then
                      idxstart = msh%basis_group(group_n_mid)%head
                      idxend = msh%basis_group(group_n_mid)%tail
                      do j = 1, rank_new
-                        if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                      enddo
                   endif
                enddo
-
-               nrow = 0
-               do i = 1, mm
-                  if (sum(mnmap(i, :)) /= 0) then
-                     nrow = nrow + 1
-                     mmap(nrow) = i
-                     mrange1(nrow) = mrange(i)
-                  endif
-               enddo
-               ncol = 0
-               do j = 1, rank_new
-                  if (sum(mnmap(:, j)) /= 0) then
-                     ncol = ncol + 1
-                     nmap(ncol) = j
-                     nrange1(ncol) = nrange(j)
-                  endif
-               enddo
-               allocate (matrix_tmp(nrow, ncol))
-               call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-               blocks%ButterflyU%blocks(index_i_loc_k)%matrix = 0
-               do i = 1, nrow
-               do j = 1, ncol
-                  blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mmap(i), nmap(j)) = matrix_tmp(i, j)
-               enddo
-               enddo
-               deallocate (mnmap)
-               deallocate (mmap)
-               deallocate (nmap)
-               deallocate (mrange1)
-               deallocate (nrange1)
-               deallocate (matrix_tmp)
-            else
-               call element_Zmn_block_user(mm, rank_new, mrange, nrange, blocks%ButterflyU%blocks(index_i_loc_k)%matrix, msh, option, ker, 0, passflag, ptree, stats)
             endif
 
-            deallocate (mrange)
-            deallocate (nrange)
-
-            ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-            ! do ij=1,mm*rank_new
-            ! j = (ij-1)/mm+1
-            ! i = mod(ij-1,mm) + 1
-            ! edge_m=header_m+i-1
-            ! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! blocks%ButterflyU%blocks(index_i_loc_k)%matrix(i,j)=ctemp
-            ! enddo
-            ! !$omp end taskloop
-
          else
-            ! allocate (core(rankmax_c,rankmax_r))
-            ! ! !$omp parallel
-            ! ! !$omp single
-            ! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-            ! do ij=1,rankmax_c*rankmax_r
-            ! j = (ij-1)/rankmax_r+1
-            ! i = mod(ij-1,rankmax_r) + 1
-            ! edge_m=header_m+select_row(i)-1
-            ! edge_n=header_n+select_column(j)-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! core(j,i)=ctemp
-            ! enddo
-            ! !$omp end taskloop
-            ! ! !$omp end single
-            ! ! !$omp end parallel
-
-            allocate (matrix_V(rankmax_c, mm))
-            allocate (matrix_V_tmp(mm, rankmax_c))
-            allocate (mrange(mm))
-            allocate (nrange(rankmax_c))
+            allocate (submats(index_ij)%dat(mm,rankmax_c))
+            submats(index_ij)%dat=0
+            allocate (submats(index_ij)%rows(mm))
+            allocate (submats(index_ij)%cols(rankmax_c))
+            submats(index_ij)%nr = mm
+            submats(index_ij)%nc = rankmax_c
             do i = 1, mm
-               mrange(i) = header_m + i - 1
+               submats(index_ij)%rows(i) = header_m + i - 1
             enddo
             do j = 1, rankmax_c
-               nrange(j) = header_n + select_column(j) - 1
+               submats(index_ij)%cols(j) = header_n + select_column(j) - 1
             enddo
 
             if (Nboundall > 0) then
 
-               allocate (mnmap(mm, rankmax_c))
-               allocate (mmap(mm))
-               allocate (nmap(rankmax_c))
-               allocate (mrange1(mm))
-               allocate (nrange1(rankmax_c))
-               mnmap = 1
+               allocate (submats(index_ij)%masks(mm, rankmax_c))
+               submats(index_ij)%masks = 1
 
                do i = 1, mm
-                  group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+                  group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                   group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                   if (group_n_mid /= -1) then
                      idxstart = msh%basis_group(group_n_mid)%head
                      idxend = msh%basis_group(group_n_mid)%tail
                      do j = 1, rankmax_c
-                        if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                      enddo
                   endif
                enddo
-
-               nrow = 0
-               do i = 1, mm
-                  if (sum(mnmap(i, :)) /= 0) then
-                     nrow = nrow + 1
-                     mmap(nrow) = i
-                     mrange1(nrow) = mrange(i)
-                  endif
-               enddo
-               ncol = 0
-               do j = 1, rankmax_c
-                  if (sum(mnmap(:, j)) /= 0) then
-                     ncol = ncol + 1
-                     nmap(ncol) = j
-                     nrange1(ncol) = nrange(j)
-                  endif
-               enddo
-               allocate (matrix_tmp(nrow, ncol))
-               call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-               matrix_V_tmp = 0
-               do i = 1, nrow
-               do j = 1, ncol
-                  matrix_V_tmp(mmap(i), nmap(j)) = matrix_tmp(i, j)
-               enddo
-               enddo
-               deallocate (mnmap)
-               deallocate (mmap)
-               deallocate (nmap)
-               deallocate (mrange1)
-               deallocate (nrange1)
-               deallocate (matrix_tmp)
-            else
-               call element_Zmn_block_user(mm, rankmax_c, mrange, nrange, matrix_V_tmp, msh, option, ker, 0, passflag, ptree, stats)
             endif
-
-            deallocate (mrange)
-            deallocate (nrange)
-            call copymatT(matrix_V_tmp, matrix_V, mm, rankmax_c)
-            deallocate (matrix_V_tmp)
-
-            allocate (core(rankmax_c, rankmax_r))
-            allocate (core_tmp(rankmax_r, rankmax_c))
-            do i = 1, rankmax_r
-               core(:, i) = matrix_V(:, select_row(i))
-            enddo
-            call copymatT(core, core_tmp, rankmax_c, rankmax_r)
-
-            ! ! !$omp parallel
-            ! ! !$omp single
-            ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-            ! do ij=1,mm*rankmax_c
-            ! j = (ij-1)/mm+1
-            ! i = mod(ij-1,mm) + 1
-
-            ! edge_m=header_m+i-1
-            ! edge_n=header_n+select_column(j)-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! matrix_V(j,i)=ctemp
-            ! enddo
-            ! !$omp end taskloop
-            ! ! !$omp end single
-            ! ! !$omp end parallel
-
-            allocate (jpvt(max(rankmax_c, rankmax_r)))
-            allocate (tau(max(rankmax_c, rankmax_r)))
-            jpvt = 0
-            call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
-            flops = flops + flop
-
-            if (rank_new > 0) then
-               call un_or_mqrf90(core, tau, matrix_V, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
-               flops = flops + flop
-               call trsmf90(core, matrix_V, 'L', 'U', 'N', 'N', rank_new, mm, flop=flop)
-               flops = flops + flop
-            else
-               rank_new = 1
-               matrix_V = 0
-            endif
-
-            index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
-            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
-            call copymatT(matrix_V(1:rank_new, 1:mm), blocks%ButterflyU%blocks(index_i_loc_k)%matrix, rank_new, mm)
-
-            index_i_loc_s = (index_i - blocks%ButterflySkel(level_butterfly + 1)%idx_r)/blocks%ButterflySkel(level_butterfly + 1)%inc_r + 1
-            allocate (blocks%ButterflySkel(level_butterfly + 1)%inds(index_i_loc_s, 1)%array(rank_new))
-            do j = 1, rank_new
-               blocks%ButterflySkel(level_butterfly + 1)%inds(index_i_loc_s, 1)%array(j) = select_row(jpvt(j))
-            enddo
-
-            if (option%sample_heuristic == 1) then
-               allocate (core_tmp1(rank_new, rankmax_c))
-               do i = 1, rank_new
-                  core_tmp1(i, :) = core_tmp(jpvt(i), :)
-               enddo
-               jpvt = 0
-               call geqp3modf90(core_tmp1, jpvt, tau, option%tol_comp, SafeUnderflow, Ncol_pre, flop=flop)
-               flops = flops + flop
-               Ncol_pre = rank_new
-               do i = 1, Ncol_pre
-                  select_col_pre(i) = header_n + select_column(jpvt(i)) - 1
-               enddo
-               deallocate (core_tmp1)
-            endif
-
          endif
 
       elseif (level == 0) then
@@ -1822,92 +1504,40 @@ contains
          header_n = msh%basis_group(group_n)%head
          index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
 
-         allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
-         allocate (matrix_V_tmp(rank_new, nn))
-         allocate (mrange(rank_new))
-         allocate (nrange(nn))
+         ! allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
+         ! allocate (matrix_V_tmp(rank_new, nn))
+         allocate (submats(index_ij)%dat(rank_new, nn))
+         submats(index_ij)%dat=0
+
+         allocate (submats(index_ij)%rows(rank_new))
+         allocate (submats(index_ij)%cols(nn))
+         submats(index_ij)%nr = rank_new
+         submats(index_ij)%nc = nn
+
          do i = 1, rank_new
-            mrange(i) = blocks%ButterflySkel(level + 1)%inds(1, index_j_loc_s)%array(i) + header_m - 1
+            submats(index_ij)%rows(i) = blocks%ButterflySkel(level + 1)%inds(1, index_j_loc_s)%array(i) + header_m - 1
          enddo
          do j = 1, nn
-            nrange(j) = j + header_n - 1
+            submats(index_ij)%cols(j) = j + header_n - 1
          enddo
 
          if (Nboundall > 0) then
 
-            allocate (mnmap(rank_new, nn))
-            allocate (mmap(rank_new))
-            allocate (nmap(nn))
-            allocate (mrange1(rank_new))
-            allocate (nrange1(nn))
-            mnmap = 1
+            allocate (submats(index_ij)%masks(rank_new, nn))
+            submats(index_ij)%masks = 1
 
             do i = 1, rank_new
-               group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+               group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                if (group_n_mid /= -1) then
                   idxstart = msh%basis_group(group_n_mid)%head
                   idxend = msh%basis_group(group_n_mid)%tail
                   do j = 1, nn
-                     if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                   enddo
                endif
             enddo
-
-            nrow = 0
-            do i = 1, rank_new
-               if (sum(mnmap(i, :)) /= 0) then
-                  nrow = nrow + 1
-                  mmap(nrow) = i
-                  mrange1(nrow) = mrange(i)
-               endif
-            enddo
-            ncol = 0
-            do j = 1, nn
-               if (sum(mnmap(:, j)) /= 0) then
-                  ncol = ncol + 1
-                  nmap(ncol) = j
-                  nrange1(ncol) = nrange(j)
-               endif
-            enddo
-            allocate (matrix_tmp(nrow, ncol))
-            call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-            matrix_V_tmp = 0
-            do i = 1, nrow
-            do j = 1, ncol
-               matrix_V_tmp(mmap(i), nmap(j)) = matrix_tmp(i, j)
-            enddo
-            enddo
-            deallocate (mnmap)
-            deallocate (mmap)
-            deallocate (nmap)
-            deallocate (mrange1)
-            deallocate (nrange1)
-            deallocate (matrix_tmp)
-         else
-            call element_Zmn_block_user(rank_new, nn, mrange, nrange, matrix_V_tmp, msh, option, ker, 0, passflag, ptree, stats)
          endif
-
-         deallocate (mrange)
-         deallocate (nrange)
-         call copymatT(matrix_V_tmp, blocks%ButterflyV%blocks(index_j_loc_k)%matrix, rank_new, nn)
-         deallocate (matrix_V_tmp)
-
-         ! ! !$omp parallel
-         ! ! !$omp single
-         ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-         ! do ij=1,rank_new*nn
-         ! j = (ij-1)/rank_new+1
-         ! i = mod(ij-1,rank_new) + 1
-         ! edge_m=blocks%ButterflySkel(level+1)%inds(1,index_j_loc_s)%array(i)+header_m-1
-         ! edge_n=j+header_n-1
-         ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-         ! blocks%ButterflyV%blocks(index_j_loc_k)%matrix(j,i)=ctemp
-         ! enddo
-         ! !$omp end taskloop
-         ! ! !$omp end single
-         ! ! !$omp end parallel
 
       else
          index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1
@@ -1924,237 +1554,175 @@ contains
             index_j_loc_s1 = (index_j - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
 
             rank_new = size(blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array)
-            allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm1, rank_new))
-            allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix(mm2, rank_new))
-
-            allocate (matrix_V_tmp(mm1 + mm2, rank_new))
-            allocate (mrange(mm1 + mm2))
-            allocate (nrange(rank_new))
+            allocate (submats(index_ij)%dat(mm1 + mm2, rank_new))
+            submats(index_ij)%dat=0
+            allocate (submats(index_ij)%rows(mm1 + mm2))
+            allocate (submats(index_ij)%cols(rank_new))
+            submats(index_ij)%nr = mm1+mm2
+            submats(index_ij)%nc = rank_new
             do i = 1, mm1 + mm2
                if (i <= mm1) then
-                  mrange(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m1 - 1
+                  submats(index_ij)%rows(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m1 - 1
                else
-                  mrange(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
+                  submats(index_ij)%rows(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
                endif
             enddo
             do j = 1, rank_new
-               nrange(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array(j) + header_n - 1
+               submats(index_ij)%cols(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array(j) + header_n - 1
             enddo
 
             if (Nboundall > 0) then
 
-               allocate (mnmap(mm1 + mm2, rank_new))
-               allocate (mmap(mm1 + mm2))
-               allocate (nmap(rank_new))
-               allocate (mrange1(mm1 + mm2))
-               allocate (nrange1(rank_new))
-               mnmap = 1
+               allocate (submats(index_ij)%masks(mm1 + mm2, rank_new))
+               submats(index_ij)%masks = 1
 
                do i = 1, mm1 + mm2
-                  group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+                  group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                   group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                   if (group_n_mid /= -1) then
                      idxstart = msh%basis_group(group_n_mid)%head
                      idxend = msh%basis_group(group_n_mid)%tail
                      do j = 1, rank_new
-                        if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                      enddo
                   endif
                enddo
-
-               nrow = 0
-               do i = 1, mm1 + mm2
-                  if (sum(mnmap(i, :)) /= 0) then
-                     nrow = nrow + 1
-                     mmap(nrow) = i
-                     mrange1(nrow) = mrange(i)
-                  endif
-               enddo
-               ncol = 0
-               do j = 1, rank_new
-                  if (sum(mnmap(:, j)) /= 0) then
-                     ncol = ncol + 1
-                     nmap(ncol) = j
-                     nrange1(ncol) = nrange(j)
-                  endif
-               enddo
-               allocate (matrix_tmp(nrow, ncol))
-               call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-               matrix_V_tmp = 0
-               do i = 1, nrow
-               do j = 1, ncol
-                  matrix_V_tmp(mmap(i), nmap(j)) = matrix_tmp(i, j)
-               enddo
-               enddo
-               deallocate (mnmap)
-               deallocate (mmap)
-               deallocate (nmap)
-               deallocate (mrange1)
-               deallocate (nrange1)
-               deallocate (matrix_tmp)
-            else
-               call element_Zmn_block_user(mm1 + mm2, rank_new, mrange, nrange, matrix_V_tmp, msh, option, ker, 0, passflag, ptree, stats)
             endif
 
-            deallocate (mrange)
-            deallocate (nrange)
-            if (mm1 > 0) blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrix_V_tmp(1:mm1, :)
-            if (mm2 > 0) blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix = matrix_V_tmp(1 + mm1:mm1 + mm2, :)
-            deallocate (matrix_V_tmp)
-
-            ! ! !$omp parallel
-            ! ! !$omp single
-            ! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-            ! do ij=1,mm*rank_new
-            ! j = (ij-1)/mm+1
-            ! i = mod(ij-1,mm) + 1
-            ! if (i<=mm1) then
-            ! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! blocks%ButterflyKerl(level)%blocks(index_i_loc_k,index_j_loc_k)%matrix(i,j)=ctemp
-            ! else
-            ! edge_n=blocks%ButterflySkel(level-1)%inds(index_i_loc_s1,index_j_loc_s1)%array(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1,index_j_loc_k)%matrix(i-mm1,j)=ctemp
-            ! endif
-            ! enddo
-            ! !$omp end taskloop
-            ! ! !$omp end single
-            ! ! !$omp end parallel
-
+            ! deallocate (matrix_V_tmp)
          else
             index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
             index_j_loc_s = (index_j - blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c + 1
-
-            ! allocate (core(rankmax_c,rankmax_r))
-            ! ! !$omp parallel
-            ! ! !$omp single
-            ! !$omp taskloop default(shared) private(ij,i,j,k,edge_m,edge_n,ctemp)
-            ! do ij=1,rankmax_c*rankmax_r
-            ! j = (ij-1)/rankmax_r+1
-            ! i = mod(ij-1,rankmax_r) + 1
-            ! if (select_row(i)<=mm1) then
-            ! edge_n=select_column(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(select_row(i))+header_m1-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! core(j,i)=ctemp
-            ! else
-            ! edge_n=select_column(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(select_row(i)-mm1)+header_m2-1
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! core(j,i)=ctemp
-            ! endif
-            ! enddo
-            ! !$omp end taskloop
-            ! ! !$omp end single
-            ! ! !$omp end parallel
-
-            ! allocate (matrix_V(rankmax_c,mm))
-            ! ! !$omp parallel
-            ! ! !$omp single
-            ! !$omp taskloop default(shared) private(ij,i,j,edge_m,edge_n,ctemp)
-            ! do ij=1,mm*rankmax_c
-            ! j = (ij-1)/mm+1
-            ! i = mod(ij-1,mm) + 1
-            ! if (i<=mm1) then
-            ! edge_n=select_column(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc,index_jj_loc)%array(i)+header_m1-1
-            ! else
-            ! edge_n=select_column(j)+header_n-1
-            ! edge_m=blocks%ButterflySkel(level+1)%inds(index_ii_loc+1,index_jj_loc)%array(i-mm1)+header_m2-1
-            ! endif
-            ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-            ! matrix_V(j,i)=ctemp
-            ! enddo
-            ! !$omp end taskloop
-            ! ! !$omp end single
-            ! ! !$omp end parallel
-
-            allocate (matrix_V(rankmax_c, mm))
-            allocate (matrix_V_tmp(mm, rankmax_c))
-            allocate (mrange(mm))
-            allocate (nrange(rankmax_c))
+            allocate (submats(index_ij)%dat(mm,rankmax_c))
+            submats(index_ij)%dat=0
+            allocate (submats(index_ij)%rows(mm))
+            allocate (submats(index_ij)%cols(rankmax_c))
+            submats(index_ij)%nr = mm
+            submats(index_ij)%nc = rankmax_c
             do i = 1, mm
                if (i <= mm1) then
-                  mrange(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m1 - 1
+                  submats(index_ij)%rows(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array(i) + header_m1 - 1
                else
-                  mrange(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
+                  submats(index_ij)%rows(i) = blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array(i - mm1) + header_m2 - 1
                endif
             enddo
             do j = 1, rankmax_c
-               nrange(j) = select_column(j) + header_n - 1
+               submats(index_ij)%cols(j) = select_column(j) + header_n - 1
             enddo
 
             if (Nboundall > 0) then
 
-               allocate (mnmap(mm, rankmax_c))
-               allocate (mmap(mm))
-               allocate (nmap(rankmax_c))
-               allocate (mrange1(mm))
-               allocate (nrange1(rankmax_c))
-               mnmap = 1
+               allocate (submats(index_ij)%masks(mm, rankmax_c))
+               submats(index_ij)%masks = 1
 
                do i = 1, mm
-                  group_m_mid = findgroup(mrange(i), msh, levelm, blocks%row_group)
+                  group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
                   group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
                   if (group_n_mid /= -1) then
                      idxstart = msh%basis_group(group_n_mid)%head
                      idxend = msh%basis_group(group_n_mid)%tail
                      do j = 1, rankmax_c
-                        if (nrange(j) >= idxstart .and. nrange(j) <= idxend) mnmap(i, j) = 0
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
                      enddo
                   endif
                enddo
-
-               nrow = 0
-               do i = 1, mm
-                  if (sum(mnmap(i, :)) /= 0) then
-                     nrow = nrow + 1
-                     mmap(nrow) = i
-                     mrange1(nrow) = mrange(i)
-                  endif
-               enddo
-               ncol = 0
-               do j = 1, rankmax_c
-                  if (sum(mnmap(:, j)) /= 0) then
-                     ncol = ncol + 1
-                     nmap(ncol) = j
-                     nrange1(ncol) = nrange(j)
-                  endif
-               enddo
-               allocate (matrix_tmp(nrow, ncol))
-               call element_Zmn_block_user(nrow, ncol, mrange1, nrange1, matrix_tmp, msh, option, ker, 0, passflag, ptree, stats)
-
-               matrix_V_tmp = 0
-               do i = 1, nrow
-               do j = 1, ncol
-                  matrix_V_tmp(mmap(i), nmap(j)) = matrix_tmp(i, j)
-               enddo
-               enddo
-               deallocate (mnmap)
-               deallocate (mmap)
-               deallocate (nmap)
-               deallocate (mrange1)
-               deallocate (nrange1)
-               deallocate (matrix_tmp)
-            else
-               call element_Zmn_block_user(mm, rankmax_c, mrange, nrange, matrix_V_tmp, msh, option, ker, 0, passflag, ptree, stats)
             endif
+         endif
 
-            deallocate (mrange)
-            deallocate (nrange)
-            call copymatT(matrix_V_tmp, matrix_V, mm, rankmax_c)
-            deallocate (matrix_V_tmp)
+      endif
+
+      if (allocated(core)) deallocate (core)
+      if (allocated(core_tmp)) deallocate (core_tmp)
+      if (allocated(tau)) deallocate (tau)
+      if (allocated(jpvt)) deallocate (jpvt)
+      if (allocated(matrix_V)) deallocate (matrix_V)
+      if (allocated(select_row)) deallocate (select_row)
+      if (allocated(select_column)) deallocate (select_column)
+   end subroutine BF_compress_NlogN_oneblock_C_sample
+
+   subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops)
+
+      use BPACK_DEFS
+      implicit none
+
+      type(intersect) :: submats(:)
+      integer Nboundall
+      integer boundary_map(*)
+      integer groupm_start
+
+      type(mesh)::msh
+      type(kernelquant)::ker
+      integer i, j, iii, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_c1, rankmax_min, rank_new
+      integer group_m, group_n, mm, nn, index_i, index_j, index_ij, index_i_loc_k, index_j_loc_k, index_i_loc_s, index_i_loc_s1, index_j_loc_s, index_j_loc_s1, ii, jj, ij
+      integer level, level_final, length_1, length_2, level_blocks
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
+      real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+      integer header_m1, header_m2, mm1, mm2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, mmm1
+      real(kind=8) flop, flops
+      DT ctemp
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, levelm, group_m_mid, group_n_mid, idxstart, idxend, nrow, ncol
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      integer::passflag = 0
+      real(kind=8)::n2, n1,overrate
+
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      group_m = blocks%row_group    ! Note: row_group and col_group interchanged here
+      group_n = blocks%col_group
+      if (level == 0) then
+         group_m = group_m - 1 + index_i
+         group_n = group_n*2**level_butterfly - 1 + index_j
+      else
+         group_m = group_m*2**(level - 1) - 1 + index_i
+         group_n = group_n*2**(level_butterfly - level + 1) - 1 + index_j
+      endif
+
+      nn = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+      if (level == level_butterfly + 1) then
+         mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+      elseif (level == 0) then
+         index_ii_loc = (index_i - blocks%ButterflySkel(level + 1)%idx_r)/blocks%ButterflySkel(level + 1)%inc_r + 1
+         index_jj_loc = (index_j - blocks%ButterflySkel(level + 1)%idx_c)/blocks%ButterflySkel(level + 1)%inc_c + 1
+         mm = size(blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+      else
+         index_jj = int((index_j + 1)/2); index_ii = 2*index_i - 1
+         index_ii_loc = (index_ii - blocks%ButterflySkel(level + 1)%idx_r)/blocks%ButterflySkel(level + 1)%inc_r + 1
+         index_jj_loc = (index_jj - blocks%ButterflySkel(level + 1)%idx_c)/blocks%ButterflySkel(level + 1)%inc_c + 1
+         mm1 = size(blocks%ButterflySkel(level + 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+         mm2 = size(blocks%ButterflySkel(level + 1)%inds(index_ii_loc + 1, index_jj_loc)%array, 1)
+         mm = mm1 + mm2
+      endif
+
+      rankmax_r = mm
+      rankmax_c = size(submats(index_ij)%dat,2)
+      allocate (select_row(rankmax_r))
+      do i = 1, rankmax_r
+         select_row(i) = i
+      enddo
+
+      if (level == level_butterfly + 1) then
+         if (level == level_final) then
+            index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
+            mm = size(submats(index_ij)%dat,1)
+            rank_new = size(submats(index_ij)%dat,2)
+            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+            blocks%ButterflyU%blocks(index_i_loc_k)%matrix = submats(index_ij)%dat
+         else
             allocate (core(rankmax_c, rankmax_r))
-            allocate (core_tmp(rankmax_r, rankmax_c))
-            do i = 1, rankmax_r
-               core(:, i) = matrix_V(:, select_row(i))
-            enddo
-            call copymatT(core, core_tmp, rankmax_c, rankmax_r)
-
+            allocate (core_tmp(rankmax_c, rankmax_r))
+            call copymatT(submats(index_ij)%dat, core, rankmax_r, rankmax_c)
+            call copymatT(submats(index_ij)%dat, core_tmp, rankmax_r, rankmax_c)
             allocate (jpvt(max(rankmax_c, rankmax_r)))
             allocate (tau(max(rankmax_c, rankmax_r)))
             jpvt = 0
@@ -2162,20 +1730,76 @@ contains
             flops = flops + flop
 
             if (rank_new > 0) then
-               call un_or_mqrf90(core, tau, matrix_V, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
+               call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
                flops = flops + flop
-               call trsmf90(core, matrix_V, 'L', 'U', 'N', 'N', rank_new, mm, flop=flop)
+               call trsmf90(core, core_tmp, 'L', 'U', 'N', 'N', rank_new, mm, flop=flop)
                flops = flops + flop
             else
                rank_new = 1
-               matrix_V = 0
+               core_tmp = 0
+            endif
+
+            index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
+            allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
+            call copymatT(core_tmp(1:rank_new, 1:mm), blocks%ButterflyU%blocks(index_i_loc_k)%matrix, rank_new, mm)
+
+            index_i_loc_s = (index_i - blocks%ButterflySkel(level_butterfly + 1)%idx_r)/blocks%ButterflySkel(level_butterfly + 1)%inc_r + 1
+            allocate (blocks%ButterflySkel(level_butterfly + 1)%inds(index_i_loc_s, 1)%array(rank_new))
+            do j = 1, rank_new
+               blocks%ButterflySkel(level_butterfly + 1)%inds(index_i_loc_s, 1)%array(j) = select_row(jpvt(j))
+            enddo
+         endif
+      elseif (level == 0) then
+         index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
+         rank_new = size(submats(index_ij)%dat,1)
+         nn = size(submats(index_ij)%dat,2)
+         allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
+         call copymatT(submats(index_ij)%dat, blocks%ButterflyV%blocks(index_j_loc_k)%matrix, rank_new, nn)
+      else
+         index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1
+         index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+         header_n = msh%basis_group(group_n)%head
+         header_m1 = msh%basis_group(group_m)%head
+         header_m2 = msh%basis_group(2*group_m + 1)%head
+         mmm1 = msh%basis_group(2*group_m)%tail - msh%basis_group(2*group_m)%head + 1
+
+         if (level == level_final) then
+            index_i_loc_s1 = (index_i - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+            index_j_loc_s1 = (index_j - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
+            rank_new = size(blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array)
+            allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm1, rank_new))
+            allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix(mm2, rank_new))
+            if (mm1 > 0) blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = submats(index_ij)%dat(1:mm1, :)
+            if (mm2 > 0) blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix = submats(index_ij)%dat(1 + mm1:mm1 + mm2, :)
+         else
+            index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
+            index_j_loc_s = (index_j - blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c + 1
+            allocate (core(rankmax_c, rankmax_r))
+            allocate (core_tmp(rankmax_c, rankmax_r))
+            call copymatT(submats(index_ij)%dat, core, rankmax_r, rankmax_c)
+            call copymatT(submats(index_ij)%dat, core_tmp, rankmax_r, rankmax_c)
+            allocate (jpvt(max(rankmax_c, rankmax_r)))
+            allocate (tau(max(rankmax_c, rankmax_r)))
+            jpvt = 0
+            call geqp3modf90(core, jpvt, tau, option%tol_comp, SafeUnderflow, rank_new, flop=flop)
+            flops = flops + flop
+
+            if (rank_new > 0) then
+               call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_c, mm, rank_new, flop=flop)
+               flops = flops + flop
+               call trsmf90(core, core_tmp, 'L', 'U', 'N', 'N', rank_new, mm, flop=flop)
+               flops = flops + flop
+            else
+               rank_new = 1
+               core_tmp = 0
             endif
 
             allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm1, rank_new))
             allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix(mm2, rank_new))
 
-            call copymatT(matrix_V(1:rank_new, 1:mm1), blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank_new, mm1)
-            call copymatT(matrix_V(1:rank_new, 1 + mm1:mm), blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, rank_new, mm - mm1)
+            call copymatT(core_tmp(1:rank_new, 1:mm1), blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank_new, mm1)
+            call copymatT(core_tmp(1:rank_new, 1 + mm1:mm), blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, rank_new, mm - mm1)
 
             allocate (blocks%ButterflySkel(level)%inds(index_i_loc_s, index_j_loc_s)%array(rank_new))
             ! !$omp taskloop default(shared) private(j)
@@ -2188,21 +1812,6 @@ contains
             enddo
             ! !$omp end taskloop
 
-            if (option%sample_heuristic == 1) then
-               allocate (core_tmp1(rank_new, rankmax_c))
-               do i = 1, rank_new
-                  core_tmp1(i, :) = core_tmp(jpvt(i), :)
-               enddo
-               jpvt = 0
-               call geqp3modf90(core_tmp1, jpvt, tau, option%tol_comp, SafeUnderflow, Ncol_pre, flop=flop)
-               flops = flops + flop
-               Ncol_pre = rank_new
-               do i = 1, Ncol_pre
-                  select_col_pre(i) = header_n + select_column(jpvt(i)) - 1
-               enddo
-               deallocate (core_tmp1)
-            endif
-
          endif
 
       endif
@@ -2214,7 +1823,8 @@ contains
       if (allocated(matrix_V)) deallocate (matrix_V)
       if (allocated(select_row)) deallocate (select_row)
       if (allocated(select_column)) deallocate (select_column)
-   end subroutine BF_compress_NlogN_oneblock_C
+   end subroutine BF_compress_NlogN_oneblock_C_rankreveal
+
 
    subroutine Bplus_compress_N15(bplus, option, Memory, stats, msh, ker, ptree)
 
@@ -2314,6 +1924,7 @@ contains
       type(proctree)::ptree
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:)
       integer emptyflag
+      type(intersect)::submats(1)
       cnt_tmp = 0
       rankFar = 0
       rankNear = 0
@@ -2412,16 +2023,23 @@ contains
                      do jj = 1, nn
                         nrange(jj) = msh%basis_group(group_n)%head + jj - 1
                      enddo
-                     call element_Zmn_block_user(mm, nn, mrange, nrange, QQ, msh, option, ker, 0, passflag, ptree, stats)
 
-                     ! do ii=1,mm
-                     ! do jj =1,nn
-                     ! edge_m = msh%basis_group(group_m)%head + ii - 1
-                     ! edge_n = msh%basis_group(group_n)%head + jj - 1
-                     ! call element_Zmn(edge_m,edge_n,ctemp,msh,option,ker)
-                     ! QQ(ii,jj) = ctemp
-                     ! end do
-                     ! end do
+
+                     submats(1)%nr = mm
+                     submats(1)%nc = nn
+                     allocate(submats(1)%rows(submats(1)%nr))
+                     submats(1)%rows = mrange
+                     allocate(submats(1)%cols(submats(1)%nc))
+                     submats(1)%cols = nrange
+                     allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+                     call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+                     QQ = submats(1)%dat
+                     deallocate(submats(1)%rows)
+                     deallocate(submats(1)%cols)
+                     deallocate(submats(1)%dat)
+
+                     ! call element_Zmn_block_user(mm, nn, mrange, nrange, QQ, msh, option, ker, 0, passflag, ptree, stats)
+
 
                      mn = min(mm, nn)
                      allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
@@ -3274,12 +2892,16 @@ contains
       integer::frow, rmax
       real(kind=8)::error
       DT:: mat_dummy(1, 1)
+      type(intersect)::submats(1)
 
       call LR_HBACA_Leaflevel(blocks, leafsize, rank, option, msh, ker, stats, ptree, pgno, cridx)
 
       passflag = 0
       do while (passflag == 0)
-         call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
+
+         call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
+         ! write(*,*)ptree%MyID,'after leaf',blocks%row_group,blocks%col_group,'passflag',passflag
+         ! call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
       enddo
       stats%Flop_tmp=0
       call LR_HMerge(blocks, rank, option, msh, stats, ptree, pgno, cridx, 1)
@@ -3768,6 +3390,7 @@ contains
       type(Hstat)::stats
       integer::passflag = 0
       integer::Maxgrp
+      type(intersect)::submats(1)
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -3910,7 +3533,24 @@ contains
                do jj = 1, blocks%N
                   nrange(jj) = blocks%headn + jj - 1
                enddo
-               call element_Zmn_block_user(blocks%M, blocks%N, mrange, nrange, QQ1, msh, option, ker, 0, passflag, ptree, stats)
+
+               ! call element_Zmn_block_user(blocks%M, blocks%N, mrange, nrange, QQ1, msh, option, ker, 0, passflag, ptree, stats)
+
+               submats(1)%nr = blocks%M
+               submats(1)%nc = blocks%N
+               allocate(submats(1)%rows(submats(1)%nr))
+               submats(1)%rows = mrange
+               allocate(submats(1)%cols(submats(1)%nc))
+               submats(1)%cols = nrange
+               allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+               call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+               QQ1 = submats(1)%dat
+               deallocate(submats(1)%rows)
+               deallocate(submats(1)%cols)
+               deallocate(submats(1)%dat)
+
+
+
                deallocate (mrange)
                deallocate (nrange)
 
@@ -3971,7 +3611,21 @@ contains
                do jj = 1, blocks%N
                   nrange(jj) = blocks%headn + jj - 1
                enddo
-               call element_Zmn_block_user(blocks%M, blocks%N, mrange, nrange, QQ1, msh, option, ker, 0, passflag, ptree, stats)
+
+               submats(1)%nr = blocks%M
+               submats(1)%nc = blocks%N
+               allocate(submats(1)%rows(submats(1)%nr))
+               submats(1)%rows = mrange
+               allocate(submats(1)%cols(submats(1)%nc))
+               submats(1)%cols = nrange
+               allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+               call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+               QQ1 = submats(1)%dat
+               deallocate(submats(1)%rows)
+               deallocate(submats(1)%cols)
+               deallocate(submats(1)%dat)
+
+               ! call element_Zmn_block_user(blocks%M, blocks%N, mrange, nrange, QQ1, msh, option, ker, 0, passflag, ptree, stats)
 
                ! write(*,*)'ni',blocks%row_group,blocks%col_group,fnorm(QQ1,blocks%M,blocks%N)
 
@@ -4119,6 +3773,7 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
       integer:: passflag = 0
+      type(intersect)::submats(1)
 
       Navr = 3 !5 !10
       itr = 1
@@ -4150,7 +3805,23 @@ contains
       do j = 1, rankmax_c
          nrange(j) = header_n + j - 1
       enddo
-      call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = 1
+      submats(1)%nc = rankmax_c
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      matr = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+      ! call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+
       row_R = matr(1, :)
       norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
 
@@ -4179,7 +3850,23 @@ contains
             do j = 1, rankmax_c
                nrange(j) = header_n + j - 1
             enddo
-            call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+            submats(1)%nr = 1
+            submats(1)%nc = rankmax_c
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            matr = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+
             row_R = matr(1, :)
             norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
 
@@ -4229,7 +3916,25 @@ contains
       do i = 1, rankmax_r
          mrange(i) = header_m + i - 1
       enddo
-      call element_Zmn_block_user(rankmax_r, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = rankmax_r
+      submats(1)%nc = 1
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      matc = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+
+      ! call element_Zmn_block_user(rankmax_r, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+
+
       column_R = matc(:, 1)
       norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
 
@@ -4274,7 +3979,22 @@ contains
          do j = 1, rankmax_c
             nrange(j) = header_n + j - 1
          enddo
-         call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = 1
+         submats(1)%nc = rankmax_c
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         matr = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
          row_R = matr(1, :)
 
          ! !$omp parallel do default(shared) private(j,i,value_Z,edge_m,edge_n)
@@ -4322,7 +4042,24 @@ contains
          do i = 1, rankmax_r
             mrange(i) = header_m + i - 1
          enddo
-         call element_Zmn_block_user(rankmax_r, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+
+         submats(1)%nr = rankmax_r
+         submats(1)%nc = 1
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         matc = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(rankmax_r, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+
          column_R = matc(:, 1)
 
          ! !$omp parallel do default(shared) private(i,j,value_Z,value_UVs,edge_m,edge_n)
@@ -4530,6 +4267,7 @@ contains
       integer::ierr
       integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun
       integer::descsMatU2D(9), descsMatV2D(9), descsMatSml(9), descsMatU2Dnew(9), descsMatV2Dnew(9), descsUUSml(9), descsVVSml(9), descsUU_u(9), descsVV_u(9), descsUU_v(9), descsVV_v(9)
+      type(intersect)::submats(1)
 
       pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
       headm_loc = blocks%M_p(pp, 1)
@@ -4564,7 +4302,23 @@ contains
       do j = 1, blocks%N_loc
          nrange(j) = header_n + j - 1 + headn_loc - 1
       enddo
-      call element_Zmn_block_user(1, blocks%N_loc, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = 1
+      submats(1)%nc = blocks%N_loc
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      matr = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+      ! call element_Zmn_block_user(1, blocks%N_loc, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+
       row_R = 0
       row_R(headn_loc:headn_loc + blocks%N_loc - 1) = matr(1, 1:blocks%N_loc)
 
@@ -4592,7 +4346,23 @@ contains
       do i = 1, blocks%M_loc
          mrange(i) = header_m + i - 1 + headm_loc - 1
       enddo
-      call element_Zmn_block_user(blocks%M_loc, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = blocks%M_loc
+      submats(1)%nc = 1
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      matc = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+
+      ! call element_Zmn_block_user(blocks%M_loc, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
       column_R = 0
       column_R(headm_loc:headm_loc + blocks%M_loc - 1) = matc(1:blocks%M_loc, 1)
       call MPI_ALLREDUCE(MPI_IN_PLACE, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
@@ -4630,7 +4400,22 @@ contains
          do j = 1, blocks%N_loc
             nrange(j) = header_n + j - 1 + headn_loc - 1
          enddo
-         call element_Zmn_block_user(1, blocks%N_loc, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = 1
+         submats(1)%nc = blocks%N_loc
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         matr = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(1, blocks%N_loc, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
+
          row_R = 0
          row_R(headn_loc:headn_loc + blocks%N_loc - 1) = matr(1, 1:blocks%N_loc)
          call MPI_ALLREDUCE(MPI_IN_PLACE, row_R, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
@@ -4681,7 +4466,21 @@ contains
          do i = 1, blocks%M_loc
             mrange(i) = header_m + i - 1 + headm_loc - 1
          enddo
-         call element_Zmn_block_user(blocks%M_loc, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = blocks%M_loc
+         submats(1)%nc = 1
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         matc = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(blocks%M_loc, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
          column_R = 0
          column_R(headm_loc:headm_loc + blocks%M_loc - 1) = matc(1:blocks%M_loc, 1)
          call MPI_ALLREDUCE(MPI_IN_PLACE, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
@@ -5039,6 +4838,7 @@ contains
       type(Hoption)::option
       integer::mrange(M), nrange(N)
       integer::passflag = 0
+      type(intersect)::submats(1)
 
       n1 = OMP_get_wtime()
 
@@ -5089,17 +4889,21 @@ contains
          do j = 1, r_est
             nrange(j) = header_n + select_column(j) - 1
          enddo
-         call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
 
-         ! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-         ! do i=1,M
-         ! do j=1,r_est
-         ! edge_m = header_m + i - 1
-         ! edge_n = header_n + select_column(j) - 1
-         ! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
-         ! enddo
-         ! enddo
-         ! !$omp end parallel do
+         submats(1)%nr = M
+         submats(1)%nc = r_est
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         column_R = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
 
          if (rank > 0) then
             do j = 1, r_est
@@ -5123,7 +4927,22 @@ contains
          do j = 1, N
             nrange(j) = header_n + j - 1
          enddo
-         call element_Zmn_block_user(r_est, N, mrange, nrange, row_R, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = r_est
+         submats(1)%nc = N
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         row_R = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+
+         ! call element_Zmn_block_user(r_est, N, mrange, nrange, row_R, msh, option, ker, 0, passflag, ptree, stats)
 
          ! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
          ! do j=1,N
@@ -5157,17 +4976,23 @@ contains
          do j = 1, r_est
             nrange(j) = header_n + select_column(j) - 1
          enddo
-         call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
 
-         ! !$omp parallel do default(shared) private(i,j,edge_m,edge_n)
-         ! do i=1,M
-         ! do j=1,r_est
-         ! edge_m = header_m + i - 1
-         ! edge_n = header_n + select_column(j) - 1
-         ! call element_Zmn(edge_m,edge_n,column_R(i,j),msh,option,ker)
-         ! enddo
-         ! enddo
-         ! !$omp end parallel do
+         submats(1)%nr = M
+         submats(1)%nc = r_est
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         column_R = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+
+         ! call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
+
          if (rank > 0) then
             do j = 1, r_est
                call gemmf77('N', 'N', M, 1, rank, -cone, matU, M, matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
@@ -5294,6 +5119,7 @@ contains
       real(kind=8) tolerance, SVD_tolerance
       integer edge_m, edge_n, header_m, header_n, mn
       real(kind=8) inner_UV, n1, n2, a, error
+      type(intersect)::submats(1)
 
       type(mesh)::msh
       type(kernelquant)::ker
@@ -5384,7 +5210,22 @@ contains
             do j = 1, r_est_knn_c
                nrange(j) = header_n + select_column_knn(j) - 1
             enddo
-            call element_Zmn_block_user(M, r_est_knn_c, mrange, nrange, column_R_knn, msh, option, ker, 0, passflag, ptree, stats)
+
+            submats(1)%nr = M
+            submats(1)%nc = r_est_knn_c
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            column_R_knn = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+
+            ! call element_Zmn_block_user(M, r_est_knn_c, mrange, nrange, column_R_knn, msh, option, ker, 0, passflag, ptree, stats)
 
             do i = 1, r_est_knn_r
                mrange(i) = header_m + select_row_knn(i) - 1
@@ -5392,7 +5233,22 @@ contains
             do j = 1, N
                nrange(j) = header_n + j - 1
             enddo
-            call element_Zmn_block_user(r_est_knn_r, N, mrange, nrange, row_R_knn, msh, option, ker, 0, passflag, ptree, stats)
+
+            submats(1)%nr = r_est_knn_r
+            submats(1)%nc = N
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            row_R_knn = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+
+            ! call element_Zmn_block_user(r_est_knn_r, N, mrange, nrange, row_R_knn, msh, option, ker, 0, passflag, ptree, stats)
 
             !**** Compute the skeleton matrix in CUR
             do i = 1, r_est_knn_r
@@ -5471,7 +5327,21 @@ contains
          do j = 1, r_est
             nrange(j) = header_n + select_column(j) - 1
          enddo
-         call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = M
+         submats(1)%nc = r_est
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         column_R = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(M, r_est, mrange, nrange, column_R, msh, option, ker, 0, passflag, ptree, stats)
 
          if (rank > 0) then
             do j = 1, r_est
@@ -5498,7 +5368,21 @@ contains
          do j = 1, N
             nrange(j) = header_n + j - 1
          enddo
-         call element_Zmn_block_user(r_est, N, mrange, nrange, row_R, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = r_est
+         submats(1)%nc = N
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         row_R = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(r_est, N, mrange, nrange, row_R, msh, option, ker, 0, passflag, ptree, stats)
 
          if (rank > 0) then
             do i = 1, r_est
@@ -5658,6 +5542,8 @@ contains
       DT, allocatable :: tau(:)
       real(kind=8):: RTEMP(1)
       integer:: passflag = 0
+      type(intersect)::submats(1)
+
       rank_new = 0
       ! ctxt = ptree%pgrp(pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
@@ -5678,18 +5564,24 @@ contains
          do jj = 1, N
             nrange(jj) = header_n + jj - 1
          enddo
-         call element_Zmn_block_user(rmaxr, N, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)
+
+         submats(1)%nr = rmaxr
+         submats(1)%nc = N
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         matV_tmp = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(rmaxr, N, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)
          call copymatT(matV_tmp, matV, rmaxr, N)
          deallocate (matV_tmp)
 
-         ! matV=0
-         ! do ii=1,N
-         ! do jj=1,rmaxr
-         ! edge_m = header_m + select_row(jj) - 1
-         ! edge_n = header_n + ii - 1
-         ! call element_Zmn(edge_m,edge_n,matV(ii,jj),msh,option,ker)
-         ! enddo
-         ! enddo
 
          allocate (MatrixSubselection(rmaxr, rmaxc))
          MatrixSubselection = 0
@@ -5699,15 +5591,22 @@ contains
          do jj = 1, rmaxc
             nrange(jj) = header_n + select_col(jj) - 1
          enddo
-         call element_Zmn_block_user(rmaxr, rmaxc, mrange, nrange, MatrixSubselection, msh, option, ker, 0, passflag, ptree, stats)
 
-         ! do ii=1,rmaxr
-         ! do jj=1,rmaxc
-         ! edge_m = header_m + select_row(ii) - 1
-         ! edge_n = header_n + select_col(jj) - 1
-         ! call element_Zmn(edge_m,edge_n,MatrixSubselection(ii,jj),msh,option,ker)
-         ! enddo
-         ! enddo
+         submats(1)%nr = rmaxr
+         submats(1)%nc = rmaxc
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         MatrixSubselection = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(rmaxr, rmaxc, mrange, nrange, MatrixSubselection, msh, option, ker, 0, passflag, ptree, stats)
+
 
          allocate (jpiv(rmaxc))
          jpiv = 0
@@ -5737,15 +5636,22 @@ contains
          do jj = 1, rank
             nrange(jj) = header_n + select_col(jpiv(jj)) - 1
          enddo
-         call element_Zmn_block_user(M, rank, mrange, nrange, blocks%ButterflyU%blocks(1)%matrix, msh, option, ker, 0, passflag, ptree, stats)
 
-         ! do ii=1,M
-         ! do jj=1,rank
-         ! edge_m = header_m + ii - 1
-         ! edge_n = header_n + select_col(jpiv(jj)) - 1
-         ! call element_Zmn(edge_m,edge_n,blocks%ButterflyU%blocks(1)%matrix(ii,jj),msh,option,ker)
-         ! enddo
-         ! enddo
+         submats(1)%nr = M
+         submats(1)%nc = rank
+         allocate(submats(1)%rows(submats(1)%nr))
+         submats(1)%rows = mrange(1:submats(1)%nr)
+         allocate(submats(1)%cols(submats(1)%nc))
+         submats(1)%cols = nrange(1:submats(1)%nc)
+         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+         blocks%ButterflyU%blocks(1)%matrix = submats(1)%dat
+         deallocate(submats(1)%rows)
+         deallocate(submats(1)%cols)
+         deallocate(submats(1)%dat)
+
+         ! call element_Zmn_block_user(M, rank, mrange, nrange, blocks%ButterflyU%blocks(1)%matrix, msh, option, ker, 0, passflag, ptree, stats)
+
 
          allocate (blocks%ButterflyV%blocks(1)%matrix(N, rank))
          blocks%ButterflyV%blocks(1)%matrix = matV(1:N, 1:rank)
@@ -5784,19 +5690,23 @@ contains
                call l2g(myi, myrow, N, nprow, nbslpk, ii)
                nrange(myi) = header_n + ii - 1
             enddo
-            call element_Zmn_block_user(myAcols, myArows, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)
+
+            submats(1)%nr = myAcols
+            submats(1)%nc = myArows
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            matV_tmp = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(myAcols, myArows, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)
             call copymatT(matV_tmp, matV, myAcols, myArows)
             deallocate (matV_tmp)
-
-            ! do myi=1,myArows
-            ! call l2g(myi,myrow,N,nprow,nbslpk,ii)
-            ! do myj=1,myAcols
-            ! call l2g(myj,mycol,rmaxr,npcol,nbslpk,jj)
-            ! edge_m = header_m + select_row(jj) - 1
-            ! edge_n = header_n + ii - 1
-            ! call element_Zmn(edge_m,edge_n,matV(myi,myj),msh,option,ker)
-            ! enddo
-            ! enddo
 
             call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
             myArows = numroc_wp(rmaxr, nbslpk, myrow, 0, nprow)
@@ -5814,17 +5724,21 @@ contains
                call l2g(myj, mycol, rmaxc, npcol, nbslpk, jj)
                nrange(myj) = header_n + select_col(jj) - 1
             enddo
-            call element_Zmn_block_user(myArows, myAcols, mrange, nrange, MatrixSubselection, msh, option, ker, 0, passflag, ptree, stats)
 
-            ! do myi=1,myArows
-            ! call l2g(myi,myrow,rmaxr,nprow,nbslpk,ii)
-            ! do myj=1,myAcols
-            ! call l2g(myj,mycol,rmaxc,npcol,nbslpk,jj)
-            ! edge_m = header_m + select_row(ii) - 1
-            ! edge_n = header_n + select_col(jj) - 1
-            ! call element_Zmn(edge_m,edge_n,MatrixSubselection(myi,myj),msh,option,ker)
-            ! enddo
-            ! enddo
+            submats(1)%nr = myArows
+            submats(1)%nc = myAcols
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            MatrixSubselection = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(myArows, myAcols, mrange, nrange, MatrixSubselection, msh, option, ker, 0, passflag, ptree, stats)
 
             ! Compute QR of MatrixSubselection*P
             allocate (ipiv(myAcols))
@@ -5888,17 +5802,21 @@ contains
                call l2g(myj, mycol, rank_new, npcol, nbslpk, jj)
                nrange(myj) = header_n + select_col(ipiv(myj)) - 1
             enddo
-            call element_Zmn_block_user(myArows, myAcols, mrange, nrange, matU2D, msh, option, ker, 0, passflag, ptree, stats)
 
-            ! do myi=1,myArows
-            ! call l2g(myi,myrow,M,nprow,nbslpk,ii)
-            ! do myj=1,myAcols
-            ! call l2g(myj,mycol,rank_new,npcol,nbslpk,jj)
-            ! edge_m = header_m + ii - 1
-            ! edge_n = header_n + select_col(ipiv(myj)) - 1
-            ! call element_Zmn(edge_m,edge_n,matU2D(myi,myj),msh,option,ker)
-            ! enddo
-            ! enddo
+            submats(1)%nr = myArows
+            submats(1)%nc = myAcols
+            allocate(submats(1)%rows(submats(1)%nr))
+            submats(1)%rows = mrange(1:submats(1)%nr)
+            allocate(submats(1)%cols(submats(1)%nc))
+            submats(1)%cols = nrange(1:submats(1)%nc)
+            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+            matU2D = submats(1)%dat
+            deallocate(submats(1)%rows)
+            deallocate(submats(1)%cols)
+            deallocate(submats(1)%dat)
+
+            ! call element_Zmn_block_user(myArows, myAcols, mrange, nrange, matU2D, msh, option, ker, 0, passflag, ptree, stats)
 
             deallocate (select_col)
             deallocate (select_row)
@@ -5982,6 +5900,7 @@ contains
       integer::mrange_dummy(1), nrange_dummy(1)
       DT:: mat_dummy(1, 1)
       integer:: passflag = 0
+      type(intersect)::submats(1)
 
       blocks => bplus%LL(1)%matrices_block(1)
       pgno = blocks%pgno
@@ -6020,13 +5939,28 @@ contains
       do myj = 1, blocks%N
          nrange(myj) = blocks%headn + myj - 1
       enddo
-      call element_Zmn_block_user(blocks%M_loc, blocks%N, mrange, nrange, Fullmat, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = blocks%M_loc
+      submats(1)%nc = blocks%N
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange(1:submats(1)%nr)
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange(1:submats(1)%nc)
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      Fullmat = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+      ! call element_Zmn_block_user(blocks%M_loc, blocks%N, mrange, nrange, Fullmat, msh, option, ker, 0, passflag, ptree, stats)
       deallocate (mrange)
       deallocate (nrange)
 
       passflag = 0
       do while (passflag == 0)
-         call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
+         ! call element_Zmn_block_user(0, 0, mrange_dummy, nrange_dummy, mat_dummy, msh, option, ker, 1, passflag, ptree, stats)
+         call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
       enddo
 
       call gemmf90(Fullmat, blocks%M_loc, Vin_glo, blocks%N, Vout1, blocks%M_loc, 'N', 'N', blocks%M_loc, Ntest, blocks%N, cone, czero)
@@ -6303,6 +6237,7 @@ contains
       type(kernelquant)::ker
       integer, allocatable::mrange(:), nrange(:)
       integer passflag
+      type(intersect)::submats(1)
 
       mm = blocks%M
       head_m = blocks%headm
@@ -6322,7 +6257,21 @@ contains
       allocate (blocks%fullmat(mm, nn))
       if (blocks%row_group == blocks%col_group) allocate (blocks%ipiv(mm))
 
-      call element_Zmn_block_user(mm, nn, mrange, nrange, blocks%fullmat, msh, option, ker, 0, passflag, ptree, stats)
+
+      submats(1)%nr = mm
+      submats(1)%nc = nn
+      allocate(submats(1)%rows(submats(1)%nr))
+      submats(1)%rows = mrange
+      allocate(submats(1)%cols(submats(1)%nc))
+      submats(1)%cols = nrange
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      blocks%fullmat = submats(1)%dat
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+
 
       deallocate (mrange)
       deallocate (nrange)
