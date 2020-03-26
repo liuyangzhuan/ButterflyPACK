@@ -327,6 +327,10 @@ contains
       stats%Time_Factor = 0
 
       time_tmp = 0
+      time_tmp1 = 0
+      time_tmp2 = 0
+      time_tmp3 = 0
+      time_tmp4 = 0
    end subroutine InitStat
 
    subroutine PrintStat(stats, ptree)

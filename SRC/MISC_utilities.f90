@@ -3376,6 +3376,443 @@ contains
 
    end subroutine Redistribute1Dto1D
 
+
+
+! redistribute array 1D block array dat_i distributed among process group pgno_i to two 1D block array dat_o1 and dat_o2 distributed among process group pgno_o1 and pgno_o1 (which should be the same), M_p_i/M_p_o1/M_p_o2 denote the starting index of each process, head_i/head_o1/head_o2 denote the global index of the first element (among all processes) in the dat_i/dat_o1/dat_o2
+   subroutine Redistribute1Dto1D_OnetoTwo(dat_i, M_p_i, head_i, pgno_i, dat_o1, M_p_o1, head_o1, pgno_o1, dat_o2, M_p_o2, head_o2, pgno_o2, N, ptree)
+      implicit none
+      DT::dat_i(:, :), dat_o1(:, :), dat_o2(:, :)
+      integer pgno_i, pgno_o,pgno_o1,pgno_o2, N
+      integer M_p_i(:, :), M_p_o1(:, :),M_p_o2(:, :)
+      integer nproc_i, nproc_o, idxs_i, idxs_o1, idxs_o2, idxe_i, idxe_o1, idxe_o2, ii, jj, iii, jjj,oo
+      type(proctree)::ptree
+      type(commquant1D), allocatable::sendquant(:), recvquant(:)
+      integer, allocatable::S_req(:), R_req(:)
+      integer, allocatable:: statuss(:, :), statusr(:, :)
+      integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_i, head_o1, head_o2, sizes, sizer, offs, offr, offset1, offset2,cnt,size1,size2
+
+      call assert(pgno_o1==pgno_o2,'pgno_o1 not equal pgno_o2 in Redistribute1Dto1D_OnetoTwo')
+      pgno_o = pgno_o1
+
+      if (pgno_i == pgno_o1 .and. pgno_i == pgno_o2 .and. ptree%pgrp(pgno_i)%nproc == 1) then
+         idxs_i = M_p_i(1, 1) + head_i
+         idxe_i = M_p_i(1, 2) + head_i
+         idxs_o1 = M_p_o1(1, 1) + head_o1
+         idxe_o1 = M_p_o1(1, 2) + head_o1
+         if (idxs_o1 <= idxe_i .and. idxe_o1 >= idxs_i) then
+            offs = max(idxs_i, idxs_o1) - idxs_i
+            sizes = min(idxe_i, idxe_o1) - max(idxs_i, idxs_o1) + 1
+            offr = max(idxs_i, idxs_o1) - idxs_o1
+            sizer = min(idxe_i, idxe_o1) - max(idxs_i, idxs_o1) + 1
+            dat_o1(offr + 1:offr + sizer, 1:N) = dat_i(offs + 1:offs + sizes, 1:N)
+         endif
+         idxs_i = M_p_i(1, 1) + head_i
+         idxe_i = M_p_i(1, 2) + head_i
+         idxs_o2 = M_p_o2(1, 1) + head_o2
+         idxe_o2 = M_p_o2(1, 2) + head_o2
+         if (idxs_o2 <= idxe_i .and. idxe_o2 >= idxs_i) then
+            offs = max(idxs_i, idxs_o2) - idxs_i
+            sizes = min(idxe_i, idxe_o2) - max(idxs_i, idxs_o2) + 1
+            offr = max(idxs_i, idxs_o2) - idxs_o2
+            sizer = min(idxe_i, idxe_o2) - max(idxs_i, idxs_o2) + 1
+            dat_o2(offr + 1:offr + sizer, 1:N) = dat_i(offs + 1:offs + sizes, 1:N)
+         endif
+      else
+
+         nproc_i = ptree%pgrp(pgno_i)%nproc
+         nproc_o = ptree%pgrp(pgno_o)%nproc
+         tag = pgno_o
+
+         allocate (statuss(MPI_status_size, nproc_o))
+         allocate (statusr(MPI_status_size, nproc_i))
+         allocate (S_req(nproc_o))
+         allocate (R_req(nproc_i))
+
+         allocate (sendquant(nproc_o))
+         do ii = 1, nproc_o
+            sendquant(ii)%size = 0
+         enddo
+
+         allocate (recvquant(nproc_i))
+         do ii = 1, nproc_i
+            recvquant(ii)%size = 0
+         enddo
+
+         if (IOwnPgrp(ptree, pgno_i)) then
+            ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+            idxs_i = M_p_i(ii, 1) + head_i
+            idxe_i = M_p_i(ii, 2) + head_i
+
+            do jj = 1, nproc_o
+               sendquant(jj)%size=0
+               idxs_o1 = M_p_o1(jj, 1) + head_o1
+               idxe_o1 = M_p_o1(jj, 2) + head_o1
+               if (idxs_o1 <= idxe_i .and. idxe_o1 >= idxs_i) then
+                  size1 = (min(idxe_i, idxe_o1) - max(idxs_i, idxs_o1) + 1)
+                  sendquant(jj)%size = sendquant(jj)%size + size1+1
+               endif
+               idxs_o2 = M_p_o2(jj, 1) + head_o2
+               idxe_o2 = M_p_o2(jj, 2) + head_o2
+               if (idxs_o2 <= idxe_i .and. idxe_o2 >= idxs_i) then
+                  size2 = (min(idxe_i, idxe_o2) - max(idxs_i, idxs_o2) + 1)
+                  sendquant(jj)%size = sendquant(jj)%size + size2+1
+               endif
+
+               if (sendquant(jj)%size > 0) then
+                  allocate (sendquant(jj)%dat(sendquant(jj)%size, N))
+               endif
+
+               cnt=0
+               if (idxs_o1 <= idxe_i .and. idxe_o1 >= idxs_i) then
+                  offset1 = max(idxs_i, idxs_o1) - idxs_i
+                  sendquant(jj)%dat(cnt+1,1) = 1
+                  ! sendquant(jj)%dat(cnt+2,1) = offset1
+                  cnt = cnt +1
+                  sendquant(jj)%dat(cnt+1:cnt+size1,1:N) = dat_i(offset1 + 1:offset1 + size1, 1:N)
+                  cnt = cnt + size1
+               endif
+               if (idxs_o2 <= idxe_i .and. idxe_o2 >= idxs_i) then
+                  offset2 = max(idxs_i, idxs_o2) - idxs_i
+                  sendquant(jj)%dat(cnt+1,1) = 2
+                  ! sendquant(jj)%dat(cnt+2,1) = offset2
+                  cnt = cnt +1
+                  sendquant(jj)%dat(cnt+1:cnt+size2,1:N) = dat_i(offset2 + 1:offset2 + size2, 1:N)
+                  cnt = cnt + size2
+               endif
+
+            enddo
+         endif
+
+         if (IOwnPgrp(ptree, pgno_o)) then
+            jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+            do ii = 1, nproc_i
+               idxs_i = M_p_i(ii, 1) + head_i
+               idxe_i = M_p_i(ii, 2) + head_i
+               recvquant(ii)%size=0
+
+               idxs_o1 = M_p_o1(jj, 1) + head_o1
+               idxe_o1 = M_p_o1(jj, 2) + head_o1
+               if (idxs_o1 <= idxe_i .and. idxe_o1 >= idxs_i) then
+                  ! recvquant(ii)%offset = max(idxs_i, idxs_o) - idxs_o
+                  recvquant(ii)%size = recvquant(ii)%size + (min(idxe_i, idxe_o1) - max(idxs_i, idxs_o1) + 1)+1
+               endif
+
+               idxs_o2 = M_p_o2(jj, 1) + head_o2
+               idxe_o2 = M_p_o2(jj, 2) + head_o2
+               if (idxs_o2 <= idxe_i .and. idxe_o2 >= idxs_i) then
+                  ! recvquant(ii)%offset = max(idxs_i, idxs_o) - idxs_o
+                  recvquant(ii)%size = recvquant(ii)%size + (min(idxe_i, idxe_o2) - max(idxs_i, idxs_o2) + 1)+1
+               endif
+
+               if(recvquant(ii)%size>0)then
+                  allocate (recvquant(ii)%dat(recvquant(ii)%size, N))
+                  recvquant(ii)%dat = 0
+               endif
+
+            enddo
+         endif
+
+         ! post receive
+         Nreqr = 0
+         do ii = 1, nproc_i
+            if (recvquant(ii)%size > 0) then
+               jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+               sendid = ii + ptree%pgrp(pgno_i)%head - 1
+               if (ptree%MyID /= sendid) then
+                  Nreqr = Nreqr + 1
+                  call MPI_Irecv(recvquant(ii)%dat, recvquant(ii)%size*N, MPI_DT, sendid, tag, ptree%Comm, R_req(Nreqr), ierr)
+               endif
+            endif
+         enddo
+
+         ! post send
+         Nreqs = 0
+         do jj = 1, nproc_o
+            if (sendquant(jj)%size > 0) then
+               ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+               recvid = jj + ptree%pgrp(pgno_o)%head - 1
+               if (ptree%MyID == recvid) then
+                  recvquant(ii)%dat = sendquant(jj)%dat ! make the direct copy if I own both send and receive pieces
+               else
+                  Nreqs = Nreqs + 1
+                  call MPI_Isend(sendquant(jj)%dat, sendquant(jj)%size*N, MPI_DT, recvid, tag, ptree%Comm, S_req(Nreqs), ierr)
+               endif
+            endif
+         enddo
+
+         if (Nreqs > 0) then
+            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+         endif
+         if (Nreqr > 0) then
+            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+         endif
+
+         ! copy data from receive buffer
+         do ii = 1, nproc_i
+            if (recvquant(ii)%size > 0) then
+               jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+               idxs_i = M_p_i(ii, 1) + head_i
+               idxe_i = M_p_i(ii, 2) + head_i
+
+               cnt=0
+               do while(cnt<recvquant(ii)%size)
+               cnt = cnt +1
+               oo=NINT(dble(recvquant(ii)%dat(cnt,1)))
+               if(oo==1)then
+                  idxs_o1 = M_p_o1(jj, 1) + head_o1
+                  idxe_o1 = M_p_o1(jj, 2) + head_o1
+                  size1 = (min(idxe_i, idxe_o1) - max(idxs_i, idxs_o1) + 1)
+                  offset1 = max(idxs_i, idxs_o1) - idxs_o1
+                  dat_o1(offset1 + 1:offset1 + size1, 1:N) = recvquant(ii)%dat(cnt+1:cnt+size1,1:N)
+                  cnt = cnt +size1
+               else if(oo==2)then
+                  idxs_o2 = M_p_o2(jj, 1) + head_o2
+                  idxe_o2 = M_p_o2(jj, 2) + head_o2
+                  size2 = (min(idxe_i, idxe_o2) - max(idxs_i, idxs_o2) + 1)
+                  offset2 = max(idxs_i, idxs_o2) - idxs_o2
+                  dat_o2(offset2 + 1:offset2 + size2, 1:N) = recvquant(ii)%dat(cnt+1:cnt+size2,1:N)
+                  cnt = cnt +size2
+               endif
+               enddo
+
+
+            endif
+         enddo
+
+         ! deallocation
+         deallocate (S_req)
+         deallocate (R_req)
+         deallocate (statuss)
+         deallocate (statusr)
+         do jj = 1, nproc_o
+            if (allocated(sendquant(jj)%dat)) deallocate (sendquant(jj)%dat)
+         enddo
+         deallocate (sendquant)
+         do ii = 1, nproc_i
+            if (allocated(recvquant(ii)%dat)) deallocate (recvquant(ii)%dat)
+         enddo
+         deallocate (recvquant)
+      endif
+
+   end subroutine Redistribute1Dto1D_OnetoTwo
+
+
+
+! redistribute two 1D block array dat_i1 and dat_i2 distributed among process group pgno_i1 and pgno_i2 (which should be the same) to one 1D block array dat_o distributed among process group pgno_o, M_p_i1/M_p_i2/M_p_o denote the starting index of each process, head_i1/head_i2/head_o denote the global index of the first element (among all processes) in the dat_i1/dat_i2/dat_o
+   subroutine Redistribute1Dto1D_TwotoOne(dat_i1, M_p_i1, head_i1, pgno_i1,dat_i2, M_p_i2, head_i2, pgno_i2, dat_o, M_p_o, head_o, pgno_o, N, ptree)
+      implicit none
+      DT::dat_o(:, :), dat_i1(:, :), dat_i2(:, :)
+      integer pgno_i, pgno_o,pgno_i1,pgno_i2, N
+      integer M_p_o(:, :), M_p_i1(:, :),M_p_i2(:, :)
+      integer nproc_i, nproc_o, idxs_o, idxs_i1, idxs_i2, idxe_o, idxe_i1, idxe_i2, ii, jj, iii, jjj,ss
+      type(proctree)::ptree
+      type(commquant1D), allocatable::sendquant(:), recvquant(:)
+      integer, allocatable::S_req(:), R_req(:)
+      integer, allocatable:: statuss(:, :), statusr(:, :)
+      integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_o, head_i1, head_i2, sizes, sizer, offs, offr, offset1, offset2,cnt,size1,size2
+
+      call assert(pgno_i1==pgno_i2,'pgno_i1 not equal pgno_i2 in Redistribute1Dto1D_TwotoOne')
+      pgno_i = pgno_i1
+
+      if (pgno_o == pgno_i1 .and. pgno_o == pgno_i2 .and. ptree%pgrp(pgno_o)%nproc == 1) then
+         idxs_i1 = M_p_i1(1, 1) + head_i1
+         idxe_i1 = M_p_i1(1, 2) + head_i1
+         idxs_o = M_p_o(1, 1) + head_o
+         idxe_o = M_p_o(1, 2) + head_o
+         if (idxs_o <= idxe_i1 .and. idxe_o >= idxs_i1) then
+            offs = max(idxs_i1, idxs_o) - idxs_i1
+            sizes = min(idxe_i1, idxe_o) - max(idxs_i1, idxs_o) + 1
+            offr = max(idxs_i1, idxs_o) - idxs_o
+            sizer = min(idxe_i1, idxe_o) - max(idxs_i1, idxs_o) + 1
+            dat_o(offr + 1:offr + sizer, 1:N) = dat_i1(offs + 1:offs + sizes, 1:N)
+         endif
+         idxs_i2 = M_p_i2(1, 1) + head_i2
+         idxe_i2 = M_p_i2(1, 2) + head_i2
+         idxs_o = M_p_o(1, 1) + head_o
+         idxe_o = M_p_o(1, 2) + head_o
+         if (idxs_o <= idxe_i2 .and. idxe_o >= idxs_i2) then
+            offs = max(idxs_i2, idxs_o) - idxs_i2
+            sizes = min(idxe_i2, idxe_o) - max(idxs_i2, idxs_o) + 1
+            offr = max(idxs_i2, idxs_o) - idxs_o
+            sizer = min(idxe_i2, idxe_o) - max(idxs_i2, idxs_o) + 1
+            dat_o(offr + 1:offr + sizer, 1:N) = dat_i2(offs + 1:offs + sizes, 1:N)
+         endif
+      else
+
+         nproc_i = ptree%pgrp(pgno_i)%nproc
+         nproc_o = ptree%pgrp(pgno_o)%nproc
+         tag = pgno_o
+
+         allocate (statuss(MPI_status_size, nproc_o))
+         allocate (statusr(MPI_status_size, nproc_i))
+         allocate (S_req(nproc_o))
+         allocate (R_req(nproc_i))
+
+         allocate (sendquant(nproc_o))
+         do ii = 1, nproc_o
+            sendquant(ii)%size = 0
+         enddo
+
+         allocate (recvquant(nproc_i))
+         do ii = 1, nproc_i
+            recvquant(ii)%size = 0
+         enddo
+
+         if (IOwnPgrp(ptree, pgno_i)) then
+            ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+            do jj = 1, nproc_o
+               sendquant(jj)%size=0
+               idxs_o = M_p_o(jj, 1) + head_o
+               idxe_o = M_p_o(jj, 2) + head_o
+
+               idxs_i1 = M_p_i1(ii, 1) + head_i1
+               idxe_i1 = M_p_i1(ii, 2) + head_i1
+               if (idxs_o <= idxe_i1 .and. idxe_o >= idxs_i1) then
+                  size1 = (min(idxe_i1, idxe_o) - max(idxs_i1, idxs_o) + 1)
+                  sendquant(jj)%size = sendquant(jj)%size + size1+1
+               endif
+               idxs_i2 = M_p_i2(ii, 1) + head_i2
+               idxe_i2 = M_p_i2(ii, 2) + head_i2
+               if (idxs_o <= idxe_i2 .and. idxe_o >= idxs_i2) then
+                  size2 = (min(idxe_i2, idxe_o) - max(idxs_i2, idxs_o) + 1)
+                  sendquant(jj)%size = sendquant(jj)%size + size2+1
+               endif
+
+               if (sendquant(jj)%size > 0) then
+                  allocate (sendquant(jj)%dat(sendquant(jj)%size, N))
+               endif
+
+               cnt=0
+               if (idxs_o <= idxe_i1 .and. idxe_o >= idxs_i1) then
+                  offset1 = max(idxs_i1, idxs_o) - idxs_i1
+                  sendquant(jj)%dat(cnt+1,1) = 1
+                  cnt = cnt +1
+                  sendquant(jj)%dat(cnt+1:cnt+size1,1:N) = dat_i1(offset1 + 1:offset1 + size1, 1:N)
+                  cnt = cnt + size1
+               endif
+               if (idxs_o <= idxe_i2 .and. idxe_o >= idxs_i2) then
+                  offset2 = max(idxs_i2, idxs_o) - idxs_i2
+                  sendquant(jj)%dat(cnt+1,1) = 2
+                  cnt = cnt +1
+                  sendquant(jj)%dat(cnt+1:cnt+size2,1:N) = dat_i2(offset2 + 1:offset2 + size2, 1:N)
+                  cnt = cnt + size2
+               endif
+
+            enddo
+         endif
+
+         if (IOwnPgrp(ptree, pgno_o)) then
+            jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+            do ii = 1, nproc_i
+               recvquant(ii)%size=0
+
+               idxs_o = M_p_o(jj, 1) + head_o
+               idxe_o = M_p_o(jj, 2) + head_o
+
+               idxs_i1 = M_p_i1(ii, 1) + head_i1
+               idxe_i1 = M_p_i1(ii, 2) + head_i1
+               if (idxs_o <= idxe_i1 .and. idxe_o >= idxs_i1) then
+                  recvquant(ii)%size = recvquant(ii)%size + (min(idxe_i1, idxe_o) - max(idxs_i1, idxs_o) + 1)+1
+               endif
+               idxs_i2 = M_p_i2(ii, 1) + head_i2
+               idxe_i2 = M_p_i2(ii, 2) + head_i2
+               if (idxs_o <= idxe_i2 .and. idxe_o >= idxs_i2) then
+                  recvquant(ii)%size = recvquant(ii)%size + (min(idxe_i2, idxe_o) - max(idxs_i2, idxs_o) + 1)+1
+               endif
+
+               if(recvquant(ii)%size>0)then
+                  allocate (recvquant(ii)%dat(recvquant(ii)%size, N))
+                  recvquant(ii)%dat = 0
+               endif
+
+            enddo
+         endif
+
+         ! post receive
+         Nreqr = 0
+         do ii = 1, nproc_i
+            if (recvquant(ii)%size > 0) then
+               jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+               sendid = ii + ptree%pgrp(pgno_i)%head - 1
+               if (ptree%MyID /= sendid) then
+                  Nreqr = Nreqr + 1
+                  call MPI_Irecv(recvquant(ii)%dat, recvquant(ii)%size*N, MPI_DT, sendid, tag, ptree%Comm, R_req(Nreqr), ierr)
+               endif
+            endif
+         enddo
+
+         ! post send
+         Nreqs = 0
+         do jj = 1, nproc_o
+            if (sendquant(jj)%size > 0) then
+               ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+               recvid = jj + ptree%pgrp(pgno_o)%head - 1
+               if (ptree%MyID == recvid) then
+                  recvquant(ii)%dat = sendquant(jj)%dat ! make the direct copy if I own both send and receive pieces
+               else
+                  Nreqs = Nreqs + 1
+                  call MPI_Isend(sendquant(jj)%dat, sendquant(jj)%size*N, MPI_DT, recvid, tag, ptree%Comm, S_req(Nreqs), ierr)
+               endif
+            endif
+         enddo
+
+         if (Nreqs > 0) then
+            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+         endif
+         if (Nreqr > 0) then
+            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+         endif
+
+         ! copy data from receive buffer
+         do ii = 1, nproc_i
+            if (recvquant(ii)%size > 0) then
+               jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+               idxs_o = M_p_o(jj, 1) + head_o
+               idxe_o = M_p_o(jj, 2) + head_o
+
+               cnt=0
+               do while(cnt<recvquant(ii)%size)
+               cnt = cnt +1
+               ss=NINT(dble(recvquant(ii)%dat(cnt,1)))
+               if(ss==1)then
+                  idxs_i1 = M_p_i1(ii, 1) + head_i1
+                  idxe_i1 = M_p_i1(ii, 2) + head_i1
+                  size1 = (min(idxe_i1, idxe_o) - max(idxs_i1, idxs_o) + 1)
+                  offset1 = max(idxs_i1, idxs_o) - idxs_o
+                  dat_o(offset1 + 1:offset1 + size1, 1:N) = recvquant(ii)%dat(cnt+1:cnt+size1,1:N)
+                  cnt = cnt +size1
+               else if(ss==2)then
+                  idxs_i2 = M_p_i2(ii, 1) + head_i2
+                  idxe_i2 = M_p_i2(ii, 2) + head_i2
+                  size2 = (min(idxe_i2, idxe_o) - max(idxs_i2, idxs_o) + 1)
+                  offset2 = max(idxs_i2, idxs_o) - idxs_o
+                  dat_o(offset2 + 1:offset2 + size2, 1:N) = recvquant(ii)%dat(cnt+1:cnt+size2,1:N)
+                  cnt = cnt +size2
+               endif
+               enddo
+            endif
+         enddo
+
+         ! deallocation
+         deallocate (S_req)
+         deallocate (R_req)
+         deallocate (statuss)
+         deallocate (statusr)
+         do jj = 1, nproc_o
+            if (allocated(sendquant(jj)%dat)) deallocate (sendquant(jj)%dat)
+         enddo
+         deallocate (sendquant)
+         do ii = 1, nproc_i
+            if (allocated(recvquant(ii)%dat)) deallocate (recvquant(ii)%dat)
+         enddo
+         deallocate (recvquant)
+      endif
+
+   end subroutine Redistribute1Dto1D_TwotoOne
+
+
+
+
 ! redistribute 1D block array dat_i distributed among process group pgno_i to 2D block array dat_o distributed among process group pgno_o
    subroutine Redistribute1Dto2D(dat_i, M_p_i, head_i, pgno_i, dat_o, M, head_o, pgno_o, N, ptree)
       implicit none

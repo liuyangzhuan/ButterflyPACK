@@ -21,7 +21,7 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-	-DTPL_BLAS_LIBRARIES="" \
+	-DTPL_BLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_gf_lp64.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;${MKLROOT}/lib/intel64/libmkl_core.so"\
 	-DTPL_LAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_gf_lp64.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;${MKLROOT}/lib/intel64/libmkl_core.so" \
 	-DTPL_SCALAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_blacs_intelmpi_lp64.so;${MKLROOT}/lib/intel64/libmkl_scalapack_lp64.so" \
 	-DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu/build/lib/libarpack.so;/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu/build/lib/libparpack.so"

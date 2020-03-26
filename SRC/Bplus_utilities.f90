@@ -4984,7 +4984,7 @@ contains
       type(proctree)::ptree
       integer pgno, comm, ierr
       type(Hstat)::stats
-      real(kind=8)::flop, flops
+      real(kind=8)::flop, flops,n1,n2
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
 
       type(butterfly_vec) :: BFvec
@@ -4992,6 +4992,8 @@ contains
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
+
+      n1 = OMP_get_wtime()
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -5041,6 +5043,10 @@ contains
          deallocate (Vout_tmp)
 
       else
+
+         !$omp parallel
+         !$omp single
+
          allocate (arr_acc_n(blocks%ButterflyV%nblk_loc))
          allocate (arr_acc_m(blocks%ButterflyU%nblk_loc))
          k1 = 0
@@ -5087,7 +5093,8 @@ contains
             BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
-            !$omp parallel do default(shared) private(i,nn,ii,jj)
+
+            !$omp taskloop default(shared) private(i,nn,ii,jj)
             do i = 1, BFvec%vec(0)%nc
                nn = size(blocks%ButterflyV%blocks(i)%matrix, 1)
                allocate (BFvec%vec(0)%blocks(1, i)%matrix(nn, num_vectors))
@@ -5097,9 +5104,11 @@ contains
                   enddo
                enddo
             enddo
-            !$omp end parallel do
+            !$omp end taskloop
+
 
             do level = 0, level_half
+               ! n1 = OMP_get_wtime()
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
 
                BFvec%vec(level + 1)%idx_r = idx_r
@@ -5127,7 +5136,8 @@ contains
 
                   if (level == 0) then
                      flops = 0
-                     !$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
+
+                     !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
                      do j = 1, blocks%ButterflyV%nblk_loc
                         index_j = (j - 1)*inc_c + idx_c
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
@@ -5137,9 +5147,11 @@ contains
                         BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
 
                         call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -5166,7 +5178,7 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-                        !$omp parallel do default(shared) private(i,rank,mm,flop) reduction(+:flops)
+                        !$omp taskloop default(shared) private(i,rank,mm,flop)
                         do i = 1, blocks%ButterflyU%nblk_loc
                            rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                            mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
@@ -5174,16 +5186,17 @@ contains
                            BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
                            call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(i, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
                         enddo
-                        !$omp end parallel do
+                        !$omp end taskloop
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                   else
                      flops = 0
-                     !$omp parallel do default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
-
+                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -5208,12 +5221,16 @@ contains
                         BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -5222,10 +5239,16 @@ contains
                      if (allocated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
                   enddo
                enddo
+
+               ! n2 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n2-n1
+
                if (level_half /= level) then
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), num_vectors, stats, ptree, level, 'R', 'B')
                endif
             enddo
+
+
 
             if (level_half + 1 /= 0) then
                call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), num_vectors, stats, ptree, level_half, 'R', 'C')
@@ -5233,8 +5256,10 @@ contains
                call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), num_vectors, stats, ptree, level_half + 1, 'R', 'C')
             endif
 
+
             do level = level_half + 1, level_butterfly + 1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
+
 
                ! convert the local column-wise kernel block ranges to local row-wise output vector ranges
                if (level /= 0 .and. level /= level_butterfly + 1) then
@@ -5295,7 +5320,8 @@ contains
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
-                     !$omp parallel do default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop) reduction(+:flops)
+
+                     !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop)
                      do i = 1, nr0
                         index_i = (i - 1)*inc_r0 + idx_r0
                         index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
@@ -5306,16 +5332,21 @@ contains
                         BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
                         call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
+
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
                   flops = 0
 
                   if (nc0 > 1 .and. inc_c0 == 1) then  ! this special treatment makes sure two threads do not write to the same address simultaneously
-                     !$omp parallel do default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+                     ! n1 = OMP_get_wtime()
+
+                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr0*nc0/2
                         index_j_loc0 = (index_ij - 1)/nr0 + 1
                         do jj = 1, 2
@@ -5343,7 +5374,9 @@ contains
                            endif
                            ! !$omp end critical
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
@@ -5354,13 +5387,19 @@ contains
                            endif
                            ! !$omp end critical
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
                         enddo
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
+
+! n2 = OMP_get_wtime()
+! time_tmp = time_tmp + n2-n1
 
                   else
-                     !$omp parallel do default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+
+                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr0*nc0
                         index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
                         index_i_loc = mod(index_ij - 1, nr0) + 1
@@ -5386,7 +5425,9 @@ contains
                         endif
                         ! !$omp end critical
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                         mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                         nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
@@ -5397,10 +5438,13 @@ contains
                         endif
                         ! !$omp end critical
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
+
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                endif
@@ -5411,12 +5455,14 @@ contains
                   enddo
                enddo
 
+
+
                if (level /= level_butterfly + 1) then
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), num_vectors, stats, ptree, level, 'R', 'R')
                endif
             enddo
 
-            !$omp parallel do default(shared) private(i,mm,ii,jj)
+            !$omp taskloop default(shared) private(i,mm,ii,jj)
             do jj = 1, num_vectors
                do i = 1, blocks%ButterflyU%nblk_loc
                   mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
@@ -5425,7 +5471,7 @@ contains
                   enddo
                enddo
             enddo
-            !$omp end parallel do
+            !$omp end taskloop
 
             if (isnan(sum(abs(random2(:, 1))**2))) then
                write (*, *) 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
@@ -5450,7 +5496,7 @@ contains
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
 
-            !$omp parallel do default(shared) private(i,mm,ii,jj)
+            !$omp taskloop default(shared) private(i,mm,ii,jj)
             do i = 1, BFvec%vec(0)%nr
                mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
                allocate (BFvec%vec(0)%blocks(i, 1)%matrix(mm, num_vectors))
@@ -5460,7 +5506,7 @@ contains
                   enddo
                enddo
             enddo
-            !$omp end parallel do
+            !$omp end taskloop
 
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
@@ -5491,7 +5537,7 @@ contains
 
                   if (level == level_butterfly + 1) then
                      flops = 0
-                     !$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
+                     !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
                      do i = 1, blocks%ButterflyU%nblk_loc
                         index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                         index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -5502,10 +5548,12 @@ contains
                         BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
 
                         call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
@@ -5533,21 +5581,23 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-                        !$omp parallel do default(shared) private(j,rank,nn,flop) reduction(+:flops)
+                        !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
                         do j = 1, blocks%ButterflyV%nblk_loc
                            nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                            rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
                            allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
                            BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
                            call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, j)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
                         enddo
-                        !$omp end parallel do
+                        !$omp end taskloop
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   else
                      flops = 0
-                     !$omp parallel do default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
@@ -5571,12 +5621,16 @@ contains
                         BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -5639,7 +5693,7 @@ contains
 
                if (level == level_butterfly + 1) then
                   flops = 0
-                  !$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
+                  !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
                   do i = 1, blocks%ButterflyU%nblk_loc
                      index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -5650,10 +5704,12 @@ contains
                      BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
 
                      call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
+                     !$omp atomic
                      flops = flops + flop
+                     !$omp end atomic
 
                   enddo
-                  !$omp end parallel do
+                  !$omp end taskloop
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
                   if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -5685,8 +5741,7 @@ contains
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
-
-                     !$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
+                     !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
                      do j = 1, blocks%ButterflyV%nblk_loc
                         index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
                         index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
@@ -5696,16 +5751,19 @@ contains
                         allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
                         BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
                         call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
 
                   flops = 0
                   if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
-                     !$omp parallel do default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+
+                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr0*nc0/2
                         index_i_loc0 = (index_ij - 1)/nc0 + 1
                         do ii = 1, 2
@@ -5734,7 +5792,9 @@ contains
                            ! !$omp end critical
                            ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
@@ -5745,12 +5805,14 @@ contains
                            endif
                            ! !$omp end critical
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                           !$omp atomic
                            flops = flops + flop
+                           !$omp end atomic
                         enddo
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
                   else
-                     !$omp parallel do default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
                      do index_ij = 1, nr0*nc0
                         index_j_loc = (index_ij - 1)/nr0 + 1
                         index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -5777,7 +5839,9 @@ contains
                         ! !$omp end critical
                         ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
 
                         mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                         nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
@@ -5788,9 +5852,11 @@ contains
                         endif
                         ! !$omp end critical
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                        !$omp atomic
                         flops = flops + flop
+                        !$omp end atomic
                      enddo
-                     !$omp end parallel do
+                     !$omp end taskloop
 
                   endif
 
@@ -5808,7 +5874,8 @@ contains
                endif
             enddo
 
-            !$omp parallel do default(shared) private(j,nn,ii,jj)
+
+            !$omp taskloop default(shared) private(j,nn,ii,jj)
             do jj = 1, num_vectors
                do j = 1, blocks%ButterflyV%nblk_loc
                   nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
@@ -5818,7 +5885,7 @@ contains
                   enddo
                enddo
             enddo
-            !$omp end parallel do
+            !$omp end taskloop
          endif
 
          do level = 0, level_butterfly + 2
@@ -5833,7 +5900,14 @@ contains
          deallocate (BFvec%vec)
          deallocate (arr_acc_m, arr_acc_n)
 
+         !$omp end single
+         !$omp end parallel
+
+
       endif
+
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2-n1
 
       return
 
@@ -7518,7 +7592,7 @@ contains
       deallocate (BFvec%vec)
 
       n5 = OMP_get_wtime()
-      time_tmp = time_tmp + n5 - n1
+      ! time_tmp = time_tmp + n5 - n1
 
    end subroutine BF_block_extraction
 
@@ -9163,6 +9237,8 @@ contains
       allocate(submats1(Nsub))
       allocate(new2old_sub(Nsub))
 
+      t1 = OMP_get_wtime()
+
       !!! copy submats into submats1 as submats can have zero elements in the masks
       Ninter_loc=0
       new2old_sub=-1
@@ -9237,6 +9313,10 @@ contains
             submats1(Ninter_loc)%nc = ncol
          endif
       enddo
+
+      t2 = OMP_get_wtime()
+      stats%Time_Entry = stats%Time_Entry + t2 - t1
+
       myflag1 = myflag
       if(Ninter_loc==0)myflag1=max(myflag,1)
 

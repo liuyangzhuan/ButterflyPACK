@@ -1176,7 +1176,10 @@ contains
             ! write(*,*)'A-BDC',level_butterfly,level
             call BF_get_rank_ABCD(partitioned_block, rank0)
             if (level_butterfly == 0) then
+               ! n1 = OMP_get_wtime()
                call LR_A_minusBDinvC(partitioned_block, ptree, option, stats)
+               ! n2 = OMP_get_wtime()
+               ! time_tmp1 = time_tmp1 + n2-n1
             else
                rate = 1.2d0
                call BF_randomized(blocks_A%pgno, level_butterfly, rank0, rate, blocks_A, partitioned_block, BF_block_MVP_inverse_A_minusBDinvC_dat, error, 'A-BD^-1C', option, stats, ptree, msh)
@@ -2174,8 +2177,14 @@ contains
          allocate (Vo2(max(1, blocks_C%M_loc), num_vect_sub))
          Vo2 = 0
 
-         call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno, num_vect_sub, ptree)
-         call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
+
+         call Redistribute1Dto1D_OnetoTwo(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno,V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
+
+
+
+
 
          if (blocks_A%M_loc > 0) then
             call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, num_vect_sub, V1, Vo1, cone, cone, ptree, stats)
@@ -2184,8 +2193,10 @@ contains
             call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, Vo2, cone, cone, ptree, stats)
          endif
 
-         call Redistribute1Dto1D(Vo1, blocks_A%M_p, 0, blocks_A%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
-         call Redistribute1Dto1D(Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(Vo1, blocks_A%M_p, 0, blocks_A%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
+
+         call Redistribute1Dto1D_TwotoOne(Vo1, blocks_A%M_p, 0, blocks_A%pgno,Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
          if (ptree%MyID == ptree%pgrp(blocks_i%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,I5,A8,I5,A8,Es14.7,A8,I5)') 'Split L_in:', blocks_i%level_butterfly, 'L_out:', blocks_A%level_butterfly, ' error:', fnorm(vout1 - vout2, blocks_i%M_loc, 1)/fnorm(vout1, blocks_i%M_loc, 1), ' #nproc:', ptree%pgrp(blocks_A%pgno)%nproc
 
