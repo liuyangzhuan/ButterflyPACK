@@ -56,12 +56,13 @@ contains
       ! call MPI_barrier(ptree%pgrp(block_inv%pgno)%Comm,ierr)
       n1 = OMP_get_wtime()
       allocate (Vin1(mm, num_vect_sub))
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
-      ! Vin1 = Vin(1:mm,1:num_vect_sub)
-
       allocate (Vin2(nn, num_vect_sub))
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
-      ! Vin2 = Vin(1+mm:N,1:num_vect_sub)
+
+      ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+
+      call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno,Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -113,10 +114,10 @@ contains
 
       ! call MPI_barrier(ptree%pgrp(block_inv%pgno)%Comm,ierr)
       n1 = OMP_get_wtime()
-      ! Vout(1:mm,1:num_vect_sub) = Vout1
-      call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
-      ! Vout(1+mm:N,1:num_vect_sub) = Vout2
-      call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D_TwotoOne(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -1010,7 +1011,7 @@ contains
             n1 = OMP_get_wtime()
             call BF_Reconstruction_LL(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, 0, block_rand(1)%level_half)
             n2 = OMP_get_wtime()
-            time_tmp = time_tmp + n2 - n1
+            ! time_tmp = time_tmp + n2 - n1
             call BF_Reconstruction_RR(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, level_butterfly + 1, block_rand(1)%level_half + 1)
 
          endif
@@ -1118,7 +1119,7 @@ contains
             n1 = OMP_get_wtime()
             call BF_Reconstruction_LL(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, 0, 0)
             n2 = OMP_get_wtime()
-            time_tmp = time_tmp + n2 - n1
+            ! time_tmp = time_tmp + n2 - n1
             call BF_Reconstruction_RR(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, level_butterfly + 1, level_butterfly + 1)
             call BF_get_rank(block_rand(1), ptree, 0)
             call MPI_ALLREDUCE(block_rand(1)%rankmax, rankmax1, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
@@ -1139,7 +1140,7 @@ contains
          call BF_Reconstruction_LL(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, 1, block_rand(1)%level_half)
          call BF_Reconstruction_RR(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, level_butterfly, block_rand(1)%level_half + 1)
          n2 = OMP_get_wtime()
-         time_tmp = time_tmp + n2 - n1
+         ! time_tmp = time_tmp + n2 - n1
 
          n1 = OMP_get_wtime()
          call BF_Test_Reconstruction_Error(block_rand(1), blocks_o, operand, blackbox_MVP_dat, error_inout, ptree, stats, operand1)
@@ -1754,8 +1755,11 @@ contains
       procedure(BMatVec)::blackbox_MVP_dat
       integer idx_r, inc_r, nr, idx_c, inc_c, nc, idx_n_s, idx_n_e, idx_m_s, idx_m_e, idxs, idxe
       character side, trans
-      num_vect_subsub = num_vect_sub/(nth_e - nth_s + 1)
+      real(kind=8)::n1,n2
 
+      n1 = OMP_get_wtime()
+
+      num_vect_subsub = num_vect_sub/(nth_e - nth_s + 1)
       level_butterfly = block_rand%level_butterfly
       groupm_start = blocks_o%row_group*2**level_butterfly
       groupn_start = blocks_o%col_group*2**level_butterfly
@@ -1769,18 +1773,22 @@ contains
       idx_m_e = idx_r + nr - 1
 
       call GetPgno_Sub(ptree, block_rand%pgno, level_butterfly, pgno_sub_mine)
+      ! n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2-n1
 
+      ! n1 = OMP_get_wtime()
       RandVectIn = 0
       RandVectOut = 0
-
       if (side == 'L') then
          trans = 'T'
          level_right_start = block_rand%level_half !  check here later
          Nsub = NINT(2**ceiling_safe((level_butterfly - 1)/2d0)/dble(2**(level_right_start - unique_nth)))   !  check here later
          Ng = 2**level_butterfly/Nsub
 
+         !$omp parallel
+         !$omp single
+         !$omp taskloop default(shared) private(i,mm1,idxs,idxe,nth)
          do nth = nth_s, nth_e
-            !$omp parallel do default(shared) private(i,mm1,idxs,idxe)
             do i = (nth - 1)*Ng + 1, nth*Ng
                if (i >= idx_m_s .and. i <= idx_m_e) then
                   if (ptree%pgrp(pgno_sub_mine)%nproc > 1) then
@@ -1794,17 +1802,20 @@ contains
                   call RandomSubMat(idxs, idxe, (nth - nth_s)*num_vect_subsub + 1, (nth - nth_s)*num_vect_subsub + num_vect_subsub, min(mm1, num_vect_subsub), RandVectIn, 0)
                end if
             end do
-            !$omp end parallel do
          end do
+         !$omp end taskloop
+         !$omp end single
+         !$omp end parallel
 
       elseif (side == 'R') then
          trans = 'N'
          level_left_start = block_rand%level_half + 1 !  check here later
          Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth - level_left_start)))    !  check here later
          Ng = 2**level_butterfly/Nsub
-
+         !$omp parallel
+         !$omp single
+         !$omp taskloop default(shared) private(i,nn1,idxs,idxe,nth)
          do nth = nth_s, nth_e
-            !$omp parallel do default(shared) private(i,nn1,idxs,idxe)
             do i = (nth - 1)*Ng + 1, nth*Ng
                if (i >= idx_n_s .and. i <= idx_n_e) then
                   if (ptree%pgrp(pgno_sub_mine)%nproc > 1) then
@@ -1818,16 +1829,23 @@ contains
                   call RandomSubMat(idxs, idxe, (nth - nth_s)*num_vect_subsub + 1, (nth - nth_s)*num_vect_subsub + num_vect_subsub, min(nn1, num_vect_subsub), RandVectIn, 0)
                end if
             end do
-            !$omp end parallel do
          end do
+         !$omp end taskloop
+         !$omp end single
+         !$omp end parallel
 
       endif
+      n2 = OMP_get_wtime()
+      ! time_tmp1 = time_tmp1 + n2-n1
+
 
       ! get the left multiplied vectors
       mm = blocks_o%M_loc
       nn = blocks_o%N_loc
+      n1 = OMP_get_wtime()
       call blackbox_MVP_dat(operand, blocks_o, trans, mm, nn, num_vect_sub, RandVectIn, RandVectOut, cone, czero, ptree, stats, operand1)
-
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2-n1
       return
 
    end subroutine BF_Randomized_Vectors_dat
@@ -1844,15 +1862,18 @@ contains
       character trans
       DT :: Vinin(:, :), Voutout(:, :)  ! the leading dimensions are block_o%M_loc or block_o%N_loc
       DT, allocatable :: Vin(:, :), Vout(:, :) ! the leading dimensions are blocks_B%M_loc+blocks_B%N_loc
-      DT, allocatable :: Vin_tmp(:, :), Vout_tmp(:, :), Vbuff(:, :), V1(:, :), V2(:, :)
+      DT, allocatable :: Vin_tmp(:, :), Vout_tmp(:, :), Vbuff(:, :), V1(:, :), V2(:, :),Voutout1(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
-      integer groupn, groupm, mm, nn
+      integer groupn, groupm, mm, nn,ierr
       class(*)::partitioned_block
       class(*), optional::operand1
       type(matrixblock)::block_o
       type(proctree)::ptree
       type(Hstat)::stats
+      real(kind=8)::n1,n2,n3,n4
+
+      n1 = OMP_get_wtime()
 
       select TYPE (partitioned_block)
 
@@ -1874,24 +1895,28 @@ contains
 
          N = mm + nn
 
+         allocate (Voutout1(M_loc, num_vect_sub))
+         Voutout1=0
          !** convert the layout of input and output to those of child groups
          allocate (V1(mm, num_vect_sub))
          allocate (V2(nn, num_vect_sub))
          allocate (Vout(N, num_vect_sub))
          allocate (Vin(N, num_vect_sub))
-         call Redistribute1Dto1D(Vinin, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno, num_vect_sub, ptree)
+         n3 = OMP_get_wtime()
+
+         call Redistribute1Dto1D_OnetoTwo(Vinin, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno,V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
+
+
+         ! call Redistribute1Dto1D(Vinin, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(Vinin, block_o%M_p, 0, block_o%pgno, V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
+
+         n4 = OMP_get_wtime()
+         time_tmp4 = time_tmp4 + n4-n3
+
          if (mm > 0) Vin(1:blocks_A%M_loc, :) = V1
-         call Redistribute1Dto1D(Vinin, block_o%M_p, 0, block_o%pgno, V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
          if (nn > 0) Vin(1 + blocks_A%M_loc:N, :) = V2
-         call Redistribute1Dto1D(Voutout, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno, num_vect_sub, ptree)
-         if (mm > 0) Vout(1:blocks_A%M_loc, :) = V1
-         call Redistribute1Dto1D(Voutout, block_o%M_p, 0, block_o%pgno, V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
-         if (nn > 0) Vout(1 + blocks_A%M_loc:N, :) = V2
 
          if (IOwnPgrp(ptree, blocks_A%pgno)) then
-
-            allocate (Vout_tmp(N, num_vect_sub))
-            Vout_tmp = Vout
             allocate (Vin_tmp(N, num_vect_sub))
             Vin_tmp = Vin
             Vout = 0
@@ -1984,31 +2009,40 @@ contains
 
             Vin = Vin_tmp
             Vout = Vout - Vin
-            Vout = a*Vout + b*Vout_tmp
-            deallocate (Vout_tmp)
             deallocate (Vin_tmp)
             deallocate (Vbuff)
          endif
+         n3 = OMP_get_wtime()
 
-         if (mm > 0) V1 = Vin(1:blocks_A%M_loc, :)
-         call Redistribute1Dto1D(V1, blocks_A%M_p, 0, blocks_A%pgno, Vinin, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
-         if (nn > 0) V2 = Vin(1 + blocks_A%M_loc:N, :)
-         call Redistribute1Dto1D(V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Vinin, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
+
+
+
          if (mm > 0) V1 = Vout(1:blocks_A%M_loc, :)
-         call Redistribute1Dto1D(V1, blocks_A%M_p, 0, blocks_A%pgno, Voutout, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
          if (nn > 0) V2 = Vout(1 + blocks_A%M_loc:N, :)
-         call Redistribute1Dto1D(V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
 
+         call Redistribute1Dto1D_TwotoOne(V1, blocks_A%M_p, 0, blocks_A%pgno,V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
+
+         ! call Redistribute1Dto1D(V1, blocks_A%M_p, 0, blocks_A%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
+         ! call Redistribute1Dto1D(V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
+
+         Voutout = a*Voutout1 + b*Voutout
+
+         n4 = OMP_get_wtime()
+         time_tmp4 = time_tmp4 + n4-n3
          deallocate (Vin)
          deallocate (V1)
          deallocate (V2)
          deallocate (Vout)
+         deallocate (Voutout1)
 
       class default
          write (*, *) "unexpected type"
          stop
 
       end select
+
+      n2 = OMP_get_wtime()
+      time_tmp2 = time_tmp2 + n2-n1
 
    end subroutine BF_block_MVP_inverse_ABCD_dat
 
@@ -2032,7 +2066,9 @@ contains
       type(matrixblock)::block_o
       type(proctree)::ptree
       type(Hstat)::stats
-      real(kind=8)::error, tmp1, tmp2, tmp3, norm1, norm2, norm3
+      real(kind=8)::error, tmp1, tmp2, tmp3, norm1, norm2, norm3,n1,n2
+
+      n1 = OMP_get_wtime()
 
       select TYPE (partitioned_block)
 
@@ -2101,6 +2137,9 @@ contains
          stop
 
       end select
+
+      n2 = OMP_get_wtime()
+      time_tmp1 = time_tmp1 + n2-n1
 
    end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
@@ -3294,12 +3333,14 @@ contains
       ! call MPI_barrier(ptree%pgrp(block_inv%pgno)%Comm,ierr)
       n1 = OMP_get_wtime()
       allocate (Vin1(mm, num_vect_sub))
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
-      ! Vin1 = Vin(1:mm,1:num_vect_sub)
-
       allocate (Vin2(nn, num_vect_sub))
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
-      ! Vin2 = Vin(1+mm:N,1:num_vect_sub)
+
+      call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno,Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+
+      ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -3355,10 +3396,11 @@ contains
       end if
 
       n1 = OMP_get_wtime()
-      ! Vout(1:mm,1:num_vect_sub) = Vout1
-      call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
-      ! Vout(1+mm:N,1:num_vect_sub) = Vout2
-      call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
+      call Redistribute1Dto1D_TwotoOne(Vout1, block_off1%M_p, 0, block_off1%pgno,Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -3448,8 +3490,13 @@ contains
       n1 = OMP_get_wtime()
       call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_off1%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, Nin_p2, offin2, block_off2%pgno, num_vect_sub, ptree)
+
+      ! call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_off1%pgno,Vin2, Nin_p2, offin2, block_off2%pgno, num_vect_sub, ptree)
+
       call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_off1%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout2, Nout_p2, offout2, block_off2%pgno, num_vect_sub, ptree)
+
+      ! call Redistribute1Dto1D_OnetoTwo(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_off1%pgno,Vout2, Nout_p2, offout2, block_off2%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -3464,6 +3511,9 @@ contains
       n1 = OMP_get_wtime()
       call Redistribute1Dto1D(Vout1, Nout_p1, offout1, block_off1%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vout2, Nout_p2, offout2, block_off2%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
+      ! call Redistribute1Dto1D_TwotoOne(Vout1, Nout_p1, offout1, block_off1%pgno, Vout2, Nout_p2, offout2, block_off2%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -3549,8 +3599,11 @@ contains
       n1 = OMP_get_wtime()
       call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, Nin_p2, offin2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vin2, Nin_p2, offin2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+
       call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D_OnetoTwo(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -3565,6 +3618,9 @@ contains
       n1 = OMP_get_wtime()
       call Redistribute1Dto1D(Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
       call Redistribute1Dto1D(Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      ! call Redistribute1Dto1D_TwotoOne(Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+
+
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
@@ -3921,6 +3977,8 @@ contains
       type(Hstat)::stats
       real(kind=8)::n2, n1
 
+      n1 = OMP_get_wtime()
+
       call assert(present(msh), 'operand1 cannot be skipped')
       select TYPE (msh)
       type is (mesh)
@@ -3994,6 +4052,9 @@ contains
 
          end select
       end select
+
+      n2 = OMP_get_wtime()
+      time_tmp3 = time_tmp3 + n2-n1
 
    end subroutine Bplus_block_MVP_diagBinvBHSS_dat
    subroutine Bplus_block_MVP_BBplus_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
@@ -4340,6 +4401,8 @@ contains
       type(Hstat)::stats
       real(kind=8)::n2, n1
 
+      n1 = OMP_get_wtime()
+
       call assert(present(msh), 'operand1 cannot be skipped')
       select TYPE (msh)
       type is (mesh)
@@ -4417,6 +4480,10 @@ contains
 
          end select
       end select
+
+      n2 = OMP_get_wtime()
+      time_tmp3 = time_tmp3 + n2-n1
+
    end subroutine Bplus_block_MVP_BdiagBinvHSS_dat
 
    subroutine Bplus_MultiLrandomized_Onesubblock(rank0, rankrate, blocks, operand, blackbox_MVP_dat, error_inout, strings, option, stats, ptree, msh, operand1)
