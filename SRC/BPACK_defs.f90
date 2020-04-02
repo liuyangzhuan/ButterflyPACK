@@ -220,6 +220,8 @@ module BPACK_DEFS
         integer headm, headn ! header indices in row and column dimension
         integer, pointer:: M_p(:, :) => null() ! row sizes of all processes sharing this block
         integer, pointer:: N_p(:, :) => null() ! column sizes of all processes sharing this block
+        integer, pointer:: ms(:) => null() ! sizes of accummulated local leaf row blocks
+        integer, pointer:: ns(:) => null() ! sizes of accummulated local leaf column blocks
         DT, allocatable :: fullmat(:, :) ! full matrix entries
         type(butterfly_UV) :: ButterflyU ! leftmost factor
         type(butterfly_UV) :: ButterflyV ! rightmost factor

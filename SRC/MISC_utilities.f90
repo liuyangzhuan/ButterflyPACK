@@ -1346,7 +1346,7 @@ contains
       return
    end function norm_vector
 
-   subroutine LeastSquare(m, n, k, A, b, x, eps_r, Flops)
+   subroutine LinearSolve(m, n, k, A, b, x, eps_r, Flops)
       !
       !
       implicit none
@@ -1376,8 +1376,8 @@ contains
       allocate (VV(n, n))
       allocate (Singular(n))
 
-      if (m < n) write (*, *) m, n
-      call assert(m >= n, 'm should not be less than n for least square')
+      ! if (m < n) write (*, *) m, n
+      ! call assert(m >= n, 'm should not be less than n for least square')
 
       if (fnorm(b, m, k) < SafeUnderflow) then
 !                write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k),'size b: ',m,k,'size A',m,n
@@ -1393,7 +1393,7 @@ contains
 ! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow
          ! if(isnan(sum(Singular)))then
 
-         ! write(*,*)'gesvd wrong in LeastSquare, switching to QR'
+         ! write(*,*)'gesvd wrong in LinearSolve, switching to QR'
 
          ! ! call GetRank(m,n,Atmp,rank,Rank_detection_factor)
          ! ! write(*,*)rank,'kao kao'
@@ -1405,7 +1405,7 @@ contains
          ! jpvt = 0
          ! call geqp3f90(Atmp,jpvt,tau)
          ! if(isnan(fnorm(Atmp,m,n)))then
-         ! write(*,*)'Q or R has NAN in LeastSquare'
+         ! write(*,*)'Q or R has NAN in LinearSolve'
          ! stop
          ! end if
          ! call un_or_mqrf90(Atmp,tau,b,'L','C',m,n,n)
@@ -1472,7 +1472,7 @@ contains
          ! end do
 
          ! if(isnan(fnorm(x,n,k)))then
-         ! write(*,*)'trisolve has NAN in LeastSquare'
+         ! write(*,*)'trisolve has NAN in LinearSolve'
          ! stop
          ! end if
 
@@ -1542,7 +1542,7 @@ contains
       deallocate (UU)
       deallocate (VV)
 
-   end subroutine LeastSquare
+   end subroutine LinearSolve
 
    subroutine GeneralInverse(m, n, A, A_inv, eps_r, Flops)
       !

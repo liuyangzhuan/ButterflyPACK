@@ -80,8 +80,7 @@ contains
       allocate (select_col_pre(blocks%N))
       select_col_pre = 0
       num_blocks = 2**level_butterfly
-
-      blocks%level_half = BF_Switchlevel(level_butterfly, option)
+      blocks%level_half = BF_Switchlevel(level_butterfly, option%pat_comp)
       level_half = blocks%level_half
 
       if (level_butterfly == 0) then
@@ -1858,7 +1857,7 @@ contains
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
                   level_BP = bplus%level
 
-                  bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option)
+                  bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
                   levelm = bplus%LL(ll)%matrices_block(bb)%level_half
                   groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
                   Nboundall = 0
@@ -1869,6 +1868,9 @@ contains
                   else
                      call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                   end if
+
+                  ! call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
+
                   Memory = Memory + rtemp
                   bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
                endif
@@ -1944,7 +1946,7 @@ contains
 !     endif
       blocks%rankmax = -100000
       blocks%rankmin = 100000
-      ! blocks%level_half = BF_Switchlevel(blocks%level_butterfly,option)
+      ! blocks%level_half = BF_Switchlevel(blocks%level_butterfly,option%pat_comp)
       blocks%level_half = floor_safe(dble(level_butterfly)/2d0)
       levelm = blocks%level_half
       level_half = blocks%level_half
