@@ -1592,7 +1592,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             h_mat%blocks_1 => block1
             h_mat%blocks_2 => block2
             rank0 = block3%rankmax
-            call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, chara)
+            call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, operand1=chara)
             T1 = OMP_get_wtime()
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
@@ -1864,7 +1864,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         h_mat%blocks_2 => block2
 
         T0 = OMP_get_wtime()
-      call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, 'm')
+      call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
         T1 = OMP_get_wtime()
         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
         stats%Time_Multiply = stats%Time_Multiply + T1 - T0
@@ -1929,9 +1929,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             h_mat%blocks_1 => blocks_1
             rank0 = blocks_o%rankmax
             if (chara == '+') then
-            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, 'a')
+            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='a')
             elseif (chara == '-') then
-            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, 's')
+            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='s')
             endif
             T1 = OMP_get_wtime()
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp

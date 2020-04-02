@@ -258,7 +258,6 @@ contains
       stats%Flop_Tmp = 0
       call BF_block_MVP_dat(block_off1, 'N', block_off1%M_loc, block_off1%N_loc, rank, block_off2%ButterflyU%blocks(1)%matrix, block_o%ButterflyU%blocks(1)%matrix, ctemp1, ctemp2, ptree, stats)
       block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
-      ! if(ptree%MyID==2)write(*,*)pgno,pgno1,pgno2,'neeeeana'
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
       stats%Flop_Tmp = 0
 
@@ -946,7 +945,7 @@ contains
          rank0 = block_Xn%rankmax
 
          rate = 1.2d0
-         call BF_randomized(block_Xn%pgno, level_butterfly, rank0, rate, block_Xn, schulz_op, BF_block_MVP_schulz_dat, error, 'schulz iter'//TRIM(iternumber), option, stats, ptree, msh, ii)
+         call BF_randomized(block_Xn%pgno, level_butterfly, rank0, rate, block_Xn, schulz_op, BF_block_MVP_schulz_dat, error, 'schulz iter'//TRIM(iternumber), option, stats, ptree, msh, operand1=ii)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 
          if (schulz_op%order == 2) schulz_op%scale = schulz_op%scale*(2 - schulz_op%scale)
@@ -2277,7 +2276,7 @@ contains
             ho_bf1%ind_bk = rowblock
             rank0 = block_o%rankmax
             rate = 1.2d0
-            call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, msh)
+            call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, operand1=msh)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
          end if
 
@@ -2394,7 +2393,7 @@ contains
                      level_butterfly = block_o%level_butterfly
                      Bplus%ind_ll = llplus
                      Bplus%ind_bk = bb
-                     call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvB_dat, error, 'L update', option, stats, ptree, msh, msh)
+                     call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvB_dat, error, 'L update', option, stats, ptree, msh,operand1= msh)
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
@@ -2416,7 +2415,7 @@ contains
                      level_butterfly = block_o%level_butterfly
                      Bplus%ind_ll = llplus
                      Bplus%ind_bk = bb
-                     call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinv_dat, error, 'R update', option, stats, ptree, msh, msh)
+                     call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinv_dat, error, 'R update', option, stats, ptree, msh, operand1=msh)
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
@@ -2473,7 +2472,7 @@ contains
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
       integer itermax, ntry, cnt, cnt_partial
       real(kind=8):: n1, n2, n3, n4, Memory
-      integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b
+      integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b, idxs,idxe,groupm
       DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :)
       DT:: ctemp1, ctemp2
       integer, allocatable :: ipiv(:)
@@ -2493,6 +2492,7 @@ contains
 
       Lplus = Bplus%Lplus
       do llplus = Lplus, 1, -1
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'HSS inverse at level:', llplus
          do bb = 1, Bplus%LL(llplus)%Nbound
             block_o => Bplus%LL(llplus)%matrices_block(bb)
             if (IOwnPgrp(ptree, block_o%pgno)) then
@@ -2500,14 +2500,59 @@ contains
                n1 = OMP_get_wtime()
                !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                if (llplus /= Lplus) then
+
+
+                  level_butterfly = block_o%level_butterfly
+                  level_BP = Bplus%level
+                  levelm = ceiling_safe(dble(level_butterfly)/2d0)
+                  level_butterfly_loc = levelm
+                  groupm_start=block_o%row_group*2**levelm
+                  edge_s =msh%basis_group(block_o%row_group)%head
+                  edge_e =msh%basis_group(block_o%row_group)%tail
+
+#if 1
+                  if(Bplus%LL(llplus+1)%Nbound>0)then
+                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group) 
+                  idxs =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
+                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group) 
+                  idxe =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
+                  ! !call BF_MoveSingulartoLeft(block_o)
+                  do ii=idxs,idxe
+                     ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1
+                     if(level_butterfly_loc==0)then
+                        write(*,*)'level_butterfly_loc==0 not done'
+                        stop
+                     else
+                        if (IOwnPgrp(ptree, Bplus%LL(llplus+1)%matrices_block(ii)%pgno)) then
+                        call BF_extract_partial(block_o, level_butterfly_loc, ij_loc,Bplus%LL(llplus+1)%matrices_block(ii)%headm,Bplus%LL(llplus+1)%matrices_block(ii)%row_group, 'L', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
+
+                        rank0 = agent_block%rankmax
+                        rate = 1.2d0
+                        Bplus%ind_ll = llplus
+                        Bplus%ind_bk = bb
+                        call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh,vskip=.true.)
+                        stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+                        error_inout = max(error_inout, error)
+                        call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
+                        ! call BF_MoveSingulartoRight(agent_block)
+
+                        call BF_copyback_partial(block_o, level_butterfly_loc, ij_loc, 'L', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
+
+                        call BF_delete(agent_block,1)
+                        endif
+                     end if
+                  end do
+                  endif
+#else
                   rank0 = block_o%rankmax
                   rate = 1.2d0
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
-                  call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, msh)
+                  call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
+#endif
                endif
                n2 = OMP_get_wtime()
                stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
@@ -2535,14 +2580,56 @@ contains
 
                n1 = OMP_get_wtime()
                if (llplus /= Lplus) then
+                  level_butterfly = block_o%level_butterfly
+                  levelm = ceiling_safe(dble(level_butterfly)/2d0)
+                  level_butterfly_loc = levelm
+                  groupm_start=block_o%row_group*2**levelm
+                  edge_s =msh%basis_group(block_o%row_group)%head
+                  edge_e =msh%basis_group(block_o%row_group)%tail
+
+#if 1
+                  ! call BF_MoveSingulartoRight(block_o)
+                  
+                  if(Bplus%LL(llplus+1)%Nbound>0)then                  
+                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group) 
+                  idxs =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
+                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group) 
+                  idxe =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
+                  
+                  do ii=idxs,idxe
+                     ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1
+                     if(level_butterfly_loc==0)then
+                        write(*,*)'level_butterfly_loc==0 not done'
+                        stop
+                     else
+                        if (IOwnPgrp(ptree,Bplus%LL(llplus+1)%matrices_block(ii)%pgno)) then
+                        call BF_extract_partial(block_o, level_butterfly_loc, ij_loc, Bplus%LL(llplus+1)%matrices_block(ii)%headm,Bplus%LL(llplus+1)%matrices_block(ii)%row_group, 'R', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
+
+                        rank0 = agent_block%rankmax
+                        rate = 1.2d0
+                        Bplus%ind_ll = llplus
+                        Bplus%ind_bk = bb
+                        call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh,uskip=.true.)
+                        stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+                        error_inout = max(error_inout, error)
+                        call BF_ChangePattern(agent_block, 3, 1, stats, ptree)
+                        ! call BF_MoveSingulartoLeft(agent_block)
+                        call BF_copyback_partial(block_o, level_butterfly_loc, ij_loc, 'R', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
+                        call BF_delete(agent_block,1)
+                        endif
+                     end if
+                  end do
+                  endif
+#else
                   rank0 = block_o%rankmax
                   rate = 1.2d0
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
-                  call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, msh)
+                  call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
+#endif
                endif
                n2 = OMP_get_wtime()
                stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
