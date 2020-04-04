@@ -90,6 +90,9 @@ contains
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
       stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
 
       !**** set thread number here
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
@@ -1078,6 +1081,7 @@ contains
       call MergeSort(lstblk%head, node_score_block_ptr_row)
 
       n2 = OMP_get_wtime()
+      stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
 
 #if 0
       write (*, *) lstblk%num_nods
@@ -1102,6 +1106,10 @@ contains
          cur => cur%next
       enddo
 #endif
+
+
+      !$omp parallel
+      !$omp single
 
       ! construct intersections for each block from the block's lists
       cur => lstblk%head
@@ -1174,8 +1182,15 @@ contains
          end select
          cur => cur%next
       enddo
+      !$omp end single
+      !$omp end parallel
 
       n3 = OMP_get_wtime()
+      stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
+
+      call MPI_barrier(ptree%Comm, ierr)
+      n3 = OMP_get_wtime()
+
 
       ! redistribute from blocks' intersections to the global intersecions inters
       if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
@@ -1185,6 +1200,8 @@ contains
       endif
 
       n4 = OMP_get_wtime()
+      stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
+
 
       ntot_loc = 0
       do nn = 1, Ninter
@@ -1362,6 +1379,7 @@ contains
       call MergeSort(lstblk%head, node_score_block_ptr_row)
 
       n2 = OMP_get_wtime()
+      stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
 
 #if 0
       write (*, *) lstblk%num_nods
@@ -1386,6 +1404,10 @@ contains
          cur => cur%next
       enddo
 #endif
+
+
+      !$omp parallel
+      !$omp single
 
       ! construct intersections for each block from the block's lists
       cur => lstblk%head
@@ -1458,9 +1480,14 @@ contains
          end select
          cur => cur%next
       enddo
+      !$omp end single
+      !$omp end parallel
 
       n3 = OMP_get_wtime()
+      stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
+      call MPI_barrier(ptree%Comm, ierr)
+      n3 = OMP_get_wtime()
       ! redistribute from blocks' intersections to the global intersecions inters
       if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
@@ -1469,6 +1496,7 @@ contains
       endif
 
       n4 = OMP_get_wtime()
+      stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
 
       ntot_loc = 0
       do nn = 1, Ninter

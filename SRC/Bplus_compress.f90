@@ -280,6 +280,7 @@ contains
                call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops = flops+flops1
+
             enddo
             !$omp end parallel do
             if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
@@ -1717,6 +1718,7 @@ contains
             rank_new = size(submats(index_ij)%dat,2)
             allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
             blocks%ButterflyU%blocks(index_i_loc_k)%matrix = submats(index_ij)%dat
+
          else
             allocate (core(rankmax_c, rankmax_r))
             allocate (core_tmp(rankmax_c, rankmax_r))

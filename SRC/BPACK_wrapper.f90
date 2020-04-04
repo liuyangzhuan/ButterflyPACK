@@ -180,6 +180,18 @@ contains
          val_d = stats%Time_C_Extract
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_Entry_Traverse') then
+         val_d = stats%Time_Entry_Traverse
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_BF') then
+         val_d = stats%Time_Entry_BF
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_Comm') then
+         val_d = stats%Time_Entry_Comm
+         valid_opt = 1
+      endif
       if (trim(str) == 'Time_Direct_LU') then
          val_d = stats%Time_Direct_LU
          valid_opt = 1
@@ -265,6 +277,7 @@ contains
 
       if (trim(str) == 'Rank_max') then
          val_d = maxval(stats%rankmax_of_level_global)
+         if(allocated(stats%rankmax_of_level_global_factor))val_d = NINT(max(dble(val_d),dble(maxval(stats%rankmax_of_level_global_factor))))
          valid_opt = 1
       endif
 
@@ -724,6 +737,9 @@ contains
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
       stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
 
@@ -923,6 +939,9 @@ contains
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
       stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
 
