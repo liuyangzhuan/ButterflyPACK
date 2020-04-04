@@ -2492,6 +2492,7 @@ contains
 
       Lplus = Bplus%Lplus
       do llplus = Lplus, 1, -1
+         call MPI_Barrier(ptree%Comm,ierr)
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'HSS inverse at level:', llplus
          do bb = 1, Bplus%LL(llplus)%Nbound
             block_o => Bplus%LL(llplus)%matrices_block(bb)
@@ -2512,9 +2513,9 @@ contains
 
 #if 1
                   if(Bplus%LL(llplus+1)%Nbound>0)then
-                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group) 
+                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group)
                   idxs =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
-                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group) 
+                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group)
                   idxe =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
                   ! !call BF_MoveSingulartoLeft(block_o)
                   do ii=idxs,idxe
@@ -2525,7 +2526,6 @@ contains
                      else
                         if (IOwnPgrp(ptree, Bplus%LL(llplus+1)%matrices_block(ii)%pgno)) then
                         call BF_extract_partial(block_o, level_butterfly_loc, ij_loc,Bplus%LL(llplus+1)%matrices_block(ii)%headm,Bplus%LL(llplus+1)%matrices_block(ii)%row_group, 'L', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
-
                         rank0 = agent_block%rankmax
                         rate = 1.2d0
                         Bplus%ind_ll = llplus
@@ -2589,13 +2589,13 @@ contains
 
 #if 1
                   ! call BF_MoveSingulartoRight(block_o)
-                  
-                  if(Bplus%LL(llplus+1)%Nbound>0)then                  
-                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group) 
+
+                  if(Bplus%LL(llplus+1)%Nbound>0)then
+                  groupm = findgroup(edge_s, msh, levelm, block_o%row_group)
                   idxs =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
-                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group) 
+                  groupm = findgroup(edge_e, msh, levelm, block_o%row_group)
                   idxe =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
-                  
+
                   do ii=idxs,idxe
                      ij_loc = Bplus%LL(llplus+1)%matrices_block(ii)%row_group - groupm_start + 1
                      if(level_butterfly_loc==0)then

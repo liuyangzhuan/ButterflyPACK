@@ -75,6 +75,10 @@ contains
         type(proctree)::ptree
         type(mesh)::msh
 
+
+        if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
+        stats%rankmax_of_level_global_factor = 0
+
         nn1 = OMP_get_wtime()
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -122,9 +126,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(rowblock)%pgno)) then
                     call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
 
-                    call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_update(rowblock), rtemp)
+                    call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_update(rowblock), rtemp, rank)
                     stats%Mem_Sblock = stats%Mem_Sblock + rtemp
-
+                    stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
                     ! if(level_c==6)then
                     ! call BF_print_size_rank(ho_bf1%levels(level_c)%matrices_block(rowblock),option%tol_comp)
                     ! stop
@@ -148,8 +152,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     call Bplus_ReDistribute_Inplace(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2), stats, ptree, msh)
 
                     call Bplus_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
-                    call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock), rtemp)
+                    call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock), rtemp,rank)
                     stats%Mem_SMW = stats%Mem_SMW + rtemp
+                    stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
 
                 endif
             end do
@@ -159,7 +164,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
         nn2 = OMP_get_wtime()
         stats%Time_Factor = nn2 - nn1
-
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
         call MPI_ALLREDUCE(stats%Time_Sblock, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing updated forward block time:', rtemp, 'Seconds'
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -227,6 +232,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         type(proctree)::ptree
         type(mesh)::msh
 
+        if(.not. allocated(stats%rankmax_of_level_global_factor))allocate (stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel))
+        stats%rankmax_of_level_global_factor = 0
+
         nn1 = OMP_get_wtime()
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -236,14 +244,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         call Bplus_copy(hss_bf1%BP, hss_bf1%BP_inverse)
 
         call Bplus_inverse_schur_partitionedinverse_hss(hss_bf1%BP_inverse, option, stats, ptree, msh)
-        call Bplus_ComputeMemory(hss_bf1%BP_inverse, rtemp)
-
+        call Bplus_ComputeMemory(hss_bf1%BP_inverse, rtemp,rank)
+        stats%rankmax_of_level_global_factor(0)=rank
         stats%Mem_Factor = rtemp
 
         nn2 = OMP_get_wtime()
         stats%Time_Inv = nn2 - nn1
         stats%Time_Factor = stats%Time_Inv
-
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel), hss_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing inverse block time:', rtemp, 'Seconds'
         call MPI_ALLREDUCE(stats%Time_random(1), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -309,10 +317,15 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         type(matrixblock), pointer :: block
         integer mypgno
 
+        if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
+        stats%rankmax_of_level_global_factor = 0
+
         nn1 = OMP_get_wtime()
         call Hmat_LU_TopLevel(h_mat%blocks_root, h_mat, option, stats, ptree, msh)
         nn2 = OMP_get_wtime()
         stats%Time_Factor = nn2 - nn1
+
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
         call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Factor:', rtemp
@@ -1594,6 +1607,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             rank0 = block3%rankmax
             call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, operand1=chara)
             T1 = OMP_get_wtime()
+            stats%rankmax_of_level_global_factor(block3%level)=max(stats%rankmax_of_level_global_factor(block3%level),block3%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
             stats%Add_random_Time(level_blocks) = stats%Add_random_Time(level_blocks) + T1 - T0
@@ -1685,6 +1699,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             rank0 = blocks_m%rankmax
             call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
             T1 = OMP_get_wtime()
+            stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
             stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0
@@ -1789,6 +1804,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             rank0 = blocks_m%rankmax
          call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
             T1 = OMP_get_wtime()
+            stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
             stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0

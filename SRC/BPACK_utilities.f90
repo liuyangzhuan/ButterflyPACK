@@ -261,6 +261,7 @@ contains
       if (allocated(stats%rankmax_of_level)) deallocate (stats%rankmax_of_level)
       if (allocated(stats%rankmin_of_level)) deallocate (stats%rankmin_of_level)
       if (allocated(stats%rankmax_of_level_global)) deallocate (stats%rankmax_of_level_global)
+      if (allocated(stats%rankmax_of_level_global_factor)) deallocate (stats%rankmax_of_level_global_factor)
       if (allocated(stats%Add_random_CNT)) deallocate (stats%Add_random_CNT)
       if (allocated(stats%Mul_random_CNT)) deallocate (stats%Mul_random_CNT)
       if (allocated(stats%XLUM_random_CNT)) deallocate (stats%XLUM_random_CNT)
@@ -302,6 +303,9 @@ contains
       stats%Time_PartialUpdate = 0
       stats%Time_Fill = 0
       stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
       stats%Mem_peak = 0
       stats%Mem_Sblock = 0
       stats%Mem_SMW = 0
@@ -363,6 +367,12 @@ contains
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Constr time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'EntryEval time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry_Traverse, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, *) '      traversal time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry_BF, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, *) '      BF compute time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry_Comm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, *) '      communicate time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(stats%Mem_Direct_for, rtemp1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Tot constr mem:', rtemp + rtemp1, 'MB'
@@ -376,6 +386,7 @@ contains
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Tot factor mem:', rtemp, 'MB'
       call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Factor flops:', rtemp
+      if (ptree%MyID == Main_ID) write (*, '(A21,I14)') 'Rank after factor:', maxval(stats%rankmax_of_level_global_factor)
 
       call MPI_ALLREDUCE(stats%Time_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Solve time:', rtemp, 'Seconds'
