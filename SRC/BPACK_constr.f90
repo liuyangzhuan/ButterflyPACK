@@ -1974,17 +1974,17 @@ contains
             call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
-         !$omp taskloop default(shared) private(i,myi,myj,idx,val)
+         !!$omp taskloop default(shared) private(i,myi,myj,idx,val)
          do i=1,recvquant(pp)%size/4
             myi = NINT(dble(recvquant(pp)%dat((i-1)*4+1, 1)))
             myj = NINT(dble(recvquant(pp)%dat((i-1)*4+2, 1)))
             idx = NINT(dble(recvquant(pp)%dat((i-1)*4+3, 1)))
             val = recvquant(pp)%dat((i-1)*4+4, 1)
-            !$omp atomic
+            !!$omp atomic
             inters(idx)%dat_loc(myi, myj) = inters(idx)%dat_loc(myi, myj) + val
-            !$omp end atomic
+            !!$omp end atomic
          enddo
-         !$omp end taskloop
+         !!$omp end taskloop
       enddo
 
       n5 = OMP_get_wtime()
@@ -2235,14 +2235,15 @@ contains
             enddo
             i = i + nc
 
-            !$omp taskloop default(shared) private(cnt,ii,jj)
+            !!$omp taskloop default(shared) private(cnt,ii,jj)
             do cnt = 1, nr*nc
                jj = mod(cnt - 1, nc) + 1
                ii = (cnt - 1)/nc + 1
-               !$omp atomic
+               !!$omp atomic
                inters(idx)%dat_loc(ridx(ii), cidx(jj)) = inters(idx)%dat_loc(ridx(ii), cidx(jj)) + recvquant(pp)%dat(i + (ii - 1)*nc + jj, 1)
-               !$omp end atomic
+               !!$omp end atomic
             enddo
+            !!$omp end taskloop
             i = i + nr*nc
 
          enddo
