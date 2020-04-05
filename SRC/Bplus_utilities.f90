@@ -2779,88 +2779,36 @@ contains
       allocate (sizes%inds(sizes%nr, sizes%nc))
 
       ! communicate the data buffer
-
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-
-      ! if(ptree%MyID==Main_ID)write(*,*)'Nactive: ',Nsendactive_min,' Nproc:', nproc
-
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat_i(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_INTEGER, recvbufall2all, recvcounts, rdispls, MPI_INTEGER, ptree%pgrp(blocks%pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat_i(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -2874,6 +2822,9 @@ contains
             sizes%inds(ii, jj)%size = Nskel
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -3063,85 +3014,36 @@ contains
          if (allocated(kerls%blocks(ii, jj)%index)) deallocate (kerls%blocks(ii, jj)%index)
       enddo
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -3156,14 +3058,18 @@ contains
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(kerls1%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
             allocate (kerls1%blocks(ii, jj)%matrix(Nrow, Ncol))
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               kerls1%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  kerls1%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+               enddo
             enddo
-            i = i + Nrow*Ncol
          enddo
       enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -3182,6 +3088,7 @@ contains
       deallocate (recvquant)
       deallocate (sendIDactive)
       deallocate (recvIDactive)
+
 
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
@@ -3365,86 +3272,37 @@ contains
       allocate (kerls%blocks(kerls%nr, kerls%nc))
       endif
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
 
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(blocks%pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -3457,14 +3315,18 @@ contains
             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(kerls%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
             allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               kerls%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  kerls%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+               enddo
             enddo
-            i = i + Nrow*Ncol
          enddo
       enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -3729,86 +3591,38 @@ contains
          if (.not. allocated(kerls_o%blocks)) allocate (kerls_o%blocks(kerls_o%nr, kerls_o%nc))
       endif
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
 
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
+
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -3823,14 +3637,17 @@ contains
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(kerls_o%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
             allocate (kerls_o%blocks(ii, jj)%matrix(Nrow, Ncol))
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               kerls_o%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  kerls_o%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+               enddo
             enddo
-            i = i + Nrow*Ncol
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -4083,86 +3900,36 @@ contains
             if (.not. allocated(kerls_o%blocks)) allocate (kerls_o%blocks(kerls_o%nr, kerls_o%nc))
          endif
 
-         call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-         all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-         all2all = .false.
-#endif
-
-         if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-            allocate (sdispls(nproc))
-            allocate (sendcounts(nproc))
-            dist = 0
-            do pp = 1, nproc
-               sendcounts(pp) = sendquant(pp)%size
-               sdispls(pp) = dist
-               dist = dist + sendquant(pp)%size
-            enddo
-            allocate (sendbufall2all(dist))
-            do pp = 1, nproc
-               if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-            enddo
-
-            allocate (rdispls(nproc))
-            allocate (recvcounts(nproc))
-            dist = 0
-            do pp = 1, nproc
-               recvcounts(pp) = recvquant(pp)%size
-               rdispls(pp) = dist
-               dist = dist + recvquant(pp)%size
-            enddo
-            allocate (recvbufall2all(dist))
-
-            call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-            do pp = 1, nproc
-               if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-            enddo
-
-            deallocate (sdispls)
-            deallocate (sendcounts)
-            deallocate (sendbufall2all)
-            deallocate (rdispls)
-            deallocate (recvcounts)
-            deallocate (recvbufall2all)
-
-         else
-
-            Nreqs = 0
-            do tt = 1, Nsendactive
-               pp = sendIDactive(tt)
-               recvid = pp - 1 + ptree%pgrp(pgno)%head
-               if (recvid /= ptree%MyID) then
-                  Nreqs = Nreqs + 1
-                  call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-               else
-                  if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-               endif
-            enddo
-
-            Nreqr = 0
-            do tt = 1, Nrecvactive
-               pp = recvIDactive(tt)
-               sendid = pp - 1 + ptree%pgrp(pgno)%head
-               if (sendid /= ptree%MyID) then
-                  Nreqr = Nreqr + 1
-                  call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-               endif
-            enddo
-
-            if (Nreqs > 0) then
-               call MPI_waitall(Nreqs, S_req, statuss, ierr)
+         Nreqs = 0
+         do tt = 1, Nsendactive
+            pp = sendIDactive(tt)
+            recvid = pp - 1 + ptree%pgrp(pgno)%head
+            if (recvid /= ptree%MyID) then
+               Nreqs = Nreqs + 1
+               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+            else
+               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
             endif
-            if (Nreqr > 0) then
-               call MPI_waitall(Nreqr, R_req, statusr, ierr)
+         enddo
+
+         Nreqr = 0
+         do tt = 1, Nrecvactive
+            pp = recvIDactive(tt)
+            sendid = pp - 1 + ptree%pgrp(pgno)%head
+            if (sendid /= ptree%MyID) then
+               Nreqr = Nreqr + 1
+               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
             endif
-         endif
+         enddo
 
          ! copy data from buffer to target
          do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
+            if(tt==1 .and. Nreqr+1== Nrecvactive)then
+               pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+            else
+               call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+               pp = statusr(MPI_SOURCE, 1) + 1
+            endif
             i = 0
             do while (i < recvquant(pp)%size)
                i = i + 1
@@ -4177,14 +3944,17 @@ contains
                Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
                call assert(.not. allocated(kerls_o%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
                allocate (kerls_o%blocks(ii, jj)%matrix(Nrow, Ncol))
-               do j = 1, Nrow*Ncol
-                  rr = mod(j - 1, Nrow) + 1
-                  cc = (j - 1)/Nrow + 1
-                  kerls_o%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     i = i + 1
+                     kerls_o%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+                  enddo
                enddo
-               i = i + Nrow*Ncol
             enddo
          enddo
+         if (Nreqs > 0) then
+            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+         endif
 
          ! deallocation
          deallocate (S_req)
@@ -4647,86 +4417,36 @@ contains
       endif
       ! if(allocated(block_i%ButterflyKerl(level_i)%blocks))deallocate(block_i%ButterflyKerl(level_i)%blocks)
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -4746,14 +4466,17 @@ contains
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
             allocate (block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(ii, jj)%matrix(Nrow, Ncol))
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+               enddo
             enddo
-            i = i + Nrow*Ncol
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -5000,86 +4723,37 @@ contains
          if (.not. allocated(kerls_o%blocks)) allocate (kerls_o%blocks(kerls_o%nblk_loc))
       endif
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
+
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -5098,14 +4772,18 @@ contains
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(kerls_o%blocks(ii)%matrix), 'receiving dat alreay exists locally')
             allocate (kerls_o%blocks(ii)%matrix(Nrow, Ncol))
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               kerls_o%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  kerls_o%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+               enddo
             enddo
-            i = i + Nrow*Ncol
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
 
       ! deallocation
       deallocate (S_req)
@@ -5402,86 +5080,36 @@ contains
       endif
       endif
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            if (sendquant(pp)%size > 0) sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            if (recvquant(pp)%size > 0) recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -5512,16 +5140,21 @@ contains
             do jjj = sj, sj + nj - 1
                call assert(.not. allocated(block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix), 'receiving dat alreay exists locally')
                allocate (block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(Nrow, Ncol))
-               do j = 1, Nrow*Ncol
-                  rr = mod(j - 1, Nrow) + 1
-                  cc = (j - 1)/Nrow + 1
-                  block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+               j=0
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     j = j + 1
+                     block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
+                  enddo
                enddo
             enddo
             enddo
             i = i + Nrow*Ncol
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
@@ -5818,86 +5451,36 @@ contains
       endif
       ! if(allocated(block_i%ButterflyV%blocks))deallocate(block_i%ButterflyV%blocks)
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
-
-      if (all2all) then ! if truly all-to-all, use MPI_ALLTOALLV
-         allocate (sdispls(nproc))
-         allocate (sendcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            sendcounts(pp) = sendquant(pp)%size
-            sdispls(pp) = dist
-            dist = dist + sendquant(pp)%size
-         enddo
-         allocate (sendbufall2all(dist))
-         do pp = 1, nproc
-            sendbufall2all(sdispls(pp) + 1:sdispls(pp) + sendcounts(pp)) = sendquant(pp)%dat(:, 1)
-         enddo
-
-         allocate (rdispls(nproc))
-         allocate (recvcounts(nproc))
-         dist = 0
-         do pp = 1, nproc
-            recvcounts(pp) = recvquant(pp)%size
-            rdispls(pp) = dist
-            dist = dist + recvquant(pp)%size
-         enddo
-         allocate (recvbufall2all(dist))
-
-         call MPI_ALLTOALLV(sendbufall2all, sendcounts, sdispls, MPI_DT, recvbufall2all, recvcounts, rdispls, MPI_DT, ptree%pgrp(pgno)%Comm, ierr)
-
-         do pp = 1, nproc
-            recvquant(pp)%dat(:, 1) = recvbufall2all(rdispls(pp) + 1:rdispls(pp) + recvcounts(pp))
-         enddo
-
-         deallocate (sdispls)
-         deallocate (sendcounts)
-         deallocate (sendbufall2all)
-         deallocate (rdispls)
-         deallocate (recvcounts)
-         deallocate (recvbufall2all)
-
-      else
-
-         Nreqs = 0
-         do tt = 1, Nsendactive
-            pp = sendIDactive(tt)
-            recvid = pp - 1 + ptree%pgrp(pgno)%head
-            if (recvid /= ptree%MyID) then
-               Nreqs = Nreqs + 1
-               call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-            else
-               if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
-            endif
-         enddo
-
-         Nreqr = 0
-         do tt = 1, Nrecvactive
-            pp = recvIDactive(tt)
-            sendid = pp - 1 + ptree%pgrp(pgno)%head
-            if (sendid /= ptree%MyID) then
-               Nreqr = Nreqr + 1
-               call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-            endif
-         enddo
-
-         if (Nreqs > 0) then
-            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-         if (Nreqr > 0) then
-            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
-      endif
+      enddo
 
       ! copy data from buffer to target
       do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -5928,16 +5511,21 @@ contains
             do jjj = sj, sj + nj - 1
                call assert(.not. allocated(block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix), 'receiving dat alreay exists locally V')
                allocate (block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(Nrow, Ncol))
-               do j = 1, Nrow*Ncol
-                  rr = mod(j - 1, Nrow) + 1
-                  cc = (j - 1)/Nrow + 1
-                  block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i + j, 1)
+               j=0
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     j = j + 1
+                     block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
+                  enddo
                enddo
             enddo
             enddo
             i = i + Nrow*Ncol
          enddo
       enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
 
       ! deallocation
       deallocate (S_req)
