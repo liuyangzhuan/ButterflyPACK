@@ -1784,7 +1784,7 @@ contains
       use BPACK_DEFS
       implicit none
       integer i, j, k
-      integer mm, nn, index_i, index_j, bb, ii, jj, ij, pp, tt, idx
+      integer mm, nn, index_i, index_j, bb, ii, jj, ij, pp, tt, idx, idxs
       real(kind=8) flop
       type(Hstat)::stats
       type(proctree)::ptree
@@ -1808,6 +1808,10 @@ contains
       integer :: nprow, npcol, idstart, myi, myj, iproc, jproc, myrow, mycol, ri, ci
       DT::val
       integer::Npmap, pmaps(Npmap, 3)
+      integer*8:: cnt
+
+      !$omp parallel
+      !$omp single
 
       n1 = OMP_get_wtime()
       pgno = 1
@@ -1912,21 +1916,25 @@ contains
                nprow = pmaps(inters(idx)%pg, 1)
                npcol = pmaps(inters(idx)%pg, 2)
                idstart = pmaps(inters(idx)%pg, 3)
-
-               do ii = 1, blocks%inters(nn)%nr_loc
+               !$omp taskloop default(shared) private(cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
+               do cnt = 1, blocks%inters(nn)%nr_loc*blocks%inters(nn)%nc
+                  jj = mod(cnt - 1, blocks%inters(nn)%nc) + 1
+                  ii = (cnt - 1)/blocks%inters(nn)%nc + 1
                   ri = blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))
                   call g2l(ri, inters(idx)%nr, nprow, nbslpk, iproc, myi)
-                  do jj = 1, blocks%inters(nn)%nc
-                     ci = blocks%inters(nn)%cols(jj)
-                     call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
-                     pp = jproc*nprow + iproc + idstart + 1
-                     sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = myi
-                     sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = myj
-                     sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = idx
-                     sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = blocks%inters(nn)%dat_loc(ii, jj)
-                     sendquant(pp)%size = sendquant(pp)%size + 4
-                  enddo
+                  ci = blocks%inters(nn)%cols(jj)
+                  call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
+                  pp = jproc*nprow + iproc + idstart + 1
+                  !$omp atomic capture
+                  idxs = sendquant(pp)%size
+                  sendquant(pp)%size = sendquant(pp)%size + 4
+                  !$omp end atomic
+                  sendquant(pp)%dat(idxs + 1, 1) = myi
+                  sendquant(pp)%dat(idxs + 2, 1) = myj
+                  sendquant(pp)%dat(idxs + 3, 1) = idx
+                  sendquant(pp)%dat(idxs + 4, 1) = blocks%inters(nn)%dat_loc(ii, jj)
                enddo
+               !$omp end taskloop
             enddo
          end select
          cur => cur%next
@@ -1934,13 +1942,6 @@ contains
 
       n3 = OMP_get_wtime()
 
-      call MPI_ALLREDUCE(Nsendactive, Nsendactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Nrecvactive, Nrecvactive_min, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(pgno)%Comm, ierr)
-#if 0
-      all2all = (nproc == Nsendactive_min .and. Nsendactive_min == Nrecvactive_min)
-#else
-      all2all = .false.
-#endif
       Nreqs = 0
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
@@ -1973,18 +1974,17 @@ contains
             call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
-         i = 0
-         do while (i < recvquant(pp)%size)
-            i = i + 1
-            myi = NINT(dble(recvquant(pp)%dat(i, 1)))
-            i = i + 1
-            myj = NINT(dble(recvquant(pp)%dat(i, 1)))
-            i = i + 1
-            idx = NINT(dble(recvquant(pp)%dat(i, 1)))
-            i = i + 1
-            val = recvquant(pp)%dat(i, 1)
+         !$omp taskloop default(shared) private(i,myi,myj,idx,val)
+         do i=1,recvquant(pp)%size/4
+            myi = NINT(dble(recvquant(pp)%dat((i-1)*4+1, 1)))
+            myj = NINT(dble(recvquant(pp)%dat((i-1)*4+2, 1)))
+            idx = NINT(dble(recvquant(pp)%dat((i-1)*4+3, 1)))
+            val = recvquant(pp)%dat((i-1)*4+4, 1)
+            !$omp atomic
             inters(idx)%dat_loc(myi, myj) = inters(idx)%dat_loc(myi, myj) + val
+            !$omp end atomic
          enddo
+         !$omp end taskloop
       enddo
 
       n5 = OMP_get_wtime()
@@ -2003,6 +2003,9 @@ contains
 
       ! n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
+
+      !$omp end single
+      !$omp end parallel
 
       ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wori'
 
@@ -2039,6 +2042,10 @@ contains
       DT::val
       integer::Npmap, pmaps(Npmap, 3)
       integer, allocatable::ridx(:), cidx(:)
+      integer*8:: cnt
+
+      !$omp parallel
+      !$omp single
 
       nr_max = 0
       nc_max = 0
@@ -2162,12 +2169,13 @@ contains
                   sendquant(pp)%dat(sendquant(pp)%size + jj, 1) = myj
                enddo
                sendquant(pp)%size = sendquant(pp)%size + nc
-
-               do ii = 1, nr
-               do jj = 1, nc
+               !$omp taskloop default(shared) private(cnt,ii,jj)
+               do cnt = 1, nr*nc
+                  jj = mod(cnt - 1, nc) + 1
+                  ii = (cnt - 1)/nc + 1
                   sendquant(pp)%dat(sendquant(pp)%size + (ii - 1)*nc + jj, 1) = blocks%inters(nn)%dat_loc(ii, jj)
                enddo
-               enddo
+               !$omp end taskloop
                sendquant(pp)%size = sendquant(pp)%size + nr*nc
             enddo
          end select
@@ -2226,10 +2234,14 @@ contains
                cidx(jj) = NINT(dble(recvquant(pp)%dat(i + jj, 1)))
             enddo
             i = i + nc
-            do ii = 1, nr
-            do jj = 1, nc
+
+            !$omp taskloop default(shared) private(cnt,ii,jj)
+            do cnt = 1, nr*nc
+               jj = mod(cnt - 1, nc) + 1
+               ii = (cnt - 1)/nc + 1
+               !$omp atomic
                inters(idx)%dat_loc(ridx(ii), cidx(jj)) = inters(idx)%dat_loc(ridx(ii), cidx(jj)) + recvquant(pp)%dat(i + (ii - 1)*nc + jj, 1)
-            enddo
+               !$omp end atomic
             enddo
             i = i + nr*nc
 
@@ -2252,6 +2264,10 @@ contains
 
       deallocate (ridx)
       deallocate (cidx)
+
+
+      !$omp end single
+      !$omp end parallel
 
       ! n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
