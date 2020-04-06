@@ -1193,11 +1193,11 @@ contains
 
 
       ! redistribute from blocks' intersections to the global intersecions inters
-      if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
+      ! if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      else
-         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      endif
+      ! else
+      !    call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+      ! endif
 
       n4 = OMP_get_wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
@@ -1489,11 +1489,11 @@ contains
       call MPI_barrier(ptree%Comm, ierr)
       n3 = OMP_get_wtime()
       ! redistribute from blocks' intersections to the global intersecions inters
-      if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
+      ! if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      else
-         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      endif
+      ! else
+      !    call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+      ! endif
 
       n4 = OMP_get_wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
@@ -1791,14 +1791,11 @@ contains
       integer ierr, nsendrecv, pid, tag, nproc, Nreqr, Nreqs, recvid, sendid
       type(commquant1D)::sendquant(nproc), recvquant(nproc)
       integer::sendactive(nproc), recvactive(nproc)
-      integer::S_req(nproc), R_req(nproc)
-      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size, nproc)
-      real(kind=8)::n1, n2, n3, n4, n5
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      real(kind=8)::n1, n2, n3, n4, n5, n6, n7
       integer::sendIDactive(nproc), recvIDactive(nproc)
-      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
-      logical all2all
-      integer::sdispls(nproc), sendcounts(nproc), rdispls(nproc), recvcounts(nproc)
-      DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer Nsendactive, Nrecvactive
       integer::dist, pgno
       type(intersect)::inters(:)
       type(list)::lstblk
@@ -1806,9 +1803,34 @@ contains
       class(*), pointer::ptr
       type(matrixblock), pointer::blocks
       integer :: nprow, npcol, idstart, myi, myj, iproc, jproc, myrow, mycol, ri, ci
+      integer,allocatable:: tmpidx(:,:)
       DT::val
       integer::Npmap, pmaps(Npmap, 3)
       integer*8:: cnt
+      type(dat_pack)::foo(2)
+
+      integer :: blocklen(2), type(2), newtype,newarrtype
+      integer(KIND=MPI_ADDRESS_KIND) :: disp(2), base, lb, extent
+
+      ! call MPI_GET_ADDRESS(foo(1)%idx(1), disp(1), ierr)
+      ! call MPI_GET_ADDRESS(foo(1)%dat(1), disp(2), ierr)
+      ! base = disp(1)
+      ! disp(1) = disp(1) - base
+      ! disp(2) = disp(2) - base
+      ! blocklen(1) = 3
+      ! blocklen(2) = 1
+      ! type(1) = MPI_INTEGER
+      ! type(2) = MPI_DT
+      ! call MPI_TYPE_CREATE_STRUCT(2, blocklen, disp, type, newtype, ierr)
+      ! call MPI_TYPE_COMMIT(newtype, ierr)
+      ! call MPI_GET_ADDRESS(foo(1), disp(1), ierr)
+      ! call MPI_GET_ADDRESS(foo(2), disp(2), ierr)
+      ! extent = disp(2) - disp(1)
+      ! lb = 0
+      ! call MPI_TYPE_CREATE_RESIZED(newtype, lb, extent, newarrtype, ierr)
+      ! call MPI_TYPE_COMMIT(newarrtype, ierr)
+
+
 
       !$omp parallel
       !$omp single
@@ -1844,13 +1866,19 @@ contains
                nprow = pmaps(inters(idx)%pg, 1)
                npcol = pmaps(inters(idx)%pg, 2)
                idstart = pmaps(inters(idx)%pg, 3)
-
+               allocate(tmpidx(blocks%inters(nn)%nc,2))
+               do jj=1,blocks%inters(nn)%nc
+                  ci = blocks%inters(nn)%cols(jj)
+                  call g2l(ci, inters(idx)%nc, npcol, nbslpk, tmpidx(jj,1), tmpidx(jj,2))
+               enddo
                do ii = 1, blocks%inters(nn)%nr_loc
                   ri = blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))
                   call g2l(ri, inters(idx)%nr, nprow, nbslpk, iproc, myi)
                   do jj = 1, blocks%inters(nn)%nc
-                     ci = blocks%inters(nn)%cols(jj)
-                     call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
+                     ! ci = blocks%inters(nn)%cols(jj)
+                     ! call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
+                     jproc = tmpidx(jj,1)
+                     myj = tmpidx(jj,2)
                      pp = jproc*nprow + iproc + idstart + 1
                      if (sendquant(pp)%active == 0) then
                         sendquant(pp)%active = 1
@@ -1861,6 +1889,7 @@ contains
                      sendquant(pp)%size = sendquant(pp)%size + 4                ! ri,ci,idx,value
                   enddo
                enddo
+               deallocate(tmpidx)
             enddo
          end select
          cur => cur%next
@@ -1868,39 +1897,28 @@ contains
 
       ! compute recvquant(pp)%active by doing alltoall since receivers don't know where the data come from
       call MPI_ALLTOALL(sendactive, 1, MPI_INTEGER, recvactive, 1, MPI_INTEGER, ptree%pgrp(pgno)%Comm, ierr)
+      Nreqr = 0
       do pp = 1, nproc
          if (recvactive(pp) == 1) then
             recvquant(pp)%active = 1
             Nrecvactive = Nrecvactive + 1
             recvIDactive(Nrecvactive) = pp
+            sendid = pp - 1 + ptree%pgrp(pgno)%head
+            if (sendid /= ptree%MyID) then
+               Nreqr = Nreqr + 1
+            endif
          endif
       enddo
 
-      ! communicate receive buffer sizes
+      ! ! communicate receive buffer sizes
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
-         call MPI_Isend(sendquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(pgno)%Comm, S_req(tt), ierr)
       enddo
-
-      do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
-         call MPI_Irecv(recvquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(pgno)%Comm, R_req(tt), ierr)
-      enddo
-      if (Nsendactive > 0) then
-         call MPI_waitall(Nsendactive, S_req, statuss, ierr)
-      endif
-      if (Nrecvactive > 0) then
-         call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
-      endif
 
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          sendquant(pp)%size = 0
-      enddo
-      do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
-         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
       enddo
 
       n2 = OMP_get_wtime()
@@ -1911,17 +1929,25 @@ contains
          select type (ptr=>cur%item)
          type is (block_ptr)
             blocks => ptr%ptr
+            !$omp taskloop default(shared) private(nn,idx,nprow,npcol,idstart,cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
                nprow = pmaps(inters(idx)%pg, 1)
                npcol = pmaps(inters(idx)%pg, 2)
                idstart = pmaps(inters(idx)%pg, 3)
-               !$omp taskloop default(shared) private(cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
+               ! allocate(tmpidx(blocks%inters(nn)%nc,2))
+               ! do jj=1,blocks%inters(nn)%nc
+               !    ci = blocks%inters(nn)%cols(jj)
+               !    call g2l(ci, inters(idx)%nc, npcol, nbslpk, tmpidx(jj,1), tmpidx(jj,2))
+               ! enddo
+               !!$omp taskloop default(shared) private(cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
                do cnt = 1, blocks%inters(nn)%nr_loc*blocks%inters(nn)%nc
                   jj = mod(cnt - 1, blocks%inters(nn)%nc) + 1
                   ii = (cnt - 1)/blocks%inters(nn)%nc + 1
                   ri = blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))
                   call g2l(ri, inters(idx)%nr, nprow, nbslpk, iproc, myi)
+                  ! jproc = tmpidx(jj,1)
+                  ! myj = tmpidx(jj,2)
                   ci = blocks%inters(nn)%cols(jj)
                   call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
                   pp = jproc*nprow + iproc + idstart + 1
@@ -1934,58 +1960,73 @@ contains
                   sendquant(pp)%dat(idxs + 3, 1) = idx
                   sendquant(pp)%dat(idxs + 4, 1) = blocks%inters(nn)%dat_loc(ii, jj)
                enddo
-               !$omp end taskloop
+               !!$omp end taskloop
+               ! deallocate(tmpidx)
             enddo
+            !$omp end taskloop
          end select
          cur => cur%next
       enddo
+
 
       n3 = OMP_get_wtime()
 
       Nreqs = 0
       do tt = 1, Nsendactive
+         ! n6 = OMP_get_wtime()
          pp = sendIDactive(tt)
          recvid = pp - 1 + ptree%pgrp(pgno)%head
          if (recvid /= ptree%MyID) then
             Nreqs = Nreqs + 1
             call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-         else
-            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
-      enddo
-
-      Nreqr = 0
-      do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
-         sendid = pp - 1 + ptree%pgrp(pgno)%head
-         if (sendid /= ptree%MyID) then
-            Nreqr = Nreqr + 1
-            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
-         endif
+         ! n7 = OMP_get_wtime()
+         ! write(*,*)ptree%MyID,'to',pp-1,n7-n6,sendquant(pp)%size
       enddo
 
       n4 = OMP_get_wtime()
 
       ! copy data from buffer to target
+      cnt = 0
       do tt = 1, Nrecvactive
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+            recvquant(pp)%size=sendquant(pp)%size
+            if(recvquant(pp)%size>0)then
+            allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            recvquant(pp)%dat = sendquant(pp)%dat
+            endif
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr,ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
+            call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+            allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            cnt = cnt + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)
          endif
-         !!$omp taskloop default(shared) private(i,myi,myj,idx,val)
+      enddo
+
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      endif
+
+      !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,val)
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
          do i=1,recvquant(pp)%size/4
             myi = NINT(dble(recvquant(pp)%dat((i-1)*4+1, 1)))
             myj = NINT(dble(recvquant(pp)%dat((i-1)*4+2, 1)))
             idx = NINT(dble(recvquant(pp)%dat((i-1)*4+3, 1)))
             val = recvquant(pp)%dat((i-1)*4+4, 1)
-            !!$omp atomic
+            ! !$omp atomic
             inters(idx)%dat_loc(myi, myj) = inters(idx)%dat_loc(myi, myj) + val
-            !!$omp end atomic
+            ! !$omp end atomic
          enddo
-         !!$omp end taskloop
       enddo
+      !$omp end taskloop
+
+
+
 
       n5 = OMP_get_wtime()
       if (Nreqs > 0) then
@@ -2007,11 +2048,12 @@ contains
       !$omp end single
       !$omp end parallel
 
-      ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wori'
+      ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wordi',ptree%MyID
 
    end subroutine BPACK_all2all_inters
 
-!*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
+!*********** all to all communication of element extraction results from local layout to each entire intersection (each process knows where to send, but doesn't know where to receive without communication)
+! YL: This subroutine seems to be slower than BPACK_all2all_inters
    subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, nproc, Npmap, pmaps)
 
       use BPACK_DEFS
@@ -2038,14 +2080,17 @@ contains
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(matrixblock), pointer::blocks
-      integer :: nprow, npcol, idstart, myi, myj, iproc, jproc, myrow, mycol, ri, ci
+      integer :: nprow, npcol, idstart, myi, myj, iproc, jproc, myrow, mycol, ri, ci, idxs
       DT::val
-      integer::Npmap, pmaps(Npmap, 3)
-      integer, allocatable::ridx(:), cidx(:)
+      integer::Npmap, pmaps(Npmap, 3), num_threads
+      integer, save:: my_tid = 0
+      integer, allocatable::ridx(:,:), cidx(:,:)
       integer*8:: cnt
 
+      !$omp threadprivate(my_tid)
       !$omp parallel
       !$omp single
+      num_threads = omp_get_num_threads()
 
       nr_max = 0
       nc_max = 0
@@ -2053,8 +2098,8 @@ contains
          nr_max = max(nr_max, inters(nn)%nr)
          nc_max = max(nc_max, inters(nn)%nc)
       enddo
-      allocate (ridx(nr_max))
-      allocate (cidx(nc_max))
+      allocate (ridx(nr_max,num_threads))
+      allocate (cidx(nc_max,num_threads))
 
       n1 = OMP_get_wtime()
       pgno = 1
@@ -2118,19 +2163,7 @@ contains
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
-         call MPI_Isend(sendquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(pgno)%Comm, S_req(tt), ierr)
       enddo
-
-      do tt = 1, Nrecvactive
-         pp = recvIDactive(tt)
-         call MPI_Irecv(recvquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(pgno)%Comm, R_req(tt), ierr)
-      enddo
-      if (Nsendactive > 0) then
-         call MPI_waitall(Nsendactive, S_req, statuss, ierr)
-      endif
-      if (Nrecvactive > 0) then
-         call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
-      endif
 
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
@@ -2138,7 +2171,6 @@ contains
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
       enddo
 
       n2 = OMP_get_wtime()
@@ -2149,35 +2181,36 @@ contains
          select type (ptr=>cur%item)
          type is (block_ptr)
             blocks => ptr%ptr
+
+            !$omp taskloop default(shared) private(nn,idx,idxs,pp,nr,nc,ii,myi,jj,myj,cnt)
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
                pp = pmaps(inters(idx)%pg, 3) + 1
                nr = blocks%inters(nn)%nr_loc
                nc = blocks%inters(nn)%nc
-               sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = idx
-               sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = nr
-               sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = nc
-               sendquant(pp)%size = sendquant(pp)%size + 3
 
+               !$omp atomic capture
+               idxs = sendquant(pp)%size
+               sendquant(pp)%size = sendquant(pp)%size + 3 + nr + nc + nr*nc
+               !$omp end atomic
+               sendquant(pp)%dat(idxs + 1, 1) = idx
+               sendquant(pp)%dat(idxs + 2, 1) = nr
+               sendquant(pp)%dat(idxs + 3, 1) = nc
                do ii = 1, nr
                   myi = blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))
-                  sendquant(pp)%dat(sendquant(pp)%size + ii, 1) = myi
+                  sendquant(pp)%dat(idxs+3 + ii, 1) = myi
                enddo
-               sendquant(pp)%size = sendquant(pp)%size + nr
                do jj = 1, nc
                   myj = blocks%inters(nn)%cols(jj)
-                  sendquant(pp)%dat(sendquant(pp)%size + jj, 1) = myj
+                  sendquant(pp)%dat(idxs+3 +nr + jj, 1) = myj
                enddo
-               sendquant(pp)%size = sendquant(pp)%size + nc
-               !$omp taskloop default(shared) private(cnt,ii,jj)
                do cnt = 1, nr*nc
                   jj = mod(cnt - 1, nc) + 1
                   ii = (cnt - 1)/nc + 1
-                  sendquant(pp)%dat(sendquant(pp)%size + (ii - 1)*nc + jj, 1) = blocks%inters(nn)%dat_loc(ii, jj)
+                  sendquant(pp)%dat(idxs+3 +nr +nc + (ii - 1)*nc + jj, 1) = blocks%inters(nn)%dat_loc(ii, jj)
                enddo
-               !$omp end taskloop
-               sendquant(pp)%size = sendquant(pp)%size + nr*nc
             enddo
+            !$omp end taskloop
          end select
          cur => cur%next
       enddo
@@ -2191,8 +2224,6 @@ contains
          if (recvid /= ptree%MyID) then
             Nreqs = Nreqs + 1
             call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
-         else
-            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
          endif
       enddo
 
@@ -2202,21 +2233,37 @@ contains
          sendid = pp - 1 + ptree%pgrp(pgno)%head
          if (sendid /= ptree%MyID) then
             Nreqr = Nreqr + 1
-            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
+            ! call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(Nreqr), ierr)
          endif
       enddo
 
-      n4 = OMP_get_wtime()
-
-      ! copy data from buffer to target
-
+      cnt = 0
       do tt = 1, Nrecvactive
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
+            recvquant(pp)%size=sendquant(pp)%size
+            if(recvquant(pp)%size>0)then
+            allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            recvquant(pp)%dat = sendquant(pp)%dat
+            endif
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr,ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
+            call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+            allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            cnt = cnt + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)
          endif
+      enddo
+
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      endif
+
+      !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,nr,nc,ii,jj,cnt)
+      do tt = 1, Nrecvactive
+         my_tid = omp_get_thread_num()
+         pp = recvIDactive(tt)
          i = 0
          do while (i < recvquant(pp)%size)
             i = i + 1
@@ -2227,11 +2274,11 @@ contains
             nc = NINT(dble(recvquant(pp)%dat(i, 1)))
 
             do ii = 1, nr
-               ridx(ii) = NINT(dble(recvquant(pp)%dat(i + ii, 1)))
+               ridx(ii,my_tid+1) = NINT(dble(recvquant(pp)%dat(i + ii, 1)))
             enddo
             i = i + nr
             do jj = 1, nc
-               cidx(jj) = NINT(dble(recvquant(pp)%dat(i + jj, 1)))
+               cidx(jj,my_tid+1) = NINT(dble(recvquant(pp)%dat(i + jj, 1)))
             enddo
             i = i + nc
 
@@ -2240,7 +2287,7 @@ contains
                jj = mod(cnt - 1, nc) + 1
                ii = (cnt - 1)/nc + 1
                !!$omp atomic
-               inters(idx)%dat_loc(ridx(ii), cidx(jj)) = inters(idx)%dat_loc(ridx(ii), cidx(jj)) + recvquant(pp)%dat(i + (ii - 1)*nc + jj, 1)
+               inters(idx)%dat_loc(ridx(ii,my_tid+1), cidx(jj,my_tid+1)) = inters(idx)%dat_loc(ridx(ii,my_tid+1), cidx(jj,my_tid+1)) + recvquant(pp)%dat(i + (ii - 1)*nc + jj, 1)
                !!$omp end atomic
             enddo
             !!$omp end taskloop
@@ -2248,6 +2295,8 @@ contains
 
          enddo
       enddo
+      !$omp end taskloop
+
 
       n5 = OMP_get_wtime()
       if (Nreqs > 0) then
@@ -2273,7 +2322,7 @@ contains
       ! n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 
-      ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wori'
+      ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wori',ptree%MyID
 
    end subroutine BPACK_all2all_inters_optimized
 

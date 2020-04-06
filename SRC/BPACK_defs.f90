@@ -108,6 +108,11 @@ module BPACK_DEFS
         DT, allocatable:: send_buff_dat(:), recv_buff_dat(:)
     end type proctree
 
+    type dat_pack
+        integer::idx(3)
+        DT::dat(1)
+    end type dat_pack
+
     !**** communication buffer for all to all communication
     type commquant1D
         integer offset ! offset in my local array
@@ -115,6 +120,7 @@ module BPACK_DEFS
         integer active ! whether this communication pair is active
         DT, allocatable::dat(:, :) ! communication buffer
         integer, allocatable::dat_i(:, :) ! communication buffer
+        type(dat_pack), allocatable::dat_pk(:, :) ! communication buffer
     end type commquant1D
 
     !**** cluster of points/indices
