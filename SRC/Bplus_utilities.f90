@@ -5656,7 +5656,7 @@ contains
 
          if (chara == 'N') then
 
-            if (isnanMat(random1,N,Nrnd)) then
+            if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
             end if
@@ -6057,14 +6057,14 @@ contains
 
 
 
-            if (isnanMat(random2,M,Nrnd)) then
+            if (isnanMat(random2(1:M,1:1),M,1)) then
                write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
             !deallocate (BFvec%vec)
 
          elseif (chara == 'T') then
-            if (isnanMat(random1,M,Nrnd)) then
+            if (isnanMat(random1(1:M,1:1),M,1)) then
                write (*, *) 'NAN in 3 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
@@ -6475,7 +6475,7 @@ contains
             enddo
             !$omp end taskloop
 
-            if (isnanMat(random2,N,Nrnd)) then
+            if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
