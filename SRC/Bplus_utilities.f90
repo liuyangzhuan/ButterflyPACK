@@ -16,12 +16,13 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_Utilities
+   use BPACK_DEFS
    use MISC_Utilities
 contains
 
    subroutine Bplus_delete(bplus)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block
       type(blockplus)::bplus
@@ -50,8 +51,8 @@ contains
    end subroutine Bplus_delete
 
    subroutine Bplus_copy(bplus_i, bplus_o, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block_i, block_o
       type(blockplus)::bplus_i, bplus_o
@@ -96,8 +97,8 @@ contains
    end subroutine Bplus_copy
 
    subroutine Bplus_copy_delete(bplus_i, bplus_o, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block_i, block_o
       type(blockplus)::bplus_i, bplus_o
@@ -139,8 +140,8 @@ contains
    end subroutine Bplus_copy_delete
 
    subroutine Bplus_extract_partial(bplus_i, ll_s, row_group, agent_bplus, msh)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block_i, block_o
       type(blockplus)::bplus_i, agent_bplus
@@ -194,8 +195,8 @@ contains
    end subroutine Bplus_extract_partial
 
    subroutine Bplus_ComputeMemory(bplus_i, memory, rank)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block_i, block_o
       type(blockplus)::bplus_i, bplus_o
@@ -222,8 +223,8 @@ contains
    end subroutine Bplus_ComputeMemory
 
    logical function Bplus_checkNAN(bplus_i)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock), pointer::block_i, block_o
       type(blockplus)::bplus_i, bplus_o
@@ -249,8 +250,8 @@ contains
 
    subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats, level_start, level_end)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
 
       integer M, N, Nrnd, index_i, index_j, na, nb, index_start, num_vectors
@@ -541,7 +542,7 @@ contains
 
    subroutine BF_delete(blocks, allflag)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer butterflyB_inuse, num_col, num_row
@@ -620,8 +621,8 @@ contains
    end subroutine BF_delete
 
    subroutine BF_copy(trans, block_i, block_o, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i, block_o
 
@@ -898,8 +899,8 @@ contains
    end subroutine BF_copy
 
    subroutine BF_copy_delete(block_i, block_o, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i, block_o
 
@@ -1058,8 +1059,8 @@ contains
    end subroutine BF_copy_delete
 
    subroutine BF_ComputeMemory(block_i, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i
 
@@ -1103,8 +1104,8 @@ contains
    end subroutine BF_ComputeMemory
 
    integer function BF_Switchlevel(level_butterfly, pat_comp)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       integer::pat_comp
       integer::level_butterfly
@@ -1116,8 +1117,8 @@ contains
    end function BF_Switchlevel
 
    logical function BF_checkNAN(block_i)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i
 
@@ -1187,8 +1188,8 @@ contains
    end function BF_checkNAN
 
    subroutine BF_print_size_rank(block_i, tolerance)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i
 
@@ -1264,8 +1265,8 @@ contains
    end subroutine BF_print_size_rank
 
    subroutine BF_extract_partial(block_o, level_butterfly_loc, ij_loc, head, group,LR, agent_block,pgno,ptree)
-      use MISC_Utilities
-      use BPACK_DEFS
+
+
       implicit none
 
       type(proctree)::ptree
@@ -1554,8 +1555,8 @@ contains
 
 
    subroutine BF_copyback_partial(block_o, level_butterfly_loc, ij_loc, LR, agent_block,pgno,ptree)
-      use MISC_Utilities
-      use BPACK_DEFS
+
+
       implicit none
 
       type(proctree)::ptree
@@ -1665,8 +1666,8 @@ contains
 
 
    subroutine BF_copy_partial(block_i, block_o, level_butterfly_loc, ij_loc, LR, memory)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_o, block_i
 
@@ -1851,7 +1852,7 @@ contains
 
    subroutine BF_Partial_MVP_Half(block_rand, chara, level_start, level_end, random, num_vect_sub, nth_s, nth_e, Ng)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer n, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
@@ -2071,7 +2072,7 @@ contains
 
    subroutine BF_exchange_extraction(blocks, kerls, stats, ptree, level, collect)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i0, index_i1, index_i_loc_k, index_i_loc_s, index_j, index_j0, index_j1, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -2355,9 +2356,9 @@ contains
 
    end subroutine BF_exchange_extraction
 
-   subroutine BF_exchange_matvec(blocks, kerls, Ncol, stats, ptree, level, mode, collect)
+   subroutine BF_exchange_matvec(blocks, kerls, stats, ptree, level, mode, collect)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -2464,7 +2465,7 @@ contains
                Nsendactive = Nsendactive + 1
                sendIDactive(Nsendactive) = pp
             endif
-            sendquant(pp)%size = sendquant(pp)%size + 3 + size(kerls%blocks(ii, jj)%matrix, 1)*Ncol
+            sendquant(pp)%size = sendquant(pp)%size + 4 + size(kerls%blocks(ii, jj)%matrix, 1)*size(kerls%blocks(ii, jj)%matrix, 2)
          endif
       enddo
       enddo
@@ -2532,10 +2533,12 @@ contains
          if (sendflag) then
             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
             Nrow = size(kerls%blocks(ii, jj)%matrix, 1)
+            Ncol = size(kerls%blocks(ii, jj)%matrix, 2)
             sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
             sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
             sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
-            sendquant(pp)%size = sendquant(pp)%size + 3
+            sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
+            sendquant(pp)%size = sendquant(pp)%size + 4
             do i = 1, Nrow*Ncol
                rr = mod(i - 1, Nrow) + 1
                cc = (i - 1)/Nrow + 1
@@ -2579,6 +2582,8 @@ contains
             jj = (index_j - kerls%idx_c)/kerls%inc_c + 1
             i = i + 1
             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             if (.not. allocated(kerls%blocks(ii, jj)%matrix)) then
                allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
                kerls%blocks(ii, jj)%matrix = 0
@@ -2619,7 +2624,7 @@ contains
 !*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_sizes(blocks, sizes, ptree, level, mode, mode_new)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -2853,7 +2858,7 @@ contains
 !*********** all to all communication of extraction results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_extraction(blocks, kerls, kerls1, stats, ptree, level, mode, mode_new)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -3096,9 +3101,9 @@ contains
    end subroutine BF_all2all_extraction
 
 !*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
-   subroutine BF_all2all_matvec(blocks, kerls, Ncol, stats, ptree, level, mode, mode_new)
+   subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, level, mode, mode_new)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -3201,7 +3206,7 @@ contains
                Nsendactive = Nsendactive + 1
                sendIDactive(Nsendactive) = pp
             endif
-            sendquant(pp)%size = sendquant(pp)%size + 3 + size(kerls%blocks(ii, jj)%matrix, 1)*Ncol
+            sendquant(pp)%size = sendquant(pp)%size + 4 + size(kerls%blocks(ii, jj)%matrix, 1)*size(kerls%blocks(ii, jj)%matrix, 2)
          enddo
          enddo
       endif
@@ -3246,11 +3251,13 @@ contains
 
          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
          Nrow = size(kerls%blocks(ii, jj)%matrix, 1)
+         Ncol = size(kerls%blocks(ii, jj)%matrix, 2)
 
          sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
          sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
          sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
-         sendquant(pp)%size = sendquant(pp)%size + 3
+         sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
+         sendquant(pp)%size = sendquant(pp)%size + 4
          do i = 1, Nrow*Ncol
             rr = mod(i - 1, Nrow) + 1
             cc = (i - 1)/Nrow + 1
@@ -3313,6 +3320,8 @@ contains
             jj = (index_j - kerls%idx_c)/kerls%inc_c + 1
             i = i + 1
             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. allocated(kerls%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
             allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
             do cc = 1, Ncol
@@ -3355,7 +3364,7 @@ contains
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_ker(block_i, pgno_i, kerls_i, level_i, offset_r, offset_c, block_o, pgno_o, kerls_o, level_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno_i, pgno_o, pgno, level_i, level_o
       integer i, j, level_butterfly_i, level_butterfly_o, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -3683,7 +3692,7 @@ contains
 !*********** all to all communication of one level of a butterfly from an old pattern pat_i to an new pattern pat_o
    subroutine BF_all2all_ker_pattern(block_i, kerls_i, pat_i, block_o,kerls_o, pat_o, level, pgno,stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno
       integer level_butterfly
@@ -3985,7 +3994,7 @@ contains
 !*********** convert blocks in block_i%sons to block_o%sons, this is a local function without MPI communication, it is assumed block_i%sons has L levels, and block_o%sons will have max(L-2,0) levels
    subroutine BF_convert_to_smallBF(block_i, block_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly_i, level_butterfly_o, level_butterfly_c_o, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_ic, index_i0, index_i_loc_k, index_i_loc_s, index_j, index_jc, index_j0, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt, iii, jjj
@@ -4149,7 +4158,7 @@ contains
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_ker_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno_sub, pgno_i, pgno_o, pgno, level_i, level_o
       integer i, j, level_butterfly_i, level_butterfly_o, level_butterfly_c_o, level_butterfly_o_true, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -4505,7 +4514,7 @@ contains
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_UV(block_i, pgno_i, kerls_i, level_i, offset, block_o, pgno_o, kerls_o, level_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno_sub, pgno_i, pgno_o, pgno, level_i, level_o
       integer i, j, level_butterfly_i, level_butterfly_o, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -4812,7 +4821,7 @@ contains
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_U_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno_sub, pgno_i, pgno_o, pgno, level_i, level_o, level_c_o
       integer i, j, level_butterfly_i, level_butterfly_o, level_butterfly_o_true, level_butterfly_c_o, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -5183,7 +5192,7 @@ contains
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_V_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
 
-      use BPACK_DEFS
+
       implicit none
       integer pgno_sub, pgno_i, pgno_o, pgno, level_i, level_o, level_c_o
       integer i, j, level_butterfly_i, level_butterfly_o, level_butterfly_c_o, level_butterfly_o_true, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -5552,8 +5561,8 @@ contains
 
    subroutine BF_block_MVP_dat(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
 
       integer M, N, Nrnd, index_i, index_j, na, nb, index_start, num_vectors
@@ -5828,16 +5837,16 @@ contains
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), num_vectors, stats, ptree, level, 'R', 'B')
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
                endif
             enddo
 
 
 
             if (level_half + 1 /= 0) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), num_vectors, stats, ptree, level_half, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half, 'R', 'C')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), num_vectors, stats, ptree, level_half + 1, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half + 1, 'R', 'C')
             endif
 
 
@@ -6040,7 +6049,7 @@ contains
                enddo
 
                if (level /= level_butterfly + 1) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), num_vectors, stats, ptree, level, 'R', 'R')
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
                endif
             enddo
 
@@ -6229,14 +6238,14 @@ contains
                enddo
 
                if (level_half + 1 /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), num_vectors, stats, ptree, level, 'C', 'B')
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
                endif
             enddo
 
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), num_vectors, stats, ptree, level_half + 1, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half + 1, 'C', 'R')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), num_vectors, stats, ptree, level_half, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half, 'C', 'R')
             endif
 
             do level = level_half, 0, -1
@@ -6458,7 +6467,7 @@ contains
                enddo
 
                if (level /= 0) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), num_vectors, stats, ptree, level, 'C', 'R')
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
                endif
             enddo
 
@@ -6521,8 +6530,8 @@ contains
    !stats: statistics
    subroutine BF_block_MVP_partial(blocks, chara, num_vectors, VectIn, BFvec, level_end, ptree, stats)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
 
       integer index_i, index_j, na, nb, index_start, num_vectors
@@ -6740,7 +6749,7 @@ contains
                enddo
             enddo
             if (level_half /= level) then
-               call BF_exchange_matvec(blocks, BFvec%vec(level + 1), num_vectors, stats, ptree, level, 'R', 'B')
+               call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
             endif
          enddo
       elseif (chara == 'T') then
@@ -6912,7 +6921,7 @@ contains
             enddo
 
             if (level_half + 1 /= level) then
-               call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), num_vectors, stats, ptree, level, 'C', 'B')
+               call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
             endif
          enddo
       endif
@@ -6922,7 +6931,7 @@ contains
    end subroutine BF_block_MVP_partial
 
    subroutine Full_block_extraction(blocks, inters, ptree, msh, stats)
-      use BPACK_DEFS
+
       implicit none
       type(matrixblock)::blocks
       type(proctree)::ptree
@@ -6948,7 +6957,7 @@ contains
    end subroutine Full_block_extraction
 
    subroutine LR_block_extraction(blocks, inters, ptree, msh, stats)
-      use BPACK_DEFS
+
       implicit none
       type(matrixblock)::blocks
       type(proctree)::ptree
@@ -7012,7 +7021,7 @@ contains
 !*********** all to all communication of columns in the V factor from the 1D block column layout to that needed by the 1D block row layout
    subroutine LR_all2all_extraction(blocks, inters, Vpartial, rank, ncol, stats, ptree, msh)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
@@ -7274,7 +7283,7 @@ contains
    end subroutine LR_all2all_extraction
 
    subroutine BF_block_extraction(blocks, inters, ptree, msh, stats)
-      use BPACK_DEFS
+
       implicit none
       type(matrixblock)::blocks
       type(proctree)::ptree
@@ -7872,7 +7881,7 @@ contains
 
 
 subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree)
-    use BPACK_DEFS
+
     implicit none
     type(matrixblock)::blocks
     type(proctree)::ptree
@@ -7992,7 +8001,7 @@ end subroutine BF_block_extraction_multiply_oneblock_right
 
 
 subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,ptree)
-   use BPACK_DEFS
+
    implicit none
    type(matrixblock)::blocks
    type(proctree)::ptree
@@ -8065,7 +8074,7 @@ end subroutine BF_block_extraction_multiply_oneblock_left
 
 
 subroutine BF_block_extraction_sort_oneblock(blocks, BFvec, level,nn,ptree)
-   use BPACK_DEFS
+
    implicit none
    type(matrixblock)::blocks
    type(proctree)::ptree
@@ -8153,7 +8162,7 @@ end subroutine BF_block_extraction_sort_oneblock
 
 
 subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, level,nn,ptree,msh)
-   use BPACK_DEFS
+
    implicit none
    type(matrixblock)::blocks
    type(proctree)::ptree
@@ -8265,7 +8274,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 !*** Find the group index of point idx at the (group%level+level) level
    integer function findgroup(idx, msh, level, group)
-      use BPACK_DEFS
+
       implicit none
       integer idx, level, ll, group, group1
       type(mesh)::msh
@@ -8287,7 +8296,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 !*** Find the process group index of point idx in a group
    integer function findpggroup(idx, msh, ptree, group, pgno)
-      use BPACK_DEFS
+
       implicit none
       integer idx, ll, group, group1
       type(mesh)::msh
@@ -8317,7 +8326,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine BF_value(mi, nj, blocks, value)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer mm, nn, mi, nj, groupm_start, groupn_start, level_butterfly, flag
@@ -8422,8 +8431,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine BF_value
 
    subroutine BF_get_rank(block_i, ptree, level_o)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       implicit none
       type(matrixblock)::block_i
 
@@ -8486,8 +8495,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine BF_sym2asym(blocks)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       implicit none
 
@@ -8677,8 +8686,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine BF_MoveSingulartoLeft(blocks)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       implicit none
 
@@ -8846,8 +8855,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine BF_MoveSingulartoRight(blocks)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       implicit none
 
@@ -9031,7 +9040,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine BF_Init_blocks(level_butterfly, groupm, groupn, pgno, block_rand, msh, ptree)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock, kover
@@ -9159,7 +9168,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    recursive subroutine Hmat_block_copy(trans, block2, block1, memory)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer blocks, flag_recv, count1, count2, recv_count, mm, nn, length
@@ -9454,9 +9463,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine Hmat_block_MVP_dat
 
    subroutine Full_block_MVP_dat(blocks, chara, M, N, random1, random2, a, b)
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start, num_vectors
@@ -9620,7 +9629,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine element_Zmn_block_user(nrow, ncol, mrange, nrange, values, msh, option, ker, myflag, passflag, ptree, stats)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer ii, jj, nn, pp, ij, i, j, nrow, ncol, passflag, myflag, Ninter, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol
@@ -9874,7 +9883,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats)
 
-      use BPACK_DEFS
+
       implicit none
 
 
