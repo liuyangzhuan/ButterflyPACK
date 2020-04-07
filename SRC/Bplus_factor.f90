@@ -16,8 +16,11 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_factor
+   use BPACK_DEFS
+   use MISC_Utilities
    use Bplus_compress
    use Bplus_randomizedop
+
 
 contains
 
@@ -178,9 +181,9 @@ contains
 
    subroutine LR_minusBC(ho_bf1, level_c, rowblock, ptree, stats)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer level_c, rowblock
@@ -267,7 +270,7 @@ contains
 
    subroutine LR_SMW(block_o, Memory, ptree, stats, pgno)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -410,9 +413,9 @@ contains
 
    subroutine LR_Sblock(ho_bf1, level_c, rowblock, ptree, stats)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer level_c, rowblock
@@ -511,7 +514,7 @@ contains
    end subroutine LR_Sblock
 
    subroutine LR_A_minusBDinvC(partitioned_block, ptree, option, stats)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, num_vect_sub, mv, nv
@@ -813,8 +816,8 @@ contains
 
    subroutine BF_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, error_inout, option, stats, ptree, msh)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
 
@@ -886,8 +889,8 @@ contains
 
    subroutine BF_inverse_schulziteration_IplusButter(block_o, error_inout, option, stats, ptree, msh)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
 
@@ -1006,8 +1009,8 @@ contains
 
    subroutine BF_compute_schulz_init(schulz_op, option, ptree, stats)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
 
@@ -1110,8 +1113,8 @@ contains
 
    recursive subroutine BF_inverse_partitionedinverse_IplusButter(blocks_io, level_butterfly_target, recurlevel, option, error_inout, stats, ptree, msh, pgno)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
 
@@ -1181,7 +1184,9 @@ contains
                ! time_tmp1 = time_tmp1 + n2-n1
             else
                rate = 1.2d0
+               ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,blocks_A%level_butterfly/2)
                call BF_randomized(blocks_A%pgno, level_butterfly, rank0, rate, blocks_A, partitioned_block, BF_block_MVP_inverse_A_minusBDinvC_dat, error, 'A-BD^-1C', option, stats, ptree, msh)
+               ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,blocks_A%level_butterfly/2)
                stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                error_inout = max(error_inout, error)
             endif
@@ -1208,7 +1213,9 @@ contains
          else
             level_butterfly = level_butterfly_target
             rate = 1.2d0
+            ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,blocks_io%level_butterfly/2)
             call BF_randomized(blocks_io%pgno, level_butterfly, rank0, rate, blocks_io, partitioned_block, BF_block_MVP_inverse_ABCD_dat, error, 'ABCDinverse', option, stats, ptree, msh)
+            ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,blocks_io%level_butterfly/2)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             error_inout = max(error_inout, error)
          endif
@@ -1237,7 +1244,7 @@ contains
    !msh: (input) containing mesh
    !blocks_o: (inout) the parent BF
    subroutine LR_ABCDinverse(partitioned_block, blocks_o, ptree, stats, option, msh)
-      use BPACK_DEFS
+
       implicit none
       type(matrixblock)::partitioned_block
       type(matrixblock)::blocks_o
@@ -1279,7 +1286,7 @@ contains
    !pgno: (in) the process group used for the four children
    !gd: (in) the process grid from process group pgno
    recursive subroutine LR_BuildABCD(blocks, partitioned_block, option, msh, stats, ptree, pgno, cridx)
-      use BPACK_DEFS
+
       implicit none
       type(matrixblock)::partitioned_block
       integer rank, ranktmp
@@ -1468,8 +1475,7 @@ contains
    !msh: (input) containing mesh
    !blocks_o: (inout) the parent BF
    subroutine BF_Aggregate(partitioned_block, blocks_o, ptree, stats, option, msh)
-      use BPACK_DEFS
-      use MISC_Utilities
+
 
       implicit none
       integer level_p, ADflag, iii, jjj
@@ -1851,8 +1857,8 @@ contains
    end subroutine BF_Aggregate
 
    subroutine BF_split(blocks_i, blocks_o, ptree, stats, msh, option)
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
 
@@ -2137,7 +2143,7 @@ contains
 
 ! Compare a block with its children
    subroutine BF_split_checkerror(blocks_i, blocks_o, ptree, stats, option)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, M_loc, N_loc, num_vect_sub, mv, nv
@@ -2210,7 +2216,7 @@ contains
 
    subroutine BF_get_rank_ABCD(partitioned_block, rankmax)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer rankmax, ii, jj
@@ -2235,7 +2241,7 @@ contains
    !ptree: process tree
    subroutine Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
 
-      use BPACK_DEFS
+
       use omp_lib
       implicit none
 
@@ -2309,11 +2315,11 @@ contains
 
    subroutine Bplus_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
-      use Bplus_compress
+
 
       implicit none
 
@@ -2449,11 +2455,11 @@ contains
 
    subroutine Bplus_inverse_schur_partitionedinverse_hss(bplus, option, stats, ptree, msh)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
 
       use omp_lib
-      use Bplus_compress
+
 
       implicit none
 
@@ -2530,7 +2536,9 @@ contains
                         rate = 1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
+                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                         call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh,vskip=.true.)
+                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                         error_inout = max(error_inout, error)
                         call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
@@ -2549,7 +2557,9 @@ contains
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
+                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                   call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh)
+                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
 #endif
@@ -2609,7 +2619,9 @@ contains
                         rate = 1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
+                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                         call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh,uskip=.true.)
+                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                         error_inout = max(error_inout, error)
                         call BF_ChangePattern(agent_block, 3, 1, stats, ptree)
@@ -2626,7 +2638,9 @@ contains
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
+                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                   call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh)
+                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
 #endif

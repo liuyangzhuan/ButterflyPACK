@@ -17,14 +17,14 @@
 #include "ButterflyPACK_config.fi"
 module Bplus_randomizedop
 ! use Utilites_randomized
-
+   use BPACK_DEFS
    use MISC_Utilities
    use BPACK_Utilities
 
 contains
 
    subroutine BF_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, ptree, stats)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, N, num_vect_sub
@@ -132,7 +132,7 @@ contains
    end subroutine BF_block_MVP_inverse_dat
 
    subroutine BF_Delete_RandVect(chara, random, level_butterfly)
-      use BPACK_DEFS
+
       implicit none
       character chara
       integer num_col, num_row, level, i, j
@@ -168,7 +168,7 @@ contains
 
    subroutine BF_Init_randomized(level_butterfly, rankmax, groupm, groupn, block, block_rand, msh, ptree, option, nodataflag)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock, kover
@@ -379,7 +379,7 @@ contains
 
    subroutine BF_Resolving_Butterfly_LL_dat(num_vect_sub, nth_s, nth_e, Ng, level, blocks, RandVectIn, RandVectOut, option, ptree, msh, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -488,7 +488,7 @@ contains
 
    subroutine BF_GetNumVectEstimate_LL(num_vect, nth_s, nth_e, Ng, level, blocks, option, ptree, msh, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -571,7 +571,7 @@ contains
    end subroutine BF_GetNumVectEstimate_LL
 
    subroutine BF_OneBlock_LL(index_i, index_j, level, num_vect_sub, mm, nth, nth_s, blocks, BFvec, option, stats)
-      use BPACK_DEFS
+
 
       implicit none
       type(matrixblock) :: blocks
@@ -642,7 +642,7 @@ contains
 
    subroutine BF_Resolving_Butterfly_RR_dat(num_vect_sub, nth_s, nth_e, Ng, level, blocks, RandVectIn, RandVectOut, option, ptree, msh, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -681,7 +681,7 @@ contains
          n1 = OMP_get_wtime()
          call BF_block_MVP_partial(blocks, 'N', num_vect_sub, RandVectIn, BFvec1, level - 1, ptree, stats)
          n2 = OMP_get_wtime()
-         call BF_all2all_matvec(blocks, BFvec1%vec(level), num_vect_sub, stats, ptree, level - 1, 'R', 'C')
+         call BF_all2all_matvec(blocks, BFvec1%vec(level), stats, ptree, level - 1, 'R', 'C')
          ! time_halfbuttermul = time_halfbuttermul + n2-n1
       endif
 
@@ -774,7 +774,7 @@ contains
 
    subroutine BF_GetNumVectEstimate_RR(num_vect, nth_s, nth_e, Ng, level, blocks, option, ptree, msh, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -857,7 +857,7 @@ contains
    end subroutine BF_GetNumVectEstimate_RR
 
    subroutine BF_OneBlock_RR(index_i, index_j, level, num_vect_sub, mm, nth, nth_s, blocks, BFvec, BFvec1, option, stats)
-      use BPACK_DEFS
+
 
       implicit none
       type(matrixblock) :: blocks
@@ -980,8 +980,8 @@ contains
 
    subroutine BF_randomized_old(pgno_large, level_butterfly, rank0, rankrate, blocks_o, operand, blackbox_MVP_dat, error_inout, strings, option, stats, ptree, msh, operand1,uskip,vskip)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       use omp_lib
 
       implicit none
@@ -1093,8 +1093,8 @@ contains
 
    subroutine BF_randomized(pgno_large, level_butterfly, rank0, rankrate, blocks_o, operand, blackbox_MVP_dat, error_inout, strings, option, stats, ptree, msh, operand1,uskip,vskip)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
+
       use omp_lib
 
       implicit none
@@ -1204,7 +1204,7 @@ contains
 
    subroutine BF_Reconstruction_Lowrank(block_rand, blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock
@@ -1278,7 +1278,7 @@ contains
 
    subroutine PQxSVDTruncate(block_rand, matQ, matQcA_trans, rmax, rank, option, stats, ptree, flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock
@@ -1425,7 +1425,7 @@ contains
 
    subroutine PSVDTruncateSigma(block_rand, matQcA_trans, rmax, rank, Singular, option, stats, ptree, flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock
@@ -1515,7 +1515,7 @@ contains
 
    subroutine BF_Reconstruction_LL(block_rand, blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, levels, levele,vskip)
 
-      use BPACK_DEFS
+
       implicit none
 
       logical,optional::vskip
@@ -1620,7 +1620,7 @@ contains
 
    subroutine BF_Reconstruction_RR(block_rand, blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, levels, levele, uskip)
 
-      use BPACK_DEFS
+
       implicit none
 
       logical,optional:: uskip
@@ -1723,7 +1723,7 @@ contains
 
    subroutine BF_Test_Reconstruction_Error(block_rand, block_o, operand, blackbox_MVP_dat, error, ptree, stats, operand1)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer nth
@@ -1792,9 +1792,9 @@ contains
 
    subroutine BF_Randomized_Vectors_dat(side, block_rand, RandVectIn, RandVectOut, blocks_o, operand, blackbox_MVP_dat, nth_s, nth_e, num_vect_sub, unique_nth, ptree, msh, stats, operand1)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk
@@ -1928,7 +1928,7 @@ contains
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
    subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block, block_o, trans, M_loc, N_loc, num_vect_sub, Vinin, Voutout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, M_loc, N_loc, num_vect_sub, mv, nv
@@ -2124,7 +2124,7 @@ contains
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
    subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2217,7 +2217,7 @@ contains
    end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
    subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2306,7 +2306,7 @@ contains
    end subroutine BF_block_MVP_inverse_minusBC_dat
 
    subroutine BF_block_MVP_schulz_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2467,7 +2467,7 @@ contains
    end subroutine BF_block_MVP_schulz_dat
 
    subroutine BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2525,9 +2525,9 @@ contains
 
    subroutine BF_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer level_c, rowblock, unique_nth
@@ -2725,7 +2725,7 @@ contains
 ! chara='+': block_o + block_1 x block_2
 ! chara='-': block_o - block_1 x block_2
    subroutine BF_block_MVP_Add_Multiply_dat(h_mat, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, chara)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2806,7 +2806,7 @@ contains
    end subroutine BF_block_MVP_Add_Multiply_dat
 
    subroutine BF_block_MVP_XLM_dat(blocks_l, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2865,7 +2865,7 @@ contains
    end subroutine BF_block_MVP_XLM_dat
 
    subroutine BF_block_MVP_XUM_dat(blocks_u, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv
@@ -2923,7 +2923,7 @@ contains
    end subroutine BF_block_MVP_XUM_dat
 
    subroutine Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -2984,7 +2984,7 @@ contains
    end subroutine Bplus_block_MVP_Exact_dat
 
    subroutine Bplus_block_MVP_Outter_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub
@@ -3033,7 +3033,7 @@ contains
    end subroutine Bplus_block_MVP_Outter_Exact_dat
 
    subroutine Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -3123,7 +3123,7 @@ contains
    end subroutine Bplus_block_MVP_minusBC_dat
 
    subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub
@@ -3171,7 +3171,7 @@ contains
    end subroutine Bplus_block_MVP_Outter_minusBC_dat
 
    subroutine Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub
@@ -3327,7 +3327,7 @@ contains
    end subroutine Bplus_block_MVP_Sblock_dat
 
    subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub
@@ -3375,7 +3375,7 @@ contains
    end subroutine Bplus_block_MVP_Outter_Sblock_dat
 
    subroutine Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, ptree, stats)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, N, num_vect_sub
@@ -3488,7 +3488,7 @@ contains
    end subroutine Bplus_block_MVP_inverse_dat
 
    subroutine Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, a, b, ptree, stats)
-      use BPACK_DEFS
+
 
       implicit none
       integer level, ii, N, num_vect_sub
@@ -3602,7 +3602,7 @@ contains
    end subroutine Bplus_block_MVP_twoforward_dat
 
    subroutine BF_block_MVP_twoforward_dat(ho_bf1, level, ii, block_rand, trans, N, num_vect_sub, Vin, Vout, a, b, ptree, stats)
-      use BPACK_DEFS
+
 
       implicit none
       type(matrixblock)::block_rand(:)
@@ -3709,7 +3709,7 @@ contains
    end subroutine BF_block_MVP_twoforward_dat
 
    subroutine Bplus_block_MVP_BplusB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -3803,7 +3803,7 @@ contains
    end subroutine Bplus_block_MVP_BplusB_dat
 
    subroutine Bplus_block_MVP_diagBinvB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -4019,7 +4019,7 @@ contains
 
 !* This is enssentially the same as Bplus_block_MVP_diagBinvB_dat, except that no redistriubtion is performed diagBinv
    subroutine Bplus_block_MVP_diagBinvBHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -4145,7 +4145,7 @@ contains
 
    end subroutine Bplus_block_MVP_diagBinvBHSS_dat
    subroutine Bplus_block_MVP_BBplus_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -4240,7 +4240,7 @@ contains
    end subroutine Bplus_block_MVP_BBplus_dat
 
    subroutine Bplus_block_MVP_BdiagBinv_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -4457,7 +4457,7 @@ contains
 
 !* This is enssentially the same as Bplus_block_MVP_BdiagBinv_dat, except that no redistriubtion is performed diagBinv
    subroutine Bplus_block_MVP_BdiagBinvHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
-      use BPACK_DEFS
+
 
       implicit none
       integer level_c, rowblock, num_vect_sub, M, N, mv, nv
@@ -4592,9 +4592,9 @@ contains
 
    subroutine Bplus_MultiLrandomized_Onesubblock(rank0, rankrate, blocks, operand, blackbox_MVP_dat, error_inout, strings, option, stats, ptree, msh, operand1)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       type(blockplus), pointer::bplus
@@ -4639,7 +4639,7 @@ contains
    contains
 
       subroutine Bplus_block_MVP_Onesubblock_dat(operand, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
-         use BPACK_DEFS
+
 
          implicit none
          integer level_c, rowblock, num_vect_sub
@@ -4714,9 +4714,9 @@ contains
 
    subroutine Bplus_randomized_constr(level_butterfly, bplus_o, operand, rank0_inner, rankrate_inner, blackbox_MVP_dat_inner, rank0_outter, rankrate_outter, blackbox_MVP_dat_outter, error_inout, strings, option, stats, ptree, msh)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       ! type(blockplus),pointer::bplus
@@ -4806,8 +4806,8 @@ contains
    end subroutine Bplus_randomized_constr
 
    subroutine Bplus_Init_FromInput(Bplus, Bplus_randomized, msh, ptree, option)
-      use MISC_Utilities
-      use BPACK_DEFS
+
+
 
       implicit none
 
