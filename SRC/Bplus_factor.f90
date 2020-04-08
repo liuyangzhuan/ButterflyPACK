@@ -2600,6 +2600,9 @@ contains
 #if 1
                   ! call BF_MoveSingulartoRight(block_o)
 
+
+                  call BF_MoveSingular_Ker(block_o, 'T', floor_safe(dble(level_butterfly_loc)/2d0)+ block_o%level_half +1, block_o%level_half, ptree, stats)
+
                   if(Bplus%LL(llplus+1)%Nbound>0)then
                   groupm = findgroup(edge_s, msh, levelm, block_o%row_group)
                   idxs =  groupm - Bplus%LL(llplus+1)%matrices_block(1)%row_group+1
