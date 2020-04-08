@@ -16,15 +16,18 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_compress
+   use BPACK_DEFS
+   use MISC_Utilities
    use Bplus_randomizedop
    use BPACK_structure
+   use BPACK_Utilities
 ! use element_Z
 
 contains
 
    subroutine BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer Nboundall, statflag
@@ -346,7 +349,7 @@ contains
 
    subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer Nboundall
@@ -591,7 +594,7 @@ contains
 
    subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       type(intersect) :: submats(:)
@@ -760,7 +763,7 @@ contains
 
    subroutine BF_exchange_skel(blocks, skels, option, stats, msh, ptree, level, mode, collect)
 
-      use BPACK_DEFS
+
       implicit none
       type(mesh)::msh
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -1014,7 +1017,7 @@ contains
 !*********** all to all communication of skeletons of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_skel(blocks, skels, option, stats, msh, ptree, level, mode, mode_new)
 
-      use BPACK_DEFS
+
       implicit none
       type(mesh)::msh
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
@@ -1257,7 +1260,7 @@ contains
 
    subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final)
 
-      use BPACK_DEFS
+
       implicit none
 
       type(intersect) :: submats(:)
@@ -1593,7 +1596,7 @@ contains
 
    subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       type(intersect) :: submats(:)
@@ -1780,9 +1783,9 @@ contains
 
    subroutine Bplus_compress_N15(bplus, option, Memory, stats, msh, ker, ptree)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       type(blockplus)::bplus
@@ -1823,6 +1826,10 @@ contains
                   end if
 
                   ! call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
+                  ! if(bplus%LL(ll)%matrices_block(bb)%level_butterfly>0)then
+                  ! call BF_MoveSingular_Ker(bplus%LL(ll)%matrices_block(bb), 'N', 1, bplus%LL(ll)%matrices_block(bb)%level_butterfly, ptree, stats)
+                  ! endif
+
 
                   Memory = Memory + rtemp
                   bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
@@ -1843,9 +1850,9 @@ contains
 
    subroutine BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer Nboundall, statflag
@@ -2678,8 +2685,8 @@ contains
 
    subroutine BF_compress_test(blocks, msh, ker, element_Zmn, ptree, option, stats)
 
-      use BPACK_DEFS
-      use BPACK_Utilities
+
+
       implicit none
 
       type(matrixblock) :: blocks
@@ -2828,7 +2835,7 @@ contains
    end subroutine BF_compress_test
 
    subroutine LR_HBACA(blocks, leafsize, rank, option, msh, ker, stats, ptree, pgno, cridx)
-      use BPACK_DEFS
+
       implicit none
       integer rank, ranktmp, leafsize
       integer header_m, header_n
@@ -2864,7 +2871,7 @@ contains
    end subroutine LR_HBACA
 
    recursive subroutine LR_HMerge(blocks, rank, option, msh, stats, ptree, pgno, cridx, hbacaflag)
-      use BPACK_DEFS
+
       implicit none
       integer rank, ranktmp
       integer header_m, header_n
@@ -3317,7 +3324,7 @@ contains
    end subroutine LR_HMerge
 
    recursive subroutine LR_HBACA_Leaflevel(blocks, leafsize, rank, option, msh, ker, stats, ptree, pgno, cridx)
-      use BPACK_DEFS
+
       implicit none
       integer rank, ranktmp, leafsize
       integer header_m, header_n
@@ -3699,7 +3706,7 @@ contains
 
    subroutine LR_ACA(matU, matV, Singular, header_m, header_n, rankmax_r, rankmax_c, frow, rmax, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2
@@ -4183,7 +4190,7 @@ contains
 
    subroutine LR_ACA_Parallel(blocks, header_m, header_n, M, N, frow, rmax, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error, ctxt, pgno)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2
@@ -4768,7 +4775,7 @@ contains
 
    subroutine LR_BACA(matU, matV, header_m, header_n, M, N, rmax, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax
@@ -5057,7 +5064,7 @@ contains
 
    subroutine LR_BACA_noOverlap(matU, matV, header_m, header_n, M, N, rmax, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax
@@ -5455,7 +5462,7 @@ contains
 
    subroutine LR_SeudoSkeleton(blocks, header_m, header_n, M, N, rmaxc, rmaxr, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, ctxt, pgno)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2, rank
@@ -5831,7 +5838,7 @@ contains
 
 !!!!!!! check error of Bplus compression of blocks by comparing the full block, assuming final distribution
    subroutine Bplus_CheckError_Full(bplus, option, msh, ker, stats, ptree)
-      use BPACK_DEFS
+
       implicit none
 
       type(blockplus)::bplus
@@ -5938,7 +5945,7 @@ contains
    end subroutine Bplus_CheckError_Full
 
    subroutine LocalButterflySVD_Left(index_i_loc, index_j_loc, level_loc, level_butterflyL, level, index_i_m, blocks, option, msh, ButterflyP_old, ButterflyP)
-      use MISC_Utilities
+
       implicit none
       integer index_i_loc, index_j_loc, level_loc, level_butterflyL, index_i_m, index_i, index_j, level, group_m, mm, nn, nn1, nn2, j, i, mn, rank, mm1
       type(butterfly_kerl) ButterflyP_old, ButterflyP
@@ -6057,7 +6064,7 @@ contains
    end subroutine LocalButterflySVD_Left
 
    subroutine LocalButterflySVD_Right(index_i_loc, index_j_loc, level_loc, level_butterflyR, level, level_butterfly, index_j_m, blocks, option, msh, ButterflyP_old, ButterflyP)
-      use MISC_Utilities
+
       implicit none
       integer index_i_loc, index_j_loc, level_loc, level_butterflyR, level_butterfly, index_j_m, index_i, index_j, level, group_n, mm, nn, nn1, mm1, mm2, j, i, mn, rank
       type(butterfly_kerl) ButterflyP_old, ButterflyP
@@ -6176,7 +6183,7 @@ contains
 
    subroutine Full_construction(blocks, msh, ker, stats, option, ptree)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer group_m, group_n, i, j
