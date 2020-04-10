@@ -2479,7 +2479,7 @@ contains
       integer itermax, ntry, cnt, cnt_partial
       real(kind=8):: n1, n2, n3, n4, Memory
       integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b, idxs,idxe,groupm
-      DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :)
+      DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :), matrixtemp(:,:)
       DT:: ctemp1, ctemp2
       integer, allocatable :: ipiv(:)
       type(Hoption)::option
@@ -2570,6 +2570,7 @@ contains
 
                n1 = OMP_get_wtime()
                if (block_o%style == 1) then
+#if 0
                   allocate (ipiv(block_o%M))
                   call getrff90(block_o%fullmat, ipiv, flop=flop)
                   stats%Flop_Factor = stats%Flop_Factor + flop
@@ -2579,6 +2580,13 @@ contains
                      ! enddo
                   stats%Flop_Factor = stats%Flop_Factor + flop
                   deallocate (ipiv)
+#else
+                  allocate(matrixtemp(block_o%M,block_o%M))
+                  matrixtemp = block_o%fullmat
+                  call GeneralInverse(block_o%M, block_o%M, matrixtemp, block_o%fullmat, SafeEps, Flops=flop)
+                  stats%Flop_Factor = stats%Flop_Factor + flop
+                  deallocate(matrixtemp)
+#endif
                else
                   !!!!! invert I+B1 to be I+B2
                   level_butterfly = block_o%level_butterfly

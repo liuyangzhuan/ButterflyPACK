@@ -780,7 +780,7 @@ contains
 
       integer nth_s, nth_e, level
       integer i, j, k, num_blocks, num_row, num_col, ii, jj, mm, kk, rs, re, rank
-      integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, iter, vector1, vector2, direction, round, flag
+      integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc_s,index_j_loc_s,iter, vector1, vector2, direction, round, flag
       real(kind=8) a, b, c, d, norm1, norm2, norm3, norm4, norm1L, norm2L, norm3L, norm4L, norm1R, norm2R, norm3R, norm4R, error, errorL, errorR, rtemp, error0, error1, error2
       DT ctemp
       integer kmax
@@ -796,13 +796,25 @@ contains
       integer nth, ind_r, noe, Ng, dimension_nn, nn1, nn2, ieo, level_butterfly, num_vect, pgno_sub_mine
       real(kind=8)::n1, n2
       type(matrixblock) :: blocks
-      type(butterfly_vec) :: BFvec
+      type(butterfly_vec) :: BFvec, BFvec1
       integer idx_r, inc_r, nr, idx_c, inc_c, nc, ierr
 
       level_butterfly = blocks%level_butterfly
       if (option%less_adapt == 0 .or. level == level_butterfly + 1) then
          num_vect = blocks%dimension_rank + vec_oversample
       else
+
+
+         !********* multiply BF with vectors to get the local block dimensions, this can be improved
+         if (blocks%level_half + 1 == level) then
+            allocate (RandVectTmp(blocks%N_loc, 1))
+            RandVectTmp = 0
+            call BF_block_MVP_partial(blocks, 'N', 1, RandVectTmp, BFvec1, level - 1, ptree, stats)
+            call BF_all2all_matvec(blocks, BFvec1%vec(level), stats, ptree, level - 1, 'R', 'C')
+            deallocate (RandVectTmp)
+            ! time_halfbuttermul = time_halfbuttermul + n2-n1
+         endif
+
 
          !********* multiply BF^C with vectors to get the local block dimensions, this can be improved
          allocate (RandVectTmp(blocks%M_loc, 1))
@@ -829,10 +841,15 @@ contains
 
                      index_ii_loc = (index_ii - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
                      index_jj_loc = (index_jj - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
-
                      nn1 = size(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, 1)
                      nn2 = size(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, 1)
                      num_vect = max(num_vect, nn1 + nn2)
+                     if (blocks%level_half + 1 == level) then
+                     index_i_loc_s = (index_i - BFvec1%vec(level)%idx_r)/BFvec1%vec(level)%inc_r + 1 !index_i_loc_s is local index in BFvec1%vec(level)
+                     index_j_loc_s = (index_j - BFvec1%vec(level)%idx_c)/BFvec1%vec(level)%inc_c + 1
+                     mm = size(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix, 1)
+                     num_vect = max(num_vect, mm)
+                     endif
                   enddo
                endif
             enddo
@@ -851,6 +868,20 @@ contains
          endif
          deallocate (BFvec%vec)
 
+         if (blocks%level_half + 1 == level) then
+         if (allocated(BFvec1%vec(level)%blocks)) then
+            do j = 1, BFvec1%vec(level)%nc
+               do i = 1, BFvec1%vec(level)%nr
+                  if (allocated(BFvec1%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec1%vec(level)%blocks(i, j)%matrix)
+               enddo
+            enddo
+            deallocate (BFvec1%vec(level)%blocks)
+         endif
+         deallocate (BFvec1%vec)
+         endif
+
+
+
       endif
       return
 
@@ -861,7 +892,7 @@ contains
 
       implicit none
       type(matrixblock) :: blocks
-      DT, allocatable :: matA(:, :), matB(:, :), matC(:, :)
+      DT, allocatable :: matA(:, :), matB(:, :), matC(:, :),mattmp(:,:)
       integer index_i, index_j, i, j, level, dimension_nn, mm, rank, num_vect_sub, nth, nth_s, nn1, nn2, level_butterfly, level_left_start
       type(Hoption) :: option
       type(Hstat) :: stats
@@ -947,7 +978,7 @@ contains
             allocate (matC(rank, nn1 + nn2), matA(mm, rank))
             call copymatT(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1:rank, (nth - nth_s)*mm + 1:(nth - nth_s + 1)*mm), matA, rank, mm)
             call LinearSolve(mm, rank, nn1 + nn2, matA, matB, matC, option%tol_LS, Flops=flop)
-            ! write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,nn1+nn2),fnorm(matC,rank,nn1+nn2),'Rker',level,level_butterfly,index_i,index_j
+            ! if(blocks%row_group==512)write(*,*)fnorm(matA,mm,rank),fnorm(matB,mm,nn1+nn2),fnorm(matC,rank,nn1+nn2),'Rker',level,level_butterfly,index_i,index_j,'rank,',rank,nn1,nn2
 
             Flops = Flops + flop
             call copymatT(matC(1:rank, 1:nn1), blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank, nn1)
@@ -1026,7 +1057,7 @@ contains
 
       do tt = 1, option%itermax
 
-         rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt - 1)) + 1
+         rank_pre_max = ceiling_safe(rank0*rankrate**(tt - 1)) + 1
 
          groupm = blocks_o%row_group
          groupn = blocks_o%col_group
@@ -1149,7 +1180,7 @@ contains
 
          converged = 0
          do tt = 1, option%itermax
-            rank_pre_max = ceiling_safe(rank0*option%rankrate**(tt - 1)) + 1
+            rank_pre_max = ceiling_safe(rank0*rankrate**(tt - 1)) + 1
             block_rand(1)%dimension_rank = rank_pre_max
             n1 = OMP_get_wtime()
             call BF_Reconstruction_LL(block_rand(1), blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh, 0, 0,vskip=vskip)
