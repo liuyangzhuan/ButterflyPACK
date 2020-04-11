@@ -2612,10 +2612,10 @@ contains
 
                level_butterfly = block_o%level_butterfly
 
-               groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
+               ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
                nn = block_o%N_loc
 
-               groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
+               ! groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
                mm = block_o%M_loc
 
                allocate (Vbuff(mm, num_vect_sub))
@@ -2673,10 +2673,10 @@ contains
 
                level_butterfly = block_o%level_butterfly
 
-               groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
+               ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
                nn = block_o%N_loc
 
-               groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
+               ! groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
                mm = block_o%M_loc
 
                allocate (Vbuff(mm, num_vect_sub))
@@ -2749,6 +2749,142 @@ contains
       return
 
    end subroutine BF_block_MVP_Sblock_dat
+
+
+   subroutine BF_block_MVP_Sblock_Sml_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+
+
+
+
+      implicit none
+
+      integer level_c, rowblock, unique_nth
+      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv
+      integer mm, nn, mn, qq, pp, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag, head, tail
+      character trans
+      ! real(kind=8) a,b,c,d
+      DT ctemp, a, b
+
+      ! type(vectorsblock), pointer :: random1, random2
+
+      real(kind=8), allocatable :: Singular(:)
+      integer idx_start_glo, N_diag, idx_start_diag, idx_end_diag, idx_start_loc, idx_end_loc, rank
+      DT, allocatable::vec_old(:, :), vec_new(:, :), matrixtemp1(:, :), Vbuff(:, :), Vout_tmp(:, :), tmpU(:, :), tmpV(:, :)
+
+      integer Nsub, Ng
+      integer*8 idx_start
+      integer level_blocks
+      integer groupm_start, groupn_start
+      integer header_mm, header_nn
+      integer header_m, header_n, tailer_m, tailer_n
+
+      integer nth_s, nth_e, num_vect_sub, nth, level_right_start
+      real(kind=8)::n1, n2
+      DT :: Vin(:, :), Vout(:, :)
+      type(vectorsblock), pointer:: RandomVectors_InOutput_tmp(:)
+
+      class(*)::ho_bf1
+      class(*), optional::msh
+      type(matrixblock)::block_o
+      type(matrixblock), pointer::blocks
+      type(proctree)::ptree
+      type(Hstat)::stats
+
+      call assert(present(msh), 'operand1 cannot be skipped')
+
+      select TYPE (msh)
+      type is (mesh)
+         select TYPE (ho_bf1)
+         type is (hobf)
+
+            level_c = ho_bf1%ind_lv
+            rowblock = ho_bf1%ind_bk
+
+            mv = size(Vout, 1)
+            nv = size(Vout, 2)
+            allocate (Vout_tmp(mv, nv))
+            Vout_tmp = Vout
+
+            if (trans == 'N') then
+
+               level_butterfly = block_o%level_butterfly
+               ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
+               nn = block_o%N_loc
+               ! groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
+               mm = block_o%M_loc
+               allocate (Vbuff(mm, num_vect_sub))
+               Vbuff = 0
+
+               ! get the right multiplied vectors
+               pp = ptree%myid - ptree%pgrp(block_o%pgno)%head + 1
+               idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
+
+               n1 = OMP_get_wtime()
+               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, Vbuff, cone, czero, ptree, stats)
+               n2 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n2 - n1
+               mm = block_o%M_loc
+
+               n1 = OMP_get_wtime()
+               if (associated(ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL)) then
+                  blocks => ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL(1)%matrices_block(1)
+                  qq = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+                  head = blocks%headm + blocks%M_p(qq, 1) - 1
+                  tail = head + blocks%M_loc - 1
+                  idx_start_loc = head - idx_start_glo + 1
+                  idx_end_loc = tail - idx_start_glo + 1
+                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+               endif
+               n2 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n2 - n1
+               deallocate (Vbuff)
+            else
+               level_butterfly = block_o%level_butterfly
+               ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
+               nn = block_o%N_loc
+               ! groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
+               mm = block_o%M_loc
+               allocate (Vbuff(mm, num_vect_sub))
+               Vbuff = 0
+               ! get the left multiplied vectors
+               pp = ptree%myid - ptree%pgrp(block_o%pgno)%head + 1
+               idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
+               n1 = OMP_get_wtime()
+               if (associated(ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL)) then
+                  blocks => ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL(1)%matrices_block(1)
+                  qq = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+                  head = blocks%headm + blocks%M_p(qq, 1) - 1
+                  tail = head + blocks%M_loc - 1
+                  idx_start_loc = head - idx_start_glo + 1
+                  idx_end_loc = tail - idx_start_glo + 1
+                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+               endif
+               n2 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n2 - n1
+               mm = block_o%M_loc
+               nn = block_o%N_loc
+               n1 = OMP_get_wtime()
+               call BF_block_MVP_dat(block_o, 'T', mm, nn, num_vect_sub, Vbuff, Vout, cone, czero, ptree, stats)
+               n2 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n2 - n1
+               deallocate (Vbuff)
+            end if
+
+            Vout = a*Vout + b*Vout_tmp
+            deallocate (Vout_tmp)
+
+         class default
+            write (*, *) "unexpected type"
+            stop
+         end select
+      class default
+         write (*, *) "unexpected type"
+         stop
+      end select
+      return
+
+   end subroutine BF_block_MVP_Sblock_Sml_dat
+
 
 ! chara='m': block_1 x block_2
 ! chara='a': block_o + block_1

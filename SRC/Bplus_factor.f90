@@ -2246,13 +2246,13 @@ contains
       implicit none
 
       integer level_c, rowblock
-      integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
+      integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks, idx_start_diag, idx_end_diag, N_diag, num_vect_sub, level_butterfly_loc, index_i_loc_k, index_i, ii_loc
       integer num_col, num_row, level, mm, nn, ii, jj, tt
       character chara
       real(kind=8) T0
       type(blockplus), pointer::bplus
       type(matrixblock)::block_old
-      type(matrixblock), pointer::block_o
+      type(matrixblock), pointer::block_o, blocks
       integer::rank_new_max
       real(kind=8)::rank_new_avr, error, rate, rankrate_inner, rankrate_outter
       integer niter, rank, ntry, rank0, rank0_inner, rank0_outter
@@ -2263,6 +2263,7 @@ contains
       type(hobf)::ho_bf1
       type(proctree)::ptree
       type(mesh)::msh
+      type(matrixblock):: agent_block
 
       error_inout = 0
 
@@ -2275,16 +2276,80 @@ contains
          block_o => ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1)
          level_butterfly = block_o%level_butterfly
 
-         if (level_butterfly == 0) then
-            call LR_Sblock(ho_bf1, level_c, rowblock, ptree, stats)
-         else
-            ho_bf1%ind_lv = level_c
-            ho_bf1%ind_bk = rowblock
-            rank0 = block_o%rankmax
+
+
+#if 0
+      if (level_butterfly == 0) then
+         call LR_Sblock(ho_bf1, level_c, rowblock, ptree, stats)
+      else
+         ho_bf1%ind_lv = level_c
+         ho_bf1%ind_bk = rowblock
+         rank0 = block_o%rankmax
+         rate = 1.2d0
+         call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, operand1=msh)
+         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+      end if
+#else
+
+   error_inout=0
+   call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
+   if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
+      call BF_ChangePattern(block_o, option%pat_comp, 1, stats, ptree)
+      call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
+   endif
+   call BF_ChangePattern(block_o, 1, 2, stats, ptree)
+
+
+   do level = ho_bf1%Maxlevel + 1,level_c+1,-1
+      N_diag = 2**(level-level_c-1)
+      idx_start_diag = max((rowblock - 1)*N_diag + 1, ho_bf1%levels(level)%Bidxs)
+      idx_end_diag = min(rowblock*N_diag, ho_bf1%levels(level)%Bidxe)
+
+      if(level==ho_bf1%Maxlevel + 1)then
+
+         !!$omp parallel do default(shared) private(ii,blocks,index_i,index_i_loc_k,num_vect_sub)
+         do ii = idx_start_diag,idx_end_diag
+            blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+            index_i = ii - ((rowblock - 1)*N_diag + 1) + 1
+            index_i_loc_k = (index_i - block_o%ButterflyU%idx)/block_o%ButterflyU%inc + 1
+            num_vect_sub = size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,2)
+
+            call Full_block_MVP_dat(blocks, 'N', blocks%M, num_vect_sub,&
+              &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, block_o%ButterflyU%blocks(index_i_loc_k)%matrix, cone, czero)
+         end do
+         !!$omp end parallel do
+
+      else
+         do ii = idx_start_diag,idx_end_diag
+            ii_loc = ii - ((rowblock - 1)*N_diag + 1) + 1
+            level_butterfly_loc = ho_bf1%Maxlevel+1-level    !!!! all even level butterfly could be problematic here
+
+            blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+            call assert(IOwnPgrp(ptree, blocks%pgno),'I do not own this pgno')
+
+            call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
+            rank0 = agent_block%rankmax
             rate = 1.2d0
-            call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, operand1=msh)
+
+            ho_bf1%ind_lv = level
+            ho_bf1%ind_bk = ii
+            rank0 = agent_block%rankmax
+            rate = 1.2d0
+            call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, ho_bf1, BF_block_MVP_Sblock_Sml_dat, error, 'Sblock_sml', option, stats, ptree, msh, operand1=msh, vskip=.true.)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
-         end if
+            error_inout = max(error_inout, error)
+
+            call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
+            call BF_copyback_partial(block_o, level_butterfly_loc, ii_loc, 'L', agent_block,blocks%pgno,ptree)
+            call BF_delete(agent_block,1)
+
+         end do
+
+      end if
+
+   end do
+
+#endif
 
          if (ptree%MyID == Main_ID .and. option%verbosity >= 1) write (*, '(A10,I5,A6,I3,A8,I3,A11,Es14.7)') 'OneL No. ', rowblock, ' rank:', block_o%rankmax, ' L_butt:', block_o%level_butterfly, ' error:', error_inout
 
