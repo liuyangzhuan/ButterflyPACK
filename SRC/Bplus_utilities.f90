@@ -9982,17 +9982,17 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          ! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
 
          ! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, M, random2, M, 'N', 'N', M, N, M, cone, czero)
+         call gemmf90(blocks%fullmat, M, random1, M, random2tmp, M, 'N', 'N', M, N, M, cone, czero)
       elseif (chara == 'T') then
          group_m = blocks%row_group  ! Note: row_group and col_group interchanged here
          group_n = blocks%col_group
          call assert(group_m == group_n, 'fullmat not square')
          ! level_blocks=blocks%level
          ! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, M, random2, M, 'T', 'N', M, N, M, al, be)
+         call gemmf90(blocks%fullmat, M, random1, M, random2tmp, M, 'T', 'N', M, N, M, al, be)
       end if
 
-      random2 = a*random2 + b*random2tmp
+      random2 = a*random2tmp + b*random2
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)
    end subroutine Full_block_MVP_dat
