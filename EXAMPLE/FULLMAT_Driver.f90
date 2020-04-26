@@ -375,7 +375,7 @@ PROGRAM ButterflyPACK_FULL
 		deallocate(datain)
 #endif
 
-		call assert(int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)< 2**31,'message size overflow in MPI!')
+		call assert(int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)< int(2d0**31d0,kind=8),'message size overflow in MPI!')
 
 		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DT,Main_ID,ptree%Comm,ierr)
 		! do ii=1,10
