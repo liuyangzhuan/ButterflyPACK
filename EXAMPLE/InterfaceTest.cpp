@@ -130,6 +130,7 @@ public:
   int _n_rand;
   std::vector<double> _MatU;
   std::vector<double> _MatV;
+  std::vector<double> _MatFull;
 
   std::vector<int> _Hperm;
   std::vector<int> _iHperm;
@@ -157,6 +158,13 @@ public:
     assert(size_t(_n_rand * _rank_rand) == _MatU.size());
 	}
 
+  C_QuantApp(int n, int ker, vector<double> MatFull, vector<int> perm)
+    : _n(n), _ker(ker), _MatFull(move(MatFull)), _Hperm(move(perm)){
+	// cout<<_n_rand<<_rank_rand<<_MatU.size()<<endl;
+    assert(size_t(_n * _n) == _MatFull.size());
+	}
+
+
 
   inline void Sample(int m, int n, double* val){
 	switch(_ker){
@@ -182,6 +190,10 @@ public:
 		for (int k = 0; k < _rank_rand; k++){
 			*val += _MatU[k*_n_rand+m]*_MatV[k*_n_rand+n];
 		}
+		break;
+	case 7: //Full matrix
+		*val =_MatFull[n*_n+m];
+		// *val =_MatFull[_Hperm[n]*_n+_Hperm[m]];
 		break;
 	}
   }
@@ -247,8 +259,9 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
 
 
 // Read a data file into a vector
-vector<double> write_from_file(string filename) {
-  vector<double> data;
+template<typename T>
+vector<T> write_from_file(string filename) {
+  vector<T> data;
   ifstream f(filename);
   string l;
   while (getline(f, l)) {
@@ -286,6 +299,7 @@ int main(int argc, char* argv[])
 
 	int Nmin=200; //finest leafsize
 	double tol=1e-4; //compression tolerance
+	double sample_para=2.0; //oversampling factor in entry evaluation
 	int com_opt=5; //1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton
 	int sort_opt=1; //0:natural order 1:kd-tree 2:cobble-like ordering 3:gram distance-based cobble-like ordering
 	int checkerr = 0; //1: check compression quality
@@ -296,6 +310,12 @@ int main(int argc, char* argv[])
 	int v_major,v_minor,v_bugfix; //version numbers
 
     int tst = 1;
+	int lrlevel=0;
+
+	int nlevel = 0; // 0: tree level, nonzero if a tree is provided
+	int* tree = new int[(int)pow(2,nlevel)]; //user provided array containing size of each leaf node, not used if nlevel=0
+	tree[0] = Npo;
+
 	if(argc>1)tst = stoi(argv[1]);
 
 
@@ -323,7 +343,7 @@ if(tst==1){
 	if(argc>11)batch = stoi(argv[11]);
 	if(argc>12)bnum = stoi(argv[12]);
 	if(argc>13)knn = stoi(argv[13]);
-    vector<double> data_train = write_from_file(filename + "_train.csv");
+    vector<double> data_train = write_from_file<double>(filename + "_train.csv");
 	Npo = data_train.size() / Ndim;
 
 	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);
@@ -397,14 +417,67 @@ if(tst==3){
 }
 
 	/*****************************************************************/
+	/* Test Full matrices*/
+if(tst==4){
+	ker = 7;
+	Npo = 40000;
+
+	if(argc>2)Npo = stoi(argv[2]);
+	if(argc>3)Nmin = stoi(argv[3]);
+
+	if(argc>4)tol = stof(argv[4]);
+	if(argc>5)com_opt = stoi(argv[5]);
+	if(argc>6)checkerr = stoi(argv[6]);
+	if(argc>7)batch = stoi(argv[7]);
+	if(argc>8)bnum = stoi(argv[8]);
+	if(argc>9)knn = stoi(argv[9]);
+	if(argc>10)lrlevel = stoi(argv[10]);
+	if(argc>11)sample_para = stof(argv[11]);
+
+	delete(tree);
+	nlevel = 7;
+	vector<int> t1((int)pow(2,nlevel));
+	vector<double> matFull(Npo*Npo);
+	vector<int> perm(Npo);
+	if(myrank==master_rank){
+		// vector<double> matFull1(Npo*Npo);
+		ifstream f("../EXAMPLE/FULLMAT_DATA/FHODLR_colmajor_real_double_40000x40000.dat", ios::binary);
+		f.read((char*)matFull.data(), sizeof(double)*Npo*Npo);
+
+		// perm = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/sorder_40000.dat");
+
+
+		// vector<int> perm1=perm;
+		// for(int ii=0;ii<Npo;ii++)
+		// 	perm.data()[perm1.data()[ii]]=ii;
+
+
+		t1 = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/leafs_40000_noheader.dat");
+
+		// std::cout<<matFull.data()[Npo*Npo-1]<<" "<<perm.data()[Npo-1]<<" "<<ccc<<std::endl;
+	}
+	MPI_Bcast(matFull.data(), Npo*Npo, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	// MPI_Bcast(perm.data(), Npo, MPI_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(t1.data(), (int)pow(2,nlevel), MPI_INT, 0, MPI_COMM_WORLD);
+
+	tree = new int[(int)pow(2,nlevel)];
+	for(int ii=0;ii<(int)pow(2,nlevel);ii++)
+	tree[ii] = t1.data()[ii];
+
+
+	quant_ptr=new C_QuantApp(Npo, ker, matFull,perm);
+	nogeo=1;
+	sort_opt=0;
+}
+
+
+
+	/*****************************************************************/
 
 	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
 
 	int myseg=0;     // local number of unknowns
 	int* perms = new int[Npo]; //permutation vector returned by HODLR
-	int nlevel = 0; // 0: tree level, nonzero if a tree is provided
-	int* tree = new int[(int)pow(2,nlevel)]; //user provided array containing size of each leaf node, not used if nlevel=0
-	tree[0] = Npo;
 	int* groups = new int[size];
 	int i_opt;
 	double d_opt;
@@ -428,8 +501,13 @@ if(tst==3){
 	d_c_bpack_createoption(&option);
 	d_c_bpack_createstats(&stats);
 
+
+
 	// set hodlr options
 	d_c_bpack_set_D_option(&option, "tol_comp", tol);
+	d_c_bpack_set_D_option(&option, "tol_rand", tol);
+	d_c_bpack_set_D_option(&option, "tol_Rdetect", tol*1e-1);
+	d_c_bpack_set_D_option(&option, "sample_para", sample_para);
 	d_c_bpack_set_I_option(&option, "nogeo", nogeo);
 	d_c_bpack_set_I_option(&option, "Nmin_leaf", Nmin);
 	d_c_bpack_set_I_option(&option, "RecLR_leaf", com_opt);
@@ -438,11 +516,14 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option, "BACA_Batch", batch);
 	d_c_bpack_set_I_option(&option, "LR_BLK_NUM", bnum);
 	d_c_bpack_set_I_option(&option, "cpp", cpp);
-	d_c_bpack_set_I_option(&option, "LRlevel", 0);
+	d_c_bpack_set_I_option(&option, "LRlevel", lrlevel);
 	d_c_bpack_set_I_option(&option, "knn", knn);
-	d_c_bpack_set_I_option(&option, "verbosity", 2);
-	//d_c_bpack_set_I_option(&option, "powiter", 5);
+	d_c_bpack_set_I_option(&option, "verbosity", 2); 
+	d_c_bpack_set_I_option(&option, "less_adapt", 1);
+	d_c_bpack_set_I_option(&option, "itermax", 10);
+	d_c_bpack_set_I_option(&option, "ErrSol", 1);
 
+	d_c_bpack_printoption(&option,&ptree);
 
     // construct hodlr with geometrical points
 	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);

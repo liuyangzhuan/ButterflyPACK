@@ -437,6 +437,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 		!**** computation of the construction phase
+		option%less_adapt=0
 		call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
 
 
@@ -501,6 +502,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 	!**** computation of the construction phase
+	option1%less_adapt=0
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 

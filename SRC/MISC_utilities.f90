@@ -26,12 +26,14 @@
 
 module MISC_Utilities
    use BPACK_DEFS
+   use MISC_DenseLA
+   use BPACK_linkedlist
+
 #ifdef Intel
    USE IFPORT
 #endif
    use omp_lib
-   use MISC_DenseLA
-   use BPACK_linkedlist
+
 
    integer, parameter :: int64 = selected_int_kind(18)
 
@@ -170,7 +172,7 @@ contains
 
    subroutine LR_ReCompression(matU, matV, M, N, rmax, rank, SVD_tolerance, Flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer N, M, rmax
@@ -268,7 +270,7 @@ contains
 
    subroutine LR_FnormUp(matU, matV, M, N, ruv, rup, ldV, normUV, normUVupdate, tolerance, Flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer N, M, ruv, rup, ldV
@@ -322,7 +324,7 @@ contains
 
    subroutine LR_Fnorm(matU, matV, M, N, rmax, norm, tolerance, Flops)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer N, M, rmax
@@ -614,15 +616,16 @@ contains
 
    end subroutine GetRank
 
-   subroutine PComputeRange(M_p, N, mat, rank, eps, ptree, pgno, Flops)
+   subroutine PComputeRange(M_p, N, mat, rank, eps, ptree, pgno, Flops, norm_tol)
 
       implicit none
       integer M, N, M_loc, rank, mn, i, mnl, ii, jj, rrflag
       DT::mat(:, :)
       real(kind=8) eps
+      logical::small
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:), mat1D(:, :), mat2D(:, :)
       real(kind=8), allocatable :: Singular(:)
-      real(kind=8) :: flop
+      real(kind=8) :: flop,norm
       integer, allocatable :: jpvt(:)
       integer, allocatable :: ipiv(:), jpiv(:), JPERM(:)
       integer:: M_p(:, :)
@@ -632,6 +635,7 @@ contains
       integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun
       integer::descsMat1D(9), descsMat2D(9)
       real(kind=8), optional:: Flops
+      real(kind=8), optional:: norm_tol
 
       rank = 0
 
@@ -645,77 +649,93 @@ contains
          M = M_p(nproc, 2)
 
          if (nproc == 1) then
-            call ComputeRange(M, N, mat, rank, 1, eps, Flops=flop)
+            call ComputeRange(M, N, mat, rank, 1, eps, Flops=flop,norm_tol=norm_tol)
             if (present(Flops)) Flops = Flops + flop
          else
 
             mn = min(M, N)
 
-            !!!!**** generate 2D grid blacs quantities
-            ctxt = ptree%pgrp(pgno)%ctxt
-            call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
-            if (myrow /= -1 .and. mycol /= -1) then
-               myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
-               myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
-               call descinit(descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-               allocate (mat2D(myArows, myAcols))
-               mat2D = 0
-            else
-               descsMat2D(2) = -1
-               allocate (mat2D(1, 1))
-               mat2D = 0
+
+            small=.False.
+            if(present(norm_tol))then
+               norm = fnorm(mat,M_loc,N)**2d0
+               call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+               norm = sqrt(norm)
+               if(norm/sqrt(dble(N))<norm_tol)small=.True.
             endif
 
-            !!!!**** redistribution of input matrix
-            call Redistribute1Dto2D(mat, M_p, 0, pgno, mat2D, M, 0, pgno, N, ptree)
-
-            ! Compute RRQR
-            if (myrow /= -1 .and. mycol /= -1) then
-               allocate (ipiv(myAcols))
-               ipiv = 0
-               taun = numroc_wp(mn, nbslpk, mycol, 0, npcol)
-               allocate (tau(taun))
-               tau = 0
-               allocate (jpiv(N))
-               jpiv = 0
-               allocate (JPERM(N))
-               JPERM = 0
-               call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank, eps, SafeUnderflow, flop=flop)
-               if (present(Flops)) Flops = Flops + flop/dble(nprow*npcol)
-
-               if (rank > 0) then
-                  call pun_or_gqrf90(ctxt, mat2D, tau, M, rank, rank, descsMat2D, 1, 1, flop=flop)
-                  if (present(Flops)) Flops = Flops + flop/dble(nprow*npcol)
+            if(small .eqv. .True.)then
+               rank = 1
+               mat(:, 1) = 0d0
+            else
+               !!!!**** generate 2D grid blacs quantities
+               ctxt = ptree%pgrp(pgno)%ctxt
+               call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+               if (myrow /= -1 .and. mycol /= -1) then
+                  myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
+                  myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+                  call descinit(descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+                  allocate (mat2D(max(1,myArows), max(1,myAcols)))
+                  mat2D = 0
                else
-                  rank = 1
-                  if (myArows > 0 .and. myAcols > 0) mat2D = 0d0
+                  descsMat2D(2) = -1
+                  allocate (mat2D(1, 1))
+                  mat2D = 0
                endif
 
-               deallocate (ipiv)
-               deallocate (tau)
-               deallocate (jpiv)
-               deallocate (JPERM)
+               !!!!**** redistribution of input matrix
+               call Redistribute1Dto2D(mat, M_p, 0, pgno, mat2D, M, 0, pgno, N, ptree)
 
-               if (isnan(fnorm(mat2D, myArows, myAcols))) then
-                  write (*, *) 'Q or R has NAN in PComputeRange'
-                  stop
-               end if
+               ! Compute RRQR
+               if (myrow /= -1 .and. mycol /= -1) then
+                  allocate (ipiv(myAcols))
+                  ipiv = 0
+                  taun = numroc_wp(mn, nbslpk, mycol, 0, npcol)
+                  allocate (tau(taun))
+                  tau = 0
+                  allocate (jpiv(N))
+                  jpiv = 0
+                  allocate (JPERM(N))
+                  JPERM = 0
+                  call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank, eps, SafeUnderflow, flop=flop)
+                  if (present(Flops)) Flops = Flops + flop/dble(nprow*npcol)
+
+                  if (rank > 0) then
+                     call pun_or_gqrf90(ctxt, mat2D, tau, M, rank, rank, descsMat2D, 1, 1, flop=flop)
+                     if (present(Flops)) Flops = Flops + flop/dble(nprow*npcol)
+                  else
+                     rank = 1
+                     if (myArows > 0 .and. myAcols > 0) mat2D = 0d0
+                  endif
+
+                  deallocate (ipiv)
+                  deallocate (tau)
+                  deallocate (jpiv)
+                  deallocate (JPERM)
+
+                  if (isnan(fnorm(mat2D, max(1,myArows), max(1,myAcols)))) then
+                     write (*, *) 'Q or R has NAN in PComputeRange'
+                     stop
+                  end if
+               endif
+
+               call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+
+               !!!!**** redistribution of output matrix
+               call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)
+
+               deallocate (mat2D)
+
             endif
-
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-
-            !!!!**** redistribution of output matrix
-            call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)
-
-            deallocate (mat2D)
          endif
       endif
 
    end subroutine PComputeRange
 
-   subroutine ComputeRange(M, N, mat, rank, rrflag, eps, Flops)
+   subroutine ComputeRange(M, N, mat, rank, rrflag, eps, Flops,norm_tol)
 
       implicit none
+      logical::small
       integer M, N, rank, mn, i, mnl, ii, jj, rrflag
       DT::mat(:, :)
       real(kind=8) eps
@@ -723,11 +743,13 @@ contains
       real(kind=8), allocatable :: Singular(:)
       integer, allocatable :: jpvt(:)
       real(kind=8), optional:: Flops
-      real(kind=8):: flop
+      real(kind=8), optional:: norm_tol
+      real(kind=8):: flop, matnorm
       if (present(Flops)) Flops = 0d0
 
       mn = min(M, N)
-      if (isnan(fnorm(mat, M, N))) then
+      matnorm=fnorm(mat, M, N)
+      if (isnan(matnorm)) then
          write (*, *) 'input matrix NAN in ComputeRange'
          stop
       end if
@@ -737,16 +759,27 @@ contains
       allocate (tau(mn))
       if (rrflag == 1) then
          ! RRQR
-         call geqp3modf90(mat, jpvt, tau, eps, SafeUnderflow, rank, flop=flop)
-         if (present(Flops)) Flops = Flops + flop
+         small=.False.
+         if(present(norm_tol))then
+            if(matnorm/sqrt(dble(N))<norm_tol)small=.True.
+         endif
 
-         if (rank > 0) then
-            call un_or_gqrf90(mat, tau, M, rank, rank, flop=flop)
-            if (present(Flops)) Flops = Flops + flop
-         else
+         if(small .eqv. .True.)then
             rank = 1
             mat(1:M, 1) = 0d0
+         else
+            call geqp3modf90(mat, jpvt, tau, eps, SafeUnderflow, rank, flop=flop)
+            if (present(Flops)) Flops = Flops + flop
+
+            if (rank > 0) then
+               call un_or_gqrf90(mat, tau, M, rank, rank, flop=flop)
+               if (present(Flops)) Flops = Flops + flop
+            else
+               rank = 1
+               mat(1:M, 1) = 0d0
+            endif
          endif
+
       else
          call geqp3f90(mat, jpvt, tau, flop=flop)
          if (present(Flops)) Flops = Flops + flop
@@ -1346,7 +1379,7 @@ contains
       return
    end function norm_vector
 
-   subroutine LinearSolve(m, n, k, A, b, x, eps_r, Flops)
+   subroutine LinearSolve(m, n, k, A, b, x, eps_r, verbose, Flops)
       !
       !
       implicit none
@@ -1360,6 +1393,7 @@ contains
       integer, allocatable:: jpvt(:)
       real(kind=8), optional::Flops
       real(kind=8)::flop
+      integer::verbose
 
       DT:: alpha, beta
       alpha = 1d0
@@ -1479,7 +1513,7 @@ contains
          ! deallocate(A_tmp_rank,xtmp_rank)
          ! else
          if (Singular(1) < SafeUnderflow) then
-            write (*, *) 'warning: Matrix zero in least square'
+            if(verbose>=2)write (*, *) 'warning: Matrix zero in LinearSolve'
             rank = 1
             x = 0
          else
@@ -1630,7 +1664,7 @@ contains
    subroutine RandomizedSVD(matRcol, matZRcol, matRrow, matZcRrow, matU, matV, Singular, rankmax_r, rankmax_c, rmax, rank, tolerance, SVD_tolerance, Flops)
       !
       !
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2018,7 +2052,7 @@ contains
 
    subroutine ID_Selection(Mat, select_column, select_row, m, n, rank, tolerance)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2078,7 +2112,7 @@ contains
 
    subroutine ACA_CompressionFull(mat, matU, matV, rankmax_r, rankmax_c, rmax, rank, tolerance, SVD_tolerance)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, indx, rank_1, rank_2
@@ -2686,7 +2720,7 @@ contains
 
    complex(kind=8) function Hankel02_Func(x)
 
-      use BPACK_DEFS
+
       implicit none
 
       real(kind=8) x
@@ -3847,7 +3881,7 @@ contains
       call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
       if (myArows > 0 .and. myAcols > 0) then
-         allocate (dat_1D(myArows, myAcols))
+         allocate (dat_1D(max(1,myArows), max(1,myAcols)))
          dat_1D = 0
       endif
       ctxt = ptree%pgrp(pgno_o)%ctxt
@@ -3904,7 +3938,7 @@ contains
       call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
       if (myArows > 0 .and. myAcols > 0) then
-         allocate (dat_1D(myArows, myAcols))
+         allocate (dat_1D(max(1,myArows), max(1,myAcols)))
          dat_1D = 0
       endif
 

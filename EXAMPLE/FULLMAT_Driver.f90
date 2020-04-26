@@ -38,6 +38,8 @@ implicit none
 		type(Hstat),pointer::stats ! Use this metadata in matvec
 		type(Hoption),pointer::option ! Use this metadata in matvec
 		CHARACTER (LEN=1000) DATA_DIR
+		CHARACTER (LEN=1000) PERM_DIR
+		CHARACTER (LEN=1000) LEAFS_DIR
 		CHARACTER (LEN=1000) GEO_DIR
 		integer:: tst=1
 	end type quant_app
@@ -172,9 +174,11 @@ PROGRAM ButterflyPACK_FULL
 	type(proctree),target::ptree,ptree1
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
-	integer,allocatable::tree(:)
+	integer,allocatable::tree1(:),tree(:)
 	integer nargs,flag
-	integer v_major,v_minor,v_bugfix
+	integer v_major,v_minor,v_bugfix,nleaf
+	integer*8 blength
+	DT,allocatable::matZ_glo_tmp(:,:)
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -230,6 +234,10 @@ PROGRAM ButterflyPACK_FULL
 							read(strings1,*)quant%tst
 						else if	(trim(strings)=='--data_dir')then
 							quant%data_dir=trim(strings1)
+						else if	(trim(strings)=='--perm_dir')then
+							quant%perm_dir=trim(strings1)
+						else if	(trim(strings)=='--leafs_dir')then
+							quant%leafs_dir=trim(strings1)
 						else if	(trim(strings)=='--geo_dir')then
 							quant%geo_dir=trim(strings1)
 							option%nogeo=0  ! geometry points available
@@ -260,6 +268,8 @@ PROGRAM ButterflyPACK_FULL
 !******************************************************************************!
 ! generate a LR matrix as two matrix product
 	if(quant%tst==1)then
+		allocate(tree(1))
+		tree=quant%Nunk
 		!**** Get matrix size and rank and create the matrix
 		quant%lambda = 1d5
 		allocate(quant%matU_glo(quant%Nunk,quant%rank))
@@ -293,7 +303,8 @@ PROGRAM ButterflyPACK_FULL
 !******************************************************************************!
 ! generate a LR matrix stored in a files
 	if(quant%tst==2)then
-
+		allocate(tree(1))
+		tree=quant%Nunk
 
 		!**** Get matrix size and rank and create the matrix
 		allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
@@ -301,16 +312,55 @@ PROGRAM ButterflyPACK_FULL
 #if DAT==1
 		!***** assuming reading one row every time
 		allocate(datain(quant%Nunk))
+		if(ptree%MyID==Main_ID)then
+
+#if 0
+		!***** read in the matrix from a flat non-Fortran binary file. Use with Caution when reading cpp binary file
+
+		! inquire(file=quant%DATA_DIR,RECL=blength)
+		blength=int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)*8
+		write(*,*)'binary file record length:',blength
+		open(10, file=quant%DATA_DIR, form='unformatted', access='direct', recl=blength)
+		read(10,rec=1)quant%matZ_glo
+
+		! allocate(Permutation(quant%Nunk))
+		! open(11, file=quant%PERM_DIR)
+		! read(11,*) Permutation(:)
+		! close(11)
+		! if(minval(Permutation)==0)Permutation=Permutation+1
+		! allocate(matZ_glo_tmp(quant%Nunk,quant%Nunk))
+		! matZ_glo_tmp = quant%matZ_glo
+		! do ii=1,quant%Nunk
+		! do jj=1,quant%Nunk
+		! 	quant%matZ_glo(ii,jj) = matZ_glo_tmp(Permutation(ii),Permutation(jj))
+		! 	! quant%matZ_glo(Permutation(ii),Permutation(jj)) = matZ_glo_tmp(ii,jj)
+		! enddo
+		! enddo
+		! deallocate(Permutation)
+		! deallocate(matZ_glo_tmp)
+
+
+		! open(12, file=quant%LEAFS_DIR)
+		! read(12,*) nleaf
+		! deallocate(tree)
+		! allocate(tree(nleaf))
+		! read(12,*) tree
+		! close(12)
+
+#else
 		open(10, file=quant%DATA_DIR)
 		do ii=1,quant%Nunk
 			read(10,*) datain(:)
 			quant%matZ_glo(ii,:)=datain(:)
 		enddo
+#endif
 		close(10)
+		endif
 		deallocate(datain)
 #else
 		!***** assuming reading one row every time
 		allocate(datain(quant%Nunk))
+		if(ptree%MyID==Main_ID)then
 		open(10, file=quant%DATA_DIR)
 		do ii=1,quant%Nunk
 			read(10,*) datain
@@ -321,10 +371,17 @@ PROGRAM ButterflyPACK_FULL
 			quant%matZ_glo(ii,:)=quant%matZ_glo(ii,:)+datain(:)*junit
 		enddo
 		close(10)
+		endif
+		deallocate(datain)
 #endif
 
+		call assert(int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)< 2**31,'message size overflow in MPI!')
 
 		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DT,Main_ID,ptree%Comm,ierr)
+		! do ii=1,10
+		! call MPI_Bcast(quant%matZ_glo(1,(ii-1)*quant%Nunk/10+1),quant%Nunk*quant%Nunk/10,MPI_DT,Main_ID,ptree%Comm,ierr)
+		! enddo
+		! write(*,*)quant%matZ_glo(quant%Nunk,quant%Nunk)
 
 		if(option%nogeo==0)then
 			!***** assuming reading one row every time
@@ -355,9 +412,9 @@ PROGRAM ButterflyPACK_FULL
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations)
+		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
-
+		deallocate(tree)
 	endif
 
 !******************************************************************************!
@@ -365,6 +422,8 @@ PROGRAM ButterflyPACK_FULL
 
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+
+	if(quant%tst==2)deallocate(quant%matZ_glo)
 
 
 	!**** factorization phase
@@ -419,20 +478,21 @@ PROGRAM ButterflyPACK_FULL
 	case(HMAT)
 		Maxlevel=bmat%h_mat%Maxlevel
 	end select
-	allocate (tree(2**Maxlevel))
+	allocate (tree1(2**Maxlevel))
 	do ii=1,2**Maxlevel
-		tree(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
+		tree1(ii)=msh%basis_group(2**Maxlevel+ii-1)%tail-msh%basis_group(2**Maxlevel+ii-1)%head+1
 	enddo
 
 
 	!**** initialization of the construction phase
 	allocate(Permutation(quant1%Nunk))
-	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree1)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
-	deallocate(tree)
+	deallocate(tree1)
 
 
 	!**** computation of the construction phase
+	option%less_adapt=0
 	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 	!**** print statistics
