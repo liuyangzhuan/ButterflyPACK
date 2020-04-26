@@ -1121,8 +1121,9 @@ contains
       ker%C_FuncHMatVec => C_FuncHMatVec
 
       !**** computation of the construction phase
+      option%less_adapt=0
       call BPACK_construction_Matvec(bmat, matvec_user_C, Memory, error, option, stats, ker, ptree, msh)
-
+      option%less_adapt=1
       !**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)

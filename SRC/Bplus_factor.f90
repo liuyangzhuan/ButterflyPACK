@@ -341,15 +341,15 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(block_o%M, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-            allocate (matU2D(myArows, myAcols))
+            allocate (matU2D(max(1,myArows), max(1,myAcols)))
             matU2D = 0
-            allocate (matU2D1(myArows, myAcols))
+            allocate (matU2D1(max(1,myArows), max(1,myAcols)))
             matU2D1 = 0
             call descinit(descU, block_o%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
             call assert(info == 0, 'descinit fail for descU')
             myArows = numroc_wp(block_o%N, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-            allocate (matV2D(myArows, myAcols))
+            allocate (matV2D(max(1,myArows), max(1,myAcols)))
             matV2D = 0
             call descinit(descV, block_o%N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
             call assert(info == 0, 'descinit fail for descV')
@@ -366,7 +366,7 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-            allocate (matrix_small(myArows, myAcols))
+            allocate (matrix_small(max(1,myArows), max(1,myAcols)))
             matrix_small = 0
             call descinit(descsmall, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
             call assert(info == 0, 'descinit fail for descsmall')
@@ -380,7 +380,7 @@ contains
                   matrix_small(myi, myj) = matrix_small(myi, myj) + 1
                endif
             enddo
-            allocate (ipiv(myArows + nbslpk))
+            allocate (ipiv(max(1,myArows) + nbslpk))
             ipiv = 0
             call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
@@ -575,6 +575,8 @@ contains
 
 ! SVD recompression
 
+
+
       !!!!**** generate 2D grid blacs quantities for matU
       pgno = blocks_A%pgno
       ctxt = ptree%pgrp(pgno)%ctxt
@@ -583,7 +585,7 @@ contains
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsMatU2D, blocks_A%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (matU2D(myArows, myAcols))
+         allocate (matU2D(max(1,myArows), max(1,myAcols)))
          matU2D = 0
 
       else
@@ -601,7 +603,7 @@ contains
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsMatV2D, blocks_A%N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (matV2D(myArows, myAcols))
+         allocate (matV2D(max(1,myArows), max(1,myAcols)))
          matV2D = 0
       else
          descsMatV2D(2) = -1
@@ -616,18 +618,18 @@ contains
 
          ! GCC 9 was segfaulting when using PXGEQRF when it calls PXGEQR2 ->PXLARFG->PXSCAL
 #if __GNUC__ < 9
-
+! #if 0
          mn1 = min(blocks_A%M, rank)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         allocate (tau_Q(myAcols))
+         allocate (tau_Q(max(1,myAcols)))
          call pgeqrff90(blocks_A%M, rank, matU2D, 1, 1, descsMatU2D, tau_Q, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
 
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsMatSmlRR1, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (RR1(myArows, myAcols))
+         allocate (RR1(max(1,myArows), max(1,myAcols)))
          RR1 = 0d0
          do myj = 1, myAcols
             call l2g(myj, mycol, mn1, npcol, nbslpk, jj)
@@ -643,14 +645,14 @@ contains
          mn2 = min(blocks_A%N, rank)
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         allocate (tau_Q(myAcols))
+         allocate (tau_Q(max(1,myAcols)))
          call pgeqrff90(blocks_A%N, rank, matV2D, 1, 1, descsMatV2D, tau_Q, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
 
          myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsMatSmlRR2, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (RR2(myArows, myAcols))
+         allocate (RR2(max(1,myArows), max(1,myAcols)))
          RR2 = 0d0
          do myj = 1, myAcols
             call l2g(myj, mycol, mn2, npcol, nbslpk, jj)
@@ -665,7 +667,7 @@ contains
 
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
-         allocate (mattemp(myArows, myAcols))
+         allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
          call descinit(descsMatSml, mn1, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', mn1, mn2, rank, cone, RR1, 1, 1, descsMatSmlRR1, RR2, 1, 1, descsMatSmlRR2, czero, mattemp, 1, 1, descsMatSml, flop=flop)
@@ -673,18 +675,18 @@ contains
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(mn1, mn2), nbslpk, mycol, 0, npcol)
          call descinit(descsUUSml, mn1, min(mn1, mn2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (UUsml(myArows, myAcols))
+         allocate (UUsml(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(min(mn1, mn2), nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
          call descinit(descsVVSml, min(mn1, mn2), mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (VVsml(myArows, myAcols))
+         allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(mn1, mn2)))
          call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
-         allocate (matU2Dnew(myArows, myAcols))
+         allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', blocks_A%M, ranknew, mn1, cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
@@ -696,7 +698,7 @@ contains
 
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
-         allocate (matV2Dnew(myArows, myAcols))
+         allocate (matV2Dnew(max(1,myArows), max(1,myAcols)))
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', blocks_A%N, ranknew, mn2, cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
@@ -711,11 +713,11 @@ contains
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn1, nbslpk, mycol, 0, npcol)
          call descinit(descsUU_u, blocks_A%M, mn1, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (UUu(myArows, myAcols))
+         allocate (UUu(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (VVu(myArows, myAcols))
+         allocate (VVu(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
          call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, flop=flop)
          do ii = 1, rank1
@@ -730,11 +732,11 @@ contains
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
          call descinit(descsUU_v, blocks_A%N, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (UUv(myArows, myAcols))
+         allocate (UUv(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          call descinit(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (VVv(myArows, myAcols))
+         allocate (VVv(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
          call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, flop=flop)
          do ii = 1, rank2
@@ -747,7 +749,7 @@ contains
 
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
-         allocate (mattemp(myArows, myAcols))
+         allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
          call descinit(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank1, rank2, rank, cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, czero, mattemp, 1, 1, descsMatSml, flop=flop)
@@ -755,18 +757,18 @@ contains
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(rank1, rank2), nbslpk, mycol, 0, npcol)
          call descinit(descsUUSml, rank1, min(rank1, rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (UUsml(myArows, myAcols))
+         allocate (UUsml(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(min(rank1, rank2), nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
          call descinit(descsVVSml, min(rank1, rank2), rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         allocate (VVsml(myArows, myAcols))
+         allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(rank1, rank2)))
          call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
-         allocate (matU2Dnew(myArows, myAcols))
+         allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', blocks_A%M, ranknew, rank1, cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
@@ -778,7 +780,7 @@ contains
 
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
-         allocate (matV2Dnew(myArows, myAcols))
+         allocate (matV2Dnew(max(1,myArows), max(1,myAcols)))
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', blocks_A%N, ranknew, rank2, cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
@@ -811,7 +813,6 @@ contains
       deallocate (Vin_tmp, Vout_tmp, Vinter_tmp)
       deallocate (matU, matV)
       deallocate (matU2Dnew, matV2Dnew)
-
    end subroutine LR_A_minusBDinvC
 
    subroutine BF_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, error_inout, option, stats, ptree, msh)
@@ -1129,12 +1130,13 @@ contains
       type(matrixblock)::blocks_io
       type(matrixblock)::blocks_schur
       integer rank_new_max, rank0
-      real(kind=8):: rank_new_avr, error, rate
+      real(kind=8):: rank_new_avr, error, rate, norm
       integer niter
       real(kind=8):: error_inout
       integer itermax, ntry
       real(kind=8):: n1, n2, Memory
-      DT, allocatable::matrix_small(:, :)
+      DT, allocatable::matrix_small(:, :),vecin(:,:),vecout(:,:)
+      type(matrixblock)::block_rand
       type(Hoption)::option
       type(Hstat)::stats
       integer level_butterfly_target, pgno, pgno1
@@ -1205,7 +1207,7 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
 
-         if (level_butterfly_target <= 1) then ! try to use deterministic algorithms for merging four LRs into a bigger LR
+         if (level_butterfly_target <= 0) then ! try to use deterministic algorithms for merging four LRs into a bigger LR
             pgno1 = blocks_io%pgno  ! recording pgno as blocks_io%pgno will be set to partitioned_block%sons(1,1)%pgno in LR_ABCDinverse
             blocks_io%level_butterfly = 0
             call LR_ABCDinverse(partitioned_block, blocks_io, ptree, stats, option, msh)
@@ -1213,9 +1215,35 @@ contains
          else
             level_butterfly = level_butterfly_target
             rate = 1.2d0
-            ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,blocks_io%level_butterfly/2)
-            call BF_randomized(blocks_io%pgno, level_butterfly, rank0, rate, blocks_io, partitioned_block, BF_block_MVP_inverse_ABCD_dat, error, 'ABCDinverse', option, stats, ptree, msh)
-            ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,blocks_io%level_butterfly/2)
+
+            !**** Check the estimated norm of the operator, if too small skip the randomized construction
+            allocate(vecin(blocks_io%N_loc,1))
+            vecin=1/sqrt(dble(blocks_io%N))
+            allocate(vecout(blocks_io%M_loc,1))
+            vecout=0
+            call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, vecout, cone, czero, ptree, stats)
+            norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
+            call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+            norm = sqrt(norm)
+            deallocate(vecin)
+            deallocate(vecout)
+
+            if(norm<option%tol_Rdetect*1d-3)then
+            ! if(norm<1d-12)then
+               call BF_Zero(level_butterfly, blocks_io%row_group, blocks_io%col_group, blocks_io, block_rand, msh, ptree, option)
+
+               call BF_delete(blocks_io, 1)
+               call BF_get_rank(block_rand, ptree)
+               ! rank_new_max = block_rand%rankmax
+               call BF_copy_delete(block_rand, blocks_io)
+
+            else
+               ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,blocks_io%level_butterfly/2)
+               call BF_randomized(blocks_io%pgno, level_butterfly, rank0, rate, blocks_io, partitioned_block, BF_block_MVP_inverse_ABCD_dat, error, 'ABCDinverse', option, stats, ptree, msh)
+               ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,blocks_io%level_butterfly/2)
+
+            endif
+
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             error_inout = max(error_inout, error)
          endif
@@ -1407,13 +1435,13 @@ contains
             myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
             call descinit(descsmatU, blocks%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            allocate (blocks%ButterflyU%blocks(1)%matrix(myArows, myAcols))
+            allocate (blocks%ButterflyU%blocks(1)%matrix(max(myArows,1), max(myAcols,1)))
             blocks%ButterflyU%blocks(1)%matrix = 0
 
             myArows = numroc_wp(blocks%N, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
             call descinit(descsmatV, blocks%N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            allocate (blocks%ButterflyV%blocks(1)%matrix(myArows, myAcols))
+            allocate (blocks%ButterflyV%blocks(1)%matrix(max(myArows,1), max(myAcols,1)))
             blocks%ButterflyV%blocks(1)%matrix = 0
          else
             descsmatU(2) = -1
@@ -2157,6 +2185,7 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
+      real(kind=8)::error
 
       if (IOwnPgrp(ptree, blocks_i%pgno)) then
 
@@ -2203,7 +2232,13 @@ contains
 
          call Redistribute1Dto1D_TwotoOne(Vo1, blocks_A%M_p, 0, blocks_A%pgno,Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
-         if (ptree%MyID == ptree%pgrp(blocks_i%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,I5,A8,I5,A8,Es14.7,A8,I5)') 'Split L_in:', blocks_i%level_butterfly, 'L_out:', blocks_A%level_butterfly, ' error:', fnorm(vout1 - vout2, blocks_i%M_loc, 1)/fnorm(vout1, blocks_i%M_loc, 1), ' #nproc:', ptree%pgrp(blocks_A%pgno)%nproc
+         if(fnorm(vout1, blocks_i%M_loc, 1)<SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<SafeUnderflow)then
+            error = 0d0
+         else
+            error = fnorm(vout1 - vout2, blocks_i%M_loc, 1)/fnorm(vout1, blocks_i%M_loc, 1)
+         endif
+
+         if (ptree%MyID == ptree%pgrp(blocks_i%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,I5,A8,I5,A8,Es14.7,A8,I5)') 'Split L_in:', blocks_i%level_butterfly, 'L_out:', blocks_A%level_butterfly, ' error:', error, ' #nproc:', ptree%pgrp(blocks_A%pgno)%nproc
 
          deallocate (vin, vout1, vout2)
          deallocate (V1)
@@ -2278,78 +2313,82 @@ contains
 
 
 
-#if 0
+
       if (level_butterfly == 0) then
          call LR_Sblock(ho_bf1, level_c, rowblock, ptree, stats)
       else
+#if 0
          ho_bf1%ind_lv = level_c
          ho_bf1%ind_bk = rowblock
          rank0 = block_o%rankmax
          rate = 1.2d0
          call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, operand1=msh)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
-      end if
+
 #else
 
-   error_inout=0
-   call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
-   if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
-      call BF_ChangePattern(block_o, option%pat_comp, 1, stats, ptree)
-      call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
-   endif
-   call BF_ChangePattern(block_o, 1, 2, stats, ptree)
+         error_inout=0
+         call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
+         if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
+            call BF_ChangePattern(block_o, option%pat_comp, 1, stats, ptree)
+            call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
+         endif
+         call BF_ChangePattern(block_o, 1, 2, stats, ptree)
 
 
-   do level = ho_bf1%Maxlevel + 1,level_c+1,-1
-      N_diag = 2**(level-level_c-1)
-      idx_start_diag = max((rowblock - 1)*N_diag + 1, ho_bf1%levels(level)%Bidxs)
-      idx_end_diag = min(rowblock*N_diag, ho_bf1%levels(level)%Bidxe)
+         do level = ho_bf1%Maxlevel + 1,level_c+1,-1
+            N_diag = 2**(level-level_c-1)
+            idx_start_diag = max((rowblock - 1)*N_diag + 1, ho_bf1%levels(level)%Bidxs)
+            idx_end_diag = min(rowblock*N_diag, ho_bf1%levels(level)%Bidxe)
 
-      if(level==ho_bf1%Maxlevel + 1)then
+            if(level==ho_bf1%Maxlevel + 1)then
 
-         !!$omp parallel do default(shared) private(ii,blocks,index_i,index_i_loc_k,num_vect_sub)
-         do ii = idx_start_diag,idx_end_diag
-            blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-            index_i = ii - ((rowblock - 1)*N_diag + 1) + 1
-            index_i_loc_k = (index_i - block_o%ButterflyU%idx)/block_o%ButterflyU%inc + 1
-            num_vect_sub = size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,2)
+               !!$omp parallel do default(shared) private(ii,blocks,index_i,index_i_loc_k,num_vect_sub)
+               do ii = idx_start_diag,idx_end_diag
+                  blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+                  index_i = ii - ((rowblock - 1)*N_diag + 1) + 1
+                  index_i_loc_k = (index_i - block_o%ButterflyU%idx)/block_o%ButterflyU%inc + 1
+                  num_vect_sub = size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,2)
 
-            call Full_block_MVP_dat(blocks, 'N', blocks%M, num_vect_sub,&
-              &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, block_o%ButterflyU%blocks(index_i_loc_k)%matrix, cone, czero)
+                  call Full_block_MVP_dat(blocks, 'N', blocks%M, num_vect_sub,&
+                     &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, block_o%ButterflyU%blocks(index_i_loc_k)%matrix, cone, czero)
+               end do
+               !!$omp end parallel do
+
+            else
+               do ii = idx_start_diag,idx_end_diag
+                  ii_loc = ii - ((rowblock - 1)*N_diag + 1) + 1
+                  level_butterfly_loc = ho_bf1%Maxlevel+1-level    !!!! all even level butterfly could be problematic here
+
+                  blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+                  call assert(IOwnPgrp(ptree, blocks%pgno),'I do not own this pgno')
+
+                  call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
+                  rank0 = agent_block%rankmax
+                  rate = 1.2d0
+
+                  ho_bf1%ind_lv = level
+                  ho_bf1%ind_bk = ii
+                  rank0 = agent_block%rankmax
+                  rate = 1.2d0
+                  call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, ho_bf1, BF_block_MVP_Sblock_Sml_dat, error, 'Sblock_sml', option, stats, ptree, msh, operand1=msh, vskip=.true.)
+                  stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+                  error_inout = max(error_inout, error)
+
+                  call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
+                  call BF_copyback_partial(block_o, level_butterfly_loc, ii_loc, 'L', agent_block,blocks%pgno,ptree)
+                  call BF_delete(agent_block,1)
+
+               end do
+
+            end if
+
          end do
-         !!$omp end parallel do
 
-      else
-         do ii = idx_start_diag,idx_end_diag
-            ii_loc = ii - ((rowblock - 1)*N_diag + 1) + 1
-            level_butterfly_loc = ho_bf1%Maxlevel+1-level    !!!! all even level butterfly could be problematic here
-
-            blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-            call assert(IOwnPgrp(ptree, blocks%pgno),'I do not own this pgno')
-
-            call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
-            rank0 = agent_block%rankmax
-            rate = 1.2d0
-
-            ho_bf1%ind_lv = level
-            ho_bf1%ind_bk = ii
-            rank0 = agent_block%rankmax
-            rate = 1.2d0
-            call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, ho_bf1, BF_block_MVP_Sblock_Sml_dat, error, 'Sblock_sml', option, stats, ptree, msh, operand1=msh, vskip=.true.)
-            stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
-            error_inout = max(error_inout, error)
-
-            call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
-            call BF_copyback_partial(block_o, level_butterfly_loc, ii_loc, 'L', agent_block,blocks%pgno,ptree)
-            call BF_delete(agent_block,1)
-
-         end do
+#endif
 
       end if
 
-   end do
-
-#endif
 
          if (ptree%MyID == Main_ID .and. option%verbosity >= 1) write (*, '(A10,I5,A6,I3,A8,I3,A11,Es14.7)') 'OneL No. ', rowblock, ' rank:', block_o%rankmax, ' L_butt:', block_o%level_butterfly, ' error:', error_inout
 

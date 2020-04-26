@@ -1,18 +1,19 @@
 module swap PrgEnv-gnu PrgEnv-intel
+module swap intel intel/19.0.3.199
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 # bash PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
-export MKLROOT=/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl
+export MKLROOT=/opt/intel/compilers_and_libraries_2019.3.199/linux/mkl
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
 rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
-	-DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel" \
+	-DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel -no-ip -no-ipo" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=ftn \

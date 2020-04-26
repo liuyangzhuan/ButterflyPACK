@@ -1033,7 +1033,7 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-            allocate (inters(nn)%dat_loc(myArows, myAcols))
+            allocate (inters(nn)%dat_loc(max(1,myArows), max(1,myAcols)))
             if (myArows > 0 .and. myAcols > 0) inters(nn)%dat_loc = 0
          endif
          if (nprow*npcol > 1) flag2D = 1
@@ -1323,7 +1323,7 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-            allocate (inters(nn)%dat_loc(myArows, myAcols))
+            allocate (inters(nn)%dat_loc(max(1,myArows), max(1,myAcols)))
             if (myArows > 0 .and. myAcols > 0) inters(nn)%dat_loc = 0
          endif
          if (nprow*npcol > 1) flag2D = 1
