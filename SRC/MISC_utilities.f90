@@ -3860,11 +3860,11 @@ contains
       integer, allocatable:: statuss(:, :), statusr(:, :)
       integer, allocatable:: M_p_1D(:, :)
       integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_i, head_o, sizes, sizer, offs, offr
-      integer ctxt1D, nproc, nprow, npcol, myrow, mycol, nb1Dc, nb1Dr, myArows, myAcols
+      integer ctxt1D, ctxt1DCol, nproc, nprow, npcol, myrow, mycol, nb1Dc, nb1Dr, myArows, myAcols
       integer::desc1D(9), desc2D(9)
       integer::ctxt, info
 
-      ctxt1D = ptree%pgrp(pgno_o)%ctxt1D
+      ctxt1DCol = ptree%pgrp(pgno_o)%ctxt1DCol
       nproc = ptree%pgrp(pgno_o)%nproc
       nb1Dc = N
       nb1Dr = ceiling_safe(M/dble(nproc))
@@ -3896,7 +3896,7 @@ contains
       call Redistribute1Dto1D(dat_i, M_p_i, head_i, pgno_i, dat_1D, M_p_1D, head_o, pgno_o, N, ptree)
 
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'2D'
-      call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1D)
+      call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1DCol)
 
       deallocate (M_p_1D)
       if (allocated(dat_1D)) deallocate (dat_1D)
@@ -3916,11 +3916,11 @@ contains
       integer, allocatable:: statuss(:, :), statusr(:, :)
       integer, allocatable:: M_p_1D(:, :)
       integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_i, head_o, sizes, sizer, offs, offr
-      integer ctxt1D, nproc, nprow, npcol, myrow, mycol, nb1Dc, nb1Dr, myArows, myAcols
+      integer ctxt1D, ctxt1DCol, nproc, nprow, npcol, myrow, mycol, nb1Dc, nb1Dr, myArows, myAcols
       integer::desc1D(9), desc2D(9)
       integer::ctxt, info
 
-      ctxt1D = ptree%pgrp(pgno_i)%ctxt1D
+      ctxt1DCol = ptree%pgrp(pgno_i)%ctxt1DCol
       nproc = ptree%pgrp(pgno_i)%nproc
       nb1Dc = N
       nb1Dr = ceiling_safe(M/dble(nproc))
@@ -3953,7 +3953,7 @@ contains
       endif
 
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),myrow,mycol,pgno_i,ctxt
-      call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1D)
+      call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1DCol)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'1D1D',isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),isnanMat(dat_o,size(dat_o,1),size(dat_o,2)),myrow,mycol
       call Redistribute1Dto1D(dat_1D, M_p_1D, head_i, pgno_i, dat_o, M_p_o, head_o, pgno_o, N, ptree)
 
