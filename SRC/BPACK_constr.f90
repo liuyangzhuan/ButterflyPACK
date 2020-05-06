@@ -1929,7 +1929,9 @@ contains
          select type (ptr=>cur%item)
          type is (block_ptr)
             blocks => ptr%ptr
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(nn,idx,nprow,npcol,idstart,cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
+#endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
                nprow = pmaps(inters(idx)%pg, 1)
@@ -1963,7 +1965,9 @@ contains
                !!$omp end taskloop
                ! deallocate(tmpidx)
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
          end select
          cur => cur%next
       enddo
@@ -2009,8 +2013,9 @@ contains
       if (Nreqr > 0) then
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
-
+#ifdef HAVE_TASKLOOP
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,val)
+#endif
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          do i=1,recvquant(pp)%size/4
@@ -2023,8 +2028,9 @@ contains
             ! !$omp end atomic
          enddo
       enddo
+#ifdef HAVE_TASKLOOP
       !$omp end taskloop
-
+#endif
 
 
 
@@ -2181,8 +2187,9 @@ contains
          select type (ptr=>cur%item)
          type is (block_ptr)
             blocks => ptr%ptr
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(nn,idx,idxs,pp,nr,nc,ii,myi,jj,myj,cnt)
+#endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
                pp = pmaps(inters(idx)%pg, 3) + 1
@@ -2210,7 +2217,9 @@ contains
                   sendquant(pp)%dat(idxs+3 +nr +nc + (ii - 1)*nc + jj, 1) = blocks%inters(nn)%dat_loc(ii, jj)
                enddo
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
          end select
          cur => cur%next
       enddo
@@ -2259,8 +2268,9 @@ contains
       if (Nreqr > 0) then
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
-
+#ifdef HAVE_TASKLOOP
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,nr,nc,ii,jj,cnt)
+#endif
       do tt = 1, Nrecvactive
          my_tid = omp_get_thread_num()
          pp = recvIDactive(tt)
@@ -2295,8 +2305,9 @@ contains
 
          enddo
       enddo
+#ifdef HAVE_TASKLOOP
       !$omp end taskloop
-
+#endif
 
       n5 = OMP_get_wtime()
       if (Nreqs > 0) then

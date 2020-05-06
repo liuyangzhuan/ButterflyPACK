@@ -2147,9 +2147,14 @@ contains
          Nsub = NINT(2**ceiling_safe((level_butterfly - 1)/2d0)/dble(2**(level_right_start - unique_nth)))   !  check here later
          Ng = 2**level_butterfly/Nsub
 
+
+#ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
          !$omp taskloop default(shared) private(i,mm1,idxs,idxe,nth)
+#else
+         !$omp parallel do default(shared) private(i,mm1,idxs,idxe,nth)
+#endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
                if (i >= idx_m_s .and. i <= idx_m_e) then
@@ -2170,18 +2175,26 @@ contains
                end if
             end do
          end do
+#ifdef HAVE_TASKLOOP
          !$omp end taskloop
          !$omp end single
          !$omp end parallel
-
+#else
+         !$omp end parallel do
+#endif
       elseif (side == 'R') then
          trans = 'N'
          level_left_start = block_rand%level_half + 1 !  check here later
          Nsub = NINT(2**ceiling_safe((level_butterfly)/2d0)/dble(2**(unique_nth - level_left_start)))    !  check here later
          Ng = 2**level_butterfly/Nsub
+
+#ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
          !$omp taskloop default(shared) private(i,nn1,idxs,idxe,nth)
+#else
+         !$omp parallel do default(shared) private(i,nn1,idxs,idxe,nth)
+#endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
                if (i >= idx_n_s .and. i <= idx_n_e) then
@@ -2201,9 +2214,13 @@ contains
                end if
             end do
          end do
+#ifdef HAVE_TASKLOOP
          !$omp end taskloop
          !$omp end single
          !$omp end parallel
+#else
+         !$omp end parallel do
+#endif
 
       endif
       n2 = OMP_get_wtime()
