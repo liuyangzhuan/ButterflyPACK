@@ -5686,8 +5686,9 @@ contains
             BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(i,nn,ii,jj)
+#endif
             do i = 1, BFvec%vec(0)%nc
                nn = size(blocks%ButterflyV%blocks(i)%matrix, 1)
                allocate (BFvec%vec(0)%blocks(1, i)%matrix(nn, num_vectors))
@@ -5697,8 +5698,9 @@ contains
                   enddo
                enddo
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
-
+#endif
 
             do level = 0, level_half
                ! n1 = OMP_get_wtime()
@@ -5729,8 +5731,9 @@ contains
 
                   if (level == 0) then
                      flops = 0
-
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
+#endif
                      do j = 1, blocks%ButterflyV%nblk_loc
                         index_j = (j - 1)*inc_c + idx_c
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
@@ -5745,7 +5748,9 @@ contains
                         flops = flops + flop
                         !$omp end atomic
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -5772,7 +5777,9 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(i,rank,mm,flop)
+#endif
                         do i = 1, blocks%ButterflyU%nblk_loc
                            rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                            mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
@@ -5784,13 +5791,17 @@ contains
                            flops = flops + flop
                            !$omp end atomic
                         enddo
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
+#endif
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                   else
                      flops = 0
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -5823,7 +5834,9 @@ contains
                         flops = flops + flop
                         !$omp end atomic
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -5913,8 +5926,9 @@ contains
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
-
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop)
+#endif
                      do i = 1, nr0
                         index_i = (i - 1)*inc_r0 + idx_r0
                         index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
@@ -5929,8 +5943,9 @@ contains
                         flops = flops + flop
                         !$omp end atomic
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
-
+#endif
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
@@ -5938,8 +5953,9 @@ contains
 
                   if (nc0 > 1 .and. inc_c0 == 1) then  ! this special treatment makes sure two threads do not write to the same address simultaneously
                      ! n1 = OMP_get_wtime()
-
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr0*nc0/2
                         index_j_loc0 = (index_ij - 1)/nr0 + 1
                         do jj = 1, 2
@@ -5985,14 +6001,17 @@ contains
                            !$omp end atomic
                         enddo
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
 
 ! n2 = OMP_get_wtime()
 ! time_tmp = time_tmp + n2-n1
 
                   else
-
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr0*nc0
                         index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
                         index_i_loc = mod(index_ij - 1, nr0) + 1
@@ -6036,7 +6055,9 @@ contains
                         !$omp end atomic
 
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
 
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -6052,8 +6073,9 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
                endif
             enddo
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(i,mm,ii,jj)
+#endif
             do jj = 1, num_vectors
                do i = 1, blocks%ButterflyU%nblk_loc
                   mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
@@ -6062,7 +6084,9 @@ contains
                   enddo
                enddo
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
 
 
 
@@ -6092,8 +6116,9 @@ contains
             BFvec%vec(0)%idx_c = 1
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(i,mm,ii,jj)
+#endif
             do i = 1, BFvec%vec(0)%nr
                mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
                allocate (BFvec%vec(0)%blocks(i, 1)%matrix(mm, num_vectors))
@@ -6103,8 +6128,9 @@ contains
                   enddo
                enddo
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
-
+#endif
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -6134,7 +6160,9 @@ contains
 
                   if (level == level_butterfly + 1) then
                      flops = 0
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
+#endif
                      do i = 1, blocks%ButterflyU%nblk_loc
                         index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                         index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -6150,7 +6178,9 @@ contains
                         !$omp end atomic
 
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
@@ -6178,7 +6208,9 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
+#endif
                         do j = 1, blocks%ButterflyV%nblk_loc
                            nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                            rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
@@ -6189,12 +6221,16 @@ contains
                            flops = flops + flop
                            !$omp end atomic
                         enddo
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
+#endif
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   else
                      flops = 0
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
@@ -6227,7 +6263,9 @@ contains
                         !$omp end atomic
 
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -6290,7 +6328,9 @@ contains
 
                if (level == level_butterfly + 1) then
                   flops = 0
+#ifdef HAVE_TASKLOOP
                   !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
+#endif
                   do i = 1, blocks%ButterflyU%nblk_loc
                      index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -6306,7 +6346,9 @@ contains
                      !$omp end atomic
 
                   enddo
+#ifdef HAVE_TASKLOOP
                   !$omp end taskloop
+#endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
                   if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -6338,7 +6380,9 @@ contains
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
+#endif
                      do j = 1, blocks%ButterflyV%nblk_loc
                         index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
                         index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
@@ -6352,15 +6396,18 @@ contains
                         flops = flops + flop
                         !$omp end atomic
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
 
                   flops = 0
                   if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
-
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr0*nc0/2
                         index_i_loc0 = (index_ij - 1)/nc0 + 1
                         do ii = 1, 2
@@ -6407,9 +6454,13 @@ contains
                            !$omp end atomic
                         enddo
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
                   else
+#ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
+#endif
                      do index_ij = 1, nr0*nc0
                         index_j_loc = (index_ij - 1)/nr0 + 1
                         index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -6453,7 +6504,9 @@ contains
                         flops = flops + flop
                         !$omp end atomic
                      enddo
+#ifdef HAVE_TASKLOOP
                      !$omp end taskloop
+#endif
 
                   endif
 
@@ -6471,8 +6524,9 @@ contains
                endif
             enddo
 
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(j,nn,ii,jj)
+#endif
             do jj = 1, num_vectors
                do j = 1, blocks%ButterflyV%nblk_loc
                   nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
@@ -6482,7 +6536,9 @@ contains
                   enddo
                enddo
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
 
             if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
@@ -7780,11 +7836,15 @@ contains
 
       !**** multiply BF with BFvec
       do level = 0, level_half
+#ifdef HAVE_TASKLOOP
          !$omp taskloop default(shared) private(nn)
+#endif
          do nn = 1, size(BFvec%vec(level + 1)%index, 1)
             call BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree)
          enddo
+#ifdef HAVE_TASKLOOP
          !$omp end taskloop
+#endif
 
          do nn = 1, size(BFvec%vec(level)%index, 1)
             index_i_loc_s = BFvec%vec(level)%index(nn, 1)
@@ -7812,12 +7872,15 @@ contains
             write (*, *) 'should not come here as level_half>=0'
             stop
          elseif (level == level_butterfly + 1) then
-
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(nn)
+#endif
             do nn = 1, size(BFvec1%vec(level + 1)%index, 1)
                call BF_block_extraction_multiply_oneblock_last(blocks, BFvec1, inters, level,nn,ptree, msh)
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
 
             do nn = 1, size(BFvec1%vec(level)%index, 1)
                index_i_loc_s = BFvec1%vec(level)%index(nn, 1)
@@ -7834,11 +7897,15 @@ contains
             enddo
 
          else
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(nn)
+#endif
             do nn = 1, size(BFvec1%vec(level + 1)%index, 1)
                call BF_block_extraction_multiply_oneblock_left(blocks, BFvec1, level,nn,ptree)
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
 
             do nn = 1, size(BFvec1%vec(level)%index, 1)
                index_i_loc_s = BFvec1%vec(level)%index(nn, 1)
@@ -7850,11 +7917,15 @@ contains
             call BF_exchange_extraction(blocks, BFvec1%vec(level + 1), stats, ptree, level, 'R')
 
             !!!!!! sort the intersection# here
+#ifdef HAVE_TASKLOOP
             !$omp taskloop default(shared) private(nn)
+#endif
             do nn = 1, size(BFvec1%vec(level + 1)%index, 1)
                call BF_block_extraction_sort_oneblock(blocks, BFvec1, level,nn,ptree)
             enddo
+#ifdef HAVE_TASKLOOP
             !$omp end taskloop
+#endif
          endif
       enddo
 
