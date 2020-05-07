@@ -6524,7 +6524,7 @@ contains
 
 
 
-
+#ifdef HAVE_MKL
 
    subroutine BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
 
@@ -7604,7 +7604,7 @@ contains
 
    end subroutine BF_block_MVP_dat_batch
 
-
+#endif
 
 
 
