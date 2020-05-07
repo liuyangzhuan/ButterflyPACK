@@ -12,7 +12,7 @@ rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
-	-DCMAKE_Fortran_FLAGS=""\
+	-DCMAKE_Fortran_FLAGS="-I${MKLROOT}/include"\
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_Fortran_COMPILER=ftn \

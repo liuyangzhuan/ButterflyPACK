@@ -145,7 +145,7 @@ contains
             num_col = random%RandomVectorLL(level)%num_col
             do j = 1, num_col
                do i = 1, num_row
-                  if (allocated(random%RandomVectorLL(level)%blocks(i, j)%matrix)) deallocate (random%RandomVectorLL(level)%blocks(i, j)%matrix)
+                  if (associated(random%RandomVectorLL(level)%blocks(i, j)%matrix)) deallocate (random%RandomVectorLL(level)%blocks(i, j)%matrix)
                enddo
             enddo
             deallocate (random%RandomVectorLL(level)%blocks)
@@ -157,7 +157,7 @@ contains
             num_col = random%RandomVectorRR(level)%num_col
             do j = 1, num_col
                do i = 1, num_row
-                  if (allocated(random%RandomVectorRR(level)%blocks(i, j)%matrix)) deallocate (random%RandomVectorRR(level)%blocks(i, j)%matrix)
+                  if (associated(random%RandomVectorRR(level)%blocks(i, j)%matrix)) deallocate (random%RandomVectorRR(level)%blocks(i, j)%matrix)
                enddo
             enddo
             deallocate (random%RandomVectorRR(level)%blocks)
@@ -645,7 +645,7 @@ contains
       if (allocated(BFvec%vec(level)%blocks)) then
       do j = 1, BFvec%vec(level)%nc
          do i = 1, BFvec%vec(level)%nr
-            if (allocated(BFvec%vec(level)%blocks(i, j)%matrix)) BFvec%vec(level)%blocks(i, j)%matrix = conjg(cmplx(BFvec%vec(level)%blocks(i, j)%matrix, kind=8))
+            if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) BFvec%vec(level)%blocks(i, j)%matrix = conjg(cmplx(BFvec%vec(level)%blocks(i, j)%matrix, kind=8))
          enddo
       enddo
       endif
@@ -678,7 +678,7 @@ contains
                   call PComputeRange(N_p, mm, matB, rank, option%tol_Rdetect, ptree, pgno_sub_mine, Flops=flops,norm_tol=norm_tol)
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   if (rank > blocks%dimension_rank) rank = blocks%dimension_rank
-                  if (allocated(blocks%ButterflyV%blocks(index_j_loc_k)%matrix)) deallocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix)
+                  if (associated(blocks%ButterflyV%blocks(index_j_loc_k)%matrix)) deallocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix)
                   allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(dimension_nn, rank))
                   blocks%ButterflyV%blocks(index_j_loc_k)%matrix = matB(1:dimension_nn, 1:rank)
                   deallocate (matB)
@@ -702,7 +702,7 @@ contains
       if (allocated(BFvec%vec(level)%blocks)) then
       do j = 1, BFvec%vec(level)%nc
          do i = 1, BFvec%vec(level)%nr
-            if (allocated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
+            if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
          enddo
       enddo
       deallocate (BFvec%vec(level)%blocks)
@@ -785,7 +785,7 @@ contains
          if (allocated(BFvec%vec(level)%blocks)) then
          do j = 1, BFvec%vec(level)%nc
             do i = 1, BFvec%vec(level)%nr
-               if (allocated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
+               if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
             enddo
          enddo
          deallocate (BFvec%vec(level)%blocks)
@@ -828,7 +828,7 @@ contains
          ! write(*,*)'BF_OneBlock_LL:',blocks%dimension_rank,rank
          Flops = Flops + flop
          if (rank > blocks%dimension_rank) rank = blocks%dimension_rank
-         if (allocated(blocks%ButterflyV%blocks(index_j_loc_k)%matrix)) deallocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix)
+         if (associated(blocks%ButterflyV%blocks(index_j_loc_k)%matrix)) deallocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix)
          allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(dimension_nn, rank))
          blocks%ButterflyV%blocks(index_j_loc_k)%matrix = matB(1:dimension_nn, 1:rank)
          deallocate (matB)
@@ -922,7 +922,7 @@ contains
       if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
       do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
          do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-            if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix = conjg(cmplx(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix, kind=8))
+            if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix = conjg(cmplx(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix, kind=8))
          enddo
       enddo
       endif
@@ -956,7 +956,7 @@ contains
                   matB = BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, 1)%matrix(1:dimension_mm, (nth - nth_s)*mm + 1:(nth - nth_s + 1)*mm)
                   call PComputeRange(M_p, mm, matB, rank, option%tol_Rdetect, ptree, pgno_sub_mine, Flops=flops, norm_tol=norm_tol)
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
-                  if (allocated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)) deallocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
+                  if (associated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)) deallocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
                   allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(dimension_mm, rank))
                   blocks%ButterflyU%blocks(index_i_loc_k)%matrix = matB(1:dimension_mm, 1:rank)
                   ! write(*,*)fnorm(matB(1:dimension_mm,1:rank),dimension_mm,rank),'U'
@@ -979,7 +979,7 @@ contains
       if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
       do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
          do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-            if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
+            if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
          enddo
       enddo
       deallocate (BFvec%vec(level_butterfly - level + 1)%blocks)
@@ -991,7 +991,7 @@ contains
       if (allocated(BFvec1%vec(level)%blocks)) then
       do j = 1, BFvec1%vec(level)%nc
          do i = 1, BFvec1%vec(level)%nr
-            if (allocated(BFvec1%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec1%vec(level)%blocks(i, j)%matrix)
+            if (associated(BFvec1%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec1%vec(level)%blocks(i, j)%matrix)
          enddo
       enddo
       deallocate (BFvec1%vec(level)%blocks)
@@ -1092,7 +1092,7 @@ contains
          if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
          do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
             do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-               if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
+               if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
             enddo
          enddo
          deallocate (BFvec%vec(level_butterfly - level + 1)%blocks)
@@ -1103,7 +1103,7 @@ contains
          if (allocated(BFvec1%vec(level)%blocks)) then
             do j = 1, BFvec1%vec(level)%nc
                do i = 1, BFvec1%vec(level)%nr
-                  if (allocated(BFvec1%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec1%vec(level)%blocks(i, j)%matrix)
+                  if (associated(BFvec1%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec1%vec(level)%blocks(i, j)%matrix)
                enddo
             enddo
             deallocate (BFvec1%vec(level)%blocks)
@@ -1173,7 +1173,7 @@ contains
             ! write(*,*)'BF_OneBlock_RR:',blocks%dimension_rank,rank
             Flops = Flops + flop
             if (rank > blocks%dimension_rank) rank = blocks%dimension_rank
-            if (allocated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)) deallocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
+            if (associated(blocks%ButterflyU%blocks(index_i_loc_k)%matrix)) deallocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix)
             allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(dimension_mm, rank))
             blocks%ButterflyU%blocks(index_i_loc_k)%matrix = matB(1:dimension_mm, 1:rank)
             ! write(*,*)fnorm(matB(1:dimension_mm,1:rank),dimension_mm,rank),'U'
@@ -1836,7 +1836,7 @@ contains
                else
                   mm = block_rand%ns(ii) - block_rand%ns(ii-1)
                endif
-               if(allocated(block_rand%ButterflyV%blocks(ii)%matrix))deallocate(block_rand%ButterflyV%blocks(ii)%matrix)
+               if(associated(block_rand%ButterflyV%blocks(ii)%matrix))deallocate(block_rand%ButterflyV%blocks(ii)%matrix)
                allocate(block_rand%ButterflyV%blocks(ii)%matrix(mm,mm))
                block_rand%ButterflyV%blocks(ii)%matrix=0
                do jj=1,mm
@@ -1953,7 +1953,7 @@ contains
                else
                   mm = block_rand%ms(ii) - block_rand%ms(ii-1)
                endif
-               if(allocated(block_rand%ButterflyU%blocks(ii)%matrix))deallocate(block_rand%ButterflyU%blocks(ii)%matrix)
+               if(associated(block_rand%ButterflyU%blocks(ii)%matrix))deallocate(block_rand%ButterflyU%blocks(ii)%matrix)
                allocate(block_rand%ButterflyU%blocks(ii)%matrix(mm,mm))
                block_rand%ButterflyU%blocks(ii)%matrix=0
                do jj=1,mm
@@ -2430,7 +2430,7 @@ contains
       end select
 
       n2 = OMP_get_wtime()
-      time_tmp2 = time_tmp2 + n2-n1
+      ! time_tmp2 = time_tmp2 + n2-n1
 
    end subroutine BF_block_MVP_inverse_ABCD_dat
 
@@ -2527,7 +2527,7 @@ contains
       end select
 
       n2 = OMP_get_wtime()
-      time_tmp1 = time_tmp1 + n2-n1
+      ! time_tmp1 = time_tmp1 + n2-n1
 
    end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 

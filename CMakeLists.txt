@@ -91,9 +91,9 @@ set(CMAKE_Fortran_FLAGS "-cpp ${CMAKE_Fortran_FLAGS}")
 include(CheckFortranCompilerFlag)
 check_fortran_compiler_flag("-ffree-line-length-none" COMPILER_GNU)
 if (COMPILER_GNU)
-set(CMAKE_Fortran_FLAGS "-ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-fno-range-check -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-set(CMAKE_Fortran_FLAGS "-fbacktrace -fbounds-check -Wconversion ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-fno-range-check -fbacktrace -fbounds-check -Wconversion ${CMAKE_Fortran_FLAGS}")
 endif()
 endif()
 check_fortran_compiler_flag("-no-prec-div" COMPILER_Intel)
@@ -169,6 +169,11 @@ if(BLAS_FOUND)
     # fix up BLAS library name
     string (REPLACE ";" " " BLAS_LIB_STR "${BLAS_LIB}")
     set(BLAS_LIB_EXPORT ${BLAS_LIB_STR})
+    string(FIND ${BLAS_LIB_STR} "mkl" BUTTERFLYPACK_USE_MKL)
+    if(BUTTERFLYPACK_USE_MKL GREATER -1)
+    	set(CMAKE_Fortran_FLAGS "-DHAVE_MKL ${CMAKE_Fortran_FLAGS}")
+	    message("-- Using MKL VSL and batch GEMM")
+    endif()
  endif()
 
 
@@ -297,6 +302,10 @@ if(BUTTERFLYPACK_USE_TASKLOOP )
 	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
 	message("-- Using OpenMP taskloop")
 endif()
+
+
+
+
 
 ######################################################################
 #

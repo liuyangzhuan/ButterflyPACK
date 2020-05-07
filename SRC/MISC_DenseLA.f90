@@ -1290,6 +1290,51 @@ contains
       if (present(flop)) flop = flops_ztrsm(side, m, n)
    end subroutine ztrsmf90
 
+
+   subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop)
+      character*1::transa_array(:),transb_array(:)
+      class(*)::alpha_array(:),beta_array(:)
+      integer::group_size(:),m_array(:),n_array(:),k_array(:),lda_array(:),ldb_array(:),ldc_array(:)
+      integer(c_intptr_t)::a_array(:),b_array(:),c_array(:)
+      real(kind=8), optional::flop
+      integer m,n,k,group_count,ii
+
+      select type (alpha_array)
+      type is (real(kind=8))
+      select type (beta_array)
+      type is (real(kind=8))
+         call dgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+
+         if (present(flop))then
+         flop=0
+         do ii=1,group_count
+            m=m_array(ii)
+            n=n_array(ii)
+            k=k_array(ii)
+            flop = flop + flops_dgemm(m, n, k)
+         enddo
+         endif
+      end select
+      end select
+
+      select type (alpha_array)
+      type is (complex(kind=8))
+      select type (beta_array)
+      type is (complex(kind=8))
+         call zgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+         if (present(flop))then
+            flop=0
+            do ii=1,group_count
+               m=m_array(ii)
+               n=n_array(ii)
+               k=k_array(ii)
+               flop = flop + flops_zgemm(m, n, k)
+            enddo
+         endif
+      end select
+      end select
+
+   end subroutine gemm_batch_mkl
    subroutine gemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, al, be, flop)
       integer m, n, k, lda, ldb, ldc
       class(*) MatA(:, :), MatB(:, :), MatC(:, :)
