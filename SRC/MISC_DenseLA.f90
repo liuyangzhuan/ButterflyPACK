@@ -1290,7 +1290,7 @@ contains
       if (present(flop)) flop = flops_ztrsm(side, m, n)
    end subroutine ztrsmf90
 
-
+#ifdef HAVE_MKL
    subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop)
       character*1::transa_array(:),transb_array(:)
       class(*)::alpha_array(:),beta_array(:)
@@ -1335,6 +1335,8 @@ contains
       end select
 
    end subroutine gemm_batch_mkl
+#endif
+
    subroutine gemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, al, be, flop)
       integer m, n, k, lda, ldb, ldc
       class(*) MatA(:, :), MatB(:, :), MatC(:, :)
