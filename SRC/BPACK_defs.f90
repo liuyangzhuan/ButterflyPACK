@@ -151,7 +151,7 @@ module BPACK_DEFS
 
     !**** one rank*rank butterfly block
     type butterflymatrix
-        DT, allocatable :: matrix(:, :) ! entries of the block
+        DT, pointer :: matrix(:, :)=> null() ! entries of the block
         ! integer::mdim,ndim         ! dimensions of the block
         type(list):: lst ! a list of intersection#s
         integer, allocatable::index(:, :) ! an array of intersection#s

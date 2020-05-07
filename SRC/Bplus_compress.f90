@@ -1938,8 +1938,8 @@ contains
          ! H-BACA
          leafsize = max(blocks%M, blocks%N)/option%LR_BLK_NUM
 
-         if (allocated(blocks%ButterflyU%blocks(1)%matrix)) deallocate (blocks%ButterflyU%blocks(1)%matrix)
-         if (allocated(blocks%ButterflyV%blocks(1)%matrix)) deallocate (blocks%ButterflyV%blocks(1)%matrix)
+         if (associated(blocks%ButterflyU%blocks(1)%matrix)) deallocate (blocks%ButterflyU%blocks(1)%matrix)
+         if (associated(blocks%ButterflyV%blocks(1)%matrix)) deallocate (blocks%ButterflyV%blocks(1)%matrix)
          call LR_HBACA(blocks, leafsize, rank, option, msh, ker, stats, ptree, blocks%pgno, 0)
 
          rankmax_for_butterfly(0) = max(blocks%rankmax, rankmax_for_butterfly(0))
@@ -3299,11 +3299,11 @@ contains
                matV2D = 0
             endif
 
-            if (allocated(blocks%ButterflyU%blocks(1)%matrix)) deallocate (blocks%ButterflyU%blocks(1)%matrix)
+            if (associated(blocks%ButterflyU%blocks(1)%matrix)) deallocate (blocks%ButterflyU%blocks(1)%matrix)
             allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M_loc, rank))
             blocks%ButterflyU%blocks(1)%matrix = 0
 
-            if (allocated(blocks%ButterflyV%blocks(1)%matrix)) deallocate (blocks%ButterflyV%blocks(1)%matrix)
+            if (associated(blocks%ButterflyV%blocks(1)%matrix)) deallocate (blocks%ButterflyV%blocks(1)%matrix)
             allocate (blocks%ButterflyV%blocks(1)%matrix(blocks%N_loc, rank))
             blocks%ButterflyV%blocks(1)%matrix = 0
 ! write(*,*) blocks%row_group,blocks%col_group,isnanMat(matU2D,size(matU2D,1),size(matU2D,2)),isnanMat(matV2D,size(matV2D,1),size(matV2D,2)),'nima222bi',ptree%MyID

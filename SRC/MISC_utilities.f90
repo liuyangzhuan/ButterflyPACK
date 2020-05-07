@@ -16,13 +16,13 @@
 
 #include "ButterflyPACK_config.fi"
 
-! ! ! ! ! ! ! the following is commented out to avoid multiple definition for intel compilers, which means for now I'm not using VSL at all.
-! #ifdef Intel
-! #ifndef USEVSL
-! #define USEVSL
-! include "mkl_vsl.f90"
-! #endif
-! #endif
+! ! ! ! ! ! ! the following can be commented out to avoid multiple definition for intel compilers, which means for now I'm not using VSL at all.
+#ifdef HAVE_MKL
+#ifndef USEVSL
+#define USEVSL
+include "mkl_vsl.f90"
+#endif
+#endif
 
 module MISC_Utilities
    use BPACK_DEFS
@@ -3865,6 +3865,7 @@ contains
       integer::ctxt, info
 
       ctxt1DCol = ptree%pgrp(pgno_o)%ctxt1DCol
+      ctxt1D = ptree%pgrp(pgno_o)%ctxt1D
       nproc = ptree%pgrp(pgno_o)%nproc
       nb1Dc = N
       nb1Dr = ceiling_safe(M/dble(nproc))
@@ -3921,6 +3922,7 @@ contains
       integer::ctxt, info
 
       ctxt1DCol = ptree%pgrp(pgno_i)%ctxt1DCol
+      ctxt1D = ptree%pgrp(pgno_i)%ctxt1D
       nproc = ptree%pgrp(pgno_i)%nproc
       nb1Dc = N
       nb1Dr = ceiling_safe(M/dble(nproc))
