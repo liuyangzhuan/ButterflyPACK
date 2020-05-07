@@ -16,9 +16,9 @@
 
 #include "ButterflyPACK_config.fi"
 
-module z_Bplus_Utilities
-   use z_BPACK_DEFS
-   use z_MISC_Utilities
+module Bplus_Utilities
+   use BPACK_DEFS
+   use MISC_Utilities
 contains
 
    subroutine Bplus_delete(bplus)
