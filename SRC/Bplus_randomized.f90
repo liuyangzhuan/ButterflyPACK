@@ -16,20 +16,21 @@
 
 #include "ButterflyPACK_config.fi"
 module Bplus_randomizedop
-! use Utilites_randomized
-   use BPACK_DEFS
-   use MISC_Utilities
-   use BPACK_Utilities
+   ! use Utilites_randomized
+      use BPACK_DEFS
+      use MISC_Utilities
+      use BPACK_Utilities
 
 contains
 
-   subroutine BF_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, ptree, stats)
+   subroutine BF_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, ldi, Vout,ldo, ptree, stats)
 
 
       implicit none
       integer level, ii, N, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vin1(:, :), Vin2(:, :), Vout1(:, :), Vout2(:, :)
       DT :: ctemp1, ctemp2
       type(matrixblock), pointer::block_inv, block_schur, block_off1, block_off2
@@ -51,8 +52,7 @@ contains
       mm = block_off1%M_loc
 
       allocate (Vin_tmp(N, num_vect_sub))
-      Vin_tmp = Vin
-
+      Vin_tmp = Vin(1:N,1:num_vect_sub)
       ! call MPI_barrier(ptree%pgrp(block_inv%pgno)%Comm,ierr)
       n1 = OMP_get_wtime()
       allocate (Vin1(mm, num_vect_sub))
@@ -61,7 +61,7 @@ contains
       ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
 
-      call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno,Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D_OnetoTwo(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin1, mm, block_off1%M_p, 0, block_off1%pgno,Vin2, nn, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -73,21 +73,21 @@ contains
 
       if (trans == 'N') then
          call BF_block_MVP_dat(block_off1, trans, mm, nn, num_vect_sub,&
-         &Vin2, Vout1, ctemp1, ctemp2, ptree, stats)
+         &Vin2, nn, Vout1, mm, ctemp1, ctemp2, ptree, stats)
          Vout1 = Vin1 - Vout1
          Vout2 = Vin2
 
          ! write(2111,*)abs(Vout)
 
          call BF_block_MVP_dat(block_schur, trans, mm, mm, num_vect_sub,&
-         &Vout1, Vin1, ctemp1, ctemp2, ptree, stats)
+         &Vout1, mm, Vin1, mm, ctemp1, ctemp2, ptree, stats)
          Vin1 = Vout1 + Vin1
          Vin2 = Vout2
 
          ! write(2112,*)abs(Vin)
 
          call BF_block_MVP_dat(block_off2, trans, nn, mm, num_vect_sub,&
-         &Vin1, Vout2, ctemp1, ctemp2, ptree, stats)
+         &Vin1, mm, Vout2, nn, ctemp1, ctemp2, ptree, stats)
          Vout2 = Vin2 - Vout2
          Vout1 = Vin1
 
@@ -96,17 +96,17 @@ contains
 
       else if (trans == 'T') then
          call BF_block_MVP_dat(block_off2, trans, nn, mm, num_vect_sub,&
-         &Vin2, Vout1, ctemp1, ctemp2, ptree, stats)
+         &Vin2, nn, Vout1, mm, ctemp1, ctemp2, ptree, stats)
          Vout1 = Vin1 - Vout1
          Vout2 = Vin2
 
          call BF_block_MVP_dat(block_schur, trans, mm, mm, num_vect_sub,&
-         &Vout1, Vin1, ctemp1, ctemp2, ptree, stats)
+         &Vout1, mm, Vin1, mm, ctemp1, ctemp2, ptree, stats)
          Vin1 = Vout1 + Vin1
          Vin2 = Vout2
 
          call BF_block_MVP_dat(block_off1, trans, mm, nn, num_vect_sub,&
-         &Vin1, Vout2, ctemp1, ctemp2, ptree, stats)
+         &Vin1, mm, Vout2, nn, ctemp1, ctemp2, ptree, stats)
          Vout2 = Vin2 - Vout2
          Vout1 = Vin1
 
@@ -116,12 +116,12 @@ contains
       n1 = OMP_get_wtime()
       ! call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D_TwotoOne(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D_TwotoOne(Vout1, mm, block_off1%M_p, 0, block_off1%pgno, Vout2, nn, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, ldo, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
-      Vin = Vin_tmp
+      Vin(1:N,1:num_vect_sub) = Vin_tmp
 
       deallocate (Vin_tmp)
       deallocate (Vin1)
@@ -1514,14 +1514,14 @@ contains
          call RandomMat(nn, num_vect, min(nn, num_vect), RandVectInR, 1)
       endif
 
-      call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, RandVectOutR, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
 
       ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
       do qq = 1, option%powiter
          if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
-         call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, RandVectInR, cone, czero, ptree, stats, operand1)
+         call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
          if (mm > 0) RandVectInR = conjg(cmplx(RandVectInR, kind=8))
-         call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, RandVectOutR, cone, czero, ptree, stats, operand1)
+         call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
       enddo
 
       ! computation of range Q
@@ -1530,7 +1530,7 @@ contains
 
       ! computation of B^T = (Q^c*A)^T
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
-      call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, RandVectInR, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
 
       ! computation of SVD B=USV and output A = (QU)*(SV)
@@ -1873,7 +1873,7 @@ contains
                   vecin=1/sqrt(dble(block_rand%M))
                   allocate(vecout(block_rand%N_loc,1))
                   vecout=0
-                  call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, vecout, cone, czero, ptree, stats, operand1)
+                  call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, cone, czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%N_loc,1)**2d0
                   call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
@@ -1991,7 +1991,7 @@ contains
                   vecin=1/sqrt(dble(block_rand%N))
                   allocate(vecout(block_rand%M_loc,1))
                   vecout=0
-                  call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, vecout, cone, czero, ptree, stats, operand1)
+                  call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, cone, czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%M_loc,1)**2d0
                   call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
@@ -2063,10 +2063,10 @@ contains
          Id = 1
       endif
 
-      call blackbox_MVP_dat(operand, block_o, 'N', mm, nn, num_vect, Id, Vdref, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, block_o, 'N', mm, nn, num_vect, Id, nn, Vdref, mm, cone, czero, ptree, stats, operand1)
 
       if (IOwnPgrp(ptree, block_rand%pgno)) then
-         call BF_block_MVP_dat(block_rand, 'N', mm, nn, num_vect, Id, Vd, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(block_rand, 'N', mm, nn, num_vect, Id, nn, Vd, mm, cone, czero, ptree, stats)
 
          tmp1 = fnorm(Vd - Vdref, mm, num_vect)**2d0
          call MPI_ALLREDUCE(tmp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
@@ -2231,7 +2231,7 @@ contains
       mm = blocks_o%M_loc
       nn = blocks_o%N_loc
       n1 = OMP_get_wtime()
-      call blackbox_MVP_dat(operand, blocks_o, trans, mm, nn, num_vect_sub, RandVectIn, RandVectOut, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, trans, mm, nn, num_vect_sub, RandVectIn, size(RandVectIn,1), RandVectOut, size(RandVectOut,1), cone, czero, ptree, stats, operand1)
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2-n1
       return
@@ -2242,13 +2242,14 @@ contains
 ! blocks_B: B
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
-   subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block, block_o, trans, M_loc, N_loc, num_vect_sub, Vinin, Voutout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_inverse_ABCD_dat(partitioned_block, block_o, trans, M_loc, N_loc, num_vect_sub, Vinin, ldi, Voutout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
       integer level, ii, M, N, M_loc, N_loc, num_vect_sub, mv, nv
       character trans
-      DT :: Vinin(:, :), Voutout(:, :)  ! the leading dimensions are block_o%M_loc or block_o%N_loc
+      integer ldi, ldo
+      DT :: Vinin(ldi, *), Voutout(ldo, *)  ! the leading dimensions are block_o%M_loc or block_o%N_loc
       DT, allocatable :: Vin(:, :), Vout(:, :) ! the leading dimensions are blocks_B%M_loc+blocks_B%N_loc
       DT, allocatable :: Vin_tmp(:, :), Vout_tmp(:, :), Vbuff(:, :), V1(:, :), V2(:, :),Voutout1(:, :)
       DT :: ctemp1, ctemp2, a, b
@@ -2292,7 +2293,7 @@ contains
          allocate (Vin(N, num_vect_sub))
          n3 = OMP_get_wtime()
 
-         call Redistribute1Dto1D_OnetoTwo(Vinin, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno,V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D_OnetoTwo(Vinin, ldi, block_o%M_p, 0, block_o%pgno, V1, mm, blocks_A%M_p, 0, blocks_A%pgno,V2,nn, blocks_D%M_p, blocks_A%M, blocks_D%pgno, num_vect_sub, ptree)
 
 
          ! call Redistribute1Dto1D(Vinin, block_o%M_p, 0, block_o%pgno, V1, blocks_A%M_p, 0, blocks_A%pgno, num_vect_sub, ptree)
@@ -2313,10 +2314,10 @@ contains
 
             if (trans == 'N') then
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vin(1 + mm:N, 1:num_vect_sub), Vbuff, ctemp1, ctemp2, ptree, stats)
+               &Vin(1 + mm, 1), N, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
                Vbuff = Vbuff + Vin(1 + mm:N, 1:num_vect_sub)
                call BF_block_MVP_dat(blocks_B, trans, mm, nn, num_vect_sub,&
-               &Vbuff, Vout(1:mm, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vbuff, nn, Vout(1, 1), N, ctemp1, ctemp2, ptree, stats)
                Vout(1:mm, 1:num_vect_sub) = Vin(1:mm, 1:num_vect_sub) - Vout(1:mm, 1:num_vect_sub)
                Vout(1 + mm:N, 1:num_vect_sub) = Vin(1 + mm:N, 1:num_vect_sub)
 
@@ -2328,9 +2329,9 @@ contains
                ! write(2111,*)abs(Vout)
 
                call BF_block_MVP_dat(blocks_A, trans, mm, mm, num_vect_sub,&
-               &Vout(1:mm, 1:num_vect_sub), Vin(1:mm, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vout(1, 1), N, Vin(1, 1), N, ctemp1, ctemp2, ptree, stats)
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vout(1 + mm:mm + nn, 1:num_vect_sub), Vin(1 + mm:mm + nn, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vout(1 + mm, 1), N, Vin(1 + mm, 1), N, ctemp1, ctemp2, ptree, stats)
                Vin = Vout + Vin
 
                if (isnan(fnorm(Vin, N, num_vect_sub))) then
@@ -2340,9 +2341,9 @@ contains
                ! write(2112,*)abs(Vin)
 
                call BF_block_MVP_dat(blocks_C, trans, nn, mm, num_vect_sub,&
-               &Vin(1:mm, 1:num_vect_sub), Vbuff, ctemp1, ctemp2, ptree, stats)
+               &Vin(1, 1), N, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vbuff, Vout(1 + mm:mm + nn, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vbuff, nn, Vout(1 + mm, 1), N, ctemp1, ctemp2, ptree, stats)
                Vout(1 + mm:mm + nn, 1:num_vect_sub) = Vout(1 + mm:mm + nn, 1:num_vect_sub) + Vbuff
 
                if (isnan(fnorm(Vout, N, num_vect_sub))) then
@@ -2358,10 +2359,10 @@ contains
             else if (trans == 'T') then
 
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vin(1 + mm:N, 1:num_vect_sub), Vbuff, ctemp1, ctemp2, ptree, stats)
+               &Vin(1 + mm, 1), N, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
                Vbuff = Vbuff + Vin(1 + mm:N, 1:num_vect_sub)
                call BF_block_MVP_dat(blocks_C, trans, nn, mm, num_vect_sub,&
-               &Vbuff, Vout(1:mm, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vbuff, nn, Vout(1, 1), N, ctemp1, ctemp2, ptree, stats)
                Vout(1:mm, 1:num_vect_sub) = Vin(1:mm, 1:num_vect_sub) - Vout(1:mm, 1:num_vect_sub)
                Vout(1 + mm:N, 1:num_vect_sub) = Vin(1 + mm:N, 1:num_vect_sub)
 
@@ -2371,9 +2372,9 @@ contains
                end if
 
                call BF_block_MVP_dat(blocks_A, trans, mm, mm, num_vect_sub,&
-               &Vout(1:mm, 1:num_vect_sub), Vin(1:mm, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vout(1, 1), N, Vin(1, 1), N, ctemp1, ctemp2, ptree, stats)
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vout(1 + mm:mm + nn, 1:num_vect_sub), Vin(1 + mm:mm + nn, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vout(1 + mm, 1), N, Vin(1 + mm, 1), N, ctemp1, ctemp2, ptree, stats)
                Vin = Vout + Vin
 
                if (isnan(fnorm(Vin, N, num_vect_sub))) then
@@ -2382,9 +2383,9 @@ contains
                end if
 
                call BF_block_MVP_dat(blocks_B, trans, mm, nn, num_vect_sub,&
-               &Vin(1:mm, 1:num_vect_sub), Vbuff, ctemp1, ctemp2, ptree, stats)
+               &Vin(1, 1), N, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &Vbuff, Vout(1 + mm:N, 1:num_vect_sub), ctemp1, ctemp2, ptree, stats)
+               &Vbuff, nn, Vout(1 + mm, 1), N, ctemp1, ctemp2, ptree, stats)
                Vout(1 + mm:N, 1:num_vect_sub) = Vout(1 + mm:N, 1:num_vect_sub) + Vbuff
 
                if (isnan(fnorm(Vout, N, num_vect_sub))) then
@@ -2408,12 +2409,12 @@ contains
          if (mm > 0) V1 = Vout(1:blocks_A%M_loc, :)
          if (nn > 0) V2 = Vout(1 + blocks_A%M_loc:N, :)
 
-         call Redistribute1Dto1D_TwotoOne(V1, blocks_A%M_p, 0, blocks_A%pgno,V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D_TwotoOne(V1, mm, blocks_A%M_p, 0, blocks_A%pgno,V2, nn, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout1, M_loc, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
 
          ! call Redistribute1Dto1D(V1, blocks_A%M_p, 0, blocks_A%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(V2, blocks_D%M_p, blocks_A%M, blocks_D%pgno, Voutout1, block_o%M_p, 0, block_o%pgno, num_vect_sub, ptree)
 
-         Voutout = a*Voutout1 + b*Voutout
+         Voutout(1:M_loc,1:num_vect_sub) = a*Voutout1 + b*Voutout(1:M_loc,1:num_vect_sub)
 
          n4 = OMP_get_wtime()
          time_tmp4 = time_tmp4 + n4-n3
@@ -2438,13 +2439,14 @@ contains
 ! blocks_B: B
 ! blocks_C: C
 ! blocks_A: (A-BD^-1C)^-1 - I
-   subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_inverse_A_minusBDinvC_dat(partitioned_block, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: V_tmp1(:, :), V_tmp2(:, :), Vin_tmp(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
@@ -2473,14 +2475,21 @@ contains
          groupm = blocks_B%row_group    ! Note: row_group and col_group interchanged here
          mm = blocks_B%M_loc
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv,1:nv)
 
-         Vout = 0
+         Vout(1:mv,1:nv) = 0
          allocate (Vin_tmp(M, num_vect_sub))
-         Vin_tmp = Vin
+         Vin_tmp = Vin(1:mi,1:nv)
 
          allocate (V_tmp1(nn, num_vect_sub))
          V_tmp1 = 0
@@ -2489,35 +2498,35 @@ contains
 
          if (trans == 'N') then
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_C, 'N', nn, mm, num_vect_sub, Vin_tmp, V_tmp1, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_C, 'N', nn, mm, num_vect_sub, Vin_tmp, M, V_tmp1, nn, ctemp1, ctemp2, ptree, stats)
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_D, 'N', nn, nn, num_vect_sub, V_tmp1, V_tmp2, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn,ctemp1, ctemp2, ptree, stats)
             V_tmp2 = V_tmp2 + V_tmp1
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_B, 'N', mm, nn, num_vect_sub, V_tmp2, Vout, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'N', mm, nn, num_vect_sub, V_tmp2, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
             ctemp1 = 1.0d0; ctemp2 = -1.0d0
-            call BF_block_MVP_dat(blocks_A, 'N', mm, mm, num_vect_sub, Vin_tmp, Vout, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', mm, mm, num_vect_sub, Vin_tmp, M, Vout, ldo, ctemp1, ctemp2, ptree, stats)
 
          else if (trans == 'T') then
 
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_B, 'T', mm, nn, num_vect_sub, Vin_tmp, V_tmp1, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'T', mm, nn, num_vect_sub, Vin_tmp, M, V_tmp1, nn, ctemp1, ctemp2, ptree, stats)
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, V_tmp1, V_tmp2, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn, ctemp1, ctemp2, ptree, stats)
             V_tmp2 = V_tmp2 + V_tmp1
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(blocks_C, 'T', nn, mm, num_vect_sub, V_tmp2, Vout, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_C, 'T', nn, mm, num_vect_sub, V_tmp2, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
             ctemp1 = 1.0d0; ctemp2 = -1.0d0
-            call BF_block_MVP_dat(blocks_A, 'T', mm, mm, num_vect_sub, Vin_tmp, Vout, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', mm, mm, num_vect_sub, Vin_tmp, M, Vout, ldo, ctemp1, ctemp2, ptree, stats)
          end if
 
-         Vin = Vin_tmp
+         Vin(1:mi,1:nv) = Vin_tmp
 
          deallocate (Vin_tmp)
          deallocate (V_tmp1)
          deallocate (V_tmp2)
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -2531,13 +2540,14 @@ contains
 
    end subroutine BF_block_MVP_inverse_A_minusBDinvC_dat
 
-   subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_inverse_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :), tmpU(:, :), tmpV(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::block_off1, block_off2
@@ -2560,10 +2570,17 @@ contains
          groupm = block_off1%row_group    ! Note: row_group and col_group interchanged here
          mm = block_off1%M_loc
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv,1:nv)
 
          ! rank=1
          ! allocate(tmpU(mm,rank))
@@ -2585,31 +2602,31 @@ contains
          ! deallocate(Vbuff)
 
          allocate (Vin_tmp(N, num_vect_sub))
-         Vin_tmp = Vin
-         Vout = 0
+         Vin_tmp = Vin(1:mi,1:nv)
+         Vout(1:mv,1:nv) = 0
 
          allocate (Vbuff(nn, num_vect_sub))
          Vbuff = 0
 
          if (trans == 'N') then
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(block_off2, 'N', nn, mm, num_vect_sub, Vin, Vbuff, ctemp1, ctemp2, ptree, stats)
-            call BF_block_MVP_dat(block_off1, 'N', mm, nn, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats)
-            Vout = -Vout
+            call BF_block_MVP_dat(block_off2, 'N', nn, mm, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(block_off1, 'N', mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+            Vout(1:mv,1:nv) = -Vout(1:mv,1:nv)
 
          else if (trans == 'T') then
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call BF_block_MVP_dat(block_off1, 'T', mm, nn, num_vect_sub, Vin, Vbuff, ctemp1, ctemp2, ptree, stats)
-            call BF_block_MVP_dat(block_off2, 'T', nn, mm, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats)
-            Vout = -Vout
+            call BF_block_MVP_dat(block_off1, 'T', mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
+            call BF_block_MVP_dat(block_off2, 'T', nn, mm, num_vect_sub, Vbuff, nn, Vout, ldo,  ctemp1, ctemp2, ptree, stats)
+            Vout(1:mv,1:nv) = -Vout(1:mv,1:nv)
          end if
 
-         Vin = Vin_tmp
+         Vin(1:mi,1:nv) = Vin_tmp
 
          deallocate (Vin_tmp)
          deallocate (Vbuff)
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -2620,13 +2637,14 @@ contains
 
    end subroutine BF_block_MVP_inverse_minusBC_dat
 
-   subroutine BF_block_MVP_schulz_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_schulz_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vbuff1(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock)::block_Xn
@@ -2650,14 +2668,21 @@ contains
             call assert(mm == nn, 'block nonsquare')
 
             if (schulz_op%order == 2) then
-               mv = size(Vout, 1)
-               nv = size(Vout, 2)
+               if (trans == 'N') then
+                  mv = M
+                  mi = N
+                  nv = num_vect_sub
+               else if (trans == 'T') then
+                  mv = N
+                  mi = N
+                  nv = num_vect_sub
+               endif
                allocate (Vout_tmp(mv, nv))
-               Vout_tmp = Vout
+               Vout_tmp = Vout(1:mv,1:nv)
 
                allocate (Vin_tmp(N, num_vect_sub))
-               Vin_tmp = Vin
-               Vout = 0
+               Vin_tmp = Vin(1:mi,1:nv)
+               Vout(1:mv,1:nv) = 0
 
                allocate (Vbuff(nn, num_vect_sub))
                Vbuff = 0
@@ -2665,53 +2690,60 @@ contains
                if (trans == 'N') then
                   ctemp1 = 1.0d0; ctemp2 = 0.0d0
                   ! XnR
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, Vbuff, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! AXnR
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats)
-                  Vout = Vbuff + Vout
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+                  Vout(1:mv,1:nv) = Vbuff + Vout(1:mv,1:nv)
 
                   ! (2-AXn)R
-                  Vbuff = 2*Vin - Vout
+                  Vbuff = 2*Vin(1:mi,1:nv) - Vout(1:mv,1:nv)
 
                   ! Xn(2-AXn)R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
                else if (trans == 'T') then
                   ctemp1 = 1.0d0; ctemp2 = 0.0d0
                   ! RXn
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, Vout, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! RXnA
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vout, Vbuff, ctemp1, ctemp2, ptree, stats)
-                  Vbuff = Vout + Vbuff
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vout, ldo, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
+                  Vbuff = Vout(1:mv,1:nv) + Vbuff
 
                   ! RXnAXn
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, Vin, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vin, ldi, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! 2RXn - RXnAXn
-                  Vout = 2*Vout - Vin
+                  Vout(1:mv,1:nv) = 2*Vout(1:mv,1:nv) - Vin(1:mi,1:nv)
                end if
 
-               Vin = Vin_tmp
+               Vin(1:mi,1:nv) = Vin_tmp
 
                scale_new = schulz_op%scale*(2 - schulz_op%scale)
 
-               Vout = Vout - Vin*scale_new ! Xn(2-AXn)-I
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) - Vin(1:mi,1:nv)*scale_new ! Xn(2-AXn)-I
 
                deallocate (Vin_tmp)
                deallocate (Vbuff)
 
             else if (schulz_op%order == 3) then
 
-               mv = size(Vout, 1)
-               nv = size(Vout, 2)
+               if (trans == 'N') then
+                  mv = M
+                  mi = N
+                  nv = num_vect_sub
+               else if (trans == 'T') then
+                  mv = N
+                  mi = N
+                  nv = num_vect_sub
+               endif
                allocate (Vout_tmp(mv, nv))
-               Vout_tmp = Vout
+               Vout_tmp = Vout(1:mv,1:nv)
 
                allocate (Vin_tmp(nn, num_vect_sub))
-               Vin_tmp = Vin
-               Vout = 0
+               Vin_tmp = Vin(1:mi,1:nv)
+               Vout(1:mv,1:nv) = 0
 
                allocate (Vbuff(nn, num_vect_sub))
                Vbuff = 0
@@ -2722,46 +2754,46 @@ contains
                   ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
                   ! AXnR
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, Vbuff, ctemp1, ctemp2, ptree, stats, operand1)
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, Vbuff1, ctemp1, ctemp2, ptree, stats)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vbuff1, nn, ctemp1, ctemp2, ptree, stats)
                   Vbuff1 = Vbuff + Vbuff1
 
                   ! (AXn)^2R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, Vbuff, ctemp1, ctemp2, ptree, stats, operand1)
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats)
-                  Vout = Vout + Vbuff
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+                  Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vbuff
 
                   ! (3-3AXn+(AXn)^2)R
-                  Vbuff1 = 3*Vin - 3*Vbuff1 + Vout
+                  Vbuff1 = 3*Vin(1:mi,1:nv) - 3*Vbuff1 + Vout(1:mv,1:nv)
 
                   ! Xn(3-3AXn+(AXn)^2)R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, Vout, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
                else if (trans == 'T') then
                   ctemp1 = 1.0d0; ctemp2 = 0.0d0
                   ! RXn
-                  Vout = Vin
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vout, Vin, ctemp1, ctemp2, ptree, stats, operand1)
+                  Vout(1:mv,1:nv) = Vin(1:mi,1:nv)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vout, ldo, Vin, ldi, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! RXn*AXn
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vin, Vbuff, ctemp1, ctemp2, ptree, stats)
-                  Vbuff = Vin + Vbuff
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, Vbuff1, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
+                  Vbuff = Vin(1:mi,1:nv) + Vbuff
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vbuff1, nn, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! RXn*(AXn)^2
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff1, Vbuff, ctemp1, ctemp2, ptree, stats)
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
                   Vbuff = Vbuff1 + Vbuff
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, Vout, ctemp1, ctemp2, ptree, stats, operand1)
+                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
                   ! RXn*(3-3AXn+(AXn)^2)
-                  Vout = 3*Vin - 3*Vbuff1 + Vout
+                  Vout(1:mv,1:nv) = 3*Vin(1:mi,1:nv) - 3*Vbuff1 + Vout(1:mv,1:nv)
                end if
 
-               Vin = Vin_tmp
+               Vin(1:mi,1:nv) = Vin_tmp
 
                scale_new = schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
 
-               Vout = Vout - Vin*scale_new ! Xn(2-AXn)-I
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) - Vin(1:mi,1:nv)*scale_new ! Xn(2-AXn)-I
 
                deallocate (Vin_tmp)
                deallocate (Vbuff)
@@ -2769,7 +2801,7 @@ contains
 
             endif
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          end select
@@ -2781,14 +2813,15 @@ contains
 
    end subroutine BF_block_MVP_schulz_dat
 
-   subroutine BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans, trans_new
       real(kind=8)::eps, memory
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :), matrixtmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock)::block_Xn
@@ -2803,19 +2836,30 @@ contains
       type is (schulz_operand)
          select TYPE (operand1)
          type is (integer)
+
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
+
             eps = 0.8d0
             ctemp1 = 1d0
             ctemp2 = 0d0
             if (operand1 == 1) then ! X0
-               Vin = conjg(cmplx(Vin, kind=8))
+               Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
                if (trans == 'N') trans_new = 'T'
                if (trans == 'T') trans_new = 'N'
-               call BF_block_MVP_dat(schulz_op%matrices_block, trans_new, M, N, num_vect_sub, Vin, Vout, ctemp1, ctemp2, ptree, stats)
-               Vout = Vout + Vin
-               Vin = conjg(cmplx(Vin, kind=8))
-               Vout = conjg(cmplx(Vout, kind=8))
+               call BF_block_MVP_dat(schulz_op%matrices_block, trans_new, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vin(1:mi,1:nv)
+               Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
+               Vout(1:mv,1:nv) = conjg(cmplx(Vout(1:mv,1:nv), kind=8))
                schulz_op%scale = (2d0 - eps)/schulz_op%A2norm**2d0
-               Vout = Vout*schulz_op%scale
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv)*schulz_op%scale
 
                ! if(trans=='N')trans_new='T'
                ! if(trans=='T')trans_new='N'
@@ -2829,8 +2873,8 @@ contains
                ! Vout = Vout + Vin
 
             else ! Xn
-               call BF_block_MVP_dat(block_Xn, trans, M, N, num_vect_sub, Vin, Vout, ctemp1, ctemp2, ptree, stats)
-               Vout = Vout + Vin*schulz_op%scale
+               call BF_block_MVP_dat(block_Xn, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vin(1:mi,1:nv)*schulz_op%scale
             endif
 
          end select
@@ -2838,7 +2882,7 @@ contains
 
    end subroutine BF_block_MVP_schulz_Xn_dat
 
-   subroutine BF_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine BF_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
 
@@ -2846,7 +2890,7 @@ contains
       implicit none
 
       integer level_c, rowblock, unique_nth
-      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv
+      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv, mi
       integer mm, nn, mn, qq, pp, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag, head, tail
       character trans
       ! real(kind=8) a,b,c,d
@@ -2867,7 +2911,8 @@ contains
 
       integer nth_s, nth_e, num_vect_sub, nth, level_right_start
       real(kind=8)::n1, n2
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       type(vectorsblock), pointer:: RandomVectors_InOutput_tmp(:)
 
       class(*)::ho_bf1
@@ -2887,10 +2932,17 @@ contains
             level_c = ho_bf1%ind_lv
             rowblock = ho_bf1%ind_bk
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = M
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
+            Vout_tmp = Vout(1:mv,1:nv)
 
             if (trans == 'N') then
 
@@ -2910,7 +2962,7 @@ contains
                idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
 
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, Vbuff, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi ,Vbuff, mm, cone, czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
                mm = block_o%M_loc
@@ -2935,9 +2987,9 @@ contains
 
                            if (level == ho_bf1%Maxlevel + 1) then
                               call Full_block_MVP_dat(blocks, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-                 &Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, czero)
+                 &Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, cone, czero)
                            else
-                              call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                              call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                            endif
                         endif
                      endif
@@ -2948,7 +3000,7 @@ contains
                   Vbuff = vec_new
                end do
 
-               Vout = vec_new
+               Vout(1:mv,1:nv) = vec_new
 
                deallocate (Vbuff)
                deallocate (vec_new)
@@ -2971,7 +3023,7 @@ contains
                idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
 
                allocate (vec_new(mm, num_vect_sub))
-               Vbuff = Vin
+               Vbuff = Vin(1:mi,1:nv)
                do level = level_c + 1, ho_bf1%Maxlevel + 1
                   N_diag = 2**(level - level_c - 1)
                   idx_start_diag = max((rowblock - 1)*N_diag + 1, ho_bf1%levels(level)%Bidxs)
@@ -2991,9 +3043,9 @@ contains
 
                            if (level == ho_bf1%Maxlevel + 1) then
                               call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-&Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, czero)
+&Vbuff(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1), mm, cone, czero)
                            else
-                              call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                              call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                            endif
                         endif
                      endif
@@ -3011,7 +3063,7 @@ contains
                mm = block_o%M_loc
                nn = block_o%N_loc
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'T', mm, nn, num_vect_sub, Vbuff, Vout, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'T', mm, nn, num_vect_sub, Vbuff, mm, Vout, ldo, cone, czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
 
@@ -3019,7 +3071,7 @@ contains
 
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -3035,7 +3087,7 @@ contains
    end subroutine BF_block_MVP_Sblock_dat
 
 
-   subroutine BF_block_MVP_Sblock_Sml_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine BF_block_MVP_Sblock_Sml_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
 
@@ -3043,7 +3095,7 @@ contains
       implicit none
 
       integer level_c, rowblock, unique_nth
-      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv
+      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv, mi
       integer mm, nn, mn, qq, pp, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag, head, tail
       character trans
       ! real(kind=8) a,b,c,d
@@ -3064,7 +3116,8 @@ contains
 
       integer nth_s, nth_e, num_vect_sub, nth, level_right_start
       real(kind=8)::n1, n2
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       type(vectorsblock), pointer:: RandomVectors_InOutput_tmp(:)
 
       class(*)::ho_bf1
@@ -3084,10 +3137,17 @@ contains
             level_c = ho_bf1%ind_lv
             rowblock = ho_bf1%ind_bk
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
+            Vout_tmp = Vout(1:mv,1:nv)
 
             if (trans == 'N') then
 
@@ -3104,11 +3164,10 @@ contains
                idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
 
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, Vbuff, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi, Vbuff, mm, cone, czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
                mm = block_o%M_loc
-
                n1 = OMP_get_wtime()
                if (associated(ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL)) then
                   blocks => ho_bf1%levels(level_c)%BP_inverse(rowblock)%LL(1)%matrices_block(1)
@@ -3117,7 +3176,7 @@ contains
                   tail = head + blocks%M_loc - 1
                   idx_start_loc = head - idx_start_glo + 1
                   idx_end_loc = tail - idx_start_glo + 1
-                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc, 1), mm, Vout(idx_start_loc, 1), ldo, ptree, stats)
                endif
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
@@ -3141,20 +3200,22 @@ contains
                   tail = head + blocks%M_loc - 1
                   idx_start_loc = head - idx_start_glo + 1
                   idx_end_loc = tail - idx_start_glo + 1
-                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vbuff(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                  call BF_block_MVP_inverse_dat(ho_bf1, level_c, rowblock, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vin(idx_start_loc, 1), ldi, Vbuff(idx_start_loc, 1),mm, ptree, stats)
                endif
                n2 = OMP_get_wtime()
+
                ! time_tmp = time_tmp + n2 - n1
                mm = block_o%M_loc
                nn = block_o%N_loc
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'T', mm, nn, num_vect_sub, Vbuff, Vout, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'T', mm, nn, num_vect_sub, Vbuff, mm, Vout, ldo, cone, czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
                deallocate (Vbuff)
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
+
             deallocate (Vout_tmp)
 
          class default
@@ -3175,13 +3236,14 @@ contains
 ! chara='s': block_o - block_1
 ! chara='+': block_o + block_1 x block_2
 ! chara='-': block_o - block_1 x block_2
-   subroutine BF_block_MVP_Add_Multiply_dat(h_mat, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, chara)
+   subroutine BF_block_MVP_Add_Multiply_dat(h_mat, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, chara)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::block_off1, block_off2
@@ -3200,17 +3262,25 @@ contains
             block_off1 => h_mat%blocks_1
             block_off2 => h_mat%blocks_2
 
-            mm = block_o%M
-            nn = block_o%N
-            kk = block_off1%N
+            mm = block_o%M_loc
+            nn = block_o%N_loc
+            kk = block_off1%N_loc
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = mm
+               mi = nn
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = nn
+               mi = mm
+               nv = num_vect_sub
+            endif
+
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
-            allocate (Vin_tmp(N, num_vect_sub))
-            Vin_tmp = Vin
-            Vout = 0
+            Vout_tmp = Vout(1:mv, 1:nv)
+            allocate (Vin_tmp(mi, nv))
+            Vin_tmp = Vin(1:mi, 1:nv)
+            Vout(1:mv, 1:nv) = 0
 
             allocate (Vbuff(kk, num_vect_sub))
             Vbuff = 0
@@ -3218,33 +3288,33 @@ contains
             if (trans == 'N') then
                if (chara == 'a' .or. chara == 's') then  ! block_o +- block_1
                   call assert(kk == nn, 'block dimensions do not match')
-                  Vbuff = Vin
+                  Vbuff = Vin(1:mi, 1:nv)
                else
-                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vin, Vbuff, cone, ptree, stats)
+                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vin, ldi, Vbuff, kk, cone, ptree, stats)
                endif
-               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vbuff, Vout, cone, ptree, stats)
+               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vbuff, kk, Vout, ldo, cone, ptree, stats)
             else if (trans == 'T') then
-               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vin, Vbuff, cone, ptree, stats)
+               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vin, ldi, Vbuff, kk, cone, ptree, stats)
                if (chara == 'a' .or. chara == 's') then  ! block_o +- block_1
                   call assert(kk == nn, 'block dimensions do not match')
-                  Vout = Vbuff
+                  Vout(1:mv, 1:nv) = Vbuff
                else
-                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vbuff, Vout, cone, ptree, stats)
+                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vbuff, kk, Vout, ldo, cone, ptree, stats)
                endif
             endif
 
             if (chara == '+' .or. chara == 'a') then ! block_o + block_1 x block_2 or block_o + block_1
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, Vout, cone, cone, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, cone, ptree, stats)
             else if (chara == '-' .or. chara == 's') then ! block_o - block_1 x block_2 or block_o - block_1
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, Vout, cone, -cone, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, -cone, ptree, stats)
             else if (chara == 'm') then ! block_1 x block_2
                !!!! nothing needs to be done here
             endif
 
-            Vin = Vin_tmp
+            Vin(1:mi, 1:nv) = Vin_tmp
             deallocate (Vin_tmp)
             deallocate (Vbuff)
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          end select
@@ -3256,13 +3326,14 @@ contains
 
    end subroutine BF_block_MVP_Add_Multiply_dat
 
-   subroutine BF_block_MVP_XLM_dat(blocks_l, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_XLM_dat(blocks_l, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       integer groupn, groupm, groupk, mm, nn
@@ -3278,33 +3349,40 @@ contains
          mm = block_o%M
          nn = block_o%N
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = mm
+            mi = nn
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = nn
+            mi = mm
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv, 1:nv)
          allocate (Vin_tmp(N, num_vect_sub))
-         Vin_tmp = Vin
-         Vout = 0
+         Vin_tmp = Vin(1:mi, 1:nv)
+         Vout(1:mv, 1:nv) = 0
 
          allocate (Vbuff(mm, num_vect_sub))
          Vbuff = 0
 
          if (trans == 'N') then
 
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, Vbuff, cone, czero, ptree, stats)
-            Vout = Vbuff
-            call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vout, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, mm, cone, czero, ptree, stats)
+            Vout(1:mv, 1:nv) = Vbuff
+            call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vout, ldo, ptree, stats)
 
          else if (trans == 'T') then
-            Vbuff = Vin
-            call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vbuff, ptree, stats)
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, Vout, cone, czero, ptree, stats)
+            Vbuff = Vin(1:mi, 1:nv)
+            call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vbuff, mm, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, mm, Vout, ldo, cone, czero, ptree, stats)
          endif
 
-         Vin = Vin_tmp
+         Vin(1:mi, 1:nv) = Vin_tmp
          deallocate (Vin_tmp)
          deallocate (Vbuff)
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3315,13 +3393,14 @@ contains
 
    end subroutine BF_block_MVP_XLM_dat
 
-   subroutine BF_block_MVP_XUM_dat(blocks_u, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine BF_block_MVP_XUM_dat(blocks_u, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
       integer groupn, groupm, groupk, mm, nn
@@ -3337,32 +3416,39 @@ contains
          mm = block_o%M
          nn = block_o%N
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = mm
+            mi = nn
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = nn
+            mi = mm
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv, 1:nv)
          allocate (Vin_tmp(N, num_vect_sub))
-         Vin_tmp = Vin
-         Vout = 0
+         Vin_tmp = Vin(1:mi, 1:nv)
+         Vout(1:mv, 1:nv) = 0
 
          allocate (Vbuff(nn, num_vect_sub))
          Vbuff = 0
 
          if (trans == 'N') then
-            Vbuff = Vin
-            call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vbuff, ptree, stats)
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, Vout, cone, czero, ptree, stats)
+            Vbuff = Vin(1:mi, 1:nv)
+            call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vbuff, nn, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, nn, Vout, ldo, cone, czero, ptree, stats)
 
          else if (trans == 'T') then
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, Vbuff, cone, czero, ptree, stats)
-            Vout = Vbuff
-            call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vout, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, nn, cone, czero, ptree, stats)
+            Vout(1:mv, 1:nv) = Vbuff
+            call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vout, ldo, ptree, stats)
          endif
 
-         Vin = Vin_tmp
+         Vin(1:mi, 1:nv) = Vin_tmp
          deallocate (Vin_tmp)
          deallocate (Vbuff)
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3373,13 +3459,14 @@ contains
 
    end subroutine BF_block_MVP_XUM_dat
 
-   subroutine Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       type(blockplus), pointer::bplus_o, bplus_off1, bplus_off2
       integer groupn, groupm, mm, nn
@@ -3408,11 +3495,18 @@ contains
 
       type is (blockplus)
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = M
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
-         Vout = 0
+         Vout_tmp = Vout(1:mv, 1:nv)
+         Vout(1:mv, 1:nv) = 0
 
          ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
@@ -3421,9 +3515,9 @@ contains
          ! groupm=bplus%row_group  ! Note: row_group and col_group interchanged here
          ! mm=bplus%LL(1)%matrices_block(1)%M
 
-         call Bplus_block_MVP_dat(bplus, trans, M, N, num_vect_sub, Vin, Vout, ctemp1, ctemp2, ptree, stats)
+         call Bplus_block_MVP_dat(bplus, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3434,16 +3528,17 @@ contains
 
    end subroutine Bplus_block_MVP_Exact_dat
 
-   subroutine Bplus_block_MVP_Outter_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_Outter_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
       integer level_c, rowblock, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, ctemp3, ctemp4, a, b
-      integer M, N, mv, nv
+      integer M, N, mv, nv, mi
 
       type(Hstat)::stats
       class(*):: bplus
@@ -3457,22 +3552,28 @@ contains
       select TYPE (bplus)
 
       type is (blockplus)
-
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv, 1:nv)
 
          call assert(present(operand1), 'operand1 cannot be skipped')
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout,ldo, cone, czero, ptree, stats, operand1)
 
-            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, Vout, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
+            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3483,13 +3584,14 @@ contains
 
    end subroutine Bplus_block_MVP_Outter_Exact_dat
 
-   subroutine Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       type(blockplus), pointer::bplus_o, bplus_off1, bplus_off2
       integer groupn, groupm, mm, nn
@@ -3524,10 +3626,17 @@ contains
          bplus_off1 => ho_bf1%levels(level_c)%BP_inverse_update(2*rowblock - 1)
          bplus_off2 => ho_bf1%levels(level_c)%BP_inverse_update(2*rowblock)
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv, 1:nv)
 
          if (trans == 'N') then
             groupn = bplus_off1%col_group  ! Note: row_group and col_group interchanged here
@@ -3539,9 +3648,9 @@ contains
 
             ! get the right multiplied vectors
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call Bplus_block_MVP_dat(bplus_off2, 'N', nn, mm, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
-            call Bplus_block_MVP_dat(bplus_off1, 'N', mm, nn, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
-            Vout = -Vout
+            call Bplus_block_MVP_dat(bplus_off2, 'N', nn, mm, num_vect_sub, Vin, ldi, vec_new, nn, ctemp1, ctemp2, ptree, stats)
+            call Bplus_block_MVP_dat(bplus_off1, 'N', mm, nn, num_vect_sub, vec_new, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+            Vout(1:mv, 1:nv) = -Vout(1:mv, 1:nv)
             deallocate (vec_new)
 
          else if (trans == 'T') then
@@ -3555,14 +3664,14 @@ contains
 
             ! get the right multiplied vectors
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call Bplus_block_MVP_dat(bplus_off1, 'T', mm, nn, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
-            call Bplus_block_MVP_dat(bplus_off2, 'T', nn, mm, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
-            Vout = -Vout
+            call Bplus_block_MVP_dat(bplus_off1, 'T', mm, nn, num_vect_sub, Vin, ldi, vec_new, nn, ctemp1, ctemp2, ptree, stats)
+            call Bplus_block_MVP_dat(bplus_off2, 'T', nn, mm, num_vect_sub, vec_new, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+            Vout(1:mv, 1:nv) = -Vout(1:mv, 1:nv)
             deallocate (vec_new)
 
          end if
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3573,16 +3682,17 @@ contains
 
    end subroutine Bplus_block_MVP_minusBC_dat
 
-   subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_Outter_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
       integer level_c, rowblock, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, ctemp3, ctemp4, a, b
-      integer M, N, mv, nv
+      integer M, N, mv, nv, mi
       type(proctree)::ptree
       class(*):: ho_bf1
       type(matrixblock)::block_o
@@ -3597,20 +3707,27 @@ contains
 
       type is (hobf)
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv, 1:nv)
 
          call assert(present(operand1), 'operand1 cannot be skipped')
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, cone, czero, ptree, stats, operand1)
-            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, Vout, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
+            call Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv, 1:nv) = a*Vout(1:mv, 1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3621,18 +3738,19 @@ contains
 
    end subroutine Bplus_block_MVP_Outter_minusBC_dat
 
-   subroutine Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
       integer level_c, rowblock, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, Ctemp, a, b
       type(blockplus), pointer::bplus_o
       integer groupn, groupm, mm, nn
 
-      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv, qq, head, tail, pp
+      integer i, j, k, level, num_blocks, num_row, num_col, ii, jj, kk, test, M, N, mv, nv, mi, qq, head, tail, pp
       integer level_butterfly, groupm_diag
       ! real(kind=8) a,b,c,d
       integer idx_start_glo, N_diag, idx_start_diag, idx_end_diag, idx_start_loc, idx_end_loc
@@ -3657,15 +3775,20 @@ contains
 
       select TYPE (ho_bf1)
       type is (hobf)
+      if (trans == 'N') then
+         mv = M
+         mi = N
+         nv = num_vect_sub
+      else if (trans == 'T') then
+         mv = N
+         mi = N
+         nv = num_vect_sub
+      endif
+      allocate (Vout_tmp(mv, nv))
+      Vout_tmp = Vout(1:mv, 1:nv)
 
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
-         allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
-
-         level_c = ho_bf1%ind_lv
-         rowblock = ho_bf1%ind_bk
-
+      level_c = ho_bf1%ind_lv
+      rowblock = ho_bf1%ind_bk
          if (trans == 'N') then
             bplus_o => ho_bf1%levels(level_c)%BP_inverse_update(rowblock)
 
@@ -3679,7 +3802,7 @@ contains
             idx_start_glo = bplus_o%LL(1)%matrices_block(1)%headm + bplus_o%LL(1)%matrices_block(1)%M_p(pp, 1) - 1
 
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
-            call Bplus_block_MVP_dat(bplus_o, 'N', mm, nn, num_vect_sub, Vin, Vout, ctemp1, ctemp2, ptree, stats)
+            call Bplus_block_MVP_dat(bplus_o, 'N', mm, nn, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
             allocate (vec_new(mm, num_vect_sub))
 
             do level = ho_bf1%Maxlevel + 1, level_c + 1, -1
@@ -3701,9 +3824,9 @@ contains
 
                         if (level == ho_bf1%Maxlevel + 1) then
                            call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-&Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ctemp1, ctemp2)
+&Vout(idx_start_loc, 1), mv, vec_new(idx_start_loc, 1), mm, ctemp1, ctemp2)
                         else
-                           call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                           call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vout(idx_start_loc, 1), ldo, vec_new(idx_start_loc, 1), mm, ptree, stats)
                         endif
                      endif
                   endif
@@ -3711,7 +3834,7 @@ contains
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
 
-               Vout = vec_new
+               Vout(1:mv, 1:nv) = vec_new
             end do
             deallocate (vec_new)
 
@@ -3729,7 +3852,7 @@ contains
             allocate (vec_old(mm, num_vect_sub))
             allocate (vec_new(mm, num_vect_sub))
 
-            vec_old = Vin
+            vec_old = Vin(1:mi,1:nv)
             do level = level_c + 1, ho_bf1%Maxlevel + 1
                N_diag = 2**(level - level_c - 1)
                idx_start_diag = max((rowblock - 1)*N_diag + 1, ho_bf1%levels(level)%Bidxs)
@@ -3748,9 +3871,9 @@ contains
                         idx_end_loc = tail - idx_start_glo + 1
                         if (level == ho_bf1%Maxlevel + 1) then
                            call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-&vec_old(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ctemp1, ctemp2)
+&vec_old(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ctemp1, ctemp2)
                         else
-                           call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_old(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                           call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_old(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                         endif
                      endif
                   endif
@@ -3762,12 +3885,12 @@ contains
             end do
             deallocate (vec_new)
             n1 = OMP_get_wtime()
-            call Bplus_block_MVP_dat(bplus_o, 'T', mm, nn, num_vect_sub, vec_old, Vout, ctemp1, ctemp2, ptree, stats)
+            call Bplus_block_MVP_dat(bplus_o, 'T', mm, nn, num_vect_sub, vec_old, mm, Vout, ldo, ctemp1, ctemp2, ptree, stats)
             n2 = OMP_get_wtime()
             deallocate (vec_old)
          end if
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3777,16 +3900,17 @@ contains
 
    end subroutine Bplus_block_MVP_Sblock_dat
 
-   subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_Outter_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
       integer level_c, rowblock, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, ctemp3, ctemp4, a, b
-      integer M, N, mv, nv
+      integer M, N, mv, nv, mi
       type(Hstat)::stats
 
       class(*):: ho_bf1
@@ -3800,21 +3924,27 @@ contains
       select TYPE (ho_bf1)
 
       type is (hobf)
-
-         mv = size(Vout, 1)
-         nv = size(Vout, 2)
+         if (trans == 'N') then
+            mv = M
+            mi = N
+            nv = num_vect_sub
+         else if (trans == 'T') then
+            mv = N
+            mi = N
+            nv = num_vect_sub
+         endif
          allocate (Vout_tmp(mv, nv))
-         Vout_tmp = Vout
+         Vout_tmp = Vout(1:mv,1:nv)
 
          call assert(present(operand1), 'operand1 cannot be skipped')
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, Vout, cone, czero, ptree, stats, operand1)
-            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, Vout, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
+            call Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
 
-         Vout = a*Vout + b*Vout_tmp
+         Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
          deallocate (Vout_tmp)
 
       class default
@@ -3825,13 +3955,14 @@ contains
 
    end subroutine Bplus_block_MVP_Outter_Sblock_dat
 
-   subroutine Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, ptree, stats)
+   subroutine Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, ldi, Vout, ldo, ptree, stats)
 
 
       implicit none
       integer level, ii, N, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vin1(:, :), Vin2(:, :), Vout1(:, :), Vout2(:, :)
       DT :: ctemp1, ctemp2
       type(matrixblock), pointer::block_o, block_inv, block_schur, block_off1, block_off2
@@ -3852,14 +3983,14 @@ contains
       nn = block_off1%N_loc
       mm = block_off1%M_loc
       allocate (Vin_tmp(N, num_vect_sub))
-      Vin_tmp = Vin
+      Vin_tmp = Vin(1:N,1:num_vect_sub)
 
       ! call MPI_barrier(ptree%pgrp(block_inv%pgno)%Comm,ierr)
       n1 = OMP_get_wtime()
       allocate (Vin1(mm, num_vect_sub))
       allocate (Vin2(nn, num_vect_sub))
 
-      call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno,Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D_OnetoTwo(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin1, mm, block_off1%M_p, 0, block_off1%pgno,Vin2, nn, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
 
       ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, block_off1%M_p, 0, block_off1%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, block_off1%N_p, block_off1%M, block_off1%pgno, num_vect_sub, ptree)
@@ -3878,21 +4009,21 @@ contains
       bplus_o => ho_bf1%levels(level)%BP_inverse_schur(ii)
       if (trans == 'N') then
          call Bplus_block_MVP_dat(bplus_off1, trans, mm, nn, num_vect_sub,&
-         &Vin2, Vout1, ctemp1, ctemp2, ptree, stats)
+         &Vin2,nn, Vout1, mm, ctemp1, ctemp2, ptree, stats)
          Vout1 = Vin1 - Vout1
          Vout2 = Vin2
 
          ! write(2111,*)abs(Vout)
 
          call Bplus_block_MVP_dat(bplus_o, trans, mm, mm, num_vect_sub,&
-         &Vout1, Vin1, ctemp1, ctemp2, ptree, stats)
+         &Vout1, mm, Vin1, mm, ctemp1, ctemp2, ptree, stats)
          Vin1 = Vout1 + Vin1
          Vin2 = Vout2
 
          ! write(2112,*)abs(Vin)
 
          call Bplus_block_MVP_dat(bplus_off2, trans, nn, mm, num_vect_sub,&
-         &Vin1, Vout2, ctemp1, ctemp2, ptree, stats)
+         &Vin1, mm, Vout2, nn, ctemp1, ctemp2, ptree, stats)
          Vout2 = Vin2 - Vout2
          Vout1 = Vin1
 
@@ -3902,18 +4033,18 @@ contains
       else if (trans == 'T') then
          ! write(*,*)'good1'
          call Bplus_block_MVP_dat(bplus_off2, trans, nn, mm, num_vect_sub,&
-         &Vin2, Vout1, ctemp1, ctemp2, ptree, stats)
+         &Vin2, nn, Vout1, mm, ctemp1, ctemp2, ptree, stats)
          Vout1 = Vin1 - Vout1
          Vout2 = Vin2
          ! write(*,*)'good2'
          call Bplus_block_MVP_dat(bplus_o, trans, mm, mm, num_vect_sub,&
-         &Vout1, Vin1, ctemp1, ctemp2, ptree, stats)
+         &Vout1, mm, Vin1, mm, ctemp1, ctemp2, ptree, stats)
          Vin1 = Vout1 + Vin1
          Vin2 = Vout2
 
          ! write(*,*)'good3'
          call Bplus_block_MVP_dat(bplus_off1, trans, mm, nn, num_vect_sub,&
-         &Vin1, Vout2, ctemp1, ctemp2, ptree, stats)
+         &Vin1, mm, Vout2, nn, ctemp1, ctemp2, ptree, stats)
          Vout2 = Vin2 - Vout2
          Vout1 = Vin1
          ! write(*,*)'good4'
@@ -3923,12 +4054,12 @@ contains
       ! call Redistribute1Dto1D(Vout1, block_off1%M_p, 0, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D(Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
-      call Redistribute1Dto1D_TwotoOne(Vout1, block_off1%M_p, 0, block_off1%pgno,Vout2, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D_TwotoOne(Vout1, mm, block_off1%M_p, 0, block_off1%pgno,Vout2, nn, block_off1%N_p, block_off1%M, block_off1%pgno, Vout, ldo, block_inv%M_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
-      Vin = Vin_tmp
+      Vin(1:N,1:num_vect_sub) = Vin_tmp
 
       deallocate (Vin_tmp)
       deallocate (Vin1)
@@ -3938,13 +4069,14 @@ contains
 
    end subroutine Bplus_block_MVP_inverse_dat
 
-   subroutine Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, Vout, a, b, ptree, stats)
+   subroutine Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats)
 
 
       implicit none
       integer level, ii, N, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vin1(:, :), Vin2(:, :), Vout1(:, :), Vout2(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::block_o, block_inv, block_schur, block_off1, block_off2
@@ -4012,13 +4144,13 @@ contains
       Vout2 = 0
 
       n1 = OMP_get_wtime()
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_off1%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, Nin_p2, offin2, block_off2%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin1, max(nin1, 1), Nin_p1, offin1, block_off1%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin2, max(nin2, 1), Nin_p2, offin2, block_off2%pgno, num_vect_sub, ptree)
 
       ! call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_off1%pgno,Vin2, Nin_p2, offin2, block_off2%pgno, num_vect_sub, ptree)
 
-      call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_off1%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout2, Nout_p2, offout2, block_off2%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout, ldo, block_inv%N_p, 0, block_inv%pgno, Vout1, max(nout1, 1), Nout_p1, offout1, block_off1%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout, ldo, block_inv%N_p, 0, block_inv%pgno, Vout2, max(nout2, 1), Nout_p2, offout2, block_off2%pgno, num_vect_sub, ptree)
 
       ! call Redistribute1Dto1D_OnetoTwo(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_off1%pgno,Vout2, Nout_p2, offout2, block_off2%pgno, num_vect_sub, ptree)
 
@@ -4026,15 +4158,15 @@ contains
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
       if (mm1 > 0) then
-         call Bplus_block_MVP_dat(bplus_off1, trans, mm1, nn1, num_vect_sub, Vin1, Vout1, a, b, ptree, stats)
+         call Bplus_block_MVP_dat(bplus_off1, trans, mm1, nn1, num_vect_sub, Vin1, max(nin1, 1), Vout1, max(nout1, 1), a, b, ptree, stats)
       endif
       if (mm2 > 0) then
-         call Bplus_block_MVP_dat(bplus_off2, trans, mm2, nn2, num_vect_sub, Vin2, Vout2, a, b, ptree, stats)
+         call Bplus_block_MVP_dat(bplus_off2, trans, mm2, nn2, num_vect_sub, Vin2, max(nin2, 1), Vout2, max(nout2, 1), a, b, ptree, stats)
       endif
 
       n1 = OMP_get_wtime()
-      call Redistribute1Dto1D(Vout1, Nout_p1, offout1, block_off1%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vout2, Nout_p2, offout2, block_off2%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout1, max(nout1, 1), Nout_p1, offout1, block_off1%pgno, Vout, ldo, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout2, max(nout2, 1), Nout_p2, offout2, block_off2%pgno, Vout, ldo,  block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
       ! call Redistribute1Dto1D_TwotoOne(Vout1, Nout_p1, offout1, block_off1%pgno, Vout2, Nout_p2, offout2, block_off2%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
@@ -4052,14 +4184,15 @@ contains
 
    end subroutine Bplus_block_MVP_twoforward_dat
 
-   subroutine BF_block_MVP_twoforward_dat(ho_bf1, level, ii, block_rand, trans, N, num_vect_sub, Vin, Vout, a, b, ptree, stats)
+   subroutine BF_block_MVP_twoforward_dat(ho_bf1, level, ii, block_rand, trans, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats)
 
 
       implicit none
       type(matrixblock)::block_rand(:)
       integer level, ii, N, num_vect_sub
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vin1(:, :), Vin2(:, :), Vout1(:, :), Vout2(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock), pointer::block_o, block_inv, block_schur
@@ -4121,27 +4254,27 @@ contains
       endif
 
       n1 = OMP_get_wtime()
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vin, block_inv%N_p, 0, block_inv%pgno, Vin2, Nin_p2, offin2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin1, nin1, Nin_p1, offin1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vin, ldi, block_inv%N_p, 0, block_inv%pgno, Vin2, nin2, Nin_p2, offin2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D_OnetoTwo(Vin, block_inv%N_p, 0, block_inv%pgno, Vin1, Nin_p1, offin1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vin2, Nin_p2, offin2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
 
-      call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vout, block_inv%N_p, 0, block_inv%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout, ldo, block_inv%N_p, 0, block_inv%pgno, Vout1, nout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout, ldo, block_inv%N_p, 0, block_inv%pgno, Vout2, nout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D_OnetoTwo(Vout, block_inv%N_p, 0, block_inv%pgno, Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, num_vect_sub, ptree)
 
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
       if (mm1 > 0) then
-         call BF_block_MVP_dat(block_rand(ii*2 - 1 - Bidxs + 1), trans, mm1, nn1, num_vect_sub, Vin1, Vout1, a, b, ptree, stats)
+         call BF_block_MVP_dat(block_rand(ii*2 - 1 - Bidxs + 1), trans, mm1, nn1, num_vect_sub, Vin1, nin1, Vout1, nout1, a, b, ptree, stats)
       endif
       if (mm2 > 0) then
-         call BF_block_MVP_dat(block_rand(ii*2 - Bidxs + 1), trans, mm2, nn2, num_vect_sub, Vin2, Vout2, a, b, ptree, stats)
+         call BF_block_MVP_dat(block_rand(ii*2 - Bidxs + 1), trans, mm2, nn2, num_vect_sub, Vin2, nin2, Vout2, nout2, a, b, ptree, stats)
       endif
 
       n1 = OMP_get_wtime()
-      call Redistribute1Dto1D(Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
-      call Redistribute1Dto1D(Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout1, nout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout, ldo, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
+      call Redistribute1Dto1D(Vout2, nout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, Vout, ldo, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
       ! call Redistribute1Dto1D_TwotoOne(Vout1, Nout_p1, offout1, block_rand(ii*2 - 1 - Bidxs + 1)%pgno, Vout2, Nout_p2, offout2, block_rand(ii*2 - Bidxs + 1)%pgno, Vout, block_inv%N_p, 0, block_inv%pgno, num_vect_sub, ptree)
 
 
@@ -4159,13 +4292,14 @@ contains
 
    end subroutine BF_block_MVP_twoforward_dat
 
-   subroutine Bplus_block_MVP_BplusB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_BplusB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4197,10 +4331,17 @@ contains
          select TYPE (operand1)
          type is (matrixblock)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
+            Vout_tmp = Vout(1:mv,1:nv)
 
             level_butterfly = block_o%level_butterfly
             num_blocks = 2**level_butterfly
@@ -4217,10 +4358,10 @@ contains
             if (trans == 'N') then
                ! get the right multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(operand1, 'N', mm, nn, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(operand1, 'N', mm, nn, num_vect_sub, Vin, ldi, vec_new, mm, ctemp1, ctemp2, ptree, stats)
 
-               call Bplus_block_MVP_dat(bplus, 'N', mm, mm, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
-               Vout = Vout + vec_new
+               call Bplus_block_MVP_dat(bplus, 'N', mm, mm, num_vect_sub, vec_new, mm, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + vec_new
 
                deallocate (vec_new)
 
@@ -4228,15 +4369,15 @@ contains
 
                ! get the left multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call Bplus_block_MVP_dat(bplus, 'T', mm, mm, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
-               vec_new = vec_new + Vin
+               call Bplus_block_MVP_dat(bplus, 'T', mm, mm, num_vect_sub, Vin, ldi, vec_new, mm, ctemp1, ctemp2, ptree, stats)
+               vec_new = vec_new + Vin(1:mi,1:nv)
 
-               call BF_block_MVP_dat(operand1, 'T', mm, nn, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(operand1, 'T', mm, nn, num_vect_sub, vec_new, mm, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
 
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -4253,13 +4394,14 @@ contains
 
    end subroutine Bplus_block_MVP_BplusB_dat
 
-   subroutine Bplus_block_MVP_diagBinvB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine Bplus_block_MVP_diagBinvB_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4292,18 +4434,25 @@ contains
          type is (blockplus)
             blocks => bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
-            Vout = 0
+            Vout_tmp = Vout(1:mv,1:nv)
+            Vout(1:mv,1:nv) = 0
             allocate (vec_new(mv, nv))
             vec_new = 0
 
             if (trans == 'N') then
                ! get the right multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, Vin, ldi, vec_new, mv, ctemp1, ctemp2, ptree, stats)
 
                do ll = bplus%ind_ll + 1, bplus%Lplus
                do ii = 1, Bplus%LL(ll)%Nbound
@@ -4352,15 +4501,15 @@ contains
                         idx_end_loc = idx_start_loc + block_tmp%M_loc - 1
                         Vin_tmp1 = vec_new(idx_start_loc:idx_end_loc, :)
                      endif
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
 
                      if (IOwnPgrp(ptree, blocks_sml%pgno)) then
-                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, Vout_sml, ctemp1, ctemp2, ptree, stats)
+                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, blocks_sml%M_loc, Vout_sml, blocks_sml%M_loc, ctemp1, ctemp2, ptree, stats)
                      endif
 
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
                      if (block_tmp%M_loc > 0) then
-                        Vout(idx_start_loc:idx_end_loc, :) = Vout(idx_start_loc:idx_end_loc, :) + Vout_tmp1
+                        Vout(idx_start_loc:idx_end_loc, 1:nv) = Vout(idx_start_loc:idx_end_loc, 1:nv) + Vout_tmp1
                         deallocate (Vin_tmp1)
                         deallocate (Vout_tmp1)
                      endif
@@ -4374,7 +4523,7 @@ contains
                   endif
                enddo
                enddo
-               Vout = Vout + vec_new
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + vec_new
 
                deallocate (vec_new)
 
@@ -4426,15 +4575,15 @@ contains
                         idx_start_glo = blocks%headm + blocks%M_p(pp, 1) - 1
                         idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                         idx_end_loc = idx_start_loc + block_tmp%M_loc - 1
-                        Vin_tmp1 = Vin(idx_start_loc:idx_end_loc, :)
+                        Vin_tmp1 = Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub)
                      endif
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_loc,blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
 
                      if (IOwnPgrp(ptree, blocks_sml%pgno)) then
-                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, Vout_sml, ctemp1, ctemp2, ptree, stats)
+                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, blocks_sml%M_loc, Vout_sml, blocks_sml%M_loc, ctemp1, ctemp2, ptree, stats)
                      endif
 
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
                      if (block_tmp%M_loc > 0) then
                         vec_new(idx_start_loc:idx_end_loc, :) = vec_new(idx_start_loc:idx_end_loc, :) + Vout_tmp1
                         deallocate (Vin_tmp1)
@@ -4450,13 +4599,13 @@ contains
                   endif
                enddo
                enddo
-               vec_new = vec_new + Vin
+               vec_new = vec_new + Vin(1:mi,1:nv)
 
-               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, vec_new, mv, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -4469,13 +4618,14 @@ contains
    end subroutine Bplus_block_MVP_diagBinvB_dat
 
 !* This is enssentially the same as Bplus_block_MVP_diagBinvB_dat, except that no redistriubtion is performed diagBinv
-   subroutine Bplus_block_MVP_diagBinvBHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine Bplus_block_MVP_diagBinvBHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4510,20 +4660,25 @@ contains
          type is (blockplus)
             ! blocks => bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
-            Vout = 0
+            Vout_tmp = Vout(1:mv,1:nv)
+            Vout(1:mv,1:nv) = 0
 
             if (trans == 'N') then
-               mv = size(Vout, 1)
-               nv = size(Vout, 2)
                allocate (vec_new(mv, nv))
                vec_new = 0
                ! get the right multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, vec_new, mv, ctemp1, ctemp2, ptree, stats)
 
                do ll = bplus%ind_ll + 1, bplus%Lplus
                if(Bplus%LL(ll)%Nbound>0)then
@@ -4542,7 +4697,7 @@ contains
                      idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%M_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, cone, cone, ptree, stats)
                   endif
                enddo
                endif
@@ -4550,9 +4705,7 @@ contains
                deallocate (vec_new)
 
             else if (trans == 'T') then
-               mv = size(Vin, 1)
-               nv = size(Vin, 2)
-               allocate (vec_new(mv, nv))
+               allocate (vec_new(mi, nv))
                vec_new = 0
                ! get the left multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
@@ -4573,15 +4726,15 @@ contains
                      idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%M_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, cone, cone, ptree, stats)
                   endif
                enddo
                endif
                enddo
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, vec_new, mi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
             end if
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -4595,13 +4748,14 @@ contains
       time_tmp3 = time_tmp3 + n2-n1
 
    end subroutine Bplus_block_MVP_diagBinvBHSS_dat
-   subroutine Bplus_block_MVP_BBplus_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+   subroutine Bplus_block_MVP_BBplus_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4633,10 +4787,17 @@ contains
          select TYPE (operand1)
          type is (matrixblock)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
+            Vout_tmp = Vout(1:mv,1:nv)
 
             level_butterfly = block_o%level_butterfly
             num_blocks = 2**level_butterfly
@@ -4654,26 +4815,26 @@ contains
                ! get the right multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
-               call Bplus_block_MVP_dat(bplus, 'N', nn, nn, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
-               vec_new = vec_new + Vin
+               call Bplus_block_MVP_dat(bplus, 'N', nn, nn, num_vect_sub, Vin, ldi, vec_new, nn, ctemp1, ctemp2, ptree, stats)
+               vec_new = vec_new + Vin(1:mi,1:nv)
 
-               call BF_block_MVP_dat(operand1, 'N', mm, nn, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(operand1, 'N', mm, nn, num_vect_sub, vec_new, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
 
             else if (trans == 'T') then
 
                ! get the left multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(operand1, 'T', mm, nn, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(operand1, 'T', mm, nn, num_vect_sub, Vin, ldi, vec_new, nn, ctemp1, ctemp2, ptree, stats)
 
-               call Bplus_block_MVP_dat(bplus, 'T', nn, nn, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
-               Vout = Vout + vec_new
+               call Bplus_block_MVP_dat(bplus, 'T', nn, nn, num_vect_sub, vec_new, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + vec_new
 
                deallocate (vec_new)
 
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -4690,13 +4851,14 @@ contains
 
    end subroutine Bplus_block_MVP_BBplus_dat
 
-   subroutine Bplus_block_MVP_BdiagBinv_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine Bplus_block_MVP_BdiagBinv_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4729,11 +4891,18 @@ contains
          type is (blockplus)
             blocks => bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
-            Vout = 0
+            Vout_tmp = Vout(1:mv,1:nv)
+            Vout(1:mv,1:nv) = 0
             allocate (vec_new(mv, nv))
             vec_new = 0
 
@@ -4785,15 +4954,15 @@ contains
                         idx_start_glo = blocks%headm + blocks%M_p(pp, 1) - 1
                         idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                         idx_end_loc = idx_start_loc + block_tmp%M_loc - 1
-                        Vin_tmp1 = Vin(idx_start_loc:idx_end_loc, :)
+                        Vin_tmp1 = Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub)
                      endif
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
 
                      if (IOwnPgrp(ptree, blocks_sml%pgno)) then
-                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, Vout_sml, ctemp1, ctemp2, ptree, stats)
+                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, size(Vin_sml,1), Vout_sml, size(Vout_sml,1), ctemp1, ctemp2, ptree, stats)
                      endif
 
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
                      if (block_tmp%M_loc > 0) then
                         vec_new(idx_start_loc:idx_end_loc, :) = vec_new(idx_start_loc:idx_end_loc, :) + Vout_tmp1
                         deallocate (Vin_tmp1)
@@ -4809,16 +4978,16 @@ contains
                   endif
                enddo
                enddo
-               vec_new = vec_new + Vin
+               vec_new = vec_new + Vin(1:mi,1:nv)
 
-               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, vec_new, mv, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
 
             else if (trans == 'T') then
                ! get the left multiplied vectors
 
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, M, N, num_vect_sub, Vin, ldi, vec_new, mv, ctemp1, ctemp2, ptree, stats)
 
                do ll = bplus%ind_ll + 1, bplus%Lplus
                do ii = 1, Bplus%LL(ll)%Nbound
@@ -4867,15 +5036,15 @@ contains
                         idx_end_loc = idx_start_loc + block_tmp%M_loc - 1
                         Vin_tmp1 = vec_new(idx_start_loc:idx_end_loc, :)
                      endif
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vin_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, Vin_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, num_vect_sub, ptree)
 
                      if (IOwnPgrp(ptree, blocks_sml%pgno)) then
-                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, Vout_sml, ctemp1, ctemp2, ptree, stats)
+                        call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin_sml, size(Vin_sml,1), Vout_sml, size(Vout_sml,1), ctemp1, ctemp2, ptree, stats)
                      endif
 
-                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
+                     if (blocks_sml%M_loc > 0 .or. block_tmp%M_loc > 0) call Redistribute1Dto1D(Vout_sml, blocks_sml%M_loc, blocks_sml%M_p, 0, blocks_sml%pgno, Vout_tmp1, block_tmp%M_loc, block_tmp%M_p, 0, block_tmp%pgno, num_vect_sub, ptree)
                      if (block_tmp%M_loc > 0) then
-                        Vout(idx_start_loc:idx_end_loc, :) = Vout(idx_start_loc:idx_end_loc, :) + Vout_tmp1
+                        Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub) = Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub) + Vout_tmp1
                         deallocate (Vin_tmp1)
                         deallocate (Vout_tmp1)
                      endif
@@ -4889,13 +5058,13 @@ contains
                   endif
                enddo
                enddo
-               Vout = Vout + vec_new
+               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + vec_new
 
                deallocate (vec_new)
 
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -4907,13 +5076,14 @@ contains
    end subroutine Bplus_block_MVP_BdiagBinv_dat
 
 !* This is enssentially the same as Bplus_block_MVP_BdiagBinv_dat, except that no redistriubtion is performed diagBinv
-   subroutine Bplus_block_MVP_BdiagBinvHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, msh)
+   subroutine Bplus_block_MVP_BdiagBinvHSS_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, msh)
 
 
       implicit none
-      integer level_c, rowblock, num_vect_sub, M, N, mv, nv
+      integer level_c, rowblock, num_vect_sub, M, N, mv, nv, mi
       character trans
-      DT :: Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *)
       DT :: ctemp1, ctemp2, a, b
       ! type(blockplus),pointer::bplus_o,bplus_off1,bplus_off2
       integer groupn, groupm, mm, nn
@@ -4948,17 +5118,22 @@ contains
          type is (blockplus)
             ! blocks => bplus%LL(bplus%ind_ll)%matrices_block(bplus%ind_bk)
 
-            mv = size(Vout, 1)
-            nv = size(Vout, 2)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = N
+               nv = num_vect_sub
+            endif
             allocate (Vout_tmp(mv, nv))
-            Vout_tmp = Vout
-            Vout = 0
+            Vout_tmp = Vout(1:mv,1:nv)
+            Vout(1:mv,1:nv) = 0
 
 
             if (trans == 'N') then
-               mv = size(Vin, 1)
-               nv = size(Vin, 2)
-               allocate (vec_new(mv, nv))
+               allocate (vec_new(mi, nv))
                vec_new = 0
                ! get the right multiplied vectors
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
@@ -4979,24 +5154,21 @@ contains
                      idx_start_glo = block_o%headn + block_o%N_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%N_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, cone, cone, ptree, stats)
                   endif
                enddo
                endif
                enddo
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, vec_new, Vout, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, vec_new, mi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                deallocate (vec_new)
 
             else if (trans == 'T') then
                ! get the left multiplied vectors
-
-               mv = size(Vout, 1)
-               nv = size(Vout, 2)
                allocate (vec_new(mv, nv))
                vec_new = 0
 
                ctemp1 = 1.0d0; ctemp2 = 0.0d0
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, vec_new, ctemp1, ctemp2, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, vec_new, mv, ctemp1, ctemp2, ptree, stats)
 
                do ll = bplus%ind_ll + 1, bplus%Lplus
                   if(Bplus%LL(ll)%Nbound>0)then
@@ -5015,7 +5187,7 @@ contains
                      idx_start_glo = block_o%headn + block_o%N_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%N_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), Vout(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, cone, cone, ptree, stats)
                   endif
                   enddo
                   endif
@@ -5026,7 +5198,7 @@ contains
 
             end if
 
-            Vout = a*Vout + b*Vout_tmp
+            Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
 
          class default
@@ -5089,13 +5261,14 @@ contains
 
    contains
 
-      subroutine Bplus_block_MVP_Onesubblock_dat(operand, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+      subroutine Bplus_block_MVP_Onesubblock_dat(operand, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
 
 
          implicit none
          integer level_c, rowblock, num_vect_sub
          character trans
-         DT :: Vin(:, :), Vout(:, :)
+         integer ldi, ldo
+         DT :: Vin(ldi, *), Vout(ldo, *)
          DT, allocatable :: Vin_large(:, :), Vout_large(:, :)
          DT :: ctemp1, ctemp2, ctemp3, ctemp4, a, b
          integer M, N, mv, nv, M_loc_large, N_loc_large
@@ -5150,12 +5323,12 @@ contains
             allocate (Vout_large(noutl, num_vect_sub))
             Vout_large = 0
 
-            call Redistribute1Dto1D(Vin, Nin_p, offin, block_o%pgno, Vin_large, Nin_pl, offinl, block_large%pgno, num_vect_sub, ptree)
-            call Redistribute1Dto1D(Vout, Nout_p, offout, block_o%pgno, Vout_large, Nout_pl, offoutl, block_large%pgno, num_vect_sub, ptree)
+            call Redistribute1Dto1D(Vin, ldi, Nin_p, offin, block_o%pgno, Vin_large, ninl, Nin_pl, offinl, block_large%pgno, num_vect_sub, ptree)
+            call Redistribute1Dto1D(Vout, ldo, Nout_p, offout, block_o%pgno, Vout_large, noutl, Nout_pl, offoutl, block_large%pgno, num_vect_sub, ptree)
 
-            call blackbox_MVP_dat(operand, block_large, trans, block_large%M_loc, block_large%N_loc, num_vect_sub, Vin_large, Vout_large, a, b, ptree, stats, msh)
+            call blackbox_MVP_dat(operand, block_large, trans, block_large%M_loc, block_large%N_loc, num_vect_sub, Vin_large, ninl, Vout_large, noutl, a, b, ptree, stats, msh)
 
-            call Redistribute1Dto1D(Vout_large, Nout_pl, offoutl, block_large%pgno, Vout, Nout_p, offout, block_o%pgno, num_vect_sub, ptree)
+            call Redistribute1Dto1D(Vout_large, noutl, Nout_pl, offoutl, block_large%pgno, Vout, ldo, Nout_p, offout, block_o%pgno, num_vect_sub, ptree)
 
          end select
 

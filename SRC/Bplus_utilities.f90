@@ -249,7 +249,7 @@ contains
 
    end function Bplus_checkNAN
 
-   subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats, level_start, level_end)
+   subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, level_start, level_end)
 
 
 
@@ -269,8 +269,8 @@ contains
       integer:: level_s, level_e
       type(proctree)::ptree
       type(Hstat)::stats
-
-      DT :: random1(:, :), random2(:, :)
+      integer:: ldi, ldo
+      DT :: random1(ldi, *), random2(ldo, *)
       DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
@@ -299,28 +299,28 @@ contains
 
                if (blocks%M_loc > 0) allocate (Vout_loc(blocks%M_loc, Nrnd))
                if (blocks%N_loc > 0) allocate (Vin_loc(blocks%N_loc, Nrnd))
-               call Redistribute1Dto1D(random1, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
-               call Redistribute1Dto1D(Vout, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vout_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
             else
 
                if (blocks%N_loc > 0) allocate (Vout_loc(blocks%N_loc, Nrnd))
                if (blocks%M_loc > 0) allocate (Vin_loc(blocks%M_loc, Nrnd))
-               call Redistribute1Dto1D(random1, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
-               call Redistribute1Dto1D(Vout, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vout_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
 
             endif
 
             if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
                call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
-               &Vin_loc, Vout_loc, ctemp1, ctemp2, ptree, stats)
+               &Vin_loc, size(Vin_loc,1), Vout_loc, size(Vout_loc,1), ctemp1, ctemp2, ptree, stats)
             endif
 
             if (chara == 'N') then
-               call Redistribute1Dto1D(Vout_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree)
                if (blocks%M_loc > 0) deallocate (Vout_loc)
                if (blocks%N_loc > 0) deallocate (Vin_loc)
             else
-               call Redistribute1Dto1D(Vout_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree)
+               call Redistribute1Dto1D(Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree)
                if (blocks%N_loc > 0) deallocate (Vout_loc)
                if (blocks%M_loc > 0) deallocate (Vin_loc)
             endif
@@ -328,7 +328,7 @@ contains
          end do
       end do
 
-      random2 = random2*b + Vout*a
+      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
       deallocate (Vout)
 
    end subroutine Bplus_block_MVP_dat
@@ -416,7 +416,7 @@ contains
             allocate (dat_new(max(1, blocks_dummy%M_loc), rank))
             dat_new = 0
 
-            call Redistribute1Dto1D(dat_old, blocks%M_p, 0, blocks%pgno, dat_new, blocks_dummy%M_p, 0, pgno_new, rank, ptree)
+            call Redistribute1Dto1D(dat_old, max(1, blocks%M_loc), blocks%M_p, 0, blocks%pgno, dat_new, max(1, blocks_dummy%M_loc), blocks_dummy%M_p, 0, pgno_new, rank, ptree)
             if (blocks%M_loc > 0) then
                deallocate (blocks%ButterflyU%blocks(1)%matrix)
 
@@ -438,7 +438,7 @@ contains
             allocate (dat_new(max(1, blocks_dummy%N_loc), rank))
             dat_new = 0
 
-            call Redistribute1Dto1D(dat_old, blocks%N_p, 0, blocks%pgno, dat_new, blocks_dummy%N_p, 0, pgno_new, rank, ptree)
+            call Redistribute1Dto1D(dat_old,max(1, blocks%N_loc), blocks%N_p, 0, blocks%pgno, dat_new, max(1, blocks_dummy%N_loc),blocks_dummy%N_p, 0, pgno_new, rank, ptree)
             if (blocks%N_loc > 0) then
                deallocate (blocks%ButterflyV%blocks(1)%matrix)
 
@@ -5561,26 +5561,27 @@ contains
    end subroutine BF_all2all_V_split
 
 
-   subroutine BF_block_MVP_dat(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
+   subroutine BF_block_MVP_dat(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
       implicit none
       type(matrixblock)::blocks
       character chara
       integer M, N, Nrnd
-      DT :: random1(:, :), random2(:, :)
+      integer ldi,ldo
+      DT :: random1(ldi, *), random2(ldo, *)
       DT :: a, b
       type(proctree)::ptree
       type(Hstat)::stats
 
 #ifdef HAVE_MKL
-      call BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
+      call BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #else
-      call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
+      call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #endif
    end subroutine BF_block_MVP_dat
 
 
 
-   subroutine BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
+   subroutine BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 
       implicit none
 
@@ -5601,7 +5602,8 @@ contains
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
 
       type(butterfly_vec) :: BFvec
-      DT :: random1(:, :), random2(:, :)
+      integer ldi,ldo
+      DT :: random1(ldi, *), random2(ldo, *)
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
@@ -5618,7 +5620,7 @@ contains
       call assert(IOwnPgrp(ptree, pgno), 'I do not share this block!')
 
       if (blocks%style == 1) then
-         call Full_block_MVP_dat(blocks, chara, M, Nrnd, random1, random2, a, b)
+         call Full_block_MVP_dat(blocks, chara, M, Nrnd, random1, ldi, random2, ldo, a, b)
          return
       endif
 
@@ -5629,25 +5631,27 @@ contains
          matrixtemp = 0
          allocate (matrixtemp1(rank, Nrnd))
          matrixtemp1 = 0
-         allocate (Vout_tmp(size(random2, 1), size(random2, 2)))
-         Vout_tmp = 0
          ! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1
          if (chara == 'N') then !Vout=U*V^T*Vin
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, size(random1, 1), matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+            allocate (Vout_tmp(M,Nrnd))
+            Vout_tmp = 0
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, size(random2, 1), 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2 = b*random2 + a*Vout_tmp
+            random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, size(random1, 1), matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+            allocate (Vout_tmp(N,Nrnd))
+            Vout_tmp = 0
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, size(random2, 1), 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2 = b*random2 + a*Vout_tmp
+            random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
 
          deallocate (matrixtemp)
@@ -5931,6 +5935,7 @@ contains
                         BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
                         call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+
                         !$omp atomic
                         flops = flops + flop
                         !$omp end atomic
@@ -5980,6 +5985,7 @@ contains
                            endif
                            ! !$omp end critical
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+
                            !$omp atomic
                            flops = flops + flop
                            !$omp end atomic
@@ -6034,6 +6040,7 @@ contains
                         endif
                         ! !$omp end critical
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+
                         !$omp atomic
                         flops = flops + flop
                         !$omp end atomic
@@ -6526,7 +6533,7 @@ contains
 
 #ifdef HAVE_MKL
 
-   subroutine BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, random2, a, b, ptree, stats)
+   subroutine BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 
 
 
@@ -6555,7 +6562,8 @@ contains
       integer group_count,cnt
 
       type(butterfly_vec) :: BFvec
-      DT :: random1(:, :), random2(:, :)
+      integer ldi,ldo
+      DT :: random1(ldi, *), random2(ldo, *)
       DT, pointer :: random1_p(:, :),random2_p(:, :)
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
 
@@ -6573,7 +6581,7 @@ contains
       call assert(IOwnPgrp(ptree, pgno), 'I do not share this block!')
 
       if (blocks%style == 1) then
-         call Full_block_MVP_dat(blocks, chara, M, Nrnd, random1, random2, a, b)
+         call Full_block_MVP_dat(blocks, chara, M, Nrnd, random1, ldi, random2, ldo, a, b)
          return
       endif
 
@@ -6584,25 +6592,27 @@ contains
          matrixtemp = 0
          allocate (matrixtemp1(rank, Nrnd))
          matrixtemp1 = 0
-         allocate (Vout_tmp(size(random2, 1), size(random2, 2)))
-         Vout_tmp = 0
          ! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1
          if (chara == 'N') then !Vout=U*V^T*Vin
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, size(random1, 1), matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+            allocate (Vout_tmp(M,Nrnd))
+            Vout_tmp = 0
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, size(random2, 1), 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2 = b*random2 + a*Vout_tmp
+            random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, size(random1, 1), matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+            allocate (Vout_tmp(N,Nrnd))
+            Vout_tmp = 0
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, size(random2, 1), 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2 = b*random2 + a*Vout_tmp
+            random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
 
          deallocate (matrixtemp)
@@ -10884,7 +10894,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    end subroutine Hmat_block_ComputeMemory
 
-   recursive subroutine Hmat_Lsolve(blocks_l, trans, idx_start, nvec, Vinout, ptree, stats)
+   recursive subroutine Hmat_Lsolve(blocks_l, trans, idx_start, nvec, Vinout, ld, ptree, stats)
       implicit none
 
       ! integer vectors_y
@@ -10893,7 +10903,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer mm, nn, nvec, idxs_m, idx_start ! idx_start means the global indice of the first element of Vinout
       integer head, tail
       DT ctemp
-      DT:: Vinout(:, :)
+      integer ld
+      DT:: Vinout(ld, *)
       type(matrixblock) :: blocks_l !!!! modified by Yang Liu. passing pointer is dangerous, blocks_u row/row_group becomes different once in this subroutine
       character trans ! 'N' means multiple L^-1 from left, 'T' means multiple L^-1 from right
       type(proctree)::ptree
@@ -10901,13 +10912,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (blocks_l%style == 4) then
          if (trans == 'N') then
-            call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, Vinout, -cone, ptree, stats)
-            call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ptree, stats)
+            call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          else
-            call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, Vinout, -cone, ptree, stats)
-            call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ptree, stats)
+            call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          end if
       else
          mm = blocks_l%M
@@ -10949,7 +10960,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    end subroutine Hmat_Lsolve
 
-   recursive subroutine Hmat_Usolve(blocks_u, trans, idx_start, nvec, Vinout, ptree, stats)
+   recursive subroutine Hmat_Usolve(blocks_u, trans, idx_start, nvec, Vinout, ld, ptree, stats)
       implicit none
 
       type(proctree)::ptree
@@ -10960,7 +10971,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer i, j, k, ii
       integer mm, nn, nvec
       integer head, tail
-      DT Vinout(:, :)
+      integer ld
+      DT Vinout(ld, *)
       type(matrixblock) :: blocks_u, blocks !!!! modified by Yang Liu. passing pointer is dangerous, blocks_u row/row_group becomes different once in this subroutine
       character trans
       integer idx_start, idxs_m
@@ -10968,13 +10980,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       mark = 0
       if (blocks_u%style == 4) then
          if (trans == 'N') then
-            call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, Vinout, -cone, ptree, stats)
-            call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ptree, stats)
+            call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          else
-            call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, Vinout, -cone, ptree, stats)
-            call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ptree, stats)
+            call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          end if
 
       else
@@ -10987,7 +10999,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    end subroutine Hmat_Usolve
 
-   recursive subroutine Hmat_block_MVP_dat(blocks, trans, idx_start_m, idx_start_n, Nrnd, Vin, Vout, a, ptree, stats)
+   recursive subroutine Hmat_block_MVP_dat(blocks, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
 
       implicit none
       integer idx_start_m, idx_start_n
@@ -10999,7 +11011,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(matrixblock), pointer::blocks_son
       integer:: style
       DT, allocatable::Vintmp(:, :), Vouttmp(:, :)
-      DT::Vin(:, :), Vout(:, :)
+      integer ldi, ldo
+      DT::Vin(ldi, *), Vout(ldo, *)
       type(proctree)::ptree
       type(Hstat)::stats
 
@@ -11011,13 +11024,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (style == 4) then
          blocks_son => blocks%sons(1, 1)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, Vout, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
          blocks_son => blocks%sons(1, 2)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, Vout, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
          blocks_son => blocks%sons(2, 1)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, Vout, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
          blocks_son => blocks%sons(2, 2)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, Vout, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
       else
          if (style == 1) then
             if (trans == 'N') then
@@ -11041,16 +11054,19 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             endif
          else
             if (trans == 'N') then
-               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_n:idxs_n + nn - 1, 1:Nrnd), Vout(idxs_m:idxs_m + mm - 1, 1:Nrnd), a, cone, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_n, 1), ldi, Vout(idxs_m, 1), ldo, a, cone, ptree, stats)
             else
-               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_m:idxs_m + mm - 1, 1:Nrnd), Vout(idxs_n:idxs_n + nn - 1, 1:Nrnd), a, cone, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_m, 1), ldi, Vout(idxs_n, 1), ldo, a, cone, ptree, stats)
             endif
          endif
       endif
 
    end subroutine Hmat_block_MVP_dat
 
-   subroutine Full_block_MVP_dat(blocks, chara, M, N, random1, random2, a, b)
+
+
+
+   subroutine Full_block_MVP_dat(blocks, chara, M, N, random1, ldi, random2, ldo, a, b)
 
 
 
@@ -11065,7 +11081,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       character chara
       type(matrixblock)::blocks
       integer M, N
-      DT :: random1(M, N), random2(M, N)
+      integer ldi,ldo
+      DT :: random1(ldi, *), random2(ldo, *)
       DT:: al, be
       DT, allocatable :: random2tmp(:, :)
 
@@ -11074,9 +11091,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       al = 1d0
       be = 0d0
 
-      num_vectors = size(random1, 2)
+      num_vectors = N
 
-      random2tmp = random2
+      random2tmp = random2(1:M, 1:N)
       call assert(size(blocks%fullmat, 1) == size(blocks%fullmat, 2), 'M not square')
       if (size(blocks%fullmat, 1) /= M) write (*, *) M, N, shape(blocks%fullmat), blocks%row_group, blocks%col_group, 'niao'
       call assert(size(blocks%fullmat, 1) == M, 'M not equal fullmat dim')
@@ -11089,17 +11106,17 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          ! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
 
          ! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, M, random2tmp, M, 'N', 'N', M, N, M, cone, czero)
+         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'N', 'N', M, N, M, cone, czero)
       elseif (chara == 'T') then
          group_m = blocks%row_group  ! Note: row_group and col_group interchanged here
          group_n = blocks%col_group
          call assert(group_m == group_n, 'fullmat not square')
          ! level_blocks=blocks%level
          ! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, M, random2tmp, M, 'T', 'N', M, N, M, al, be)
+         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'T', 'N', M, N, M, al, be)
       end if
 
-      random2 = a*random2tmp + b*random2
+      random2(1:M, 1:N) = a*random2tmp + b*random2(1:M, 1:N)
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)
    end subroutine Full_block_MVP_dat

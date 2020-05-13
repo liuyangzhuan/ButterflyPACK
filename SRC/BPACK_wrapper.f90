@@ -47,7 +47,8 @@ contains
 
    end subroutine matvec_user_C
 
-   subroutine Bmatvec_user_C(ker, block_o, trans, M, N, num_vect, Vin, Vout, a, b, ptree, stats, operand1)
+   !******! It is assumed the C_BMatVec does not need ldi and ldo!
+   subroutine Bmatvec_user_C(ker, block_o, trans, M, N, num_vect, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
       implicit none
       class(*)::ker
       class(*), optional::operand1
@@ -56,7 +57,8 @@ contains
       integer M, N, num_vect
       type(proctree)::ptree
       type(Hstat)::stats
-      DT :: Vin(:, :), Vout(:, :), a, b
+      integer ldi, ldo
+      DT :: Vin(ldi, *), Vout(ldo, *), a, b
       procedure(C_BMatVec), POINTER :: proc
 
       select TYPE (ker)
@@ -1609,9 +1611,9 @@ contains
       stats%Time_C_Mult = 0
       xout = 0
       if (trim(str) == 'N') then
-         call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, xout, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, cone, czero, ptree, stats)
       else
-         call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, xout, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, cone, czero, ptree, stats)
       endif
 
       t2 = OMP_get_wtime()

@@ -5889,7 +5889,7 @@ contains
       Vout1 = 0
       Vout2 = 0
 
-      call Bplus_block_MVP_dat(bplus, 'N', blocks%M_loc, blocks%N_loc, Ntest, Vin, Vout2, cone, czero, ptree, stats)
+      call Bplus_block_MVP_dat(bplus, 'N', blocks%M_loc, blocks%N_loc, Ntest, Vin, blocks%N_loc, Vout2, blocks%M_loc, cone, czero, ptree, stats)
 
       allocate (Fullmat(blocks%M_loc, blocks%N))
       allocate (mrange(blocks%M_loc))
