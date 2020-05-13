@@ -91,7 +91,6 @@ contains
    end function zlangef90
 
    subroutine gesvd_robust(Matrix, Singular, UU, VV, mm, nn, mn_min, flop)
-      use BPACK_DEFS
       implicit none
       integer mm, nn, mn_min
       DT Matrix(:, :), UU(:, :), VV(:, :)
@@ -1311,7 +1310,7 @@ contains
             m=m_array(ii)
             n=n_array(ii)
             k=k_array(ii)
-            flop = flop + flops_dgemm(m, n, k)
+            flop = flop + flops_gemm(m, n, k)
          enddo
          endif
       end select
@@ -1328,7 +1327,7 @@ contains
                m=m_array(ii)
                n=n_array(ii)
                k=k_array(ii)
-               flop = flop + flops_zgemm(m, n, k)
+               flop = flop + flops_gemm(m, n, k)
             enddo
          endif
       end select
@@ -1337,106 +1336,19 @@ contains
    end subroutine gemm_batch_mkl
 #endif
 
-   subroutine gemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, al, be, flop)
+   subroutine gemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, alpha, beta, flop)
+      implicit none
       integer m, n, k, lda, ldb, ldc
-      class(*) MatA(:, :), MatB(:, :), MatC(:, :)
-      class(*), optional:: al, be
+      DT MatA(lda, *), MatB(ldb, *), MatC(ldc, *)
+      DT alpha, beta
       character transa, transb
       real(kind=8), optional::flop
-      real(kind=8) alphar, betar
-      complex(kind=8) alphac, betac
 
-! use default value if not presentd
-      alphar = 1d0
-      betar = 0d0
-      alphac = 1d0
-      betac = 0d0
+      call gemmf77(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
 
-      select type (MatA)
-      type is (real(kind=8))
-         select type (MatB)
-         type is (real(kind=8))
-            select type (MatC)
-            type is (real(kind=8))
-
-               if (present(al)) then
-                  select type (al)
-                  type is (real(kind=8))
-                     alphar = al
-                  end select
-               endif
-
-               if (present(be)) then
-                  select type (be)
-                  type is (real(kind=8))
-                     betar = be
-                  end select
-               endif
-               call dgemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, alphar, betar, flop)
-
-            end select
-         end select
-
-      type is (complex(kind=8))
-         select type (MatB)
-         type is (complex(kind=8))
-            select type (MatC)
-            type is (complex(kind=8))
-
-               if (present(al)) then
-                  select type (al)
-                  type is (complex(kind=8))
-                     alphac = al
-                  end select
-               endif
-
-               if (present(be)) then
-                  select type (be)
-                  type is (complex(kind=8))
-                     betac = be
-                  end select
-               endif
-               call zgemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, alphac, betac, flop)
-
-            end select
-         end select
-      end select
-
+! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)
+      if (present(flop)) flop = flops_gemm(m, n, k)
    end subroutine gemmf90
-
-   subroutine dgemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, alpha, beta, flop)
-
-!
-
-      implicit none
-      integer m, n, k, lda, ldb, ldc
-      real(kind=8) MatA(:, :), MatB(:, :), MatC(:, :)
-      real(kind=8):: alpha, beta
-      character transa, transb
-      real(kind=8), optional::flop
-
-      call dgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
-
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)
-      if (present(flop)) flop = flops_dgemm(m, n, k)
-   end subroutine dgemmf90
-
-   subroutine zgemmf90(MatA, lda, MatB, ldb, MatC, ldc, transa, transb, m, n, k, alpha, beta, flop)
-
-!
-
-      implicit none
-      integer m, n, k, lda, ldb, ldc
-      complex(kind=8) MatA(:, :), MatB(:, :), MatC(:, :)
-      complex(kind=8):: alpha, beta
-      character transa, transb
-      real(kind=8), optional::flop
-
-      call zgemm(transa, transb, m, n, k, alpha, MatA, lda, MatB, ldb, beta, MatC, ldc)
-
-! call gemmf90(MatA,MatB,MatC,transa,transb,alpha,beta)
-      if (present(flop)) flop = flops_zgemm(m, n, k)
-   end subroutine zgemmf90
 
    subroutine pun_or_mqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
       implicit none
@@ -1704,7 +1616,7 @@ contains
                   select type (beta)
                   type is (real(kind=8))
                      call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-                     if (present(flop)) flop = flops_dgemm(m, n, k)
+                     if (present(flop)) flop = flops_gemm(m, n, k)
                   end select
                end select
             end select
@@ -1719,7 +1631,7 @@ contains
                   select type (beta)
                   type is (complex(kind=8))
                      call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-                     if (present(flop)) flop = flops_zgemm(m, n, k)
+                     if (present(flop)) flop = flops_gemm(m, n, k)
                   end select
                end select
             end select
@@ -2199,15 +2111,15 @@ contains
       integer m, n, k
       fadds_gemm = m*n*k
    end function fadds_gemm
-   real(kind=8) function flops_zgemm(m, n, k)
+   real(kind=8) function flops_gemm(m, n, k)
       implicit none
       integer m, n, k
-      flops_zgemm = 6.*fmuls_gemm(m, n, k) + 2.*fadds_gemm(m, n, k)
-   end function flops_zgemm
-   real(kind=8) function flops_dgemm(m, n, k)
-      implicit none
-      integer m, n, k
-      flops_dgemm = fmuls_gemm(m, n, k) + fadds_gemm(m, n, k)
-   end function flops_dgemm
+#if DAT==0
+   flops_gemm = 6.*fmuls_gemm(m, n, k) + 2.*fadds_gemm(m, n, k)
+#elif DAT==1
+   flops_gemm = fmuls_gemm(m, n, k) + fadds_gemm(m, n, k)
+#endif
+
+   end function flops_gemm
 
 end module MISC_DenseLA

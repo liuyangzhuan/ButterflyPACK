@@ -485,7 +485,7 @@ module BPACK_DEFS
     end type ipair
 
     abstract interface
-        subroutine BMatVec(operand, block_o, trans, M, N, num_vect_sub, Vin, Vout, a, b, ptree, stats, operand1)
+        subroutine BMatVec(operand, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
             import :: matrixblock, proctree, Hstat
             implicit none
             class(*)::operand
@@ -495,7 +495,8 @@ module BPACK_DEFS
             integer M, N, num_vect_sub
             type(proctree)::ptree
             type(Hstat)::stats
-            DT :: Vin(:, :), Vout(:, :), a, b
+            integer ldi, ldo
+            DT :: Vin(ldi, *), Vout(ldo, *), a, b
         end subroutine BMatVec
 
         subroutine Zelem(edge_m, edge_n, value, msh, option, ker)

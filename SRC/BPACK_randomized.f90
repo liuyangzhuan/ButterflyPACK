@@ -16,6 +16,8 @@
 
 #include "ButterflyPACK_config.fi"
 module BPACK_randomMVP
+   use BPACK_DEFS
+   use MISC_Utilities
    use Bplus_randomizedop
    use BPACK_Solve_Mul
    use Bplus_compress
@@ -70,7 +72,7 @@ contains
 
    subroutine HODLR_randomized(ho_bf1, blackbox_HODLR_MVP, Memory, error, option, stats, ker, ptree, msh)
 
-      use BPACK_DEFS
+
       implicit none
       real(kind=8):: n1, n2, n3, n4, Memory, error_inout, error_lastiter, Memtmp, tmpfact, error, tmp1, tmp2, norm1, norm2
       integer level_c, level_butterfly, bb, rank_new_max, ii, groupm, groupn, Nloc, rank_max_lastiter, rank_max_lastlevel, rank_pre_max, converged
@@ -251,7 +253,7 @@ contains
 
    subroutine HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rmax, option, ker, ptree, stats, msh)
 
-      use BPACK_DEFS
+
       implicit none
       real(kind=8):: n1, n2, Memory, error_inout, Memtmp
       integer mn, rankref, level_c, rmax, rmaxloc, level_butterfly, bb, bb1, bb_inv, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn
@@ -365,7 +367,7 @@ contains
 
    subroutine HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, trans, VectIn, VectOut, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
 
-      use BPACK_DEFS
+
       implicit none
       real(kind=8):: n1, n2, Memory, error_inout, Memtmp
       integer Nloc, mn, rankref, level_c, rmax, rmaxloc, bb, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn
@@ -581,7 +583,7 @@ contains
 
    subroutine HODLR_randomized_OneL_Fullmat(ho_bf1, blackbox_HODLR_MVP, N, level_c, Memory, ker, ptree, option, stats, msh)
 
-      use BPACK_DEFS
+
       implicit none
       real(kind=8):: n1, n2, Memory, error_inout, Memtmp
       integer N, rankref, level_c, rmaxloc, level_butterfly, bb, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn
@@ -671,7 +673,7 @@ contains
 
    subroutine HODLR_Reconstruction_LL(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, vecCNT, option, stats, ker, ptree, msh)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock, Nloc
@@ -772,7 +774,7 @@ contains
 
    subroutine HODLR_Reconstruction_RR(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, vecCNT, option, stats, ker, ptree, msh)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_c, rowblock, Nloc
@@ -872,7 +874,7 @@ contains
 
    subroutine HODLR_Test_Error_RR(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, error, ker, ptree, stats, msh, option)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer nth
@@ -946,9 +948,9 @@ contains
          idx_end_loc = tail - msh%idxs + 1
          if (level_c == ho_bf1%Maxlevel + 1) then
             call Full_block_MVP_dat(block_rand(bb_inv - Bidxs + 1), 'N', idx_end_loc - idx_start_loc + 1, num_vect,&
-                        &RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc, 1:num_vect), RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc, 1:num_vect), cone, czero)
+                        &RandomVectors_InOutput(1)%vector(idx_start_loc, 1),Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1),Nloc, cone, czero)
          else
-            call BF_block_MVP_twoforward_dat(ho_bf1, level_c, bb_inv, block_rand, 'N', idx_end_loc - idx_start_loc + 1, num_vect, RandomVectors_InOutput(1)%vector(idx_start_loc:idx_end_loc, 1:num_vect), RandomVectors_InOutput(2)%vector(idx_start_loc:idx_end_loc, 1:num_vect), cone, czero, ptree, stats)
+            call BF_block_MVP_twoforward_dat(ho_bf1, level_c, bb_inv, block_rand, 'N', idx_end_loc - idx_start_loc + 1, num_vect, RandomVectors_InOutput(1)%vector(idx_start_loc, 1), Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1), Nloc, cone, czero, ptree, stats)
          endif
       end do
 
@@ -980,9 +982,9 @@ contains
 
    subroutine HODLR_Randomized_Vectors(side, ho_bf1, block_rand, RandVectIn, RandVectOut, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, nth_s, nth_e, num_vect_sub, unique_nth, ker, ptree, stats, msh, option)
 
-      use BPACK_DEFS
 
-      use MISC_Utilities
+
+
       implicit none
 
       integer level_c, rowblock, unique_nth
@@ -1080,7 +1082,7 @@ contains
    end subroutine HODLR_Randomized_Vectors
 
    subroutine PComputeRange_twoforward(ho_bf1, level, Bidxs, ii, ranks, AR, eps, ptree, stats)
-      use BPACK_DEFS
+
       implicit none
       integer ranks(:)
       integer level, ii, bb
@@ -1123,7 +1125,7 @@ contains
             endif
          endif
          n1 = OMP_get_wtime()
-         call Redistribute1Dto1D(AR, block_inv%M_p, 0, block_inv%pgno, matrixtemp, M_p, offout(bb), block_off%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         call Redistribute1Dto1D(AR, size(AR,1), block_inv%M_p, 0, block_inv%pgno, matrixtemp, mm(bb), M_p, offout(bb), block_off%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
          n2 = OMP_get_wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
       enddo
@@ -1155,7 +1157,7 @@ contains
          if (bb == 2) matrixtemp => matrixtemp2
 
          n1 = OMP_get_wtime()
-         call Redistribute1Dto1D(matrixtemp, M_p, offout(bb), block_off%pgno, AR, block_inv%M_p, 0, block_inv%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         call Redistribute1Dto1D(matrixtemp, mm(bb), M_p, offout(bb), block_off%pgno, AR, size(AR,1),block_inv%M_p, 0, block_inv%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
          n2 = OMP_get_wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
          if (mm(bb) > 0) then
@@ -1168,7 +1170,7 @@ contains
 !!!!!***** this subroutine is part of the randomized SVD.
 ! Given B^T = (Q^cA)^T (N_loc x ranks(bb)) and Q (M_loc x ranks(bb)) in the process layout of hodlr, it computes SVD B=USV and output A = (QU)*(SV)
    subroutine PQxSVDTruncate_twoforward(ho_bf1, level, Bidxs, bb_inv, ranks, Q, QcA_trans, block_rand, option, ptree, stats)
-      use BPACK_DEFS
+
       implicit none
       integer ranks(:)
       integer level, ii, bb, bb_inv
@@ -1218,7 +1220,7 @@ contains
                matQ => matQ2
             endif
          endif
-         call Redistribute1Dto1D(Q, block_inv%M_p, 0, block_inv%pgno, matQ, M_p, offM(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         call Redistribute1Dto1D(Q, size(Q,1), block_inv%M_p, 0, block_inv%pgno, matQ, mm(bb), M_p, offM(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
 
          if (nn(bb) > 0) then
             if (bb == 1) then
@@ -1230,7 +1232,7 @@ contains
                matQcA_trans => matQcA_trans2
             endif
          endif
-         call Redistribute1Dto1D(QcA_trans, block_inv%N_p, 0, block_inv%pgno, matQcA_trans, N_p, offN(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         call Redistribute1Dto1D(QcA_trans, size(QcA_trans,1), block_inv%N_p, 0, block_inv%pgno, matQcA_trans, nn(bb), N_p, offN(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -1259,7 +1261,7 @@ contains
 !!!!!***** this subroutine is part of the randomized HODLR_BF.
 ! The difference between this subroutine and BF_Resolving_Butterfly_LL_dat is that this subroutine requires redistribution of RandVectIn and RandVectOut to match the data layout of block_rand(bb_inv*2-1-Bidxs+1) and block_rand(bb_inv*2-Bidxs+1). Therefore this subroutine reconstructs two neighbouring butterflies together.
    subroutine BF_Resolving_Butterfly_LL_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn, RandVectOut, option, ptree, msh, stats)
-      use BPACK_DEFS
+
       implicit none
       integer level, level_c, ii, bb, bb_inv
       DT :: RandVectIn(:, :), RandVectOut(:, :)
@@ -1310,7 +1312,7 @@ contains
                matOut => matOut2
             endif
          endif
-         call Redistribute1Dto1D(RandVectOut, block_inv%N_p, 0, block_inv%pgno, matOut, N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D(RandVectOut, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matOut, nn(bb), N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
 
          if (mm(bb) > 0) then
             if (bb == 1) then
@@ -1322,7 +1324,7 @@ contains
                matIn => matIn2
             endif
          endif
-         call Redistribute1Dto1D(RandVectIn, block_inv%M_p, 0, block_inv%pgno, matIn, M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D(RandVectIn, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matIn, mm(bb),M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -1351,7 +1353,7 @@ contains
 !!!!!***** this subroutine is part of the randomized HODLR_BF.
 ! The difference between this subroutine and BF_Resolving_Butterfly_RR_dat is that this subroutine requires redistribution of RandVectIn and RandVectOut to match the data layout of block_rand(bb_inv*2-1-Bidxs+1) and block_rand(bb_inv*2-Bidxs+1). Therefore this subroutine reconstructs two neighbouring butterflies together.
    subroutine BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn, RandVectOut, option, ptree, msh, stats)
-      use BPACK_DEFS
+
       implicit none
       integer level, level_c, ii, bb, bb_inv
       DT :: RandVectIn(:, :), RandVectOut(:, :)
@@ -1402,7 +1404,7 @@ contains
                matOut => matOut2
             endif
          endif
-         call Redistribute1Dto1D(RandVectOut, block_inv%M_p, 0, block_inv%pgno, matOut, M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D(RandVectOut, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matOut, mm(bb), M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
 
          if (nn(bb) > 0) then
             if (bb == 1) then
@@ -1414,7 +1416,7 @@ contains
                matIn => matIn2
             endif
          endif
-         call Redistribute1Dto1D(RandVectIn, block_inv%N_p, 0, block_inv%pgno, matIn, N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D(RandVectIn, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matIn, nn(bb),N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1

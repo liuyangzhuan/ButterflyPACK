@@ -106,8 +106,8 @@ contains
       allocate (fullmatrix(mm, nn))
       fullmatrix = 0d0
 
-      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, Vin1, cone, ptree, stats)
-      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, fullmatrix, cone, ptree, stats)
+      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, cone, ptree, stats)
+      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, cone, ptree, stats)
 
       if (chara == '-') fullmatrix = -fullmatrix
       block3%fullmat = block3%fullmat + fullmatrix
@@ -164,7 +164,7 @@ contains
       allocate (fullmatrix(mm, nn))
       fullmatrix = 0d0
 
-      call BF_block_MVP_dat(block1, 'N', mm, nn, nn, Vin, fullmatrix, cone, czero, ptree, stats)
+      call BF_block_MVP_dat(block1, 'N', mm, nn, nn, Vin, nn, fullmatrix, mm, cone, czero, ptree, stats)
 
       if (chara == '-') fullmatrix = -fullmatrix
 
@@ -259,7 +259,7 @@ contains
       block_o%ButterflyV%blocks(1)%matrix = block_off2%ButterflyV%blocks(1)%matrix
 
       stats%Flop_Tmp = 0
-      call BF_block_MVP_dat(block_off1, 'N', block_off1%M_loc, block_off1%N_loc, rank, block_off2%ButterflyU%blocks(1)%matrix, block_o%ButterflyU%blocks(1)%matrix, ctemp1, ctemp2, ptree, stats)
+      call BF_block_MVP_dat(block_off1, 'N', block_off1%M_loc, block_off1%N_loc, rank, block_off2%ButterflyU%blocks(1)%matrix, block_off1%N_loc, block_o%ButterflyU%blocks(1)%matrix, block_off1%M_loc, ctemp1, ctemp2, ptree, stats)
       block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
       stats%Flop_Tmp = 0
@@ -487,9 +487,9 @@ contains
                   idx_end_loc = tail - idx_start_glo + 1
                   if (level == ho_bf1%Maxlevel + 1) then
                      call Full_block_MVP_dat(blocks, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-               &vec_old(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), cone, czero)
+               &vec_old(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1),mm, cone, czero)
                   else
-                     call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_old(idx_start_loc:idx_end_loc, 1:num_vect_sub), vec_new(idx_start_loc:idx_end_loc, 1:num_vect_sub), ptree, stats)
+                     call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_old(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                   endif
 
                endif
@@ -540,9 +540,9 @@ contains
       blocks_D => partitioned_block%sons(2, 2)
 
       groupn = blocks_B%col_group    ! Note: row_group and col_group interchanged here
-      nn = blocks_B%N
+      nn = blocks_B%N_loc
       groupm = blocks_B%row_group    ! Note: row_group and col_group interchanged here
-      mm = blocks_B%M
+      mm = blocks_B%M_loc
       num_vect_sub = blocks_B%rankmax
       allocate (Vin_tmp(blocks_B%N_loc, num_vect_sub))
       Vin_tmp = blocks_B%ButterflyV%blocks(1)%matrix
@@ -552,10 +552,10 @@ contains
       Vinter_tmp = 0
 
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
-      call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, Vin_tmp, Vinter_tmp, ctemp1, ctemp2, ptree, stats)
+      call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, Vin_tmp, blocks_B%N_loc, Vinter_tmp, blocks_B%N_loc, ctemp1, ctemp2, ptree, stats)
       Vinter_tmp = Vinter_tmp + Vin_tmp
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
-      call BF_block_MVP_dat(blocks_C, 'T', nn, mm, num_vect_sub, Vinter_tmp, Vout_tmp, ctemp1, ctemp2, ptree, stats)
+      call BF_block_MVP_dat(blocks_C, 'T', nn, mm, num_vect_sub, Vinter_tmp, blocks_B%N_loc, Vout_tmp, blocks_B%M_loc, ctemp1, ctemp2, ptree, stats)
       rank = blocks_B%rankmax + blocks_A%rankmax
       allocate (matU(blocks_A%M_loc, rank))
       matU(:, 1:blocks_A%rankmax) = blocks_A%ButterflyU%blocks(1)%matrix
@@ -960,10 +960,10 @@ contains
          ctemp1 = 1.0d0; ctemp2 = 0.0d0
          call RandomMat(mm, num_vect, min(mm, num_vect), VecIn, 1)
          ! XnR
-         call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, 'N', mm, mm, num_vect, VecIn, VecBuff, ctemp1, ctemp2, ptree, stats, ii + 1)
+         call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, 'N', mm, mm, num_vect, VecIn, mm, VecBuff, mm, ctemp1, ctemp2, ptree, stats, ii + 1)
 
          ! AXnR
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, mm, num_vect, VecBuff, VecOut, ctemp1, ctemp2, ptree, stats)
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, mm, num_vect, VecBuff, mm, VecOut, mm, ctemp1, ctemp2, ptree, stats)
          VecOut = VecBuff + VecOut
 
          norm1 = fnorm(VecOut - VecIn, mm, num_vect)**2d0
@@ -1051,7 +1051,7 @@ contains
       call RandomMat(nn, num_vect, min(nn, num_vect), RandVectIn, 1)
 
       ! computation of AR
-      call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, RandVectOut, cone, czero, ptree, stats)
+      call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
       RandVectOut = RandVectIn + RandVectOut
 
       ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
@@ -1059,12 +1059,12 @@ contains
       do qq = 1, q
          RandVectOut = conjg(cmplx(RandVectOut, kind=8))
 
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, RandVectIn, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
          RandVectIn = RandVectOut + RandVectIn
 
          RandVectIn = conjg(cmplx(RandVectIn, kind=8))
 
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, RandVectOut, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
          RandVectOut = RandVectIn + RandVectOut
 
       enddo
@@ -1075,7 +1075,7 @@ contains
 
       ! computation of B = Q^c*A
       RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-      call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, RandVectIn, cone, czero, ptree, stats)
+      call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm,RandVectIn, nn,cone, czero, ptree, stats)
       RandVectIn = RandVectOut + RandVectIn
       RandVectOut = conjg(cmplx(RandVectOut, kind=8))
 
@@ -1221,7 +1221,7 @@ contains
             vecin=1/sqrt(dble(blocks_io%N))
             allocate(vecout(blocks_io%M_loc,1))
             vecout=0
-            call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, vecout, cone, czero, ptree, stats)
+            call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, cone, czero, ptree, stats)
             norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
             call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
             norm = sqrt(norm)
@@ -1371,40 +1371,40 @@ contains
             rank = blocks_B%rankmax
             allocate (UU(blocks_B%M_loc, rank))
             UU = 0
-            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_B%ButterflyU%blocks(1)%matrix, UU, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_B%ButterflyU%blocks(1)%matrix, blocks_A%N_loc, UU, blocks_A%M_loc, cone, czero, ptree, stats)
             UU = -UU - blocks_B%ButterflyU%blocks(1)%matrix
             allocate (VV(blocks_B%N_loc, rank))
             VV = 0
-            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_B%ButterflyV%blocks(1)%matrix, VV, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_B%ButterflyV%blocks(1)%matrix, blocks_D%M_loc, VV, blocks_D%N_loc, cone, czero, ptree, stats)
             VV = VV + blocks_B%ButterflyV%blocks(1)%matrix
 
          elseif (blocks%row_group == blocks_C%row_group .and. blocks%col_group == blocks_C%col_group) then
             rank = blocks_C%rankmax
             allocate (UU(blocks_C%M_loc, rank))
             UU = 0
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_C%ButterflyU%blocks(1)%matrix, UU, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_C%ButterflyU%blocks(1)%matrix, blocks_D%N_loc, UU, blocks_D%M_loc, cone, czero, ptree, stats)
             UU = -UU - blocks_C%ButterflyU%blocks(1)%matrix
             allocate (VV(blocks_C%N_loc, rank))
             VV = 0
-            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_C%ButterflyV%blocks(1)%matrix, VV, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_C%ButterflyV%blocks(1)%matrix,blocks_A%M_loc, VV, blocks_A%N_loc, cone, czero, ptree, stats)
             VV = VV + blocks_C%ButterflyV%blocks(1)%matrix
 
          elseif (blocks%row_group == blocks_D%row_group .and. blocks%col_group == blocks_D%col_group) then
             rank1 = blocks_C%rankmax
             allocate (UU1(blocks_C%M_loc, rank1))
             UU1 = 0
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank1, blocks_C%ButterflyU%blocks(1)%matrix, UU1, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank1, blocks_C%ButterflyU%blocks(1)%matrix,blocks_D%N_loc, UU1, blocks_D%M_loc, cone, czero, ptree, stats)
             UU1 = UU1 + blocks_C%ButterflyU%blocks(1)%matrix
             allocate (TT1(blocks_A%N_loc, rank1))
             TT1 = 0
-            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank1, blocks_C%ButterflyV%blocks(1)%matrix, TT1, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank1, blocks_C%ButterflyV%blocks(1)%matrix, blocks_A%M_loc, TT1, blocks_A%N_loc, cone, czero, ptree, stats)
             TT1 = TT1 + blocks_C%ButterflyV%blocks(1)%matrix
             allocate (SS1(blocks_B%N_loc, rank1))
             SS1 = 0
-            call BF_block_MVP_dat(blocks_B, 'T', blocks_B%M_loc, blocks_B%N_loc, rank1, TT1, SS1, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'T', blocks_B%M_loc, blocks_B%N_loc, rank1, TT1, blocks_B%M_loc, SS1, blocks_B%N_loc, cone, czero, ptree, stats)
             allocate (VV1(blocks_B%N_loc, rank1))
             VV1 = 0
-            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank1, SS1, VV1, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank1, SS1, blocks_D%M_loc, VV1, blocks_D%N_loc, cone, czero, ptree, stats)
             VV1 = VV1 + SS1
 
             rank2 = blocks_D%rankmax
@@ -1903,7 +1903,7 @@ contains
       type(mesh)::msh
       type(proctree)::ptree
       type(Hstat)::stats
-      integer pgno, Maxlevel
+      integer pgno, Maxlevel, ld
       integer, allocatable::M_p_sub(:, :), M_p_sub1(:, :), N_p_sub(:, :), N_p_sub1(:, :)
       type(matrixblock), pointer::block_c_o
       integer rank, ierr
@@ -1970,8 +1970,8 @@ contains
                blocks%ButterflyV%inc = 1
                blocks%ButterflyV%idx = 1
             endif
-            call Redistribute1Dto1D(blocks_i_copy%ButterflyU%blocks(1)%matrix, blocks_i_copy%M_p, blocks_i_copy%headm, blocks_i_copy%pgno, blocks%ButterflyU%blocks(1)%matrix, blocks%M_p, blocks%headm, blocks%pgno, kk, ptree)
-            call Redistribute1Dto1D(blocks_i_copy%ButterflyV%blocks(1)%matrix, blocks_i_copy%N_p, blocks_i_copy%headn, blocks_i_copy%pgno, blocks%ButterflyV%blocks(1)%matrix, blocks%N_p, blocks%headn, blocks%pgno, kk, ptree)
+            call Redistribute1Dto1D(blocks_i_copy%ButterflyU%blocks(1)%matrix, blocks_i_copy%M_loc, blocks_i_copy%M_p, blocks_i_copy%headm, blocks_i_copy%pgno, blocks%ButterflyU%blocks(1)%matrix, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, kk, ptree)
+            call Redistribute1Dto1D(blocks_i_copy%ButterflyV%blocks(1)%matrix, blocks_i_copy%N_loc, blocks_i_copy%N_p, blocks_i_copy%headn, blocks_i_copy%pgno, blocks%ButterflyV%blocks(1)%matrix, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, kk, ptree)
          enddo
          enddo
 
@@ -1992,7 +1992,7 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyU%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyU%blocks(1)%matrix)
                allocate (matrixtemp2(M_p_sub1(1, 2), rank))
-               call Redistribute1Dto1D(matrixtemp1, M_p_sub, 0, pgno_sub_mine, matrixtemp2, M_p_sub1, 0, pgno_sub_mine, rank, ptree)
+               call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%M_loc, M_p_sub, 0, pgno_sub_mine, matrixtemp2, M_p_sub1(1, 2), M_p_sub1, 0, pgno_sub_mine, rank, ptree)
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyU%blocks(1)%matrix(M_p_sub1(1, 2), rank))
                   blocks_i_copy%ButterflyU%blocks(1)%matrix = matrixtemp2
@@ -2014,7 +2014,7 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyV%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyV%blocks(1)%matrix)
                allocate (matrixtemp2(N_p_sub1(1, 2), rank))
-               call Redistribute1Dto1D(matrixtemp1, N_p_sub, 0, pgno_sub_mine, matrixtemp2, N_p_sub1, 0, pgno_sub_mine, rank, ptree)
+               call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%N_loc, N_p_sub, 0, pgno_sub_mine, matrixtemp2, N_p_sub1(1, 2), N_p_sub1, 0, pgno_sub_mine, rank, ptree)
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyV%blocks(1)%matrix(N_p_sub1(1, 2), rank))
                   blocks_i_copy%ButterflyV%blocks(1)%matrix = matrixtemp2
@@ -2087,15 +2087,17 @@ contains
 
                         if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                            allocate (matrixtemp1(N_p_sub1(1, 2), rank))
+                           ld = N_p_sub1(1, 2)
                            matrixtemp1 = block_c_o%ButterflyV%blocks(1)%matrix
                            deallocate (block_c_o%ButterflyV%blocks(1)%matrix)
                         else
                            allocate (matrixtemp1(1, 1))
+                           ld = 1
                            matrixtemp1 = 0
                            allocate (block_c_o%ButterflyV%blocks(1))
                         endif
                         allocate (block_c_o%ButterflyV%blocks(1)%matrix(block_c_o%N_loc, rank))
-                        call Redistribute1Dto1D(matrixtemp1, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, N_p_sub, 0, pgno_sub_mine, rank, ptree)
+                        call Redistribute1Dto1D(matrixtemp1, ld, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, block_c_o%N_loc, N_p_sub, 0, pgno_sub_mine, rank, ptree)
                         deallocate (N_p_sub)
                         deallocate (N_p_sub1)
                         deallocate (matrixtemp1)
@@ -2120,15 +2122,17 @@ contains
 
                         if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                            allocate (matrixtemp1(M_p_sub1(1, 2), rank))
+                           ld=M_p_sub1(1, 2)
                            matrixtemp1 = block_c_o%ButterflyU%blocks(1)%matrix
                            deallocate (block_c_o%ButterflyU%blocks(1)%matrix)
                         else
                            allocate (matrixtemp1(1, 1))
+                           ld=1
                            matrixtemp1 = 0
                            allocate (block_c_o%ButterflyU%blocks(1))
                         endif
                         allocate (block_c_o%ButterflyU%blocks(1)%matrix(block_c_o%M_loc, rank))
-                        call Redistribute1Dto1D(matrixtemp1, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, M_p_sub, 0, pgno_sub_mine, rank, ptree)
+                        call Redistribute1Dto1D(matrixtemp1, ld, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, block_c_o%M_loc, M_p_sub, 0, pgno_sub_mine, rank, ptree)
                         deallocate (M_p_sub)
                         deallocate (M_p_sub1)
                         deallocate (matrixtemp1)
@@ -2201,7 +2205,7 @@ contains
          vout1 = 0
          allocate (vout2(blocks_i%M_loc, num_vect_sub))
          vout2 = 0
-         call BF_block_MVP_dat(blocks_i, 'N', blocks_i%M_loc, blocks_i%N_loc, num_vect_sub, vin, vout1, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks_i, 'N', blocks_i%M_loc, blocks_i%N_loc, num_vect_sub, vin, blocks_i%N_loc, vout1, blocks_i%M_loc, cone, czero, ptree, stats)
 
          allocate (V1(max(1, blocks_A%N_loc), num_vect_sub))
          allocate (V2(max(1, blocks_B%N_loc), num_vect_sub))
@@ -2214,23 +2218,23 @@ contains
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
 
-         call Redistribute1Dto1D_OnetoTwo(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno,V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D_OnetoTwo(vin, blocks_i%N_loc, blocks_i%N_p, 0, blocks_i%pgno, V1, max(1, blocks_A%N_loc),blocks_A%N_p, 0, blocks_A%pgno,V2, max(1, blocks_B%N_loc), blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
 
 
 
 
 
          if (blocks_A%M_loc > 0) then
-            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, num_vect_sub, V1, Vo1, cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_B, 'N', blocks_B%M_loc, blocks_B%N_loc, num_vect_sub, V2, Vo1, cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_C, 'N', blocks_C%M_loc, blocks_C%N_loc, num_vect_sub, V1, Vo2, cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, Vo2, cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo1, max(1, blocks_A%M_loc), cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'N', blocks_B%M_loc, blocks_B%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo1, max(1, blocks_A%M_loc), cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_C, 'N', blocks_C%M_loc, blocks_C%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo2, max(1, blocks_C%M_loc), cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo2, max(1, blocks_C%M_loc), cone, cone, ptree, stats)
          endif
 
          ! call Redistribute1Dto1D(Vo1, blocks_A%M_p, 0, blocks_A%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
-         call Redistribute1Dto1D_TwotoOne(Vo1, blocks_A%M_p, 0, blocks_A%pgno,Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
+         call Redistribute1Dto1D_TwotoOne(Vo1, max(1, blocks_A%M_loc), blocks_A%M_p, 0, blocks_A%pgno,Vo2, max(1, blocks_C%M_loc), blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_loc, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
          if(fnorm(vout1, blocks_i%M_loc, 1)<SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<SafeUnderflow)then
             error = 0d0
@@ -2334,7 +2338,7 @@ contains
             call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
          endif
          call BF_ChangePattern(block_o, 1, 2, stats, ptree)
-
+         write(*,*)fnorm(block_o%ButterflyU%blocks(1)%matrix, size(block_o%ButterflyU%blocks(1)%matrix,1), size(block_o%ButterflyU%blocks(1)%matrix,2)),'eegeee',block_o%row_group,block_o%col_group
 
          do level = ho_bf1%Maxlevel + 1,level_c+1,-1
             N_diag = 2**(level-level_c-1)
@@ -2349,9 +2353,8 @@ contains
                   index_i = ii - ((rowblock - 1)*N_diag + 1) + 1
                   index_i_loc_k = (index_i - block_o%ButterflyU%idx)/block_o%ButterflyU%inc + 1
                   num_vect_sub = size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,2)
-
                   call Full_block_MVP_dat(blocks, 'N', blocks%M, num_vect_sub,&
-                     &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, block_o%ButterflyU%blocks(index_i_loc_k)%matrix, cone, czero)
+                     &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1),block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1), cone, czero)
                end do
                !!$omp end parallel do
 

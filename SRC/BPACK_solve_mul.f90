@@ -16,7 +16,7 @@
 
 #include "ButterflyPACK_config.fi"
 module BPACK_Solve_Mul
-
+   use BPACK_DEFS
    use Bplus_compress
 
 contains
@@ -38,7 +38,7 @@ contains
    !which: which eigenvlaues are computed: 'LM', 'SM', LR', 'SR', LI', 'SI'
    subroutine BPACK_Eigen(bmat_A, option_A, ptree_A, stats_A, bmat_B, option_B, ptree_B, stats_B, bmat_sh, option_sh, ptree_sh, stats_sh, Nunk, Nunk_loc, nev, tol, CMmode, SI, shift, which, nconv, eigval, eigvec)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer Nunk, Nunk_loc, nev, nconv, CMmode, SI
@@ -304,7 +304,7 @@ contains
 
    subroutine BPACK_Solution(bmat, x, b, Ns_loc, num_vectors, option, ptree, stats)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, ii, jj, iii, jjj
@@ -551,7 +551,7 @@ contains
 
    subroutine BPACK_Test_Solve_error(bmat, N_unk_loc, option, ptree, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -635,7 +635,7 @@ contains
    end subroutine BPACK_Inv_Mult
 
    subroutine Test_BPACK_Mult(Ns, bmat, ptree, option, stats)
-      use BPACK_DEFS
+
       implicit none
       integer Ns
       DT::Vin(Ns, 1), Vout(Ns, 1)
@@ -661,7 +661,7 @@ contains
    end subroutine Test_BPACK_Mult
 
    subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats)
-      use BPACK_DEFS
+
       implicit none
       character trans
       integer Ns
@@ -685,7 +685,7 @@ contains
 
    subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -751,10 +751,10 @@ contains
 
             if (level == ho_bf1%Maxlevel + 1) then
                call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors,&
-&Vout(idx_start_loc:idx_end_loc, 1:num_vectors), vec_new(idx_start_loc:idx_end_loc, 1:num_vectors), ctemp1, ctemp2)
-               stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
+&Vout(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2)
+               stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
             else
-               call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vout(idx_start_loc:idx_end_loc, 1:num_vectors), vec_new(idx_start_loc:idx_end_loc, 1:num_vectors), ptree, stats)
+               call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vout(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ptree, stats)
 
             endif
          end do
@@ -780,7 +780,7 @@ contains
 
    subroutine HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -815,7 +815,7 @@ contains
          Vin = conjg(cmplx(Vin, kind=8))
       endif
       Vout=0
-      call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Vout, cone, czero, ptree, stats)
+      call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, cone, czero, ptree, stats)
 
       if (trans == 'C') then
          Vout = conjg(cmplx(Vout, kind=8))
@@ -828,7 +828,7 @@ contains
    end subroutine HSS_Inv_Mult
 
    subroutine HODLR_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, ho_bf1, ptree, option, stats)
-      use BPACK_DEFS
+
       implicit none
 
       character trans, trans_tmp
@@ -881,10 +881,10 @@ contains
 
             if (level == ho_bf1%Maxlevel + 1) then
                call Full_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1), trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors,&
-&Vin(idx_start_loc:idx_end_loc, 1:num_vectors), vec_new(idx_start_loc:idx_end_loc, 1:num_vectors), ctemp1, ctemp2)
-               stats%Flop_Tmp = stats%Flop_Tmp + flops_zgemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
+&Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2)
+               stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
             else
-               call Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vin(idx_start_loc:idx_end_loc, 1:num_vectors), vec_new(idx_start_loc:idx_end_loc, 1:num_vectors), ctemp1, ctemp2, ptree, stats)
+               call Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2, ptree, stats)
             endif
 
          end do
@@ -908,7 +908,7 @@ contains
    end subroutine HODLR_Mult
 
    subroutine HSS_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
-      use BPACK_DEFS
+
       implicit none
 
       character trans, trans_tmp
@@ -941,7 +941,7 @@ contains
       endif
       Vout=0
       stats%Flop_Tmp = 0
-      call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Vout, cone, czero, ptree, stats)
+      call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, cone, czero, ptree, stats)
 
       if (trans == 'C') then
          Vout = conjg(cmplx(Vout, kind=8))
@@ -1003,7 +1003,7 @@ contains
 
    subroutine Hmat_Mult(trans, Ns, num_vectors, Vin, Vout, h_mat, ptree, option, stats)
 
-      use BPACK_DEFS
+
 
       implicit none
 
@@ -1067,7 +1067,7 @@ contains
             blocks_i => h_mat%Local_blocks_copy(j, 1)
             allocate (vin_tmp(blocks_i%N, num_vectors))
             vin_tmp = vec_buffer(1:blocks_i%N, 1:num_vectors)
-            call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, Vout, cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, blocks_i%N, Vout, Ns, cone, ptree, stats)
             deallocate (vin_tmp)
 
             Nmsg = Nmsg - 1
@@ -1146,7 +1146,7 @@ contains
                vin(iii, jjj) = recv_buf(j)
             enddo
             enddo
-            call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, xloc, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, xloc, size(xloc,1),-cone, ptree, stats)
             deallocate (vin)
             Nmod = Nmod - 1
          enddo
@@ -1154,7 +1154,7 @@ contains
 
          blocks_l => h_mat%Local_blocks(ptree%MyID + 1, 1)
          idx_start = blocks_l%headm
-         call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, xloc, ptree, stats)
+         call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, xloc, size(xloc,1), ptree, stats)
 
          Nreq = num_blocks - 1 - ptree%MyID
          if (Nreq > 0) then
@@ -1228,7 +1228,7 @@ contains
             enddo
             enddo
 
-            call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, xloc, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, xloc, size(xloc,1), -cone, ptree, stats)
 
             deallocate (vin)
 
@@ -1238,7 +1238,7 @@ contains
 
          blocks_u => h_mat%Local_blocks(ptree%MyID + 1, 1)
          idx_start = blocks_u%headm
-         call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, xloc, ptree, stats)
+         call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, xloc, size(xloc,1), ptree, stats)
 
          Nreq = ptree%MyID
          if (Nreq > 0) then

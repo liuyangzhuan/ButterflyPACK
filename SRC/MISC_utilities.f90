@@ -3270,9 +3270,10 @@ contains
 ! end subroutine CreateNewGrid
 
 ! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o
-   subroutine Redistribute1Dto1D(dat_i, M_p_i, head_i, pgno_i, dat_o, M_p_o, head_o, pgno_o, N, ptree)
+   subroutine Redistribute1Dto1D(dat_i, ldi, M_p_i, head_i, pgno_i, dat_o, ldo, M_p_o, head_o, pgno_o, N, ptree)
       implicit none
-      DT::dat_i(:, :), dat_o(:, :)
+      integer ldi, ldo
+      DT::dat_i(ldi, *), dat_o(ldo, *)
       integer pgno_i, pgno_o, N
       integer M_p_i(:, :), M_p_o(:, :)
       integer nproc_i, nproc_o, idxs_i, idxs_o, idxe_i, idxe_o, ii, jj, iii, jjj
@@ -3413,9 +3414,10 @@ contains
 
 
 ! redistribute array 1D block array dat_i distributed among process group pgno_i to two 1D block array dat_o1 and dat_o2 distributed among process group pgno_o1 and pgno_o1 (which should be the same), M_p_i/M_p_o1/M_p_o2 denote the starting index of each process, head_i/head_o1/head_o2 denote the global index of the first element (among all processes) in the dat_i/dat_o1/dat_o2
-   subroutine Redistribute1Dto1D_OnetoTwo(dat_i, M_p_i, head_i, pgno_i, dat_o1, M_p_o1, head_o1, pgno_o1, dat_o2, M_p_o2, head_o2, pgno_o2, N, ptree)
+   subroutine Redistribute1Dto1D_OnetoTwo(dat_i, ldi, M_p_i, head_i, pgno_i, dat_o1, ldo1, M_p_o1, head_o1, pgno_o1, dat_o2, ldo2, M_p_o2, head_o2, pgno_o2, N, ptree)
       implicit none
-      DT::dat_i(:, :), dat_o1(:, :), dat_o2(:, :)
+      integer ldi,ldo1,ldo2
+      DT::dat_i(ldi, *), dat_o1(ldo1, *), dat_o2(ldo2, *)
       integer pgno_i, pgno_o,pgno_o1,pgno_o2, N
       integer M_p_i(:, :), M_p_o1(:, :),M_p_o2(:, :)
       integer nproc_i, nproc_o, idxs_i, idxs_o1, idxs_o2, idxe_i, idxe_o1, idxe_o2, ii, jj, iii, jjj,oo
@@ -3633,9 +3635,10 @@ contains
 
 
 ! redistribute two 1D block array dat_i1 and dat_i2 distributed among process group pgno_i1 and pgno_i2 (which should be the same) to one 1D block array dat_o distributed among process group pgno_o, M_p_i1/M_p_i2/M_p_o denote the starting index of each process, head_i1/head_i2/head_o denote the global index of the first element (among all processes) in the dat_i1/dat_i2/dat_o
-   subroutine Redistribute1Dto1D_TwotoOne(dat_i1, M_p_i1, head_i1, pgno_i1,dat_i2, M_p_i2, head_i2, pgno_i2, dat_o, M_p_o, head_o, pgno_o, N, ptree)
+   subroutine Redistribute1Dto1D_TwotoOne(dat_i1, ldi1, M_p_i1, head_i1, pgno_i1,dat_i2, ldi2, M_p_i2, head_i2, pgno_i2, dat_o, ldo, M_p_o, head_o, pgno_o, N, ptree)
       implicit none
-      DT::dat_o(:, :), dat_i1(:, :), dat_i2(:, :)
+      integer ldi1, ldi2, ldo
+      DT::dat_o(ldo, *), dat_i1(ldi1, *), dat_i2(ldi2, *)
       integer pgno_i, pgno_o,pgno_i1,pgno_i2, N
       integer M_p_o(:, :), M_p_i1(:, :),M_p_i2(:, :)
       integer nproc_i, nproc_o, idxs_o, idxs_i1, idxs_i2, idxe_o, idxe_i1, idxe_i2, ii, jj, iii, jjj,ss
@@ -3850,6 +3853,7 @@ contains
 ! redistribute 1D block array dat_i distributed among process group pgno_i to 2D block array dat_o distributed among process group pgno_o
    subroutine Redistribute1Dto2D(dat_i, M_p_i, head_i, pgno_i, dat_o, M, head_o, pgno_o, N, ptree)
       implicit none
+      integer ld
       DT::dat_i(:, :), dat_o(:, :)
       DT, allocatable::dat_1D(:, :)
       integer pgno_i, pgno_o, N, M
@@ -3880,8 +3884,10 @@ contains
       myAcols = N
       call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
+      ld=0
       if (myArows > 0 .and. myAcols > 0) then
          allocate (dat_1D(max(1,myArows), max(1,myAcols)))
+         ld = max(1,myArows)
          dat_1D = 0
       endif
       ctxt = ptree%pgrp(pgno_o)%ctxt
@@ -3894,7 +3900,7 @@ contains
          desc2D(2) = -1
       endif
 
-      call Redistribute1Dto1D(dat_i, M_p_i, head_i, pgno_i, dat_1D, M_p_1D, head_o, pgno_o, N, ptree)
+      call Redistribute1Dto1D(dat_i, size(dat_i,1), M_p_i, head_i, pgno_i, dat_1D, ld, M_p_1D, head_o, pgno_o, N, ptree)
 
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'2D'
       call pgemr2df90(M, N, dat_1D, 1, 1, desc1D, dat_o, 1, 1, desc2D, ctxt1DCol)
@@ -3907,6 +3913,7 @@ contains
 ! redistribute 2D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o
    subroutine Redistribute2Dto1D(dat_i, M, head_i, pgno_i, dat_o, M_p_o, head_o, pgno_o, N, ptree)
       implicit none
+      integer ld
       DT::dat_i(:, :), dat_o(:, :)
       DT, allocatable::dat_1D(:, :)
       integer pgno_i, pgno_o, N, M
@@ -3937,8 +3944,10 @@ contains
       myAcols = N
       call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
+      ld=0
       if (myArows > 0 .and. myAcols > 0) then
          allocate (dat_1D(max(1,myArows), max(1,myAcols)))
+         ld = max(1,myArows)
          dat_1D = 0
       endif
 
@@ -3957,7 +3966,7 @@ contains
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_i,1),size(dat_i,2),size(dat_1D,1),size(dat_1D,2),'2D2D',isnanMat(dat_i,size(dat_i,1),size(dat_i,2)),isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),myrow,mycol,pgno_i,ctxt
       call pgemr2df90(M, N, dat_i, 1, 1, desc2D, dat_1D, 1, 1, desc1D, ctxt1DCol)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,size(dat_1D,1),size(dat_1D,2),size(dat_o,1),size(dat_o,2),'1D1D',isnanMat(dat_1D,size(dat_1D,1),size(dat_1D,2)),isnanMat(dat_o,size(dat_o,1),size(dat_o,2)),myrow,mycol
-      call Redistribute1Dto1D(dat_1D, M_p_1D, head_i, pgno_i, dat_o, M_p_o, head_o, pgno_o, N, ptree)
+      call Redistribute1Dto1D(dat_1D, ld, M_p_1D, head_i, pgno_i, dat_o, size(dat_o,1), M_p_o, head_o, pgno_o, N, ptree)
 
       deallocate (M_p_1D)
       if (allocated(dat_1D)) deallocate (dat_1D)
