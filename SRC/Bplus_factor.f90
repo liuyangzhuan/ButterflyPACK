@@ -1908,6 +1908,7 @@ contains
       type(matrixblock), pointer::block_c_o
       integer rank, ierr
       type(Hoption)::option
+      real(kind=8)::n3,n4
 
       blocks_A => blocks_o%sons(1, 1)
       blocks_B => blocks_o%sons(1, 2)
@@ -1970,8 +1971,11 @@ contains
                blocks%ButterflyV%inc = 1
                blocks%ButterflyV%idx = 1
             endif
+            n3 = OMP_get_wtime()
             call Redistribute1Dto1D(blocks_i_copy%ButterflyU%blocks(1)%matrix, blocks_i_copy%M_loc, blocks_i_copy%M_p, blocks_i_copy%headm, blocks_i_copy%pgno, blocks%ButterflyU%blocks(1)%matrix, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, kk, ptree)
             call Redistribute1Dto1D(blocks_i_copy%ButterflyV%blocks(1)%matrix, blocks_i_copy%N_loc, blocks_i_copy%N_p, blocks_i_copy%headn, blocks_i_copy%pgno, blocks%ButterflyV%blocks(1)%matrix, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, kk, ptree)
+            n4 = OMP_get_wtime()
+            stats%Time_RedistB = stats%Time_RedistB + n4-n3
          enddo
          enddo
 
@@ -1992,7 +1996,10 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyU%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyU%blocks(1)%matrix)
                allocate (matrixtemp2(M_p_sub1(1, 2), rank))
+               n3 = OMP_get_wtime()
                call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%M_loc, M_p_sub, 0, pgno_sub_mine, matrixtemp2, M_p_sub1(1, 2), M_p_sub1, 0, pgno_sub_mine, rank, ptree)
+               n4 = OMP_get_wtime()
+               stats%Time_RedistB = stats%Time_RedistB + n4-n3
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyU%blocks(1)%matrix(M_p_sub1(1, 2), rank))
                   blocks_i_copy%ButterflyU%blocks(1)%matrix = matrixtemp2
@@ -2014,7 +2021,10 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyV%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyV%blocks(1)%matrix)
                allocate (matrixtemp2(N_p_sub1(1, 2), rank))
+               n3 = OMP_get_wtime()
                call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%N_loc, N_p_sub, 0, pgno_sub_mine, matrixtemp2, N_p_sub1(1, 2), N_p_sub1, 0, pgno_sub_mine, rank, ptree)
+               n4 = OMP_get_wtime()
+               stats%Time_RedistB = stats%Time_RedistB + n4-n3
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyV%blocks(1)%matrix(N_p_sub1(1, 2), rank))
                   blocks_i_copy%ButterflyV%blocks(1)%matrix = matrixtemp2
@@ -2097,7 +2107,10 @@ contains
                            allocate (block_c_o%ButterflyV%blocks(1))
                         endif
                         allocate (block_c_o%ButterflyV%blocks(1)%matrix(block_c_o%N_loc, rank))
+                        n3 = OMP_get_wtime()
                         call Redistribute1Dto1D(matrixtemp1, ld, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, block_c_o%N_loc, N_p_sub, 0, pgno_sub_mine, rank, ptree)
+                        n4 = OMP_get_wtime()
+                        stats%Time_RedistB = stats%Time_RedistB + n4-n3
                         deallocate (N_p_sub)
                         deallocate (N_p_sub1)
                         deallocate (matrixtemp1)
@@ -2132,7 +2145,10 @@ contains
                            allocate (block_c_o%ButterflyU%blocks(1))
                         endif
                         allocate (block_c_o%ButterflyU%blocks(1)%matrix(block_c_o%M_loc, rank))
+                        n3 = OMP_get_wtime()
                         call Redistribute1Dto1D(matrixtemp1, ld, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, block_c_o%M_loc, M_p_sub, 0, pgno_sub_mine, rank, ptree)
+                        n4 = OMP_get_wtime()
+                        stats%Time_RedistB = stats%Time_RedistB + n4-n3
                         deallocate (M_p_sub)
                         deallocate (M_p_sub1)
                         deallocate (matrixtemp1)
@@ -2189,7 +2205,7 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
-      real(kind=8)::error
+      real(kind=8)::error,n1,n2
 
       if (IOwnPgrp(ptree, blocks_i%pgno)) then
 
@@ -2215,11 +2231,13 @@ contains
          allocate (Vo2(max(1, blocks_C%M_loc), num_vect_sub))
          Vo2 = 0
 
+         n1 = OMP_get_wtime()
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
 
          call Redistribute1Dto1D_OnetoTwo(vin, blocks_i%N_loc, blocks_i%N_p, 0, blocks_i%pgno, V1, max(1, blocks_A%N_loc),blocks_A%N_p, 0, blocks_A%pgno,V2, max(1, blocks_B%N_loc), blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
-
+         n2 = OMP_get_wtime()
+         stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
 
 
@@ -2231,10 +2249,13 @@ contains
             call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo2, max(1, blocks_C%M_loc), cone, cone, ptree, stats)
          endif
 
+         n1 = OMP_get_wtime()
          ! call Redistribute1Dto1D(Vo1, blocks_A%M_p, 0, blocks_A%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
          call Redistribute1Dto1D_TwotoOne(Vo1, max(1, blocks_A%M_loc), blocks_A%M_p, 0, blocks_A%pgno,Vo2, max(1, blocks_C%M_loc), blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_loc, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
+         n2 = OMP_get_wtime()
+         stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
          if(fnorm(vout1, blocks_i%M_loc, 1)<SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<SafeUnderflow)then
             error = 0d0
@@ -2306,6 +2327,7 @@ contains
 
       error_inout = 0
 
+
       call Bplus_copy(ho_bf1%levels(level_c)%BP(rowblock), ho_bf1%levels(level_c)%BP_inverse_update(rowblock))
       !!!!!!! the forward block BP can be deleted if not used in solution phase
 
@@ -2331,6 +2353,9 @@ contains
 
 #else
 
+
+
+
          error_inout=0
          call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
          if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
@@ -2338,7 +2363,8 @@ contains
             call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
          endif
          call BF_ChangePattern(block_o, 1, 2, stats, ptree)
-         write(*,*)fnorm(block_o%ButterflyU%blocks(1)%matrix, size(block_o%ButterflyU%blocks(1)%matrix,1), size(block_o%ButterflyU%blocks(1)%matrix,2)),'eegeee',block_o%row_group,block_o%col_group
+
+
 
          do level = ho_bf1%Maxlevel + 1,level_c+1,-1
             N_diag = 2**(level-level_c-1)
@@ -2359,16 +2385,19 @@ contains
                !!$omp end parallel do
 
             else
+
                do ii = idx_start_diag,idx_end_diag
                   ii_loc = ii - ((rowblock - 1)*N_diag + 1) + 1
                   level_butterfly_loc = ho_bf1%Maxlevel+1-level    !!!! all even level butterfly could be problematic here
 
                   blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
                   call assert(IOwnPgrp(ptree, blocks%pgno),'I do not own this pgno')
-
+                  n1=OMP_get_wtime()
                   call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
                   rank0 = agent_block%rankmax
                   rate = 1.2d0
+                  n2=OMP_get_wtime()
+                  ! time_tmp = time_tmp + n2-n1
 
                   ho_bf1%ind_lv = level
                   ho_bf1%ind_bk = ii
@@ -2379,10 +2408,16 @@ contains
                   error_inout = max(error_inout, error)
 
                   call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
+
+                  n1=OMP_get_wtime()
                   call BF_copyback_partial(block_o, level_butterfly_loc, ii_loc, 'L', agent_block,blocks%pgno,ptree)
+                  n2=OMP_get_wtime()
+                  ! time_tmp = time_tmp + n2-n1
+
                   call BF_delete(agent_block,1)
 
                end do
+
 
             end if
 

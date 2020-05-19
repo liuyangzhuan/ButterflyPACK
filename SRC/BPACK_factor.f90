@@ -177,6 +177,8 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Reconstruct:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(4), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Onesub:', rtemp
+        call MPI_ALLREDUCE(stats%Time_random(5), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_OneBlock_XX:', rtemp
         call MPI_ALLREDUCE(stats%Time_SMW, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_SMW:', rtemp
         call MPI_ALLREDUCE(stats%Time_PartialUpdate, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -270,6 +272,8 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Reconstruct:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(4), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Onesub:', rtemp
+        call MPI_ALLREDUCE(stats%Time_random(5), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_OneBlock_XX:', rtemp
         call MPI_ALLREDUCE(stats%Time_SMW, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_SMW:', rtemp
         call MPI_ALLREDUCE(stats%Time_PartialUpdate, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
