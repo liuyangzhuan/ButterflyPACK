@@ -234,8 +234,12 @@ contains
       integer level, blocks, edge, patch, node, group, level_c
       integer::block_num, block_num_new, num_blocks, level_butterfly, Nboundall
       real(kind=8)::rtemp
+
       Bplus_checkNAN = .false.
 
+#ifdef NDEBUG
+      Bplus_checkNAN = .false.
+#else
       do ll = 1, LplusMax
          if (bplus_i%LL(ll)%Nbound > 0) then
             do bb = 1, bplus_i%LL(ll)%Nbound
@@ -246,7 +250,7 @@ contains
             end do
          end if
       end do
-
+#endif
    end function Bplus_checkNAN
 
    subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, level_start, level_end)
@@ -273,7 +277,7 @@ contains
       DT :: random1(ldi, *), random2(ldo, *)
       DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
-
+      real(kind=8)::n2,n1
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
       integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
@@ -295,26 +299,27 @@ contains
          do bb = 1, bplus%LL(ll)%Nbound
             blocks => bplus%LL(ll)%matrices_block(bb)
 
+            n1 = OMP_get_wtime()
             if (chara == 'N') then
-
                if (blocks%M_loc > 0) allocate (Vout_loc(blocks%M_loc, Nrnd))
                if (blocks%N_loc > 0) allocate (Vin_loc(blocks%N_loc, Nrnd))
                call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
                call Redistribute1Dto1D(Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
             else
-
                if (blocks%N_loc > 0) allocate (Vout_loc(blocks%N_loc, Nrnd))
                if (blocks%M_loc > 0) allocate (Vin_loc(blocks%M_loc, Nrnd))
                call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
                call Redistribute1Dto1D(Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
-
             endif
+            n2 = OMP_get_wtime()
+            stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
             if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
                call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
                &Vin_loc, size(Vin_loc,1), Vout_loc, size(Vout_loc,1), ctemp1, ctemp2, ptree, stats)
             endif
 
+            n1 = OMP_get_wtime()
             if (chara == 'N') then
                call Redistribute1Dto1D(Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree)
                if (blocks%M_loc > 0) deallocate (Vout_loc)
@@ -324,6 +329,8 @@ contains
                if (blocks%N_loc > 0) deallocate (Vout_loc)
                if (blocks%M_loc > 0) deallocate (Vin_loc)
             endif
+            n2 = OMP_get_wtime()
+            stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
          end do
       end do
@@ -1128,6 +1135,9 @@ contains
       integer::block_num, block_num_new, num_blocks, level_butterfly
       real(kind=8):: temp
 
+#ifdef NDEBUG
+      BF_checkNAN=.false.
+#else
       level_butterfly = block_i%level_butterfly
       num_blocks = 2**level_butterfly
       temp = 0
@@ -1185,7 +1195,7 @@ contains
       end if
 
       BF_checkNAN = isnan(temp)
-
+#endif
    end function BF_checkNAN
 
    subroutine BF_print_size_rank(block_i, tolerance)
@@ -1276,9 +1286,12 @@ contains
       character LR
       integer idx_r, inc_r, nr, idx_c, inc_c, nc, nblk_loc, idx, inc, pp, ierr,  head, group
       type(butterfly_skel)::sizes
-
+      real(kind=8)::n1,n2
+      integer reqm, reqn
+      integer statusm(MPI_status_size), statusn(MPI_status_size)
+      ! call MPI_Barrier(ptree%pgrp(pgno)%Comm, ierr)
       ! allocate(agent_block)
-
+      n1=OMP_Get_wtime()
       call assert(level_butterfly_loc >= 1, 'level_butterfly_loc cannot be zero')
 
       agent_block%style = block_o%style
@@ -1509,12 +1522,27 @@ contains
          enddo
       end if
 
+      ! n2=OMP_Get_wtime()
+      ! time_tmp = time_tmp+n2-n1
+
+
+      ! n1=OMP_Get_wtime()
+
 
       !*********** compute M_p, N_p, ms, ns, M and N
       allocate(agent_block%M_p(ptree%pgrp(agent_block%pgno)%nproc,2))
-      call MPI_ALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
       allocate(agent_block%N_p(ptree%pgrp(agent_block%pgno)%nproc,2))
+
+#ifdef HAVE_MPI3
+      call MPI_IALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqm, ierr)
+      call MPI_IALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqn, ierr)
+      call MPI_Wait(reqm, statusm, ierr)
+      call MPI_Wait(reqn, statusn, ierr)
+#else
+      call MPI_ALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
       call MPI_ALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
+#endif
+
       agent_block%M = 0
       agent_block%N = 0
       do pp=1,ptree%pgrp(agent_block%pgno)%nproc
@@ -1551,7 +1579,8 @@ contains
       enddo
 
       call BF_get_rank(agent_block, ptree)
-
+      n2=OMP_Get_wtime()
+      ! time_tmp = time_tmp+n2-n1
    end subroutine BF_extract_partial
 
 
@@ -1706,10 +1735,11 @@ contains
                      ! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank,dimension_n,nn)
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, rank, block_i%ButterflyV%blocks(2*index_j - 1)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
 
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 1'
                      end if
-
+#endif
                      dimension_n = size(block_i%ButterflyV%blocks(2*index_j)%matrix, 1)
                      nn = size(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, 2)
                      rank = size(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, 1)
@@ -1719,30 +1749,31 @@ contains
                      ! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank,dimension_n,nn)
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, rank, block_i%ButterflyV%blocks(2*index_j)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
 
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 2'
                      end if
-
+#endif
                   else
                      nn = size(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, 2)
                      rank = size(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, 1)
                      deallocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix)
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix
-
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 3'
                      end if
-
+#endif
                      nn = size(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, 2)
                      deallocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix)
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix
-
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 4'
                      end if
-
+#endif
                   end if
 
                   if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix)/1024.0d3
@@ -1756,9 +1787,11 @@ contains
                      allocate (block_o%ButterflyU%blocks(index_i + index_i_start)%matrix(mm, rank))
                      block_o%ButterflyU%blocks(index_i + index_i_start)%matrix = block_i%ButterflyU%blocks(index_i)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix)/1024.0d3
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in L 5'
                      end if
+#endif
                   endif
                enddo
             enddo
@@ -1785,11 +1818,11 @@ contains
                      call gemmf90(block_i%ButterflyU%blocks(2*index_i - 1)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, cone, czero)
 
 ! write(*,*)'good 1.1'
-
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 1'
                      end if
-
+#endif
                      dimension_m = size(block_i%ButterflyU%blocks(2*index_i)%matrix, 1)
                      mm = size(block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, 1)
                      rank = size(block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, 2)
@@ -1801,9 +1834,11 @@ contains
                      call gemmf90(block_i%ButterflyU%blocks(2*index_i)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, cone, czero)
 
 ! write(*,*)'good 2'
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 2'
                      end if
+#endif
                   else
                      ! write(*,*)'good 3'
                      mm = size(block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix, 1)
@@ -1812,19 +1847,22 @@ contains
                      allocate (block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix(mm, rank))
                      block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix
 
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 3'
                      end if
-
+#endif
                      mm = size(block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, 1)
                      rank = size(block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, 2)
                      deallocate (block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix)
                      allocate (block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix(mm, rank))
                      block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix
                      ! write(*,*)'good 4'
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 4'
                      end if
+#endif
                   end if
 
                   if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix)/1024.0d3
@@ -1838,10 +1876,11 @@ contains
                      allocate (block_o%ButterflyV%blocks(index_j + index_j_start)%matrix(nn, rank))
                      block_o%ButterflyV%blocks(index_j + index_j_start)%matrix = block_i%ButterflyV%blocks(index_j)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix)/1024.0d3
-
+#ifndef NDEBUG
                      if (isnan(fnorm(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix, nn, rank))) then
                         write (*, *) 'NAN in R 5'
                      end if
+#endif
                   endif
                end do
             end do
@@ -2114,7 +2153,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno+level
+      tag = blocks%pgno+level*10
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -2399,7 +2438,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno+level
+      tag = blocks%pgno+level*10
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -2667,6 +2706,8 @@ contains
       nproc = ptree%pgrp(blocks%pgno)%nproc
       tag = blocks%pgno
 
+      if(nproc>1)then
+
       ! mode_new and level_new determine the block range in the new mode
       if (mode_new == 'R') then
          level_new = max(level - 1, 0)
@@ -2849,11 +2890,245 @@ contains
       deallocate (recvquant)
       deallocate (sendIDactive)
       deallocate (recvIDactive)
+      endif
+
 
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_sizes
+
+
+
+! !*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!    subroutine BF_all2all_sizes(blocks, sizes, ptree, nproc, level, mode, mode_new)
+
+
+!       implicit none
+!       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
+!       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
+!       integer level, length_1, length_2, level_blocks
+!       integer rank, rankmax, butterflyB_inuse, rank1, rank2
+!       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+!       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
+!       real(kind=8) flop
+!       DT ctemp
+!       type(matrixblock)::blocks
+!       type(proctree)::ptree
+
+!       integer ierr, nsendrecv, pid, pgno_sub, tag, nproc, Ncol, Nskel, Nreqr, Nreqs, recvid, sendid, tmpi
+!       integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+!       type(commquant1D)::sendquant(nproc), recvquant(nproc)
+!       integer ::S_req(nproc), R_req(nproc)
+!       integer :: statuss(MPI_status_size, nproc), statusr(MPI_status_size, nproc)
+!       character::mode, mode_new
+!       real(kind=8)::n1, n2
+!       integer::sendIDactive(nproc), recvIDactive(nproc)
+!       integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+!       logical all2all
+!       type(butterfly_skel)::sizes
+!       integer::dist
+
+
+!       call assert(mode /= mode_new, 'only row2col or col2row is supported')
+
+!       level_butterfly = blocks%level_butterfly
+!       ! nproc = ptree%pgrp(blocks%pgno)%nproc
+!       tag = blocks%pgno
+
+!       if(nproc>1)then
+
+!       ! mode_new and level_new determine the block range in the new mode
+!       if (mode_new == 'R') then
+!          level_new = max(level - 1, 0)
+!       elseif (mode_new == 'C') then
+!          level_new = min(level + 1, level_butterfly + 1)
+!       endif
+!       call GetLocalBlockRange(ptree, blocks%pgno, level_new, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, mode_new)
+
+!       ! allocation of communication quantities
+!       do ii = 1, nproc
+!          sendquant(ii)%size = 0
+!          sendquant(ii)%active = 0
+!       enddo
+!       do ii = 1, nproc
+!          recvquant(ii)%size = 0
+!          recvquant(ii)%active = 0
+!       enddo
+!       Nsendactive = 0
+!       Nrecvactive = 0
+
+!       ! calculate send buffer sizes in the first pass
+!       do ii = 1, nr
+!       do jj = 1, nc
+!          index_i = (ii - 1)*inc_r + idx_r
+!          index_j = (jj - 1)*inc_c + idx_c
+!          call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i, index_j, mode, pgno_sub)
+!          pid = ptree%pgrp(pgno_sub)%head
+!          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+!          if (recvquant(pp)%active == 0) then
+!             recvquant(pp)%active = 1
+!             Nrecvactive = Nrecvactive + 1
+!             recvIDactive(Nrecvactive) = pp
+!          endif
+!       enddo
+!       enddo
+
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          call MPI_Irecv(recvquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+!       enddo
+
+!       do ii = 1, sizes%nr
+!       do jj = 1, sizes%nc
+!          index_i = (ii - 1)*sizes%inc_r + sizes%idx_r
+!          index_j = (jj - 1)*sizes%inc_c + sizes%idx_c
+!          call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+!          pid = ptree%pgrp(pgno_sub)%head
+!          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+!          if (sendquant(pp)%active == 0) then
+!             sendquant(pp)%active = 1
+!             Nsendactive = Nsendactive + 1
+!             sendIDactive(Nsendactive) = pp
+!          endif
+!          sendquant(pp)%size = sendquant(pp)%size + 3
+!       enddo
+!       enddo
+
+
+!       n1 = OMP_get_wtime()
+
+!       ! communicate receive buffer sizes
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          allocate (sendquant(pp)%dat_i(sendquant(pp)%size, 1))
+!          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          call MPI_Isend(sendquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+!       enddo
+
+
+
+!       if (Nrecvactive > 0) then
+!          call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
+!       endif
+!       n2 = OMP_get_wtime()
+!       ! time_tmp = time_tmp + n2 - n1
+
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          sendquant(pp)%size = 0
+!       enddo
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          allocate (recvquant(pp)%dat_i(recvquant(pp)%size, 1))
+!       enddo
+
+!       n1 = OMP_Get_wtime()
+
+!       ! pack the send buffer in the second pass
+!       do ii = 1, sizes%nr
+!       do jj = 1, sizes%nc
+!          index_i = (ii - 1)*sizes%inc_r + sizes%idx_r
+!          index_j = (jj - 1)*sizes%inc_c + sizes%idx_c
+!          call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+!          pid = ptree%pgrp(pgno_sub)%head
+
+!          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+
+!          Nskel = sizes%inds(ii, jj)%size
+!          sendquant(pp)%dat_i(sendquant(pp)%size + 1, 1) = index_i
+!          sendquant(pp)%dat_i(sendquant(pp)%size + 2, 1) = index_j
+!          sendquant(pp)%dat_i(sendquant(pp)%size + 3, 1) = Nskel
+!          sendquant(pp)%size = sendquant(pp)%size + 3
+!       enddo
+!       enddo
+
+
+
+
+!       deallocate (sizes%inds)
+!       sizes%idx_r = idx_r
+!       sizes%idx_c = idx_c
+!       sizes%inc_r = inc_r
+!       sizes%inc_c = inc_c
+!       sizes%nr = nr
+!       sizes%nc = nc
+
+!       allocate (sizes%inds(sizes%nr, sizes%nc))
+!       if (Nsendactive > 0) then
+!          call MPI_waitall(Nsendactive, S_req, statuss, ierr)
+!       endif
+!       ! communicate the data buffer
+!       Nreqs = 0
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          if (recvid /= ptree%MyID) then
+!             Nreqs = Nreqs + 1
+!             call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+!          else
+!             if (sendquant(pp)%size > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
+!          endif
+!       enddo
+
+!       Nreqr = 0
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          if (sendid /= ptree%MyID) then
+!             Nreqr = Nreqr + 1
+!             call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+!          endif
+!       enddo
+
+!       ! copy data from buffer to target
+!       do tt = 1, Nrecvactive
+!          if(tt==1 .and. Nreqr+1== Nrecvactive)then
+!             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+!          else
+!             call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+!             pp = statusr(MPI_SOURCE, 1) + 1
+!          endif
+!          ! n1 = OMP_get_wtime()
+!          i = 0
+!          do while (i < recvquant(pp)%size)
+!             i = i + 1
+!             index_i = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+!             ii = (index_i - sizes%idx_r)/sizes%inc_r + 1
+!             i = i + 1
+!             index_j = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+!             jj = (index_j - sizes%idx_c)/sizes%inc_c + 1
+!             i = i + 1
+!             Nskel = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+!             sizes%inds(ii, jj)%size = Nskel
+!          enddo
+!          ! n2 = OMP_get_wtime()
+!          ! time_tmp = time_tmp + n2 - n1
+!       enddo
+!       if (Nreqs > 0) then
+!          call MPI_waitall(Nreqs, S_req, statuss, ierr)
+!       endif
+
+!       ! deallocation
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          if (allocated(sendquant(pp)%dat_i)) deallocate (sendquant(pp)%dat_i)
+!       enddo
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          if (allocated(recvquant(pp)%dat_i)) deallocate (recvquant(pp)%dat_i)
+!       enddo
+!       endif
+
+!       n2 = OMP_get_wtime()
+!       ! time_tmp = time_tmp + n2 - n1
+
+
+!    end subroutine BF_all2all_sizes
+
+
 
 
 !*********** all to all communication of extraction results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
@@ -2901,7 +3176,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno+level
+      tag = blocks%pgno+level*10
 
       ! mode_new and level_new determine the block range in the new mode
       if (mode_new == 'R') then
@@ -3101,8 +3376,7 @@ contains
 
    end subroutine BF_all2all_extraction
 
-!*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
-   subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, level, mode, mode_new)
+   subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
 
 
       implicit none
@@ -3126,12 +3400,13 @@ contains
       integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
       integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
 
-      type(commquant1D), allocatable::sendquant(:), recvquant(:)
-      integer, allocatable::S_req(:), R_req(:)
-      integer, allocatable:: statuss(:, :), statusr(:, :)
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
       character::mode, mode_new
       real(kind=8)::n1, n2
-      integer, allocatable::sendIDactive(:), recvIDactive(:)
       integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
       type(butterfly_kerl)::kerls
       integer rr, cc
@@ -3145,8 +3420,8 @@ contains
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
       level_butterfly = blocks%level_butterfly
-      nproc = ptree%pgrp(blocks%pgno)%nproc
-      tag = blocks%pgno+level
+      ! nproc = ptree%pgrp(blocks%pgno)%nproc
+      tag = blocks%pgno+level*10
 
       ! mode_new and level_new determine the block range in the new mode
       if (mode_new == 'R') then
@@ -3157,22 +3432,15 @@ contains
       call GetLocalBlockRange(ptree, blocks%pgno, level_new, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, mode_new)
 
       ! allocation of communication quantities
-      allocate (statuss(MPI_status_size, nproc))
-      allocate (statusr(MPI_status_size, nproc))
-      allocate (S_req(nproc))
-      allocate (R_req(nproc))
-      allocate (sendquant(nproc))
       do ii = 1, nproc
          sendquant(ii)%size = 0
          sendquant(ii)%active = 0
       enddo
-      allocate (recvquant(nproc))
       do ii = 1, nproc
          recvquant(ii)%size = 0
          recvquant(ii)%active = 0
       enddo
-      allocate (sendIDactive(nproc))
-      allocate (recvIDactive(nproc))
+
       Nsendactive = 0
       Nrecvactive = 0
 
@@ -3339,27 +3607,268 @@ contains
       endif
 
       ! deallocation
-      deallocate (S_req)
-      deallocate (R_req)
-      deallocate (statuss)
-      deallocate (statusr)
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
       enddo
-      deallocate (sendquant)
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
       enddo
-      deallocate (recvquant)
-      deallocate (sendIDactive)
-      deallocate (recvIDactive)
 
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_matvec
+
+
+! !*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!    subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
+
+
+!       implicit none
+!       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
+!       integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
+!       integer level, length_1, length_2, level_blocks
+!       integer rank, rankmax, butterflyB_inuse, rank1, rank2
+!       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+!       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
+!       real(kind=8) flop
+!       DT ctemp
+!       type(matrixblock)::blocks
+!       type(Hstat)::stats
+!       type(proctree)::ptree
+
+!       integer, allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+!       integer, allocatable:: select_row_rr(:), select_column_rr(:)
+!       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_little_cc(:, :), core(:, :), tau(:)
+
+!       integer, allocatable::jpvt(:)
+!       integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
+!       integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+
+!       type(commquant1D)::sendquant(nproc), recvquant(nproc)
+!       integer::sendactive(nproc), recvactive(nproc)
+!       integer::S_req(nproc),R_req(nproc)
+!       integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+!       integer::sendIDactive(nproc), recvIDactive(nproc)
+!       character::mode, mode_new
+!       real(kind=8)::n1, n2
+!       integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+!       type(butterfly_kerl)::kerls
+!       integer rr, cc, cnt
+!       logical all2all
+!       integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+!       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+!       integer::dist
+
+!       n1 = OMP_get_wtime()
+
+!       call assert(mode /= mode_new, 'only row2col or col2row is supported')
+
+!       level_butterfly = blocks%level_butterfly
+!       ! nproc = ptree%pgrp(blocks%pgno)%nproc
+!       tag = blocks%pgno+level*10
+
+!       ! mode_new and level_new determine the block range in the new mode
+!       if (mode_new == 'R') then
+!          level_new = max(level - 1, 0)
+!       elseif (mode_new == 'C') then
+!          level_new = min(level + 1, level_butterfly + 1)
+!       endif
+!       call GetLocalBlockRange(ptree, blocks%pgno, level_new, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, mode_new)
+
+!       ! allocation of communication quantities
+!       do ii = 1, nproc
+!          sendquant(ii)%size = 0
+!          sendquant(ii)%active = 0
+!       enddo
+!       do ii = 1, nproc
+!          recvquant(ii)%size = 0
+!          recvquant(ii)%active = 0
+!       enddo
+!       Nsendactive = 0
+!       Nrecvactive = 0
+
+!       call GetPgno_Sub(ptree, blocks%pgno, level_butterfly, pgno_sub_mine)
+
+!       if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+!          ! calculate send buffer sizes in the first pass
+!          do ii = 1, nr
+!          do jj = 1, nc
+!             index_i = (ii - 1)*inc_r + idx_r
+!             index_j = (jj - 1)*inc_c + idx_c
+!             call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i, index_j, mode, pgno_sub)
+!             pid = ptree%pgrp(pgno_sub)%head
+!             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+!             if (recvquant(pp)%active == 0) then
+!                recvquant(pp)%active = 1
+!                Nrecvactive = Nrecvactive + 1
+!                recvIDactive(Nrecvactive) = pp
+!             endif
+!          enddo
+!          enddo
+
+!          do ii = 1, kerls%nr
+!          do jj = 1, kerls%nc
+!             index_i = (ii - 1)*kerls%inc_r + kerls%idx_r
+!             index_j = (jj - 1)*kerls%inc_c + kerls%idx_c
+!             call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+!             pid = ptree%pgrp(pgno_sub)%head
+!             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+!             if (sendquant(pp)%active == 0) then
+!                sendquant(pp)%active = 1
+!                Nsendactive = Nsendactive + 1
+!                sendIDactive(Nsendactive) = pp
+!             endif
+!             sendquant(pp)%size = sendquant(pp)%size + 4 + size(kerls%blocks(ii, jj)%matrix, 1)*size(kerls%blocks(ii, jj)%matrix, 2)
+!          enddo
+!          enddo
+!       endif
+!       n2 = OMP_get_wtime()
+!       time_tmp = time_tmp + n2 - n1
+
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+!       enddo
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          sendquant(pp)%size = 0
+!       enddo
+
+!       Nreqr = 0
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          if (sendid /= ptree%MyID) then
+!             Nreqr = Nreqr + 1
+!          endif
+!       enddo
+
+!       n1 = OMP_get_wtime()
+!       ! pack the send buffer in the second pass
+!       if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+!       do ii = 1, kerls%nr
+!       do jj = 1, kerls%nc
+!          index_i = (ii - 1)*kerls%inc_r + kerls%idx_r
+!          index_j = (jj - 1)*kerls%inc_c + kerls%idx_c
+!          call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+!          pid = ptree%pgrp(pgno_sub)%head
+
+!          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
+!          Nrow = size(kerls%blocks(ii, jj)%matrix, 1)
+!          Ncol = size(kerls%blocks(ii, jj)%matrix, 2)
+
+!          sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
+!          sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
+!          sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+!          sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
+!          sendquant(pp)%size = sendquant(pp)%size + 4
+!          do i = 1, Nrow*Ncol
+!             rr = mod(i - 1, Nrow) + 1
+!             cc = (i - 1)/Nrow + 1
+!             sendquant(pp)%dat(sendquant(pp)%size + i, 1) = kerls%blocks(ii, jj)%matrix(rr, cc)
+!          enddo
+!          sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+!          deallocate (kerls%blocks(ii, jj)%matrix)
+!       enddo
+!       enddo
+!       deallocate (kerls%blocks)
+
+!       kerls%idx_r = idx_r
+!       kerls%idx_c = idx_c
+!       kerls%inc_r = inc_r
+!       kerls%inc_c = inc_c
+!       kerls%nr = nr
+!       kerls%nc = nc
+
+!       allocate (kerls%blocks(kerls%nr, kerls%nc))
+!       endif
+!       n2 = OMP_get_wtime()
+!       time_tmp = time_tmp + n2 - n1
+
+!       Nreqs = 0
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+!          if (recvid /= ptree%MyID) then
+!             Nreqs = Nreqs + 1
+!             call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+!          endif
+!       enddo
+
+!       cnt = 0
+!       do tt = 1, Nrecvactive
+!          if(tt==1 .and. Nreqr+1== Nrecvactive)then
+!             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+!             recvquant(pp)%size=sendquant(pp)%size
+!             if(recvquant(pp)%size>0)then
+!             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+!             recvquant(pp)%dat = sendquant(pp)%dat
+!             endif
+!          else
+!             call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(blocks%pgno)%Comm, statusr,ierr)
+!             pp = statusr(MPI_SOURCE, 1) + 1
+!             call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+!             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+!             cnt = cnt + 1
+!             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(cnt), ierr)
+!          endif
+!       enddo
+
+!       if (Nreqr > 0) then
+!          call MPI_waitall(Nreqr, R_req, statusr, ierr)
+!       endif
+
+!       ! copy data from buffer to target
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          n1 = OMP_get_wtime()
+!          i = 0
+!          do while (i < recvquant(pp)%size)
+!             i = i + 1
+!             index_i = NINT(dble(recvquant(pp)%dat(i, 1)))
+!             ii = (index_i - kerls%idx_r)/kerls%inc_r + 1
+!             i = i + 1
+!             index_j = NINT(dble(recvquant(pp)%dat(i, 1)))
+!             jj = (index_j - kerls%idx_c)/kerls%inc_c + 1
+!             i = i + 1
+!             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+!             i = i + 1
+!             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
+!             call assert(.not. associated(kerls%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
+!             allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
+!             do cc = 1, Ncol
+!                do rr = 1, Nrow
+!                   i = i + 1
+!                   kerls%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+!                enddo
+!             enddo
+!          enddo
+!          n2 = OMP_get_wtime()
+!          time_tmp = time_tmp + n2 - n1
+!       enddo
+
+!       if (Nreqs > 0) then
+!          call MPI_waitall(Nreqs, S_req, statuss, ierr)
+!       endif
+
+!       ! deallocation
+!       do tt = 1, Nsendactive
+!          pp = sendIDactive(tt)
+!          if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+!       enddo
+!       do tt = 1, Nrecvactive
+!          pp = recvIDactive(tt)
+!          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+!       enddo
+
+!       ! n2 = OMP_get_wtime()
+!       ! time_tmp = time_tmp + n2 - n1
+
+!    end subroutine BF_all2all_matvec
 
 !*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
@@ -3403,7 +3912,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno+level_i
+      tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -3740,7 +4249,7 @@ contains
          n1 = OMP_get_wtime()
 
          nproc = ptree%pgrp(pgno)%nproc
-         tag = pgno+level
+         tag = pgno+level*10
 
 
          call GetLocalBlockRange(ptree, pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, mode_o)
@@ -4196,7 +4705,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno+level_i
+      tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -4553,7 +5062,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno+level_i
+      tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -4859,7 +5368,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno+level_i
+      tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -5230,7 +5739,7 @@ contains
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
-      tag = pgno+level_i
+      tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_i = block_i%level_butterfly
@@ -5572,7 +6081,8 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
-#ifdef HAVE_MKL
+! #ifdef HAVE_MKL
+#if 0
       call BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #else
       call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
@@ -5598,7 +6108,7 @@ contains
       type(proctree)::ptree
       integer pgno, comm, ierr
       type(Hstat)::stats
-      real(kind=8)::flop, flops,n1,n2,n3,n4
+      real(kind=8)::flop, flops,n1,n2,n3,n4,n5,n6
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
 
       type(butterfly_vec) :: BFvec
@@ -5687,7 +6197,7 @@ contains
          end if
 
          if (chara == 'N') then
-
+            n5 = OMP_get_wtime()
             if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
@@ -5708,22 +6218,6 @@ contains
             BFvec%vec(0)%idx_c = blocks%ButterflyV%idx
             BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
-
-#ifdef HAVE_TASKLOOP
-            !$omp taskloop default(shared) private(i,nn,ii,jj)
-#endif
-            do i = 1, BFvec%vec(0)%nc
-               nn = size(blocks%ButterflyV%blocks(i)%matrix, 1)
-               allocate (BFvec%vec(0)%blocks(1, i)%matrix(nn, num_vectors))
-               do ii = 1, nn
-                  do jj = 1, num_vectors
-                     BFvec%vec(0)%blocks(1, i)%matrix(ii, jj) = random1(ii + arr_acc_n(i), jj)
-                  enddo
-               enddo
-            enddo
-#ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-#endif
 
             do level = 0, level_half
                ! n1 = OMP_get_wtime()
@@ -5766,7 +6260,7 @@ contains
                         allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
                         BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, random1(1 + arr_acc_n(j), 1), ldi, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
 
                         !$omp atomic
                         flops = flops + flop
@@ -5777,7 +6271,7 @@ contains
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
@@ -5832,7 +6326,7 @@ contains
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
                   endif
                endif
                do j = 1, BFvec%vec(level)%nc
@@ -5848,16 +6342,16 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
                endif
             enddo
-
-
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half + 1, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
             endif
 
-
+            n5 = OMP_get_wtime()
             do level = level_half + 1, level_butterfly + 1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
 
@@ -5917,7 +6411,7 @@ contains
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
                      BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, BFvec%vec(level + 1)%blocks(1, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, random2(1 + arr_acc_m(1), 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -5934,7 +6428,7 @@ contains
                         allocate (BFvec%vec(level + 1)%blocks(i, 1)%matrix(mm, num_vectors))
                         BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, random2(1 + arr_acc_m(i), 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
 
                         !$omp atomic
                         flops = flops + flop
@@ -5944,7 +6438,7 @@ contains
                      !$omp end taskloop
 #endif
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
 
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -6066,7 +6560,7 @@ contains
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   n4 = OMP_get_wtime()
-                  time_tmp = time_tmp + n4-n3
+                  ! time_tmp = time_tmp + n4-n3
                endif
 
                do j = 1, BFvec%vec(level)%nc
@@ -6079,28 +6573,14 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
                endif
             enddo
-#ifdef HAVE_TASKLOOP
-            !$omp taskloop default(shared) private(i,mm,ii,jj)
-#endif
-            do jj = 1, num_vectors
-               do i = 1, blocks%ButterflyU%nblk_loc
-                  mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                  do ii = 1, mm
-                     random2(ii + arr_acc_m(i), jj) = b*random2(ii + arr_acc_m(i), jj) + a*BFvec%vec(level_butterfly + 2)%blocks(i, 1)%matrix(ii, jj)
-                  enddo
-               enddo
-            enddo
-#ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-#endif
-
-
 
             if (isnanMat(random2(1:M,1:1),M,1)) then
                write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
             !deallocate (BFvec%vec)
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
 
          elseif (chara == 'T') then
             if (isnanMat(random1(1:M,1:1),M,1)) then
@@ -6122,21 +6602,8 @@ contains
             BFvec%vec(0)%idx_c = 1
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
-#ifdef HAVE_TASKLOOP
-            !$omp taskloop default(shared) private(i,mm,ii,jj)
-#endif
-            do i = 1, BFvec%vec(0)%nr
-               mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-               allocate (BFvec%vec(0)%blocks(i, 1)%matrix(mm, num_vectors))
-               do ii = 1, mm
-                  do jj = 1, num_vectors
-                     BFvec%vec(0)%blocks(i, 1)%matrix(ii, jj) = random1(ii + arr_acc_m(i), jj)
-                  enddo
-               enddo
-            enddo
-#ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-#endif
+
+            n5 = OMP_get_wtime()
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -6179,7 +6646,7 @@ contains
                         allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
                         BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, random1(1 + arr_acc_m(i), 1), ldi, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
                         !$omp atomic
                         flops = flops + flop
                         !$omp end atomic
@@ -6189,7 +6656,7 @@ contains
                      !$omp end taskloop
 #endif
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
@@ -6245,7 +6712,7 @@ contains
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
                   endif
                endif
                do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
@@ -6258,13 +6725,16 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
                endif
             enddo
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half + 1, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
             endif
 
+            n5 = OMP_get_wtime()
             do level = level_half, 0, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
 
@@ -6328,7 +6798,7 @@ contains
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
                      BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, random2(1 + arr_acc_n(1), 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -6343,7 +6813,7 @@ contains
                         rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
                         allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
                         BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
-                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, rank, random2(1 + arr_acc_n(j), 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
                         !$omp atomic
                         flops = flops + flop
                         !$omp end atomic
@@ -6354,7 +6824,7 @@ contains
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   n4 = OMP_get_wtime()
-                  time_tmp = time_tmp + n4-n3
+                  ! time_tmp = time_tmp + n4-n3
                else
 
                   flops = 0
@@ -6467,7 +6937,7 @@ contains
 
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                   n4 = OMP_get_wtime()
-                  time_tmp = time_tmp + n4-n3
+                  ! time_tmp = time_tmp + n4-n3
                endif
 
                do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
@@ -6481,27 +6951,12 @@ contains
                endif
             enddo
 
-#ifdef HAVE_TASKLOOP
-            !$omp taskloop default(shared) private(j,nn,ii,jj)
-#endif
-            do jj = 1, num_vectors
-               do j = 1, blocks%ButterflyV%nblk_loc
-                  nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
-                  ! write(*,*)nn,arr_acc_n(j)
-                  do ii = 1, nn
-                     random2(ii + arr_acc_n(j), jj) = b*random2(ii + arr_acc_n(j), jj) + a*BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(ii, jj)
-                  enddo
-               enddo
-            enddo
-#ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-#endif
-
             if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
-
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
          endif
 
          do level = 0, level_butterfly + 2
@@ -6563,7 +7018,7 @@ contains
 
       type(butterfly_vec) :: BFvec
       integer ldi,ldo
-      DT :: random1(ldi, *), random2(ldo, *)
+      DT,target :: random1(ldi, *), random2(ldo, *)
       DT, pointer :: random1_p(:, :),random2_p(:, :)
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
 
@@ -6648,8 +7103,6 @@ contains
 
          if (chara == 'N') then
 
-
-
             if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
@@ -6671,33 +7124,7 @@ contains
             BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
-
-
-
             n5 = OMP_get_wtime()
-
-            allocate(random1_p(N,num_vectors))
-            random1_p=random1(1:N,1:num_vectors)
-
-         ! !$omp parallel
-         ! !$omp single
-         !    !$omp taskloop default(shared) private(i,nn,ii,jj)
-         !    do i = 1, BFvec%vec(0)%nc
-         !       nn = size(blocks%ButterflyV%blocks(i)%matrix, 1)
-         !       allocate (BFvec%vec(0)%blocks(1, i)%matrix(nn, num_vectors))
-         !       ! do jj = 1, num_vectors
-         !       ! do ii = 1, nn
-
-         !       !       BFvec%vec(0)%blocks(1, i)%matrix(ii, jj) = random1(ii + arr_acc_n(i), jj)
-         !       !    enddo
-         !       ! enddo
-         !    enddo
-         !    !$omp end taskloop
-         !    !$omp end single
-         ! !$omp end parallel
-
-
-
             do level = 0, level_half
                ! n1 = OMP_get_wtime()
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
@@ -6750,13 +7177,10 @@ contains
                         n_array(cnt)=num_vectors
                         k_array(cnt)=nn
                         lda_array(cnt)=nn
-                        ldb_array(cnt)=N
+                        ldb_array(cnt)=ldi
                         ldc_array(cnt)=rank
                         a_array(cnt)=C_LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
-                        b_array(cnt)=C_LOC(random1_p(1 + arr_acc_n(j), 1))
-
-
-
+                        b_array(cnt)=C_LOC(random1(1 + arr_acc_n(j), 1))
                         c_array(cnt)=C_LOC(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
@@ -6764,7 +7188,7 @@ contains
 
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -6828,7 +7252,7 @@ contains
                      enddo
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      n4 = OMP_get_wtime()
-                     time_tmp = time_tmp + n4-n3
+                     ! time_tmp = time_tmp + n4-n3
                   endif
                endif
                do j = 1, BFvec%vec(level)%nc
@@ -6849,12 +7273,12 @@ contains
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half + 1, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
             endif
 
-
+            n5 = OMP_get_wtime()
             do level = level_half + 1, level_butterfly + 1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
 
@@ -6914,7 +7338,8 @@ contains
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
                      BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, BFvec%vec(level + 1)%blocks(1, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, random2(arr_acc_m(1)+1, 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
+
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -6925,8 +7350,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='N'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=a
+                     beta_array=b
                      group_size=1
                      cnt=0
                      do i = 1, nr0
@@ -6946,10 +7371,10 @@ contains
                         k_array(cnt)=rank
                         lda_array(cnt)=mm
                         ldb_array(cnt)=rank
-                        ldc_array(cnt)=mm
+                        ldc_array(cnt)=ldo
                         a_array(cnt)=C_LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
                         b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(i, 1)%matrix(1,1))
+                        c_array(cnt)=C_LOC(random2(arr_acc_m(i)+1, 1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
 
@@ -7121,26 +7546,15 @@ contains
                endif
             enddo
 
-            !!$omp taskloop default(shared) private(i,mm,ii,jj)
-            do jj = 1, num_vectors
-               do i = 1, blocks%ButterflyU%nblk_loc
-                  mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                  do ii = 1, mm
-                     random2(ii + arr_acc_m(i), jj) = b*random2(ii + arr_acc_m(i), jj) + a*BFvec%vec(level_butterfly + 2)%blocks(i, 1)%matrix(ii, jj)
-                  enddo
-               enddo
-            enddo
-            !!$omp end taskloop
-
-
-
             if (isnanMat(random2(1:M,1:1),M,1)) then
                write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
             !deallocate (BFvec%vec)
 
-            deallocate(random1_p)
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
+
 
 
          elseif (chara == 'T') then
@@ -7164,18 +7578,7 @@ contains
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
 
-            !!$omp taskloop default(shared) private(i,mm,ii,jj)
-            do i = 1, BFvec%vec(0)%nr
-               mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-               allocate (BFvec%vec(0)%blocks(i, 1)%matrix(mm, num_vectors))
-               do ii = 1, mm
-                  do jj = 1, num_vectors
-                     BFvec%vec(0)%blocks(i, 1)%matrix(ii, jj) = random1(ii + arr_acc_m(i), jj)
-                  enddo
-               enddo
-            enddo
-            !!$omp end taskloop
-
+            n5 = OMP_get_wtime()
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -7227,10 +7630,10 @@ contains
                         n_array(cnt)=num_vectors
                         k_array(cnt)=mm
                         lda_array(cnt)=mm
-                        ldb_array(cnt)=mm
+                        ldb_array(cnt)=ldi
                         ldc_array(cnt)=rank
                         a_array(cnt)=C_LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(0)%blocks(i, 1)%matrix(1,1))
+                        b_array(cnt)=C_LOC(random1(1 + arr_acc_m(i), 1))
                         c_array(cnt)=C_LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
@@ -7312,13 +7715,16 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
                endif
             enddo
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half + 1, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
             endif
 
+            n5 = OMP_get_wtime()
             do level = level_half, 0, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
 
@@ -7380,7 +7786,7 @@ contains
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
                      BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, random2(arr_acc_n(1)+1, 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -7389,8 +7795,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='N'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=a
+                     beta_array=b
                      group_size=1
                      cnt=0
                      do j = 1, blocks%ButterflyV%nblk_loc
@@ -7407,10 +7813,10 @@ contains
                         k_array(cnt)=rank
                         lda_array(cnt)=nn
                         ldb_array(cnt)=rank
-                        ldc_array(cnt)=nn
+                        ldc_array(cnt)=ldo
                         a_array(cnt)=C_LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
                         b_array(cnt)=C_LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(1,1))
+                        c_array(cnt)=C_LOC(random2(arr_acc_n(j)+1, 1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
@@ -7568,19 +7974,8 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
                endif
             enddo
-
-
-            !!$omp taskloop default(shared) private(j,nn,ii,jj)
-            do jj = 1, num_vectors
-               do j = 1, blocks%ButterflyV%nblk_loc
-                  nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
-                  ! write(*,*)nn,arr_acc_n(j)
-                  do ii = 1, nn
-                     random2(ii + arr_acc_n(j), jj) = b*random2(ii + arr_acc_n(j), jj) + a*BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(ii, jj)
-                  enddo
-               enddo
-            enddo
-            !!$omp end taskloop
+            n6 = OMP_get_wtime()
+            time_tmp1 = time_tmp1 + n6-n5
 
             if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
@@ -7600,9 +7995,6 @@ contains
 
          deallocate (BFvec%vec)
          deallocate (arr_acc_m, arr_acc_n)
-
-         ! n6 = OMP_get_wtime()
-         ! time_tmp1 = time_tmp1 + n6-n5
 
 
       endif
@@ -7675,12 +8067,6 @@ contains
       end if
 
       if (chara == 'N') then
-
-         if (isnan(sum(abs(VectIn(:, 1))**2))) then
-            write (*, *) 'NAN in 1 BF_block_MVP_partial'
-            stop
-         end if
-
          level_butterfly = blocks%level_butterfly
          num_blocks = 2**level_butterfly
          level_half = blocks%level_half
@@ -7754,7 +8140,7 @@ contains
                if (level == 0) then
                   flops = 0
 
-                  !$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
+                  !$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s,idxs) reduction(+:flops)
                   do j = 1, blocks%ButterflyV%nblk_loc
                      index_j = (j - 1)*inc_c + idx_c
                      index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
@@ -7762,7 +8148,6 @@ contains
                      nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                      allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
                      BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
-
                      call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
                      flops = flops + flop
                   enddo
@@ -7926,7 +8311,7 @@ contains
 
                if (level == level_butterfly + 1) then
                   flops = 0
-                  !$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
+                  !$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s,idxs) reduction(+:flops)
                   do i = 1, blocks%ButterflyU%nblk_loc
                      index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -7935,7 +8320,6 @@ contains
                      mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
                      allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
                      BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
-
                      call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
                      flops = flops + flop
 
@@ -9990,7 +10374,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
             call assert(level_end<=level_half + 1,'level_end can at most one more level over level_half')
             if(level_half + 1==level_end)then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, level_half, 'R', 'C')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
                level = level_end
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
                if (level == 0) then
@@ -10200,7 +10584,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             call assert(level_end>=level_half,'level_end can be at most level_half')
             if(level_half ==level_end)then
                level = level_half
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, level_half + 1, 'C', 'R')
+               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
                if (level == level_butterfly + 1) then
                elseif (level == 0) then
