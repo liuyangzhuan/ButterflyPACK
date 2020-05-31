@@ -42,7 +42,6 @@ ENDFOREACH()
 ######################################################################
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)    ## ????
 set(CMAKE_INSTALL_NAME_DIR "${CMAKE_INSTALL_PREFIX}/lib")
-
 #---- For shared library
 
 # use, i.e. don't skip the full RPATH for the build tree

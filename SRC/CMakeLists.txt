@@ -1,6 +1,6 @@
 set(headers
     C_BPACK_wrapper.h
-    # ButterflyPACK_config.fi
+    ButterflyPACK_config.fi
     # ${PROJECT_BINARY_DIR}/ButterflyPACK_config.h
 )
 
@@ -35,6 +35,7 @@ target_link_libraries(butterflypack
 set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
+
 target_include_directories(butterflypack PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
   $<INSTALL_INTERFACE:include>)
@@ -49,3 +50,8 @@ install(TARGETS butterflypack EXPORT MYBPACKTargets
 )
 
 install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+
+#SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.mod")

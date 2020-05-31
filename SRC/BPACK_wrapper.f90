@@ -1393,9 +1393,10 @@ contains
    !msh_Cptr: the structure containing points and ordering information (in)
    !ker_Cptr: the structure containing kernel quantities (inout)
    !ptree_Cptr: the structure containing process tree (in)
+   !C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of a block (in)
    !C_FuncZmnBlock: the C_pointer to user-provided function to extract a list of intersections from a block (in)
    !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-   subroutine C_BF_Construct_Element_Compute(bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bf_construct_element_compute")
+   subroutine C_BF_Construct_Element_Compute(bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bf_construct_element_compute")
       implicit none
 
       integer Maxlevel
@@ -1409,6 +1410,7 @@ contains
       type(c_ptr) :: ker_Cptr
       type(c_ptr) :: ptree_Cptr
       type(c_ptr), intent(in), target :: C_QuantApp
+      type(c_funptr), intent(in), value, target :: C_FuncZmn
       type(c_funptr), intent(in), value, target :: C_FuncZmnBlock
 
       type(Hoption), pointer::option
@@ -1436,6 +1438,7 @@ contains
       ! !**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmnBlock => C_FuncZmnBlock
+      ker%C_FuncZmn => C_FuncZmn
 
       t1 = OMP_get_wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
