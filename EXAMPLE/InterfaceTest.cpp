@@ -34,6 +34,10 @@
 #include <vector>
 #include <atomic>
 #include <mpi.h>
+#include <sstream>
+#include <cstring>
+#include <getopt.h>
+#include <unistd.h>
 
 #include "dC_BPACK_wrapper.h"
 
@@ -207,6 +211,23 @@ inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
   Q->Sample(*m-1,*n-1,val);
 }
 
+// The sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncBZmn(int *m, int *n, double *val, C2Fptr quant) {
+
+  C_QuantApp* Q = (C_QuantApp*) quant;
+// here positve inidex means row, negative index means column
+  int m1, n1;
+  if(m>0){
+	  m1=*m;
+	  n1=-*n;
+  }else{
+	  m1=*n;
+	  n1=-*m;
+  }
+  Q->Sample(m1-1,n1-1,val);
+}
+
+
 // The distance function wrapper required by the Fortran HODLR code
 inline void C_FuncDistmn(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
@@ -274,6 +295,214 @@ vector<T> write_from_file(string filename) {
 }
 
 
+// The command line parser for the example related parameters
+void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
+    double opt_d;
+    int opt_i;
+    std::vector<std::unique_ptr<char[]>> argv_data(argc);
+    std::vector<char*> argv(argc);
+    for (int i=0; i<argc; i++) {
+      argv_data[i].reset(new char[strlen(cargv[i])+1]);
+      argv[i] = argv_data[i].get();
+      strcpy(argv[i], cargv[i]);
+    }
+    option long_options[] =
+      {{"nmin_leaf",                     required_argument, 0, 1},
+       {"tol_comp",                   required_argument, 0, 2},
+       {"tol_rand",                   required_argument, 0, 3},
+       {"tol_Rdetect",             required_argument, 0, 4},
+       {"tol_itersol",             required_argument, 0, 5},
+       {"n_iter",          required_argument, 0, 6},
+       {"level_check",         required_argument, 0, 7},
+       {"precon",                  required_argument, 0, 8},
+       {"xyzsort",      required_argument, 0, 9},
+       {"lrlevel",     required_argument, 0, 10},
+       {"errfillfull",       required_argument, 0, 11},
+       {"baca_batch",      required_argument, 0, 12},
+       {"reclr_leaf",      required_argument, 0, 13},
+       {"nogeo",     required_argument, 0, 14},
+       {"less_adapt",            required_argument, 0, 15},
+       {"errsol",           required_argument, 0, 16},
+       {"lr_blk_num",                  required_argument, 0, 17},
+       {"rank0",  required_argument, 0, 18},
+       {"rankrate", required_argument, 0, 19},
+       {"itermax",               required_argument, 0, 20},
+       {"powiter",  required_argument, 0, 21},
+       {"ilu", required_argument, 0, 22},
+       {"nbundle",     required_argument, 0, 23},
+       {"near_para",  required_argument, 0, 24},
+       {"format",  required_argument, 0, 25},
+       {"verbosity", required_argument, 0, 26},
+       {"rmax", required_argument, 0, 27},
+       {"sample_para", required_argument, 0, 28},
+       {"pat_comp",    required_argument, 0, 29},
+       {"knn",         required_argument, 0, 30},
+       {NULL, 0, NULL, 0}
+      };
+    int c, option_index = 0;
+    // bool unrecognized_options = false;
+    opterr = optind = 0;
+    while ((c = getopt_long_only
+            (argc, argv.data(), "",
+             long_options, &option_index)) != -1) {     
+      switch (c) {
+      case 1: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "Nmin_leaf", opt_i);
+      } break;
+      case 2: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "tol_comp", opt_d);
+        d_c_bpack_set_D_option(&option0, "tol_rand", opt_d);
+        d_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d*0.1);
+      } break;
+      case 3: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "tol_rand", opt_d);
+      } break;
+      case 4: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d);
+      } break;
+      case 5: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "tol_itersol", opt_d);
+      } break;        
+      case 6: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "n_iter", opt_i);
+      } break;
+      case 7: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "level_check", opt_i);
+      } break;
+      case 8: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "precon", opt_i);
+      } break;
+      case 9: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "xyzsort", opt_i);
+      } break;      
+      case 10: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "LRlevel", opt_i);
+      } break;   
+      case 11: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "ErrFillFull", opt_i);
+      } break;   
+      case 12: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "BACA_Batch", opt_i);
+      } break;   
+      case 13: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "RecLR_leaf", opt_i);
+      } break;   
+      case 14: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "nogeo", opt_i);
+      } break;   
+      case 15: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "less_adapt", opt_i);
+      } break;   
+      case 16: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "ErrSol", opt_i);
+      } break;   
+      case 17: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "LR_BLK_NUM", opt_i);
+      } break;   
+      case 18: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "rank0", opt_i);
+      } break;   
+      case 19: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "rankrate", opt_i);
+      } break;   
+      case 20: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "itermax", opt_i);
+      } break;   
+      case 21: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "powiter", opt_i);
+      } break;   
+      case 22: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "ILU", opt_i);
+      } break;   
+      case 23: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "Nbundle", opt_i);
+      } break;  
+      case 24: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "near_para", opt_d);
+      } break;   
+      case 25: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "format", opt_i);
+      } break;   
+      case 26: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "verbosity", opt_i);
+      } break;   
+      case 27: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "rmax", opt_i);
+      } break;   
+      case 28: {
+        std::istringstream iss(optarg);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "sample_para", opt_d);
+      } break;   
+      case 29: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "pat_comp", opt_i);
+      } break;   
+      case 30: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        d_c_bpack_set_I_option(&option0, "knn", opt_i);
+      } break;                                                                                             
+      default: break;
+      }
+    }
+  }
+
 ////////////////////////////////////////////////////////////////////////////////
 // --------------------------- Main Code Starts Here ------------------------ //
 
@@ -291,6 +520,7 @@ int main(int argc, char* argv[])
 	int ker=1 ; // kernel choice
 	int Npo=5000;   // matrix size
 	int Ndim=1; //data dimension
+	int rank_rand=100;  //rank of the random LR product
 	double starttime, endtime;
 	double* dat_ptr;
 	int* nns_ptr;
@@ -314,9 +544,94 @@ int main(int argc, char* argv[])
 
 	int nlevel = 0; // 0: tree level, nonzero if a tree is provided
 	int* tree = new int[(int)pow(2,nlevel)]; //user provided array containing size of each leaf node, not used if nlevel=0
+	string trainfile("../EXAMPLE/KRR_DATA/susy_10Kn");
+	string fullmatfile("../EXAMPLE/FULLMAT_DATA/FHODLR_colmajor_real_double_40000x40000.dat");
+	string leaffile("../EXAMPLE/FULLMAT_DATA/leafs_40000_noheader.dat");
+
 	tree[0] = Npo;
 
-	if(argc>1)tst = stoi(argv[1]);
+
+
+  //getting the example configurations from command line
+  std::vector<std::unique_ptr<char[]>> argv_data(argc);
+  std::vector<char*> argv1(argc);
+  for (int i=0; i<argc; i++) {
+    argv_data[i].reset(new char[strlen(argv[i])+1]);
+    argv1[i] = argv_data[i].get();
+    strcpy(argv1[i], argv[i]);
+  }
+  option long_options[] =
+    {{"tst",                     required_argument, 0, 1},
+      {"N",                   required_argument, 0, 2},
+      {"Ndim",                   required_argument, 0, 3},
+      {"ker",             required_argument, 0, 4},
+      {"h",             required_argument, 0, 5},
+      {"lambda",          required_argument, 0, 6},
+      {"rank_rand",          required_argument, 0, 7},
+      {"trainfile",          required_argument, 0, 8},
+      {"nlevel",          required_argument, 0, 9},
+      {"leaffile",          required_argument, 0, 10},
+      {"fullmatfile",          required_argument, 0, 11},
+      {"help",          no_argument, 0, 'h'},
+      {NULL, 0, NULL, 0}
+    };
+  int c, option_index = 0;
+  opterr = optind = 0;
+  while ((c = getopt_long_only
+          (argc, argv1.data(), "h",
+            long_options, &option_index)) != -1) {    
+
+    switch (c) {
+    case 1: {
+      std::istringstream iss(optarg);
+      iss >> tst;
+    } break;
+    case 2: {
+      std::istringstream iss(optarg);
+      iss >> Npo;
+    } break;
+    case 3: {
+      std::istringstream iss(optarg);
+      iss >> Ndim;
+    } break;
+    case 4: {
+      std::istringstream iss(optarg);
+      iss >> ker;
+    } break;
+    case 5: {
+      std::istringstream iss(optarg);
+      iss >> h;
+    } break;        
+    case 6: {
+      std::istringstream iss(optarg);
+      iss >> lambda;
+    } break;   
+    case 7: {
+      std::istringstream iss(optarg);
+      iss >> rank_rand;
+    } break;      
+	case 8: {
+	  std::istringstream iss(optarg);
+  	  iss >> trainfile;		
+    } break;  
+	case 9: {
+	  std::istringstream iss(optarg);
+  	  iss >> nlevel;		
+    } break;  	 	
+	case 10: {
+	  std::istringstream iss(optarg);
+  	  iss >> leaffile;		
+    } break;  
+	case 11: {
+	  std::istringstream iss(optarg);
+  	  iss >> fullmatfile;		
+    } break;  	
+	case 'h': { std::cout<<" tst=1: testing data sets with csv formats with ker 1:5 \n tst=2: testing randomly generated data sets with ker 1:5 \n tst=3: testing a LR product of two random matrices with ker=6 \n tst=4: testing full matrix and leaves stored in file with ker=7 "<<std::endl; } break;                                                                 
+    default: break;
+    }
+  }
+
+
 
 
 if(myrank==master_rank){
@@ -328,24 +643,8 @@ if(myrank==master_rank){
 	/*****************************************************************/
 	/* Test Kernels for Liza's data sets */
 if(tst==1){
-	string filename("../EXAMPLE/KRR_DATA/susy_10Kn");
-	Ndim=8;
-	if(argc>2)filename = string(argv[2]);
-	if(argc>3)Ndim = stoi(argv[3]);
-	if(argc>4)ker = stoi(argv[4]);
-	if(argc>5)h = stof(argv[5]);
-	if(argc>6)lambda = stof(argv[6]);
-
-	if(argc>7)Nmin = stoi(argv[7]);
-	if(argc>8)tol = stof(argv[8]);
-	if(argc>9)com_opt = stoi(argv[9]);
-	if(argc>10)checkerr = stoi(argv[10]);
-	if(argc>11)batch = stoi(argv[11]);
-	if(argc>12)bnum = stoi(argv[12]);
-	if(argc>13)knn = stoi(argv[13]);
-    vector<double> data_train = write_from_file<double>(filename + "_train.csv");
-	Npo = data_train.size() / Ndim;
-
+    vector<double> data_train = write_from_file<double>(trainfile + "_train.csv");
+	assert(Npo == data_train.size() / Ndim);
 	quant_ptr=new C_QuantApp(data_train, Ndim, h, lambda,ker);
 	dat_ptr = new double[data_train.size()];
 	for(int ii=0;ii<data_train.size();ii++)
@@ -356,21 +655,6 @@ if(tst==1){
 	/*****************************************************************/
 	/* Test Kernels for Random point clouds */
 if(tst==2){
-	Ndim=6;
-	if(argc>2)Npo = stoi(argv[2]);
-	if(argc>3)Ndim = stoi(argv[3]);
-	if(argc>4)ker = stoi(argv[4]);
-	if(argc>5)h = stof(argv[5]);
-	if(argc>6)lambda = stof(argv[6]);
-
-	if(argc>7)Nmin = stoi(argv[7]);
-	if(argc>8)tol = stof(argv[8]);
-	if(argc>9)com_opt = stoi(argv[9]);
-	if(argc>10)checkerr = stoi(argv[10]);
-	if(argc>11)batch = stoi(argv[11]);
-	if(argc>12)bnum = stoi(argv[12]);
-	if(argc>13)knn = stoi(argv[13]);
-
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
 	data_train[i] = (double)rand() / RAND_MAX;
@@ -386,21 +670,10 @@ if(tst==2){
 	/*****************************************************************/
 	/* Test Product of two Random matrices*/
 if(tst==3){
-	ker = 6;
-	int rank_rand = 100;
-	Npo = 1000;
-
-	if(argc>2)Npo = stoi(argv[2]);
-	if(argc>3)rank_rand = stoi(argv[3]);
-	if(argc>4)Nmin = stoi(argv[4]);
-
-	if(argc>5)tol = stof(argv[5]);
-	if(argc>6)com_opt = stoi(argv[6]);
-	if(argc>7)checkerr = stoi(argv[7]);
-	if(argc>8)batch = stoi(argv[8]);
-	if(argc>9)bnum = stoi(argv[9]);
-	if(argc>10)knn = stoi(argv[10]);
-
+	if(ker !=6){
+		if(myrank==master_rank)std::cout<<"Forcing ker to 6 for tst=3."<<std::endl;
+		ker = 6;
+	}
 	vector<double> matU(Npo*rank_rand);
       for (int i=0; i<Npo*rank_rand; i++)
 	matU[i] = (double)rand() / RAND_MAX;
@@ -419,29 +692,20 @@ if(tst==3){
 	/*****************************************************************/
 	/* Test Full matrices*/
 if(tst==4){
-	ker = 7;
-	Npo = 40000;
-
-	if(argc>2)Npo = stoi(argv[2]);
-	if(argc>3)Nmin = stoi(argv[3]);
-
-	if(argc>4)tol = stof(argv[4]);
-	if(argc>5)com_opt = stoi(argv[5]);
-	if(argc>6)checkerr = stoi(argv[6]);
-	if(argc>7)batch = stoi(argv[7]);
-	if(argc>8)bnum = stoi(argv[8]);
-	if(argc>9)knn = stoi(argv[9]);
-	if(argc>10)lrlevel = stoi(argv[10]);
-	if(argc>11)sample_para = stof(argv[11]);
+	if(ker !=7){
+		if(myrank==master_rank)std::cout<<"Forcing ker to 7 for tst=4."<<std::endl;
+		ker = 7;
+	}
+	// Npo = 40000;
 
 	delete(tree);
-	nlevel = 7;
+	// nlevel = 7;
 	vector<int> t1((int)pow(2,nlevel));
 	vector<double> matFull(Npo*Npo);
 	vector<int> perm(Npo);
 	if(myrank==master_rank){
 		// vector<double> matFull1(Npo*Npo);
-		ifstream f("../EXAMPLE/FULLMAT_DATA/FHODLR_colmajor_real_double_40000x40000.dat", ios::binary);
+		ifstream f(fullmatfile, ios::binary);
 		f.read((char*)matFull.data(), sizeof(double)*Npo*Npo);
 
 		// perm = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/sorder_40000.dat");
@@ -452,7 +716,7 @@ if(tst==4){
 		// 	perm.data()[perm1.data()[ii]]=ii;
 
 
-		t1 = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/leafs_40000_noheader.dat");
+		t1 = write_from_file<int>(leaffile);
 
 		// std::cout<<matFull.data()[Npo*Npo-1]<<" "<<perm.data()[Npo-1]<<" "<<ccc<<std::endl;
 	}
@@ -518,11 +782,13 @@ if(tst==4){
 	d_c_bpack_set_I_option(&option, "cpp", cpp);
 	d_c_bpack_set_I_option(&option, "LRlevel", lrlevel);
 	d_c_bpack_set_I_option(&option, "knn", knn);
-	d_c_bpack_set_I_option(&option, "verbosity", 2); 
+	d_c_bpack_set_I_option(&option, "verbosity", 2);
 	d_c_bpack_set_I_option(&option, "less_adapt", 1);
 	d_c_bpack_set_I_option(&option, "itermax", 10);
 	d_c_bpack_set_I_option(&option, "ErrSol", 1);
 
+
+	set_option_from_command_line(argc, argv,option);
 	d_c_bpack_printoption(&option,&ptree);
 
     // construct hodlr with geometrical points
@@ -715,7 +981,7 @@ if(tst==3){
 	d_c_bpack_set_I_option(&option2, "elem_extract", 1);// use block-wise element extraction
 
 	d_c_bf_construct_init(&M, &N, &myrow, &mycol, nns_ptr, nns_ptr, &msh, &msh, &bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2,&C_FuncDistmn, &C_FuncNearFar, quant_ptr2);
-	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmnBlock, quant_ptr2);
+	d_c_bf_construct_element_compute(&bf2, &option2, &stats2, &msh2, &kerquant2, &ptree2, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr2); // C_FuncBZmn is not referenced since elem_extract=1
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the fifth BF: "<<std::endl;
 	d_c_bpack_printstats(&stats2,&ptree2);

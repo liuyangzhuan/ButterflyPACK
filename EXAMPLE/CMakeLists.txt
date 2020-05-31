@@ -82,6 +82,15 @@ add_executable(ctest ${CDEXM})
 target_link_libraries(ctest ${all_link_libs_d})
 
 
+########################################### double complex C++ drivers
+
+set(CFEXM FIO_Driver.cpp)
+add_executable(cfio ${CFEXM})
+target_link_libraries(cfio ${all_link_libs_d})
+target_link_libraries(cfio ${all_link_libs_z})
+add_dependencies(cfio ctest)
+
+
 
 
 
