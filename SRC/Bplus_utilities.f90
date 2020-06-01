@@ -7179,9 +7179,9 @@ contains
                         lda_array(cnt)=nn
                         ldb_array(cnt)=ldi
                         ldc_array(cnt)=rank
-                        a_array(cnt)=C_LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
-                        b_array(cnt)=C_LOC(random1(1 + arr_acc_n(j), 1))
-                        c_array(cnt)=C_LOC(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
+                        b_array(cnt)=LOC(random1(1 + arr_acc_n(j), 1))
+                        c_array(cnt)=LOC(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7243,9 +7243,9 @@ contains
                            lda_array(cnt)=mm
                            ldb_array(cnt)=nn1
                            ldc_array(cnt)=mm
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+j-1)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+j-1)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
                         enddo
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7372,9 +7372,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=rank
                         ldc_array(cnt)=ldo
-                        a_array(cnt)=C_LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
-                        c_array(cnt)=C_LOC(random2(arr_acc_m(i)+1, 1))
+                        a_array(cnt)=LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
+                        c_array(cnt)=LOC(random2(arr_acc_m(i)+1, 1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
 
@@ -7429,9 +7429,9 @@ contains
                            lda_array(cnt)=mm
                            ldb_array(cnt)=nn
                            ldc_array(cnt)=mm
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
 
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
@@ -7447,9 +7447,9 @@ contains
                            lda_array(cnt)=mm
                            ldb_array(cnt)=nn
                            ldc_array(cnt)=mm
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
                         enddo
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7499,9 +7499,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=nn
                         ldc_array(cnt)=mm
-                        a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
 
 
                         mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
@@ -7518,9 +7518,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=nn
                         ldc_array(cnt)=mm
-                        a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7632,9 +7632,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=ldi
                         ldc_array(cnt)=rank
-                        a_array(cnt)=C_LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
-                        b_array(cnt)=C_LOC(random1(1 + arr_acc_m(i), 1))
-                        c_array(cnt)=C_LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
+                        b_array(cnt)=LOC(random1(1 + arr_acc_m(i), 1))
+                        c_array(cnt)=LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7693,9 +7693,9 @@ contains
                            lda_array(cnt)=mm1
                            ldb_array(cnt)=mm1
                            ldc_array(cnt)=nn
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+i-1, index_j_loc_k)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+i-1, index_j_loc_k)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
                         enddo
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7814,9 +7814,9 @@ contains
                         lda_array(cnt)=nn
                         ldb_array(cnt)=rank
                         ldc_array(cnt)=ldo
-                        a_array(cnt)=C_LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
-                        c_array(cnt)=C_LOC(random2(arr_acc_n(j)+1, 1))
+                        a_array(cnt)=LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
+                        c_array(cnt)=LOC(random2(arr_acc_n(j)+1, 1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
@@ -7868,9 +7868,9 @@ contains
                            lda_array(cnt)=mm
                            ldb_array(cnt)=mm
                            ldc_array(cnt)=nn
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
@@ -7886,9 +7886,9 @@ contains
                            lda_array(cnt)=mm
                            ldb_array(cnt)=mm
                            ldc_array(cnt)=nn
-                           a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
-                           b_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                           c_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+                           a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                           b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                           c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
                         enddo
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -7934,9 +7934,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=mm
                         ldc_array(cnt)=nn
-                        a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
 
 
                         mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
@@ -7952,9 +7952,9 @@ contains
                         lda_array(cnt)=mm
                         ldb_array(cnt)=mm
                         ldc_array(cnt)=nn
-                        a_array(cnt)=C_LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
-                        b_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
-                        c_array(cnt)=C_LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+                        a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                        b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
