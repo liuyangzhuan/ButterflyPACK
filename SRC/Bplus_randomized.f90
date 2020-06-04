@@ -639,7 +639,7 @@ contains
       enddo
       endif
       n2 = OMP_get_wtime()
-      time_tmp = time_tmp + n2 - n1
+      ! time_tmp = time_tmp + n2 - n1
 
       !********* compute row spaces and reconstruct blocks at level level
       do nth = nth_s, nth_e
@@ -920,7 +920,7 @@ contains
       enddo
       endif
       n2 = OMP_get_wtime()
-      time_tmp = time_tmp + n2 - n1
+      ! time_tmp = time_tmp + n2 - n1
 
 
       !********* compute column spaces and reconstruct blocks at level level
@@ -2029,7 +2029,7 @@ contains
       type(RandomBlock), pointer :: random
       integer Nsub, Ng, num_vect, nth_s, nth_e, level_butterfly
       integer*8 idx_start
-      real(kind=8)::error, tmp1, tmp2, tmp3, norm1, norm2, norm3
+      real(kind=8)::error, tmp1, tmp2, tmp3, norm1, norm2, norm3,n1,n2
       integer level_c, rowblock, dimension_m
       DT, allocatable::Vdref(:, :), Id(:, :), Vd(:, :)
       type(proctree)::ptree
@@ -2044,7 +2044,7 @@ contains
       level_butterfly = block_rand%level_butterfly
       num_blocks = 2**level_butterfly
 
-      num_vect = 1
+      num_vect = 16
 
       mm = block_rand%M_loc
       nn = block_rand%N_loc
@@ -2061,7 +2061,10 @@ contains
          Id = 1
       endif
 
+      n1=OMP_Get_wtime()
       call blackbox_MVP_dat(operand, block_o, 'N', mm, nn, num_vect, Id, nn, Vdref, mm, cone, czero, ptree, stats, operand1)
+      n2=OMP_get_wtime()
+      time_tmp = (n2-n1)/num_vect
 
       if (IOwnPgrp(ptree, block_rand%pgno)) then
          call BF_block_MVP_dat(block_rand, 'N', mm, nn, num_vect, Id, nn, Vd, mm, cone, czero, ptree, stats)

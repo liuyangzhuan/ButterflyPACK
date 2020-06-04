@@ -1385,9 +1385,9 @@ contains
       ptree_Cptr = c_loc(ptree)
 
 
-      if (ptree%MyID == Main_ID ) then
-         write (*, *) 'time_tmp', time_tmp, 'randomized_bf time,', t2-t1, 'stats%Time_random,', stats%Time_random, 'mem', stats%Mem_Comp_for
-      endif
+      ! if (ptree%MyID == Main_ID ) then
+      !    write (*, *) 'time_tmp', time_tmp, 'randomized_bf time,', t2-t1, 'stats%Time_random,', stats%Time_random, 'mem', stats%Mem_Comp_for
+      ! endif
 
 
    end subroutine C_BF_Construct_Matvec_Compute
