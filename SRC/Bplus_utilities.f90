@@ -9270,7 +9270,7 @@ contains
          !$omp taskloop default(shared) private(nn)
 #endif
          do nn = 1, size(BFvec%vec(level + 1)%index, 1)
-            call BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree)
+            call BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree,stats)
          enddo
 #ifdef HAVE_TASKLOOP
          !$omp end taskloop
@@ -9306,7 +9306,7 @@ contains
             !$omp taskloop default(shared) private(nn)
 #endif
             do nn = 1, size(BFvec1%vec(level + 1)%index, 1)
-               call BF_block_extraction_multiply_oneblock_last(blocks, BFvec1, inters, level,nn,ptree, msh)
+               call BF_block_extraction_multiply_oneblock_last(blocks, BFvec1, inters, level,nn,ptree, msh,stats)
             enddo
 #ifdef HAVE_TASKLOOP
             !$omp end taskloop
@@ -9331,7 +9331,7 @@ contains
             !$omp taskloop default(shared) private(nn)
 #endif
             do nn = 1, size(BFvec1%vec(level + 1)%index, 1)
-               call BF_block_extraction_multiply_oneblock_left(blocks, BFvec1, level,nn,ptree)
+               call BF_block_extraction_multiply_oneblock_left(blocks, BFvec1, level,nn,ptree,stats)
             enddo
 #ifdef HAVE_TASKLOOP
             !$omp end taskloop
@@ -9381,11 +9381,12 @@ contains
 
 
 
-subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree)
+subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree,stats)
 
     implicit none
     type(matrixblock)::blocks
     type(proctree)::ptree
+    type(Hstat):: stats
     type(butterfly_vec) :: BFvec
     integer level,nn
 
@@ -9451,6 +9452,9 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
                 mat1 = 0
                 mat1(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
                 call gemmf77('N', 'N', mm, nvec1, nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn1 + 2, czero, mat1(3, 1), mm + 2)
+                !$omp atomic
+                stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec1, nn1)
+                !$omp end atomic
             endif
 
             allocate (mat2(mm + 2, nvec2))
@@ -9458,6 +9462,9 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
                 mat2 = 0
                 mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(1:2, :)
                 call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
+                !$omp atomic
+                stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec2, nn2)
+                !$omp end atomic
             endif
 
             !**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
@@ -9501,11 +9508,12 @@ end subroutine BF_block_extraction_multiply_oneblock_right
 
 
 
-subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,ptree)
+subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,ptree,stats)
 
    implicit none
    type(matrixblock)::blocks
    type(proctree)::ptree
+   type(Hstat):: stats
    type(butterfly_vec) :: BFvec
    integer level,nn
 
@@ -9546,7 +9554,10 @@ subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,pt
             mat2 = 0
             mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
             call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
-            ! stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec2, nn2)
+
+            !$omp atomic
+            stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec2, nn2)
+            !$omp end atomic
 
             if (associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
                nvec1 = size(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, 2)
@@ -9662,11 +9673,12 @@ end subroutine BF_block_extraction_sort_oneblock
 
 
 
-subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, level,nn,ptree,msh)
+subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, level,nn,ptree,msh,stats)
 
    implicit none
    type(matrixblock)::blocks
    type(proctree)::ptree
+   type(Hstat):: stats
    type(butterfly_vec) :: BFvec
    integer level,nn
    type(intersect)::inters(:)
@@ -9741,7 +9753,9 @@ subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, lev
       enddo
 
       call gemmf77('N', 'N', nr, nc, rank, cone, mat, nr, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, czero, Vpartial, nr)
-      ! stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(nr, nc, rank)
+      !$omp atomic
+      stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(nr, nc, rank)
+      !$omp end atomic
 
       do ii = 1, nr
          iii = BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%index(idxr + ii, 2)
