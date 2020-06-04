@@ -1384,6 +1384,12 @@ contains
       ker_Cptr = c_loc(ker)
       ptree_Cptr = c_loc(ptree)
 
+
+      if (ptree%MyID == Main_ID ) then
+         write (*, *) 'time_tmp', time_tmp, 'randomized_bf time,', t2-t1, 'stats%Time_random,', stats%Time_random, 'mem', stats%Mem_Comp_for
+      endif
+
+
    end subroutine C_BF_Construct_Matvec_Compute
 
 !**** C interface of BF construction via entry extraction
@@ -1468,7 +1474,7 @@ contains
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
       stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
       stats%Time_Fill = stats%Time_Fill + t2 - t1
-      stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
+      ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
       !**** return the C address of hodlr structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
