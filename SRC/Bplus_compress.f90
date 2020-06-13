@@ -430,7 +430,7 @@ contains
       endif
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
-      if (level == 0) rankmax_r1 = min(ceiling_safe(option%sample_para*nn*overrate), mm)
+      if (level == 0) rankmax_r1 = min(ceiling_safe(option%sample_para_outer*nn*overrate), mm)
       rankmax_c = nn
       allocate (select_row(rankmax_r1 + nn*option%knn))
 
@@ -1346,7 +1346,7 @@ contains
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*mm rows, the first option%sample_para*mm are random, the next option%knn*mm are nearest points
       rankmax_r = mm
       rankmax_c1 = min(nn, ceiling_safe(option%sample_para*mm*overrate))
-      if (level == level_butterfly + 1) rankmax_c1 = min(ceiling_safe(option%sample_para*mm*overrate), nn)
+      if (level == level_butterfly + 1) rankmax_c1 = min(ceiling_safe(option%sample_para_outer*mm*overrate), nn)
       allocate (select_column(rankmax_c1 + option%knn*mm))
       call linspaceI(1, nn, rankmax_c1, select_column(1:rankmax_c1))
       header_m = msh%basis_group(group_m)%head

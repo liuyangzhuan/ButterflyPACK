@@ -449,6 +449,7 @@ contains
       option%rmax = 3000
       option%forwardN15flag = 0
       option%sample_para = 2.0d0
+      option%sample_para_outer = 2.0d0
       ! option%sample_heuristic = 1
       option%pat_comp = 3
       option%elem_extract = 0
@@ -540,6 +541,8 @@ contains
                   read (strings1, *) option%rmax
                else if (trim(strings) == '--sample_para') then
                   read (strings1, *) option%sample_para
+               else if (trim(strings) == '--sample_para_outer') then
+                  read (strings1, *) option%sample_para_outer
                ! else if (trim(strings) == '--sample_heuristic') then
                !    read (strings1, *) option%sample_heuristic
                else if (trim(strings) == '--pat_comp') then
@@ -609,6 +612,7 @@ contains
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
       option1%sample_para = option%sample_para
+      option1%sample_para_outer = option%sample_para_outer
       ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
       option1%elem_extract = option%elem_extract
@@ -669,6 +673,7 @@ contains
          write (*, '(A18,Es14.7)') 'near_para', option%near_para
          write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
          write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
+         write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
          write (*, *) '***************************'
          write (*, *) ' '
       endif

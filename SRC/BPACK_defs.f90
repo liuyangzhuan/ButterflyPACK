@@ -359,6 +359,7 @@ module BPACK_DEFS
         integer:: TwoLayerOnly  ! restrict Bplus as Butterfly + LR
         real(kind=8) touch_para   ! parameters used to determine whether one patch is closer to seperator
         real(kind=8) sample_para   ! parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
+        real(kind=8) sample_para_outer   ! parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
         ! integer sample_heuristic   ! 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp ! pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
 
