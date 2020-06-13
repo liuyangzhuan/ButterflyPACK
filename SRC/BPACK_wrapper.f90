@@ -591,6 +591,12 @@ contains
          valid_opt = 1
       endif
 
+      if (trim(str) == 'sample_para_outer') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%sample_para_outer = val_d
+         valid_opt = 1
+      endif
+
       if (valid_opt == 0) write (*, *) 'invalid HODLR option: '//trim(str)
 
       deallocate (str)
