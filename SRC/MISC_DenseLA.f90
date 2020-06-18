@@ -1090,7 +1090,7 @@ contains
       norm1 = fnorm(Matrix,m, n,'1')
       do ii=1,mn_min
          if(abs(Matrix(ii, ii))<dlamch('E'))then
-            Matrix(ii, ii) = sqrt(dlamch('E'))*norm1
+            Matrix(ii, ii) = sign(1d0,dble(Matrix(ii, ii)))*sqrt(dlamch('E'))*norm1
          endif
       enddo
 

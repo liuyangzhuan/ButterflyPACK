@@ -1661,6 +1661,78 @@ contains
 
    end subroutine GeneralInverse
 
+
+
+   subroutine PGeneralInverse(m, n, A, A_inv, eps_r, ctxt, Flops)
+      implicit none
+      integer m,n,mn,rank, iproc, myi,ii,jj
+      DT::A(:,:), A_inv(:,:)
+      DT,allocatable::UU(:,:),VV(:,:)
+      real(kind=8)::eps_r
+      integer ctxt
+      real(kind=8),optional::Flops
+      real(kind=8)::flop
+
+      integer:: nprow, npcol, myrow, mycol, myArows, myAcols, info
+      integer::descsMatA(9), descsMatAinv(9), descsMatU(9), descsMatV(9)
+      real(kind=8), allocatable :: Singular(:)
+
+      if (present(Flops))Flops=0
+
+      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
+         myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(n, nbslpk, mycol, 0, npcol)
+         call descinit(descsMatA, m, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+
+         myArows = numroc_wp(n, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(m, nbslpk, mycol, 0, npcol)
+         call descinit(descsMatAinv, n, m, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+
+         mn = min(m, n)
+         myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(mn, nbslpk, mycol, 0, npcol)
+         call descinit(descsMatU, m, mn, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (UU(max(1,myArows), max(1,myAcols)))
+         myArows = numroc_wp(mn, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(n, nbslpk, mycol, 0, npcol)
+         call descinit(descsMatV, mn, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (VV(max(1,myArows), max(1,myAcols)))
+         allocate (Singular(mn))
+
+         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, flop=flop)
+         if (present(Flops))Flops=Flops+flop
+
+         do ii=1,size(UU,1)
+         do jj=1,size(UU,2)
+            UU(ii, jj) = conjg(cmplx(UU(ii, jj), kind=8))
+         enddo
+         enddo
+         do ii=1,size(VV,1)
+         do jj=1,size(VV,2)
+            VV(ii, jj) = conjg(cmplx(VV(ii, jj), kind=8))
+         enddo
+         enddo
+         do ii = 1, rank
+            call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+            if (iproc == myrow) then
+               VV(myi, :) = VV(myi, :)/Singular(ii)
+            endif
+         enddo
+         deallocate (Singular)
+
+
+         A_inv=0
+         call pgemmf90('T', 'T', n, m, rank, cone, VV, 1, 1, descsMatV, UU, 1, 1, descsMatU, czero, A_inv, 1, 1, descsMatAinv, flop=flop)
+         if (present(Flops))Flops=Flops+flop
+
+         deallocate(UU,VV)
+      endif
+
+   end subroutine PGeneralInverse
+
+
+
    subroutine RandomizedSVD(matRcol, matZRcol, matRrow, matZcRrow, matU, matV, Singular, rankmax_r, rankmax_c, rmax, rank, tolerance, SVD_tolerance, Flops)
       !
       !

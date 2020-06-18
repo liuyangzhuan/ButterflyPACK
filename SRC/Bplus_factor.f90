@@ -280,7 +280,7 @@ contains
       real(kind=8) a, b, c, d, Memory, flop, norm1
       DT ctemp, TEMP(1)
       type(matrixblock)::block_o
-      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), matrixtemp2(:, :), matrixtemp3(:, :), UU(:, :), VV(:, :), matrix_small(:, :), vin(:, :), vout1(:, :), vout2(:, :), vout3(:, :), matU(:, :), matU2D(:, :), matU2D1(:, :), matV2D(:, :)
+      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), matrixtemp2(:, :), matrixtemp3(:, :), UU(:, :), VV(:, :), matrix_small(:, :), matrix_small1(:, :), vin(:, :), vout1(:, :), vout2(:, :), vout3(:, :), matU(:, :), matU2D(:, :), matU2D1(:, :), matV2D(:, :)
       real(kind=8), allocatable:: Singular(:)
       integer, allocatable :: ipiv(:), iwork(:)
       type(proctree)::ptree
@@ -373,7 +373,7 @@ contains
             call assert(info == 0, 'descinit fail for descsmall')
 
             call pgemmf90('T', 'N', rank, rank, block_o%N, cone, matV2D, 1, 1, descV, matU2D, 1, 1, descU, czero, matrix_small, 1, 1, descsmall, flop=flop)
-            stats%Flop_Factor = stats%Flop_Factor + flop
+            stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             do ii = 1, rank
                call g2l(ii, rank, nprow, nbslpk, iproc, myi)
                call g2l(ii, rank, npcol, nbslpk, jproc, myj)
@@ -381,28 +381,35 @@ contains
                   matrix_small(myi, myj) = matrix_small(myi, myj) + 1
                endif
             enddo
+#if 0
             allocate (ipiv(max(1,myArows) + nbslpk))
             ipiv = 0
             call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
-
             norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
             do ii = 1, rank
                call g2l(ii, rank, nprow, nbslpk, iproc, myi)
                call g2l(ii, rank, npcol, nbslpk, jproc, myj)
                if (iproc == myrow .and. jproc == mycol) then
                   if(abs(matrix_small(myi, myj))<dlamch('E'))then
-                     matrix_small(myi, myj) = sqrt(dlamch('E'))*norm1
+                     matrix_small(myi, myj) = sign(1d0,dble(matrix_small(myi, myj)))*sqrt(dlamch('E'))*norm1
                   endif
                endif
             enddo
-
             call pgetrif90(rank, matrix_small, 1, 1, descsmall, ipiv, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
-
             deallocate (ipiv)
+#else
+            allocate (matrix_small1(max(1,myArows), max(1,myAcols)))
+            matrix_small1=0
+            call PGeneralInverse(rank, rank, matrix_small, matrix_small1, SafeEps, ctxt, Flops=flop)
+            stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
+            matrix_small=matrix_small1
+            deallocate(matrix_small1)
+
+#endif
             call pgemmf90('N', 'N', block_o%M, rank, rank, cone, matU2D, 1, 1, descU, matrix_small, 1, 1, descsmall, czero, matU2D1, 1, 1, descU, flop=flop)
-            stats%Flop_Factor = stats%Flop_Factor + flop
+            stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             matU2D1 = -matU2D1
             deallocate (matrix_small)
          endif
@@ -636,7 +643,7 @@ contains
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          allocate (tau_Q(max(1,myAcols)))
          call pgeqrff90(blocks_A%M, rank, matU2D, 1, 1, descsMatU2D, tau_Q, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -652,14 +659,14 @@ contains
          enddo
          call pun_or_gqrf90(ctxt, matU2D, tau_Q, blocks_A%M, mn1, mn1, descsMatU2D, 1, 1, flop=flop)
          deallocate (tau_Q)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 
          mn2 = min(blocks_A%N, rank)
          myArows = numroc_wp(blocks_A%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          allocate (tau_Q(max(1,myAcols)))
          call pgeqrff90(blocks_A%N, rank, matV2D, 1, 1, descsMatV2D, tau_Q, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -675,7 +682,7 @@ contains
          enddo
          call pun_or_gqrf90(ctxt, matV2D, tau_Q, blocks_A%N, mn2, mn2, descsMatV2D, 1, 1, flop=flop)
          deallocate (tau_Q)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
@@ -683,7 +690,7 @@ contains
          mattemp = 0
          call descinit(descsMatSml, mn1, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', mn1, mn2, rank, cone, RR1, 1, 1, descsMatSmlRR1, RR2, 1, 1, descsMatSmlRR2, czero, mattemp, 1, 1, descsMatSml, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(mn1, mn2), nbslpk, mycol, 0, npcol)
          call descinit(descsUUSml, mn1, min(mn1, mn2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
@@ -695,14 +702,14 @@ contains
 
          allocate (Singularsml(min(mn1, mn2)))
          call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', blocks_A%M, ranknew, mn1, cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
             matU2Dnew(:, myj) = matU2Dnew(:, myj)*Singularsml(jj)
@@ -714,7 +721,7 @@ contains
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', blocks_A%N, ranknew, mn2, cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
 
          deallocate (mattemp, RR1, UUsml, VVsml, Singularsml)
@@ -765,7 +772,7 @@ contains
          mattemp = 0
          call descinit(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank1, rank2, rank, cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, czero, mattemp, 1, 1, descsMatSml, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(rank1, rank2), nbslpk, mycol, 0, npcol)
          call descinit(descsUUSml, rank1, min(rank1, rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
@@ -777,14 +784,14 @@ contains
 
          allocate (Singularsml(min(rank1, rank2)))
          call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', blocks_A%M, ranknew, rank1, cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
             matU2Dnew(:, myj) = matU2Dnew(:, myj)*Singularsml(jj)
@@ -796,7 +803,7 @@ contains
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', blocks_A%N, ranknew, rank2, cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
 
          deallocate (mattemp, UUsml, VVsml, Singularsml)
