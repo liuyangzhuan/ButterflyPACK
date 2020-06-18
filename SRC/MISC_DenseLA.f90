@@ -90,6 +90,74 @@ contains
 
    end function zlangef90
 
+
+   real(kind=8) function pfnorm(M, N, Matrix, ia, ja, desca, norm)
+      integer M, N, ia, ja
+      class(*) Matrix(:, :)
+      integer desca(9)
+      character, optional:: norm
+      select type (Matrix)
+      type is (real(kind=8))
+         pfnorm = pdlangef90(M, N, Matrix, ia, ja, desca, norm)
+      type is (complex(kind=8))
+         pfnorm = pzlangef90(M, N, Matrix, ia, ja, desca, norm)
+      end select
+   end function pfnorm
+
+
+   real(kind=8) function pdlangef90(M, N, Matrix, ia, ja, desca, norm)
+      implicit none
+      integer M, N, ia, ja
+      real(kind=8) Matrix(:, :)
+      integer desca(9)
+      character, optional:: norm
+      real(kind=8), allocatable:: WORK(:)
+      real(kind=8) pdlange
+      character::opt
+      integer IROFFA,ICOFFA
+
+      IROFFA = MOD( ia-1, nbslpk )
+      ICOFFA = MOD( ja-1, nbslpk )
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         allocate (WORK(max(M+IROFFA,N+ICOFFA)))
+         WORK = 0
+      end if
+      pdlangef90 = pdlange(opt, M, N, Matrix, ia, ja, desca, WORK)
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         deallocate (WORK)
+      end if
+   end function pdlangef90
+
+
+   real(kind=8) function pzlangef90(M, N, Matrix, ia, ja, desca, norm)
+      implicit none
+      integer M, N, ia, ja
+      complex(kind=8) Matrix(:, :)
+      integer desca(9)
+      character, optional:: norm
+      complex(kind=8), allocatable:: WORK(:)
+      complex(kind=8) pzlange
+      character::opt
+      integer IROFFA,ICOFFA
+
+      IROFFA = MOD( ia-1, nbslpk )
+      ICOFFA = MOD( ja-1, nbslpk )
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         allocate (WORK(max(M+IROFFA,N+ICOFFA)))
+         WORK = 0
+      end if
+      pzlangef90 = pzlange(opt, M, N, Matrix, ia, ja, desca, WORK)
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         deallocate (WORK)
+      end if
+   end function pzlangef90
+
+
+
    subroutine gesvd_robust(Matrix, Singular, UU, VV, mm, nn, mn_min, flop)
       implicit none
       integer mm, nn, mn_min
@@ -999,10 +1067,11 @@ contains
       implicit none
       real(kind=8) Matrix(:, :)
       integer ipiv(:)
-      integer m, n, mn_min
+      integer m, n, mn_min, ii
 
       integer INFO
       real(kind=8), optional::flop
+      real(kind=8)::norm1,dlamch
 
       m = size(Matrix, 1)
       n = size(Matrix, 2)
@@ -1017,6 +1086,15 @@ contains
 
 ! call getrf(Matrix,ipiv)
       if (present(flop)) flop = flops_dgeqrf(m, n)
+
+      norm1 = fnorm(Matrix,m, n,'1')
+      do ii=1,mn_min
+         if(abs(Matrix(ii, ii))<dlamch('E'))then
+            Matrix(ii, ii) = sqrt(dlamch('E'))*norm1
+         endif
+      enddo
+
+
    end subroutine dgetrff90
 
    subroutine zgetrff90(Matrix, ipiv, flop)
@@ -1026,9 +1104,10 @@ contains
       implicit none
       complex(kind=8) Matrix(:, :)
       integer ipiv(:)
-      integer m, n, mn_min
+      integer m, n, mn_min, ii
       real(kind=8), optional::flop
       integer INFO
+      real(kind=8)::norm1,dlamch
 
       m = size(Matrix, 1)
       n = size(Matrix, 2)
@@ -1043,6 +1122,15 @@ contains
 
 ! call getrf(Matrix,ipiv)
       if (present(flop)) flop = flops_zgeqrf(m, n)
+
+
+      norm1 = fnorm(Matrix,m, n,'1')
+      do ii=1,mn_min
+         if(abs(Matrix(ii, ii))<dlamch('E'))then
+            Matrix(ii, ii) = sqrt(dlamch('E'))*norm1
+         endif
+      enddo
+
    end subroutine zgetrff90
 
    subroutine getrsf90(Matrix, ipiv, B, trans, flop)
@@ -1459,11 +1547,11 @@ contains
       real(kind=8), optional::flop
 
       LWORK = -1
-      call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
+      call PZGEQRF(M, N, Matrix, ia, ja, desca, tau, TEMP, lwork, info)
       lwork = NINT(dble(TEMP(1)*2.001 + 1))
       allocate (WORK(lwork))
       WORK = 0
-      call PZGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
+      call PZGEQRF(M, N, Matrix, ia, ja, desca, tau, WORK, lwork, info)
 
       deallocate (WORK)
 
