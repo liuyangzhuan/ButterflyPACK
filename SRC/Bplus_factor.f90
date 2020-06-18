@@ -277,7 +277,7 @@ contains
       integer level_c, rowblock, kover, rank, kk1, kk2, nprow, npcol
       integer i, j, k, level, num_blocks, blocks3, num_row, num_col, ii, jj, kk, level_butterfly, mm, nn
       integer dimension_rank, dimension_m, dimension_n, blocks, groupm, groupn, index_j, index_i
-      real(kind=8) a, b, c, d, Memory, flop
+      real(kind=8) a, b, c, d, Memory, flop, norm1
       DT ctemp, TEMP(1)
       type(matrixblock)::block_o
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), matrixtemp2(:, :), matrixtemp3(:, :), UU(:, :), VV(:, :), matrix_small(:, :), vin(:, :), vout1(:, :), vout2(:, :), vout3(:, :), matU(:, :), matU2D(:, :), matU2D1(:, :), matV2D(:, :)
@@ -290,6 +290,7 @@ contains
       integer lwork, liwork, lcmrc, ierr
       DT, allocatable:: work(:)
       type(Hstat)::stats
+      real(kind=8)::dlamch
 
       ctxt = ptree%pgrp(pgno)%ctxt
       ctxt_head = ptree%pgrp(pgno)%ctxt_head
@@ -384,6 +385,17 @@ contains
             ipiv = 0
             call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
+
+            norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
+            do ii = 1, rank
+               call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+               call g2l(ii, rank, npcol, nbslpk, jproc, myj)
+               if (iproc == myrow .and. jproc == mycol) then
+                  if(abs(matrix_small(myi, myj))<dlamch('E'))then
+                     matrix_small(myi, myj) = sqrt(dlamch('E'))*norm1
+                  endif
+               endif
+            enddo
 
             call pgetrif90(rank, matrix_small, 1, 1, descsmall, ipiv, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
