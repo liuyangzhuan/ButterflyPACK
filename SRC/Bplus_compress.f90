@@ -4596,7 +4596,7 @@ contains
          myAcols = numroc_wp(mn, nbslpk, mycol, 0, npcol)
          allocate (tau_Q(myAcols))
          call pgeqrff90(M, mn, matU2D, 1, 1, descsMatU2D, tau_Q, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -4611,14 +4611,14 @@ contains
          enddo
          call pun_or_gqrf90(ctxt, matU2D, tau_Q, M, rank, rank, descsMatU2D, 1, 1, flop=flop)
          deallocate (tau_Q)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          mn = min(N, rank)
          myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn, nbslpk, mycol, 0, npcol)
          allocate (tau_Q(myAcols))
          call pgeqrff90(N, mn, matV2D, 1, 1, descsMatV2D, tau_Q, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -4633,7 +4633,7 @@ contains
          enddo
          call pun_or_gqrf90(ctxt, matV2D, tau_Q, N, rank, rank, descsMatV2D, 1, 1, flop=flop)
          deallocate (tau_Q)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -4641,11 +4641,11 @@ contains
          mattemp = 0
          call descinit(descsMatSml, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank, rank, rank, cone, RR1, 1, 1, descsMatSml, RR2, 1, 1, descsMatSml, czero, mattemp, 1, 1, descsMatSml, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          allocate (UUsml(max(1,myArows), max(1,myAcols)), VVsml(max(1,myArows), max(1,myAcols)), Singularsml(rank))
          call PSVD_Truncate(rank, rank, mattemp, descsMatSml, UUsml, VVsml, descsMatSml, descsMatSml, Singularsml, SVD_tolerance, ranknew, ctxt, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
@@ -4653,7 +4653,7 @@ contains
          blocks%ButterflyU%blocks(1)%matrix = 0
          call descinit(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', M, ranknew, rank, cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsMatSml, czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descsMatU2Dnew, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
@@ -4666,7 +4666,7 @@ contains
          blocks%ButterflyV%blocks(1)%matrix = 0
          call descinit(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', N, ranknew, rank, cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsMatSml, czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descsMatV2Dnew, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
          rank = ranknew
 
@@ -4718,7 +4718,7 @@ contains
          mattemp = 0
          call descinit(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank1, rank2, rank, cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, czero, mattemp, 1, 1, descsMatSml, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(rank1, rank2), nbslpk, mycol, 0, npcol)
          call descinit(descsUUSml, rank1, min(rank1, rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
@@ -4729,14 +4729,14 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
          allocate (Singularsml(min(rank1, rank2)))
          call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, SVD_tolerance, ranknew, ctxt, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (blocks%ButterflyU%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
          blocks%ButterflyU%blocks(1)%matrix = 0
          call descinit(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', M, ranknew, rank1, cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descsMatU2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
             blocks%ButterflyU%blocks(1)%matrix(:, myj) = blocks%ButterflyU%blocks(1)%matrix(:, myj)*Singularsml(jj)
@@ -4748,7 +4748,7 @@ contains
          blocks%ButterflyV%blocks(1)%matrix = 0
          call descinit(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', N, ranknew, rank2, cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descsMatV2Dnew, flop=flop)
-         stats%Flop_Factor = stats%Flop_Factor + flop
+         stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
 
          deallocate (mattemp, UUsml, VVsml, Singularsml)
