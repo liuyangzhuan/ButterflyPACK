@@ -335,6 +335,7 @@ contains
       time_tmp2 = 0
       time_tmp3 = 0
       time_tmp4 = 0
+      time_tmp5 = 0
    end subroutine InitStat
 
    subroutine PrintStat(stats, ptree)

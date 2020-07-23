@@ -39,9 +39,11 @@ echo "#if DAT==0" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_COMPLEX" >> $MACRO_FILE
+echo "#define C_SIZEOF_DT sizeof_complex16" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_DOUBLE_COMPLEX)" >> $MACRO_FILE
 echo "#define C_DT _Complex double" >> $MACRO_FILE
 echo "#define gemmf77 zgemm" >> $MACRO_FILE
+echo "#define copymatf77 zlacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 while IFS= read -r line ; do
     echo "#define $line z_$line" >> $MACRO_FILE
@@ -51,9 +53,11 @@ echo "#elif DAT==1" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT real(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_PRECISION" >> $MACRO_FILE
+echo "#define C_SIZEOF_DT sizeof_double" >> $MACRO_FILE
 echo "#define CBIND_DT real(kind=C_DOUBLE)" >> $MACRO_FILE
 echo "#define C_DT double" >> $MACRO_FILE
 echo "#define gemmf77 dgemm" >> $MACRO_FILE
+echo "#define copymatf77 dlacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 while IFS= read -r line ; do
     echo "#define $line d_$line" >> $MACRO_FILE
@@ -80,6 +84,9 @@ sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/z_BPACK_WRAP/g" $ZSRCDIR/*.h
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.f90
+sed -i -e "s/c_magma_offset_1d/z_c_magma_offset_1d/g" $ZSRCDIR/*.f90
+sed -i -e "s/c_magma_offset_2d/z_c_magma_offset_2d/g" $ZSRCDIR/*.f90
+sed -i -e "s/magmablas_gemm_vbatched/magmablas_zgemm_vbatched/g" $ZSRCDIR/*.f90
 
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
@@ -94,6 +101,9 @@ sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/d_BPACK_WRAP/g" $DSRCDIR/*.h
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.f90
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.f90
+sed -i -e "s/c_magma_offset_1d/d_c_magma_offset_1d/g" $DSRCDIR/*.f90
+sed -i -e "s/c_magma_offset_2d/d_c_magma_offset_2d/g" $DSRCDIR/*.f90
+sed -i -e "s/magmablas_gemm_vbatched/magmablas_dgemm_vbatched/g" $DSRCDIR/*.f90
 
 
 ###########################################################

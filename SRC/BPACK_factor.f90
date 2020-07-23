@@ -188,15 +188,17 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         call MPI_ALLREDUCE(stats%Time_RedistV, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_RedistV:', rtemp
         call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', rtemp
         call MPI_ALLREDUCE(time_tmp1, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp1', time_tmp1
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp1', rtemp
         call MPI_ALLREDUCE(time_tmp2, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp2', time_tmp2
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp2', rtemp
         call MPI_ALLREDUCE(time_tmp3, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp3', time_tmp3
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp3', rtemp
         call MPI_ALLREDUCE(time_tmp4, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp4', time_tmp4
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp4', rtemp
+        call MPI_ALLREDUCE(time_tmp5, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp5', rtemp
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
 
@@ -285,15 +287,17 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         call MPI_ALLREDUCE(stats%Time_Split, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Split:', rtemp
         call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', rtemp
         call MPI_ALLREDUCE(time_tmp1, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp1', time_tmp1
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp1', rtemp
         call MPI_ALLREDUCE(time_tmp2, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp2', time_tmp2
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp2', rtemp
         call MPI_ALLREDUCE(time_tmp3, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp3', time_tmp3
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp3', rtemp
         call MPI_ALLREDUCE(time_tmp4, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp4', time_tmp4
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp4', rtemp
+        call MPI_ALLREDUCE(time_tmp5, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp5', rtemp
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
 

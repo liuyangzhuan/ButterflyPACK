@@ -5,6 +5,8 @@ set(headers
 )
 
 set(sources
+MAGMA_offset.c
+MAGMA_utilities.f90
 LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 SCALAPACK_pdgeqpfmod.f
@@ -31,7 +33,7 @@ BPACK_wrapper.f90
 
 add_library(butterflypack ${sources} ${HEADERS})
 target_link_libraries(butterflypack
-                      ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} m)
+                      ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
 set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
