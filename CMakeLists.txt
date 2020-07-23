@@ -214,6 +214,20 @@ if(SCALAPACK_FOUND)
     set(SCALAPACK_LIB_EXPORT ${SCALAPACK_LIB_STR})
  endif()
 
+  # #--------------------- MAGMA ---------------------
+if(TPL_MAGMA_LIBRARIES)
+	set(MAGMA_FOUND TRUE)
+endif()
+
+if(MAGMA_FOUND)
+    message("-- Using TPL_MAGMA_LIBRARIES='${TPL_MAGMA_LIBRARIES}'")
+    set(MAGMA_LIB ${TPL_MAGMA_LIBRARIES})
+    string (REPLACE ";" " " MAGMA_LIB_STR "${MAGMA_LIB}")
+    set(MAGMA_LIB_EXPORT ${MAGMA_LIB_STR})
+    set(CMAKE_Fortran_FLAGS "-DHAVE_MAGMA ${CMAKE_Fortran_FLAGS}")
+    set(CMAKE_C_FLAGS "-DHAVE_MAGMA ${CMAKE_C_FLAGS}")
+ endif()
+
 
 # #--------------------- ARPACK ---------------------
 if(TPL_ARPACK_LIBRARIES)

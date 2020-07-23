@@ -625,7 +625,7 @@ module BPACK_DEFS
     end interface
 
     !*** need to further work on the following:
-    real(kind=8)::time_tmp,time_tmp1,time_tmp2,time_tmp3,time_tmp4
+    real(kind=8)::time_tmp,time_tmp1,time_tmp2,time_tmp3,time_tmp4,time_tmp5
 
     ! integer,allocatable:: basis_group_pre(:,:)
 contains

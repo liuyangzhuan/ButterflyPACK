@@ -19,6 +19,9 @@
 module Bplus_Utilities
    use BPACK_DEFS
    use MISC_Utilities
+#ifdef HAVE_MAGMA
+   use magma_utilities
+#endif
 contains
 
    subroutine Bplus_delete(bplus)
@@ -6081,11 +6084,16 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
+#ifdef HAVE_MAGMA
+   call BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+#else
+
 ! #ifdef HAVE_MKL
 #if 0
-      call BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+      call BF_block_MVP_dat_batch_mkl(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #else
       call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+#endif
 #endif
    end subroutine BF_block_MVP_dat
 
@@ -6988,7 +6996,7 @@ contains
 
 #ifdef HAVE_MKL
 
-   subroutine BF_block_MVP_dat_batch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+   subroutine BF_block_MVP_dat_batch_mkl(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 
 
 
@@ -8004,11 +8012,2319 @@ contains
       time_tmp2 = time_tmp2 + n2-n1
       return
 
-   end subroutine BF_block_MVP_dat_batch
+   end subroutine BF_block_MVP_dat_batch_mkl
 
 #endif
 
 
+#ifdef HAVE_MAGMA
+subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+
+
+   implicit none
+
+   integer M, N, Nrnd, index_i, index_j, na, nb, index_start, num_vectors
+   integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
+   integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
+   integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+   integer vector_a, vector_b, nn1, nn2, mm1, mm2, level_half, level_final, pgno_sub
+   integer idx_r, inc_r, nr, idx_c, inc_c, nc
+   integer idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0
+   DT ctemp, a, b
+   character chara
+   type(matrixblock)::blocks
+   type(proctree)::ptree
+   integer pgno, comm, ierr
+   type(Hstat)::stats
+   real(kind=8)::flop, flops,n1,n2,n3,n4,n5,n6,n7,n8
+   integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
+   integer*8:: cnta,cntb,cntc
+   integer,target,allocatable::group_size(:),m_array(:),n_array(:),k_array(:),lda_array(:),ldb_array(:),ldc_array(:)
+   type(c_ptr),target,allocatable::a_array(:),b_array(:),c_array(:)
+   integer group_count,cnt
+   type(c_ptr) :: dm_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dn_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dk_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dlda_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dldb_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dldc_array  !! on GPU, int*     (array of batchcount integers)
+   type(c_ptr) :: dA_array,dB_array,dC_array  !! on GPU, double** (array of batchcount DT* pointers)
+   DT,target,allocatable::AA(:),BB(:),CC(:)
+   integer :: asize,bsize,csize
+
+   type(butterfly_vec) :: BFvec
+   integer ldi,ldo
+   DT,target :: random1(ldi, *), random2(ldo, *)
+   DT, pointer :: random1_p(:, :),random2_p(:, :)
+   DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
+
+   integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
+
+   type(c_ptr) :: dA,dB,dC           !! on GPU, double*  (array of n * n * batchcount doubles)
+   integer info
+   integer :: dev
+   type(c_ptr) :: queue  !! magma_queue_t
+   integer(c_int):: transa_magma,transb_magma
+   DT:: alpha_magma,beta_magma
+
+   n1 = OMP_get_wtime()
+
+   call MAGMA_init()
+   dev = 0
+   call MAGMA_queue_create( dev, queue )
+
+
+   level_butterfly = blocks%level_butterfly
+   pgno = blocks%pgno
+   comm = ptree%pgrp(pgno)%comm
+   if (comm == MPI_COMM_NULL) then
+      write (*, *) 'ninin', pgno, comm == MPI_COMM_NULL, ptree%MyID
+   endif
+
+   call assert(IOwnPgrp(ptree, pgno), 'I do not share this block!')
+
+   if (blocks%style == 1) then
+      call Full_block_MVP_dat(blocks, chara, M, Nrnd, random1, ldi, random2, ldo, a, b)
+      return
+   endif
+
+   if (level_butterfly == 0) then
+      rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
+      call assert(rank > 0, 'rank incorrect in blocks%ButterflyU')
+      allocate (matrixtemp(rank, Nrnd))
+      matrixtemp = 0
+      allocate (matrixtemp1(rank, Nrnd))
+      matrixtemp1 = 0
+      ! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1
+      if (chara == 'N') then !Vout=U*V^T*Vin
+         allocate (Vout_tmp(M,Nrnd))
+         Vout_tmp = 0
+         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
+         call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
+      else if (chara == 'T') then !Vout=V*U^T*Vin
+         allocate (Vout_tmp(N,Nrnd))
+         Vout_tmp = 0
+         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
+         call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
+      endif
+
+      deallocate (matrixtemp)
+      deallocate (matrixtemp1)
+      deallocate (Vout_tmp)
+
+   else
+
+      allocate (arr_acc_n(blocks%ButterflyV%nblk_loc))
+      allocate (arr_acc_m(blocks%ButterflyU%nblk_loc))
+      k1 = 0
+      do i = 1, blocks%ButterflyV%nblk_loc
+         arr_acc_n(i) = k1
+         nn = size(blocks%ButterflyV%blocks(i)%matrix, 1)
+         k1 = k1 + nn
+      enddo
+
+      k2 = 0
+      do i = 1, blocks%ButterflyU%nblk_loc
+         arr_acc_m(i) = k2
+         mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+         k2 = k2 + mm
+      enddo
+
+      num_vectors = Nrnd
+
+      if (BF_checkNAN(blocks)) then
+         write (*, *) 'NAN in 0 BF_block_MVP_dat'
+         stop
+      end if
+
+      if (chara == 'N') then
+
+         if (isnanMat(random1(1:N,1:1),N,1)) then
+            write (*, *) 'NAN in 1 BF_block_MVP_dat'
+            stop
+         end if
+
+         level_butterfly = blocks%level_butterfly
+         num_blocks = 2**level_butterfly
+         level_half = blocks%level_half
+
+         allocate (BFvec%vec(0:level_butterfly + 2))
+
+         allocate (BFvec%vec(0)%blocks(1, blocks%ButterflyV%nblk_loc))
+         BFvec%vec(0)%num_row = 1
+         BFvec%vec(0)%num_col = num_blocks
+         BFvec%vec(0)%idx_r = 1
+         BFvec%vec(0)%inc_r = 1
+         BFvec%vec(0)%nr = 1
+         BFvec%vec(0)%idx_c = blocks%ButterflyV%idx
+         BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
+         BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
+
+         n5 = OMP_get_wtime()
+         do level = 0, level_half
+            ! n1 = OMP_get_wtime()
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
+
+            BFvec%vec(level + 1)%idx_r = idx_r
+            BFvec%vec(level + 1)%inc_r = inc_r
+            BFvec%vec(level + 1)%nr = nr
+            BFvec%vec(level + 1)%idx_c = idx_c
+            BFvec%vec(level + 1)%inc_c = inc_c
+            BFvec%vec(level + 1)%nc = nc
+
+            if (nr > 0 .and. nc > 0) then
+               if (level /= level_butterfly + 1) then
+                  BFvec%vec(level + 1)%num_row = 2**level
+                  BFvec%vec(level + 1)%num_col = 2**(level_butterfly - level)
+               else
+                  BFvec%vec(level + 1)%num_row = 2**level_butterfly
+                  BFvec%vec(level + 1)%num_col = 1
+               endif
+               if (level_half /= level) then ! the last level doesn't require doubling block columns
+               if (nc == 1 .and. 2**(level_butterfly - level) > 1) then ! double the number of local block columns used for MPI communication
+                  BFvec%vec(level + 1)%nc = 2
+                  BFvec%vec(level + 1)%idx_c = BFvec%vec(level + 1)%idx_c - 1 + mod(BFvec%vec(level + 1)%idx_c, 2)
+               endif
+               endif
+               allocate (BFvec%vec(level + 1)%blocks(BFvec%vec(level + 1)%nr, BFvec%vec(level + 1)%nc))
+
+               if (level == 0) then
+                  flops = 0
+
+                  n3 = OMP_get_wtime()
+                  group_count=blocks%ButterflyV%nblk_loc
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=cone
+                  beta_magma=cone
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*inc_c + idx_c
+                     index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
+                     nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
+                     allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
+                     BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
+                     cnt=cnt+1
+                     m_array(cnt)=rank
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=nn
+                     lda_array(cnt)=nn
+                     ldb_array(cnt)=nn
+                     ldc_array(cnt)=rank
+                     ! a_array(cnt)=LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
+                     ! b_array(cnt)=LOC(random1(1 + arr_acc_n(j), 1))
+                     ! c_array(cnt)=LOC(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*inc_c + idx_c
+                     index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
+                     nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
+                     BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix,ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),random1(1 + arr_acc_n(j), 1),ldi,BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyV%blocks(j)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+
+
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                  ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+                  cnt=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*inc_c + idx_c
+                     index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     cnt=cnt+1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix,ldc_array(cnt))
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+
+                  call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
+                  if (ptree%pgrp(pgno_sub)%nproc > 1) then
+                     rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
+                     index_j = idx_c
+                     index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                  endif
+
+               elseif (level == level_butterfly + 1) then
+                  write(*,*)'should not arrive here'
+               else
+
+                  n3 = OMP_get_wtime()
+                  do j=1,2
+                     group_count=nr*nc
+
+                     allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                     transa_magma=MagmaNoTrans
+                     transb_magma=MagmaNoTrans
+                     alpha_magma=cone
+                     beta_magma=cone
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_jj - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        nn1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix, 2)
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+
+                        if(.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix))then
+                           allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
+                           BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        endif
+                        cnt=cnt+1
+                        m_array(cnt)=mm
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=nn1
+                        lda_array(cnt)=mm
+                        ldb_array(cnt)=nn1
+                        ldc_array(cnt)=mm
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+j-1)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                     enddo
+
+                     allocate(AA(asize))
+                     allocate(BB(bsize))
+                     allocate(CC(csize))
+                     info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                     info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                     info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_jj - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        nn1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix, 2)
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+
+                        cnt=cnt+1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+j-1)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+
+                     call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                     call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                     call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                     call magmaf_wtime(n7)
+                     call MAGMA_gemm_vbatched( &
+                     transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                     dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+
+                     ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+                     cnt=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_jj - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        nn1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+j-1)%matrix, 2)
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+
+                        cnt=cnt+1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+
+                     deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                     info = MAGMA_free( dA )
+                     info = MAGMA_free( dB )
+                     info = MAGMA_free( dC )
+                     info = MAGMA_free( dA_array )
+                     info = MAGMA_free( dB_array )
+                     info = MAGMA_free( dC_array )
+                     info = MAGMA_free( dm_array )
+                     info = MAGMA_free( dn_array )
+                     info = MAGMA_free( dk_array )
+                     info = MAGMA_free( dlda_array )
+                     info = MAGMA_free( dldb_array )
+                     info = MAGMA_free( dldc_array )
+
+                  enddo
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+               endif
+            endif
+            do j = 1, BFvec%vec(level)%nc
+               do i = 1, BFvec%vec(level)%nr
+                  if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
+               enddo
+            enddo
+
+            ! n2 = OMP_get_wtime()
+            ! time_tmp = time_tmp + n2-n1
+
+            if (level_half /= level) then
+               call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
+            endif
+         enddo
+
+         n6 = OMP_get_wtime()
+         time_tmp1 = time_tmp1 + n6-n5
+
+         if (level_half + 1 /= 0) then
+            call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
+         else
+            call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
+         endif
+
+         n5 = OMP_get_wtime()
+         do level = level_half + 1, level_butterfly + 1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
+
+
+            ! convert the local column-wise kernel block ranges to local row-wise output vector ranges
+            if (level /= 0 .and. level /= level_butterfly + 1) then
+               idx_r = idx_r0*2 - 1
+               nr = nr0*2
+               inc_r = inc_r0
+               idx_c = ceiling_safe(idx_c0/2d0)
+               if (inc_c0 > 1) then
+                  nc = nc0
+               else
+                  nc = ceiling_safe(nc0/2d0)
+               endif
+               inc_c = ceiling_safe(inc_c0/2d0)
+            else
+               idx_r = idx_r0
+               nr = nr0
+               inc_r = inc_r0
+               idx_c = idx_c0
+               nc = nc0
+               inc_c = inc_c0
+            endif
+
+            BFvec%vec(level + 1)%idx_r = idx_r
+            BFvec%vec(level + 1)%inc_r = inc_r
+            BFvec%vec(level + 1)%nr = nr
+            BFvec%vec(level + 1)%idx_c = idx_c
+            BFvec%vec(level + 1)%inc_c = inc_c
+            BFvec%vec(level + 1)%nc = nc
+            if (level /= level_butterfly + 1) then
+               BFvec%vec(level + 1)%num_row = 2**level
+               BFvec%vec(level + 1)%num_col = 2**(level_butterfly - level)
+            else
+               BFvec%vec(level + 1)%num_row = 2**level_butterfly
+               BFvec%vec(level + 1)%num_col = 1
+            endif
+
+            allocate (BFvec%vec(level + 1)%blocks(BFvec%vec(level + 1)%nr, BFvec%vec(level + 1)%nc))
+
+            if (level == 0) then
+               write (*, *) 'should not arrive here'
+            elseif (level == level_butterfly + 1) then
+               flops = 0
+               call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
+               if (ptree%pgrp(pgno_sub)%nproc > 1) then
+                  mm = size(blocks%ButterflyU%blocks(1)%matrix, 1)
+                  rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
+                  allocate (matrixtemp(rank, num_vectors))
+                  matrixtemp = 0
+                  if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
+                     index_i = idx_r0
+                     index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+                     matrixtemp = BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix
+                  endif
+                  call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                  allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
+                  BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
+                  call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, random2(arr_acc_m(1)+1, 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
+
+                  flops = flops + flop
+                  deallocate (matrixtemp)
+               else
+
+
+                  n3 = OMP_get_wtime()
+                  group_count=nr0
+
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaNoTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=a
+                  beta_magma=b
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  cnt=0
+                  do i = 1, nr0
+
+                     index_i = (i - 1)*inc_r0 + idx_r0
+                     index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+
+                     rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+                     mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+                     allocate (BFvec%vec(level + 1)%blocks(i, 1)%matrix(mm, num_vectors))
+                     BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
+
+                     cnt=cnt+1
+
+                     m_array(cnt)=mm
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=rank
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=rank
+                     ldc_array(cnt)=mm
+
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  cnt=0
+                  do i = 1, nr0
+
+                     index_i = (i - 1)*inc_r0 + idx_r0
+                     index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+
+                     rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+                     mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+
+
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),random2(arr_acc_m(i)+1, 1),ldo,CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyU%blocks(i)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                     ! a_array(cnt)=LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
+                     ! c_array(cnt)=LOC(random2(arr_acc_m(i)+1, 1))
+                  enddo
+
+
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+
+                  csize=0
+                  cnt=0
+                  do i = 1, nr0
+
+                     index_i = (i - 1)*inc_r0 + idx_r0
+                     index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),random2(arr_acc_m(i)+1, 1),ldo)
+
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+
+               endif
+               stats%Flop_Tmp = stats%Flop_Tmp + flops
+            else
+               n3=OMP_get_wtime()
+               if (nc0 > 1 .and. inc_c0 == 1) then
+                  group_count=nr0*nc0
+
+                  do jj=1,2
+
+                     allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                     transa_magma=MagmaNoTrans
+                     transb_magma=MagmaNoTrans
+                     alpha_magma=cone
+                     beta_magma=cone
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_j_loc0 = (index_ij - 1)/nr0 + 1
+
+                        index_j_loc = 2*(index_j_loc0 - 1) + jj       !index_i_loc is local index of column-wise ordering at current level
+                        index_i_loc = mod(index_ij - 1, nr0) + 1
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                        if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
+                           allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
+                           BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        endif
+                        cnt = cnt +1
+                        m_array(cnt)=mm
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=nn
+                        lda_array(cnt)=mm
+                        ldb_array(cnt)=nn
+                        ldc_array(cnt)=mm
+
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                        if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix)) then
+                           allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(mm, num_vectors))
+                           BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix = 0
+                        endif
+                        cnt = cnt +1
+                        m_array(cnt)=mm
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=nn
+                        lda_array(cnt)=mm
+                        ldb_array(cnt)=nn
+                        ldc_array(cnt)=mm
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                     enddo
+
+                     allocate(AA(asize))
+                     allocate(BB(bsize))
+                     allocate(CC(csize))
+                     info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                     info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                     info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_j_loc0 = (index_ij - 1)/nr0 + 1
+
+                        index_j_loc = 2*(index_j_loc0 - 1) + jj       !index_i_loc is local index of column-wise ordering at current level
+                        index_i_loc = mod(index_ij - 1, nr0) + 1
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                        cnt = cnt +1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                        cnt = cnt +1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                     enddo
+
+                     ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                     call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                     call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                     call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                     call magmaf_wtime(n7)
+                     call MAGMA_gemm_vbatched( &
+                     transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                     dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                     cnt=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_j_loc0 = (index_ij - 1)/nr0 + 1
+
+                        index_j_loc = 2*(index_j_loc0 - 1) + jj       !index_i_loc is local index of column-wise ordering at current level
+                        index_i_loc = mod(index_ij - 1, nr0) + 1
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                        index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                        cnt = cnt +1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                        cnt = cnt +1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+
+                        asize=asize+lda_array(cnt)*k_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+
+                     deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                     info = MAGMA_free( dA )
+                     info = MAGMA_free( dB )
+                     info = MAGMA_free( dC )
+                     info = MAGMA_free( dA_array )
+                     info = MAGMA_free( dB_array )
+                     info = MAGMA_free( dC_array )
+                     info = MAGMA_free( dm_array )
+                     info = MAGMA_free( dn_array )
+                     info = MAGMA_free( dk_array )
+                     info = MAGMA_free( dlda_array )
+                     info = MAGMA_free( dldb_array )
+                     info = MAGMA_free( dldc_array )
+
+                  enddo
+
+
+               else
+
+                  group_count=nr0*nc0*2
+
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaNoTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=cone
+                  beta_magma=cone
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
+                     index_i_loc = mod(index_ij - 1, nr0) + 1
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                     index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                     index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                     index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                     ! !$omp critical
+                     if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
+                        allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
+                        BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                     endif
+                     cnt = cnt +1
+                     m_array(cnt)=mm
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=nn
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=nn
+                     ldc_array(cnt)=mm
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                     ! !$omp critical
+                     if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix)) then
+                        allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(mm, num_vectors))
+                        BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix = 0
+                     endif
+                     cnt = cnt +1
+                     m_array(cnt)=mm
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=nn
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=nn
+                     ldc_array(cnt)=mm
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
+                     index_i_loc = mod(index_ij - 1, nr0) + 1
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                     index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                     index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                     index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+
+                     cnt = cnt +1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                     cnt = cnt +1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                  ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  cnt=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
+                     index_i_loc = mod(index_ij - 1, nr0) + 1
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of column-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii_loc = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1  !index_ii_loc is local index in BFvec%vec(level)
+                     index_jj_loc = (index_j - BFvec%vec(level)%idx_c)/BFvec%vec(level)%inc_c + 1
+
+                     index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2)  !index_ii is global index in BFvec%vec(level+1)
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level + 1)%idx_r)/BFvec%vec(level + 1)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level+1)
+                     index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
+                     index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+
+                     cnt = cnt +1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
+                     cnt = cnt +1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+
+               endif
+               n4 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n4-n3
+
+
+            endif
+
+
+
+            do j = 1, BFvec%vec(level)%nc
+               do i = 1, BFvec%vec(level)%nr
+                  if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
+               enddo
+            enddo
+
+            if (level /= level_butterfly + 1) then
+               call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
+            endif
+         enddo
+
+         if (isnanMat(random2(1:M,1:1),M,1)) then
+            write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
+            stop
+         end if
+         !deallocate (BFvec%vec)
+
+         n6 = OMP_get_wtime()
+         time_tmp1 = time_tmp1 + n6-n5
+
+
+
+      elseif (chara == 'T') then
+
+         if (isnanMat(random1(1:M,1:1),M,1)) then
+            write (*, *) 'NAN in 3 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
+            stop
+         end if
+
+         level_butterfly = blocks%level_butterfly
+         num_blocks = 2**level_butterfly
+         level_half = blocks%level_half
+
+         allocate (BFvec%vec(0:level_butterfly + 2))
+         allocate (BFvec%vec(0)%blocks(blocks%ButterflyU%nblk_loc, 1))
+         BFvec%vec(0)%num_row = num_blocks
+         BFvec%vec(0)%num_col = 1
+         BFvec%vec(0)%idx_r = blocks%ButterflyU%idx
+         BFvec%vec(0)%inc_r = blocks%ButterflyU%inc
+         BFvec%vec(0)%nr = blocks%ButterflyU%nblk_loc
+         BFvec%vec(0)%idx_c = 1
+         BFvec%vec(0)%inc_c = 1
+         BFvec%vec(0)%nc = 1
+
+         n5 = OMP_get_wtime()
+         do level = level_butterfly + 1, level_half + 1, -1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
+
+            BFvec%vec(level_butterfly - level + 2)%idx_r = idx_r
+            BFvec%vec(level_butterfly - level + 2)%inc_r = inc_r
+            BFvec%vec(level_butterfly - level + 2)%nr = nr
+            BFvec%vec(level_butterfly - level + 2)%idx_c = idx_c
+            BFvec%vec(level_butterfly - level + 2)%inc_c = inc_c
+            BFvec%vec(level_butterfly - level + 2)%nc = nc
+
+            if (nr > 0 .and. nc > 0) then
+
+               if (level /= 0) then
+                  BFvec%vec(level_butterfly - level + 2)%num_row = 2**(level - 1)
+                  BFvec%vec(level_butterfly - level + 2)%num_col = 2**(level_butterfly - level + 1)
+               else
+                  BFvec%vec(level_butterfly - level + 2)%num_row = 1
+                  BFvec%vec(level_butterfly - level + 2)%num_col = 2**level_butterfly
+               endif
+               if (level_half + 1 /= level) then ! the last level doesn't require doubling block rows
+               if (nr == 1 .and. 2**(level - 1) > 1) then ! double the number of local block rows used for MPI communication
+                  BFvec%vec(level_butterfly - level + 2)%nr = 2
+                  BFvec%vec(level_butterfly - level + 2)%idx_r = BFvec%vec(level_butterfly - level + 2)%idx_r - 1 + mod(BFvec%vec(level_butterfly - level + 2)%idx_r, 2)
+               endif
+               endif
+               allocate (BFvec%vec(level_butterfly - level + 2)%blocks(BFvec%vec(level_butterfly - level + 2)%nr, BFvec%vec(level_butterfly - level + 2)%nc))
+
+               if (level == level_butterfly + 1) then
+                  n3=OMP_get_wtime()
+                  group_count=blocks%ButterflyU%nblk_loc
+
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=cone
+                  beta_magma=cone
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do i = 1, blocks%ButterflyU%nblk_loc
+
+                     index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
+                     index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
+
+                     rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+                     mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+                     allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
+                     BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
+                     cnt=cnt+1
+                     m_array(cnt)=rank
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=mm
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=mm
+                     ldc_array(cnt)=rank
+                     ! a_array(cnt)=LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
+                     ! b_array(cnt)=LOC(random1(1 + arr_acc_m(i), 1))
+                     ! c_array(cnt)=LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do i = 1, blocks%ButterflyU%nblk_loc
+
+                     index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
+                     index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
+
+                     rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+                     mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),random1(1 + arr_acc_m(i), 1),ldi,BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyU%blocks(i)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyU%blocks(i)%matrix(1,1))
+                     ! b_array(cnt)=LOC(random1(1 + arr_acc_m(i), 1))
+                     ! c_array(cnt)=LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                  ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  cnt=0
+                  csize=0
+                  do i = 1, blocks%ButterflyU%nblk_loc
+
+                     index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
+                     index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
+
+                     rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+                     mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1),ldc_array(cnt))
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+
+
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+                  call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
+                  if (ptree%pgrp(pgno_sub)%nproc > 1) then
+                     rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
+                     index_i = blocks%ButterflyU%idx
+                     index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
+                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                  endif
+
+               elseif (level == 0) then
+                  write(*,*)'should not arrive here'
+               else
+                  n3=OMP_get_wtime()
+                  group_count=nr*nc
+                  do i=1,2
+
+                     allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                     transa_magma=MagmaTrans
+                     transb_magma=MagmaNoTrans
+                     alpha_magma=cone
+                     beta_magma=cone
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2) !index_ii is global index in BFvec%vec(level_butterfly-level+1)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_jj - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        mm1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k +i-1, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                        if(.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix))then
+                           allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
+                           BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        endif
+                        cnt=cnt+1
+                        m_array(cnt)=nn
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=mm1
+                        lda_array(cnt)=mm1
+                        ldb_array(cnt)=mm1
+                        ldc_array(cnt)=nn
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+i-1, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+                     allocate(AA(asize))
+                     allocate(BB(bsize))
+                     allocate(CC(csize))
+                     info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                     info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                     info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2) !index_ii is global index in BFvec%vec(level_butterfly-level+1)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_jj - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        cnt=cnt+1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k+i-1, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+i-1, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+
+                     ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                     call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                     call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                     call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                     call magmaf_wtime(n7)
+                     call MAGMA_gemm_vbatched( &
+                     transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                     dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                     cnt=0
+                     csize=0
+                     do index_ij = 1, nr*nc
+
+                        index_j_loc = (index_ij - 1)/nr + 1
+                        index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of column-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                        index_ii = 2*index_i - 1; index_jj = int((index_j + 1)/2) !index_ii is global index in BFvec%vec(level_butterfly-level+1)
+
+                        index_ii_loc = (index_ii - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_jj - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_i - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (2*index_i - 1 - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_j - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (index_j - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        cnt=cnt+1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+                     enddo
+                     deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                     info = MAGMA_free( dA )
+                     info = MAGMA_free( dB )
+                     info = MAGMA_free( dC )
+                     info = MAGMA_free( dA_array )
+                     info = MAGMA_free( dB_array )
+                     info = MAGMA_free( dC_array )
+                     info = MAGMA_free( dm_array )
+                     info = MAGMA_free( dn_array )
+                     info = MAGMA_free( dk_array )
+                     info = MAGMA_free( dlda_array )
+                     info = MAGMA_free( dldb_array )
+                     info = MAGMA_free( dldc_array )
+                  enddo
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+               endif
+            endif
+            do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
+               do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
+                  if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
+               enddo
+            enddo
+
+            if (level_half + 1 /= level) then
+               call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
+            endif
+         enddo
+         n6 = OMP_get_wtime()
+         time_tmp1 = time_tmp1 + n6-n5
+
+         if (level_half /= level_butterfly + 1) then
+            call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
+         else
+            call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
+         endif
+
+         n5 = OMP_get_wtime()
+         do level = level_half, 0, -1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
+
+            ! convert the local row-wise kernel block ranges to local column-wise output vector ranges
+            if (level /= 0 .and. level /= level_butterfly + 1) then
+               idx_r = ceiling_safe(idx_r0/2d0)
+               if (inc_r0 > 1) then
+                  nr = nr0
+               else
+                  nr = ceiling_safe(nr0/2d0)
+               endif
+               inc_r = ceiling_safe(inc_r0/2d0)
+               idx_c = idx_c0*2 - 1
+               nc = nc0*2
+               inc_c = inc_c0
+            else
+               idx_r = idx_r0
+               nr = nr0
+               inc_r = inc_r0
+               idx_c = idx_c0
+               nc = nc0
+               inc_c = inc_c0
+            endif
+
+            BFvec%vec(level_butterfly - level + 2)%idx_r = idx_r
+            BFvec%vec(level_butterfly - level + 2)%inc_r = inc_r
+            BFvec%vec(level_butterfly - level + 2)%nr = nr
+            BFvec%vec(level_butterfly - level + 2)%idx_c = idx_c
+            BFvec%vec(level_butterfly - level + 2)%inc_c = inc_c
+            BFvec%vec(level_butterfly - level + 2)%nc = nc
+            if (level /= 0) then
+               BFvec%vec(level + 1)%num_row = 2**(level - 1)
+               BFvec%vec(level + 1)%num_col = 2**(level_butterfly - level + 1)
+            else
+               BFvec%vec(level + 1)%num_row = 1
+               BFvec%vec(level + 1)%num_col = 2**level_butterfly
+            endif
+
+            allocate (BFvec%vec(level_butterfly - level + 2)%blocks(BFvec%vec(level_butterfly - level + 2)%nr, BFvec%vec(level_butterfly - level + 2)%nc))
+
+            if (level == level_butterfly + 1) then
+               write(*,*)'should not arrive here'
+
+            elseif (level == 0) then
+               flops = 0
+
+               call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
+               if (ptree%pgrp(pgno_sub)%nproc > 1) then
+                  nn = size(blocks%ButterflyV%blocks(1)%matrix, 1)
+                  rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
+                  allocate (matrixtemp(rank, num_vectors))
+                  matrixtemp = 0
+                  if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
+                     index_j = blocks%ButterflyV%idx
+                     index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+
+                     matrixtemp = BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix
+                  endif
+                  call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                  allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
+                  BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
+                  call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, random2(arr_acc_n(1)+1, 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
+                  flops = flops + flop
+                  deallocate (matrixtemp)
+               else
+                  n3=OMP_get_wtime()
+                  group_count=blocks%ButterflyV%nblk_loc
+
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaNoTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=a
+                  beta_magma=b
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
+                     index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+                     nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
+                     rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
+                     allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
+                     BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
+                     cnt=cnt+1
+
+                     m_array(cnt)=nn
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=rank
+                     lda_array(cnt)=nn
+                     ldb_array(cnt)=rank
+                     ldc_array(cnt)=nn
+                     ! a_array(cnt)=LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
+                     ! c_array(cnt)=LOC(random2(arr_acc_n(j)+1, 1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
+                     index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+
+                     cnt=cnt+1
+
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),random2(arr_acc_n(j)+1, 1),ldo,CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),k_array(cnt),blocks%ButterflyV%blocks(j)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyV%blocks(j)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
+                     ! c_array(cnt)=LOC(random2(arr_acc_n(j)+1, 1))
+                     asize=asize+lda_array(cnt)*k_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+
+
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  cnt=0
+                  csize=0
+                  do j = 1, blocks%ButterflyV%nblk_loc
+                     index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
+                     index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+                     cnt=cnt+1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),random2(arr_acc_n(j)+1, 1),ldo)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+                  n4 = OMP_get_wtime()
+                  ! time_tmp = time_tmp + n4-n3
+               endif
+               stats%Flop_Tmp = stats%Flop_Tmp + flops
+            else
+               n3=OMP_get_wtime()
+               if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
+                  group_count=nr0*nc0
+                  do ii = 1, 2
+                     allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                     transa_magma=MagmaTrans
+                     transb_magma=MagmaNoTrans
+                     alpha_magma=cone
+                     beta_magma=cone
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_i_loc0 = (index_ij - 1)/nc0 + 1
+                        index_i_loc = (index_i_loc0 - 1)*2 + ii
+                        index_j_loc = mod(index_ij - 1, nc0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                        index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                        if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
+                           allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
+                           BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        endif
+
+                        cnt = cnt +1
+                        m_array(cnt)=nn
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=mm
+                        lda_array(cnt)=mm
+                        ldb_array(cnt)=mm
+                        ldc_array(cnt)=nn
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+
+                        mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
+                        nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
+                        if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
+                           allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
+                           BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                        endif
+
+                        cnt = cnt +1
+                        m_array(cnt)=nn
+                        n_array(cnt)=num_vectors
+                        k_array(cnt)=mm
+                        lda_array(cnt)=mm
+                        ldb_array(cnt)=mm
+                        ldc_array(cnt)=nn
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     enddo
+
+                     allocate(AA(asize))
+                     allocate(BB(bsize))
+                     allocate(CC(csize))
+                     info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                     info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                     info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                     info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                     info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                     info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                     cnt=0
+                     asize=0
+                     bsize=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_i_loc0 = (index_ij - 1)/nc0 + 1
+                        index_i_loc = (index_i_loc0 - 1)*2 + ii
+                        index_j_loc = mod(index_ij - 1, nc0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                        index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        cnt = cnt +1
+
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        cnt = cnt +1
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                        call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                        call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+                        a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                        b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                        c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+                        ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                        ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                        ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+
+                        asize=asize+lda_array(cnt)*m_array(cnt)
+                        bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     enddo
+
+                     ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                     call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                     call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                     call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                     call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                     call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                     call magmaf_wtime(n7)
+                     call MAGMA_gemm_vbatched( &
+                     transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                     dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                     cnt=0
+                     csize=0
+                     do index_ij = 1, nr0*nc0/2
+                        index_i_loc0 = (index_ij - 1)/nc0 + 1
+                        index_i_loc = (index_i_loc0 - 1)*2 + ii
+                        index_j_loc = mod(index_ij - 1, nc0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                        index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                        index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                        index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                        index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                        index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                        index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                        index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                        index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                        index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                        cnt = cnt +1
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                        cnt = cnt +1
+                        call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1),ldc_array(cnt))
+                        csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     enddo
+                     deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                     info = MAGMA_free( dA )
+                     info = MAGMA_free( dB )
+                     info = MAGMA_free( dC )
+                     info = MAGMA_free( dA_array )
+                     info = MAGMA_free( dB_array )
+                     info = MAGMA_free( dC_array )
+                     info = MAGMA_free( dm_array )
+                     info = MAGMA_free( dn_array )
+                     info = MAGMA_free( dk_array )
+                     info = MAGMA_free( dlda_array )
+                     info = MAGMA_free( dldb_array )
+                     info = MAGMA_free( dldc_array )
+                  enddo
+               else
+                  group_count=nr0*nc0*2
+                  allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
+                  transa_magma=MagmaTrans
+                  transb_magma=MagmaNoTrans
+                  alpha_magma=cone
+                  beta_magma=cone
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1
+                     index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                     index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                     index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                     index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                     index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
+                     if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
+                        allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
+                        BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                     endif
+                     cnt = cnt + 1
+                     m_array(cnt)=nn
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=mm
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=mm
+                     ldc_array(cnt)=nn
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
+                     nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
+                     if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
+                        allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
+                        BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                     endif
+                     cnt = cnt + 1
+                     m_array(cnt)=nn
+                     n_array(cnt)=num_vectors
+                     k_array(cnt)=mm
+                     lda_array(cnt)=mm
+                     ldb_array(cnt)=mm
+                     ldc_array(cnt)=nn
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  allocate(AA(asize))
+                  allocate(BB(bsize))
+                  allocate(CC(csize))
+                  info = MAGMA_malloc( dA,          asize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dB,          bsize * C_SIZEOF_DT )
+                  info = MAGMA_malloc( dC,          csize * C_SIZEOF_DT )
+
+                  info = MAGMA_malloc(    dA_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dB_array, group_count * sizeof_ptr )
+                  info = MAGMA_malloc(    dC_array, group_count * sizeof_ptr )
+
+                  info = MAGMA_malloc( dm_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dn_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dk_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dlda_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldb_array, (group_count+1) * sizeof_int )
+                  info = MAGMA_malloc( dldc_array, (group_count+1) * sizeof_int )
+
+                  cnt=0
+                  asize=0
+                  bsize=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1
+                     index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                     index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                     index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                     index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                     index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     cnt = cnt + 1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+
+                     cnt = cnt + 1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1),ldc_array(cnt),CC(csize+1),ldc_array(cnt))
+                     call copymatf77(' ',ldb_array(cnt),n_array(cnt),BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1),ldb_array(cnt),BB(bsize+1),ldb_array(cnt))
+                     call copymatf77(' ',lda_array(cnt),m_array(cnt),blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1),lda_array(cnt),AA(asize+1),lda_array(cnt))
+                     a_array(cnt)    = MAGMA_offset_1d( dA, 1, asize+1 )
+                     b_array(cnt)    = MAGMA_offset_1d( dB, 1, bsize+1 )
+                     c_array(cnt)    = MAGMA_offset_1d( dC, 1, csize+1 )
+
+                     ! a_array(cnt)=LOC(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(1,1))
+                     ! b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
+                     ! c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
+                     asize=asize+lda_array(cnt)*m_array(cnt)
+                     bsize=bsize+ldb_array(cnt)*n_array(cnt)
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+
+                  ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                  ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+                  call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
+                  call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
+                  call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int), c_loc(m_array), 1, dm_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(n_array), 1, dn_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(k_array), 1, dk_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(lda_array), 1, dlda_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldb_array), 1, dldb_array, 1, queue )
+                  call MAGMA_setvector(group_count, int(sizeof_int),c_loc(ldc_array), 1, dldc_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(a_array), 1,    dA_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
+                  call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
+
+                  call magmaf_wtime(n7)
+                  call MAGMA_gemm_vbatched( &
+                  transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
+                  dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  cnt=0
+                  csize=0
+                  do index_ij = 1, nr0*nc0
+                     index_j_loc = (index_ij - 1)/nr0 + 1
+                     index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
+                     index_i = (index_i_loc - 1)*inc_r0 + idx_r0  !index_i is global index of row-wise ordering at current level
+                     index_j = (index_j_loc - 1)*inc_c0 + idx_c0
+
+                     index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1 !index_ii is global index in BFvec%vec(level_butterfly-level+2)
+
+                     index_ii_loc = (index_i - BFvec%vec(level_butterfly - level + 1)%idx_r)/BFvec%vec(level_butterfly - level + 1)%inc_r + 1 !index_ii_loc is local index in BFvec%vec(level_butterfly-level+1)
+                     index_jj_loc = (index_j - BFvec%vec(level_butterfly - level + 1)%idx_c)/BFvec%vec(level_butterfly - level + 1)%inc_c + 1
+
+                     index_i_loc_s = (index_ii - BFvec%vec(level_butterfly - level + 2)%idx_r)/BFvec%vec(level_butterfly - level + 2)%inc_r + 1 !index_i_loc_s is local index in BFvec%vec(level_butterfly-level+2)
+                     index_i_loc_k = (index_i - blocks%ButterflyKerl(level)%idx_r)/blocks%ButterflyKerl(level)%inc_r + 1 !index_i_loc_k is local index of kernels at current level
+                     index_j_loc_s = (index_jj - BFvec%vec(level_butterfly - level + 2)%idx_c)/BFvec%vec(level_butterfly - level + 2)%inc_c + 1
+                     index_j_loc_k = (2*index_j - 1 - blocks%ButterflyKerl(level)%idx_c)/blocks%ButterflyKerl(level)%inc_c + 1
+
+                     cnt = cnt + 1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1),ldc_array(cnt))
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+
+                     cnt = cnt + 1
+                     call copymatf77(' ',ldc_array(cnt),n_array(cnt),CC(csize+1),ldc_array(cnt),BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1),ldc_array(cnt))
+                     csize=csize+ldc_array(cnt)*n_array(cnt)
+                  enddo
+
+                  deallocate(m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array,AA,BB,CC)
+                  info = MAGMA_free( dA )
+                  info = MAGMA_free( dB )
+                  info = MAGMA_free( dC )
+                  info = MAGMA_free( dA_array )
+                  info = MAGMA_free( dB_array )
+                  info = MAGMA_free( dC_array )
+                  info = MAGMA_free( dm_array )
+                  info = MAGMA_free( dn_array )
+                  info = MAGMA_free( dk_array )
+                  info = MAGMA_free( dlda_array )
+                  info = MAGMA_free( dldb_array )
+                  info = MAGMA_free( dldc_array )
+               endif
+               n4 = OMP_get_wtime()
+               ! time_tmp = time_tmp + n4-n3
+            endif
+
+            do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
+               do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
+                  if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
+               enddo
+            enddo
+
+            if (level /= 0) then
+               call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
+            endif
+         enddo
+         n6 = OMP_get_wtime()
+         time_tmp1 = time_tmp1 + n6-n5
+
+         if (isnanMat(random2(1:N,1:1),N,1)) then
+            write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
+            stop
+         end if
+
+      endif
+
+      do level = 0, level_butterfly + 2
+         do j = 1, BFvec%vec(level)%nc
+            do i = 1, BFvec%vec(level)%nr
+               if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
+            enddo
+         enddo
+         if (allocated(BFvec%vec(level)%blocks)) deallocate (BFvec%vec(level)%blocks)
+      enddo
+
+      deallocate (BFvec%vec)
+      deallocate (arr_acc_m, arr_acc_n)
+
+
+   endif
+
+   n2 = OMP_get_wtime()
+   ! time_tmp = time_tmp + n2-n1
+   time_tmp2 = time_tmp2 + n2-n1
+
+
+   call MAGMA_queue_destroy( queue )
+   call MAGMA_finalize()
+
+   return
+
+end subroutine BF_block_MVP_dat_batch_magma
+#endif
 
 
 
