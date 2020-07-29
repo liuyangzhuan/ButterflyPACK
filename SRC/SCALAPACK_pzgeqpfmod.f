@@ -474,7 +474,7 @@
                   AJJ = A( IOFFA )
                   CALL ZLARFG( 1, AJJ, A( IOFFA ), 1, TAU( JJ ) )
                   IF( N.GT.1 ) THEN
-                     ALPHA = CMPLX( ONE ) - DCONJG( TAU( JJ ) )
+                     ALPHA = DCMPLX( ONE ) - DCONJG( TAU( JJ ) )
                      CALL ZGEBS2D( ICTXT, 'Rowwise', ' ', 1, 1, ALPHA,
      $                                  1 )
                      CALL ZSCAL( NQ-JJ, ALPHA, A( IOFFA+DESCA( LLD_ ) ),

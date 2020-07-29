@@ -111,7 +111,27 @@ set(CMAKE_Fortran_FLAGS "-O0 -g -pg -Mbounds -traceback ${CMAKE_Fortran_FLAGS}")
 endif()
 endif()
 
-
+if (COMPILER_PGI)  # PGI taskloop seems buggy
+else()
+#Test OPENMP TASKLOOP
+check_fortran_source_compiles(
+"PROGRAM TEST
+integer i
+!$omp parallel
+!$omp single
+!$omp taskloop default(shared) private(i)
+do i=1,10
+write(*,*)'iter:',i
+enddo
+!$omp end taskloop
+!$omp end single
+!$omp end parallel
+END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
+if(BUTTERFLYPACK_USE_TASKLOOP )
+	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
+	message("-- Using OpenMP taskloop")
+endif()
+endif()
 
 set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 include(CheckCXXCompilerFlag)
@@ -290,7 +310,7 @@ check_fortran_source_compiles(
 
 	contains
 
-	subroutine finalizer( this )
+	subroutine finalize( this )
 		type(quant), intent(inout) :: this
 	end subroutine finalize
 end module MOD
@@ -303,30 +323,6 @@ if(BUTTERFLYPACK_USE_Finalizer )
 	set(CMAKE_Fortran_FLAGS "-DHAVE_FINAL ${CMAKE_Fortran_FLAGS}")
 	message("-- Using Fortran Finalizer features")
 endif()
-
-
-#Test OPENMP TASKLOOP
-check_fortran_source_compiles(
-"PROGRAM TEST
-integer i
-!$omp parallel
-!$omp single
-!$omp taskloop default(shared) private(i)
-do i=1,10
-write(*,*)'iter:',i
-enddo
-!$omp end taskloop
-!$omp end single
-!$omp end parallel
-END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
-
-if(BUTTERFLYPACK_USE_TASKLOOP )
-	set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
-	message("-- Using OpenMP taskloop")
-endif()
-
-
-
 
 
 ######################################################################

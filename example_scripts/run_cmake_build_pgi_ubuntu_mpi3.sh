@@ -17,7 +17,7 @@ cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=OFF \
-	-DTPL_BLAS_LIBRARIES="/opt/pgi/linux86-64-llvm/19.10/lib/libblas.so" \
+	-DTPL_BLAS_LIBRARIES="/opt/pgi/linux86-64-llvm/19.10/lib/libomp.so;/opt/pgi/linux86-64-llvm/19.10/lib/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/opt/pgi/linux86-64-llvm/19.10/lib/liblapack.so" \
 	-DTPL_SCALAPACK_LIBRARIES="/opt/pgi/linux86-64-llvm/19.10/lib/scalapack/scalapack-2.0.2/openmpi-3.1.3/lib/libscalapack.a" \
 	-DCMAKE_Fortran_COMPILER=mpif90 \

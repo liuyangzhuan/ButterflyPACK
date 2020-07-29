@@ -1,3 +1,4 @@
+module purge
 module load gcc/9.1.0
 module load openmpi/gcc-9.1.0/4.0.1
 module load scalapack-netlib/gcc-9.1.0/2.0.2 
