@@ -132,7 +132,6 @@ contains
       integer style(3), data_type(3), id1, id2, id3
       character chara
       DT, allocatable:: Vin(:, :)
-      !logical isNaN
       real*8 T0, T1
       type(matrixblock) :: block1, block3
       type(Hstat):: stats
@@ -998,7 +997,7 @@ contains
             exit
          endif
 
-         if (isnan(error_inout)) then
+         if (ieee_is_nan(error_inout)) then
             converged = 0
             exit
          endif

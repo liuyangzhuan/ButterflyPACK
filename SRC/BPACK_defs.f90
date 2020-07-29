@@ -17,6 +17,7 @@
 #include "ButterflyPACK_config.fi"
 module BPACK_DEFS
     use iso_c_binding
+    use ieee_arithmetic
     use BPACK_linkedlist
     implicit none
     INCLUDE 'mpif.h'
@@ -26,6 +27,9 @@ module BPACK_DEFS
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !**** common parameters
+#ifdef PGI
+    integer, external :: iargc
+#endif
     integer, parameter::dp = kind(0.0d0), sp = kind(0.0)
     real(kind=8), parameter :: pi = 4d0*atan(1d0)
     complex(kind=8), parameter :: junit = (0d0, 1d0)

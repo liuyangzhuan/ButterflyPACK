@@ -402,7 +402,7 @@ contains
       w = r
       yo = r
       ! ! write(*,*)'2'
-      ! ! if(isnan(sum(abs(yo)**2)))then
+      ! ! if(ieee_is_nan(sum(abs(yo)**2)))then
       ! ! write(*,*)'shitddd'
       ! ! stop
       ! ! end if

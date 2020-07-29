@@ -2315,7 +2315,7 @@ contains
                call BF_block_MVP_dat(blocks_B, trans, mm, nn, num_vect_sub,&
                &Vbuff, nn, Vin(1, 1), ld, -cone, cone, ptree, stats)
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vout, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD11N'
 !                   stop
 !                end if
@@ -2330,7 +2330,7 @@ contains
                if(nn>0)V2 = Vin(1 + mm:nn + mm,:) + V2
 
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vin, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vin, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD22N'
 !                   stop
 !                end if
@@ -2343,7 +2343,7 @@ contains
                &Vbuff, nn, Vin(1 + mm, 1), ld, ctemp1, ctemp2, ptree, stats)
 
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vout, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD33N'
 !                   stop
 !                end if
@@ -2360,7 +2360,7 @@ contains
                call BF_block_MVP_dat(blocks_C, trans, nn, mm, num_vect_sub,&
                &Vbuff, nn, Vin(1, 1), ld, -cone, cone, ptree, stats)
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vout, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD11T'
 !                   stop
 !                end if
@@ -2372,7 +2372,7 @@ contains
                if(mm>0)V1 = Vin(1:mm,:) + V1
                if(nn>0)V2 = Vin(1 + mm:nn + mm,:) + V2
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vin, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vin, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD22T'
 !                   stop
 !                end if
@@ -2383,7 +2383,7 @@ contains
                &Vbuff, nn, Vin(1 + mm, 1), ld, ctemp1, ctemp2, ptree, stats)
 
 ! #ifndef NDEBUG
-!                if (isnan(fnorm(Vout, N, num_vect_sub))) then
+!                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD33T'
 !                   stop
 !                end if

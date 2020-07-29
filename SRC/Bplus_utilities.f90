@@ -19,9 +19,7 @@
 module Bplus_Utilities
    use BPACK_DEFS
    use MISC_Utilities
-#ifdef HAVE_MAGMA
    use magma_utilities
-#endif
 contains
 
    subroutine Bplus_delete(bplus)
@@ -1154,7 +1152,7 @@ contains
                      mm = size(block_i%ButterflyV%blocks(index_j)%matrix, 1)
                      nn = size(block_i%ButterflyV%blocks(index_j)%matrix, 2)
                      temp = temp + fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn)
-                     if (isnan(temp)) write (*, *) 'V', level_butterfly, index_j, fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn), mm, nn
+                     if (ieee_is_nan(temp)) write (*, *) 'V', level_butterfly, index_j, fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn), mm, nn
                   endif
                enddo
                endif
@@ -1165,7 +1163,7 @@ contains
                      mm = size(block_i%ButterflyU%blocks(index_i)%matrix, 1)
                      nn = size(block_i%ButterflyU%blocks(index_i)%matrix, 2)
                      temp = temp + fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn)
-                     if (isnan(temp)) write (*, *) 'U', level_butterfly, index_i, fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn), mm, nn
+                     if (ieee_is_nan(temp)) write (*, *) 'U', level_butterfly, index_i, fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn), mm, nn
                   endif
                enddo
                endif
@@ -1178,7 +1176,7 @@ contains
                         mm = size(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, 1)
                         nn = size(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, 2)
                         temp = temp + fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn)
-                        if (isnan(temp)) write (*, *) 'Ker', level_butterfly, level, index_i, index_j, fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn), mm, nn
+                        if (ieee_is_nan(temp)) write (*, *) 'Ker', level_butterfly, level, index_i, index_j, fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn), mm, nn
                      endif
                   enddo
                enddo
@@ -1197,7 +1195,7 @@ contains
          stop
       end if
 
-      BF_checkNAN = isnan(temp)
+      BF_checkNAN = ieee_is_nan(temp)
 #endif
    end function BF_checkNAN
 
@@ -1739,7 +1737,7 @@ contains
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, rank, block_i%ButterflyV%blocks(2*index_j - 1)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
 
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 1'
                      end if
 #endif
@@ -1753,7 +1751,7 @@ contains
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, rank, block_i%ButterflyV%blocks(2*index_j)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
 
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 2'
                      end if
 #endif
@@ -1764,7 +1762,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, nn))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 3'
                      end if
 #endif
@@ -1773,7 +1771,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, nn))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 4'
                      end if
 #endif
@@ -1791,7 +1789,7 @@ contains
                      block_o%ButterflyU%blocks(index_i + index_i_start)%matrix = block_i%ButterflyU%blocks(index_i)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix)/1024.0d3
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix, mm, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in L 5'
                      end if
 #endif
@@ -1822,7 +1820,7 @@ contains
 
 ! write(*,*)'good 1.1'
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 1'
                      end if
 #endif
@@ -1838,7 +1836,7 @@ contains
 
 ! write(*,*)'good 2'
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 2'
                      end if
 #endif
@@ -1851,7 +1849,7 @@ contains
                      block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix
 
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, mm, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 3'
                      end if
 #endif
@@ -1862,7 +1860,7 @@ contains
                      block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix
                      ! write(*,*)'good 4'
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, mm, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 4'
                      end if
 #endif
@@ -1880,7 +1878,7 @@ contains
                      block_o%ButterflyV%blocks(index_j + index_j_start)%matrix = block_i%ButterflyV%blocks(index_j)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix)/1024.0d3
 #ifndef NDEBUG
-                     if (isnan(fnorm(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix, nn, rank))) then
+                     if (ieee_is_nan(fnorm(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix, nn, rank))) then
                         write (*, *) 'NAN in R 5'
                      end if
 #endif
@@ -8200,6 +8198,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
 
                if (level == 0) then
                   flops = 0
+                  call magmaf_wtime(n7)
 
                   n3 = OMP_get_wtime()
                   group_count=blocks%ButterflyV%nblk_loc
@@ -8276,6 +8275,10 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      csize=csize+ldc_array(cnt)*n_array(cnt)
                   enddo
 
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+
+                  call magmaf_wtime(n7)
                   call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                   call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                   call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -8289,19 +8292,20 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
-                  call magmaf_wtime(n8)
-                  time_tmp5 = time_tmp5 + n8-n7
-
 
 
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                   ! stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                   call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+
                   cnt=0
                   csize=0
                   do j = 1, blocks%ButterflyV%nblk_loc
@@ -8344,6 +8348,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   n3 = OMP_get_wtime()
                   do j=1,2
                      group_count=nr*nc
+
+                     call magmaf_wtime(n7)
 
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaNoTrans
@@ -8451,6 +8457,11 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         csize=csize+ldc_array(cnt)*n_array(cnt)
                      enddo
 
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+
+                     call magmaf_wtime(n7)
+
                      call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                      call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                      call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -8464,17 +8475,19 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                     call magmaf_wtime(n7)
+
                      call MAGMA_gemm_vbatched( &
                      transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                      dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
-                     call magmaf_wtime(n8)
-                     time_tmp5 = time_tmp5 + n8-n7
+
 
                      ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      ! stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+
                      cnt=0
                      csize=0
                      do index_ij = 1, nr*nc
@@ -8613,7 +8626,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   deallocate (matrixtemp)
                else
 
-
+                  call magmaf_wtime(n7)
                   n3 = OMP_get_wtime()
                   group_count=nr0
 
@@ -8701,8 +8714,11 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
                      ! c_array(cnt)=LOC(random2(arr_acc_m(i)+1, 1))
                   enddo
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
 
 
+                  call magmaf_wtime(n7)
                   call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                   call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                   call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -8716,14 +8732,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                   call magmaf_wtime(n8)
                   time_tmp5 = time_tmp5 + n8-n7
-                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
 
                   csize=0
@@ -8765,7 +8781,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   group_count=nr0*nc0
 
                   do jj=1,2
-
+                     call magmaf_wtime(n7)
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaNoTrans
                      transb_magma=MagmaNoTrans
@@ -8922,10 +8938,12 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         ! b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
                         ! c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
                      enddo
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
 
                      ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      ! stats%Flop_Tmp = stats%Flop_Tmp + flops
-
+                     call magmaf_wtime(n7)
                      call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                      call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                      call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -8939,14 +8957,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                     call magmaf_wtime(n7)
+
                      call MAGMA_gemm_vbatched( &
                      transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                      dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                      call magmaf_wtime(n8)
                      time_tmp5 = time_tmp5 + n8-n7
-                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                      cnt=0
                      csize=0
                      do index_ij = 1, nr0*nc0/2
@@ -9009,6 +9027,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                else
 
                   group_count=nr0*nc0*2
+                  call magmaf_wtime(n7)
 
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaNoTrans
@@ -9157,11 +9176,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      bsize=bsize+ldb_array(cnt)*n_array(cnt)
                      csize=csize+ldc_array(cnt)*n_array(cnt)
                   enddo
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+
 
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                   ! stats%Flop_Tmp = stats%Flop_Tmp + flops
 
-
+                  call magmaf_wtime(n7)
                   call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                   call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                   call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -9175,13 +9197,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                   call magmaf_wtime(n8)
                   time_tmp5 = time_tmp5 + n8-n7
-                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
 
                   cnt=0
                   csize=0
@@ -9317,6 +9340,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   n3=OMP_get_wtime()
                   group_count=blocks%ButterflyU%nblk_loc
 
+                  call magmaf_wtime(n7)
+
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaTrans
                   transb_magma=MagmaNoTrans
@@ -9397,9 +9422,13 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      bsize=bsize+ldb_array(cnt)*n_array(cnt)
                      csize=csize+ldc_array(cnt)*n_array(cnt)
                   enddo
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
 
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                   ! stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+                  call magmaf_wtime(n7)
 
                   call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                   call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
@@ -9414,14 +9443,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                   call magmaf_wtime(n8)
                   time_tmp5 = time_tmp5 + n8-n7
-                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                   cnt=0
                   csize=0
                   do i = 1, blocks%ButterflyU%nblk_loc
@@ -9467,6 +9496,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   n3=OMP_get_wtime()
                   group_count=nr*nc
                   do i=1,2
+                     call magmaf_wtime(n7)
 
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaTrans
@@ -9573,10 +9603,13 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         bsize=bsize+ldb_array(cnt)*n_array(cnt)
                         csize=csize+ldc_array(cnt)*n_array(cnt)
                      enddo
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
+
 
                      ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      ! stats%Flop_Tmp = stats%Flop_Tmp + flops
-
+                     call magmaf_wtime(n7)
                      call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
                      call MAGMA_setvector(bsize, int(C_SIZEOF_DT), c_loc(BB), 1, dB, 1, queue )
                      call MAGMA_setvector(csize, int(C_SIZEOF_DT), c_loc(CC), 1, dC, 1, queue )
@@ -9590,14 +9623,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                     call magmaf_wtime(n7)
+
                      call MAGMA_gemm_vbatched( &
                      transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                      dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                      call magmaf_wtime(n8)
                      time_tmp5 = time_tmp5 + n8-n7
-                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                      cnt=0
                      csize=0
                      do index_ij = 1, nr*nc
@@ -9727,7 +9760,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                else
                   n3=OMP_get_wtime()
                   group_count=blocks%ButterflyV%nblk_loc
-
+                  call magmaf_wtime(n7)
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaNoTrans
                   transb_magma=MagmaNoTrans
@@ -9803,7 +9836,10 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      bsize=bsize+ldb_array(cnt)*n_array(cnt)
                      csize=csize+ldc_array(cnt)*n_array(cnt)
                   enddo
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
 
+                  call magmaf_wtime(n7)
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
 
 
@@ -9820,14 +9856,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                   call magmaf_wtime(n8)
                   time_tmp5 = time_tmp5 + n8-n7
-                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                   cnt=0
                   csize=0
                   do j = 1, blocks%ButterflyV%nblk_loc
@@ -9859,6 +9895,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
                   group_count=nr0*nc0
                   do ii = 1, 2
+
+                     call magmaf_wtime(n7)
+
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaTrans
                      transb_magma=MagmaNoTrans
@@ -10003,7 +10042,10 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         csize=csize+ldc_array(cnt)*n_array(cnt)
 
                      enddo
+                     call magmaf_wtime(n8)
+                     time_tmp5 = time_tmp5 + n8-n7
 
+                     call magmaf_wtime(n7)
                      ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      ! stats%Flop_Tmp = stats%Flop_Tmp + flops
 
@@ -10020,14 +10062,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                      call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                     call magmaf_wtime(n7)
+
                      call MAGMA_gemm_vbatched( &
                      transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                      dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                      call magmaf_wtime(n8)
                      time_tmp5 = time_tmp5 + n8-n7
-                     call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                      cnt=0
                      csize=0
                      do index_ij = 1, nr0*nc0/2
@@ -10071,6 +10113,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldc_array )
                   enddo
                else
+
+                  call magmaf_wtime(n7)
+
                   group_count=nr0*nc0*2
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaTrans
@@ -10208,8 +10253,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      bsize=bsize+ldb_array(cnt)*n_array(cnt)
                      csize=csize+ldc_array(cnt)*n_array(cnt)
                   enddo
-
-
+                  call magmaf_wtime(n8)
+                  time_tmp5 = time_tmp5 + n8-n7
+                  call magmaf_wtime(n7)
                   ! call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                   ! stats%Flop_Tmp = stats%Flop_Tmp + flops
                   call MAGMA_setvector(asize, int(C_SIZEOF_DT), c_loc(AA), 1, dA, 1, queue )
@@ -10225,14 +10271,14 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(b_array), 1,    dB_array, 1, queue )
                   call MAGMA_setvector( group_count, int(sizeof_ptr),   c_loc(c_array), 1,    dC_array, 1, queue )
 
-                  call magmaf_wtime(n7)
+
                   call MAGMA_gemm_vbatched( &
                   transa_magma, transb_magma, dm_array, dn_array, dk_array, alpha_magma, dA_array, &
                   dlda_array, dB_array, dldb_array,beta_magma,dC_array, dldc_array, group_count, queue)
+
+                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
                   call magmaf_wtime(n8)
                   time_tmp5 = time_tmp5 + n8-n7
-                  call MAGMA_getvector(csize, int(C_SIZEOF_DT), dC, 1, c_loc(CC), 1, queue )
-
                   cnt=0
                   csize=0
                   do index_ij = 1, nr0*nc0
@@ -12661,9 +12707,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (UU(rank, mn_min))
                            allocate (VV(mn_min, num_vectors1 + num_vectors2))
                            allocate (Singular(mn_min))
-                           call assert(.not. isnan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
+                           call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
                            call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min)
-                           call assert(.not. isnan(sum(Singular)), 'Singular NAN at 4')
+                           call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
 
                            do ii = 1, mn_min
                               UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -12872,9 +12918,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (VV(mn_min,rank))
                            allocate (Singular(mn_min))
 
-                           call assert(.not. isnan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
+                           call assert(.not. ieee_is_nan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
                            call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min)
-                           call assert(.not. isnan(sum(Singular)), 'Singular NAN at 4')
+                           call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
 
                            do ii = 1, mn_min
                               VV(ii, :) = VV(ii, :)*Singular(ii)
@@ -13038,10 +13084,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                allocate (Singular(mn_min))
 
                call copymatT(blocks%ButterflyV%blocks(j)%matrix, matrixtemp, dimension_n, rank)
-               call assert(.not. isnan(fnorm(matrixtemp, rank, dimension_n)), 'matrixtemp NAN at 3')
+               call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, dimension_n)), 'matrixtemp NAN at 3')
 
                call gesvd_robust(matrixtemp, Singular, UU, VV, rank, dimension_n, mn_min)
-               call assert(.not. isnan(sum(Singular)), 'Singular NAN at 3')
+               call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 3')
 
                do ii = 1, mn_min
                   UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -13101,9 +13147,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   matrixtemp(1:rank, 1:nn1) = blocks%ButterflyKerl(level)%blocks(i, j)%matrix
                   ! call copymatN(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,matrixtemp(1:rank,1+nn1:nn2+nn1),rank,nn2)
                   matrixtemp(1:rank, 1 + nn1:nn2 + nn1) = blocks%ButterflyKerl(level)%blocks(i, j + 1)%matrix
-                  call assert(.not. isnan(fnorm(matrixtemp, rank, nn1 + nn2)), 'matrixtemp NAN at 4')
+                  call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, nn1 + nn2)), 'matrixtemp NAN at 4')
                   call gesvd_robust(matrixtemp, Singular, UU, VV, rank, nn1 + nn2, mn_min)
-                  call assert(.not. isnan(sum(Singular)), 'Singular NAN at 4')
+                  call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
 
                   do ii = 1, mn_min
                      UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -13208,10 +13254,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                ! call copymatN(blocks%ButterflyU%blocks(i)%matrix,matrixtemp,dimension_m,rank)
                matrixtemp = blocks%ButterflyU%blocks(i)%matrix
-               call assert(.not. isnan(fnorm(matrixtemp, dimension_m, rank)), 'matrixtemp NAN at 1')
+               call assert(.not. ieee_is_nan(fnorm(matrixtemp, dimension_m, rank)), 'matrixtemp NAN at 1')
 
                call gesvd_robust(matrixtemp, Singular, UU, VV, dimension_m, rank, mn_min)
-               call assert(.not. isnan(sum(Singular)), 'Singular NAN at 1')
+               call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 1')
 
                do ii = 1, mn_min
                   VV(ii, :) = VV(ii, :)*Singular(ii)
@@ -13273,15 +13319,15 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   matrixtemp(1:mm1, 1:rank) = blocks%ButterflyKerl(level)%blocks(i, j)%matrix
                   ! call copymatN(blocks%ButterflyKerl(level)%blocks(i+1,j)%matrix,matrixtemp(1+mm1:mm2+mm1,1:rank),mm2,rank)
                   matrixtemp(1 + mm1:mm2 + mm1, 1:rank) = blocks%ButterflyKerl(level)%blocks(i + 1, j)%matrix
-                  call assert(.not. isnan(fnorm(matrixtemp, mm1 + mm2, rank)), 'matrixtemp NAN at 2')
+                  call assert(.not. ieee_is_nan(fnorm(matrixtemp, mm1 + mm2, rank)), 'matrixtemp NAN at 2')
 
                   call gesvd_robust(matrixtemp, Singular, UU, VV, mm1 + mm2, rank, mn_min)
-                  ! if(isnan(sum(Singular)).and. mm1+mm2<rank)then
+                  ! if(ieee_is_nan(sum(Singular)).and. mm1+mm2<rank)then
                   ! write(*,*)mm1+mm2,rank,mm1+mm2>=rank,'rank too large?'
                   ! end if
 
-                  ! call assert(.not. isnan(sum(Singular)),'Singular NAN at 2')
-                  if (isnan(sum(Singular))) then
+                  ! call assert(.not. ieee_is_nan(sum(Singular)),'Singular NAN at 2')
+                  if (ieee_is_nan(sum(Singular))) then
                      write (*, *) 'Singular NAN at 2', mm1 + mm2, rank
                      do ii = 1, mm1 + mm2
                         do jj = 1, rank

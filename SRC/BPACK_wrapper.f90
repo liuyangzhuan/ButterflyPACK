@@ -113,6 +113,7 @@ contains
       implicit none
       real(kind=8)::val_d
       character(kind=c_char, len=1) :: nam(*)
+      character(kind=c_char) :: tmpc
       type(c_ptr) :: stats_Cptr
       type(Hstat), pointer::stats
       ! character::nam(:)
@@ -125,8 +126,10 @@ contains
 
       valid_opt = 0
       strlen = 1
-      do while (nam(strlen) /= c_null_char)
+      tmpc=nam(strlen)
+      do while (tmpc /= c_null_char)
          strlen = strlen + 1
+         tmpc=nam(strlen)
       enddo
       strlen = strlen - 1
       allocate (character(len=strlen) :: str)
@@ -278,7 +281,7 @@ contains
       endif
 
       if (trim(str) == 'Rank_max') then
-         val_d = maxval(stats%rankmax_of_level_global)
+         val_d = dble(maxval(stats%rankmax_of_level_global))
          if(allocated(stats%rankmax_of_level_global_factor))val_d = NINT(max(dble(val_d),dble(maxval(stats%rankmax_of_level_global_factor))))
          valid_opt = 1
       endif

@@ -4076,7 +4076,7 @@ contains
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
          ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'
-         ! if(isnan(sqrt(norm_Z)))then
+         ! if(ieee_is_nan(sqrt(norm_Z)))then
          ! write(*,*)inner_UV,norm_U,norm_V,maxvalue
          ! stop
          ! endif

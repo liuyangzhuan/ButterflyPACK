@@ -275,8 +275,8 @@ contains
 !    equal to the given complex value.
 !
    subroutine nod_assign_nod_to_nod(LHS, RHS)
-      type(nod), intent(inout) :: LHS
-      type(nod), intent(in) :: RHS
+      type(nod), intent(inout),target :: LHS
+      type(nod), intent(in),target :: RHS
       type(nod), pointer:: cur
       class(*), pointer::ptrl, ptrr, ptr
       integer ii
@@ -292,9 +292,11 @@ contains
 
       if (allocated(RHS%item)) then
          allocate (LHS%item, source=RHS%item)
-         select TYPE (ptrr=>RHS%item)
+         ptrr=>RHS%item
+         select TYPE (ptrr)
          type is (list)
-            select TYPE (ptrl=>LHS%item)
+            ptrl=>LHS%item
+            select TYPE (ptrl)
             type is (list)
                ptrl%num_nods = 0
                ptrl%head => null()
