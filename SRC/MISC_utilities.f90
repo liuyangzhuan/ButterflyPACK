@@ -1029,10 +1029,9 @@ contains
       implicit none
       real(kind=8):: a = 0, b = 0, c = 0, d = 0
       integer seed
-      class(*) val
+      DT val
 
-      select type (val)
-      type is (complex(kind=8))
+#if DAT==0
 
          ! Uniform distribution
          call random_number(a)
@@ -1051,12 +1050,12 @@ contains
          ! ! call random_number(a)
          ! ! seed = a*10000000
          ! ! random_dp_number =  c8_normal_01 ( seed )
-      type is (real(kind=8))
+#else
          ! Uniform distribution
          call random_number(a)
          val = a*2d0 - 1d0
+#endif
 
-      end select
       return
    end subroutine random_dp_number
 
@@ -2017,7 +2016,7 @@ contains
       implicit none
 
       integer m, n, k, mn_min, ktmp
-      class(*):: A(:, :)
+      DT:: A(:, :)
       real(kind=8):: c
       real(kind=8), allocatable::Singular(:), Ar(:, :), Ai(:, :)
       complex(kind=8):: ctemp
@@ -2040,8 +2039,7 @@ contains
 
 #ifdef USEVSL
 
-      select type (A)
-      type is (complex(kind=8))
+#if DAT==0
 
          allocate (Ar(m, n))
          allocate (Ai(m, n))
@@ -2061,7 +2059,7 @@ contains
          A = Ar + junit*Ai
          deallocate (Ar)
          deallocate (Ai)
-      type is (real(kind=8))
+#else
 
          allocate (Ar(m, n))
          brng = VSL_BRNG_MCG31
@@ -2076,13 +2074,14 @@ contains
          A = Ar
          deallocate (Ar)
 
-      end select
+#endif
 #else
       do ii = 1, m
       do jj = 1, n
          call random_dp_number(A(ii, jj))
       end do
       end do
+
 
 ! select type(A)
       ! type is (complex(kind=8))
@@ -2100,7 +2099,7 @@ contains
       ! ! call assert(mn_min==n,'mn_min not correct')
       ! ! A = UU(1:m,1:mn_min)
       ! ! else
-      ! ! !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+      ! ! !!!$omp parallel do default(shared) private(ii,jj,kk,ctemp)
       ! do jj=1, n
       ! do ii=1, m
       ! ctemp=(0d0,0d0)
@@ -2110,7 +2109,7 @@ contains
       ! A(ii,jj)=ctemp
       ! enddo
       ! enddo
-      ! ! !$omp end parallel do
+      ! ! !!!$omp end parallel do
       ! ! end if
 
       ! deallocate(Singular)

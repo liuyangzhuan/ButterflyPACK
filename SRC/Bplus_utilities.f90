@@ -6175,10 +6175,10 @@ contains
          deallocate (Vout_tmp)
 
       else
-
+#ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
-
+#endif
          allocate (arr_acc_n(blocks%ButterflyV%nblk_loc))
          allocate (arr_acc_m(blocks%ButterflyU%nblk_loc))
          k1 = 0
@@ -6976,10 +6976,10 @@ contains
 
          deallocate (BFvec%vec)
          deallocate (arr_acc_m, arr_acc_n)
-
+#ifdef HAVE_TASKLOOP
          !$omp end single
          !$omp end parallel
-
+#endif
 
       endif
 
@@ -12604,10 +12604,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       call assert(1<=level_start .and. level_start<=level_butterfly, 'it should be 1<=level_start<=level_butterfly in BF_MoveSingular_Ker')
       call assert(1<=level_end .and. level_end<=level_butterfly, 'it should be 1<=level_end<=level_butterfly in BF_MoveSingular_Ker')
 
-
+#ifdef HAVE_TASKLOOP
       !$omp parallel
       !$omp single
-
+#endif
       if (BF_checkNAN(blocks)) then
          write (*, *) 'NAN in 0 BF_block_MVP_dat'
          stop
@@ -13027,9 +13027,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       endif
 
       deallocate (BFvec%vec)
+#ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
-
+#endif
 
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2-n1

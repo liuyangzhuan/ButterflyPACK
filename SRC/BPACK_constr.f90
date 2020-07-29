@@ -1111,10 +1111,10 @@ contains
       enddo
 #endif
 
-
+#ifdef HAVE_TASKLOOP
       !$omp parallel
       !$omp single
-
+#endif
       ! construct intersections for each block from the block's lists
       cur => lstblk%head
       do ii = 1, lstblk%num_nods ! loop all blocks
@@ -1188,9 +1188,10 @@ contains
          end select
          cur => cur%next
       enddo
+#ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
-
+#endif
       n3 = OMP_get_wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
@@ -1415,10 +1416,10 @@ contains
       enddo
 #endif
 
-
+#ifdef HAVE_TASKLOOP
       !$omp parallel
       !$omp single
-
+#endif
       ! construct intersections for each block from the block's lists
       cur => lstblk%head
       do ii = 1, lstblk%num_nods ! loop all blocks
@@ -1492,9 +1493,10 @@ contains
          end select
          cur => cur%next
       enddo
+#ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
-
+#endif
       n3 = OMP_get_wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
@@ -1843,10 +1845,10 @@ contains
       ! call MPI_TYPE_COMMIT(newarrtype, ierr)
 
 
-
+#ifdef HAVE_TASKLOOP
       !$omp parallel
       !$omp single
-
+#endif
       n1 = OMP_get_wtime()
       pgno = 1
       ! nproc = ptree%pgrp(pgno)%nproc
@@ -1942,9 +1944,7 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
             !$omp taskloop default(shared) private(nn,idx,nprow,npcol,idstart,cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
-#endif
 #endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
@@ -1980,9 +1980,7 @@ contains
                ! deallocate(tmpidx)
             enddo
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
             !$omp end taskloop
-#endif
 #endif
          end select
          cur => cur%next
@@ -2030,9 +2028,7 @@ contains
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,val)
-#endif
 #endif
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
@@ -2047,9 +2043,7 @@ contains
          enddo
       enddo
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
       !$omp end taskloop
-#endif
 #endif
 
 
@@ -2070,10 +2064,10 @@ contains
 
       ! n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
-
+#ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
-
+#endif
       ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wordi',ptree%MyID
 
    end subroutine BPACK_all2all_inters
@@ -2112,10 +2106,11 @@ contains
       integer, save:: my_tid = 0
       integer, allocatable::ridx(:,:), cidx(:,:)
       integer*8:: cnt
-
+#ifdef HAVE_TASKLOOP
       !$omp threadprivate(my_tid)
       !$omp parallel
       !$omp single
+#endif
       num_threads = omp_get_num_threads()
 
       nr_max = 0
@@ -2208,20 +2203,21 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
             !$omp taskloop default(shared) private(nn,idx,idxs,pp,nr,nc,ii,myi,jj,myj,cnt)
-#endif
 #endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
                pp = pmaps(inters(idx)%pg, 3) + 1
                nr = blocks%inters(nn)%nr_loc
                nc = blocks%inters(nn)%nc
-
+#ifdef HAVE_TASKLOOP
                !$omp atomic capture
+#endif
                idxs = sendquant(pp)%size
                sendquant(pp)%size = sendquant(pp)%size + 3 + nr + nc + nr*nc
+#ifdef HAVE_TASKLOOP
                !$omp end atomic
+#endif
                sendquant(pp)%dat(idxs + 1, 1) = idx
                sendquant(pp)%dat(idxs + 2, 1) = nr
                sendquant(pp)%dat(idxs + 3, 1) = nc
@@ -2240,9 +2236,7 @@ contains
                enddo
             enddo
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
             !$omp end taskloop
-#endif
 #endif
          end select
          cur => cur%next
@@ -2293,9 +2287,7 @@ contains
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,nr,nc,ii,jj,cnt)
-#endif
 #endif
       do tt = 1, Nrecvactive
          my_tid = omp_get_thread_num()
@@ -2332,9 +2324,7 @@ contains
          enddo
       enddo
 #ifdef HAVE_TASKLOOP
-#ifndef PGI
       !$omp end taskloop
-#endif
 #endif
 
       n5 = OMP_get_wtime()
@@ -2354,10 +2344,10 @@ contains
       deallocate (ridx)
       deallocate (cidx)
 
-
+#ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
-
+#endif
       ! n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 

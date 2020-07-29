@@ -34,8 +34,11 @@ module BPACK_linkedlist
       type(nod), pointer :: tail => null()
       procedure(nod_score), nopass, pointer :: FuncScore => null()
    contains
+
+#ifndef PGI
 #ifdef HAVE_FINAL
-      final :: list_finalizer
+         final :: list_finalizer  ! This causes runtime error for PGI
+#endif
 #endif
       procedure :: len => list_length
    end type list

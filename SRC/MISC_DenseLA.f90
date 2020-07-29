@@ -22,15 +22,14 @@ module MISC_DenseLA
 contains
 
    real(kind=8) function fnorm(Matrix, M, N, norm)
-      class(*) Matrix(:, :)
+      DT Matrix(:, :)
       integer M, N
       character, optional:: norm
-      select type (Matrix)
-      type is (real(kind=8))
+#if DAT==1
          fnorm = dlangef90(Matrix, M, N, norm)
-      type is (complex(kind=8))
+#else
          fnorm = zlangef90(Matrix, M, N, norm)
-      end select
+#endif
 
    end function fnorm
 
@@ -93,15 +92,14 @@ contains
 
    real(kind=8) function pfnorm(M, N, Matrix, ia, ja, desca, norm)
       integer M, N, ia, ja
-      class(*) Matrix(:, :)
+      DT Matrix(:, :)
       integer desca(9)
       character, optional:: norm
-      select type (Matrix)
-      type is (real(kind=8))
+#if DAT==1
          pfnorm = pdlangef90(M, N, Matrix, ia, ja, desca, norm)
-      type is (complex(kind=8))
+#else
          pfnorm = pzlangef90(M, N, Matrix, ia, ja, desca, norm)
-      end select
+#endif
    end function pfnorm
 
 
@@ -138,7 +136,7 @@ contains
       integer desca(9)
       character, optional:: norm
       complex(kind=8), allocatable:: WORK(:)
-      complex(kind=8) pzlange
+      real(kind=8) pzlange
       character::opt
       integer IROFFA,ICOFFA
 
@@ -206,30 +204,16 @@ contains
 
    subroutine gesvdf90(Matrix, Singular, UU, VV, flop)
       implicit none
-      class(*)::Matrix(:, :), UU(:, :), VV(:, :)
+      DT::Matrix(:, :), UU(:, :), VV(:, :)
       real(kind=8) Singular(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (UU)
-         type is (real(kind=8))
-            select type (VV)
-            type is (real(kind=8))
-               call dgesvdf90(Matrix, Singular, UU, VV, flop)
-            end select
-         end select
+#if DAT==1
+      call dgesvdf90(Matrix, Singular, UU, VV, flop)
+#else
+      call zgesvdf90(Matrix, Singular, UU, VV, flop)
+#endif
 
-      type is (complex(kind=8))
-         select type (UU)
-         type is (complex(kind=8))
-            select type (VV)
-            type is (complex(kind=8))
-               call zgesvdf90(Matrix, Singular, UU, VV, flop)
-            end select
-         end select
-
-      end select
 
    end subroutine gesvdf90
 
@@ -318,31 +302,15 @@ contains
 
    subroutine gesddf90(Matrix, Singular, UU, VV, flop)
       implicit none
-      class(*)::Matrix(:, :), UU(:, :), VV(:, :)
+      DT::Matrix(:, :), UU(:, :), VV(:, :)
       real(kind=8) Singular(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (UU)
-         type is (real(kind=8))
-            select type (VV)
-            type is (real(kind=8))
+#if DAT==1
                call dgesddf90(Matrix, Singular, UU, VV, flop)
-            end select
-         end select
-
-      type is (complex(kind=8))
-         select type (UU)
-         type is (complex(kind=8))
-            select type (VV)
-            type is (complex(kind=8))
+#else
                call zgesddf90(Matrix, Singular, UU, VV, flop)
-            end select
-         end select
-
-      end select
-
+#endif
    end subroutine gesddf90
 
    subroutine zgesddf90(Matrix, Singular, UU, VV, flop)
@@ -433,22 +401,14 @@ contains
 
    subroutine geqrff90(Matrix, tau, flop)
       implicit none
-      class(*)::Matrix(:, :), tau(:)
+      DT::Matrix(:, :), tau(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call dgeqrff90(Matrix, tau, flop)
-         end select
-
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call zgeqrff90(Matrix, tau, flop)
-         end select
-      end select
+#endif
 
    end subroutine geqrff90
 
@@ -531,24 +491,15 @@ contains
 !
 
       implicit none
-      class(*):: Matrix(:, :), tau(:)
+      DT:: Matrix(:, :), tau(:)
       integer jpvt(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call dgeqp3f90(Matrix, jpvt, tau, flop)
-         end select
-
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call zgeqp3f90(Matrix, jpvt, tau, flop)
-         end select
-      end select
-
+#endif
    end subroutine geqp3f90
 
    subroutine zgeqp3f90(Matrix, jpvt, tau, flop)
@@ -635,7 +586,7 @@ contains
 !
 
       implicit none
-      class(*):: Matrix(:, :), tau(:)
+      DT:: Matrix(:, :), tau(:)
       integer jpvt(:)
       real(kind=8)::rtol, atol
       integer rank
@@ -648,19 +599,11 @@ contains
       if(mn_min==0)then
          rank=0
       else
-         select type (Matrix)
-         type is (real(kind=8))
-            select type (tau)
-            type is (real(kind=8))
+#if DAT==1
                call dgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
-            end select
-
-         type is (complex(kind=8))
-            select type (tau)
-            type is (complex(kind=8))
+#else
                call zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
-            end select
-         end select
+#endif
       endif
 
    end subroutine geqp3modf90
@@ -757,30 +700,16 @@ contains
 !
 
       implicit none
-      class(*) a(:, :), tau(:), c(:, :)
+      DT a(:, :), tau(:), c(:, :)
       integer m, n, k
       character:: side, trans
       real(kind=8), optional::flop
 
-      select type (a)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
-            select type (c)
-            type is (real(kind=8))
+#if DAT==1
                call ormqrf90(a, tau, c, side, trans, m, n, k, flop)
-            end select
-         end select
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
-            select type (c)
-            type is (complex(kind=8))
+#else
                call unmqrf90(a, tau, c, side, trans, m, n, k, flop)
-            end select
-         end select
-      end select
-
+#endif
    end subroutine un_or_mqrf90
 
    subroutine ormqrf90(a, tau, c, side, trans, m, n, k, flop)
@@ -858,28 +787,19 @@ contains
    end subroutine unmqrf90
 
    subroutine un_or_gqrf90(Matrix, tau, m, n, k, flop)
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       real(kind=8), optional::flop
       integer m, n, k
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call orgqrf90(Matrix, tau, m, n, k, flop)
-         end select
-
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call ungqrf90(Matrix, tau, m, n, k, flop)
-         end select
-      end select
-
+#endif
    end subroutine un_or_gqrf90
 
    subroutine pun_or_gqrf90(ctxt, Matrix, tau, m, n, k, desca, ia, ja, flop)
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       real(kind=8), optional::flop
       integer m, n, k, ia, ja
       integer desca(9)
@@ -889,20 +809,11 @@ contains
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call porgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
-         end select
-
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call pungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
-         end select
-      end select
-
+#endif
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
@@ -1047,19 +958,19 @@ contains
    end subroutine pungqrf90
 
    subroutine getrff90(Matrix, ipiv, flop)
-      class(*) Matrix(:, :)
+      DT Matrix(:, :)
       integer ipiv(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
+#if DAT==1
          call dgetrff90(Matrix, ipiv, flop)
-      type is (complex(kind=8))
+#else
          call zgetrff90(Matrix, ipiv, flop)
-      end select
+#endif
 
    end subroutine getrff90
 
+#if DAT==1
    subroutine dgetrff90(Matrix, ipiv, flop)
 
 !
@@ -1096,7 +1007,7 @@ contains
 
 
    end subroutine dgetrff90
-
+#else
    subroutine zgetrff90(Matrix, ipiv, flop)
 
 !
@@ -1132,26 +1043,19 @@ contains
       enddo
 
    end subroutine zgetrff90
+#endif
 
    subroutine getrsf90(Matrix, ipiv, B, trans, flop)
-      class(*) Matrix(:, :), B(:, :)
+      DT Matrix(:, :), B(:, :)
       integer ipiv(:)
       character:: trans
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (B)
-         type is (real(kind=8))
+#if DAT==1
             call dgetrsf90(Matrix, ipiv, B, trans, flop)
-         end select
-      type is (complex(kind=8))
-         select type (B)
-         type is (complex(kind=8))
+#else
             call zgetrsf90(Matrix, ipiv, B, trans, flop)
-         end select
-      end select
-
+#endif
    end subroutine getrsf90
 
    subroutine dgetrsf90(Matrix, ipiv, B, trans, flop)
@@ -1212,16 +1116,15 @@ contains
    subroutine getrif90(Matrix, ipiv, flop)
 
       implicit none
-      class(*) Matrix(:, :)
+      DT Matrix(:, :)
       integer ipiv(:)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
+#if DAT==1
          call dgetrif90(Matrix, ipiv, flop)
-      type is (complex(kind=8))
+#else
          call zgetrif90(Matrix, ipiv, flop)
-      end select
+#endif
 
    end subroutine getrif90
 
@@ -1312,24 +1215,16 @@ contains
    subroutine trsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
 
       implicit none
-      class(*) Matrix(:, :), B(:, :)
+      DT Matrix(:, :), B(:, :)
       integer m, n
       character side, uplo, transa, diag
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (B)
-         type is (real(kind=8))
+#if DAT==1
             call dtrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
-         end select
-      type is (complex(kind=8))
-         select type (B)
-         type is (complex(kind=8))
+#else
             call ztrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
-         end select
-      end select
-
+#endif
    end subroutine trsmf90
 
    subroutine dtrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
@@ -1380,16 +1275,13 @@ contains
 #ifdef HAVE_MKL
    subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop)
       character*1::transa_array(:),transb_array(:)
-      class(*)::alpha_array(:),beta_array(:)
+      DT::alpha_array(:),beta_array(:)
       integer::group_size(:),m_array(:),n_array(:),k_array(:),lda_array(:),ldb_array(:),ldc_array(:)
       integer(c_intptr_t)::a_array(:),b_array(:),c_array(:)
       real(kind=8), optional::flop
       integer m,n,k,group_count,ii
 
-      select type (alpha_array)
-      type is (real(kind=8))
-      select type (beta_array)
-      type is (real(kind=8))
+#if DAT==1
          call dgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
 
          if (present(flop))then
@@ -1401,13 +1293,7 @@ contains
             flop = flop + flops_gemm(m, n, k)
          enddo
          endif
-      end select
-      end select
-
-      select type (alpha_array)
-      type is (complex(kind=8))
-      select type (beta_array)
-      type is (complex(kind=8))
+#else
          call zgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
          if (present(flop))then
             flop=0
@@ -1418,8 +1304,7 @@ contains
                flop = flop + flops_gemm(m, n, k)
             enddo
          endif
-      end select
-      end select
+#endif
 
    end subroutine gemm_batch_mkl
 #endif
@@ -1442,28 +1327,15 @@ contains
       implicit none
       character side, trans
       integer m, n, k, ia, ja, ic, jc
-      class(*) MatA(:, :), MatC(:, :), tau(:)
+      DT MatA(:, :), MatC(:, :), tau(:)
       integer desca(9), descc(9)
       real(kind=8), optional::flop
 
-      select type (MatA)
-      type is (real(kind=8))
-         select type (MatC)
-         type is (real(kind=8))
-            select type (tau)
-            type is (real(kind=8))
+#if DAT==1
                call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
-            end select
-         end select
-      type is (complex(kind=8))
-         select type (MatC)
-         type is (complex(kind=8))
-            select type (tau)
-            type is (complex(kind=8))
+#else
                call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
-            end select
-         end select
-      end select
+#endif
 
    end subroutine pun_or_mqrf90
 
@@ -1514,23 +1386,16 @@ contains
    subroutine pgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
       implicit none
       integer M, N, ia, ja
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       integer rank
       integer desca(9)
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
-         end select
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
-         end select
-      end select
+#endif
 
    end subroutine pgeqrff90
 
@@ -1538,7 +1403,7 @@ contains
       implicit none
 
       integer M, N, ia, ja
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       integer rank
       integer desca(9)
       integer LWORK, INFO, ierr
@@ -1562,7 +1427,7 @@ contains
       implicit none
 
       integer M, N, ia, ja
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       integer rank
       integer desca(9)
       integer LWORK, INFO, ierr
@@ -1585,26 +1450,18 @@ contains
    subroutine pgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
       implicit none
       integer M, N, ia, ja
-      class(*) Matrix(:, :), tau(:)
+      DT Matrix(:, :), tau(:)
       integer ipiv(:), jpiv(:), JPERM(:)
       integer rank
       integer desca(9)
       real(kind=8)::rtol, atol
       real(kind=8), optional::flop
 
-      select type (Matrix)
-      type is (real(kind=8))
-         select type (tau)
-         type is (real(kind=8))
+#if DAT==1
             call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
-         end select
-      type is (complex(kind=8))
-         select type (tau)
-         type is (complex(kind=8))
+#else
             call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
-         end select
-      end select
-
+#endif
    end subroutine pgeqpfmodf90
 
    subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
@@ -1668,63 +1525,31 @@ contains
    subroutine pgemr2df90(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
       implicit none
       integer M, N, ia, ja, ib, jb
-      class(*) MatA(:, :), MatB(:, :)
+      DT MatA(:, :), MatB(:, :)
       integer desca(9), descb(9)
       integer ictxt
 
-      select type (MatA)
-      type is (real(kind=8))
-         select type (MatB)
-         type is (real(kind=8))
+#if DAT==1
             call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
-         end select
-      type is (complex(kind=8))
-         select type (MatB)
-         type is (complex(kind=8))
+#else
             call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
-         end select
-      end select
+#endif
    end subroutine pgemr2df90
 
    subroutine pgemmf90(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc, flop)
       implicit none
       character transa, transb
       integer m, n, k, ia, ja, ib, jb, ic, jc
-      class(*) alpha, beta, a(:, :), b(:, :), c(:, :)
+      DT alpha, beta, a(:, :), b(:, :), c(:, :)
       integer desca(9), descb(9), descc(9)
       real(kind=8), optional::flop
-      select type (a)
-      type is (real(kind=8))
-         select type (b)
-         type is (real(kind=8))
-            select type (c)
-            type is (real(kind=8))
-               select type (alpha)
-               type is (real(kind=8))
-                  select type (beta)
-                  type is (real(kind=8))
+#if DAT==1
                      call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
                      if (present(flop)) flop = flops_gemm(m, n, k)
-                  end select
-               end select
-            end select
-         end select
-      type is (complex(kind=8))
-         select type (b)
-         type is (complex(kind=8))
-            select type (c)
-            type is (complex(kind=8))
-               select type (alpha)
-               type is (complex(kind=8))
-                  select type (beta)
-                  type is (complex(kind=8))
+#else
                      call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
                      if (present(flop)) flop = flops_gemm(m, n, k)
-                  end select
-               end select
-            end select
-         end select
-      end select
+#endif
    end subroutine pgemmf90
 
    subroutine ptrsmf90(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb, flop)
@@ -1732,64 +1557,49 @@ contains
       character side, uplo, transa, diag
       integer m, n, ia, ja, ib, jb
       integer desca(9), descb(9)
-      class(*) a(:, :), b(:, :), alpha
+      DT a(:, :), b(:, :), alpha
       real(kind=8), optional::flop
 
-      select type (a)
-      type is (real(kind=8))
-         select type (b)
-         type is (real(kind=8))
-            select type (alpha)
-            type is (real(kind=8))
+#if DAT==1
                call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
                if (present(flop)) flop = flops_dtrsm(side, m, n)
-            end select
-         end select
-      type is (complex(kind=8))
-         select type (b)
-         type is (complex(kind=8))
-            select type (alpha)
-            type is (complex(kind=8))
+#else
                call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
                if (present(flop)) flop = flops_ztrsm(side, m, n)
-            end select
-         end select
-      end select
+#endif
    end subroutine ptrsmf90
 
    subroutine pgetrff90(m, n, a, ia, ja, desca, ipiv, info, flop)
       implicit none
       integer m, n, ia, ja
-      class(*) a(:, :)
+      DT a(:, :)
       integer desca(9)
       integer ipiv(:)
       integer info
       real(kind=8), optional::flop
 
-      select type (a)
-      type is (real(kind=8))
+#if DAT==1
          call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
          if (present(flop)) flop = flops_dgetrf(m, n)
-      type is (complex(kind=8))
+#else
          call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)
          if (present(flop)) flop = flops_zgetrf(m, n)
-      end select
+#endif
    end subroutine pgetrff90
 
    subroutine pgetrif90(n, a, ia, ja, desca, ipiv, flop)
       implicit none
       integer n, ia, ja
-      class(*):: a(:, :)
+      DT:: a(:, :)
       integer desca(9)
       integer ipiv(:)
       real(kind=8), optional::flop
 
-      select type (a)
-      type is (real(kind=8))
+#if DAT==1
          call pdgetrif90(n, a, ia, ja, desca, ipiv, flop)
-      type is (complex(kind=8))
+#else
          call pzgetrif90(n, a, ia, ja, desca, ipiv, flop)
-      end select
+#endif
 
    end subroutine pgetrif90
 
@@ -1857,30 +1667,16 @@ contains
 
       character jobu, jobvt
       integer m, n, ia, ja, iu, ju, ivt, jvt
-      class(*):: a(:, :), u(:, :), vt(:, :)
+      DT:: a(:, :), u(:, :), vt(:, :)
       integer desca(9), descu(9), descvt(9)
       real(kind=8):: s(:)
       real(kind=8), optional::flop
 
-      select type (a)
-      type is (real(kind=8))
-         select type (u)
-         type is (real(kind=8))
-            select type (vt)
-            type is (real(kind=8))
+#if DAT==1
                call pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
-            end select
-         end select
-      type is (complex(kind=8))
-         select type (u)
-         type is (complex(kind=8))
-            select type (vt)
-            type is (complex(kind=8))
+#else
                call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
-            end select
-         end select
-      end select
-
+#endif
    end subroutine pgesvdf90
 
    subroutine pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
