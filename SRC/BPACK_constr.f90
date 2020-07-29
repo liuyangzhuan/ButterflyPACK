@@ -1067,9 +1067,11 @@ contains
       curr => lstr%head
       curc => lstc%head
       do nn = 1, Ninter
-         select type (ptrr=>curr%item)
+         ptrr=>curr%item
+         select type (ptrr)
          type is (iarray)
-            select type (ptrc=>curc%item)
+            ptrc=>curc%item
+            select type (ptrc)
             type is (iarray)
                call Hmat_MapIntersec2Block_Loc(blocks_o, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk)
             end select
@@ -1092,9 +1094,11 @@ contains
             curr => ptr%ptr%lstr%head
             curc => ptr%ptr%lstc%head
             do nn = 1, ptr%ptr%lstr%num_nods
-               select type (ptrr=>curr%item)
+               ptrr=>curr%item
+               select type (ptrr)
                type is (iarray)
-                  select type (ptrc=>curc%item)
+                  ptrc=>curc%item
+                  select type (ptrc)
                   type is (iarray)
                      write (*, *) ptree%MyID, ptr%ptr%row_group, ptr%ptr%col_group, nn, ptrr%num_nods, ptrc%num_nods
                   end select
@@ -1125,9 +1129,11 @@ contains
             curc => blocks%lstc%head
             allocate (blocks%inters(blocks%lstr%num_nods))
             do nn = 1, blocks%lstr%num_nods ! loop all lists of list of rows and columns
-               select type (ptrr=>curr%item)
+               ptrr=>curr%item
+               select type (ptrr)
                type is (iarray)
-                  select type (ptrc=>curc%item)
+                  ptrc=>curc%item
+                  select type (ptrc)
                   type is (iarray)
                      blocks%inters(nn)%nr = ptrr%num_nods
                      allocate (blocks%inters(nn)%rows(ptrr%num_nods))
@@ -1357,9 +1363,11 @@ contains
       curr => lstr%head
       curc => lstc%head
       do nn = 1, Ninter
-         select type (ptrr=>curr%item)
+         ptrr=>curr%item
+         select type (ptrr)
          type is (iarray)
-            select type (ptrc=>curc%item)
+            ptrc=>curc%item
+            select type (ptrc)
             type is (iarray)
                select case (option%format)
                case (HODLR)
@@ -1390,9 +1398,11 @@ contains
             curr => ptr%ptr%lstr%head
             curc => ptr%ptr%lstc%head
             do nn = 1, ptr%ptr%lstr%num_nods
-               select type (ptrr=>curr%item)
+               ptrr=>curr%item
+               select type (ptrr)
                type is (iarray)
-                  select type (ptrc=>curc%item)
+                  ptrc=>curc%item
+                  select type (ptrc)
                   type is (iarray)
                      write (*, *) ptree%MyID, ptr%ptr%row_group, ptr%ptr%col_group, nn, ptrr%num_nods*ptrc%num_nods
                   end select
@@ -1423,9 +1433,11 @@ contains
             curc => blocks%lstc%head
             allocate (blocks%inters(blocks%lstr%num_nods))
             do nn = 1, blocks%lstr%num_nods ! loop all lists of list of rows and columns
-               select type (ptrr=>curr%item)
+               ptrr=>curr%item
+               select type (ptrr)
                type is (iarray)
-                  select type (ptrc=>curc%item)
+                  ptrc=>curc%item
+                  select type (ptrc)
                   type is (iarray)
                      blocks%inters(nn)%nr = ptrr%num_nods
                      allocate (blocks%inters(nn)%rows(ptrr%num_nods))
@@ -1930,7 +1942,9 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
             !$omp taskloop default(shared) private(nn,idx,nprow,npcol,idstart,cnt,ii,ri,iproc,myi,jj,ci,jproc,myj,pp,idxs)
+#endif
 #endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
@@ -1966,7 +1980,9 @@ contains
                ! deallocate(tmpidx)
             enddo
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
             !$omp end taskloop
+#endif
 #endif
          end select
          cur => cur%next
@@ -2014,7 +2030,9 @@ contains
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,val)
+#endif
 #endif
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
@@ -2029,7 +2047,9 @@ contains
          enddo
       enddo
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
       !$omp end taskloop
+#endif
 #endif
 
 
@@ -2188,7 +2208,9 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
             !$omp taskloop default(shared) private(nn,idx,idxs,pp,nr,nc,ii,myi,jj,myj,cnt)
+#endif
 #endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
@@ -2218,7 +2240,9 @@ contains
                enddo
             enddo
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
             !$omp end taskloop
+#endif
 #endif
          end select
          cur => cur%next
@@ -2269,7 +2293,9 @@ contains
          call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,nr,nc,ii,jj,cnt)
+#endif
 #endif
       do tt = 1, Nrecvactive
          my_tid = omp_get_thread_num()
@@ -2306,7 +2332,9 @@ contains
          enddo
       enddo
 #ifdef HAVE_TASKLOOP
+#ifndef PGI
       !$omp end taskloop
+#endif
 #endif
 
       n5 = OMP_get_wtime()

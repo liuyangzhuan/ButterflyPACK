@@ -151,7 +151,7 @@ contains
       isnanMat = .false.
       do ii = 1, m
       do jj = 1, n
-         isnanMat = isnanMat .or. isnan(abs(A(ii, jj)))
+         isnanMat = isnanMat .or. ieee_is_nan(abs(A(ii, jj)))
       end do
       end do
    end function isnanMat
@@ -538,7 +538,7 @@ contains
       allocate (VV(mn, N))
       allocate (Singular(mn))
 
-      if (isnan(fnorm(mat, M, N))) then
+      if (ieee_is_nan(fnorm(mat, M, N))) then
          write (*, *) 'input matrix NAN in GetRank'
          stop
       end if
@@ -549,7 +549,7 @@ contains
          rank = 1
          deallocate (UU, VV, Singular)
       else
-         if (isnan(sum(Singular))) then
+         if (ieee_is_nan(sum(Singular))) then
             deallocate (UU, VV, Singular)
             write (*, *) 'gesvd_robust wrong in GetRank, switching to QR'
 
@@ -568,7 +568,7 @@ contains
             ! RRQR
             jpvt = 0
             call geqp3f90(Atmp, jpvt, tau, flop)
-            if (isnan(fnorm(Atmp, mnl, mn))) then
+            if (ieee_is_nan(fnorm(Atmp, mnl, mn))) then
                write (*, *) 'Q or R has NAN in GetRank'
                stop
             end if
@@ -713,7 +713,7 @@ contains
                   deallocate (jpiv)
                   deallocate (JPERM)
 
-                  if (isnan(fnorm(mat2D, max(1,myArows), max(1,myAcols)))) then
+                  if (ieee_is_nan(fnorm(mat2D, max(1,myArows), max(1,myAcols)))) then
                      write (*, *) 'Q or R has NAN in PComputeRange'
                      stop
                   end if
@@ -749,7 +749,7 @@ contains
 
       mn = min(M, N)
       matnorm=fnorm(mat, M, N)
-      if (isnan(matnorm)) then
+      if (ieee_is_nan(matnorm)) then
          write (*, *) 'input matrix NAN in ComputeRange'
          stop
       end if
@@ -787,7 +787,7 @@ contains
          if (present(Flops)) Flops = Flops + flop
          rank = mn
       endif
-      if (isnan(fnorm(mat, M, N))) then
+      if (ieee_is_nan(fnorm(mat, M, N))) then
          write (*, *) 'Q or R has NAN in ComputeRange'
          stop
       end if
@@ -1425,7 +1425,7 @@ contains
          if (present(Flops)) Flops = Flops + flop
 
 ! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow
-         ! if(isnan(sum(Singular)))then
+         ! if(ieee_is_nan(sum(Singular)))then
 
          ! write(*,*)'gesvd wrong in LinearSolve, switching to QR'
 
@@ -1438,7 +1438,7 @@ contains
          ! ! RRQR
          ! jpvt = 0
          ! call geqp3f90(Atmp,jpvt,tau)
-         ! if(isnan(fnorm(Atmp,m,n)))then
+         ! if(ieee_is_nan(fnorm(Atmp,m,n)))then
          ! write(*,*)'Q or R has NAN in LinearSolve'
          ! stop
          ! end if
@@ -1505,7 +1505,7 @@ contains
          ! x(jpvt(ii),1:k) = xtmp(ii,1:k)
          ! end do
 
-         ! if(isnan(fnorm(x,n,k)))then
+         ! if(ieee_is_nan(fnorm(x,n,k)))then
          ! write(*,*)'trisolve has NAN in LinearSolve'
          ! stop
          ! end if
@@ -1552,7 +1552,7 @@ contains
          ! end if
 
          do ii = 1, k
-         if (isnan(abs(sum(x(:, ii))))) then
+         if (ieee_is_nan(abs(sum(x(:, ii))))) then
             ! do jj =1,rank
             ! write(*,*)jj,'hh',A_tmp_rank(jj,:)
             ! end do

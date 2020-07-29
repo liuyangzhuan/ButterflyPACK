@@ -103,6 +103,15 @@ set(CMAKE_Fortran_FLAGS "-traceback -debug full -check bounds ${CMAKE_Fortran_FL
 endif()
 endif()
 
+check_fortran_compiler_flag("Msmartalloc" COMPILER_PGI)
+if (COMPILER_PGI)
+set(CMAKE_Fortran_FLAGS "-Mextend -DPGI ${CMAKE_Fortran_FLAGS}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+set(CMAKE_Fortran_FLAGS "-O0 -g -pg -Mbounds -traceback ${CMAKE_Fortran_FLAGS}")
+endif()
+endif()
+
+
 
 set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 include(CheckCXXCompilerFlag)
