@@ -6447,9 +6447,9 @@ contains
                         deallocate (matrixtemp)
                      else
                      n3 = OMP_get_wtime()
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop)
-   #endif
+#endif
                         do i = 1, nr0
                            index_i = (i - 1)*inc_r0 + idx_r0
                            index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
@@ -6460,17 +6460,17 @@ contains
                            BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
                            call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, random2(1 + arr_acc_m(i), 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
                         n4 = OMP_get_wtime()
                         ! time_tmp = time_tmp + n4-n3
 
@@ -6483,9 +6483,9 @@ contains
 
                      if (nc0 > 1 .and. inc_c0 == 1) then  ! this special treatment makes sure two threads do not write to the same address simultaneously
                         ! n1 = OMP_get_wtime()
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
-   #endif
+#endif
                         do index_ij = 1, nr0*nc0/2
                            index_j_loc0 = (index_ij - 1)/nr0 + 1
                            do jj = 1, 2
@@ -6511,13 +6511,13 @@ contains
                                  BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                               endif
                               call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp atomic
-   #endif
+#endif
                               flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp end atomic
-   #endif
+#endif
 
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
@@ -6528,26 +6528,26 @@ contains
                               endif
                               ! !$omp end critical
                               call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp atomic
-   #endif
+#endif
                               flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp end atomic
-   #endif
+#endif
                            enddo
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
 
    ! n2 = OMP_get_wtime()
    ! time_tmp = time_tmp + n2-n1
 
                      else
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
-   #endif
+#endif
                         do index_ij = 1, nr0*nc0
                            index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
                            index_i_loc = mod(index_ij - 1, nr0) + 1
@@ -6571,13 +6571,13 @@ contains
                               BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                            endif
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
@@ -6588,18 +6588,18 @@ contains
                            endif
                            ! !$omp end critical
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
 
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
@@ -6862,9 +6862,9 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
-   #endif
+#endif
                         do j = 1, blocks%ButterflyV%nblk_loc
                            index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
                            index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
@@ -6874,17 +6874,17 @@ contains
                            allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
                            BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
                            call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, rank, random2(1 + arr_acc_n(j), 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      n4 = OMP_get_wtime()
@@ -6894,9 +6894,9 @@ contains
                      flops = 0
                      n3 = OMP_get_wtime()
                      if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop)
-   #endif
+#endif
                         do index_ij = 1, nr0*nc0/2
                            index_i_loc0 = (index_ij - 1)/nc0 + 1
                            do ii = 1, 2
@@ -6923,13 +6923,13 @@ contains
                               endif
                               ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
                               call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp atomic
-   #endif
+#endif
                               flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp end atomic
-   #endif
+#endif
 
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
@@ -6940,22 +6940,22 @@ contains
                               endif
                               ! !$omp end critical
                               call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp atomic
-   #endif
+#endif
                               flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                               !$omp end atomic
-   #endif
+#endif
                            enddo
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
                      else
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
-   #endif
+#endif
                         do index_ij = 1, nr0*nc0
                            index_j_loc = (index_ij - 1)/nr0 + 1
                            index_i_loc = mod(index_ij - 1, nr0) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -6980,13 +6980,13 @@ contains
                            endif
                            ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
@@ -6995,17 +6995,17 @@ contains
                               BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
                            endif
                            call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp atomic
-   #endif
+#endif
                            flops = flops + flop
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                            !$omp end atomic
-   #endif
+#endif
                         enddo
-   #ifdef HAVE_TASKLOOP
+#ifdef HAVE_TASKLOOP
                         !$omp end taskloop
-   #endif
+#endif
 
                      endif
 
