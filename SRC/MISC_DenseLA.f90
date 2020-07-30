@@ -78,14 +78,16 @@ contains
       if (opt == 'I' .or. opt == 'i') then
          allocate (WORK(M))
          WORK = 0
+      else
+         allocate(WORK(1))
       end if
 
       lda = size(Matrix, 1)
       zlangef90 = zlange(opt, M, N, Matrix, lda, WORK)
 
-      if (opt == 'I' .or. opt == 'i') then
+      ! if (opt == 'I' .or. opt == 'i') then
          deallocate (WORK)
-      end if
+      ! end if
 
    end function zlangef90
 

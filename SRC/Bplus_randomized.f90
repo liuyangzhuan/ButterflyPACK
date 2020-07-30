@@ -343,7 +343,7 @@ contains
                elseif (level == level_butterfly + 1) then
                   allocate (block_rand%ButterflyU%blocks(block_rand%ButterflyU%nblk_loc))
                else
-                  allocate (block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr, block_rand%ButterflyKerl(level)%nc))
+                  if(block_rand%ButterflyKerl(level)%nr>0 .and. block_rand%ButterflyKerl(level)%nc>0)allocate (block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr, block_rand%ButterflyKerl(level)%nc))
                endif
             enddo
 
@@ -355,7 +355,7 @@ contains
                elseif (level == level_butterfly + 1) then
                   allocate (block_rand%ButterflyU%blocks(block_rand%ButterflyU%nblk_loc))
                else
-                  allocate (block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr, block_rand%ButterflyKerl(level)%nc))
+                  if(block_rand%ButterflyKerl(level)%nr>0 .and. block_rand%ButterflyKerl(level)%nc>0)allocate (block_rand%ButterflyKerl(level)%blocks(block_rand%ButterflyKerl(level)%nr, block_rand%ButterflyKerl(level)%nc))
                endif
             enddo
          endif
