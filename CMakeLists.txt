@@ -107,7 +107,7 @@ check_fortran_compiler_flag("Msmartalloc" COMPILER_PGI)
 if (COMPILER_PGI)
 set(CMAKE_Fortran_FLAGS "-Mextend -DPGI ${CMAKE_Fortran_FLAGS}")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-set(CMAKE_Fortran_FLAGS "-O0 -g -pg -Mbounds -traceback ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-O0 -g -Mbounds -Mdepchk -traceback ${CMAKE_Fortran_FLAGS}")
 endif()
 endif()
 
