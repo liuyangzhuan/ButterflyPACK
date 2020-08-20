@@ -378,6 +378,12 @@ contains
       type(proctree)::ptree
       type(Hoption)::option
 
+
+      if(ieee_is_nan(sum(abs(x))))then
+         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
+         stop
+      endif
+
       itmax = iter
 
       call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)

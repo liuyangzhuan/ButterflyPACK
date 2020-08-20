@@ -20,7 +20,7 @@
 #include "ButterflyPACK_config.fi"
 
 
-module EMSURF_MODULE
+module EMSURF_PORT_MODULE
 use BPACK_DEFS
 use MISC_Utilities
 implicit none
@@ -28,11 +28,61 @@ implicit none
 	!**** define your application-related variables here
 
 
+	real(kind=8):: r_TE_nm(3,3)	=	&
+	reshape((/3.8317,	1.8412,		3.0542,		&
+				7.0156,	5.3314,		6.7061,		&
+				10.1735,	8.5363,	 	9.9695	/), (/3,3/))  ! roots of derivative of bessel j
+	real(kind=8):: r_TM_nm(3,3)=	&
+	reshape((/2.4048,	3.8317,		5.1356,		&
+				5.5201,	7.0156,		8.4172,		&
+				8.6537,	10.1735,	11.6198	/), (/3,3/))  ! roots of bessel j
+
+	real(kind=8):: A_TE_nm_cir(3,3)	=	&
+	reshape((/1.40081,	1.63313,		3.32719,		&
+			1.87991,	2.34682,		3.18421,		&
+			2.25943,	2.93968,	 	3.59894	/), (/3,3/)) ! normalization factor of TE_nm circular: A_TE_nm_cir/R
+	real(kind=8):: A_TM_nm_cir(3,3) =	&
+	reshape((/1.08676,	1.98104,		2.96082,		&
+			1.65809,	2.65859,		3.38125,		&
+			2.07841,	3.19531,	 	3.79779	/), (/3,3/))  ! normalization factor of TM_nm circular A_TM_nm_cir/R
+
+	! normalization factor of TE_nm, rectangular: 1/sqrt(a/b*m^2*A_nm_rec + b/a*n^2*B_nm_rec) 
+	! normalization factor of TM_nm, rectangular: 1/sqrt(a/b*m^2*B_nm_rec + b/a*n^2*A_nm_rec) 
+	real(kind=8):: A_nm_rec(3,3)	=	&
+	reshape((/0d0,	0d0,			0d0,		&
+			0.5d0,	0.125d0,		0.25d0,		&
+			0.5d0,	0.25d0,	 		0.125d0	/), (/3,3/))
+
+	real(kind=8):: B_nm_rec(3,3)	=	&
+	reshape((/0d0,		0.5d0,		0.5d0,		&
+			0d0,		0.125d0,	0.25d0,		&
+			0d0,		0.25d0,	 	0.125d0	/), (/3,3/))
+
 	!**** edges of each node
 	type edge_node
 		integer Nedge
 		integer,allocatable::edges(:,:)
 	end type edge_node
+
+	!**** define a port
+	type port
+		integer type   ! 0: circular 1: rectangular
+		real(kind=8) origin(3)  ! origin of the local coordinate system
+		real(kind=8) x(3),y(3),z(3)   ! local coordinate units
+		integer:: Nunk=0            ! number of internal edges on the port
+		real(kind=8) R  ! radius of the port if it's circular
+		real(kind=8) a, b ! sizes of the port if it's rectangular
+		integer:: nmax=1   ! TM_nm and TE_nm
+		integer:: mmax=1   ! TM_nm and TE_nm
+		real(kind=8):: A_TE_nm(3,3) ! normalization factor of TE_nm 
+		real(kind=8):: A_TM_nm(3,3) ! normalization factor of TM_nm 
+		real(kind=8):: impedance_TE_nm(3,3)  ! mode impedance TE_nm
+		real(kind=8):: impedance_TM_nm(3,3)  ! mode impedance of TM_nm
+		complex(kind=8),allocatable::nxe_dot_rwg(:,:,:,:,:)  ! int_nxe_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
+	end type port
+
+
+
 
 	!**** quantities related to geometries, meshes, unknowns and points
 	type quant_EMSURF
@@ -45,9 +95,14 @@ implicit none
 		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
 
 		integer Nunk ! size of the matrix
+		integer Nunk_int ! not port unknowns
+		integer Nunk_port ! port unknowns
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: info_unk(:,:)
 		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
+
+		integer:: Nport=0 ! number of ports
+		type(port), allocatable:: ports(:)   ! the open ports
 
 		! 3D mesh
 		integer maxnode ! # of vertices in a mesh
@@ -87,8 +142,9 @@ if(allocated(quant%node_of_patch))deallocate(quant%node_of_patch)
 
 end subroutine delete_quant_EMSURF
 
+
 !**** user-defined subroutine to sample Z_mn
-subroutine Zelem_EMSURF(m,n,value,quant)
+subroutine Zelem_EMSURF_T(m,n,value,quant)
 
     use BPACK_DEFS
     implicit none
@@ -106,14 +162,126 @@ subroutine Zelem_EMSURF(m,n,value,quant)
     real(kind=8) ianl,ianl1,ianl2
     real(kind=8) area
 
-	class(*),pointer :: quant
+	type(quant_EMSURF) :: quant
 
 
     real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
 
 
-	select TYPE(quant)
-	type is (quant_EMSURF)
+
+		! convert to new indices because quant%info_unk has been reordered
+		edge_m = m
+		edge_n = n
+
+		allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+		allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+
+		lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+		ctemp1=(0.,0.)
+		ctemp2=(0.,0.)
+		value_m=(0.,0.)
+
+			do ii=3,4
+				call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+				nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
+				do i=1,quant%integral_points
+					am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+					am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+					am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+					bb(1)=(0.,0.)
+					aa(1:3)=(0.,0.)
+					do jj=3,4
+						call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+						nr_n(1:3)=quant%normal_of_patch(1:3,quant%info_unk(jj,edge_n))
+						if (quant%info_unk(ii,edge_m)==quant%info_unk(jj,edge_n)) then
+							! area=triangle_area(quant%info_unk(ii,edge_m),quant)
+							imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
+							do j=1,quant%integral_points
+								distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
+								if(distance==0)then
+									imp=imp+wn(j)*(-junit*quant%wavenum)
+									imp1=imp1+quant%ng1(j)*wn(j)*(-junit*quant%wavenum)
+									imp2=imp2+quant%ng2(j)*wn(j)*(-junit*quant%wavenum)
+									ianl=ianalytic(edge_n,jj,xn(j),yn(j),zn(j),quant)
+									ianl1=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),1,quant)
+									ianl2=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),2,quant)
+									imp=imp+ianl  !debug
+									imp1=imp1+ianl1
+									imp2=imp2+ianl2
+								else
+									ctemp=exp(-junit*quant%wavenum*distance)/distance
+									imp=imp+wn(j)*ctemp
+									imp1=imp1+quant%ng1(j)*wn(j)*ctemp
+									imp2=imp2+quant%ng2(j)*wn(j)*ctemp
+								endif
+							enddo
+							imp3=imp-imp1-imp2
+							nodetemp_n=quant%info_unk(jj+2,edge_n)
+							patch=quant%info_unk(jj,edge_n)
+							do jjj=1,3
+								aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
+							enddo
+							bb(1)=bb(1)+(-1)**(jj+1)*imp
+						else
+							imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
+							do j=1,quant%integral_points
+								distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
+								ctemp=exp(-junit*quant%wavenum*distance)/distance
+								imp=imp+wn(j)*ctemp
+								imp1=imp1+quant%ng1(j)*wn(j)*ctemp
+								imp2=imp2+quant%ng2(j)*wn(j)*ctemp
+							enddo
+							imp3=imp-imp1-imp2
+							nodetemp_n=quant%info_unk(jj+2,edge_n)
+							patch=quant%info_unk(jj,edge_n)
+							do jjj=1,3
+								aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
+							enddo
+							bb(1)=bb(1)+(-1)**(jj+1)*imp
+						endif
+					enddo
+					call cscalar(aa,am,ctemp)
+					ctemp1=ctemp1+(-1)**(ii+1)*ctemp*wm(i)
+					ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
+				enddo
+			enddo
+			value_e=ln*lm*junit*(ctemp1-ctemp2)/2./quant%freq/eps0
+			value=value_e/impedence0
+
+		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
+
+
+    return
+
+end subroutine Zelem_EMSURF_T
+
+subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,n,sign
+    integer flag,edge_m,edge_n,nodetemp_n,patch
+    complex(kind=8) value_e,value_m,value
+    integer i,j,ii,jj,iii,jjj
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3),nxan(3)
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3),dg3(3)
+    complex(kind=8) imp,imp1,imp2,imp3
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+    real(kind=8) area
+
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+
 
 		! convert to new indices because quant%info_unk has been reordered
 		edge_m = m
@@ -144,39 +312,13 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 					nr_n(1:3)=quant%normal_of_patch(1:3,quant%info_unk(jj,edge_n))
 					if (quant%info_unk(ii,edge_m)==quant%info_unk(jj,edge_n)) then
 						area=triangle_area(quant%info_unk(ii,edge_m),quant)
-						imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						call scalar(am,an,temp)
-						value_m=value_m+(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
-						do j=1,quant%integral_points
-							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
-							if(distance==0)then
-								imp=imp+wn(j)*(-junit*quant%wavenum)
-								imp1=imp1+quant%ng1(j)*wn(j)*(-junit*quant%wavenum)
-								imp2=imp2+quant%ng2(j)*wn(j)*(-junit*quant%wavenum)
-								ianl=ianalytic(edge_n,jj,xn(j),yn(j),zn(j),quant)
-								ianl1=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),1,quant)
-								ianl2=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),2,quant)
-								imp=imp+ianl  !debug
-								imp1=imp1+ianl1
-								imp2=imp2+ianl2
-							else
-								imp=imp+wn(j)*exp(-junit*quant%wavenum*distance)/distance
-								imp1=imp1+quant%ng1(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
-								imp2=imp2+quant%ng2(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
-							endif
-						enddo
-						imp3=imp-imp1-imp2
-						nodetemp_n=quant%info_unk(jj+2,edge_n)
-						patch=quant%info_unk(jj,edge_n)
-						do jjj=1,3
-							aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
-						enddo
-						bb(1)=bb(1)+(-1)**(jj+1)*imp
+						call curl(nr_n,an,nxan)
+						call scalar(am,nxan,temp)
+						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
 					else
-						imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
 						do j=1,quant%integral_points
 							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
 							an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
@@ -185,34 +327,269 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							dg(1)=(xm(i)-xn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
-							 call ccurl(an,dg,dg1)
-							 call ccurl(nr_m,dg1,dg2)
+							 call ccurl(an,dg,dg2)
 							 call cscalar(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
-							imp=imp+wn(j)*exp(-junit*quant%wavenum*distance)/distance
-							imp1=imp1+quant%ng1(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
-							imp2=imp2+quant%ng2(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
 						enddo
-						imp3=imp-imp1-imp2
-						nodetemp_n=quant%info_unk(jj+2,edge_n)
-						patch=quant%info_unk(jj,edge_n)
-						do jjj=1,3
-						   aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
-						enddo
-						bb(1)=bb(1)+(-1)**(jj+1)*imp
 					endif
 				enddo
-				call cscalar(aa,am,ctemp)
-				ctemp1=ctemp1+(-1)**(ii+1)*ctemp*wm(i)
-				ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 			enddo
 		enddo
-		value_e=ln*lm*junit*(ctemp1-ctemp2)/2./quant%freq/eps0
 		value_m=value_m*lm*ln
 
-		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*impedence0*value_m
+		value=value_m
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
+
+
+    return
+
+end subroutine Zelem_EMSURF_K
+
+
+
+subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,pp,mm,nn,TETM,rr
+    integer flag,edge_m,patch
+    complex(kind=8) value_m,value
+    integer i,ii
+    real(kind=8) lm,am(3),nr_m(3),nxe(3)
+    real(kind=8) temp
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+		edge_m = m
+		allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+
+		lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+
+		value_m=(0.,0.)
+
+		do ii=3,4
+			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
+			do i=1,quant%integral_points
+				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+				am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+
+				call Port_nxe(xm(i),ym(i),zm(i),nxe,quant,pp,mm,nn,TETM,rr)
+				call scalar(am,nxe,temp)
+				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
+			enddo
+		enddo
+		value_m=value_m*lm
+
+		value=value_m
+
+		deallocate(xm,ym,zm,wm)
+
+
+    return
+
+end subroutine Port_nxe_dot_rwg
+
+subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
+	real(kind=8) xm,ym,zm,e(3),nxe(3),r,theta,phi,Erho,Ephi,Ex,Ey,kc,x,y,z,nhat(3),rhat(3),phihat(3),rho(3),a,b
+	type(quant_EMSURF) :: quant
+	integer:: pp,mm,nn,TETM,rr
+	real(kind=8):: J(nn+2),Jp(nn+2)
+	
+	if(quant%ports(pp)%type==0)then
+	
+		Erho=0
+		Ephi=0
+
+		call Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
+
+		nhat = quant%ports(pp)%z
+		rhat = 0
+		phihat = 0
+		if(r>0)then
+			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
+			call curl(nhat,rhat,phihat)
+		endif
+
+		if(TETM==1)then !TE_nm
+			kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
+			x = kc*r
+			if(nn==0)then
+				call bessjyV(1,x,J,0)
+				Jp(1) = -J(2)
+			else
+				call bessjyV(nn,x,J,0)
+				Jp(nn+1) = J(nn)-(nn)/x*J(nn+1)
+			endif
+			if(rr==1)then
+				Erho = nn/x*sin(nn*phi)*J(nn+1)
+				Ephi = cos(nn*phi)*Jp(nn+1)
+			else 
+				Erho = -nn/x*cos(nn*phi)*J(nn+1)
+				Ephi = sin(nn*phi)*Jp(nn+1)				
+			endif
+			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TE_nm(nn+1,mm)/quant%ports(pp)%R
+		elseif(TETM==2)then ! TM_nm
+			kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
+			x = kc*r
+			if(nn==0)then
+				call bessjyV(1,x,J,0)
+				Jp(1) = -J(2)
+			else
+				call bessjyV(nn,x,J,0)
+				Jp(nn+1) = J(nn)-(nn)/x*J(nn+1)
+			endif
+			if(rr==1)then
+				Erho = cos(nn*phi)*Jp(nn+1)
+				Ephi = -nn/x*sin(nn*phi)*J(nn+1)
+			else 
+				Erho = sin(nn*phi)*Jp(nn+1)
+				Ephi = nn/x*cos(nn*phi)*J(nn+1)
+			endif	
+			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
+		endif
+		call curl(nhat,e,nxe)
+	elseif(quant%ports(pp)%type==1)then
+		Ex=0
+		Ey=0
+		rho(1)=xm
+		rho(2)=ym
+		rho(3)=zm
+		rho = rho - quant%ports(pp)%origin
+		x = dot_product(rho,quant%ports(pp)%x)
+		y = dot_product(rho,quant%ports(pp)%y)
+		z = dot_product(rho,quant%ports(pp)%z)
+
+		a = quant%ports(pp)%a
+		b = quant%ports(pp)%b
+
+		if(TETM==1)then !TE_nm
+			Ex = mm/b*cos(nn*pi*x/a)*sin(mm*pi*y/b)
+			Ey = -nn/a*sin(nn*pi*x/a)*cos(mm*pi*y/b)
+			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TE_nm(nn+1,mm+1)
+		elseif(TETM==2)then ! TM_nm
+			Ex = nn/a*cos(nn*pi*x/a)*sin(mm*pi*y/b)
+			Ey = mm/b*sin(nn*pi*x/a)*cos(mm*pi*y/b)
+			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
+		endif
+		call curl(quant%ports(pp)%z,e,nxe)
+	else 
+		write(*,*)'unrecognized port type'
+		stop
+	endif
+
+end subroutine Port_nxe
+
+!**** user-defined subroutine to sample Z_mn
+subroutine Zelem_EMSURF(m,n,value,quant)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,n
+    integer flag,edge_m,edge_n,nodetemp_n,patch,cntm,cntn,ppm,ppn
+    complex(kind=8) value_e,value_m,value
+    integer i,j,ii,jj,iii,jjj,nn,mm,mode,rr
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3)
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
+    complex(kind=8) imp,imp1,imp2,imp3
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+	real(kind=8) area
+	integer sign,npolar,off
+
+	class(*),pointer :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+
+	select TYPE(quant)
+	type is (quant_EMSURF)
+
+		! convert to new indices because quant%info_unk has been reordered
+
+
+		if(m<=quant%Nunk-quant%Nunk_port .and. n<=quant%Nunk-quant%Nunk_port)then
+			edge_m = m
+			edge_n = n
+			call Zelem_EMSURF_T(edge_m,edge_n,value,quant)
+		elseif(m>quant%Nunk-quant%Nunk_port .and. n>quant%Nunk-quant%Nunk_port)then
+			edge_m = m-quant%Nunk_port
+			edge_n = n-quant%Nunk_port
+			call Zelem_EMSURF_T(edge_m,edge_n,value,quant)
+
+			! find which ports this edge is on
+			cntm = quant%Nunk_int
+			do ppm=1,quant%Nport
+				if(edge_m<=cntm+quant%ports(ppm)%Nunk)exit
+				cntm = cntm + quant%ports(ppm)%Nunk
+			enddo
+			cntn = quant%Nunk_int
+			do ppn=1,quant%Nport
+				if(edge_n<=cntn+quant%ports(ppn)%Nunk)exit
+				cntn = cntn + quant%ports(ppn)%Nunk
+			enddo
+			if(ppm==ppn)then
+				if(quant%ports(ppm)%type==0)then 
+					npolar=2
+					off=0
+				elseif(quant%ports(ppm)%type==1)then
+					npolar=1
+					off=1
+				else 
+					write(*,*)'unrecognized port type',quant%ports(ppm)%type
+					stop
+				endif
+				ctemp=0
+				do rr=1,npolar
+					do nn=0,quant%ports(ppm)%nmax
+						do mm=1-off,quant%ports(ppm)%mmax
+							if(mm>0 .or. nn>0)then
+							ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,1,rr)
+							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,1,rr)
+							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off)*ctemp1*ctemp2
+							endif
+						enddo
+					enddo
+					do nn=0,quant%ports(ppm)%nmax
+						do mm=1-off,quant%ports(ppm)%mmax
+							if(mm>0 .or. nn>0)then
+							ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,2,rr)
+							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,2,rr)
+							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TM_nm(nn+1,mm+off)*ctemp1*ctemp2
+							endif
+						enddo
+					enddo
+				enddo
+				value = value +ctemp
+			endif
+
+
+		elseif(m>quant%Nunk-quant%Nunk_port .and. n<=quant%Nunk-quant%Nunk_port)then
+			edge_m = m-quant%Nunk_port
+			edge_n = n
+			sign=0
+			call Zelem_EMSURF_K(edge_m,edge_n,value,quant,sign)
+			value=-value
+
+		elseif(m<=quant%Nunk-quant%Nunk_port .and. n>quant%Nunk-quant%Nunk_port)then
+			edge_m = m
+			edge_n = n-quant%Nunk_port
+			if(m<=quant%Nunk_int)sign=-1
+			if(m>quant%Nunk_int)sign=1
+			! sign=-1
+			call Zelem_EMSURF_K(edge_m,edge_n,value,quant,sign)
+		endif
+
+
 	class default
 		write(*,*)"unexpected type"
 		stop
@@ -698,12 +1075,12 @@ return
 end function ianalytic2
 
 
-subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
+subroutine current_node_patch_mapping(JMflag,string,curr,msh,quant,ptree)
 
     use BPACK_DEFS
     implicit none
 
-    integer patch, edge, node_patch(3), node_edge, node, info_idx
+    integer JMflag,patch, edge,edge1, node_patch(3), node_edge, node, info_idx
     integer i,j,k,ii,jj,kk,flag,lr
     real(kind=8) center(3), r, a, signs, current_patch(3),  current_abs
 	character(*)::string
@@ -721,38 +1098,42 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 	current_at_patch=0
 	vec_current_at_patch=0
 
-	!$omp parallel do default(shared) private(lr,patch,signs,info_idx,i,j,center,edge,current_abs,current_patch,a,r)
+	!$omp parallel do default(shared) private(lr,patch,signs,info_idx,i,j,center,edge,edge1,current_abs,current_patch,a,r)
 	do edge=msh%idxs,msh%idxe
 		do lr=3,4
-		patch = quant%info_unk(lr,msh%new2old(edge))
-		if(patch/=-1)then
-			if(lr==3)then
-				signs=1
-				info_idx=5
-			endif
-			if(lr==4)then
-				signs=-1
-				info_idx=6
-			endif
+			if((msh%new2old(edge)<=quant%Nunk_int+quant%Nunk_port .and. JMflag==0) .or. (msh%new2old(edge)>quant%Nunk_int+quant%Nunk_port .and. JMflag==1))then  ! the electric current (JMflag=0) or magnetic current (JMflag=1)
+				if(JMflag==0)edge1=msh%new2old(edge)
+				if(JMflag==1)edge1=msh%new2old(edge)-quant%Nunk_port
+				patch = quant%info_unk(lr,edge1)
+				if(patch/=-1)then
+					if(lr==3)then
+						signs=1
+						info_idx=5
+					endif
+					if(lr==4)then
+						signs=-1
+						info_idx=6
+					endif
 
-			do i=1,3
-				center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
-			enddo
-			current_abs=dble(curr(edge-msh%idxs+1))
-			r=0.
-			do j=1,3
-				a=quant%xyz(j,quant%info_unk(info_idx,msh%new2old(edge)))-center(j)
-				r=r+a**2
-				current_patch(j)=signs*current_abs*a
-			enddo
-			r=sqrt(r)
-			current_patch = current_patch/r
-			do i=1,3
-			!$omp atomic
-			vec_current_at_patch(i,patch)=vec_current_at_patch(i,patch) + current_patch(i)
-			!$omp end atomic
-			enddo
-		endif
+					do i=1,3
+						center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
+					enddo
+					current_abs=dble(curr(edge-msh%idxs+1))
+					r=0.
+					do j=1,3
+						a=quant%xyz(j,quant%info_unk(info_idx,edge1))-center(j)
+						r=r+a**2
+						current_patch(j)=signs*current_abs*a
+					enddo
+					r=sqrt(r)
+					current_patch = current_patch/r
+					do i=1,3
+					!$omp atomic
+					vec_current_at_patch(i,patch)=vec_current_at_patch(i,patch) + current_patch(i)
+					!$omp end atomic
+					enddo
+				endif
+			endif
 		enddo
 	enddo
 	!$omp end parallel do
@@ -1176,12 +1557,13 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	use MISC_Utilities
     implicit none
 
-    integer i,j,ii,jj,nn,iii,jjj
+	real T0
+    integer i,j,ii,jj,nn,iii,jjj,pp,cnt,mode,mm,rr
     integer intemp
     integer node, patch, edge,edge1, flag
-    integer node1, node2,found
+    integer node1, node2,found,npolar,off
     integer node_temp(2)
-    real(kind=8) a(3),b(3),c(3),r0
+    real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2
 	! type(mesh)::msh
 	type(quant_EMSURF)::quant
 	! type(proctree)::ptree
@@ -1191,6 +1573,10 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	integer,parameter:: NperNode=10
 	integer,allocatable::tmpint(:,:)
 	integer,allocatable:: info_unk(:,:)
+	real(kind=8),allocatable::distance(:)
+	integer,allocatable::order(:)
+	integer v1,v2
+
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 
     open(11,file=trim(DATA_DIR)//'_node.inp')
@@ -1402,6 +1788,52 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     enddo
     !$omp end parallel do
 
+
+	! handle the ports
+	allocate(distance(Maxedge))
+	distance=0
+	allocate(order(Maxedge))
+	do edge=1,Maxedge
+		v1 = quant%info_unk(5,edge)
+		v2 = quant%info_unk(6,edge)
+		do ii =1,quant%Nport
+			if(quant%ports(ii)%type==0)then
+				if(abs(dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%z))<SafeEps .and. sqrt(sum((quant%xyz(:,v1)-quant%ports(ii)%origin)**2d0))<quant%ports(ii)%R*(1+SafeEps)  .and. abs(dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%z))<SafeEps .and. sqrt(sum((quant%xyz(:,v2)-quant%ports(ii)%origin)**2d0))<quant%ports(ii)%R*(1+SafeEps))then
+					distance(edge)=ii
+					quant%ports(ii)%Nunk=quant%ports(ii)%Nunk+1
+					quant%Nunk_port = quant%Nunk_port+1
+				endif
+			else if(quant%ports(ii)%type==0)then
+				x1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%x)
+				y1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%y)
+				z1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%z)
+				x2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%x)
+				y2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%y)
+				z2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%z)				
+
+				if(abs(z1)<SafeEps .and. x1<quant%ports(ii)%a*(1+SafeEps) .and. y1<quant%ports(ii)%b*(1+SafeEps) .and. abs(z2)<SafeEps .and. x2<quant%ports(ii)%a*(1+SafeEps) .and. y2<quant%ports(ii)%b*(1+SafeEps))then
+					distance(edge)=ii
+					quant%ports(ii)%Nunk=quant%ports(ii)%Nunk+1
+					quant%Nunk_port = quant%Nunk_port+1
+				endif
+			else 
+				write(*,*)'unrecognized port type'
+				stop
+			endif
+		enddo
+	enddo
+	call quick_sort(distance, order, Maxedge)
+	allocate(info_unk(0:6,edge))
+	info_unk(0:6,1:Maxedge)=quant%info_unk(0:6,1:Maxedge)
+	quant%info_unk(0:6,:)=info_unk(0:6,order)
+	deallocate(info_unk)
+	deallocate(distance)
+	deallocate(order)
+	quant%Nunk_int = Maxedge - quant%Nunk_port
+	quant%Nunk = quant%Nunk_int + quant%Nunk_port*2
+
+
+
     node=quant%maxnode
     do edge=1, Maxedge
         node=node+1
@@ -1425,17 +1857,55 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 	! write(*,*)	quant%xyz(1,1:100),sum(quant%xyz(1,:))
 	! stop
-	quant%Nunk = Maxedge
 
     if(MyID==Main_ID)write (*,*) ''
     if(MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
+    if(MyID==Main_ID)write (*,*) 'Nunk:',quant%Nunk
 	if(MyID==Main_ID)write (*,*) 'minedgelength:',quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'wavelength/minedgelength:',quant%wavelength/quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'maxedgelength:',quant%maxedgelength
 	if(MyID==Main_ID)write (*,*) 'wavelength/maxedgelength:',quant%wavelength/quant%maxedgelength
 
-    if(MyID==Main_ID)write (*,*) ''
 
+	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports ...'
+	T0=secnds(0.0)
+	edge=quant%Nunk_int
+	do pp=1,quant%Nport
+		if(quant%ports(pp)%type==0)then 
+			npolar=2
+			off=0
+		elseif(quant%ports(pp)%type==1)then
+			npolar=1
+			off=1
+		else 
+			write(*,*)'unrecognized port type',quant%ports(pp)%type
+			stop
+		endif
+
+		allocate(quant%ports(pp)%nxe_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
+		do cnt=1,quant%ports(pp)%Nunk
+			do rr=1,npolar
+				do nn=0,quant%ports(pp)%nmax
+					do mm=1-off,quant%ports(pp)%mmax
+						if(mm>0 .or. nn>0)then
+						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
+						endif
+					enddo
+				enddo
+				do nn=0,quant%ports(pp)%nmax
+					do mm=1-off,quant%ports(pp)%mmax
+						if(mm>0 .or. nn>0)then
+						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
+						endif
+					enddo
+				enddo
+			enddo
+		enddo
+		edge =edge+quant%ports(pp)%Nunk
+	enddo
+	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',secnds(T0),'Seconds'
+	if(MyID==Main_ID)write (*,*) ''
+	
     return
 
 end subroutine geo_modeling_SURF
@@ -1587,4 +2057,4 @@ end subroutine EM_solve_SURF
 
 
 
-end module EMSURF_MODULE
+end module EMSURF_PORT_MODULE

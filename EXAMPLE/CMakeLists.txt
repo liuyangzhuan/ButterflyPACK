@@ -4,8 +4,8 @@ include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX)
 # Libs linked to all of the examples
-set(all_link_libs_z zbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
-set(all_link_libs_d dbutterflypack ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+set(all_link_libs_z zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+set(all_link_libs_d dbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
 
 
 ########################################### double complex Fortran drivers
@@ -49,6 +49,13 @@ set(FZEXM8 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_non
 add_executable(go3d ${FZEXM8})
 target_link_libraries(go3d ${all_link_libs_z})
 add_dependencies(go3d go2d)
+
+
+set(FZEXM9 EMSURF_Port_Eigen_Driver.f90 EMSURF_Port_Module.f90)
+add_executable(ie3dporteigen ${FZEXM9})
+target_link_libraries(ie3dporteigen ${all_link_libs_z})
+add_dependencies(ie3dporteigen ie3d)
+
 
 ########################################### double Fortran drivers
 
