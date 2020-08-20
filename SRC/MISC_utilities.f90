@@ -2756,6 +2756,27 @@ contains
 
    END subroutine quick_sort
 
+   !******* convert from a gloal Cartesian coordinate to a local Cartesian coordinate (origin, xunit, yunit, zunit) and then convert to the local spherial coordinate
+   subroutine Cart2Sph_Loc(xin, yin, zin, origin, xunit, yunit, zunit, r, theta, phi)
+      implicit none
+      real(kind=8), intent(in)::xin, yin, zin, origin(3),xunit(3),yunit(3),zunit(3)
+      real(kind=8), intent(out)::r, theta, phi
+      real(kind=8):: x, y, z, rho(3),origin1(3)
+
+      origin1=0
+      rho(1)=xin
+      rho(2)=yin
+      rho(3)=zin
+      rho = rho - origin
+      x = dot_product(rho,xunit)
+      y = dot_product(rho,yunit)
+      z = dot_product(rho,zunit)
+
+      call Cart2Sph(x, y, z, origin1, r, theta, phi)
+
+   end subroutine Cart2Sph_Loc
+
+
    subroutine Cart2Sph(xin, yin, zin, origin, r, theta, phi)
       implicit none
       real(kind=8), intent(in)::xin, yin, zin, origin(3)
@@ -2855,6 +2876,286 @@ contains
       return
 
    end function BesselY0_func
+
+
+
+
+
+
+   ! **************************************************************************************** !
+   ! *****             bessjyV                                                          ***** !
+   ! *****             Nmax: the maximum order                                          ***** !
+   ! *****             x: the input x for j_n                                           ***** !
+   ! *****             sjv: bessel function                                   ***** !
+   ! *****             bf:upward,downward flag (upward is not stable)                   ***** !
+   ! **************************************************************************************** !
+   ! calculate first kind bessel function j_n(x) with n=0,1,...,Nmax iteratively
+   ! Be careful, this routine is not accurate for large argument (x)
+   SUBROUTINE bessjyV(Nmax,x,sjv,bf)
+      implicit none
+      integer Nmax,ii
+      real*8 x
+      real*8,dimension(Nmax+1)::sjv
+      integer bf,kk
+      integer,parameter:: kkmax = 20
+      real*8:: b0,b1,b_1,b_2,a0,a_1,b_Nmax,b_Nmax_1,tmp1,tmp2,fk_Nmax,fk_Nmax_1,fk_Nmax_array(0:kkmax),fk_Nmax_1_array(0:kkmax)
+      real*8:: b_n(Nmax+1)
+      integer non_O_idx
+      integer underflow
+      ! numerical recipe
+      if(abs(x)<1d-16)then
+         sjv(:)=0d0
+         sjv(1)=1d0
+      else
+         if(bf==1)then
+            call bessjy(x,0d0,sjv(1))
+            if(Nmax==0)return
+            call bessjy(x,1d0,sjv(2))
+            do ii=2,Nmax
+               sjv(ii+1) = (2*ii-2)*sjv(ii)/x - sjv(ii-1)
+            end do
+         else
+            call bessjy(x,dble(Nmax),sjv(Nmax+1))
+            if(Nmax==0)return
+            call bessjy(x,dble(Nmax-1),sjv(Nmax))
+            do ii=Nmax-2,0,-1
+               sjv(ii+1) = (2*ii+2)*sjv(ii+2)/x - sjv(ii+3)
+            end do
+         end if
+      end if
+
+      underflow = 0
+      tmp1 = sum(sjv)
+      if(tmp1 .NE. tmp1)underflow = 1
+      if(sum(abs(sjv))==0d0)then
+         underflow = 1
+      else
+         do ii = Nmax+1,1,-1
+            if(sjv(ii)/=0)then
+               non_O_idx = ii
+               exit
+            end if
+         end do
+         if(abs(sjv(non_O_idx))<1d-300)then
+            underflow = 1
+         end if
+      end if
+
+      if(underflow == 1)then
+         write(*,*)"warning: underflow in bessjyV"
+      end if
+
+   end SUBROUTINE	bessjyV
+
+
+   ! **************************************************************************************** !
+   ! *****       bessjy: calculate J_v(x), v real, x real                              ****** !
+   ! **************************************************************************************** !
+      SUBROUTINE bessjy(x,xnu,rj)
+      IMPLICIT NONE
+      REAL*8, INTENT(IN) :: x,xnu
+      REAL*8, INTENT(OUT) :: rj
+      INTEGER*8, PARAMETER :: MAXIT=1000000 !originally MAXIT = 1000, the bigger MAXIT, the larger supported x
+      REAL*8, PARAMETER :: XMIN=2.0d0,EPS=1.0d-10,FPMIN=1.0d-30
+      REAL*8, PARAMETER :: PI_D=3.141592653589793238462643383279502884197d0
+      INTEGER*4 :: i,isign,l,nl
+      REAL*8 :: ry,rjp,ryp
+      REAL*8 :: a,b,c,d,del,del1,e,f,fact,fact2,fact3,ff,gam,gam1,gam2,&
+         gammi,gampl,h,p,pimu,pimu2,q,r,rjl,rjl1,rjmu,rjp1,rjpl,rjtemp,&
+         ry1,rymu,rymup,rytemp,sum,sum1,w,x2,xi,xi2,xmu,xmu2
+      COMPLEX(kind=8) :: aa,bb,cc,dd,dl,pq
+      nl=merge(int(xnu+0.5d0), max(0,int(xnu-x+1.5d0)), x < XMIN)
+      xmu=xnu-nl
+      xmu2=xmu*xmu
+      if(x <=0)stop
+      xi=1.0d0/x
+      xi2=2.0d0*xi
+      w=xi2/PI_D
+      isign=1
+      h=xnu*xi
+      if (h < FPMIN) h=FPMIN
+      b=xi2*xnu
+      d=0.0
+      c=h
+      do i=1,MAXIT
+         b=b+xi2
+         d=b-d
+         if (abs(d) < FPMIN) d=FPMIN
+         c=b-1.0d0/c
+         if (abs(c) < FPMIN) c=FPMIN
+         d=1.0d0/d
+         del=c*d
+         h=del*h
+         if (d < 0.0) isign=-isign
+         if (abs(del-1.0d0) < EPS) exit
+      end do
+      call assert(i<=MAXIT,'x too large; try asymptotic expansion')
+
+      rjl=isign*FPMIN
+      rjpl=h*rjl
+      rjl1=rjl
+      rjp1=rjpl
+      fact=xnu*xi
+      do l=nl,1,-1
+         rjtemp=fact*rjl+rjpl
+         fact=fact-xi
+         rjpl=fact*rjtemp-rjl
+         rjl=rjtemp
+      end do
+      if (rjl == 0.0) rjl=EPS
+      f=rjpl/rjl
+      if (x < XMIN) then
+         x2=0.5d0*x
+         pimu=PI_D*xmu
+         if (abs(pimu) < EPS) then
+            fact=1.0
+         else
+            fact=pimu/sin(pimu)
+         end if
+         d=-log(x2)
+         e=xmu*d
+         if (abs(e) < EPS) then
+            fact2=1.0
+         else
+            fact2=sinh(e)/e
+         end if
+         call beschb(xmu,gam1,gam2,gampl,gammi)
+         ff=2.0d0/PI_D*fact*(gam1*cosh(e)+gam2*fact2*d)
+         e=exp(e)
+         p=e/(gampl*PI_D)
+         q=1.0d0/(e*PI_D*gammi)
+         pimu2=0.5d0*pimu
+         if (abs(pimu2) < EPS) then
+            fact3=1.0
+         else
+            fact3=sin(pimu2)/pimu2
+         end if
+         r=PI_D*pimu2*fact3*fact3
+         c=1.0
+         d=-x2*x2
+         sum=ff+r*q
+         sum1=p
+         do i=1,MAXIT
+            ff=(i*ff+p+q)/(i*i-xmu2)
+            c=c*d/i
+            p=p/(i-xmu)
+            q=q/(i+xmu)
+            del=c*(ff+r*q)
+            sum=sum+del
+            del1=c*p-i*del
+            sum1=sum1+del1
+            if (abs(del) < (1.0d0+abs(sum))*EPS) exit
+         end do
+         call assert(i<=MAXIT,'bessy series failed to converge')
+         rymu=-sum
+         ry1=-sum1*xi2
+         rymup=xmu*xi*rymu-ry1
+         rjmu=w/(rymup-f*rymu)
+      else
+         a=0.25d0-xmu2
+         pq=cmplx(-0.5d0*xi,1.0d0,kind=8)
+         aa=cmplx(0.0d0,xi*a,kind=8)
+         bb=cmplx(2.0d0*x,2.0d0,kind=8)
+         cc=bb+aa/pq
+         dd=1.0d0/bb
+         pq=cc*dd*pq
+         do i=2,MAXIT
+            a=a+2*(i-1)
+            bb=bb+cmplx(0.0d0,2.0d0,kind=8)
+            dd=a*dd+bb
+            if (absc(dd) < FPMIN) dd=FPMIN
+            cc=bb+a/cc
+            if (absc(cc) < FPMIN) cc=FPMIN
+            dd=1.0d0/dd
+            dl=cc*dd
+            pq=pq*dl
+            if (absc(dl-1.0d0) < EPS) exit
+         end do
+         call assert(i<=MAXIT,'cf2 failed in bessjy')
+         p=dble(pq)
+         q=DIMAG(pq)
+         gam=(p-f)/q
+         rjmu=sqrt(w/((p-f)*gam+q))
+         rjmu=sign(rjmu,rjl)
+         rymu=rjmu*gam
+         rymup=rymu*(p+q/gam)
+         ry1=xmu*xi*rymu-rymup
+      end if
+      fact=rjmu/rjl
+      rj=rjl1*fact
+      rjp=rjp1*fact
+      do i=1,nl
+         rytemp=(xmu+i)*xi2*ry1-rymu
+         rymu=ry1
+         ry1=rytemp
+      end do
+      ry=rymu
+      ryp=xnu*xi*rymu-ry1
+      CONTAINS
+   !BL
+      FUNCTION absc(z)
+      IMPLICIT NONE
+      COMPLEX(kind = 8), INTENT(IN) :: z
+      REAL*8 :: absc
+      absc=abs(dble(z))+abs(DIMAG(z))
+      END FUNCTION absc
+
+      END SUBROUTINE bessjy
+
+
+   ! **************************************************************************************** !
+   ! *****       beschb: ......                                                        ****** !
+   ! **************************************************************************************** !
+
+      SUBROUTINE beschb(x,gam1,gam2,gampl,gammi)
+      IMPLICIT NONE
+      REAL*8, INTENT(IN) :: x
+      REAL*8, INTENT(OUT) :: gam1,gam2,gampl,gammi
+      INTEGER*4, PARAMETER :: NUSE1=5,NUSE2=5
+      REAL*8 :: xx
+      REAL*8, DIMENSION(7) :: c1=(/-1.142022680371168d0,&
+         6.5165112670737d-3,3.087090173086d-4,-3.4706269649d-6,&
+         6.9437664d-9,3.67795d-11,-1.356d-13/)
+      REAL*8, DIMENSION(8) :: c2=(/1.843740587300905d0,&
+         -7.68528408447867d-2,1.2719271366546d-3,&
+         -4.9717367042d-6, -3.31261198d-8,2.423096d-10,&
+         -1.702d-13,-1.49d-15/)
+      xx=8.0*x*x-1.0
+      gam1=chebev(-1.0d0,1.0d0,c1(1:NUSE1),xx)
+      gam2=chebev(-1.0d0,1.0d0,c2(1:NUSE2),xx)
+      gampl=gam2-x*gam1
+      gammi=gam2+x*gam1
+      END SUBROUTINE beschb
+
+
+
+
+   ! **************************************************************************************** !
+   ! *****       chebev: ......                                                        ****** !
+   ! **************************************************************************************** !
+      FUNCTION chebev(a,b,c,x)
+      IMPLICIT NONE
+      REAL*8, INTENT(IN) :: a,b,x
+      REAL*8, DIMENSION(:), INTENT(IN) :: c
+      REAL*8 :: chebev
+      INTEGER*4 :: j,m
+      REAL*8 :: d,dd,sv,y,y2
+      call assert((x-a)*(x-b) <= 0.0,'x not in range in chebev_s')
+      m=size(c)
+      d=0.0
+      dd=0.0
+      y=(2.0*x-a-b)/(b-a)
+      y2=2.0*y
+      do j=m,2,-1
+         sv=d
+         d=y2*d-dd+c(j)
+         dd=sv
+      end do
+      chebev=y*d-dd+0.5*c(1)
+      END FUNCTION chebev
+
+
+
 
 !**** create a array treeleaf holding size of each leaf box of a tree with nlevel levels (0<=level<=nlevel)
    recursive subroutine CreateLeaf_Natural(nlevel, level, group, idxs, idxe, treeleaf)

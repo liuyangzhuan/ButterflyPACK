@@ -22,7 +22,7 @@
 
 PROGRAM ButterflyPACK_IE_3D
     use BPACK_DEFS
-	use EMSURF_MODULE
+	use EMSURF_PORT_MODULE
 
 	use BPACK_structure
 	use BPACK_factor
@@ -36,11 +36,11 @@ PROGRAM ButterflyPACK_IE_3D
 
     real(kind=8) para
     real(kind=8) tolerance
-    integer Primary_block, nn, mm,kk,mn,rank,ii,jj
+    integer Primary_block, nn, mm,kk,mn,rank,ii,jj,pp
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r
+	real(kind=8) t1,t2,x,y,z,r,kc,betanm
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -163,11 +163,11 @@ PROGRAM ButterflyPACK_IE_3D
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
 							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+						else if (trim(strings)=='--scaling')then
+							read(strings1,*)quant%scaling								
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
-						else if (trim(strings)=='--scaling')then
-							read(strings1,*)quant%scaling							
 						else if	(trim(strings)=='--cmmode')then
 							read(strings1,*)quant%CMmode
 						else if	(trim(strings)=='--si')then
@@ -202,6 +202,113 @@ PROGRAM ButterflyPACK_IE_3D
     quant%wavenum=2*pi/quant%wavelength
 	! option_A%touch_para = 3* quant%minedgelength
 
+
+
+	! quant%Nport=2
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
+	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	! quant%ports(1)%R=0.1
+	! quant%ports(1)%type=0
+	! quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
+	! quant%ports(2)%z=(/0d0,0d0,1d0/)
+	! quant%ports(2)%x=(/1d0,0d0,0d0/)
+	! quant%ports(2)%R=0.1
+	! quant%ports(2)%type=0
+
+	quant%ports(1)%origin=(/0d0,0d0,-0.2d0/)
+	quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	quant%ports(1)%x=(/1d0,0d0,0d0/)
+	quant%ports(1)%R=0.037
+	quant%ports(1)%type=0
+	quant%ports(2)%origin=(/0d0,0d0,0.2d0/)
+	quant%ports(2)%z=(/0d0,0d0,1d0/)
+	quant%ports(2)%x=(/1d0,0d0,0d0/)
+	quant%ports(2)%R=0.037
+	quant%ports(2)%type=0
+	
+	
+
+	do pp=1,2
+		call curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+		quant%ports(pp)%mmax=1
+		quant%ports(pp)%nmax=1
+
+		do nn=0,quant%ports(pp)%nmax
+		do mm=1,quant%ports(pp)%mmax
+			kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
+			quant%ports(pp)%A_TE_nm(nn+1,mm)=A_TE_nm_cir(nn+1,mm)
+			quant%ports(pp)%impedance_TE_nm(nn+1,mm)=Bigvalue
+			if(quant%wavenum > kc)then
+				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*impedence0/betanm
+				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm)				
+			endif	
+			kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
+			quant%ports(pp)%A_TM_nm(nn+1,mm)=A_TM_nm_cir(nn+1,mm)
+			quant%ports(pp)%impedance_TM_nm(nn+1,mm)=Bigvalue
+			if(quant%wavenum > kc)then
+				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=impedence0*betanm/quant%wavenum
+				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm)				
+			endif
+		enddo
+		enddo
+	enddo
+
+
+
+
+	! quant%Nport=2
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	! quant%ports(1)%y=(/0d0,0d0,1d0/)
+	! quant%ports(1)%z=(/0d0,1d0,0d0/)
+	! quant%ports(1)%type=1
+	! quant%ports(1)%a=0.07d0
+	! quant%ports(1)%b=0.02d0
+
+	! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+	! quant%ports(2)%x=(/0d0,-1d0,0d0/)
+	! quant%ports(2)%y=(/0d0,0d0,1d0/)
+	! quant%ports(2)%z=(/-1d0,0d0,0d0/)
+	! quant%ports(2)%type=1
+	! quant%ports(2)%a=0.07d0
+	! quant%ports(2)%b=0.02d0
+
+	! do pp=1,2
+	! 	quant%ports(pp)%mmax=1
+	! 	quant%ports(pp)%nmax=1
+
+	! 	do nn=0,quant%ports(pp)%nmax
+	! 	do mm=0,quant%ports(pp)%mmax
+	! 		if(nn>0 .or. mm>0)then ! the lowest mode is 01 or 10
+	! 			kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+	! 			quant%ports(pp)%A_TE_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*A_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*B_nm_rec(nn+1,mm+1))
+	! 			quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=Bigvalue
+	! 			if(quant%wavenum > kc)then
+	! 				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+	! 				quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*impedence0/betanm
+	! 				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)		
+	! 			endif	
+	! 			kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+	! 			quant%ports(pp)%A_TM_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*B_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*A_nm_rec(nn+1,mm+1))
+	! 			quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=Bigvalue
+	! 			if(quant%wavenum > kc)then
+	! 				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+	! 				quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=impedence0*betanm/quant%wavenum
+	! 				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)	
+	! 			endif
+	! 		endif
+	! 	enddo
+	! 	enddo
+	! enddo
+
+
+
+
    !***********************************************************************
 	if(ptree_A%MyID==Main_ID)then
    write (*,*) ''
@@ -223,9 +330,13 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** initialization of the construction phase
 	t1 = OMP_get_wtime()
 	allocate(xyz(3,quant%Nunk))
-	do ii=1, quant%Nunk
+	do ii=1, quant%Nunk_int+quant%Nunk_port
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 	enddo
+	do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
+		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
+	enddo
+
     allocate(Permutation(quant%Nunk))
 	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
@@ -256,8 +367,11 @@ PROGRAM ButterflyPACK_IE_3D
 		!**** initialization of the construction phase
 		t1 = OMP_get_wtime()
 		allocate(xyz(3,quant%Nunk))
-		do ii=1, quant%Nunk
+		do ii=1, quant%Nunk_int+quant%Nunk_port
 			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
+		enddo
+		do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
+			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
 		enddo
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
@@ -294,8 +408,11 @@ PROGRAM ButterflyPACK_IE_3D
 		!**** initialization of the construction phase
 		t1 = OMP_get_wtime()
 		allocate(xyz(3,quant%Nunk))
-		do ii=1, quant%Nunk
+		do ii=1, quant%Nunk_int+quant%Nunk_port
 			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
+		enddo
+		do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
+			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
 		enddo
 		allocate(Permutation(quant%Nunk))
 		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
@@ -320,7 +437,8 @@ PROGRAM ButterflyPACK_IE_3D
 	do ii=1,nconv
 	write(substring , *) ii
 	write(substring1 , *) quant%freq
-	call current_node_patch_mapping('EigVec_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
+	call current_node_patch_mapping(0,'EigVecJ_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
+	call current_node_patch_mapping(1,'EigVecM_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',eigvec(:,ii),msh_A,quant,ptree_A)
 
 	if(quant%CMmode==1)then
 		if(ptree_A%MyID==Main_ID)open (100, file='VV_bistatic_'//'EigVec_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.txt')
@@ -379,10 +497,13 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** deletion of quantities
 	call delete_quant_EMSURF(quant)
 
+
+
 	if(parent/= MPI_COMM_NULL)then
 		call MPI_REDUCE(retval, MPI_BOTTOM, 1, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
 		call MPI_Comm_disconnect(parent,ierr)
 	endif
+
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
 

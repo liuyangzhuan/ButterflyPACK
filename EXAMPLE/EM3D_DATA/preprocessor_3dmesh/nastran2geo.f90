@@ -20,14 +20,14 @@ PROGRAM nastran2geo
     integer i,j,ii,jj,iii,jjj,k,kk,kkk
     integer node, patch, edge, flag
     integer num_nodes, num_patches
-    integer intemp1, intemp2, intemp
+    integer intemp1, intemp2, intemp,nheader
     real T0
     character (50) chartemp, chartemp1, chartemp2
 	character(len=300)::filename, DATA_DIR    
-    real, allocatable :: xyz_nodes(:,:)
+    real(kind=8), allocatable :: xyz_nodes(:,:)
     integer, allocatable :: node_patches(:,:)
     
-    real a(3),b(3),c(3),r0
+    ! real a(3),b(3),c(3),r0
     
     T0=secnds(0.0)
     CALL getarg(1, filename)
@@ -36,11 +36,22 @@ PROGRAM nastran2geo
 !	read(unit=8,fmt=*) filename
 	
 !    open(unit=10,file=filename,status='unknown')
+    flag=0
+    nheader=0
+    do while (.true.)
+        read (10,*) chartemp1
+        if (chartemp1=='GRID*') then
+            exit
+        endif
+        nheader =nheader+1
+    enddo
+    rewind (10)
     
-    do i = 1, 1
+    do i = 1, nheader
         read (10,*) 
     enddo
-    
+
+
     flag=0
     k=0
     do while (flag==0)
@@ -55,7 +66,7 @@ PROGRAM nastran2geo
     rewind (10)
     allocate (xyz_nodes(3,num_nodes))
     
-    do i = 1, 1
+    do i = 1, nheader
         read (10,*) chartemp
     enddo
     do i= 1, num_nodes
@@ -77,7 +88,7 @@ PROGRAM nastran2geo
     rewind (10)
     allocate (node_patches(3,num_patches))
     
-     do i = 1, 1
+     do i = 1, nheader
         read (10,*) 
      enddo
      do i= 1, 2*num_nodes
