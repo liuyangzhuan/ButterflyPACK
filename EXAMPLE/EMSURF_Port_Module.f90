@@ -46,8 +46,8 @@ implicit none
 			1.65809,	2.65859,		3.38125,		&
 			2.07841,	3.19531,	 	3.79779	/), (/3,3/))  ! normalization factor of TM_nm circular A_TM_nm_cir/R
 
-	! normalization factor of TE_nm, rectangular: 1/sqrt(a/b*m^2*A_nm_rec + b/a*n^2*B_nm_rec) 
-	! normalization factor of TM_nm, rectangular: 1/sqrt(a/b*m^2*B_nm_rec + b/a*n^2*A_nm_rec) 
+	! normalization factor of TE_nm, rectangular: 1/sqrt(a/b*m^2*A_nm_rec + b/a*n^2*B_nm_rec)
+	! normalization factor of TM_nm, rectangular: 1/sqrt(a/b*m^2*B_nm_rec + b/a*n^2*A_nm_rec)
 	real(kind=8):: A_nm_rec(3,3)	=	&
 	reshape((/0d0,	0d0,			0d0,		&
 			0.5d0,	0.125d0,		0.25d0,		&
@@ -74,8 +74,8 @@ implicit none
 		real(kind=8) a, b ! sizes of the port if it's rectangular
 		integer:: nmax=1   ! TM_nm and TE_nm
 		integer:: mmax=1   ! TM_nm and TE_nm
-		real(kind=8):: A_TE_nm(3,3) ! normalization factor of TE_nm 
-		real(kind=8):: A_TM_nm(3,3) ! normalization factor of TM_nm 
+		real(kind=8):: A_TE_nm(3,3) ! normalization factor of TE_nm
+		real(kind=8):: A_TM_nm(3,3) ! normalization factor of TM_nm
 		real(kind=8):: impedance_TE_nm(3,3)  ! mode impedance TE_nm
 		real(kind=8):: impedance_TM_nm(3,3)  ! mode impedance of TM_nm
 		complex(kind=8),allocatable::nxe_dot_rwg(:,:,:,:,:)  ! int_nxe_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
@@ -400,9 +400,9 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 	type(quant_EMSURF) :: quant
 	integer:: pp,mm,nn,TETM,rr
 	real(kind=8):: J(nn+2),Jp(nn+2)
-	
+
 	if(quant%ports(pp)%type==0)then
-	
+
 		Erho=0
 		Ephi=0
 
@@ -429,9 +429,9 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			if(rr==1)then
 				Erho = nn/x*sin(nn*phi)*J(nn+1)
 				Ephi = cos(nn*phi)*Jp(nn+1)
-			else 
+			else
 				Erho = -nn/x*cos(nn*phi)*J(nn+1)
-				Ephi = sin(nn*phi)*Jp(nn+1)				
+				Ephi = sin(nn*phi)*Jp(nn+1)
 			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TE_nm(nn+1,mm)/quant%ports(pp)%R
 		elseif(TETM==2)then ! TM_nm
@@ -447,10 +447,10 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			if(rr==1)then
 				Erho = cos(nn*phi)*Jp(nn+1)
 				Ephi = -nn/x*sin(nn*phi)*J(nn+1)
-			else 
+			else
 				Erho = sin(nn*phi)*Jp(nn+1)
 				Ephi = nn/x*cos(nn*phi)*J(nn+1)
-			endif	
+			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
 		endif
 		call curl(nhat,e,nxe)
@@ -478,8 +478,8 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
 		endif
 		call curl(quant%ports(pp)%z,e,nxe)
-	else 
-		write(*,*)'unrecognized port type'
+	else
+		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
 	endif
 
@@ -538,13 +538,13 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 				cntn = cntn + quant%ports(ppn)%Nunk
 			enddo
 			if(ppm==ppn)then
-				if(quant%ports(ppm)%type==0)then 
+				if(quant%ports(ppm)%type==0)then
 					npolar=2
 					off=0
 				elseif(quant%ports(ppm)%type==1)then
 					npolar=1
 					off=1
-				else 
+				else
 					write(*,*)'unrecognized port type',quant%ports(ppm)%type
 					stop
 				endif
@@ -1803,21 +1803,21 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 					quant%ports(ii)%Nunk=quant%ports(ii)%Nunk+1
 					quant%Nunk_port = quant%Nunk_port+1
 				endif
-			else if(quant%ports(ii)%type==0)then
+			else if(quant%ports(ii)%type==1)then
 				x1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%x)
 				y1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%y)
 				z1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%z)
 				x2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%x)
 				y2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%y)
-				z2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%z)				
+				z2 = dot_product(quant%xyz(:,v2)-quant%ports(ii)%origin, quant%ports(ii)%z)
 
 				if(abs(z1)<SafeEps .and. x1<quant%ports(ii)%a*(1+SafeEps) .and. y1<quant%ports(ii)%b*(1+SafeEps) .and. abs(z2)<SafeEps .and. x2<quant%ports(ii)%a*(1+SafeEps) .and. y2<quant%ports(ii)%b*(1+SafeEps))then
 					distance(edge)=ii
 					quant%ports(ii)%Nunk=quant%ports(ii)%Nunk+1
 					quant%Nunk_port = quant%Nunk_port+1
 				endif
-			else 
-				write(*,*)'unrecognized port type'
+			else
+				write(*,*)'unrecognized port type',quant%ports(ii)%type
 				stop
 			endif
 		enddo
@@ -1871,13 +1871,13 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	T0=secnds(0.0)
 	edge=quant%Nunk_int
 	do pp=1,quant%Nport
-		if(quant%ports(pp)%type==0)then 
+		if(quant%ports(pp)%type==0)then
 			npolar=2
 			off=0
 		elseif(quant%ports(pp)%type==1)then
 			npolar=1
 			off=1
-		else 
+		else
 			write(*,*)'unrecognized port type',quant%ports(pp)%type
 			stop
 		endif
@@ -1905,7 +1905,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	enddo
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',secnds(T0),'Seconds'
 	if(MyID==Main_ID)write (*,*) ''
-	
+
     return
 
 end subroutine geo_modeling_SURF
