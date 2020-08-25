@@ -36,11 +36,11 @@ PROGRAM ButterflyPACK_IE_3D
 
     real(kind=8) para
     real(kind=8) tolerance
-    integer Primary_block, nn, mm,kk,mn,rank,ii,jj,pp
+    integer Primary_block, nn, mm,kk,mn,rank,ii,jj,pp,nn1
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r,kc,betanm
+	real(kind=8) t1,t2,x,y,z,r,kc,betanm,norm1,normi,maxnorm
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -72,7 +72,7 @@ PROGRAM ButterflyPACK_IE_3D
 	character(len=10) which
     integer ido, n, nx, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
     complex(kind=8) sigma
-    real(kind=8) tol, retval
+    real(kind=8) tol, retval(2)
     real(kind=8) dtheta,theta,phi,rcs
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
     logical rvec
@@ -81,7 +81,7 @@ PROGRAM ButterflyPACK_IE_3D
 	integer v_major,v_minor,v_bugfix
 
 	integer nargs,flag
-	integer parent 
+	integer parent
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -164,7 +164,7 @@ PROGRAM ButterflyPACK_IE_3D
 							read(strings1,*)quant%wavelength
 							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
 						else if (trim(strings)=='--scaling')then
-							read(strings1,*)quant%scaling								
+							read(strings1,*)quant%scaling
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
@@ -203,7 +203,7 @@ PROGRAM ButterflyPACK_IE_3D
 	! option_A%touch_para = 3* quant%minedgelength
 
 
-
+	!!!!!!!!! pillbox
 	! quant%Nport=2
 	! allocate(quant%ports(quant%Nport))
 	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
@@ -217,94 +217,118 @@ PROGRAM ButterflyPACK_IE_3D
 	! quant%ports(2)%R=0.1
 	! quant%ports(2)%type=0
 
-	quant%ports(1)%origin=(/0d0,0d0,-0.2d0/)
-	quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	quant%ports(1)%x=(/1d0,0d0,0d0/)
-	quant%ports(1)%R=0.037
-	quant%ports(1)%type=0
-	quant%ports(2)%origin=(/0d0,0d0,0.2d0/)
-	quant%ports(2)%z=(/0d0,0d0,1d0/)
-	quant%ports(2)%x=(/1d0,0d0,0d0/)
-	quant%ports(2)%R=0.037
-	quant%ports(2)%type=0
-	
-	
 
-	do pp=1,2
-		call curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+	! !!!!!!!!! cavity wakefield
+	! quant%Nport=2
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0d0,0d0,-0.1995d0/)
+	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	! quant%ports(1)%x=(/1d0,0d0,0d0/)
+	! quant%ports(1)%R=0.037
+	! quant%ports(1)%type=0
+	! quant%ports(2)%origin=(/0d0,0d0,0.1995d0/)
+	! quant%ports(2)%z=(/0d0,0d0,1d0/)
+	! quant%ports(2)%x=(/1d0,0d0,0d0/)
+	! quant%ports(2)%R=0.037
+	! quant%ports(2)%type=0
+
+
+	!!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
+	quant%Nport=4
+	allocate(quant%ports(quant%Nport))
+	quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+	quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	quant%ports(1)%y=(/0d0,0d0,1d0/)
+	quant%ports(1)%z=(/0d0,1d0,0d0/)
+	quant%ports(1)%type=1
+	quant%ports(1)%a=0.07d0
+	quant%ports(1)%b=0.02d0
+
+	quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+	quant%ports(2)%x=(/0d0,-1d0,0d0/)
+	quant%ports(2)%y=(/0d0,0d0,1d0/)
+	quant%ports(2)%z=(/-1d0,0d0,0d0/)
+	quant%ports(2)%type=1
+	quant%ports(2)%a=0.07d0
+	quant%ports(2)%b=0.02d0
+
+	quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
+	quant%ports(3)%z=(/0d0,0d0,-1d0/)
+	quant%ports(3)%x=(/1d0,0d0,0d0/)
+	quant%ports(3)%R=0.025
+	quant%ports(3)%type=0
+	quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
+	quant%ports(4)%z=(/0d0,0d0,1d0/)
+	quant%ports(4)%x=(/1d0,0d0,0d0/)
+	quant%ports(4)%R=0.025
+	quant%ports(4)%type=0
+
+
+	if(ptree_A%MyID==Main_ID .and. quant%Nport>0)write(*,*)'Port No.','Type','TETM','n','m','kc','k','eta_nm'
+	do pp=1,quant%Nport
 		quant%ports(pp)%mmax=1
 		quant%ports(pp)%nmax=1
 
-		do nn=0,quant%ports(pp)%nmax
-		do mm=1,quant%ports(pp)%mmax
-			kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
-			quant%ports(pp)%A_TE_nm(nn+1,mm)=A_TE_nm_cir(nn+1,mm)
-			quant%ports(pp)%impedance_TE_nm(nn+1,mm)=Bigvalue
-			if(quant%wavenum > kc)then
-				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*impedence0/betanm
-				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm)				
-			endif	
-			kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
-			quant%ports(pp)%A_TM_nm(nn+1,mm)=A_TM_nm_cir(nn+1,mm)
-			quant%ports(pp)%impedance_TM_nm(nn+1,mm)=Bigvalue
-			if(quant%wavenum > kc)then
-				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=impedence0*betanm/quant%wavenum
-				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm)				
-			endif
-		enddo
-		enddo
+		if(quant%ports(pp)%type==0)then
+			call curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+			quant%ports(pp)%mmax=1
+			quant%ports(pp)%nmax=1
+	
+			do nn=0,quant%ports(pp)%nmax
+			do mm=1,quant%ports(pp)%mmax
+				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
+				quant%ports(pp)%A_TE_nm(nn+1,mm)=A_TE_nm_cir(nn+1,mm)
+				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=Bigvalue
+				if(quant%wavenum > kc)then
+					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+					quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*impedence0/betanm
+					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm)
+				endif
+				kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
+				quant%ports(pp)%A_TM_nm(nn+1,mm)=A_TM_nm_cir(nn+1,mm)
+				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=Bigvalue
+				if(quant%wavenum > kc)then
+					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+					quant%ports(pp)%impedance_TM_nm(nn+1,mm)=impedence0*betanm/quant%wavenum
+					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm)
+				endif
+			enddo
+			enddo
+		else if(quant%ports(pp)%type==1)then
+			do nn=0,quant%ports(pp)%nmax
+				do mm=0,quant%ports(pp)%mmax
+					quant%ports(pp)%A_TE_nm(nn+1,mm+1)=0
+					quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=Bigvalue
+					if(nn>0 .or. mm>0)then ! the lowest TE mode is 01 or 10
+						kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+						quant%ports(pp)%A_TE_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*A_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*B_nm_rec(nn+1,mm+1))
+						if(quant%wavenum > kc)then
+							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+							quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*impedence0/betanm
+							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)
+						endif
+					endif
+				enddo
+			enddo
+	
+			do nn=0,quant%ports(pp)%nmax
+				do mm=0,quant%ports(pp)%mmax
+					quant%ports(pp)%A_TM_nm(nn+1,mm+1)=0
+					quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=Bigvalue
+					if(nn>0 .and. mm>0)then ! the lowest TM mode is 11
+						kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+						quant%ports(pp)%A_TM_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*B_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*A_nm_rec(nn+1,mm+1))
+						if(quant%wavenum > kc)then
+							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
+							quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=impedence0*betanm/quant%wavenum
+							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)
+						endif
+					endif
+				enddo
+			enddo
+		endif
+
 	enddo
-
-
-
-
-	! quant%Nport=2
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
-	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	! quant%ports(1)%y=(/0d0,0d0,1d0/)
-	! quant%ports(1)%z=(/0d0,1d0,0d0/)
-	! quant%ports(1)%type=1
-	! quant%ports(1)%a=0.07d0
-	! quant%ports(1)%b=0.02d0
-
-	! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
-	! quant%ports(2)%x=(/0d0,-1d0,0d0/)
-	! quant%ports(2)%y=(/0d0,0d0,1d0/)
-	! quant%ports(2)%z=(/-1d0,0d0,0d0/)
-	! quant%ports(2)%type=1
-	! quant%ports(2)%a=0.07d0
-	! quant%ports(2)%b=0.02d0
-
-	! do pp=1,2
-	! 	quant%ports(pp)%mmax=1
-	! 	quant%ports(pp)%nmax=1
-
-	! 	do nn=0,quant%ports(pp)%nmax
-	! 	do mm=0,quant%ports(pp)%mmax
-	! 		if(nn>0 .or. mm>0)then ! the lowest mode is 01 or 10
-	! 			kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
-	! 			quant%ports(pp)%A_TE_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*A_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*B_nm_rec(nn+1,mm+1))
-	! 			quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=Bigvalue
-	! 			if(quant%wavenum > kc)then
-	! 				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-	! 				quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*impedence0/betanm
-	! 				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)		
-	! 			endif	
-	! 			kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
-	! 			quant%ports(pp)%A_TM_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*B_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*A_nm_rec(nn+1,mm+1))
-	! 			quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=Bigvalue
-	! 			if(quant%wavenum > kc)then
-	! 				betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-	! 				quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=impedence0*betanm/quant%wavenum
-	! 				if(ptree_A%MyID==Main_ID)write(*,*)'Port',pp,'TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)	
-	! 			endif
-	! 		endif
-	! 	enddo
-	! 	enddo
-	! enddo
 
 
 
@@ -465,7 +489,29 @@ PROGRAM ButterflyPACK_IE_3D
 		if(ptree_A%MyID==Main_ID)close(100)
 	endif
 	enddo
-	retval = abs(eigval(1))
+
+	if(ptree_A%MyID==Main_ID)then
+		write(*,*)'Checking 1-norm of the eigenvectors: '
+	endif
+	maxnorm=0
+	do nn=1,quant%nev
+		norm1 = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
+		normi = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
+		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		norm1 =norm1/normi
+		if(norm1>maxnorm)then
+			nn1=nn 
+			maxnorm = norm1
+		endif
+		if(ptree_A%MyID==Main_ID)then
+			write(*,*)dble(eigval(nn)),aimag(eigval(nn)),norm1
+		endif
+	enddo
+
+	retval(1) = abs(eigval(nn1))
+	retval(2) = maxnorm
+	
 	deallocate(eigval)
 	deallocate(eigvec)
 
@@ -500,7 +546,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	if(parent/= MPI_COMM_NULL)then
-		call MPI_REDUCE(retval, MPI_BOTTOM, 1, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
+		call MPI_REDUCE(retval, MPI_BOTTOM, 2, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
 		call MPI_Comm_disconnect(parent,ierr)
 	endif
 

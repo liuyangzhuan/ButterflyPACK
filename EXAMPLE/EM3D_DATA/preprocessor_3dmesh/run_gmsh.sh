@@ -1,8 +1,8 @@
 make
-#export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
+export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
 #export GMSH_DIR=/home/administrator/Desktop/research/preprocessor/gmsh-2.11.0-Linux/bin
 # export GMSH_DIR=/home/administrator/Desktop/software/gmsh-2.11.0-Linux/bin
-export GMSH_DIR=/home/administrator/Desktop/Software/gmsh-4.6.0-Linux64/bin
+# export GMSH_DIR=/home/administrator/Desktop/Software/gmsh-4.6.0-Linux64/bin
 # export GMSH_DIR=/Applications/Gmsh.app/Contents/MacOS/gmsh/bin
 # # # # #${GMSH_DIR}/gmsh sphere.geo -1 -2 -format msh -algo del2d -clmin 7.65e-1 -clmax 1e0   # 48 patches
 # # # # #${GMSH_DIR}/gmsh sphere.geo -1 -2 -format msh -algo del2d -clmin 3.8e-1 -clmax 5e-1   # 192 patches
@@ -175,30 +175,64 @@ export GMSH_DIR=/home/administrator/Desktop/Software/gmsh-4.6.0-Linux64/bin
  mv node.geo ${name}_node.inp
  mv elem.geo ${name}_elem.inp
 
-
- name=cavity_wakefield_4K_feko
-#  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+ name=pillbox_200K
+ ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.0075e-1 -clmax 0.0125e-1 -string "Mesh.BdfFieldFormat = 2;"  
  ./con_all ${name}.nas
  mv node.geo ${name}_node.inp
  mv elem.geo ${name}_elem.inp
 
- name=cavity_wakefield_14K_feko
-#  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
 
- name=cavity_rec_5K_feko
-#  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=cavity_wakefield_4K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
- name=cavity_rec_17K_feko
-#  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=cavity_wakefield_14K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+#  name=cavity_rec_5K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+#  name=cavity_rec_17K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+
+#  name=cavity_5cell_400K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+
+#  name=cavity_5cell_1M_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+
+#  name=cavity_5cell_400K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+#  name=cavity_5cell_30K_feko
+# #  ${GMSH_DIR}/gmsh cavity_wakfield.geo -2 -o $name.nas -algo del2d -clmin 0.12e2 -clmax 0.2e2 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
 
 #  rm *.nas
 

@@ -713,9 +713,11 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 	type(proctree)::ptree
 
     real(kind=8),allocatable :: current_at_patch(:),vec_current_at_patch(:,:), current_at_node(:)
+	complex(kind=8),allocatable:: current1(:,:)
 	integer ierr
 
 	allocate (current_at_node(quant%maxnode),current_at_patch(quant%maxpatch))
+	allocate (current1(quant%maxnode,1))
 	allocate (vec_current_at_patch(3,quant%maxpatch))
 	current_at_node=0
 	current_at_patch=0
@@ -786,8 +788,13 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
     enddo
     close(30)
 	endif
+	current1(:,1) = current_at_node
+	
+!	if(ptree%MyID == Main_ID)then
+!	write(*,*)'J norm: ', fnorm(current1,quant%maxnode,1,'1')/fnorm(current1,quant%maxnode,1,'I')
+!	endif
 
-    deallocate (current_at_node,current_at_patch,vec_current_at_patch)
+    deallocate (current1,current_at_node,current_at_patch,vec_current_at_patch)
     return
 
 end subroutine current_node_patch_mapping

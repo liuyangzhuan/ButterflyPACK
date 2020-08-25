@@ -36,11 +36,11 @@ PROGRAM ButterflyPACK_IE_3D
 
     real(kind=8) para
     real(kind=8) tolerance
-    integer Primary_block, nn, mm,kk,mn,rank,ii,jj
+    integer Primary_block, nn, mm,kk,mn,rank,ii,jj,nn1
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r
+	real(kind=8) t1,t2,x,y,z,r,norm1,normi,maxnorm
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -72,7 +72,7 @@ PROGRAM ButterflyPACK_IE_3D
 	character(len=10) which
     integer ido, n, nx, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
     complex(kind=8) sigma
-    real(kind=8) tol, retval
+    real(kind=8) tol, retval(2)
     real(kind=8) dtheta,theta,phi,rcs
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
     logical rvec
@@ -81,7 +81,7 @@ PROGRAM ButterflyPACK_IE_3D
 	integer v_major,v_minor,v_bugfix
 
 	integer nargs,flag
-	integer parent 
+	integer parent
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -125,7 +125,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
-
+ 
 	!**** default parameters for the eigen solvers
 	quant%CMmode=0
 	quant%SI=0
@@ -167,7 +167,7 @@ PROGRAM ButterflyPACK_IE_3D
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
 						else if (trim(strings)=='--scaling')then
-							read(strings1,*)quant%scaling							
+							read(strings1,*)quant%scaling
 						else if	(trim(strings)=='--cmmode')then
 							read(strings1,*)quant%CMmode
 						else if	(trim(strings)=='--si')then
@@ -347,7 +347,30 @@ PROGRAM ButterflyPACK_IE_3D
 		if(ptree_A%MyID==Main_ID)close(100)
 	endif
 	enddo
-	retval = abs(eigval(1))
+	
+	if(ptree_A%MyID==Main_ID)then
+		write(*,*)'Checking 1-norm of the eigenvectors: '
+	endif
+	maxnorm=0
+	do nn=1,quant%nev
+		norm1 = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
+		normi = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
+		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		norm1 =norm1/normi
+		if(norm1>maxnorm)then
+			nn1=nn 
+			maxnorm = norm1
+		endif
+		if(ptree_A%MyID==Main_ID)then
+			write(*,*)dble(eigval(nn)),aimag(eigval(nn)),norm1
+		endif
+	enddo
+
+	retval(1) = abs(eigval(nn1))
+	retval(2) = maxnorm
+	
+
 	deallocate(eigval)
 	deallocate(eigvec)
 
@@ -380,7 +403,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call delete_quant_EMSURF(quant)
 
 	if(parent/= MPI_COMM_NULL)then
-		call MPI_REDUCE(retval, MPI_BOTTOM, 1, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
+		call MPI_REDUCE(retval, MPI_BOTTOM, 2, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
 		call MPI_Comm_disconnect(parent,ierr)
 	endif
 	call blacs_exit(1)
