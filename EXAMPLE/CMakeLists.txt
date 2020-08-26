@@ -65,6 +65,12 @@ target_link_libraries(full ${all_link_libs_d})
 target_link_libraries(full ${all_link_libs_z})
 add_dependencies(full frontaldist)
 
+set(FDEXM1-1 FULLMAT_Driver_simple.f90)
+add_executable(full_simple ${FDEXM1-1})
+target_link_libraries(full_simple ${all_link_libs_d})
+target_link_libraries(full_simple ${all_link_libs_z})
+add_dependencies(full_simple frontaldist)
+
 set(FDEXM2 KERREG_Driver.f90)
 add_executable(krr ${FDEXM2})
 target_link_libraries(krr ${all_link_libs_d})
