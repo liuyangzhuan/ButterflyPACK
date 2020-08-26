@@ -203,19 +203,23 @@ PROGRAM ButterflyPACK_IE_3D
 	! option_A%touch_para = 3* quant%minedgelength
 
 
-	!!!!!!!!! pillbox
-	! quant%Nport=2
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
-	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	! quant%ports(1)%R=0.1
-	! quant%ports(1)%type=0
-	! quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
-	! quant%ports(2)%z=(/0d0,0d0,1d0/)
-	! quant%ports(2)%x=(/1d0,0d0,0d0/)
-	! quant%ports(2)%R=0.1
-	! quant%ports(2)%type=0
+	!!!!!!! No port, the results should be identical as ie3deigen 
+	quant%Nport=0
+
+
+	!!!!!!!! pillbox ports
+	quant%Nport=2
+	allocate(quant%ports(quant%Nport))
+	quant%ports(1)%origin=(/0d0,0d0,0d0/)
+	quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	quant%ports(1)%R=0.1
+	quant%ports(1)%type=0
+	quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
+	quant%ports(2)%z=(/0d0,0d0,1d0/)
+	quant%ports(2)%x=(/1d0,0d0,0d0/)
+	quant%ports(2)%R=0.1
+	quant%ports(2)%type=0
 
 
 	! !!!!!!!!! cavity wakefield
@@ -233,35 +237,35 @@ PROGRAM ButterflyPACK_IE_3D
 	! quant%ports(2)%type=0
 
 
-	!!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
-	quant%Nport=4
-	allocate(quant%ports(quant%Nport))
-	quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
-	quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	quant%ports(1)%y=(/0d0,0d0,1d0/)
-	quant%ports(1)%z=(/0d0,1d0,0d0/)
-	quant%ports(1)%type=1
-	quant%ports(1)%a=0.07d0
-	quant%ports(1)%b=0.02d0
+	! !!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
+	! quant%Nport=4
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	! quant%ports(1)%y=(/0d0,0d0,1d0/)
+	! quant%ports(1)%z=(/0d0,1d0,0d0/)
+	! quant%ports(1)%type=1
+	! quant%ports(1)%a=0.07d0
+	! quant%ports(1)%b=0.02d0
 
-	quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
-	quant%ports(2)%x=(/0d0,-1d0,0d0/)
-	quant%ports(2)%y=(/0d0,0d0,1d0/)
-	quant%ports(2)%z=(/-1d0,0d0,0d0/)
-	quant%ports(2)%type=1
-	quant%ports(2)%a=0.07d0
-	quant%ports(2)%b=0.02d0
+	! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+	! quant%ports(2)%x=(/0d0,-1d0,0d0/)
+	! quant%ports(2)%y=(/0d0,0d0,1d0/)
+	! quant%ports(2)%z=(/-1d0,0d0,0d0/)
+	! quant%ports(2)%type=1
+	! quant%ports(2)%a=0.07d0
+	! quant%ports(2)%b=0.02d0
 
-	quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
-	quant%ports(3)%z=(/0d0,0d0,-1d0/)
-	quant%ports(3)%x=(/1d0,0d0,0d0/)
-	quant%ports(3)%R=0.025
-	quant%ports(3)%type=0
-	quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
-	quant%ports(4)%z=(/0d0,0d0,1d0/)
-	quant%ports(4)%x=(/1d0,0d0,0d0/)
-	quant%ports(4)%R=0.025
-	quant%ports(4)%type=0
+	! quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
+	! quant%ports(3)%z=(/0d0,0d0,-1d0/)
+	! quant%ports(3)%x=(/1d0,0d0,0d0/)
+	! quant%ports(3)%R=0.025
+	! quant%ports(3)%type=0
+	! quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
+	! quant%ports(4)%z=(/0d0,0d0,1d0/)
+	! quant%ports(4)%x=(/1d0,0d0,0d0/)
+	! quant%ports(4)%R=0.025
+	! quant%ports(4)%type=0
 
 
 	if(ptree_A%MyID==Main_ID .and. quant%Nport>0)write(*,*)'Port No.','Type','TETM','n','m','kc','k','eta_nm'
@@ -273,7 +277,7 @@ PROGRAM ButterflyPACK_IE_3D
 			call curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			quant%ports(pp)%mmax=1
 			quant%ports(pp)%nmax=1
-	
+
 			do nn=0,quant%ports(pp)%nmax
 			do mm=1,quant%ports(pp)%mmax
 				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
@@ -310,7 +314,7 @@ PROGRAM ButterflyPACK_IE_3D
 					endif
 				enddo
 			enddo
-	
+
 			do nn=0,quant%ports(pp)%nmax
 				do mm=0,quant%ports(pp)%mmax
 					quant%ports(pp)%A_TM_nm(nn+1,mm+1)=0
@@ -501,7 +505,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
 		norm1 =norm1/normi
 		if(norm1>maxnorm)then
-			nn1=nn 
+			nn1=nn
 			maxnorm = norm1
 		endif
 		if(ptree_A%MyID==Main_ID)then
@@ -511,7 +515,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 	retval(1) = abs(eigval(nn1))
 	retval(2) = maxnorm
-	
+
 	deallocate(eigval)
 	deallocate(eigvec)
 

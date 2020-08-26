@@ -79,6 +79,7 @@ implicit none
 		real(kind=8):: impedance_TE_nm(3,3)  ! mode impedance TE_nm
 		real(kind=8):: impedance_TM_nm(3,3)  ! mode impedance of TM_nm
 		complex(kind=8),allocatable::nxe_dot_rwg(:,:,:,:,:)  ! int_nxe_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
+		complex(kind=8),allocatable::e_dot_rwg(:,:,:,:,:)  ! int_e_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
 	end type port
 
 
@@ -348,6 +349,86 @@ end subroutine Zelem_EMSURF_K
 
 
 
+subroutine Zelem_EMSURF_K_Self(m,n,value,quant,sign)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,n,sign
+    integer flag,edge_m,edge_n,nodetemp_n,patch
+    complex(kind=8) value_e,value_m,value
+    integer i,j,ii,jj,iii,jjj
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3),nxan(3)
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3),dg3(3)
+    complex(kind=8) imp,imp1,imp2,imp3
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+    real(kind=8) area
+
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+
+
+		! convert to new indices because quant%info_unk has been reordered
+		edge_m = m
+		edge_n = n
+
+		allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+		allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+
+		lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+		ctemp1=(0.,0.)
+		ctemp2=(0.,0.)
+		value_m=(0.,0.)
+
+		do ii=3,4
+			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
+			do i=1,quant%integral_points
+				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+				am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+				bb(1)=(0.,0.)
+				aa(1:3)=(0.,0.)
+				do jj=3,4
+					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+					nr_n(1:3)=quant%normal_of_patch(1:3,quant%info_unk(jj,edge_n))
+					if (quant%info_unk(ii,edge_m)==quant%info_unk(jj,edge_n)) then
+						area=triangle_area(quant%info_unk(ii,edge_m),quant)
+						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+						! call curl(nr_n,an,nxan)
+						! call scalar(am,nxan,temp)
+
+						call scalar(am,an,temp)
+						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
+					else
+
+					endif
+				enddo
+			enddo
+		enddo
+		value_m=value_m*lm*ln
+
+		value=value_m
+
+		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
+
+
+    return
+
+end subroutine Zelem_EMSURF_K_Self
+
+
 subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
     use BPACK_DEFS
@@ -394,6 +475,54 @@ subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
     return
 
 end subroutine Port_nxe_dot_rwg
+
+subroutine Port_e_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,pp,mm,nn,TETM,rr
+    integer flag,edge_m,patch
+    complex(kind=8) value_m,value
+    integer i,ii
+    real(kind=8) lm,am(3),nr_m(3),e(3)
+    real(kind=8) temp
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+		edge_m = m
+		allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+
+		lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+
+		value_m=(0.,0.)
+
+		do ii=3,4
+			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
+			do i=1,quant%integral_points
+				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+				am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+
+				call Port_e(xm(i),ym(i),zm(i),e,quant,pp,mm,nn,TETM,rr)
+				call scalar(am,e,temp)
+				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
+			enddo
+		enddo
+		value_m=value_m*lm
+
+		value=value_m
+
+		deallocate(xm,ym,zm,wm)
+
+
+    return
+
+end subroutine Port_e_dot_rwg
+
 
 subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 	real(kind=8) xm,ym,zm,e(3),nxe(3),r,theta,phi,Erho,Ephi,Ex,Ey,kc,x,y,z,nhat(3),rhat(3),phihat(3),rho(3),a,b
@@ -484,6 +613,99 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 	endif
 
 end subroutine Port_nxe
+
+
+subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
+	real(kind=8) xm,ym,zm,e(3),nxe(3),r,theta,phi,Erho,Ephi,Ex,Ey,kc,x,y,z,nhat(3),rhat(3),phihat(3),rho(3),a,b
+	type(quant_EMSURF) :: quant
+	integer:: pp,mm,nn,TETM,rr
+	real(kind=8):: J(nn+2),Jp(nn+2)
+
+	if(quant%ports(pp)%type==0)then
+
+		Erho=0
+		Ephi=0
+
+		call Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
+
+		nhat = quant%ports(pp)%z
+		rhat = 0
+		phihat = 0
+		if(r>0)then
+			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
+			call curl(nhat,rhat,phihat)
+		endif
+
+		if(TETM==1)then !TE_nm
+			kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
+			x = kc*r
+			if(nn==0)then
+				call bessjyV(1,x,J,0)
+				Jp(1) = -J(2)
+			else
+				call bessjyV(nn,x,J,0)
+				Jp(nn+1) = J(nn)-(nn)/x*J(nn+1)
+			endif
+			if(rr==1)then
+				Erho = nn/x*sin(nn*phi)*J(nn+1)
+				Ephi = cos(nn*phi)*Jp(nn+1)
+			else
+				Erho = -nn/x*cos(nn*phi)*J(nn+1)
+				Ephi = sin(nn*phi)*Jp(nn+1)
+			endif
+			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TE_nm(nn+1,mm)/quant%ports(pp)%R
+		elseif(TETM==2)then ! TM_nm
+			kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
+			x = kc*r
+			if(nn==0)then
+				call bessjyV(1,x,J,0)
+				Jp(1) = -J(2)
+			else
+				call bessjyV(nn,x,J,0)
+				Jp(nn+1) = J(nn)-(nn)/x*J(nn+1)
+			endif
+			if(rr==1)then
+				Erho = cos(nn*phi)*Jp(nn+1)
+				Ephi = -nn/x*sin(nn*phi)*J(nn+1)
+			else
+				Erho = sin(nn*phi)*Jp(nn+1)
+				Ephi = nn/x*cos(nn*phi)*J(nn+1)
+			endif
+			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
+		endif
+		! call curl(nhat,e,nxe)
+	elseif(quant%ports(pp)%type==1)then
+		Ex=0
+		Ey=0
+		rho(1)=xm
+		rho(2)=ym
+		rho(3)=zm
+		rho = rho - quant%ports(pp)%origin
+		x = dot_product(rho,quant%ports(pp)%x)
+		y = dot_product(rho,quant%ports(pp)%y)
+		z = dot_product(rho,quant%ports(pp)%z)
+
+		a = quant%ports(pp)%a
+		b = quant%ports(pp)%b
+
+		if(TETM==1)then !TE_nm
+			Ex = mm/b*cos(nn*pi*x/a)*sin(mm*pi*y/b)
+			Ey = -nn/a*sin(nn*pi*x/a)*cos(mm*pi*y/b)
+			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TE_nm(nn+1,mm+1)
+		elseif(TETM==2)then ! TM_nm
+			Ex = nn/a*cos(nn*pi*x/a)*sin(mm*pi*y/b)
+			Ey = mm/b*sin(nn*pi*x/a)*cos(mm*pi*y/b)
+			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
+		endif
+		! call curl(quant%ports(pp)%z,e,nxe)
+	else
+		write(*,*)'unrecognized port type',quant%ports(pp)%type
+		stop
+	endif
+
+end subroutine Port_e
+
+
 
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF(m,n,value,quant)
@@ -590,6 +812,8 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 		endif
 
 
+		value = value*impedence0 ! the solution vector will be J and M/impedence0, this makes it easier to compare with ie3deigen 
+
 	class default
 		write(*,*)"unexpected type"
 		stop
@@ -598,6 +822,120 @@ subroutine Zelem_EMSURF(m,n,value,quant)
     return
 
 end subroutine Zelem_EMSURF
+
+
+! !**** user-defined subroutine to sample Z_mn
+! subroutine Zelem_EMSURF(m,n,value,quant)
+
+!     use BPACK_DEFS
+!     implicit none
+
+!     integer, INTENT(IN):: m,n
+!     integer flag,edge_m,edge_n,nodetemp_n,patch,cntm,cntn,ppm,ppn
+!     complex(kind=8) value_e,value_m,value
+!     integer i,j,ii,jj,iii,jjj,nn,mm,mode,rr
+!     real(kind=8) ln,lm,am(3),an(3),nr_m(3)
+!     real(kind=8) nr_n(3)
+!     complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
+!     complex(kind=8) imp,imp1,imp2,imp3
+!     real(kind=8) temp
+!     real(kind=8) distance
+!     real(kind=8) ianl,ianl1,ianl2
+! 	real(kind=8) area
+! 	integer sign,npolar,off
+
+! 	class(*),pointer :: quant
+
+
+!     real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+
+! 	select TYPE(quant)
+! 	type is (quant_EMSURF)
+
+! 		! convert to new indices because quant%info_unk has been reordered
+
+
+! 		if(m<=quant%Nunk-quant%Nunk_port .and. n<=quant%Nunk-quant%Nunk_port)then
+! 			edge_m = m
+! 			edge_n = n
+! 			call Zelem_EMSURF_T(edge_m,edge_n,value,quant)
+! 		elseif(m>quant%Nunk-quant%Nunk_port .and. n>quant%Nunk-quant%Nunk_port)then
+! 			edge_m = m-quant%Nunk_port
+! 			edge_n = n-quant%Nunk_port
+! 			! call Zelem_EMSURF_T(edge_m,edge_n,value,quant)
+
+! 			! find which ports this edge is on
+! 			cntm = quant%Nunk_int
+! 			do ppm=1,quant%Nport
+! 				if(edge_m<=cntm+quant%ports(ppm)%Nunk)exit
+! 				cntm = cntm + quant%ports(ppm)%Nunk
+! 			enddo
+! 			cntn = quant%Nunk_int
+! 			do ppn=1,quant%Nport
+! 				if(edge_n<=cntn+quant%ports(ppn)%Nunk)exit
+! 				cntn = cntn + quant%ports(ppn)%Nunk
+! 			enddo
+! 			if(ppm==ppn)then
+! 				if(quant%ports(ppm)%type==0)then
+! 					npolar=2
+! 					off=0
+! 				elseif(quant%ports(ppm)%type==1)then
+! 					npolar=1
+! 					off=1
+! 				else
+! 					write(*,*)'unrecognized port type',quant%ports(ppm)%type
+! 					stop
+! 				endif
+! 				ctemp=0
+! 				do rr=1,npolar
+! 					do nn=0,quant%ports(ppm)%nmax
+! 						do mm=1-off,quant%ports(ppm)%mmax
+! 							if(mm>0 .or. nn>0)then
+! 							ctemp1=quant%ports(ppm)%e_dot_rwg(edge_m-cntm,nn+1,mm+off,1,rr)
+! 							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,1,rr)
+! 							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off)*ctemp1*ctemp2
+! 							endif
+! 						enddo
+! 					enddo
+! 					do nn=0,quant%ports(ppm)%nmax
+! 						do mm=1-off,quant%ports(ppm)%mmax
+! 							if(mm>0 .or. nn>0)then
+! 							ctemp1=quant%ports(ppm)%e_dot_rwg(edge_m-cntm,nn+1,mm+off,2,rr)
+! 							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,2,rr)
+! 							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TM_nm(nn+1,mm+off)*ctemp1*ctemp2
+! 							endif
+! 						enddo
+! 					enddo
+! 				enddo
+! 				value = value +ctemp
+! 			endif
+
+! 		elseif(m>quant%Nunk-quant%Nunk_port .and. n<=quant%Nunk-quant%Nunk_port)then
+! 			edge_m = m-quant%Nunk_port
+! 			edge_n = n
+! 			sign = 1
+! 			call Zelem_EMSURF_K_Self(edge_m,edge_n,value,quant,sign)
+! 			value=-value
+
+! 		elseif(m<=quant%Nunk-quant%Nunk_port .and. n>quant%Nunk-quant%Nunk_port)then
+! 			edge_m = m
+! 			edge_n = n-quant%Nunk_port
+! 			if(m<=quant%Nunk_int)sign=-1
+! 			if(m>quant%Nunk_int)sign=1
+! 			! sign=-1
+! 			call Zelem_EMSURF_K(edge_m,edge_n,value,quant,sign)
+! 		endif
+
+
+! 	class default
+! 		write(*,*)"unexpected type"
+! 		stop
+! 	end select
+
+!     return
+
+! end subroutine Zelem_EMSURF
 
 
 
@@ -1883,12 +2221,14 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 		endif
 
 		allocate(quant%ports(pp)%nxe_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
+		allocate(quant%ports(pp)%e_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
 		do cnt=1,quant%ports(pp)%Nunk
 			do rr=1,npolar
 				do nn=0,quant%ports(pp)%nmax
 					do mm=1-off,quant%ports(pp)%mmax
 						if(mm>0 .or. nn>0)then
 						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
+						call Port_e_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
 						endif
 					enddo
 				enddo
@@ -1896,6 +2236,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 					do mm=1-off,quant%ports(pp)%mmax
 						if(mm>0 .or. nn>0)then
 						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
+						call Port_e_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
 						endif
 					enddo
 				enddo
