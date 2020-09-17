@@ -217,7 +217,7 @@ inline void C_FuncBZmn(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 // here positve inidex means row, negative index means column
   int m1, n1;
-  if(m>0){
+  if(*m>0){
 	  m1=*m;
 	  n1=-*n;
   }else{
