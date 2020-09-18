@@ -50,7 +50,7 @@
 //------------------------------------------------------------------------------
 using namespace std;
 
-const _Complex double I={0.0,1.0};
+const _Complex double Im={0.0,1.0};
 
 
 extern "C" {
@@ -114,32 +114,32 @@ public:
 			double ki = n-_n_rand/2.0;
 			double ci = (2+sin(2*M_PI*xi))/8.0;
 			double phi = xi*ki+ci*abs(ki);
-			// *val = cexp(2*M_PI*I*phi);
-			*val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
+			// *val = cexp(2*M_PI*Im*phi);
+			*val = cos(2*M_PI*phi)+Im*sin(2*M_PI*phi);
 
 			// double xi = m/((double)_n_rand);
 			// double ki = n;
 			// double phi = xi*ki;
-			// *val = cexp(2*M_PI*I*phi);
+			// *val = cexp(2*M_PI*Im*phi);
 
 		}else if(_ker==2){
 			double xi = n/((double)_n_rand);
 			double ki = m;
 			double phi = -xi*ki;
-			// *val = cexp(2*M_PI*I*phi);
-      *val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
+			// *val = cexp(2*M_PI*Im*phi);
+      *val = cos(2*M_PI*phi)+Im*sin(2*M_PI*phi);
 		}else if(_ker==3){
 			double xi = m/((double)_m_rand);
 			double ki = n-_n_rand/2.0;
 			double ci = (2+sin(2*M_PI*xi))/8.0;
 			double phi = ci*abs(ki);
-			// *val = cexp(2*M_PI*I*phi);
-      *val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
+			// *val = cexp(2*M_PI*Im*phi);
+      *val = cos(2*M_PI*phi)+Im*sin(2*M_PI*phi);
 
 			// double xi = m/((double)_n_rand);
 			// double ki = n;
 			// double phi = xi*ki;
-			// *val = cexp(2*M_PI*I*phi);
+			// *val = cexp(2*M_PI*Im*phi);
 
 		}
   }
