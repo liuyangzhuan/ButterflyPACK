@@ -365,7 +365,7 @@ if(tst==4){
 
 	string mat_file("../EXAMPLE/FULLMAT_DATA/FULLMAT.csv");
 	string geo_file("../EXAMPLE/FULLMAT_DATA/Geometry.csv");
-	
+
 
 	vector<double> geo_data = write_from_file<double>(geo_file);
 	Ndim=3;
@@ -378,7 +378,7 @@ if(tst==4){
 	vector<double> mat_data = write_from_file<double>(mat_file);
 	quant_ptr=new C_QuantApp(Npo, ker, mat_data);
 
-	
+
 	nogeo=0;
 	sort_opt=1;
 	Nmin = 50;
@@ -387,14 +387,14 @@ if(tst==4){
 
 	if(argc>2)Nmin = stoi(argv[2]); 		 // leafsize
 
-	if(argc>3)tol = stof(argv[3]);   		 // compression tolerance 
+	if(argc>3)tol = stof(argv[3]);   		 // compression tolerance
 	if(argc>4)com_opt = stoi(argv[4]);       // compression algorithm if LR is used
 	if(argc>5)checkerr = stoi(argv[5]);      // whether to fully check the compression accuracy
 	if(argc>6)batch = stoi(argv[6]);         // the block size in H-BACA if com_opt=4 or 5
 	if(argc>7)bnum = stoi(argv[7]);          // number of bottom level blocks in H-BACA if com_opt=4 or 5
 	if(argc>8)knn = stoi(argv[8]);           // number of nearest neighbours per point to be found
 	if(argc>9)lrlevel = stoi(argv[9]);       // the top "lrlevel" levels of the matrix uses butterfly, the rest uses low-rank
-	if(argc>10)sample_para = stof(argv[10]); // oversampling parameter in butterfly compression 
+	if(argc>10)sample_para = stof(argv[10]); // oversampling parameter in butterfly compression
 	if(argc>11)format = stoi(argv[11]);      // 1: HOD-LR/BF  2:H-LR/BF
 	if(argc>12)near_para = stof(argv[12]);   // control the admissibility: e.g. 0.01: weak admissibility 2.01: strong admissibility
 }

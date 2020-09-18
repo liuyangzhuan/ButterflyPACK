@@ -50,6 +50,8 @@
 //------------------------------------------------------------------------------
 using namespace std;
 
+const _Complex double I={0.0,1.0};
+
 
 extern "C" {
       ///////////////////////////////////////////////
@@ -112,7 +114,8 @@ public:
 			double ki = n-_n_rand/2.0;
 			double ci = (2+sin(2*M_PI*xi))/8.0;
 			double phi = xi*ki+ci*abs(ki);
-			*val = cexp(2*M_PI*I*phi);
+			// *val = cexp(2*M_PI*I*phi);
+			*val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
 
 			// double xi = m/((double)_n_rand);
 			// double ki = n;
@@ -123,13 +126,15 @@ public:
 			double xi = n/((double)_n_rand);
 			double ki = m;
 			double phi = -xi*ki;
-			*val = cexp(2*M_PI*I*phi);
+			// *val = cexp(2*M_PI*I*phi);
+      *val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
 		}else if(_ker==3){
 			double xi = m/((double)_m_rand);
 			double ki = n-_n_rand/2.0;
 			double ci = (2+sin(2*M_PI*xi))/8.0;
 			double phi = ci*abs(ki);
-			*val = cexp(2*M_PI*I*phi);
+			// *val = cexp(2*M_PI*I*phi);
+      *val = cos(2*M_PI*phi)+I*sin(2*M_PI*phi);
 
 			// double xi = m/((double)_n_rand);
 			// double ki = n;
@@ -154,7 +159,7 @@ inline void C_FuncBZmn(int *m, int *n, _Complex double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 // here positve inidex means row, negative index means column
   int m1, n1;
-  if(m>0){
+  if(*m>0){
 	  m1=*m;
 	  n1=-*n;
   }else{
@@ -270,7 +275,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
     opterr = optind = 0;
     while ((c = getopt_long_only
             (argc, argv.data(), "",
-             long_options, &option_index)) != -1) {     
+             long_options, &option_index)) != -1) {
       switch (c) {
       case 1: {
         std::istringstream iss(optarg);
@@ -298,7 +303,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_d;
         z_c_bpack_set_D_option(&option0, "tol_itersol", opt_d);
-      } break;        
+      } break;
       case 6: {
         std::istringstream iss(optarg);
         iss >> opt_i;
@@ -318,118 +323,118 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "xyzsort", opt_i);
-      } break;      
+      } break;
       case 10: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "LRlevel", opt_i);
-      } break;   
+      } break;
       case 11: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "ErrFillFull", opt_i);
-      } break;   
+      } break;
       case 12: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "BACA_Batch", opt_i);
-      } break;   
+      } break;
       case 13: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "RecLR_leaf", opt_i);
-      } break;   
+      } break;
       case 14: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "nogeo", opt_i);
-      } break;   
+      } break;
       case 15: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "less_adapt", opt_i);
-      } break;   
+      } break;
       case 16: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "ErrSol", opt_i);
-      } break;   
+      } break;
       case 17: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "LR_BLK_NUM", opt_i);
-      } break;   
+      } break;
       case 18: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "rank0", opt_i);
-      } break;   
+      } break;
       case 19: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "rankrate", opt_i);
-      } break;   
+      } break;
       case 20: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "itermax", opt_i);
-      } break;   
+      } break;
       case 21: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "powiter", opt_i);
-      } break;   
+      } break;
       case 22: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "ILU", opt_i);
-      } break;   
+      } break;
       case 23: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "Nbundle", opt_i);
-      } break;  
+      } break;
       case 24: {
         std::istringstream iss(optarg);
         iss >> opt_d;
         z_c_bpack_set_D_option(&option0, "near_para", opt_d);
-      } break;   
+      } break;
       case 25: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "format", opt_i);
-      } break;   
+      } break;
       case 26: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "verbosity", opt_i);
-      } break;   
+      } break;
       case 27: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "rmax", opt_i);
-      } break;   
+      } break;
       case 28: {
         std::istringstream iss(optarg);
         iss >> opt_d;
         z_c_bpack_set_D_option(&option0, "sample_para", opt_d);
-      } break;   
+      } break;
       case 29: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "pat_comp", opt_i);
-      } break;   
+      } break;
       case 30: {
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "knn", opt_i);
-      } break;                                                                                             
+      } break;
       default: break;
       }
     }
   }
 
-// This example uses entry evaluation to compute three butterflies and use matvec to compress their products. The three butterflies are of size MxN, NxK, KxL, the fourth butterfly is of size MxL  
+// This example uses entry evaluation to compute three butterflies and use matvec to compress their products. The three butterflies are of size MxN, NxK, KxL, the fourth butterfly is of size MxL
 ////////////////////////////////////////////////////////////////////////////////
 // --------------------------- Main Code Starts Here ------------------------ //
 
@@ -506,7 +511,7 @@ if(myrank==master_rank){
   opterr = optind = 0;
   while ((c = getopt_long_only
           (argc, argv1.data(), "",
-            long_options, &option_index)) != -1) {    
+            long_options, &option_index)) != -1) {
 
     switch (c) {
     case 1: {
@@ -528,11 +533,11 @@ if(myrank==master_rank){
     case 5: {
       std::istringstream iss(optarg);
       iss >> L;
-    } break;        
+    } break;
     case 6: {
       std::istringstream iss(optarg);
       iss >> rank_rand;
-    } break;                                                                                         
+    } break;
     default: break;
     }
   }
