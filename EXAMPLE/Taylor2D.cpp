@@ -48,7 +48,7 @@
 //------------------------------------------------------------------------------
 using namespace std;
 const int pi = 4.0*atan(1.0);
-
+const _Complex double I={0.0,1.0};
 
 
 // The object handling kernel parameters and sampling function

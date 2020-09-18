@@ -48,7 +48,7 @@
 //------------------------------------------------------------------------------
 using namespace std;
 const int pi = 4.0*atan(1.0);
-
+const _Complex double I={0.0,1.0};
 
 
 // The object handling kernel parameters and sampling function
@@ -358,7 +358,7 @@ if(myrank==master_rank){
 
 	double theta;
 	double phi;
-	
+
 	int iijj=0;
 	for(int ii=1;ii<=sqrt(Npo);ii++){
 	for(int jj=1;jj<=sqrt(Npo);jj++){
