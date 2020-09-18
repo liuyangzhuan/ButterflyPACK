@@ -48,7 +48,7 @@
 //------------------------------------------------------------------------------
 using namespace std;
 const int pi = 4.0*atan(1.0);
-const _Complex double I={0.0,1.0};
+const _Complex double Im={0.0,1.0};
 
 
 // The object handling kernel parameters and sampling function
@@ -80,7 +80,7 @@ public:
 		  *val = 0;  //self term is not computed yet
 	  }else{
 		creal_T out =G2D(&_data[m * _d], &_data[n * _d], _w);
-		*val = (double)out.re+ I*(double)out.im;
+		*val = (double)out.re+ Im*(double)out.im;
 	  }
   }
 };
