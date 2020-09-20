@@ -1,7 +1,7 @@
 #define DAT 0
 #include "ButterflyPACK_config.fi"
 
-module APPLICATION_MODULE
+module APPLICATION_MODULE_FULL_SIMPLE
 use BPACK_DEFS
 implicit none
 
@@ -71,12 +71,12 @@ contains
 			stop
 		end select
 	end subroutine Zelem_FULL
-end module APPLICATION_MODULE
+end module APPLICATION_MODULE_FULL_SIMPLE
 
 
 PROGRAM ButterflyPACK_TEMPLATE
     use BPACK_DEFS
-    use APPLICATION_MODULE
+    use APPLICATION_MODULE_FULL_SIMPLE
 	use BPACK_Solve_Mul
 
 	use BPACK_structure
