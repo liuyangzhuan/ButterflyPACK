@@ -203,23 +203,23 @@ PROGRAM ButterflyPACK_IE_3D
 	! option_A%touch_para = 3* quant%minedgelength
 
 
-	!!!!!!! No port, the results should be identical as ie3deigen 
+	!!!!!!! No port, the results should be identical as ie3deigen
 	quant%Nport=0
 
 
-	!!!!!!!! pillbox ports
-	quant%Nport=2
-	allocate(quant%ports(quant%Nport))
-	quant%ports(1)%origin=(/0d0,0d0,0d0/)
-	quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	quant%ports(1)%R=0.1
-	quant%ports(1)%type=0
-	quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
-	quant%ports(2)%z=(/0d0,0d0,1d0/)
-	quant%ports(2)%x=(/1d0,0d0,0d0/)
-	quant%ports(2)%R=0.1
-	quant%ports(2)%type=0
+	! !!!!!!!! pillbox ports
+	! quant%Nport=2
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
+	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	! quant%ports(1)%R=0.1
+	! quant%ports(1)%type=0
+	! quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
+	! quant%ports(2)%z=(/0d0,0d0,1d0/)
+	! quant%ports(2)%x=(/1d0,0d0,0d0/)
+	! quant%ports(2)%R=0.1
+	! quant%ports(2)%type=0
 
 
 	! !!!!!!!!! cavity wakefield

@@ -44,7 +44,7 @@ PROGRAM ButterflyPACK_IE_2D
 	integer seed_myid(50)
 	integer times(8)
 	integer edge
-	real(kind=8) t1,t2,t3, x,y,z,r,theta,phi
+	real(kind=8) t1,t2,t3, x,y,z,r,theta,phi,retval(1)
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -70,9 +70,11 @@ PROGRAM ButterflyPACK_IE_2D
 	integer Nunk_loc,Maxlevel
 	integer nargs,flag
 	integer v_major,v_minor,v_bugfix
+	integer parent
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
+	call MPI_COMM_GET_PARENT(parent, ierr) ! YL: this is needed if this function is spawned by a master process
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
@@ -291,7 +293,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** print statistics
 	call PrintStat(stats,ptree)
-
+	retval(1)=stats%Time_Fill+stats%Time_Factor+stats%Time_Sol
 
 	!**** deletion of quantities
 	call delete_quant_EMCURV(quant)
@@ -305,6 +307,11 @@ PROGRAM ButterflyPACK_IE_2D
 
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
+
+	if(parent/= MPI_COMM_NULL)then
+		call MPI_REDUCE(retval, MPI_BOTTOM, 1, MPI_double_precision, MPI_MAX, Main_ID, parent,ierr)
+		call MPI_Comm_disconnect(parent,ierr)
+	endif
 
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
