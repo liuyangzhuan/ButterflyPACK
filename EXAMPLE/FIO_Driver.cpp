@@ -24,6 +24,7 @@
 #include <sstream>
 #include <string>
 #include <iomanip>
+#include <memory>
 
 #include <pthread.h>
 

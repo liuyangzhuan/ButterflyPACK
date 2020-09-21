@@ -35,7 +35,7 @@
 #include <atomic>
 #include <mpi.h>
 #include <complex.h>
-
+#include <memory>
 
 #include "G2D/rt_nonfinite.h"
 #include "G2D/G2D.h"

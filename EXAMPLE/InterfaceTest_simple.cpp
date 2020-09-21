@@ -34,6 +34,7 @@
 #include <vector>
 #include <atomic>
 #include <mpi.h>
+#include <memory>
 
 #include "dC_BPACK_wrapper.h"
 
