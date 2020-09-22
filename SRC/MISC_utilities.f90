@@ -17,12 +17,12 @@
 #include "ButterflyPACK_config.fi"
 
 ! ! ! ! ! ! ! the following can be commented out to avoid multiple definition for intel compilers, which means for now I'm not using VSL at all.
-#ifdef HAVE_MKL
-#ifndef USEVSL
-#define USEVSL
-include "mkl_vsl.f90"
-#endif
-#endif
+! #ifdef HAVE_MKL
+! #ifndef USEVSL
+! #define USEVSL
+! include "mkl_vsl.f90"
+! #endif
+! #endif
 
 module MISC_Utilities
    use BPACK_DEFS
