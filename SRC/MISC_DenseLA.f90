@@ -373,7 +373,7 @@ contains
       real(kind=8), allocatable::RWORK(:)
       integer, allocatable::IWORK(:)
 
-      complex(kind=8), allocatable:: WORK(:)
+      real(kind=8), allocatable:: WORK(:)
       real(kind=8), optional::flop
 
       m = size(Matrix, 1)
