@@ -20,9 +20,8 @@ module BPACK_DEFS
     use iso_c_binding
     use ieee_arithmetic
     use BPACK_linkedlist
-    use mpi
     implicit none
-    
+    INCLUDE 'mpif.h'
 
     integer, parameter:: BPACK_MAJOR_VERSION = 1
     integer, parameter:: BPACK_MINOR_VERSION = 1
