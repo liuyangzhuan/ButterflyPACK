@@ -3494,8 +3494,10 @@ contains
 
                ! the context involving head proc only
                ptree%pgrp(group)%ctxt_head = sys2blacs_handle(ptree%pgrp(group)%Comm)
-               pid = 0
-               call blacs_gridmap(ptree%pgrp(group)%ctxt_head, pid, 1, 1, 1)
+               allocate (pmap(1, 1))
+               pmap=0
+               call blacs_gridmap(ptree%pgrp(group)%ctxt_head, pmap, 1, 1, 1)
+               deallocate (pmap)
 
                ! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
 
