@@ -104,6 +104,10 @@ implicit none
 
 		integer:: Nport=0 ! number of ports
 		type(port), allocatable:: ports(:)   ! the open ports
+		
+		integer:: Nobs = 0 ! number of observation points (currently cannot locate on the walls or ports) 
+		real(kind=8), allocatable:: obs_points(:,:) ! xyz coordinates, dimensions 3xNobs
+		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs 
 
 		! 3D mesh
 		integer maxnode ! # of vertices in a mesh
@@ -318,7 +322,7 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
 						call curl(nr_n,an,nxan)
 						call scalar(am,nxan,temp)
-						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
+						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)  ! note that a factor of 1/(2.*area) was removed from both LHS and RHS of the MOM system
 					else
 						do j=1,quant%integral_points
 							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
@@ -812,7 +816,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 		endif
 
 
-		value = value*impedence0 ! the solution vector will be J and M/impedence0, this makes it easier to compare with ie3deigen 
+		value = value*impedence0 ! the solution vector will be J and M/impedence0, this makes it easier to compare with ie3deigen
 
 	class default
 		write(*,*)"unexpected type"
@@ -1057,11 +1061,11 @@ end subroutine Zelem_EMSURF
 	wb=(155.-sqrt(15.))/2400.
 	wc=(155.+sqrt(15.))/2400.
 
-	v1=1./3.
-	v2=(6.-sqrt(15.))/21.
-	v3=(9.+2*sqrt(15.))/21.
-	v4=(6.+sqrt(15.))/21.
-	v5=(9.-2*sqrt(15.))/21.
+	v1=1d0/3d0
+	v2=(6d0-sqrt(15d0))/21d0
+	v3=(9d0+2*sqrt(15d0))/21d0
+	v4=(6d0+sqrt(15d0))/21d0
+	v5=(9d0-2*sqrt(15d0))/21d0
 
 	quant%ng1(1)=1-v1-v1
 	quant%ng1(2)=1-v2-v2
@@ -2393,6 +2397,275 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
     return
 
 end subroutine EM_solve_SURF
+
+
+
+
+
+subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,string)
+    use BPACK_DEFS
+	use BPACK_Solve_Mul
+
+
+    implicit none
+
+    integer i, j, ii, jj, iii, jjj,ierr
+    integer level, blocks, edge, edge_n, patch, node, group
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+    real T0
+    real(kind=8) n1,n2,rtemp, center(3)
+    complex(kind=8) value_Z,ctemp,a
+    complex(kind=8) eigvec(:)
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
+	real(kind=8):: rel_error
+	type(Hoption)::option
+	type(mesh)::msh
+	type(quant_EMSURF)::quant
+	type(proctree)::ptree
+	type(Hstat)::stats
+	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:)
+	complex(kind=8):: fieldT(3),fieldK(3)
+	real(kind=8) ln, area
+	character(*)::string
+
+
+	quant%obs_Efields=0
+	
+	do n=msh%idxs, msh%idxe
+		do ii =1,quant%Nobs
+			fieldT=0
+			fieldK=0
+			if(n<=quant%Nunk-quant%Nunk_port)then
+				edge = n
+				call Field_EMSURF_T(quant%obs_points(:,ii),fieldT,msh%new2old(edge),quant,eigvec(n-msh%idxs+1))
+			else
+				edge = n-quant%Nunk_port
+				call Field_EMSURF_K(quant%obs_points(:,ii),fieldK,msh%new2old(edge),quant,eigvec(n-msh%idxs+1))
+			endif	
+			quant%obs_Efields(:,ii) = quant%obs_Efields(:,ii) + (fieldT+fieldK)*impedence0 ! the solution vector is J and M/impedence0, this makes it easier to compare with ie3deigen	
+		enddo
+	enddo
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,quant%obs_Efields,quant%Nobs*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	
+	if(ptree%MyID==Main_ID)then
+	write(*,*)abs(quant%obs_Efields(1,quant%Nobs/2))
+	write(*,*)'x'
+	
+	write(*,*)abs(quant%obs_Efields(2,quant%Nobs/2))
+	write(*,*)'y'
+
+	write(*,*)abs(quant%obs_Efields(3,quant%Nobs/2))
+	write(*,*)'z'	
+	endif
+
+
+
+
+	!!!!! Compute the maximum normal electric fields
+
+	
+	allocate(Enormal_at_patch(quant%maxpatch))
+	Enormal_at_patch=0
+
+	do edge=msh%idxs,msh%idxe
+		edge_n = msh%new2old(edge)
+
+		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+		do jj=3,4
+		patch = quant%info_unk(jj,edge_n)
+		if(patch/=-1)then
+			area=triangle_area(patch,quant)		
+			Enormal_at_patch(patch) = Enormal_at_patch(patch)-ln/area*(-1)**(jj+1)*eigvec(edge-msh%idxs+1)*cd**2d0*mu0/junit/quant%freq/2/pi
+		endif
+		enddo
+	enddo
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+
+
+	! do patch=1,quant%maxpatch
+	! 	do i=1,3
+	! 		center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
+	! 	enddo
+	! 	if(ptree%MyID==Main_ID)write(*,*)center,abs(Enormal_at_patch(patch))
+	! enddo
+
+
+	allocate(Enormal_at_node(quant%maxnode))
+	Enormal_at_node=0
+
+    !$omp parallel do default(shared) private(patch,i,ii,node,a)
+    do node=1, quant%maxnode
+        ii=0; a=0.
+        do patch=1, quant%maxpatch
+            do i=1,3
+                if (quant%node_of_patch(i,patch)==node) then
+                    a=a+Enormal_at_patch(patch)
+                    ii=ii+1
+                endif
+            enddo
+        enddo
+        Enormal_at_node(node)=a/dble(ii)
+    enddo
+    !$omp end parallel do
+
+	if(ptree%MyID == Main_ID)then
+    ! string='current'//chara//'.out'
+    open(30,file='EigEn_'//string)
+    do node=1, quant%maxnode
+        write (30,*) abs(Enormal_at_node(node))
+    enddo
+    close(30)
+	endif
+
+
+
+	if(ptree%MyID==Main_ID)write(*,*)'max normal E:',maxval(abs(Enormal_at_patch))
+
+	deallocate(Enormal_at_patch)
+	deallocate(Enormal_at_node)
+
+
+
+end subroutine EM_cavity_postprocess
+
+
+
+
+!**** Compute the fields at a given point due to the K operator on a rwg basis
+subroutine Field_EMSURF_K(point,field,n,quant,coef)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: n
+    integer flag,edge_m,edge_n,nodetemp_n,patch
+    complex(kind=8) value_e,value_m,value
+    integer i,j,ii,jj,iii,jjj
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3),nxan(3)
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3),dg3(3)
+    complex(kind=8) imp,imp1,imp2,imp3,coef
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+    real(kind=8) point(3)
+    complex(kind=8) field(3)	
+
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+		! convert to new indices because quant%info_unk has been reordered
+		edge_n = n
+
+		allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+		field = 0d0
+
+		do jj=3,4
+			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+			do j=1,quant%integral_points
+				distance=sqrt((point(1)-xn(j))**2+(point(2)-yn(j))**2+(point(3)-zn(j))**2)
+				an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+				an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+				an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+				dg(1)=(point(1)-xn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
+				dg(2)=(point(2)-yn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
+				dg(3)=(point(3)-zn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
+				call ccurl(an,dg,dg2)
+				field = field - (-1)**(jj+1)*dg2*wn(j)*ln/(2)
+			enddo
+		enddo
+		field = field * coef
+		deallocate(xn,yn,zn,wn)
+
+    return
+
+end subroutine Field_EMSURF_K
+
+
+
+!**** Compute the fields at a given point due to the T operator on a rwg basis  
+subroutine Field_EMSURF_T(point,field,n,quant,coef)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: n
+    integer flag,edge_m,edge_n,nodetemp_n,patch
+    integer i,j,ii,jj,iii,jjj
+    real(kind=8) ln,an(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,ctemp3,coef
+    real(kind=8) temp
+	real(kind=8) distance,distance1,distance2,distance3
+	complex(kind=8) phi,phi1,phi2,phi3,phase
+    real(kind=8) delta
+    real(kind=8) point(3)
+    complex(kind=8) field(3),field_A(3),dg(3),field_phi(3)
+
+	type(quant_EMSURF) :: quant
+
+
+    real(kind=8),allocatable::xn(:),yn(:),zn(:),wn(:)
+
+
+
+		! convert to new indices because quant%info_unk has been reordered
+		edge_n = n
+		allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+		field_A = 0d0
+		field_phi = 0d0
+		do jj=3,4
+			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)					
+			do j=1,quant%integral_points
+				an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+				an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+				an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+				an = an/(2d0)*(-1)**(jj+1)
+				distance=sqrt((point(1)-xn(j))**2+(point(2)-yn(j))**2+(point(3)-zn(j))**2)
+
+				phase = -quant%wavenum*distance
+				ctemp=exp(-aimag(phase))*(cos(dble(phase))+junit*sin(dble(phase)))
+				field_A = field_A + an*wn(j)*ctemp/distance	
+				
+				
+				dg(1)=(point(1)-xn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
+				dg(2)=(point(2)-yn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
+				dg(3)=(point(3)-zn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
+				
+				field_phi = field_phi + wn(j)*dg*(-1)**(jj+1)
+			
+			enddo
+		enddo
+
+		field_A = field_A * junit*quant%wavenum
+		field_phi = field_phi * junit/quant%wavenum
+
+		! write(777,*)'x', field_A(1), field_phi(1)
+		! write(777,*)'y', field_A(2), field_phi(2)
+		! write(777,*)'z', field_A(3), field_phi(3)
+		
+		field = field_A -  field_phi
+		field = field * coef * ln
+
+		deallocate(xn,yn,zn,wn)					
+
+
+
+    return
+
+end subroutine Field_EMSURF_T
+
 
 
 
