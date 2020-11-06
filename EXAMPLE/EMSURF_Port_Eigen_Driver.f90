@@ -72,10 +72,10 @@ PROGRAM ButterflyPACK_IE_3D
 	character(len=10) which
     integer ido, n, nx, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
     complex(kind=8) sigma
-    real(kind=8) tol, retval(2)
+    real(kind=8) tol, retval(2), offset
     real(kind=8) dtheta,theta,phi,rcs
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
-    logical rvec
+	logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
 	character(len=1024)  :: substring,substring1
 	integer v_major,v_minor,v_bugfix
@@ -220,6 +220,16 @@ PROGRAM ButterflyPACK_IE_3D
 	! quant%ports(2)%x=(/1d0,0d0,0d0/)
 	! quant%ports(2)%R=0.1
 	! quant%ports(2)%type=0
+	quant%Nobs=100
+	allocate(quant%obs_points(3,quant%Nobs))
+	allocate(quant%obs_Efields(3,quant%Nobs))
+	offset=1e-10
+	do ii=1,quant%Nobs
+		quant%obs_points(1,ii)=0
+		quant%obs_points(2,ii)=0
+		quant%obs_points(3,ii)=(0.1-2*offset)/(quant%Nobs-1)*(ii-1)+offset
+	enddo
+
 
 
 	! !!!!!!!!! cavity wakefield
@@ -512,6 +522,18 @@ PROGRAM ButterflyPACK_IE_3D
 			write(*,*)dble(eigval(nn)),aimag(eigval(nn)),norm1
 		endif
 	enddo
+
+
+	if(ptree_A%MyID==Main_ID)then
+		write(*,*)'Postprocessing: '
+	endif
+
+	do nn=1,quant%nev
+		call EM_cavity_postprocess(option_A,msh_A,quant,ptree_A,stats_A,eigvec(:,nn),trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+	enddo
+
+
+
 
 	retval(1) = abs(eigval(nn1))
 	retval(2) = maxnorm
