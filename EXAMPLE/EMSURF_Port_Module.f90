@@ -94,6 +94,7 @@ implicit none
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
 		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
+		real(kind=8):: sigma_s=1/1.7d-8  ! surface conductivity, copper 1/1.7d-8
 
 		integer Nunk ! size of the matrix
 		integer Nunk_int ! not port unknowns
@@ -104,10 +105,10 @@ implicit none
 
 		integer:: Nport=0 ! number of ports
 		type(port), allocatable:: ports(:)   ! the open ports
-		
-		integer:: Nobs = 0 ! number of observation points (currently cannot locate on the walls or ports) 
+
+		integer:: Nobs = 0 ! number of observation points (currently cannot locate on the walls or ports)
 		real(kind=8), allocatable:: obs_points(:,:) ! xyz coordinates, dimensions 3xNobs
-		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs 
+		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs
 
 		! 3D mesh
 		integer maxnode ! # of vertices in a mesh
@@ -828,6 +829,76 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 end subroutine Zelem_EMSURF
 
 
+
+
+!**** user-defined subroutine to sample Z_mn for calculating the normal E fields
+subroutine Zelem_EMSURF_Post(m,n,value,quant)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,n
+    integer flag,edge_m,edge_n,nodetemp_n,patch,cntm,cntn,ppm,ppn
+    complex(kind=8) value_e,value_m,value,value0
+    integer i,j,ii,jj,iii,jjj,nn,mm,mode,rr
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3),point(3),l1,l2,l3
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3),field(3)
+    complex(kind=8) imp,imp1,imp2,imp3
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+	real(kind=8) area
+	integer sign,npolar,off
+
+	class(*),pointer :: quant
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+
+	select TYPE(quant)
+	type is (quant_EMSURF)
+
+		if(m>quant%Nunk-quant%Nunk_port)then
+			value=0d0
+		else
+			! Calulate the average normal E field between the center of the two patches (with an offset towards the inside) 
+			value=0d0
+			do ii = 3,4 
+			edge_m = m
+			patch = quant%info_unk(ii,edge_m)
+			nr_m(1:3)=quant%normal_of_patch(1:3,patch)
+			do i=1,3
+				point(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
+			enddo
+
+			l1=sqrt(sum((quant%xyz(:,quant%node_of_patch(1,patch))-quant%xyz(:,quant%node_of_patch(2,patch)))**2d0))
+			l2=sqrt(sum((quant%xyz(:,quant%node_of_patch(1,patch))-quant%xyz(:,quant%node_of_patch(3,patch)))**2d0))
+			l3=sqrt(sum((quant%xyz(:,quant%node_of_patch(3,patch))-quant%xyz(:,quant%node_of_patch(2,patch)))**2d0))
+			ln= max(l1,max(l2,l3))
+
+			! if(abs(point(3)-0.14454)<1e-4 .or. abs(point(3)+0.14454)<1e-4)write(*,*)point(3),nr_m(3)				
+			point = point - nr_m*(ln)  ! use largest edge length as an offset inwards, to avoid singularity
+			call Field_EMSURF(point,field,n,quant)
+			value0 = dot_product(field,nr_m)
+			value0 = value0*impedence0
+			value = value + value0
+			enddo
+			value = value/2
+		endif
+			
+	class default
+		write(*,*)"unexpected type"
+		stop
+	end select
+
+    return
+
+end subroutine Zelem_EMSURF_Post
+
+
+
 ! !**** user-defined subroutine to sample Z_mn
 ! subroutine Zelem_EMSURF(m,n,value,quant)
 
@@ -1535,6 +1606,50 @@ real(kind=8) function triangle_area(patch,quant)
 
     return
 end function triangle_area
+
+
+logical function in_triangle(point,patch,quant)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer patch,i
+    real(kind=8) a(3),b(3),c(3),area,point(3),alpha1,beta1,gamma1
+	type(quant_EMSURF)::quant
+
+    do i=1,3
+        a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
+        b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
+    enddo
+    call curl(a,b,c)
+	area=0.5*sqrt(sum(c**2d0))
+
+    do i=1,3
+        a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
+        b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
+    enddo
+    call curl(a,b,c)
+    alpha1=0.5*sqrt(sum(c**2d0))/area
+
+    do i=1,3
+        a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
+        b(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
+    enddo
+    call curl(a,b,c)
+	beta1=0.5*sqrt(sum(c**2d0))/area
+
+
+    do i=1,3
+        a(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
+        b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
+    enddo
+    call curl(a,b,c)
+	gamma1=0.5*sqrt(sum(c**2d0))/area
+
+	in_triangle = alpha1>=0 .and. alpha1<=1 .and. beta1>=0 .and. beta1<=1 .and. gamma1>=0 .and. gamma1<=1 .and. abs(alpha1+beta1+gamma1-1)<=1d-13
+
+    return
+end function in_triangle
 
 
 subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
@@ -2402,96 +2517,120 @@ end subroutine EM_solve_SURF
 
 
 
-subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,string)
+subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,eigval,Enormal_GF,ith)
     use BPACK_DEFS
 	use BPACK_Solve_Mul
 
 
     implicit none
 
-    integer i, j, ii, jj, iii, jjj,ierr
-    integer level, blocks, edge, edge_n, patch, node, group
+    integer i, j, ii, jj, iii, jjj,ierr,nth, ith
+    integer level, blocks, edge, edge_n, patch, node, group, pp, ppn, port, cntn
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
-    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H, freq, norm
     real T0
-    real(kind=8) n1,n2,rtemp, center(3)
-    complex(kind=8) value_Z,ctemp,a
-    complex(kind=8) eigvec(:)
+    real(kind=8) n1,n2,rtemp, center(3),an(3)
+    complex(kind=8) value_Z,ctemp,a,eigval
+    complex(kind=8) eigvec(:),Enormal_GF(:)
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
-	real(kind=8):: rel_error
+	real(kind=8):: rel_error,Rs, max_Enormal_GF
 	type(Hoption)::option
 	type(mesh)::msh
 	type(quant_EMSURF)::quant
 	type(proctree)::ptree
 	type(Hstat)::stats
-	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:)
-	complex(kind=8):: fieldT(3),fieldK(3)
-	real(kind=8) ln, area
-	character(*)::string
+	integer,allocatable:: port_of_patch(:),cnt_patch(:)
+	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:),Ht_at_patch(:,:),Et_at_patch(:,:)
+	complex(kind=8):: field(3),cpoint(3), volt_acc
+	real(kind=8) ln, area,point(3), Ht2int, dx(3)
+	character(4096)::string
+	real(kind=8),allocatable::xn(:),yn(:),zn(:),wn(:), weight_at_patch(:),ExH_at_ports(:,:)
+	character(len=1024)  :: substring,substring1
+
+	write(substring , *) nth
+	write(substring1 , *) quant%freq
 
 
+	n1 = OMP_get_wtime()
 	quant%obs_Efields=0
-	
+
 	do n=msh%idxs, msh%idxe
 		do ii =1,quant%Nobs
-			fieldT=0
-			fieldK=0
-			if(n<=quant%Nunk-quant%Nunk_port)then
-				edge = n
-				call Field_EMSURF_T(quant%obs_points(:,ii),fieldT,msh%new2old(edge),quant,eigvec(n-msh%idxs+1))
-			else
-				edge = n-quant%Nunk_port
-				call Field_EMSURF_K(quant%obs_points(:,ii),fieldK,msh%new2old(edge),quant,eigvec(n-msh%idxs+1))
-			endif	
-			quant%obs_Efields(:,ii) = quant%obs_Efields(:,ii) + (fieldT+fieldK)*impedence0 ! the solution vector is J and M/impedence0, this makes it easier to compare with ie3deigen	
+			field=0
+			edge = msh%new2old(n)
+			call Field_EMSURF(quant%obs_points(:,ii),field,edge,quant)
+			quant%obs_Efields(:,ii) = quant%obs_Efields(:,ii) + field*eigvec(n-msh%idxs+1)*impedence0 ! the solution vector is J and M/impedence0, this makes it easier to compare with ie3deigen
 		enddo
 	enddo
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,quant%obs_Efields,quant%Nobs*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-	
+
 	if(ptree%MyID==Main_ID)then
-	write(*,*)abs(quant%obs_Efields(1,quant%Nobs/2))
-	write(*,*)'x'
-	
-	write(*,*)abs(quant%obs_Efields(2,quant%Nobs/2))
-	write(*,*)'y'
+		volt_acc = 0
+		do ii =2,quant%Nobs
+			dx =  quant%obs_points(:,ii) - quant%obs_points(:,ii-1)
+			volt_acc = volt_acc + dot_product(quant%obs_Efields(:,ii),dx)
+		enddo
 
-	write(*,*)abs(quant%obs_Efields(3,quant%Nobs/2))
-	write(*,*)'z'	
+
+	! write(*,*)abs(quant%obs_Efields(1,quant%Nobs/2))
+	! write(*,*)'x'
+
+	! write(*,*)abs(quant%obs_Efields(2,quant%Nobs/2))
+	! write(*,*)'y'
+
+	! write(*,*)abs(quant%obs_Efields(3,quant%Nobs/2))
+	! write(*,*)'z'
+	open(28,file='Eobs_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+	do ii=1,quant%Nobs
+		write(28,*) quant%obs_points(:,ii),abs(quant%obs_Efields(1,ii)), abs(quant%obs_Efields(2,ii)), abs(quant%obs_Efields(3,ii))
+	enddo
+	close(28)
+	write(*,*)ith,': Computing_nth_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))
+	write(*,*)'   eigval: ', eigval
+	write(*,*)'   norm_1/norm_inf: ', norm
+	write(*,*)'   acceleration voltage: ', abs(volt_acc)
+
 	endif
+	n2 = OMP_get_wtime()
+	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
 
 
 
 
-	!!!!! Compute the maximum normal electric fields
-
-	
+	!!!!! Compute the maximum normal electric fields, this is not very accurate due to definition of RWG
+	n1 = OMP_get_wtime()
 	allocate(Enormal_at_patch(quant%maxpatch))
 	Enormal_at_patch=0
 
 	do edge=msh%idxs,msh%idxe
 		edge_n = msh%new2old(edge)
+		if(edge_n<=quant%Nunk-quant%Nunk_port)then
+			ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
 
-		ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
-
-		do jj=3,4
-		patch = quant%info_unk(jj,edge_n)
-		if(patch/=-1)then
-			area=triangle_area(patch,quant)		
-			Enormal_at_patch(patch) = Enormal_at_patch(patch)-ln/area*(-1)**(jj+1)*eigvec(edge-msh%idxs+1)*cd**2d0*mu0/junit/quant%freq/2/pi
+			do jj=3,4
+			patch = quant%info_unk(jj,edge_n)
+			if(patch/=-1)then
+				area=triangle_area(patch,quant)
+				Enormal_at_patch(patch) = Enormal_at_patch(patch)-ln/area*(-1)**(jj+1)*eigvec(edge-msh%idxs+1)*cd**2d0*mu0/junit/quant%freq/(2*pi)/2  ! note that a fator of 2 is needed here
+			endif
+			enddo
 		endif
-		enddo
 	enddo
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-
-	! do patch=1,quant%maxpatch
-	! 	do i=1,3
-	! 		center(i)=1./3.*(quant%xyz(i,quant%node_of_patch(1,patch))+quant%xyz(i,quant%node_of_patch(2,patch))+quant%xyz(i,quant%node_of_patch(3,patch)))
-	! 	enddo
-	! 	if(ptree%MyID==Main_ID)write(*,*)center,abs(Enormal_at_patch(patch))
-	! enddo
+	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
+	do ii=1,quant%Nobs
+	do patch =1,quant%maxpatch
+	point = quant%obs_points(:,ii)
+	point(3) = 0.1d0
+	if(in_triangle(point,patch,quant))then
+		write(666,*) point,abs(Enormal_at_patch(patch))
+	endif
+	enddo
+	enddo
+	endif
 
 
 	allocate(Enormal_at_node(quant%maxnode))
@@ -2514,7 +2653,76 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,string)
 
 	if(ptree%MyID == Main_ID)then
     ! string='current'//chara//'.out'
-    open(30,file='EigEn_'//string)
+    open(30,file='EigEn_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+    do node=1, quant%maxnode
+        write (30,*) abs(Enormal_at_node(node))
+    enddo
+    close(30)
+	endif
+	if(ptree%MyID==Main_ID)write(*,*)'   max normal E:',maxval(abs(Enormal_at_patch))
+
+
+	!!!!! Compute the maximum normal electric fields using GF, but there is a delta offset at each patch to avoid singularity
+	n1 = OMP_get_wtime()
+	Enormal_at_patch=0
+	allocate(cnt_patch(quant%maxpatch))	
+	cnt_patch=0
+	do edge=msh%idxs,msh%idxe
+		edge_n = msh%new2old(edge)
+		if(edge_n<=quant%Nunk-quant%Nunk_port)then
+			do jj=3,4
+			patch = quant%info_unk(jj,edge_n)
+			if(patch/=-1)then
+				Enormal_at_patch(patch) = Enormal_at_patch(patch) + Enormal_GF(edge-msh%idxs+1)	
+				cnt_patch(patch) = cnt_patch(patch)+1
+			endif
+			enddo
+		endif
+	enddo
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE,cnt_patch,quant%maxpatch,MPI_INTEGER,MPI_SUM,ptree%Comm,ierr)
+	do patch =1,quant%maxpatch
+		if(cnt_patch(patch)>0)then
+			Enormal_at_patch(patch)=Enormal_at_patch(patch)/cnt_patch(patch)
+		endif
+	enddo
+
+
+
+	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
+	do ii=1,quant%Nobs
+	do patch =1,quant%maxpatch
+	point = quant%obs_points(:,ii)
+	point(3) = 0.1d0
+	if(in_triangle(point,patch,quant))then
+		write(667,*) point,abs(Enormal_at_patch(patch))
+	endif
+	enddo
+	enddo
+	endif
+	deallocate(cnt_patch)
+
+	Enormal_at_node=0
+
+    !$omp parallel do default(shared) private(patch,i,ii,node,a)
+    do node=1, quant%maxnode
+        ii=0; a=0.
+        do patch=1, quant%maxpatch
+            do i=1,3
+                if (quant%node_of_patch(i,patch)==node) then
+                    a=a+Enormal_at_patch(patch)
+                    ii=ii+1
+                endif
+            enddo
+        enddo
+        Enormal_at_node(node)=a/dble(ii)
+    enddo
+    !$omp end parallel do
+
+	if(ptree%MyID == Main_ID)then
+    ! string='current'//chara//'.out'
+    open(30,file='EigEn1_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
     do node=1, quant%maxnode
         write (30,*) abs(Enormal_at_node(node))
     enddo
@@ -2523,10 +2731,175 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,string)
 
 
 
-	if(ptree%MyID==Main_ID)write(*,*)'max normal E:',maxval(abs(Enormal_at_patch))
+
+
+	max_Enormal_GF = maxval(abs(Enormal_GF))
+	call MPI_ALLREDUCE(MPI_IN_PLACE,max_Enormal_GF,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+
+
+	if(ptree%MyID==Main_ID)write(*,*)'   max normal E (GF):',max_Enormal_GF
+	n2 = OMP_get_wtime()
+	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
+
+
+
+	!!!!! Compute the surface integral of |Ht|^2
+	n1 = OMP_get_wtime()
+	allocate(Ht_at_patch(3,quant%maxpatch*quant%integral_points))
+	allocate(weight_at_patch(quant%maxpatch*quant%integral_points))
+	Ht_at_patch=0
+	weight_at_patch=0
+	allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+
+	do edge_n=1,quant%Nunk-quant%Nunk_port
+		do jj=3,4
+			patch = quant%info_unk(jj,edge_n)
+			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+			do j=1,quant%integral_points
+				weight_at_patch((patch-1)*quant%integral_points+j) = wn(j)
+			enddo
+		enddo
+	enddo
+
+
+	do edge=msh%idxs,msh%idxe
+		edge_n = msh%new2old(edge)
+		if(edge_n<=quant%Nunk_int)then
+			ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+			do jj=3,4
+				patch = quant%info_unk(jj,edge_n)
+				call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+				do j=1,quant%integral_points
+					an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+					an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+					an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+					Ht_at_patch(:,(patch-1)*quant%integral_points+j) = Ht_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2)*eigvec(edge-msh%idxs+1)
+				enddo
+			enddo
+		endif
+	enddo
+
+	call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+
+	if(ptree%MyID==Main_ID)then
+		Ht2int=0
+		do ii=1,quant%maxpatch*quant%integral_points
+			patch = int((ii-1)/quant%integral_points)+1
+			rtemp = abs(Ht_at_patch(1,ii))**2d0+abs(Ht_at_patch(2,ii))**2d0+abs(Ht_at_patch(3,ii))**2d0
+			Ht2int = Ht2int + weight_at_patch(ii)* rtemp
+		enddo
+		Rs = 1/quant%sigma_s/sqrt(2d0/(quant%sigma_s*2*pi*quant%freq*mu0))
+		Ht2int = Ht2int/2*Rs
+		write(*,*)'   int Rs|H_t|^2/2 and Rs:',Ht2int,Rs
+	endif
+
+	n2 = OMP_get_wtime()
+	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
+
+
+
+	!!!!! Compute power at ports
+	if(quant%Nport>0)then
+		n1 = OMP_get_wtime()
+		allocate(Et_at_patch(3,quant%maxpatch*quant%integral_points))
+		Et_at_patch=0
+		allocate(ExH_at_ports(3,quant%Nport))
+		ExH_at_ports=0
+		allocate(port_of_patch(quant%maxpatch))
+		port_of_patch=0
+
+		do edge=msh%idxs,msh%idxe
+			edge_n = msh%new2old(edge)
+			if(edge_n>quant%Nunk-quant%Nunk_port)then
+				edge_n = edge_n - quant%Nunk_port
+				ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+				do jj=3,4
+					patch = quant%info_unk(jj,edge_n)
+					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+					do j=1,quant%integral_points
+						an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+						an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+						an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+						Ht_at_patch(:,(patch-1)*quant%integral_points+j) = Ht_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2)*eigvec(edge-msh%idxs+1)
+					enddo
+				enddo
+			endif
+		enddo
+
+		do edge=msh%idxs,msh%idxe
+			edge_n = msh%new2old(edge)
+			if(edge_n>quant%Nunk-quant%Nunk_port)then
+				edge_n = edge_n - quant%Nunk_port
+				ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+				do jj=3,4
+					patch = quant%info_unk(jj,edge_n)
+					area=triangle_area(patch,quant)
+
+					cntn = quant%Nunk_int
+					do ppn=1,quant%Nport
+						if(edge_n<=cntn+quant%ports(ppn)%Nunk)then
+							port_of_patch(patch)=ppn
+							exit
+						endif
+						cntn = cntn + quant%ports(ppn)%Nunk
+					enddo
+
+					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+					do j=1,quant%integral_points
+						an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+						an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+						an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+						Et_at_patch(:,(patch-1)*quant%integral_points+j) = Et_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2*area)*eigvec(edge-msh%idxs+1)*impedence0
+						
+						! if(port_of_patch(patch)==2)then
+						! 	write(*,*)port_of_patch(patch),patch, abs(Et_at_patch(:,(patch-1)*quant%integral_points+j)),abs(Ht_at_patch(:,(patch-1)*quant%integral_points+j))
+						! endif	
+					
+					enddo
+				enddo
+			endif
+		enddo
+		call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE,Et_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE,port_of_patch,quant%maxpatch,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
+
+
+
+		if(ptree%MyID==Main_ID)then
+			do ii=1,quant%maxpatch*quant%integral_points
+				patch = int((ii-1)/quant%integral_points)+1
+				port = port_of_patch(patch)
+				if(port>0)then				
+					call cccurl(Et_at_patch(:,ii),conjg(Ht_at_patch(:,ii)),cpoint)
+					cpoint = cpoint*weight_at_patch(ii)
+					point = dble(cpoint)/2d0
+					ExH_at_ports(:,port) = ExH_at_ports(:,port) + point
+				endif
+			enddo
+			do pp=1,quant%Nport
+				write(*,*)'   power at port ',pp, dot_product(ExH_at_ports(:,pp),quant%ports(pp)%z)
+			enddo
+		endif
+		deallocate(Et_at_patch)
+		deallocate(port_of_patch)
+		deallocate(ExH_at_ports)
+		n2 = OMP_get_wtime()
+		! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
+	
+	endif
+
+
+
+
 
 	deallocate(Enormal_at_patch)
 	deallocate(Enormal_at_node)
+
+	deallocate(weight_at_patch)
+	deallocate(Ht_at_patch)
+	deallocate(xn,yn,zn,wn)
+
 
 
 
@@ -2536,7 +2909,7 @@ end subroutine EM_cavity_postprocess
 
 
 !**** Compute the fields at a given point due to the K operator on a rwg basis
-subroutine Field_EMSURF_K(point,field,n,quant,coef)
+subroutine Field_EMSURF_K(point,field,n,quant)
 
     use BPACK_DEFS
     implicit none
@@ -2548,12 +2921,12 @@ subroutine Field_EMSURF_K(point,field,n,quant,coef)
     real(kind=8) ln,lm,am(3),an(3),nr_m(3),nxan(3)
     real(kind=8) nr_n(3)
     complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3),dg3(3)
-    complex(kind=8) imp,imp1,imp2,imp3,coef
+    complex(kind=8) imp,imp1,imp2,imp3
     real(kind=8) temp
     real(kind=8) distance
     real(kind=8) ianl,ianl1,ianl2
     real(kind=8) point(3)
-    complex(kind=8) field(3)	
+    complex(kind=8) field(3)
 
 	type(quant_EMSURF) :: quant
 
@@ -2583,7 +2956,6 @@ subroutine Field_EMSURF_K(point,field,n,quant,coef)
 				field = field - (-1)**(jj+1)*dg2*wn(j)*ln/(2)
 			enddo
 		enddo
-		field = field * coef
 		deallocate(xn,yn,zn,wn)
 
     return
@@ -2592,8 +2964,8 @@ end subroutine Field_EMSURF_K
 
 
 
-!**** Compute the fields at a given point due to the T operator on a rwg basis  
-subroutine Field_EMSURF_T(point,field,n,quant,coef)
+!**** Compute the fields at a given point due to the T operator on a rwg basis
+subroutine Field_EMSURF_T(point,field,n,quant)
 
     use BPACK_DEFS
     implicit none
@@ -2602,7 +2974,7 @@ subroutine Field_EMSURF_T(point,field,n,quant,coef)
     integer flag,edge_m,edge_n,nodetemp_n,patch
     integer i,j,ii,jj,iii,jjj
     real(kind=8) ln,an(3)
-    complex(kind=8) ctemp,ctemp1,ctemp2,ctemp3,coef
+    complex(kind=8) ctemp,ctemp1,ctemp2,ctemp3
     real(kind=8) temp
 	real(kind=8) distance,distance1,distance2,distance3
 	complex(kind=8) phi,phi1,phi2,phi3,phase
@@ -2626,7 +2998,7 @@ subroutine Field_EMSURF_T(point,field,n,quant,coef)
 		field_A = 0d0
 		field_phi = 0d0
 		do jj=3,4
-			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)					
+			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 			do j=1,quant%integral_points
 				an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 				an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
@@ -2635,16 +3007,16 @@ subroutine Field_EMSURF_T(point,field,n,quant,coef)
 				distance=sqrt((point(1)-xn(j))**2+(point(2)-yn(j))**2+(point(3)-zn(j))**2)
 
 				phase = -quant%wavenum*distance
-				ctemp=exp(-aimag(phase))*(cos(dble(phase))+junit*sin(dble(phase)))
-				field_A = field_A + an*wn(j)*ctemp/distance	
-				
-				
+				ctemp=exp(-aimag(phase))*(cos(dble(phase))+junit*sin(dble(phase)))/(4*pi)
+				field_A = field_A + an*wn(j)*ctemp/distance
+
+
 				dg(1)=(point(1)-xn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
 				dg(2)=(point(2)-yn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
 				dg(3)=(point(3)-zn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
-				
+
 				field_phi = field_phi + wn(j)*dg*(-1)**(jj+1)
-			
+
 			enddo
 		enddo
 
@@ -2654,11 +3026,11 @@ subroutine Field_EMSURF_T(point,field,n,quant,coef)
 		! write(777,*)'x', field_A(1), field_phi(1)
 		! write(777,*)'y', field_A(2), field_phi(2)
 		! write(777,*)'z', field_A(3), field_phi(3)
-		
-		field = field_A -  field_phi
-		field = field * coef * ln
 
-		deallocate(xn,yn,zn,wn)					
+		field = field_A -  field_phi
+		field = field  * ln
+
+		deallocate(xn,yn,zn,wn)
 
 
 
@@ -2669,6 +3041,24 @@ end subroutine Field_EMSURF_T
 
 
 
+!**** Compute the fields at a given point due to the T or K operator on a rwg basis
+subroutine Field_EMSURF(point,field,n,quant)
 
+    use BPACK_DEFS
+    implicit none
+
+	integer, INTENT(IN):: n
+	integer edge
+	type(quant_EMSURF) :: quant
+	complex(kind=8) field(3)
+	real(kind=8) point(3)
+	edge=n
+	if(edge<=quant%Nunk-quant%Nunk_port)then
+		call Field_EMSURF_T(point,field,edge,quant)
+	else
+		edge = edge-quant%Nunk_port
+		call Field_EMSURF_K(point,field,edge,quant)
+	endif
+end subroutine Field_EMSURF
 
 end module EMSURF_PORT_MODULE

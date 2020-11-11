@@ -104,7 +104,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
-	quant%CFIE_alpha=1
+	quant%CFIE_alpha=1.0
 
 	option%ErrSol=1
 	option%format=  HODLR !HMAT!

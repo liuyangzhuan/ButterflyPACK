@@ -27,7 +27,7 @@ Line(12) = {4, 9};
 
 Line Loop(1) = {1,2,3,4};
 Ruled Surface(1) = {1};
-Line Loop(2) = {5,6,7,8};
+Line Loop(2) = {-5,-8,-7,-6};
 Ruled Surface(2) = {2};
 Line Loop(3) = {4,9,-8,-12};
 Ruled Surface(3) = {3};

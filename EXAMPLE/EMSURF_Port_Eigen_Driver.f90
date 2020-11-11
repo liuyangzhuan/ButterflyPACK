@@ -49,24 +49,24 @@ PROGRAM ButterflyPACK_IE_3D
 	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option_sh,option_A,option_B
-	type(Hstat)::stats_sh,stats_A,stats_B
-	type(mesh)::msh_sh,msh_A,msh_B
-	type(Bmatrix)::bmat_sh,bmat_A,bmat_B
-	type(kernelquant)::ker_sh,ker_A,ker_B
+	type(Hoption)::option_post,option_sh,option_A,option_B
+	type(Hstat)::stats_post,stats_sh,stats_A,stats_B
+	type(mesh)::msh_post,msh_sh,msh_A,msh_B
+	type(Bmatrix)::bmat_post, bmat_sh,bmat_A,bmat_B
+	type(kernelquant)::ker_post, ker_sh,ker_A,ker_B
 	type(quant_EMSURF),target::quant
-	type(proctree)::ptree_sh,ptree_A,ptree_B
+	type(proctree)::ptree_post, ptree_sh,ptree_A,ptree_B
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	real(kind=8),allocatable::xyz(:,:)
-	integer,allocatable::Permutation(:)
+	integer,allocatable::Permutation(:),order(:)
 	integer Nunk_loc
 
-	integer maxn, maxnev, maxncv, ldv
+	integer maxn, maxnev, maxncv, ldv, ith
 	integer iparam(11), ipntr(14)
     logical,allocatable:: select(:)
-    complex(kind=8),allocatable:: ax(:), mx(:), d(:), v(:,:), workd(:), workev(:), resid(:), workl(:), eigval(:), eigvec(:,:)
-    real(kind=8),allocatable:: rwork(:), rd(:,:)
+    complex(kind=8),allocatable:: ax(:), mx(:), d(:), v(:,:), workd(:), workev(:), resid(:), workl(:), eigval(:), eigvec(:,:),E_normal(:,:)
+    real(kind=8),allocatable:: rwork(:), rd(:,:),norms(:),norms_tmp(:)
 
     character bmattype
 	character(len=10) which
@@ -178,6 +178,8 @@ PROGRAM ButterflyPACK_IE_3D
 							read(strings1,*)quant%tol_eig
 						else if	(trim(strings)=='--which')then
 							quant%which=trim(strings1)
+						else if	(trim(strings)=='--mesh_normal')then
+							read(strings1,*)quant%mesh_normal						
 						else
 							if(ptree_A%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -207,23 +209,24 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%Nport=0
 
 
-	! !!!!!!!! pillbox ports
-	! quant%Nport=2
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
-	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	! quant%ports(1)%R=0.1
-	! quant%ports(1)%type=0
-	! quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
-	! quant%ports(2)%z=(/0d0,0d0,1d0/)
-	! quant%ports(2)%x=(/1d0,0d0,0d0/)
-	! quant%ports(2)%R=0.1
-	! quant%ports(2)%type=0
-	quant%Nobs=100
+	!!!!!!!! pillbox ports
+	quant%Nport=2
+	allocate(quant%ports(quant%Nport))
+	quant%ports(1)%origin=(/0d0,0d0,0d0/)
+	quant%ports(1)%z=(/0d0,0d0,-1d0/)
+	quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	quant%ports(1)%R=0.1
+	quant%ports(1)%type=0
+	quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
+	quant%ports(2)%z=(/0d0,0d0,1d0/)
+	quant%ports(2)%x=(/1d0,0d0,0d0/)
+	quant%ports(2)%R=0.1
+	quant%ports(2)%type=0
+	
+	quant%Nobs=1000
 	allocate(quant%obs_points(3,quant%Nobs))
 	allocate(quant%obs_Efields(3,quant%Nobs))
-	offset=1e-10
+	offset=0.001
 	do ii=1,quant%Nobs
 		quant%obs_points(1,ii)=0
 		quant%obs_points(2,ii)=0
@@ -276,9 +279,21 @@ PROGRAM ButterflyPACK_IE_3D
 	! quant%ports(4)%x=(/1d0,0d0,0d0/)
 	! quant%ports(4)%R=0.025
 	! quant%ports(4)%type=0
+	
+	! quant%Nobs=1000
+	! allocate(quant%obs_points(3,quant%Nobs))
+	! allocate(quant%obs_Efields(3,quant%Nobs))
+	! offset=0.001
+	! do ii=1,quant%Nobs
+	! 	quant%obs_points(1,ii)=0
+	! 	quant%obs_points(2,ii)=0
+	! 	quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
+	! enddo
 
 
-	if(ptree_A%MyID==Main_ID .and. quant%Nport>0)write(*,*)'Port No.','Type','TETM','n','m','kc','k','eta_nm'
+
+
+	if(ptree_A%MyID==Main_ID .and. quant%Nport>0)write(*,*)'Port No.  TypeTETM  n  m  kc  k  eta_nm'
 	do pp=1,quant%Nport
 		quant%ports(pp)%mmax=1
 		quant%ports(pp)%nmax=1
@@ -504,10 +519,11 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
 	enddo
 
-	if(ptree_A%MyID==Main_ID)then
-		write(*,*)'Checking 1-norm of the eigenvectors: '
-	endif
+	! if(ptree_A%MyID==Main_ID)then
+	! 	write(*,*)'Checking 1-norm of the eigenvectors: '
+	! endif
 	maxnorm=0
+	allocate(norms(quant%nev))
 	do nn=1,quant%nev
 		norm1 = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
 		normi = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
@@ -518,8 +534,16 @@ PROGRAM ButterflyPACK_IE_3D
 			nn1=nn
 			maxnorm = norm1
 		endif
+		norms(nn)=norm1
+	enddo
+	allocate(order(quant%nev))
+	allocate(norms_tmp(quant%nev))
+	norms_tmp = norms
+	call quick_sort(norms_tmp,order,quant%nev)
+	deallocate(norms_tmp)
+	do nn=1,quant%nev
 		if(ptree_A%MyID==Main_ID)then
-			write(*,*)dble(eigval(nn)),aimag(eigval(nn)),norm1
+			write(*,*)dble(eigval(nn)),aimag(eigval(nn)),norms(nn)
 		endif
 	enddo
 
@@ -528,8 +552,46 @@ PROGRAM ButterflyPACK_IE_3D
 		write(*,*)'Postprocessing: '
 	endif
 
+
+
+	call CopyOptions(option_A,option_post)
+	!**** register the user-defined function and type in ker
+	ker_post%QuantApp => quant
+	ker_post%FuncZmn => Zelem_EMSURF_Post
+	!**** initialize stats_post and option
+	call InitStat(stats_post)
+	!**** create the process tree, can use larger number of mpis if needed
+	allocate(groupmembers(nmpi))
+	do ii=1,nmpi
+		groupmembers(ii)=(ii-1)
+	enddo
+	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_post)
+	deallocate(groupmembers)
+	!**** initialization of the construction phase
+	t1 = OMP_get_wtime()
+	allocate(xyz(3,quant%Nunk))
+	do ii=1, quant%Nunk_int+quant%Nunk_port
+		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
+	enddo
+	do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
+		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
+	enddo
+	allocate(Permutation(quant%Nunk))
+	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_post,option_post,stats_post,msh_post,ker_post,ptree_post,Coordinates=xyz)
+	deallocate(Permutation) ! caller can use this permutation vector if needed
+	deallocate(xyz)
+	t2 = OMP_get_wtime()
+	!**** computation of the construction phase
+	call BPACK_construction_Element(bmat_post,option_post,stats_post,msh_post,ker_post,ptree_post)
+	
+	allocate(E_normal(Nunk_loc,quant%nev))
+	E_normal=0
+	call BPACK_Mult('N', Nunk_loc, quant%nev, eigvec, E_normal, bmat_post, ptree_post, option_post, stats_post)
+
+	ith=0
 	do nn=1,quant%nev
-		call EM_cavity_postprocess(option_A,msh_A,quant,ptree_A,stats_A,eigvec(:,nn),trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+		ith = ith +1
+		call EM_cavity_postprocess(option_A,msh_A,quant,ptree_A,stats_A,eigvec(:,order(nn)),order(nn),norms(order(nn)),eigval(order(nn)),E_normal(:,order(nn)),ith)
 	enddo
 
 
@@ -540,9 +602,19 @@ PROGRAM ButterflyPACK_IE_3D
 
 	deallocate(eigval)
 	deallocate(eigvec)
+	deallocate(order)
+	deallocate(norms)
+	deallocate(E_normal)
+
 
 
 	if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
+
+	call delete_proctree(ptree_post)
+	call delete_Hstat(stats_post)
+	call delete_mesh(msh_post)
+	call delete_kernelquant(ker_post)
+	call BPACK_delete(bmat_post)
 
 	if(quant%SI==1)then
 		call delete_proctree(ptree_sh)

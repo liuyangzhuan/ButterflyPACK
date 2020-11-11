@@ -143,11 +143,11 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
 #  mv node.geo ${name}_node.inp
 #  mv elem.geo ${name}_elem.inp
 
-# name=plate_512000
-# ${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.045e-1 -clmax 0.045e-1  -string "Mesh.BdfFieldFormat = 2;" # 7552 patches
-# ./con_all ${name}.nas
-# mv node.geo ${name}_node.inp
-# mv elem.geo ${name}_elem.inp
+ name=plate_512000
+ ${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.045e-1 -clmax 0.045e-1  -string "Mesh.BdfFieldFormat = 2;" # 7552 patches
+ ./con_all ${name}.nas
+ mv node.geo ${name}_node.inp
+ mv elem.geo ${name}_elem.inp
 
 
 #name=plate_10240000
@@ -174,6 +174,15 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
  ./con_all ${name}.nas
  mv node.geo ${name}_node.inp
  mv elem.geo ${name}_elem.inp
+
+
+
+ name=pillbox_50K
+ ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.015e-1 -clmax 0.025e-1 -string "Mesh.BdfFieldFormat = 2;"  
+ ./con_all ${name}.nas
+ mv node.geo ${name}_node.inp
+ mv elem.geo ${name}_elem.inp
+
 
  name=pillbox_200K
  ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.0075e-1 -clmax 0.0125e-1 -string "Mesh.BdfFieldFormat = 2;"  

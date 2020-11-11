@@ -125,7 +125,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
- 
+
 	!**** default parameters for the eigen solvers
 	quant%CMmode=0
 	quant%SI=0
@@ -347,7 +347,7 @@ PROGRAM ButterflyPACK_IE_3D
 		if(ptree_A%MyID==Main_ID)close(100)
 	endif
 	enddo
-	
+
 	if(ptree_A%MyID==Main_ID)then
 		write(*,*)'Checking 1-norm of the eigenvectors: '
 	endif
@@ -359,7 +359,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
 		norm1 =norm1/normi
 		if(norm1>maxnorm)then
-			nn1=nn 
+			nn1=nn
 			maxnorm = norm1
 		endif
 		if(ptree_A%MyID==Main_ID)then
@@ -369,7 +369,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 	retval(1) = abs(eigval(nn1))
 	retval(2) = maxnorm
-	
+
 
 	deallocate(eigval)
 	deallocate(eigvec)

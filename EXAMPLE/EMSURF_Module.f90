@@ -789,7 +789,7 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
     close(30)
 	endif
 	current1(:,1) = current_at_node
-	
+
 !	if(ptree%MyID == Main_ID)then
 !	write(*,*)'J norm: ', fnorm(current1,quant%maxnode,1,'1')/fnorm(current1,quant%maxnode,1,'I')
 !	endif

@@ -14,6 +14,7 @@ for level=0:Maxlevel
     axis equal
 end
 
+
 skel = load('fort.114');
 figure(2)
 plot3(skel(:,1),skel(:,2),skel(:,3),'o','Color', 'k')
