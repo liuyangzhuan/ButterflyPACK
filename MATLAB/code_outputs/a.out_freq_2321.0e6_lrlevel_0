@@ -1,0 +1,361 @@
+ -------------------------------Program Start----------------------------------
+ ButterflyPACK_IE_3D
+ ButterflyPACK Version:1.1.0
+    
+  
+ ***************************
+ Printing Solver Options:
+         Nmin_leaf     100
+            n_iter    1000
+       level_check   10000
+            precon       1
+           xyzsort       2
+             lnoBP   40000
+         bp_cnt_lr       0
+      TwoLayerOnly       1
+       schulzorder       3
+       schulzlevel    3000
+           LRlevel       0
+        BACA_Batch      64
+        RecLR_leaf       5
+             nogeo       0
+        LR_BLK_NUM       1
+             rank0      32
+           itermax      10
+           powiter       0
+               ILU       0
+           Nbundle       1
+         verbosity       2
+              rmax    3000
+    forwardN15flag       0
+          pat_comp       3
+      elem_extract       0
+               cpp       0
+               knn     100
+       ErrFillFull       0
+            ErrSol       1
+        less_adapt       0
+          rankrate 1.5000000E+00
+          tol_comp 1.0000000E-04
+       tol_Rdetect 1.0000000E-05
+            tol_LS 1.0000000E-12
+       tol_itersol 1.0000000E-05
+          tol_rand 1.0000000E-04
+        touch_para 0.0000000E+00
+         near_para 1.0000000E-02
+      scale_factor 1.0000000E+00
+       sample_para 2.0000000E+00
+ sample_para_outer 2.0000000E+00
+ ***************************
+  
+ Port No.  TypeTETM  n  m  kc  k  eta_nm
+           1 RECTTE           1           0   44.879895051282752        48.644562959498529        976.64996052034746     
+           2 RECTTE           1           0   44.879895051282752        48.644562959498529        976.64996052034746     
+ 
+ EFIE computing
+ frequency:   2321000000.0000000     
+ wavelength:  0.12916521240844464     
+ 
+ 
+ Maxedge:       25455
+ Nunk:       26506
+ minedgelength:   1.0543566258655931E-003
+ wavelength/minedgelength:   122.50618930990653     
+ maxedgelength:   8.8059232374561522E-003
+ wavelength/maxedgelength:   14.667992091849960     
+ Pre-computing the nxe_dot_rwg vectors at the ports ...
+ Pre-computing the nxe_dot_rwg vectors at the ports:  0.125000000     Seconds
+ 
+ NUMBER_MPI=         128
+ OMP_NUM_THREADS=           8
+ User-supplied kernel requiring reorder
+     
+ Hierarchical format......
+ 
+ Maxlevel_for_blocks:           9
+ N_leaf:          51
+ 
+ Constructing basis groups...
+ Finding neighbours time:   0.38282782491296530     
+ Hierarchical format finished
+     
+ Matrix construction......
+ 
+ SVD error threshold   1.0000000000000000E-004
+ 
+ constructing Leaf-blocks......
+ constructing level           1
+ time   12.801224095048383      rankmax_of_level so far:           0        1021           0           0           0           0           0           0           0           0
+ constructing level           2
+ time   6.2743718380806968      rankmax_of_level so far:           0        1021         539           0           0           0           0           0           0           0
+ constructing level           3
+ time   2.3429510579444468      rankmax_of_level so far:           0        1021         539         269           0           0           0           0           0           0
+ constructing level           4
+ time   2.2778176129795611      rankmax_of_level so far:           0        1021         539         269         260           0           0           0           0           0
+ constructing level           5
+ time   1.3090331200510263      rankmax_of_level so far:           0        1021         539         269         260         111           0           0           0           0
+ constructing level           6
+ time  0.65760963177308440      rankmax_of_level so far:           0        1021         539         269         260         111          93           0           0           0
+ constructing level           7
+ time  0.36794552591163665      rankmax_of_level so far:           0        1021         539         269         260         111          93          63           0           0
+ constructing level           8
+ time  0.25780330807901919      rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45           0
+ constructing level           9
+ time  0.17805234901607037      rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45          31
+ constructing level          10
+ time   2.9191635898314416E-002 rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45          31
+ rankmax_of_level:           0        1025         541         270         260         174         142          88          60          44
+ 
+ Total construction time:   26.496163759962656      Seconds
+ Total entry eval time:   11.546632441692054      Seconds
+ Total construction flops:      5.87E+12
+ time_tmp   0.0000000000000000     
+ 
+   1883.5948750000000      MB costed for butterfly forward blocks
+   21.442093750000005      MB costed for direct forward blocks
+ 
+ Matrix construction finished
+ BPACK_CheckError: fnorm: 1.7037859E+00 1.7037859E+00 acc:  2.53E-05 time:  1.95E-01
+         Constr time:      2.65E+01 Seconds
+      EntryEval time:      1.15E+01 Seconds
+      traversal time:      1.53E-04 Seconds
+     BF compute time:      3.79E-02 Seconds
+    communicate time:      1.76E-01 Seconds
+      Tot constr mem:      1.91E+03 MB
+        Constr flops:      5.87E+12
+  Rank before factor:          1025
+         Factor time:      0.00E+00 Seconds
+      Tot factor mem:      0.00E+00 MB
+        Factor flops:      0.00E+00
+          Solve time:      0.00E+00 Seconds
+         Solve flops:      0.00E+00
+         C_mult time:      0.00E+00 Seconds
+        C_mult flops:      0.00E+00
+      C_extract time:      0.00E+00 Seconds
+     C_extract flops:      0.00E+00
+            Peak mem:      2.73E+01 MB
+ NUMBER_MPI=         128
+ OMP_NUM_THREADS=           8
+ User-supplied kernel requiring reorder
+     
+ Hierarchical format......
+ 
+ Maxlevel_for_blocks:           9
+ N_leaf:          51
+ 
+ Constructing basis groups...
+ Finding neighbours time:   0.29855045489966869     
+ Hierarchical format finished
+     
+ Matrix construction......
+ 
+ SVD error threshold   1.0000000000000000E-004
+ 
+ constructing Leaf-blocks......
+ constructing level           1
+ time   11.783262812998146      rankmax_of_level so far:           0        1021           0           0           0           0           0           0           0           0
+ constructing level           2
+ time   6.2821907959878445      rankmax_of_level so far:           0        1021         539           0           0           0           0           0           0           0
+ constructing level           3
+ time   2.4291419591754675      rankmax_of_level so far:           0        1021         539         269           0           0           0           0           0           0
+ constructing level           4
+ time   2.3181781140156090      rankmax_of_level so far:           0        1021         539         269         260           0           0           0           0           0
+ constructing level           5
+ time   1.3278945760102943      rankmax_of_level so far:           0        1021         539         269         260         111           0           0           0           0
+ constructing level           6
+ time  0.66745134629309177      rankmax_of_level so far:           0        1021         539         269         260         111          93           0           0           0
+ constructing level           7
+ time  0.37110094889067113      rankmax_of_level so far:           0        1021         539         269         260         111          93          63           0           0
+ constructing level           8
+ time  0.25655320694204420      rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45           0
+ constructing level           9
+ time  0.18045005598105490      rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45          31
+ constructing level          10
+ time   2.9513105051591992E-002 rankmax_of_level so far:           0        1021         539         269         260         111          93          63          45          31
+ rankmax_of_level:           0        1025         541         270         260         174         142          88          60          44
+ 
+ Total construction time:   25.651984032941982      Seconds
+ Total entry eval time:   11.729270529001951      Seconds
+ Total construction flops:      5.87E+12
+ time_tmp   0.0000000000000000     
+ 
+   1883.5948750000000      MB costed for butterfly forward blocks
+   21.442093750000005      MB costed for direct forward blocks
+ 
+ Matrix construction finished
+ BPACK_CheckError: fnorm: 1.4632203E+00 1.4632201E+00 acc:  2.71E-05 time:  3.54E-02
+ 
+ Computing block inverse at level Maxlevel+1...
+ Computing block inverse at higher levels...
+ update forward blocks at level:           9
+ OneL No.     1 rank: 31 L_butt:  0     error: 0.0000000E+00
+ OneL No.     2 rank: 31 L_butt:  0     error: 0.0000000E+00
+ OneL No.     3 rank: 22 L_butt:  0     error: 0.0000000E+00
+ OneL No.     4 rank: 22 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           9
+ OneL No.     1 rank: 31 L_butt:  0     error: 0.0000000E+00
+ OneL No.     2 rank: 22 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           8
+ OneL No.     1 rank: 45 L_butt:  0     error: 0.0000000E+00
+ OneL No.     2 rank: 45 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           8
+ OneL No.     1 rank: 45 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           7
+ OneL No.     1 rank: 63 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           7
+ OneL No.     1 rank: 63 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           6
+ OneL No.     1 rank: 93 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           6
+ OneL No.     1 rank: 93 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           5
+ OneL No.     1 rank:111 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           5
+ OneL No.     1 rank:111 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           4
+ OneL No.     1 rank:260 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           4
+ OneL No.     1 rank:260 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           3
+ OneL No.     1 rank:269 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           3
+ OneL No.     1 rank:270 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           2
+ OneL No.     1 rank:539 L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           2
+ OneL No.     1 rank:541 L_butt:  0     error: 0.0000000E+00
+ update forward blocks at level:           1
+ OneL No.     1 rank:*** L_butt:  0     error: 0.0000000E+00
+ compute block inverse at level:           1
+ OneL No.     1 rank:*** L_butt:  0     error: 0.0000000E+00
+ computing updated forward block time:  0.44698844756931067      Seconds
+ computing inverse block time:   2.1080564144067466      Seconds
+      Time_Init:   0.0000000000000000     
+      Time_MVP:   0.0000000000000000     
+      Time_Reconstruct:   0.0000000000000000     
+      Time_Onesub:   0.0000000000000000     
+      Time_OneBlock_XX:   0.0000000000000000     
+      Time_SMW:   1.9136738330125809     
+      Time_PartialUpdate:   0.0000000000000000     
+      Time_RedistB:   6.1850917059928179E-002
+      Time_RedistV:  0.12740401085466146     
+ time_tmp   0.0000000000000000     
+ time_tmp1   0.0000000000000000     
+ time_tmp2  0.47154684970155358     
+ time_tmp3   0.0000000000000000     
+ time_tmp4   0.0000000000000000     
+ time_tmp5   0.0000000000000000     
+ Factorization flops:      1.71E+12
+ 
+   943.30546874999993      MB costed for butterfly inverse blocks
+   1883.5948750000000      MB costed for butterfly Sblocks
+   21.442093750000005      MB costed for direct inverse blocks
+   0.0000000000000000      MB costed for storing intermidiate vectors
+ 
+ ||X_t-H\(H*X_t)||_F/||X_t||_F:    4.2067795094687139E-013
+ ||B-H*(H\B)||_F/||B||_F:    1.1720047335186403E-014
+         Constr time:      2.57E+01 Seconds
+      EntryEval time:      1.17E+01 Seconds
+      traversal time:      1.30E-04 Seconds
+     BF compute time:      3.29E-02 Seconds
+    communicate time:      1.10E-01 Seconds
+      Tot constr mem:      1.91E+03 MB
+        Constr flops:      5.87E+12
+  Rank before factor:          1025
+         Factor time:      2.61E+00 Seconds
+      Tot factor mem:      2.85E+03 MB
+        Factor flops:      1.71E+12
+   Rank after factor:          1025
+          Solve time:      5.18E-03 Seconds
+         Solve flops:      3.41E+09
+         C_mult time:      0.00E+00 Seconds
+        C_mult flops:      0.00E+00
+      C_extract time:      0.00E+00 Seconds
+     C_extract flops:      0.00E+00
+            Peak mem:      5.14E+01 MB
+
+ Ritz values (Real, Imag) and direct residuals
+ ---------------------------------------------
+               Col   1       Col   2       Col   3
+  Row   1:    3.35417D-05  -8.66190D-05   2.22268D-03
+  
+            (0.18306823443959488,-0.32440253882370235)
+  
+ _NDRV1
+ ====== 
+  
+  Size of the matrix is        26506
+  The number of processors is          128
+  The number of Ritz values requested is            1
+  The number of Arnoldi vectors generated (NCV) is            4
+  What portion of the spectrum: LM
+  The number of converged Ritz values is            1
+  The number of Implicit Arnoldi update iterations taken is            5
+  The number of OP*x is           12
+  The convergence criterion is    1.0000000000000000E-013
+  
+ Eigen Solve time:    8.9665880892425776E-002
+   3.3541713028069215E-005  -8.6618950238554756E-005   6621.2687286043729     
+ Postprocessing: 
+ NUMBER_MPI=         128
+ OMP_NUM_THREADS=           8
+ User-supplied kernel requiring reorder
+     
+ Hierarchical format......
+ 
+ Maxlevel_for_blocks:           9
+ N_leaf:          51
+ 
+ Constructing basis groups...
+ Finding neighbours time:   0.31696415413171053     
+ Hierarchical format finished
+     
+ Matrix construction......
+ 
+ SVD error threshold   1.0000000000000000E-004
+ 
+ constructing Leaf-blocks......
+ constructing level           1
+ time   5.7392659941688180      rankmax_of_level so far:           0         830           0           0           0           0           0           0           0           0
+ constructing level           2
+ time   3.1830498287454247      rankmax_of_level so far:           0         830         431           0           0           0           0           0           0           0
+ constructing level           3
+ time   1.0398285929113626      rankmax_of_level so far:           0         830         431         261           0           0           0           0           0           0
+ constructing level           4
+ time  0.88967342581599951      rankmax_of_level so far:           0         830         431         261         221           0           0           0           0           0
+ constructing level           5
+ time  0.37370201107114553      rankmax_of_level so far:           0         830         431         261         221         104           0           0           0           0
+ constructing level           6
+ time  0.23998608067631721      rankmax_of_level so far:           0         830         431         261         221         104          80           0           0           0
+ constructing level           7
+ time  0.10352115891873837      rankmax_of_level so far:           0         830         431         261         221         104          80          58           0           0
+ constructing level           8
+ time   5.9021175373345613E-002 rankmax_of_level so far:           0         830         431         261         221         104          80          58          42           0
+ constructing level           9
+ time   4.2880828958004713E-002 rankmax_of_level so far:           0         830         431         261         221         104          80          58          42          29
+ constructing level          10
+ time   4.5603150501847267E-003 rankmax_of_level so far:           0         830         431         261         221         104          80          58          42          29
+ rankmax_of_level:           0         833         431         261         235         157         123          90          53          39
+ 
+ Total construction time:   11.677838786039501      Seconds
+ Total entry eval time:   1.8700766703113914      Seconds
+ Total construction flops:      4.39E+12
+ time_tmp   0.0000000000000000     
+ 
+   1577.8381250000000      MB costed for butterfly forward blocks
+   21.442093750000005      MB costed for direct forward blocks
+ 
+ Matrix construction finished
+ BPACK_CheckError: fnorm: 1.0413553E+02 1.0413557E+02 acc:  9.45E-05 time:  1.83E-02
+           1 : Computing_nth_1_freq_2321000000.0000000
+    eigval:   (3.35417130280692149E-005,-8.66189502385547561E-005)
+    norm_1/norm_inf:    6621.2687286043729     
+    acceleration voltage:    1.1496414956260089E-004
+    max normal E:   11.197060097172445     
+    max normal E (GF):   4.8538487229823239     
+    int Rs|H_t|^2/2 and Rs:   3.3046195430953249E-013   1.2480784924896073E-002
+    power at port            1   1.1802885341243644E-006
+    power at port            2   1.1739705161882364E-006
+    power at port            3  -8.4917934741151607E-009
+    power at port            4  -8.7037106562238369E-009
+ -------------------------------program end-------------------------------------

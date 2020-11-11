@@ -1361,6 +1361,22 @@ contains
       return
    end subroutine ccurl
 
+   subroutine cccurl(a, b, c)
+      implicit none
+      complex(kind=8) a(3), b(3), c(3)
+      real(kind=8) ax, ay, az
+      complex(kind=8) bx, by, bz
+      complex(kind=8) cx, cy, cz
+      ax = a(1); ay = a(2); az = a(3)
+      bx = b(1); by = b(2); bz = b(3)
+
+      cx = ay*bz - by*az
+      cy = -ax*bz + bx*az
+      cz = ax*by - bx*ay
+      c(1) = cx; c(2) = cy; c(3) = cz
+      return
+   end subroutine cccurl
+
    real(kind=8) function norm_vector(vector, n)
       implicit none
       integer n
