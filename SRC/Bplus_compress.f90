@@ -3376,10 +3376,11 @@ contains
             if (option%RecLR_leaf == PS) then
                ! !!!!! CUR
 
-               ! rmaxc = min(blocks%M,blocks%N)
-               ! rmaxr = min(blocks%M,blocks%N)
-               rmaxc = blocks%N
-               rmaxr = blocks%M
+               rmaxc = min(option%rmax,blocks%N)
+               rmaxr = min(blocks%M,option%rmax)
+               ! rmaxc = blocks%N
+               ! rmaxr = blocks%M
+
 
                call LR_SeudoSkeleton(blocks, blocks%headm, blocks%headn, blocks%M, blocks%N, rmaxc, rmaxr, rank, option%tol_comp, option%tol_comp, msh, ker, stats, ptree, option, ptree%pgrp(pgno)%ctxt)
 
@@ -5539,34 +5540,16 @@ contains
          deallocate(submats(1)%cols)
          deallocate(submats(1)%dat)
 
+         allocate (MatrixSubselection(rmaxr, rmaxc))
+         MatrixSubselection = 0
+         do jj = 1, rmaxc
+            MatrixSubselection(:,jj)=matV_tmp(:,select_col(jj))
+         enddo   
+
+
          ! call element_Zmn_block_user(rmaxr, N, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)
          call copymatT(matV_tmp, matV, rmaxr, N)
          deallocate (matV_tmp)
-
-
-         allocate (MatrixSubselection(rmaxr, rmaxc))
-         MatrixSubselection = 0
-         do ii = 1, rmaxr
-            mrange(ii) = header_m + select_row(ii) - 1
-         enddo
-         do jj = 1, rmaxc
-            nrange(jj) = header_n + select_col(jj) - 1
-         enddo
-
-         submats(1)%nr = rmaxr
-         submats(1)%nc = rmaxc
-         allocate(submats(1)%rows(submats(1)%nr))
-         submats(1)%rows = mrange(1:submats(1)%nr)
-         allocate(submats(1)%cols(submats(1)%nc))
-         submats(1)%cols = nrange(1:submats(1)%nc)
-         allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
-         call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
-         MatrixSubselection = submats(1)%dat
-         deallocate(submats(1)%rows)
-         deallocate(submats(1)%cols)
-         deallocate(submats(1)%dat)
-
-         ! call element_Zmn_block_user(rmaxr, rmaxc, mrange, nrange, MatrixSubselection, msh, option, ker, 0, passflag, ptree, stats)
 
 
          allocate (jpiv(rmaxc))

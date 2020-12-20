@@ -47,7 +47,7 @@
 
 //------------------------------------------------------------------------------
 using namespace std;
-const int pi = 4.0*atan(1.0);
+const double pi = 4.0*atan(1.0);
 const _Complex double Im={0.0,1.0};
 
 

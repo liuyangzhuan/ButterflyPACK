@@ -275,11 +275,19 @@ contains
       implicit none
       type(basisgroup):: basis_group1(:), basis_group2(:)
       integer node1, node2, Maxgroup1, Maxgroup2, offset
+      integer Dimn
+
       if (node2 <= Maxgroup2 .and. node1 <= Maxgroup1) then
 
          basis_group2(node2)%head = basis_group1(node1)%head + offset
          basis_group2(node2)%tail = basis_group1(node1)%tail + offset
          basis_group2(node2)%pgno = basis_group1(node1)%pgno
+         basis_group2(node2)%radius = basis_group1(node1)%radius
+         if(allocated(basis_group1(node1)%center))then
+            Dimn = size(basis_group1(node1)%center, 1)
+            allocate(basis_group2(node2)%center(Dimn))
+            basis_group2(node2)%center = basis_group1(node1)%center
+         endif
 
          call copy_basis_group(basis_group1, node1*2, Maxgroup1, basis_group2, node2*2, Maxgroup2, offset)
          call copy_basis_group(basis_group1, node1*2 + 1, Maxgroup1, basis_group2, node2*2 + 1, Maxgroup2, offset)

@@ -548,32 +548,32 @@ if(myrank==master_rank){
 		vector<_Complex double> matU(M*rank_rand);
 		for (int i=0; i<M*rank_rand; i++)
 		matU[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matU.data(), M*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matU.data(), M*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		vector<_Complex double> matV(N*rank_rand);
 		for (int i=0; i<N*rank_rand; i++)
 		matV[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matV.data(), N*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matV.data(), N*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		quant_ptr_a=new C_QuantApp(M, N, rank_rand, 0, matU, matV);
 
 		matU.resize(N*rank_rand);
 		for (int i=0; i<N*rank_rand; i++)
 		matU[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matU.data(), N*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matU.data(), N*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		matV.resize(K*rank_rand);
 		for (int i=0; i<K*rank_rand; i++)
 		matV[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matV.data(), K*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matV.data(), K*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		quant_ptr_b=new C_QuantApp(N, K, rank_rand, 0, matU, matV);
 
 
 		matU.resize(K*rank_rand);
 		for (int i=0; i<K*rank_rand; i++)
 		matU[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matU.data(), K*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matU.data(), K*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		matV.resize(L*rank_rand);
 		for (int i=0; i<L*rank_rand; i++)
 		matV[i] = (_Complex double)rand() / RAND_MAX;
-		MPI_Bcast(matV.data(), L*rank_rand, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(matV.data(), L*rank_rand, MPI_DOUBLE_COMPLEX, 0, MPI_COMM_WORLD);
 		quant_ptr_c=new C_QuantApp(K, L, rank_rand, 0, matU, matV);
 
 	}
