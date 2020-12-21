@@ -587,6 +587,11 @@ contains
          option%near_para = val_d
          valid_opt = 1
       endif
+      if (trim(str) == 'knn_near_para') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%knn_near_para = val_d
+         valid_opt = 1
+      endif
 
       if (trim(str) == 'sample_para') then
          call c_f_pointer(val_Cptr, val_d)
