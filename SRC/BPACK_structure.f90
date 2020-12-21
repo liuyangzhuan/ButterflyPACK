@@ -1044,7 +1044,7 @@ contains
       else
          do ii = 1, 2
          do jj = 1, 2
-            if (near_or_far_user(group_m*2 + ii - 1, group_n*2 + jj - 1, msh, option, ker, knn_near_para) == 0) call append_nlist(ker, option, stats, msh, ptree, group_m*2 + ii - 1, group_n*2 + jj - 1, flag,Bidxs, Bidxe)
+            if (near_or_far_user(group_m*2 + ii - 1, group_n*2 + jj - 1, msh, option, ker, option%knn_near_para) == 0) call append_nlist(ker, option, stats, msh, ptree, group_m*2 + ii - 1, group_n*2 + jj - 1, flag,Bidxs, Bidxe)
          enddo
          enddo
       endif

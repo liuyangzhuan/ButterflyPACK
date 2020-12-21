@@ -452,6 +452,7 @@ contains
       option%ILU = 0
       option%Nbundle = 1
       option%near_para = SafeEps
+      option%knn_near_para = 20d0
       option%format = HODLR
       option%verbosity = 0
       option%scale_factor = 1d0
@@ -542,6 +543,8 @@ contains
                   read (strings1, *) option%Nbundle
                else if (trim(strings) == '--near_para') then
                   read (strings1, *) option%near_para
+               else if (trim(strings) == '--knn_near_para') then
+                  read (strings1, *) option%knn_near_para
                else if (trim(strings) == '--format') then
                   read (strings1, *) option%format
                else if (trim(strings) == '--verbosity') then
@@ -615,6 +618,7 @@ contains
       option1%ILU = option%ILU
       option1%Nbundle = option%Nbundle
       option1%near_para = option%near_para
+      option1%knn_near_para = option%knn_near_para
       option1%format = option%format
       option1%verbosity = option%verbosity
       option1%scale_factor = option%scale_factor
@@ -680,6 +684,7 @@ contains
          write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
          write (*, '(A18,Es14.7)') 'touch_para', option%touch_para
          write (*, '(A18,Es14.7)') 'near_para', option%near_para
+         write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
          write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
          write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
          write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer

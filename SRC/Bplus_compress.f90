@@ -5544,7 +5544,7 @@ contains
          MatrixSubselection = 0
          do jj = 1, rmaxc
             MatrixSubselection(:,jj)=matV_tmp(:,select_col(jj))
-         enddo   
+         enddo
 
 
          ! call element_Zmn_block_user(rmaxr, N, mrange, nrange, matV_tmp, msh, option, ker, 0, passflag, ptree, stats)

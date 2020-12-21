@@ -47,7 +47,6 @@ module BPACK_DEFS
     integer, parameter :: INDEX_Header = 4 ! number of integers in header of Butterfly_index_MPI
     integer, parameter :: vec_oversample = 5 ! number of extra vectors adding onto estimated rank in the randomized scheme
     integer, parameter:: msg_chunk = 100000 ! used to determine message tag and hence the massage size
-    real(kind=8), parameter::knn_near_para = 3.0d0 ! used to search in the tree to find knns
 
     !**** parameters for CEM
     real(kind=8), parameter :: cd = 299792458d0 ! free-space speed of light
@@ -376,6 +375,7 @@ module BPACK_DEFS
         integer xyzsort ! clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
         integer::RecLR_leaf ! bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
         real(kind=8):: near_para ! parameters used to determine whether two groups are nearfield or farfield pair
+        real(kind=8):: knn_near_para ! parameters used to determine whether two groups are nearfield or farfield pair, used for knn search
         real(kind=8):: scale_factor ! parameters used to scale matrix entries
         integer::rmax ! maximum rank truncation
         integer:: elem_extract ! 1: use user-defined element extraction 0: use user-defined formula
