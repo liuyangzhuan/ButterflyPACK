@@ -867,11 +867,11 @@ contains
       end select
 
       N_loc = msh%idxe - msh%idxs + 1
-      if (ptree%MyID == Main_ID) then
+      ! if (ptree%MyID == Main_ID) then
          do edge = 1, N
             Permutation(edge) = msh%new2old(edge)
          enddo
-      endif
+      ! endif
 
       !**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
@@ -882,6 +882,24 @@ contains
       ptree_Cptr = c_loc(ptree)
 
    end subroutine C_BPACK_Construct_Init
+
+
+
+!**** C interface of converting from new,local index to old, global index, the indexs start from 1
+   !newidx_loc: new, local index
+   !oldix: old, global index
+   !msh_Cptr: the structure containing points and ordering information (out)
+   subroutine C_BPACK_New2Old(msh_Cptr, newidx_loc, oldidx) bind(c, name="c_bpack_new2old")
+      implicit none
+      integer newidx_loc,oldidx
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+      oldidx = msh%new2old(msh%idxs + newidx_loc - 1)
+
+   end subroutine C_BPACK_New2Old
+
 
 !**** C interface of matrix construction via entry evaluation and using it for gram distance
    !N: matrix size (in)

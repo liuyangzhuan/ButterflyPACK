@@ -39,6 +39,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*ho_bf_for, F2Cptr*
         void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
 void c_bpack_createstats(F2Cptr*stats);
+void c_bpack_new2old(F2Cptr* msh, int* newidx_loc, int* oldidx);
 void c_bpack_printstats(F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_getstats(F2Cptr*stats, char const*nam, double*val_d);
 void c_bpack_createoption(F2Cptr*option);
