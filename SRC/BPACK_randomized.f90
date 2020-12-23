@@ -56,6 +56,8 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
 
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
+
       t1 = OMP_get_wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction......"
       select case (option%format)
