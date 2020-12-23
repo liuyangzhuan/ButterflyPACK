@@ -138,32 +138,32 @@ contains
 
    real(kind=8) function distance_geo(edgem, edgen, ker, msh, option, ptree, stats)
 
-      use BPACK_DEFS
-      implicit none
+   use BPACK_DEFS
+   implicit none
 
-      integer edgem, edgen
-      real(kind=8) dis
-      integer i, j
-      integer Dimn
-      type(mesh)::msh
-      type(kernelquant)::ker
-      type(Hoption)::option
-      type(proctree)::ptree
-      type(Hstat)::stats
+   integer edgem, edgen
+   real(kind=8) dis
+   integer i, j
+   integer Dimn
+   type(mesh)::msh
+   type(kernelquant)::ker
+   type(Hoption)::option
+   type(proctree)::ptree
+   type(Hstat)::stats
 
-      Dimn = 0
-      if (allocated(msh%xyz)) Dimn = size(msh%xyz, 1)
+   call assert(allocated(msh%xyz), 'xyz is not allocated in distance_geo')
+   Dimn = size(msh%xyz, 1)
 
-      dis = 0d0
-      do i = 1, Dimn
-         dis = dis + (msh%xyz(i, edgem) - msh%xyz(i, edgen))**2
-      enddo
+   dis = 0d0
+   do i = 1, Dimn
+      dis = dis + (msh%xyz(i, edgem) - msh%xyz(i, edgen))**2
+   enddo
 
-      distance_geo = dis
+   distance_geo = dis
 
-      return
+   return
 
-   end function distance_geo
+end function distance_geo
 
 !**** l2 gram distance^2 between element edgem and edgen is
 !     defined as: Re{Z_ii+Z_jj-Z_ij-Z_ji} for SPD, HPD, general symmetric real, and hermitian matrices
@@ -1218,7 +1218,7 @@ contains
 
       if (allocated(msh%xyz)) then
          stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
-         deallocate (msh%xyz)
+         ! deallocate (msh%xyz)
       endif
 
    end subroutine HSS_structuring
@@ -1777,7 +1777,7 @@ contains
 
       if (allocated(msh%xyz)) then
          stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
-         deallocate (msh%xyz)
+         ! deallocate (msh%xyz)
       endif
 
    end subroutine HODLR_structuring
@@ -1909,7 +1909,7 @@ contains
 
       if (allocated(msh%xyz)) then
          stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
-         deallocate (msh%xyz)
+         ! deallocate (msh%xyz)
       endif
 
       return

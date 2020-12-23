@@ -9,6 +9,14 @@ TMP_FILE=$PWD/tmp.txt
 lb="\b"
 rb="\b"
 
+major=$(grep "set(VERSION_MAJOR" ./CMakeLists.txt | sed 's/[^"]*"\([^"]*\)".*/\1/')
+minor=$(grep "set(VERSION_MINOR" ./CMakeLists.txt | sed 's/[^"]*"\([^"]*\)".*/\1/')
+bug=$(grep "set(VERSION_BugFix" ./CMakeLists.txt | sed 's/[^"]*"\([^"]*\)".*/\1/')
+sed -i -e "s/BPACK_MAJOR_VERSION.*/BPACK_MAJOR_VERSION = $major/" ./SRC/BPACK_defs.f90
+sed -i -e "s/BPACK_MINOR_VERSION.*/BPACK_MINOR_VERSION = $minor/" ./SRC/BPACK_defs.f90
+sed -i -e "s/BPACK_PATCH_VERSION.*/BPACK_PATCH_VERSION = $bug/" ./SRC/BPACK_defs.f90
+
+
 ######## The following takes care of windows to linux conversion
 declare -a StringArray=("*.*" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
 for val in ${StringArray[@]}; do

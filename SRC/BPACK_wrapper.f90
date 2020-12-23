@@ -824,7 +824,7 @@ contains
       if (option%nogeo == 0) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
-         allocate (msh%xyz(Dimn, 0:msh%Nunk))
+         allocate (msh%xyz(Dimn, 1:msh%Nunk))
          ii = 0
          do edge = 1, msh%Nunk
             msh%xyz(1:Dimn, edge) = Locations(ii + 1:ii + Dimn)
@@ -1042,7 +1042,7 @@ contains
       if (option%nogeo == 0) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
-         allocate (msh%xyz(Dimn, 0:msh%Nunk))
+         allocate (msh%xyz(Dimn, 1:msh%Nunk))
          ii = 0
          do edge = 1, msh%Nunk
             msh%xyz(1:Dimn, edge) = Locations(ii + 1:ii + Dimn)
@@ -1279,6 +1279,18 @@ contains
       do ii = 1 + M, N + M
          msh%new2old(ii) = -(ii - M)
       enddo
+      !**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
+      if (option%nogeo ==0) then
+         Dimn = size(mshr%xyz,1)
+         allocate(msh%xyz(1:Dimn,-N:M))
+         msh%xyz=0
+         do ii=1,M
+            msh%xyz(1:Dimn,ii) = mshr%xyz(1:Dimn,mshr%new2old(ii))
+         enddo
+         do ii=1,N
+            msh%xyz(:,-ii) = mshc%xyz(:,mshc%new2old(ii))
+         enddo
+      endif
 
       !**** construct a list of k-nearest neighbours for each point
       if (option%nogeo /= 3 .and. option%knn > 0) then
@@ -1380,6 +1392,7 @@ contains
       call c_f_pointer(msh_Cptr, msh)
       call c_f_pointer(bf_Cptr, blocks)
       call c_f_pointer(ker_Cptr, ker)
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
       stats%rankmax_of_level(0) = 0
@@ -1472,7 +1485,7 @@ contains
       call c_f_pointer(msh_Cptr, msh)
       call c_f_pointer(bf_Cptr, blocks)
       call c_f_pointer(ker_Cptr, ker)
-
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
       ! !**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmnBlock => C_FuncZmnBlock

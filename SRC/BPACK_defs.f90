@@ -24,8 +24,8 @@ module BPACK_DEFS
     INCLUDE 'mpif.h'
 
     integer, parameter:: BPACK_MAJOR_VERSION = 1
-    integer, parameter:: BPACK_MINOR_VERSION = 1
-    integer, parameter:: BPACK_PATCH_VERSION = 0
+    integer, parameter:: BPACK_MINOR_VERSION = 2
+    integer, parameter:: BPACK_PATCH_VERSION = 1
 
     !**** common parameters
 #ifdef PGI

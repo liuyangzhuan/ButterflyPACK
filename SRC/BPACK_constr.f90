@@ -278,7 +278,7 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       integer Maxlevel
-
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction......"
 
       select case (option%format)
