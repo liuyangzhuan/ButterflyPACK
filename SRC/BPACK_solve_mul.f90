@@ -153,14 +153,15 @@ contains
                   rd(j, 3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
                   rd(j, 3) = rd(j, 3)/dlapy2(rd(j, 1), rd(j, 2))
                enddo
-               call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
+               if (option_A%verbosity>=0) call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
 
                eigval(1:nconv) = d(1:nconv)
                eigvec(1:Nunk_loc, 1:nconv) = v(1:Nunk_loc, 1:nconv)
 
             end if
 
-            if (ptree_A%MyID == Main_ID) then
+            if (ptree_A%MyID == Main_ID .and. option_A%verbosity>=0) then
+               ! write(*,*)resid(1:nconv)
                if (info .eq. 1) then
                   print *, ' '
                   print *, ' Maximum number of iterations reached.'
@@ -244,12 +245,12 @@ contains
                   rd(j, 3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
                   rd(j, 3) = rd(j, 3)/dlapy2(rd(j, 1), rd(j, 2))
                enddo
-               call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
+               if (option_A%verbosity>=0) call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
                eigval(1:nconv) = d(1:nconv)
                eigvec(1:Nunk_loc, 1:nconv) = v(1:Nunk_loc, 1:nconv)
             end if
 
-            if (ptree_A%MyID == Main_ID) then
+            if (ptree_A%MyID == Main_ID .and. option_A%verbosity>=0) then
                if (info .eq. 1) then
                   print *, ' '
                   print *, ' Maximum number of iterations reached.'

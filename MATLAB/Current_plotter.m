@@ -19,7 +19,7 @@ threshold=1000;
 
 
 
-
+% 
 % noEobs=0;
 % noport=0;
 % noEn=0;
@@ -51,10 +51,10 @@ name='cavity_rec_17K_feko';
 % freqstr='_freq_1510000000.0000000';
 % freqstr='_freq_2327400000.0000000';
 % freqstr='_freq_2316700000.0000000';
-freqstr='_freq_2321000000.0000000';
-% freqstr='_freq_7495000000.0000000';
+% freqstr='_freq_2321000000.0000000';
+freqstr='_freq_7495000000.0000000';
 % freqstr='_freq_2141300000.0000000';
-
+% 
 
 
 % 
@@ -267,6 +267,50 @@ if(norm(CV,1)>threshold)
 
         axis equal
         shading interp
+        
+        
+        
+        
+        fid1 = fopen (['code_outputs/EigEn_GF_',num2str(i),freqstr,'.out'],'r');
+        X=xyz2(:,1);
+        Y=xyz2(:,2);
+        Z=xyz2(:,3);
+
+        CV=zeros(nnod2,1);
+        % color for each node
+        CV(1:nnod2)=fscanf(fid1,'%f',nnod2)';
+
+        ith=ith+1;
+        figure(ith);
+        colormap(map);
+        maxabs3 = max((abs(CV)));
+        CV = CV./maxabs2;
+        CV =20*log10(abs(CV));
+
+        clf
+        a = trisurf(ct2(1:count_pec,1:3),X,Y,Z,CV); %pause;
+
+        c = colorbar('location','EastOutside');
+        caxis([-dbdown 0]);
+        axis equal;
+        shading interp;
+        axis off;
+        grid off;
+        view(-120,30);    
+        title(['$|\mathbf{E}_n|_{GF}$ ',num2str(i),'th'],'interpreter','Latex')
+        set(gcf,'Position',[origin,1000,700]);
+        gca = get(gcf,'CurrentAxes');
+        set( gca, 'FontName','Times New Roman','fontsize',axisticksize);        
+
+        fname=sprintf('%s',name,'_currM_',num2str(i),'th',freqstr,'.jpg');
+        print ('-djpeg','-r300',fname)
+
+
+        fclose('all');
+
+        axis equal
+        shading interp
+        
      end   
     
     
