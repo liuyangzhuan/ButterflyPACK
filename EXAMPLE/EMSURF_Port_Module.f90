@@ -106,6 +106,7 @@ implicit none
 		integer:: Nport=0 ! number of ports
 		type(port), allocatable:: ports(:)   ! the open ports
 
+		integer:: postprocess = 1 ! whether postprocessing is carried out 
 		integer:: Nobs = 0 ! number of observation points (currently cannot locate on the walls or ports)
 		real(kind=8), allocatable:: obs_points(:,:) ! xyz coordinates, dimensions 3xNobs
 		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs
@@ -863,9 +864,9 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 		if(m>quant%Nunk-quant%Nunk_port)then
 			value=0d0
 		else
-			! Calulate the average normal E field between the center of the two patches (with an offset towards the inside) 
+			! Calulate the average normal E field between the center of the two patches (with an offset towards the inside)
 			value=0d0
-			do ii = 3,4 
+			do ii = 3,4
 			edge_m = m
 			patch = quant%info_unk(ii,edge_m)
 			nr_m(1:3)=quant%normal_of_patch(1:3,patch)
@@ -878,7 +879,7 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 			l3=sqrt(sum((quant%xyz(:,quant%node_of_patch(3,patch))-quant%xyz(:,quant%node_of_patch(2,patch)))**2d0))
 			ln= max(l1,max(l2,l3))
 
-			! if(abs(point(3)-0.14454)<1e-4 .or. abs(point(3)+0.14454)<1e-4)write(*,*)point(3),nr_m(3)				
+			! if(abs(point(3)-0.14454)<1e-4 .or. abs(point(3)+0.14454)<1e-4)write(*,*)point(3),nr_m(3)
 			point = point - nr_m*(ln)  ! use largest edge length as an offset inwards, to avoid singularity
 			call Field_EMSURF(point,field,n,quant)
 			value0 = dot_product(field,nr_m)
@@ -887,7 +888,7 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 			enddo
 			value = value/2
 		endif
-			
+
 	class default
 		write(*,*)"unexpected type"
 		stop
@@ -2517,7 +2518,7 @@ end subroutine EM_solve_SURF
 
 
 
-subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,eigval,Enormal_GF,ith)
+subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,eigval,Enormal_GF,ith,model)
     use BPACK_DEFS
 	use BPACK_Solve_Mul
 
@@ -2545,7 +2546,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	real(kind=8) ln, area,point(3), Ht2int, dx(3)
 	character(4096)::string
 	real(kind=8),allocatable::xn(:),yn(:),zn(:),wn(:), weight_at_patch(:),ExH_at_ports(:,:)
-	character(len=1024)  :: substring,substring1
+	character(len=1024)  :: substring,substring1,model
 
 	write(substring , *) nth
 	write(substring1 , *) quant%freq
@@ -2581,7 +2582,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	! write(*,*)abs(quant%obs_Efields(3,quant%Nobs/2))
 	! write(*,*)'z'
-	open(28,file='Eobs_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+	open(28,file=trim(adjustl(model))//'_Eobs_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
 	do ii=1,quant%Nobs
 		write(28,*) quant%obs_points(:,ii),abs(quant%obs_Efields(1,ii)), abs(quant%obs_Efields(2,ii)), abs(quant%obs_Efields(3,ii))
 	enddo
@@ -2653,7 +2654,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	if(ptree%MyID == Main_ID)then
     ! string='current'//chara//'.out'
-    open(30,file='EigEn_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+    open(30,file=trim(adjustl(model))//'_EigEn_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
     do node=1, quant%maxnode
         write (30,*) abs(Enormal_at_node(node))
     enddo
@@ -2665,7 +2666,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	!!!!! Compute the maximum normal electric fields using GF, but there is a delta offset at each patch to avoid singularity
 	n1 = OMP_get_wtime()
 	Enormal_at_patch=0
-	allocate(cnt_patch(quant%maxpatch))	
+	allocate(cnt_patch(quant%maxpatch))
 	cnt_patch=0
 	do edge=msh%idxs,msh%idxe
 		edge_n = msh%new2old(edge)
@@ -2673,7 +2674,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			do jj=3,4
 			patch = quant%info_unk(jj,edge_n)
 			if(patch/=-1)then
-				Enormal_at_patch(patch) = Enormal_at_patch(patch) + Enormal_GF(edge-msh%idxs+1)	
+				Enormal_at_patch(patch) = Enormal_at_patch(patch) + Enormal_GF(edge-msh%idxs+1)
 				cnt_patch(patch) = cnt_patch(patch)+1
 			endif
 			enddo
@@ -2722,7 +2723,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	if(ptree%MyID == Main_ID)then
     ! string='current'//chara//'.out'
-    open(30,file='EigEn1_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
+    open(30,file=trim(adjustl(model))//'_EigEn1_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out')
     do node=1, quant%maxnode
         write (30,*) abs(Enormal_at_node(node))
     enddo
@@ -2851,11 +2852,11 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 						an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
 						Et_at_patch(:,(patch-1)*quant%integral_points+j) = Et_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2*area)*eigvec(edge-msh%idxs+1)*impedence0
-						
+
 						! if(port_of_patch(patch)==2)then
 						! 	write(*,*)port_of_patch(patch),patch, abs(Et_at_patch(:,(patch-1)*quant%integral_points+j)),abs(Ht_at_patch(:,(patch-1)*quant%integral_points+j))
-						! endif	
-					
+						! endif
+
 					enddo
 				enddo
 			endif
@@ -2870,7 +2871,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			do ii=1,quant%maxpatch*quant%integral_points
 				patch = int((ii-1)/quant%integral_points)+1
 				port = port_of_patch(patch)
-				if(port>0)then				
+				if(port>0)then
 					call cccurl(Et_at_patch(:,ii),conjg(Ht_at_patch(:,ii)),cpoint)
 					cpoint = cpoint*weight_at_patch(ii)
 					point = dble(cpoint)/2d0
@@ -2886,7 +2887,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		deallocate(ExH_at_ports)
 		n2 = OMP_get_wtime()
 		! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
-	
+
 	endif
 
 

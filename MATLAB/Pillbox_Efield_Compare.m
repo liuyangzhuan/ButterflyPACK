@@ -1,7 +1,7 @@
 clear all
 clc
 close all
-E_GF = load('code_outputs/Eobs_1_freq_1145000000.0000000.out');
+E_GF = load('code_outputs/fort.667');
 E_LOC = load('code_outputs/fort.666');
 E_REF = besselj(0,E_GF(:,1)*2.4048/0.1);
 axisticksize = 40;
@@ -11,9 +11,9 @@ LineWidth = 2;
 
 
 figure(1)
-plot(E_GF(:,1),E_GF(:,6)/max(E_GF(:,6)),'r','LineWidth',LineWidth)
+plot(E_GF(:,1),E_GF(:,4)/max(E_GF(:,4)),'r','LineWidth',LineWidth)
 hold on
-plot(E_LOC(:,1),E_LOC(:,4)/max(E_GF(:,6)),'b','LineWidth',LineWidth)
+plot(E_LOC(:,1),E_LOC(:,4)/max(E_GF(:,4)),'b','LineWidth',LineWidth)
 hold on
 plot(E_GF(:,1),E_REF/max(E_REF),'k','LineWidth',LineWidth)
 hold on
