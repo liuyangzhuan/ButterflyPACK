@@ -174,6 +174,8 @@ PROGRAM ButterflyPACK_IE_3D
 							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
 						else if (trim(strings)=='--scaling')then
 							read(strings1,*)quant%scaling
+						else if (trim(strings)=='--norm_thresh')then
+							read(strings1,*)norm_thresh
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
@@ -182,7 +184,7 @@ PROGRAM ButterflyPACK_IE_3D
 						else if	(trim(strings)=='--si')then
 							read(strings1,*)quant%SI
 						else if	(trim(strings)=='--postprocess')then
-							read(strings1,*)quant%postprocess							
+							read(strings1,*)quant%postprocess
 						else if	(trim(strings)=='--nev')then
 							read(strings1,*)quant%nev
 						else if	(trim(strings)=='--tol_eig')then
@@ -411,18 +413,16 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** computation of the construction phase
     call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
-	call PrintStat(stats_A,ptree_A)
+
+	if(.not. (quant%SI==1 .and. abs(quant%shift)<1e-14))then 
+		call PrintStat(stats_A,ptree_A)
+	endif
 
 
 	!***********************************************************************
 	!**** construct compressed A - sigma I or  A - sigma real(A)
 	if(quant%SI==1)then
 		call CopyOptions(option_A,option_sh)
-		!**** register the user-defined function and type in ker
-		ker_sh%QuantApp => quant
-		ker_sh%FuncZmn => Zelem_EMSURF_Shifted
-		!**** initialize stats_sh and option
-		call InitStat(stats_sh)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
 		do ii=1,nmpi
@@ -430,22 +430,36 @@ PROGRAM ButterflyPACK_IE_3D
 		enddo
 		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
 		deallocate(groupmembers)
-		!**** initialization of the construction phase
-		t1 = OMP_get_wtime()
-		allocate(xyz(3,quant%Nunk))
-		do ii=1, quant%Nunk_int+quant%Nunk_port
-			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
-		enddo
-		do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
-			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
-		enddo
-		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
-		deallocate(Permutation) ! caller can use this permutation vector if needed
-		deallocate(xyz)
-		t2 = OMP_get_wtime()
-		!**** computation of the construction phase
-		call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
+
+		if(abs(quant%shift)<1e-14)then  ! if zero shift, no need to compress the shifted matrix
+			call CopyMesh(msh_A,msh_sh)
+			call CopyStat(stats_A,stats_sh)
+			call BPACK_copy(bmat_A,bmat_sh)
+		else
+			!**** initialize stats_sh and option
+			call InitStat(stats_sh)
+			!**** register the user-defined function and type in ker
+			ker_sh%QuantApp => quant
+			ker_sh%FuncZmn => Zelem_EMSURF_Shifted
+			!**** initialization of the construction phase
+			t1 = OMP_get_wtime()
+			allocate(xyz(3,quant%Nunk))
+			do ii=1, quant%Nunk_int+quant%Nunk_port
+				xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
+			enddo
+			do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
+				xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
+			enddo
+			allocate(Permutation(quant%Nunk))
+			call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
+			deallocate(Permutation) ! caller can use this permutation vector if needed
+			deallocate(xyz)
+			t2 = OMP_get_wtime()
+			!**** computation of the construction phase
+			call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
+		endif
+
+
 		!**** factorization phase
 		call BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
 		! !**** solve phase
@@ -641,7 +655,7 @@ PROGRAM ButterflyPACK_IE_3D
 					write(15,*)trim(adjustl(substring1)),abs(eigval(ii))
 					close(15)
 				endif
-				
+
 			endif
 		endif
 	enddo
