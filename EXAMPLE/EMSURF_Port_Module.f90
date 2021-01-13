@@ -106,7 +106,7 @@ implicit none
 		integer:: Nport=0 ! number of ports
 		type(port), allocatable:: ports(:)   ! the open ports
 
-		integer:: postprocess = 1 ! whether postprocessing is carried out 
+		integer:: postprocess = 1 ! whether postprocessing is carried out
 		integer:: Nobs = 0 ! number of observation points (currently cannot locate on the walls or ports)
 		real(kind=8), allocatable:: obs_points(:,:) ! xyz coordinates, dimensions 3xNobs
 		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs

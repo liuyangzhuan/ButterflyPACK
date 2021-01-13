@@ -21,7 +21,7 @@ module BPACK_Utilities
 
 contains
 
-   subroutine copy_HOBF(ho_bf_i, ho_bf_o)
+   subroutine HODLR_copy(ho_bf_i, ho_bf_o)
       use BPACK_DEFS
       use MISC_Utilities
       implicit none
@@ -49,18 +49,23 @@ contains
          ! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g'
          allocate (ho_bf_o%levels(level_c)%BP_inverse(ho_bf_o%levels(level_c)%N_block_inverse))
          ! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g1'
+         allocate (ho_bf_o%levels(level_c)%BP_inverse_update(ho_bf_o%levels(level_c)%N_block_forward))
+         allocate (ho_bf_o%levels(level_c)%BP_inverse_schur(ho_bf_o%levels(level_c)%N_block_inverse))
+
          do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
             call Bplus_copy(ho_bf_i%levels(level_c)%BP(ii), ho_bf_o%levels(level_c)%BP(ii))
+            call Bplus_copy(ho_bf_i%levels(level_c)%BP_inverse_update(ii), ho_bf_o%levels(level_c)%BP_inverse_update(ii))
          end do
          ! if(level_c/=ho_bf_o%Maxlevel+1)then
          do ii = 1, ho_bf_o%levels(level_c)%N_block_inverse
             ! write(*,*)ii,'6642'
             call Bplus_copy(ho_bf_i%levels(level_c)%BP_inverse(ii), ho_bf_o%levels(level_c)%BP_inverse(ii))
+            if (level_c < ho_bf_i%Maxlevel + 1)call Bplus_copy(ho_bf_i%levels(level_c)%BP_inverse_schur(ii), ho_bf_o%levels(level_c)%BP_inverse_schur(ii))
          end do
          ! end if
       end do
 
-   end subroutine copy_HOBF
+   end subroutine HODLR_copy
 
    recursive subroutine Hmat_delete_global_tree(blocks)
       implicit none
@@ -173,6 +178,27 @@ contains
          bmat%h_mat => null()
       endif
    end subroutine BPACK_delete
+
+
+   subroutine BPACK_copy(bmat_i,bmat_o)
+      use BPACK_DEFS
+      implicit none
+      type(Bmatrix)::bmat_i,bmat_o
+      if (associated(bmat_i%ho_bf)) then
+         if(.not. associated(bmat_o%ho_bf))allocate (bmat_o%ho_bf)
+         call HODLR_copy(bmat_i%ho_bf, bmat_o%ho_bf)
+      endif
+      if (associated(bmat_i%h_mat)) then
+         write(*,*)'H matrix copy not yet implemented'
+         stop
+      endif
+      if (associated(bmat_i%hss_bf)) then
+         write(*,*)'HSS-BF copy not yet implemented'
+         stop
+      endif
+   end subroutine BPACK_copy
+
+
 
    subroutine delete_kernelquant(ker)
       use BPACK_DEFS
@@ -295,6 +321,126 @@ contains
 
    end subroutine copy_basis_group
 
+
+   subroutine CopyMesh(msh_i,msh_o)
+      implicit none
+      type(mesh)msh_i,msh_o
+      msh_o%Nunk=msh_i%Nunk
+      msh_o%Dist_level=msh_i%Dist_level
+      msh_o%Maxgroup=msh_i%Maxgroup
+      msh_o%idxs=msh_i%idxs
+      msh_o%idxe=msh_i%idxe
+      if(allocated(msh_i%xyz))then
+         allocate(msh_o%xyz(size(msh_i%xyz,1),size(msh_i%xyz,2)))
+         msh_o%xyz=msh_i%xyz
+      endif
+      if(allocated(msh_i%new2old))then
+         allocate(msh_o%new2old(size(msh_i%new2old,1)))
+         msh_o%new2old=msh_i%new2old
+      endif
+      if(allocated(msh_i%old2new))then
+         allocate(msh_o%old2new(size(msh_i%old2new,1)))
+         msh_o%old2new=msh_i%old2new
+      endif
+      if(allocated(msh_i%nns))then
+         allocate(msh_o%nns(size(msh_i%nns,1),size(msh_i%nns,2)))
+         msh_o%nns=msh_i%nns
+      endif
+      if(allocated(msh_i%basis_group))then
+         allocate(msh_o%basis_group(msh_o%Maxgroup))
+         call copy_basis_group(msh_i%basis_group, 1, msh_i%Maxgroup, msh_o%basis_group, 1, msh_o%Maxgroup, 0)
+      endif
+   end subroutine CopyMesh
+
+
+   subroutine CopyStat(stats_i,stats_o)
+      implicit none
+      type(Hstat)stats_i,stats_o
+
+      stats_o%Time_random = stats_i%Time_random
+      stats_o%Time_Sblock = stats_i%Time_Sblock
+      stats_o%Time_Sol = stats_i%Time_Sol
+      stats_o%Time_C_Mult = stats_i%Time_C_Mult
+      stats_o%Time_C_Extract = stats_i%Time_C_Extract
+      stats_o%Time_Inv = stats_i%Time_Inv
+      stats_o%Time_RedistB = stats_i%Time_RedistB
+      stats_o%Time_RedistV = stats_i%Time_RedistV
+      stats_o%Time_SMW = stats_i%Time_SMW
+      stats_o%Time_PartialUpdate = stats_i%Time_PartialUpdate
+      stats_o%Time_Fill = stats_i%Time_Fill
+      stats_o%Time_Entry = stats_i%Time_Entry
+      stats_o%Time_Entry_Traverse = stats_i%Time_Entry_Traverse
+      stats_o%Time_Entry_BF = stats_i%Time_Entry_BF
+      stats_o%Time_Entry_Comm = stats_i%Time_Entry_Comm
+      stats_o%Mem_peak = stats_i%Mem_peak
+      stats_o%Mem_Sblock = stats_i%Mem_Sblock
+      stats_o%Mem_SMW = stats_i%Mem_SMW
+      stats_o%Mem_Direct_for = stats_i%Mem_Direct_for
+      stats_o%Mem_Direct_inv = stats_i%Mem_Direct_inv
+      stats_o%Mem_int_vec = stats_i%Mem_int_vec
+      stats_o%Mem_Comp_for = stats_i%Mem_Comp_for
+      stats_o%Mem_Fill = stats_i%Mem_Fill
+      stats_o%Mem_Factor = stats_i%Mem_Factor
+      stats_o%Flop_Fill = stats_i%Flop_Fill
+      stats_o%Flop_Factor = stats_i%Flop_Factor
+      stats_o%Flop_Sol = stats_i%Flop_Sol
+      stats_o%Flop_C_Mult = stats_i%Flop_C_Mult
+      stats_o%Flop_C_Extract = stats_i%Flop_C_Extract
+
+      stats_o%Time_Direct_LU = stats_i%Time_Direct_LU
+      stats_o%Time_Add_Multiply = stats_i%Time_Add_Multiply
+      stats_o%Time_Multiply = stats_i%Time_Multiply
+      stats_o%Time_XLUM = stats_i%Time_XLUM
+      stats_o%Time_Split = stats_i%Time_Split
+      stats_o%Time_Comm = stats_i%Time_Comm
+      stats_o%Time_Idle = stats_i%Time_Idle
+      stats_o%Time_Factor = stats_i%Time_Factor
+
+      if(allocated(stats_i%rankmax_of_level))then
+         allocate(stats_o%rankmax_of_level(size(stats_i%rankmax_of_level,1)))
+         stats_o%rankmax_of_level=stats_i%rankmax_of_level
+      endif
+      if(allocated(stats_i%rankmin_of_level))then
+         allocate(stats_o%rankmin_of_level(size(stats_i%rankmin_of_level,1)))
+         stats_o%rankmin_of_level=stats_i%rankmin_of_level
+      endif
+      if(allocated(stats_i%rankmax_of_level_global))then
+         allocate(stats_o%rankmax_of_level_global(size(stats_i%rankmax_of_level_global,1)))
+         stats_o%rankmax_of_level_global=stats_i%rankmax_of_level_global
+      endif
+      if(allocated(stats_i%rankmax_of_level_global_factor))then
+         allocate(stats_o%rankmax_of_level_global_factor(size(stats_i%rankmax_of_level_global_factor,1)))
+         stats_o%rankmax_of_level_global_factor=stats_i%rankmax_of_level_global_factor
+      endif
+      if(allocated(stats_i%Add_random_CNT))then
+         allocate(stats_o%Add_random_CNT(size(stats_i%Add_random_CNT,1)))
+         stats_o%Add_random_CNT=stats_i%Add_random_CNT
+      endif
+      if(allocated(stats_i%Mul_random_CNT))then
+         allocate(stats_o%Mul_random_CNT(size(stats_i%Mul_random_CNT,1)))
+         stats_o%Mul_random_CNT=stats_i%Mul_random_CNT
+      endif
+      if(allocated(stats_i%XLUM_random_CNT))then
+         allocate(stats_o%XLUM_random_CNT(size(stats_i%XLUM_random_CNT,1)))
+         stats_o%XLUM_random_CNT=stats_i%XLUM_random_CNT
+      endif
+      if(allocated(stats_i%Add_random_Time))then
+         allocate(stats_o%Add_random_Time(size(stats_i%Add_random_Time,1)))
+         stats_o%Add_random_Time=stats_i%Add_random_Time
+      endif
+      if(allocated(stats_i%Mul_random_Time))then
+         allocate(stats_o%Mul_random_Time(size(stats_i%Mul_random_Time,1)))
+         stats_o%Mul_random_Time=stats_i%Mul_random_Time
+      endif
+      if(allocated(stats_i%XLUM_random_Time))then
+         allocate(stats_o%XLUM_random_Time(size(stats_i%XLUM_random_Time,1)))
+         stats_o%XLUM_random_Time=stats_i%XLUM_random_Time
+      endif
+      if(allocated(stats_i%leafs_of_level))then
+         allocate(stats_o%leafs_of_level(size(stats_i%leafs_of_level,1)))
+         stats_o%leafs_of_level=stats_i%leafs_of_level
+      endif
+   end subroutine CopyStat
    subroutine InitStat(stats)
       implicit none
       type(Hstat)::stats
