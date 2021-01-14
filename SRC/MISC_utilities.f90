@@ -268,6 +268,95 @@ contains
 
    end subroutine LR_ReCompression
 
+
+   subroutine LR_add(chara,U1,V1,U2,V2,rank1,rank2,ranknew,matU,matV,M,N,SVD_tolerance,flops)
+      implicit none
+      character:: chara
+      integer rank,ranknew,M,N,rank1,rank2
+      DT::matU(M,rank1+rank2),matV(rank1+rank2,N)
+      DT::U1(M,rank1),V1(N,rank1),U2(M,rank2),V2(N,rank2)
+      integer ii,jj,i,j
+      DT :: QQ1(M, rank1+rank2), RR1(min(M,rank1+rank2), rank1+rank2), QQ2(N, rank1+rank2), RR2(min(N,rank1+rank2), rank1+rank2), UUsml(min(M,rank1+rank2),min(min(M,rank1+rank2), min(N,rank1+rank2))), VVsml(min(min(M,rank1+rank2), min(N,rank1+rank2)), min(N,rank1+rank2)), tau_Q(rank1+rank2), mattemp(min(M,rank1+rank2), min(N,rank1+rank2))
+      real(kind=8) :: signs, Singularsml(min(min(M,rank1+rank2), min(N,rank1+rank2))), SVD_tolerance, flop
+      real(kind=8),optional::flops
+
+
+      if (chara == '+') signs=1d0
+      if (chara == '-') signs=-1d0
+
+      if (present(flops)) flops = 0
+      rank=rank1+rank2
+      do ii=1,M
+          do jj=1,rank1
+              matU(ii,jj) = U1(ii,jj)
+          enddo
+      enddo
+      do ii=1,M
+          do jj=1,rank2
+              matU(ii,jj+rank1) = signs*U2(ii,jj)
+          enddo
+      enddo
+      do ii=1,rank1
+          do jj=1,N
+              matV(ii,jj) = V1(jj,ii)
+          enddo
+      enddo
+      do ii=1,rank2
+          do jj=1,N
+              matV(ii+rank1,jj) = V2(jj,ii)
+          enddo
+      enddo
+
+      ranknew = rank1+rank2
+
+
+      QQ1 = matU(1:M, 1:rank)
+      call geqrff90(QQ1, tau_Q, flop=flop)
+      if (present(flops)) flops = flops + flop
+
+      RR1 = 0d0
+      ! !$omp parallel do default(shared) private(i,j)
+      do j = 1, rank
+         do i = 1, min(j,M)
+            RR1(i, j) = QQ1(i, j)
+         enddo
+      enddo
+      ! !$omp end parallel do
+      call un_or_gqrf90(QQ1, tau_Q, M, min(M,rank), min(M,rank), flop=flop)
+      if (present(flops)) flops = flops + flop
+
+      call copymatT(matV(1:rank, 1:N), QQ2, rank, N)
+      call geqrff90(QQ2, tau_Q, flop=flop)
+      if (present(flops)) flops = flops + flop
+
+      RR2 = 0d0
+      ! !$omp parallel do default(shared) private(i,j)
+      do j = 1, rank
+         do i = 1, min(N,j)
+            RR2(i, j) = QQ2(i, j)
+         enddo
+      enddo
+      ! !$omp end parallel do
+      call un_or_gqrf90(QQ2, tau_Q, N, min(N,rank), min(N,rank), flop=flop)
+      if (present(flops)) flops = flops + flop
+
+      mattemp = 0
+      call gemmf90(RR1, min(M,rank), RR2, min(N,rank), mattemp, min(M,rank), 'N', 'T', min(M,rank), min(N,rank), rank, cone, czero, flop=flop)
+      if (present(flops)) flops = flops + flop
+      call SVD_Truncate(mattemp, min(M,rank), min(N,rank), min(min(M,rank), min(N,rank)), UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+      if (present(flops)) flops = flops + flop
+      call gemmf90(QQ1, M, UUsml, min(M,rank), matU, M, 'N', 'N', M, ranknew, min(M,rank), cone, czero, flop=flop)
+      if (present(flops)) flops = flops + flop
+      call gemmf90(VVsml, min(min(M,rank), min(N,rank)), QQ2, N, matV, rank, 'N', 'T', ranknew, N, min(N,rank), cone, czero, flop=flop)
+      if (present(flops)) flops = flops + flop
+
+      do jj=1,ranknew
+          matU(:,jj) = matU(:,jj)*Singularsml(jj)
+      enddo
+
+  end subroutine LR_add
+
+
    subroutine LR_FnormUp(matU, matV, M, N, ruv, rup, ldV, normUV, normUVupdate, tolerance, Flops)
 
 

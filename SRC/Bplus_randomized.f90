@@ -3249,11 +3249,11 @@ contains
    end subroutine BF_block_MVP_Sblock_Sml_dat
 
 
-! chara='m': block_1 x block_2
-! chara='a': block_o + block_1
-! chara='s': block_o - block_1
-! chara='+': block_o + block_1 x block_2
-! chara='-': block_o - block_1 x block_2
+! chara='m': block_o = block_1 x block_2
+! chara='a': block_o = block_o + block_1
+! chara='s': block_o = block_o - block_1
+! chara='+': block_o = block_o + block_1 x block_2
+! chara='-': block_o = block_o - block_1 x block_2
    subroutine BF_block_MVP_Add_Multiply_dat(h_mat, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, chara)
 
 

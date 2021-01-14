@@ -359,6 +359,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Comm:', rtemp
         call MPI_ALLREDUCE(stats%Time_Idle, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Idle:', rtemp
+        call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', rtemp
+
 
         call MPI_allreduce(MPI_IN_PLACE, stats%Add_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
         call MPI_allreduce(MPI_IN_PLACE, stats%Mul_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
@@ -1558,61 +1561,59 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
         level_blocks = block3%level
 
-        if (style(3) == 4) then   !!! modified by Yang Liu, hybrid butterfly-LR treatment
-            if ((style(1) /= 4 .or. style(2) /= 4)) then
-                T0 = OMP_get_wtime()
-                call Hmat_add_multiply_Hblock3(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
-                T1 = OMP_get_wtime()
-            else
-                T0 = OMP_get_wtime()
-                if (style(1) /= 4) then
-                    allocate (block1%sons(2, 2))
-                    call BF_split(block1, block1, ptree, stats, msh, option)
-                endif
-                if (style(2) /= 4) then
-                    allocate (block2%sons(2, 2))
-                    call BF_split(block2, block2, ptree, stats, msh, option)
-                endif
-                if (style(3) /= 4) then
-                    allocate (block3%sons(2, 2))
-                    call BF_split(block3, block3, ptree, stats, msh, option)
-                endif
-                T1 = OMP_get_wtime()
-                stats%Time_split = stats%Time_split + T1 - T0
+        if ((style(1) /= 4 .or. style(2) /= 4)) then
+            T0 = OMP_get_wtime()
+            call Hmat_add_multiply_Hblock3(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
+            T1 = OMP_get_wtime()
+        else if (style(3) == 4) then   !!! modified by Yang Liu, hybrid butterfly-LR treatment
+            T0 = OMP_get_wtime()
+            if (style(1) /= 4) then
+                allocate (block1%sons(2, 2))
+                call BF_split(block1, block1, ptree, stats, msh, option)
+            endif
+            if (style(2) /= 4) then
+                allocate (block2%sons(2, 2))
+                call BF_split(block2, block2, ptree, stats, msh, option)
+            endif
+            if (style(3) /= 4) then
+                allocate (block3%sons(2, 2))
+                call BF_split(block3, block3, ptree, stats, msh, option)
+            endif
+            T1 = OMP_get_wtime()
+            stats%Time_split = stats%Time_split + T1 - T0
 
-                block1_son => block1%sons(1, 1)
-                block2_son => block2%sons(1, 1)
-                block3_son => block3%sons(1, 1)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(1, 2)
-                block2_son => block2%sons(2, 1)
-                block3_son => block3%sons(1, 1)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(1, 1)
-                block2_son => block2%sons(1, 2)
-                block3_son => block3%sons(1, 2)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(1, 2)
-                block2_son => block2%sons(2, 2)
-                block3_son => block3%sons(1, 2)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(2, 1)
-                block2_son => block2%sons(1, 1)
-                block3_son => block3%sons(2, 1)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(2, 2)
-                block2_son => block2%sons(2, 1)
-                block3_son => block3%sons(2, 1)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(2, 1)
-                block2_son => block2%sons(1, 2)
-                block3_son => block3%sons(2, 2)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-                block1_son => block1%sons(2, 2)
-                block2_son => block2%sons(2, 2)
-                block3_son => block3%sons(2, 2)
-                call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-            end if
+            block1_son => block1%sons(1, 1)
+            block2_son => block2%sons(1, 1)
+            block3_son => block3%sons(1, 1)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(1, 2)
+            block2_son => block2%sons(2, 1)
+            block3_son => block3%sons(1, 1)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(1, 1)
+            block2_son => block2%sons(1, 2)
+            block3_son => block3%sons(1, 2)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(1, 2)
+            block2_son => block2%sons(2, 2)
+            block3_son => block3%sons(1, 2)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(2, 1)
+            block2_son => block2%sons(1, 1)
+            block3_son => block3%sons(2, 1)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(2, 2)
+            block2_son => block2%sons(2, 1)
+            block3_son => block3%sons(2, 1)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(2, 1)
+            block2_son => block2%sons(1, 2)
+            block3_son => block3%sons(2, 2)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
+            block1_son => block1%sons(2, 2)
+            block2_son => block2%sons(2, 2)
+            block3_son => block3%sons(2, 2)
+            call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
         elseif (style(3) == 1) then
             call Full_add_multiply(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
         elseif (style(3) == 2) then
@@ -1626,6 +1627,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             stats%rankmax_of_level_global_factor(block3%level)=max(stats%rankmax_of_level_global_factor(block3%level),block3%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
+            ! time_tmp = time_tmp + T1 - T0
             stats%Add_random_Time(level_blocks) = stats%Add_random_Time(level_blocks) + T1 - T0
             stats%Add_random_CNT(level_blocks) = stats%Add_random_CNT(level_blocks) + 1
 
@@ -1712,8 +1714,13 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             call Hmat_LXM(blocks1, blocks2, h_mat, option, stats, ptree, msh)
         else if (blocks_m%style == 2) then
             T0 = OMP_get_wtime()
-            rank0 = blocks_m%rankmax
-            call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
+            if(blocks_m%level_butterfly==0)then
+                rank = size(blocks_m%butterflyU%blocks(1)%matrix,2)
+                call Hmat_Lsolve(blocks_l, 'N', blocks_l%headm, rank, blocks_m%butterflyU%blocks(1)%matrix, blocks_l%M, ptree, stats)
+            else
+                rank0 = blocks_m%rankmax
+                call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
+            endif
             T1 = OMP_get_wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
@@ -1817,8 +1824,13 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             call Hmat_XUM(blocks1, blocks2, h_mat, option, stats, ptree, msh)
         else if (blocks_m%style == 2) then
             T0 = OMP_get_wtime()
-            rank0 = blocks_m%rankmax
-         call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
+            if(blocks_m%level_butterfly==0)then
+                rank = size(blocks_m%butterflyV%blocks(1)%matrix,2)
+                call Hmat_Usolve(blocks_u, 'T', blocks_u%headm, rank, blocks_m%butterflyV%blocks(1)%matrix, blocks_m%N, ptree, stats)
+            else
+                rank0 = blocks_m%rankmax
+                call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
+            endif
             T1 = OMP_get_wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
@@ -1856,7 +1868,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         type(proctree)::ptree
         type(mesh)::msh
 
-        integer group_m, group_n, mm, nn
+        integer group_m, group_n, mm, nn,rank
         integer level_blocks, level_butterfly
         character chara, charatmp
         real*8 T0, T1
@@ -1878,26 +1890,36 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         allocate (block_agent)
         call BF_Init_randomized(level_butterfly, rank0, blocks%row_group, blocks%col_group, blocks, block_agent, msh, ptree, option, 1)
 
-        ! block_agent%row_group = blocks%row_group
-        ! block_agent%col_group = blocks%col_group
-        ! block_agent%level = blocks%level
-        ! block_agent%style=2
-
-        ! block_agent%headm=blocks%headm
-        ! block_agent%M=blocks%M
-        ! block_agent%headn=blocks%headn
-        ! block_agent%N=blocks%N
-
-        ! block_agent%pgno=blocks%pgno
-        ! call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,0)
-        ! call ComputeParallelIndices(block_agent,block_agent%pgno,ptree,msh,1)        ! is this needed?
-
         h_mat%blocks_1 => block1
         h_mat%blocks_2 => block2
 
         T0 = OMP_get_wtime()
-      call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
+        if(level_butterfly==0)then ! use faster, deterministic schemes
+            allocate(block_agent%butterflyU%blocks(1))
+            allocate(block_agent%butterflyV%blocks(1))
+            if (block1%style == 2) then
+                rank = size(block1%butterflyU%blocks(1)%matrix,2)
+                allocate(block_agent%butterflyU%blocks(1)%matrix(block_agent%M_loc,rank))
+                block_agent%butterflyU%blocks(1)%matrix = block1%butterflyU%blocks(1)%matrix
+                allocate(block_agent%butterflyV%blocks(1)%matrix(block_agent%N_loc,rank))
+                block_agent%butterflyV%blocks(1)%matrix=0
+                call Hmat_block_MVP_dat(block2, 'T', block2%headm, block2%headn, rank, block1%butterflyV%blocks(1)%matrix, block1%N_loc, block_agent%butterflyV%blocks(1)%matrix, block_agent%N_loc, cone, ptree, stats)
+            elseif (block2%style == 2) then
+                rank = size(block2%butterflyV%blocks(1)%matrix,2)
+                allocate(block_agent%butterflyV%blocks(1)%matrix(block_agent%N_loc,rank))
+                block_agent%butterflyV%blocks(1)%matrix = block2%butterflyV%blocks(1)%matrix
+                allocate(block_agent%butterflyU%blocks(1)%matrix(block_agent%M_loc,rank))
+                block_agent%butterflyU%blocks(1)%matrix=0
+                call Hmat_block_MVP_dat(block1, 'N', block1%headm, block1%headn, rank, block2%butterflyU%blocks(1)%matrix, block2%M_loc, block_agent%butterflyU%blocks(1)%matrix, block_agent%M_loc, cone, ptree, stats)
+            else
+                write(*,*)'not supported style of block1 and block2 in Hmat_add_multiply_Hblock3'
+                stop
+            endif
+        else
+            call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
+        endif
         T1 = OMP_get_wtime()
+
         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
         stats%Time_Multiply = stats%Time_Multiply + T1 - T0
         stats%Mul_random_Time(blocks%level) = stats%Mul_random_Time(blocks%level) + T1 - T0
@@ -1923,9 +1945,11 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         type(matrixblock), target::blocks_1
         type(matrixblock), pointer::blocks_1_son, blocks_o_son
         character chara
-        real(kind=8) error
+        real(kind=8) error,flop
         real(kind=8) T0, T1
         integer rank0
+        integer rankmax,rankmax2,ranknew,i,j
+        DT,allocatable::matUnew(:,:),matVnew(:,:)
 
         if (blocks_o%style == 4) then
             T0 = OMP_get_wtime()
@@ -1960,12 +1984,54 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             T0 = OMP_get_wtime()
             h_mat%blocks_1 => blocks_1
             rank0 = blocks_o%rankmax
-            if (chara == '+') then
-            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='a')
-            elseif (chara == '-') then
-            call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='s')
-            endif
+
+
+            if(blocks_o%level_butterfly==0)then
+                ! if(.false.)then
+                    rankmax2 = size(blocks_1%butterflyU%blocks(1)%matrix,2)
+                    rankmax = blocks_o%rankmax+rankmax2
+                    allocate(matUnew(blocks_o%M,rankmax))
+                    matUnew=0
+                    allocate(matVnew(rankmax,blocks_o%N))
+                    matVnew=0
+                    call LR_add(chara,blocks_o%butterflyU%blocks(1)%matrix,blocks_o%butterflyV%blocks(1)%matrix,blocks_1%butterflyU%blocks(1)%matrix,blocks_1%butterflyV%blocks(1)%matrix,blocks_o%rankmax,rankmax2,ranknew,matUnew,matVnew,blocks_o%M,blocks_o%N,option%tol_rand,flops=flop)
+                    stats%Flop_Tmp = flop
+
+                    deallocate(blocks_o%butterflyU%blocks(1)%matrix)
+                    allocate(blocks_o%butterflyU%blocks(1)%matrix(blocks_o%M,ranknew))
+                    !!$omp parallel do default(shared) private(i,j)
+                    do j = 1, ranknew
+                        do i = 1, blocks_o%M
+                            blocks_o%ButterflyU%blocks(1)%matrix(i, j) = matUnew(i, j)
+                        enddo
+                     enddo
+                     !!$omp end parallel do
+                     deallocate(blocks_o%butterflyV%blocks(1)%matrix)
+                     allocate(blocks_o%butterflyV%blocks(1)%matrix(blocks_o%N,ranknew))
+                     !!$omp parallel do default(shared) private(i,j)
+                     do j = 1, ranknew
+                        do i = 1, blocks_o%N
+                            blocks_o%butterflyV%blocks(1)%matrix(i, j) = matVnew(j, i)
+                        enddo
+                     enddo
+                     !!$omp end parallel do
+                     deallocate(matUnew)
+                     deallocate(matVnew)
+                     blocks_o%rankmax = ranknew
+
+                else
+                    if (chara == '+') then
+                    call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='a')
+                    elseif (chara == '-') then
+                    call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='s')
+                    endif
+                endif
+
+
+
+
             T1 = OMP_get_wtime()
+            ! time_tmp = time_tmp + T1-T0
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
             stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T1 - T0
