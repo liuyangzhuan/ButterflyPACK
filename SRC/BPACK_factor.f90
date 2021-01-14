@@ -1561,7 +1561,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
         level_blocks = block3%level
 
-        if ((style(1) /= 4 .or. style(2) /= 4)) then
+        if ((style(1) ==2 .or. style(2) ==2)) then
             T0 = OMP_get_wtime()
             call Hmat_add_multiply_Hblock3(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
             T1 = OMP_get_wtime()
@@ -1932,6 +1932,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
     end subroutine Hmat_add_multiply_Hblock3
 
+
     recursive subroutine Hmat_BF_add(blocks_o, chara, blocks_1, h_mat, option, stats, ptree, msh)
         implicit none
 
@@ -1994,7 +1995,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     matUnew=0
                     allocate(matVnew(rankmax,blocks_o%N))
                     matVnew=0
-                    call LR_add(chara,blocks_o%butterflyU%blocks(1)%matrix,blocks_o%butterflyV%blocks(1)%matrix,blocks_1%butterflyU%blocks(1)%matrix,blocks_1%butterflyV%blocks(1)%matrix,blocks_o%rankmax,rankmax2,ranknew,matUnew,matVnew,blocks_o%M,blocks_o%N,option%tol_rand,flops=flop)
+                    call LR_Add(chara,blocks_o%butterflyU%blocks(1)%matrix,blocks_o%butterflyV%blocks(1)%matrix,blocks_1%butterflyU%blocks(1)%matrix,blocks_1%butterflyV%blocks(1)%matrix,blocks_o%rankmax,rankmax2,ranknew,matUnew,matVnew,blocks_o%M,blocks_o%N,option%tol_rand,flops=flop)
                     stats%Flop_Tmp = flop
 
                     deallocate(blocks_o%butterflyU%blocks(1)%matrix)
