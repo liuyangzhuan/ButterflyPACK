@@ -269,15 +269,15 @@ contains
    end subroutine LR_ReCompression
 
 
-   subroutine LR_add(chara,U1,V1,U2,V2,rank1,rank2,ranknew,matU,matV,M,N,SVD_tolerance,flops)
+   subroutine LR_Add(chara,U1,V1,U2,V2,rank1,rank2,ranknew,matU,matV,M,N,SVD_tolerance,flops)
       implicit none
       character:: chara
-      integer rank,ranknew,M,N,rank1,rank2
-      DT::matU(M,rank1+rank2),matV(rank1+rank2,N)
+      integer rank,ranknew,M,N,rank1,rank2,ranknew1,ranknew2
+      DT::matU(M,rank1+rank2),matU1(M,rank1+rank2),matV(rank1+rank2,N),matV1(rank1+rank2,N)
       DT::U1(M,rank1),V1(N,rank1),U2(M,rank2),V2(N,rank2)
       integer ii,jj,i,j
-      DT :: QQ1(M, rank1+rank2), RR1(min(M,rank1+rank2), rank1+rank2), QQ2(N, rank1+rank2), RR2(min(N,rank1+rank2), rank1+rank2), UUsml(min(M,rank1+rank2),min(min(M,rank1+rank2), min(N,rank1+rank2))), VVsml(min(min(M,rank1+rank2), min(N,rank1+rank2)), min(N,rank1+rank2)), tau_Q(rank1+rank2), mattemp(min(M,rank1+rank2), min(N,rank1+rank2))
-      real(kind=8) :: signs, Singularsml(min(min(M,rank1+rank2), min(N,rank1+rank2))), SVD_tolerance, flop
+      DT :: QQ1(M, rank1+rank2), RR1(min(M,rank1+rank2), rank1+rank2),QQ3(rank1+rank2,N), RR3(min(N,rank1+rank2),N), QQ2(N, rank1+rank2), RR2(min(N,rank1+rank2), rank1+rank2), UUsml(min(M,rank1+rank2),min(min(M,rank1+rank2), min(N,rank1+rank2))), VVsml(min(min(M,rank1+rank2), min(N,rank1+rank2)), min(N,rank1+rank2)), tau_Q(rank1+rank2), mattemp(min(M,rank1+rank2), min(N,rank1+rank2))
+      real(kind=8) :: error, signs, Singularsml(min(min(M,rank1+rank2), min(N,rank1+rank2))), SVD_tolerance, flop
       real(kind=8),optional::flops
 
 
@@ -310,6 +310,41 @@ contains
       ranknew = rank1+rank2
 
 
+!!!!!! ACA+SVD
+#if 1
+      call LR_Add_ACA(matU, matV, M, N, rank, ranknew, SVD_tolerance, SVD_tolerance,error,flops=flop)
+      if (present(flops)) flops = flops + flop
+#endif
+
+
+!!!!!! QR
+#if 0
+      QQ1 = matU(1:M, 1:rank)
+      call RRQR_LQ(QQ1, M, rank, min(M,rank), QQ1, RR1, SVD_tolerance, ranknew1, 'R', flops=flop)
+      if (present(flops)) flops = flops + flop
+
+      QQ3 = matV(1:rank, 1:N)
+      call RRQR_LQ(QQ3, rank, N, min(N,rank), QQ3, RR3, SVD_tolerance, ranknew2, 'L', flops=flop)
+      if (present(flops)) flops = flops + flop
+
+      if(ranknew1<=ranknew2)then
+          ranknew = ranknew1
+          matU(1:M, 1:ranknew1)=QQ1(1:M, 1:ranknew1)
+          matV1=matV
+          call gemmf90(RR1, min(M,rank), matV1, rank, matV, rank, 'N', 'N', ranknew1, N, rank, cone, czero, flop=flop)
+          if (present(flops)) flops = flops + flop
+      else
+          ranknew = ranknew2
+          matV(1:ranknew2, 1:N)=RR3(1:ranknew2,1:N)
+          matU1=matU
+          call gemmf90(matU1, M, QQ3, rank, matU, M, 'N', 'N', M, ranknew2, rank, cone, czero, flop=flop)
+          if (present(flops)) flops = flops + flop
+      endif
+#endif
+
+
+!!!!!! QR+SVD
+#if 0
       QQ1 = matU(1:M, 1:rank)
       call geqrff90(QQ1, tau_Q, flop=flop)
       if (present(flops)) flops = flops + flop
@@ -353,8 +388,347 @@ contains
       do jj=1,ranknew
           matU(:,jj) = matU(:,jj)*Singularsml(jj)
       enddo
+#endif
 
-  end subroutine LR_add
+  end subroutine LR_Add
+
+
+
+
+  subroutine LR_Add_ACA(matU, matV, rankmax_r, rankmax_c, rmax, rank, tolerance, SVD_tolerance,error,flops)
+
+
+      implicit none
+
+      integer i, j, ii, jj, indx, rank_1, rank_2
+      integer blocks, index_j, group_nn, rank_blocks
+      integer group_m, group_n, size_of_groupm, size_of_groupn
+      real(kind=8) norm_Z, norm_U, norm_V, tolerance, SVD_tolerance, dist
+      integer edgefine_m, edgefine_n, level_butterfly, level_blocks
+      integer edge_m, edge_n, header_m, header_n, Dimn, mn, Navr, itr
+      integer rank, ranknew, row, column, rankmax, rankmax_c, rankmax_r, rankmax_min, rmax, idxs_r, idxs_c, frow
+      DT value_Z, maxvalue
+      DT inner_U, inner_V, ctemp, value_UVs
+      real(kind=8) inner_UV, n1, n2, a, error, flop
+      integer, allocatable:: select_column(:), select_row(:)
+      DT::matU(rankmax_r, rmax), matV(rmax, rankmax_c),matU0(rankmax_r, rmax), matV0(rmax, rankmax_c)
+      DT::matr(1, rankmax_c), matc(rankmax_r, 1)
+      real(kind=8)::Singular(rmax)
+      DT, allocatable:: row_R(:), column_R(:), value_UV(:)
+      real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:), norm_UVavrbynorm_Z(:)
+      DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
+      real(kind=8), allocatable :: Singularsml(:)
+      real(kind=8),optional::flops
+
+      if (present(flops)) flops=0
+      matU0 = matU
+      matV0 = matV
+      frow=1
+
+
+      Navr = 1 !5 !10
+      itr = 1
+      allocate (norm_UVavrbynorm_Z(Navr))
+      norm_UVavrbynorm_Z = 0
+
+      n1 = OMP_get_wtime()
+
+      allocate (select_column(rankmax_c))
+      allocate (select_row(rankmax_r))
+      allocate (value_UV(max(rankmax_c, rankmax_r)))
+      value_UV = 0
+
+      rankmax_min = min(rmax,min(rankmax_r, rankmax_c))
+      norm_Z = 0
+      select_column = 0
+      select_row = 0
+
+      allocate (row_R(rankmax_c), column_R(rankmax_r))
+      allocate (norm_row_R(rankmax_c), norm_column_R(rankmax_r))
+      row_R = 0
+      column_R = 0
+      norm_row_R = 0
+      norm_column_R = 0
+
+      select_row(1) = frow
+
+      call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+
+      row_R = matr(1, :)
+      norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
+
+      select_column(1) = maxloc(norm_row_R, 1)
+      maxvalue = row_R(select_column(1))
+
+      if (abs(maxvalue) < SafeUnderflow) then
+
+         do ii = 1, 100
+            a = 0
+            call random_number(a)
+            select_row(1) = floor_safe(a*(rankmax_r - 1)) + 1
+
+            call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+            row_R = matr(1, :)
+            norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
+
+            select_column(1) = maxloc(norm_row_R, 1)
+            maxvalue = row_R(select_column(1))
+            if (abs(maxvalue) > SafeUnderflow) exit
+         end do
+         if (abs(maxvalue) < SafeUnderflow) then
+            rank = 1
+            matU(:, 1) = 0
+            matV(1, :) = 0
+            Singular(1) = 0
+
+            deallocate (select_column)
+            deallocate (select_row)
+            deallocate (value_UV)
+            deallocate (row_R, column_R)
+            deallocate (norm_row_R, norm_column_R)
+            deallocate (norm_UVavrbynorm_Z)
+            return
+         endif
+      end if
+
+      ! !$omp parallel do default(shared) private(j)
+      do j = 1, rankmax_c
+         row_R(j) = row_R(j)/maxvalue
+      enddo
+      ! !$omp end parallel do
+      ! !$omp parallel do default(shared) private(j)
+      do j = 1, rankmax_c
+         matV(1, j) = row_R(j)
+      enddo
+      ! !$omp end parallel do
+
+      call gemmf77('N', 'N', rankmax_r, 1, rmax, cone, matU0, rankmax_r, matV0(1,select_column(1)), rmax, czero, matc, rankmax_r)
+      column_R = matc(:, 1)
+      norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
+
+      norm_column_R(select_row(1)) = 0
+
+      ! !$omp parallel do default(shared) private(i)
+      do i = 1, rankmax_r
+         matU(i, 1) = column_R(i)
+      enddo
+      ! !$omp end parallel do
+
+      norm_U = norm_vector(column_R, rankmax_r)
+      norm_V = norm_vector(row_R, rankmax_c)
+      norm_Z = norm_Z + norm_U*norm_V
+      if (norm_Z > SafeUnderflow) then
+         norm_UVavrbynorm_Z(itr) = norm_U*norm_V/norm_Z
+      else
+         norm_UVavrbynorm_Z(itr) = 0
+      endif
+      itr = mod(itr, Navr) + 1
+
+      ! if(rankmax<2)write(*,*)'rankmax'
+      select_row(2) = maxloc(norm_column_R, 1)
+
+      rank = 1
+      ! write(*,*)column_R,row_R
+      ! write(*,*)norm_Z*ACA_tolerance_forward**2,norm_U*norm_V,'hehe',ACA_tolerance_forward
+      do while (tolerance**2 < (sum(norm_UVavrbynorm_Z)/min(Navr, rank)) .and. rank < rankmax_min)
+
+         call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(rank + 1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+         row_R = matr(1, :)
+         call gemmf77('N', 'N', 1, rankmax_c, rank, cone, matU(select_row(rank + 1), 1), rankmax_r, matV, rmax, czero, value_UV, 1)
+
+         row_R = row_R - value_UV(1:rankmax_c)
+         norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
+         if (present(flops)) flops = flops + rank*rankmax_c
+
+         do i = 1, rank
+            norm_row_R(select_column(i)) = 0
+         enddo
+
+         select_column(rank + 1) = maxloc(norm_row_R, 1)
+         maxvalue = row_R(select_column(rank + 1))
+
+         if (abs(maxvalue) < SafeUnderflow) then
+            ! write(*,*)'warning: zero pivot ',maxvalue,' in ACA, exiting with residual', sqrt((sum(norm_UVavrbynorm_Z)/Navr))
+            exit
+            row_R = 0
+         else
+            do j = 1, rankmax_c
+               row_R(j) = row_R(j)/maxvalue
+            enddo
+         endif
+         ! !$omp parallel do default(shared) private(j)
+
+         ! !$omp end parallel do
+         ! !$omp parallel do default(shared) private(j)
+         do j = 1, rankmax_c
+            matV(rank + 1, j) = row_R(j)
+         enddo
+         ! !$omp end parallel do
+
+
+         call gemmf77('N', 'N', rankmax_r, 1, rmax, cone, matU0, rankmax_r, matV0(1,select_column(rank+1)), rmax, czero, matc, rankmax_r)
+         column_R = matc(:, 1)
+         call gemmf77('N', 'N', rankmax_r, 1, rank, cone, matU, rankmax_r, matV(1, select_column(rank + 1)), rmax, czero, value_UV, rankmax_r)
+         column_R = column_R - value_UV(1:rankmax_r)
+         norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
+         if (present(flops)) flops = flops + rank*rankmax_r
+
+         do i = 1, rank + 1
+            norm_column_R(select_row(i)) = 0
+         enddo
+
+         ! !$omp parallel do default(shared) private(i)
+         do i = 1, rankmax_r
+            matU(i, rank + 1) = column_R(i)
+         enddo
+         ! !$omp end parallel do
+
+         norm_U = norm_vector(column_R, rankmax_r)
+         norm_V = norm_vector(row_R, rankmax_c)
+
+         inner_UV = 0
+         !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+         do j = 1, rank
+            inner_U = 0
+            inner_V = 0
+            ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
+            do i = 1, rankmax_r
+               ctemp = matU(i, rank + 1)*conjg(cmplx(matU(i, j), kind=8))
+               inner_U = inner_U + ctemp
+            enddo
+            ! !$omp end parallel do
+            ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
+            do i = 1, rankmax_c
+               ctemp = matV(rank + 1, i)*conjg(cmplx(matV(j, i), kind=8))
+               inner_V = inner_V + ctemp
+            enddo
+            ! !$omp end parallel do
+            inner_UV = inner_UV + 2*dble(inner_U*inner_V)
+         enddo
+         !$omp end parallel do
+
+         norm_Z = norm_Z + inner_UV + norm_U*norm_V
+
+         ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'
+         ! if(ieee_is_nan(sqrt(norm_Z)))then
+         ! write(*,*)inner_UV,norm_U,norm_V,maxvalue
+         ! stop
+         ! endif
+
+         if (norm_Z > SafeUnderflow) then
+            norm_UVavrbynorm_Z(itr) = norm_U*norm_V/norm_Z
+         else
+            norm_UVavrbynorm_Z(itr) = 0
+         endif
+         itr = mod(itr, Navr) + 1
+
+         if (present(flops)) flops = flops +  rank*rankmax_c + rank*rankmax_r
+
+         rank = rank + 1
+         if (rank > rmax) then
+            ! write(*,*)'increase rmax',rank,rmax
+            ! stop
+            exit
+         end if
+         if (rank < rankmax_min) then
+            select_row(rank + 1) = maxloc(norm_column_R, 1)
+         endif
+
+         if (norm_Z < 0) exit
+
+         ! write(*,*)sqrt((sum(norm_UVavrbynorm_Z)/Navr)),sqrt(norm_U*norm_V),sqrt(norm_Z),rank,rankmax_min,tolerance**2<(sum(norm_UVavrbynorm_Z)/Navr)
+
+      enddo
+      ! write(*,*)sqrt((sum(norm_UVavrbynorm_Z)/Navr)),sqrt(norm_U*norm_V),sqrt(norm_Z),rank,rankmax_min,tolerance**2<(sum(norm_UVavrbynorm_Z)/Navr)
+
+      error = sqrt((sum(norm_UVavrbynorm_Z)/Navr))
+
+      ! write(*,*)select_row(1:rank),select_column(1:rank)
+
+      deallocate (row_R, column_R)
+      deallocate (norm_row_R, norm_column_R)
+      deallocate (norm_UVavrbynorm_Z)
+
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+
+
+!   ! ACA followed by SVD
+
+!         allocate (QQ1(rankmax_r, rank))
+!         QQ1 = matU(1:rankmax_r, 1:rank)
+!         ! call copymatN(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
+!         allocate (tau_Q(rank))
+!         call geqrff90(QQ1, tau_Q, flop=flop)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+
+!         allocate (RR1(rank, rank))
+!         RR1 = 0d0
+!         ! !$omp parallel do default(shared) private(i,j)
+!         do j = 1, rank
+!            do i = 1, j
+!               RR1(i, j) = QQ1(i, j)
+!            enddo
+!         enddo
+!         ! !$omp end parallel do
+!         call un_or_gqrf90(QQ1, tau_Q, rankmax_r, rank, rank, flop=flop)
+!         deallocate (tau_Q)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+
+!         allocate (QQ2(rankmax_c, rank))
+!         call copymatT(matV(1:rank, 1:rankmax_c), QQ2, rank, rankmax_c)
+!         allocate (tau_Q(rank))
+!         call geqrff90(QQ2, tau_Q, flop=flop)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+
+!         allocate (RR2(rank, rank))
+!         RR2 = 0d0
+!         ! !$omp parallel do default(shared) private(i,j)
+!         do j = 1, rank
+!            do i = 1, j
+!               RR2(i, j) = QQ2(i, j)
+!            enddo
+!         enddo
+!         ! !$omp end parallel do
+!         call un_or_gqrf90(QQ2, tau_Q, rankmax_c, rank, rank, flop=flop)
+!         deallocate (tau_Q)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+
+!         allocate (mattemp(rank, rank))
+!         mattemp = 0
+!         call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'T', rank, rank, rank, cone, czero, flop=flop)
+!         ! call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+!         allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
+!         call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+!         ! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
+!         call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, cone, czero, flop=flop)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+!         ! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax)
+!         call gemmf90(VVsml, rank, QQ2, rankmax_c, matV, rmax, 'N', 'T', ranknew, rankmax_c, rank, cone, czero, flop=flop)
+!         stats%Flop_Fill = stats%Flop_Fill + flop
+
+!         rank = ranknew
+!         Singular(1:ranknew) = Singularsml(1:ranknew)
+
+!         do jj=1,ranknew
+!             matU(:,jj) = matU(:,jj)*Singularsml(jj)
+!         enddo
+
+!         deallocate (mattemp, RR1, QQ1, UUsml, VVsml, Singularsml)
+!         deallocate (QQ2, RR2)
+
+
+      deallocate (select_column)
+      deallocate (select_row)
+      deallocate (value_UV)
+
+      return
+
+   end subroutine LR_Add_ACA
+
 
 
    subroutine LR_FnormUp(matU, matV, M, N, ruv, rup, ldV, normUV, normUVupdate, tolerance, Flops)
