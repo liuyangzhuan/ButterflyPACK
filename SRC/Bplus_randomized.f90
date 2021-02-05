@@ -905,7 +905,7 @@ contains
          ! n1 = OMP_get_wtime()
          call BF_block_MVP_partial(blocks, 'N', num_vect_sub, RandVectIn, BFvec1, level - 1, ptree, stats)
          ! n2 = OMP_get_wtime()
-         call BF_all2all_matvec(blocks, BFvec1%vec(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level - 1, 'R', 'C')
+         call BF_all2all_vec_n_ker(blocks, BFvec1%vec(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level - 1, 'R', 'C', 0)
          ! time_halfbuttermul = time_halfbuttermul + n2-n1
       endif
 
@@ -1037,7 +1037,7 @@ contains
             allocate (RandVectTmp(blocks%N_loc, 1))
             RandVectTmp = 0
             call BF_block_MVP_partial(blocks, 'N', 1, RandVectTmp, BFvec1, level - 1, ptree, stats)
-            call BF_all2all_matvec(blocks, BFvec1%vec(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level - 1, 'R', 'C')
+            call BF_all2all_vec_n_ker(blocks, BFvec1%vec(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level - 1, 'R', 'C', 0)
             deallocate (RandVectTmp)
             ! time_halfbuttermul = time_halfbuttermul + n2-n1
          endif

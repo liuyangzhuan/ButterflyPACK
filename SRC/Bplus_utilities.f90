@@ -909,6 +909,76 @@ contains
 
    end subroutine BF_copy
 
+
+   subroutine BF_delete_ker_onelevel(ker_o)
+
+      implicit none
+      type(butterfly_kerl)::ker_o
+
+      integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m
+      integer level, blocks, edge, patch, node, group, level_c
+      integer::block_num, block_num_new, num_blocks, level_butterfly
+      character::trans
+
+      if(ker_o%nr>0 .and. ker_o%nc>0 .and. allocated(ker_o%blocks))then
+         do ii = 1, ker_o%nr
+            do jj = 1, ker_o%nc
+               if(associated(ker_o%blocks(ii, jj)%matrix))then
+                  deallocate(ker_o%blocks(ii, jj)%matrix)
+                  ker_o%blocks(ii, jj)%matrix => null()
+               endif
+            enddo
+         enddo
+         if(allocated(ker_o%blocks))deallocate(ker_o%blocks)
+      endif
+   end subroutine BF_delete_ker_onelevel
+
+
+   subroutine BF_copy_ker_onelevel(ker_i, ker_o)
+
+      implicit none
+      type(butterfly_kerl)::ker_i, ker_o
+
+      integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m
+      integer level, blocks, edge, patch, node, group, level_c
+      integer::block_num, block_num_new, num_blocks, level_butterfly
+      character::trans
+
+      if(ker_o%nr>0 .and. ker_o%nc>0 .and. allocated(ker_o%blocks))then
+         do ii = 1, ker_o%nr
+            do jj = 1, ker_o%nc
+               if(associated(ker_o%blocks(ii, jj)%matrix))then
+                  deallocate(ker_o%blocks(ii, jj)%matrix)
+                  ker_o%blocks(ii, jj)%matrix => null()
+               endif
+            enddo
+         enddo
+         if(allocated(ker_o%blocks))deallocate(ker_o%blocks)
+      endif
+
+      ker_o%num_row = ker_i%num_row
+      ker_o%num_col = ker_i%num_col
+      ker_o%nc = ker_i%nc
+      ker_o%nr = ker_i%nr
+      ker_o%idx_c = ker_i%idx_c
+      ker_o%idx_r = ker_i%idx_r
+      ker_o%inc_c = ker_i%inc_c
+      ker_o%inc_r = ker_i%inc_r
+      if(ker_o%nr>0 .and. ker_o%nc>0)then
+         allocate (ker_o%blocks(ker_o%nr, ker_o%nc))
+         do ii = 1, ker_o%nr
+            do jj = 1, ker_o%nc
+               nn = size(ker_i%blocks(ii, jj)%matrix, 2)
+               rank = size(ker_i%blocks(ii, jj)%matrix, 1)
+               allocate (ker_o%blocks(ii, jj)%matrix(rank, nn))
+               ker_o%blocks(ii, jj)%matrix = ker_i%blocks(ii, jj)%matrix
+            enddo
+         enddo
+      endif
+
+   end subroutine BF_copy_ker_onelevel
+
+
    subroutine BF_copy_delete(block_i, block_o, memory)
 
 
@@ -3385,12 +3455,14 @@ contains
 
    end subroutine BF_all2all_extraction
 
-   subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
+
+   !***** switching the matvecs/temporary buffer/kernels from row/col distributions to col/row distributions, kerflag=1: kernels, kerflag=0: matvecs and buffer
+   subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new, kerflag)
 
 
       implicit none
       integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
-      integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
+      integer group_m, group_n, mm, nn, index_i,index_i0, index_i_loc_k, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
       integer level, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -3422,7 +3494,7 @@ contains
       logical all2all
       integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
-      integer::dist
+      integer::dist, kerflag
 
       n1 = OMP_get_wtime()
 
@@ -3433,12 +3505,30 @@ contains
       tag = blocks%pgno+level*10
 
       ! mode_new and level_new determine the block range in the new mode
-      if (mode_new == 'R') then
-         level_new = max(level - 1, 0)
-      elseif (mode_new == 'C') then
-         level_new = min(level + 1, level_butterfly + 1)
+      if(kerflag==0)then
+         if (mode_new == 'R') then
+            level_new = max(level - 1, 0)
+         elseif (mode_new == 'C') then
+            level_new = min(level + 1, level_butterfly + 1)
+         endif
+      else
+         level_new=level
       endif
+
       call GetLocalBlockRange(ptree, blocks%pgno, level_new, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, mode_new)
+
+      if(kerflag==1)then
+         if (mode_new == 'R') then
+            idx_c = idx_c*2 - 1
+            inc_c = inc_c
+            nc = nc*2
+         elseif (mode_new == 'C') then
+            idx_r = idx_r*2 - 1
+            inc_r = inc_r
+            nr = nr*2
+         endif
+      endif
+
 
       ! allocation of communication quantities
       do ii = 1, nproc
@@ -3461,7 +3551,17 @@ contains
          do jj = 1, nc
             index_i = (ii - 1)*inc_r + idx_r
             index_j = (jj - 1)*inc_c + idx_c
-            call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i, index_j, mode, pgno_sub)
+            index_i0 = index_i
+            index_j0 = index_j
+            if(kerflag==1)then
+            if (mode == 'R') then
+               index_j0 = floor_safe((index_j - 1)/2d0) + 1
+            endif
+            if (mode == 'C') then
+               index_i0 = floor_safe((index_i - 1)/2d0) + 1
+            endif
+            endif
+            call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i0, index_j0, mode, pgno_sub)
             pid = ptree%pgrp(pgno_sub)%head
             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
             if (recvquant(pp)%active == 0) then
@@ -3476,7 +3576,17 @@ contains
          do jj = 1, kerls%nc
             index_i = (ii - 1)*kerls%inc_r + kerls%idx_r
             index_j = (jj - 1)*kerls%inc_c + kerls%idx_c
-            call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+            index_i0 = index_i
+            index_j0 = index_j
+            if(kerflag==1)then
+            if (mode_new == 'R') then
+               index_j0 = floor_safe((index_j - 1)/2d0) + 1
+            endif
+            if (mode_new == 'C') then
+               index_i0 = floor_safe((index_i - 1)/2d0) + 1
+            endif
+            endif
+            call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i0, index_j0, mode_new, pgno_sub)
             pid = ptree%pgrp(pgno_sub)%head
             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
             if (sendquant(pp)%active == 0) then
@@ -3524,7 +3634,17 @@ contains
       do jj = 1, kerls%nc
          index_i = (ii - 1)*kerls%inc_r + kerls%idx_r
          index_j = (jj - 1)*kerls%inc_c + kerls%idx_c
-         call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+         index_i0 = index_i
+         index_j0 = index_j
+         if(kerflag==1)then
+            if (mode_new == 'R') then
+               index_j0 = floor_safe((index_j - 1)/2d0) + 1
+            endif
+            if (mode_new == 'C') then
+               index_i0 = floor_safe((index_i - 1)/2d0) + 1
+            endif
+         endif
+         call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i0, index_j0, mode_new, pgno_sub)
          pid = ptree%pgrp(pgno_sub)%head
 
          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
@@ -3628,11 +3748,11 @@ contains
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 
-   end subroutine BF_all2all_matvec
+   end subroutine BF_all2all_vec_n_ker
 
 
 ! !*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
-!    subroutine BF_all2all_matvec(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
+!    subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
 
 
 !       implicit none
@@ -3877,7 +3997,7 @@ contains
 !       ! n2 = OMP_get_wtime()
 !       ! time_tmp = time_tmp + n2 - n1
 
-!    end subroutine BF_all2all_matvec
+!    end subroutine BF_all2all_vec_n_ker
 
 !*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
@@ -6374,9 +6494,9 @@ contains
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
             endif
 
             n5 = OMP_get_wtime()
@@ -6786,9 +6906,9 @@ contains
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
             endif
 
             n5 = OMP_get_wtime()
@@ -7349,9 +7469,9 @@ contains
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
             endif
 
             n5 = OMP_get_wtime()
@@ -7792,9 +7912,9 @@ contains
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
             else
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
             endif
 
             n5 = OMP_get_wtime()
@@ -8625,9 +8745,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
          time_tmp1 = time_tmp1 + n6-n5
 
          if (level_half + 1 /= 0) then
-            call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
+            call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
          else
-            call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C')
+            call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
          endif
 
          n5 = OMP_get_wtime()
@@ -9757,9 +9877,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
          time_tmp1 = time_tmp1 + n6-n5
 
          if (level_half /= level_butterfly + 1) then
-            call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
+            call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
          else
-            call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R')
+            call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
          endif
 
          n5 = OMP_get_wtime()
@@ -11292,7 +11412,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       allocate (BFvec1%vec(level_half + 1:level_butterfly + 2))
       do level = level_half, level_butterfly + 1
          if (level == level_half) then
-            call GetLocalBlockRange(ptree, blocks%pgno, level_half + 1, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C') ! this is the same as the target block range used in BF_all2all_matvec
+            call GetLocalBlockRange(ptree, blocks%pgno, level_half + 1, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C') ! this is the same as the target block range used in BF_all2all_vec_n_ker
             idx_r = idx_r0
             nr = nr0
             inc_r = inc_r0
@@ -12825,7 +12945,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
             call assert(level_end<=level_half + 1,'level_end can at most one more level over level_half')
             if(level_half + 1==level_end)then
-               call BF_all2all_matvec(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
                level = level_end
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
                if (level == 0) then
@@ -13035,7 +13155,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             call assert(level_end>=level_half,'level_end can be at most level_half')
             if(level_half ==level_end)then
                level = level_half
-               call BF_all2all_matvec(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R')
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
                if (level == level_butterfly + 1) then
                elseif (level == 0) then

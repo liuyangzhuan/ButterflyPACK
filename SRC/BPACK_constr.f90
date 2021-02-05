@@ -534,7 +534,7 @@ contains
                   endif
 
                   ! if(mod(ii,2)==1)then
-                  call Bplus_compress_N15(ho_bf1%levels(level_c)%BP(ii), option, rtemp, stats, msh, ker, ptree)
+                  call Bplus_compress(ho_bf1%levels(level_c)%BP(ii), option, rtemp, stats, msh, ker, ptree)
                   ! else
                   ! call BF_delete(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),1)
                   ! call BF_copy('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
@@ -673,7 +673,7 @@ contains
       allocate (stats%rankmax_of_level_global(0:hss_bf1%Maxlevel))
       stats%rankmax_of_level_global = 0
 
-      call Bplus_compress_N15(hss_bf1%BP, option, rtemp, stats, msh, ker, ptree)
+      call Bplus_compress(hss_bf1%BP, option, rtemp, stats, msh, ker, ptree)
       stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
 
       passflag = 0
