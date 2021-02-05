@@ -563,7 +563,7 @@ contains
                      mm=msh%basis_group(groupm_start + idx_r + i -2)%tail - msh%basis_group(groupm_start + idx_r + i -2)%head+1
                      allocate(block_rand%ButterflyU%blocks(i)%matrix(mm,1))
                      block_rand%ButterflyU%blocks(i)%matrix=0
-                     if(block_rand%row_group==25)write(*,*)i,nr,ptree%MyID,mm,'dantang',block_rand%level_butterfly,block_rand%M,block_rand%M_loc
+                     ! if(block_rand%row_group==25)write(*,*)i,nr,ptree%MyID,mm,'dantang',block_rand%level_butterfly,block_rand%M,block_rand%M_loc
                   enddo
                endif
             else
