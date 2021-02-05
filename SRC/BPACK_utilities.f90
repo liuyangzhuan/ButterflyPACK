@@ -663,6 +663,8 @@ contains
                   read (strings1, *) option%LRlevel
                else if (trim(strings) == '--errfillfull') then
                   read (strings1, *) option%ErrFillFull
+               else if (trim(strings) == '--forwardN15flag') then
+                  read (strings1, *) option%forwardN15flag
                else if (trim(strings) == '--baca_batch') then
                   read (strings1, *) option%BACA_Batch
                else if (trim(strings) == '--reclr_leaf') then

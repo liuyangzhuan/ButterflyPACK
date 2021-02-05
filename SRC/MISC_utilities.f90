@@ -170,7 +170,7 @@ contains
    ! fnorm = sqrt(fnorm)
    ! end function fnorm
 
-   subroutine LR_ReCompression(matU, matV, M, N, rmax, rank, SVD_tolerance, Flops)
+   subroutine LR_ReCompression(matU, matV, Singular, M, N, rmax, rank, SVD_tolerance, Flops)
 
 
       implicit none
@@ -183,6 +183,7 @@ contains
       integer rank, ranknew, ldaU, ldaV
 
       DT::matU(:, :), matV(:, :)
+      real(kind=8)::Singular(:)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
       real(kind=8), allocatable :: Singularsml(:)
       integer, allocatable :: jpvt1(:), jpvt2(:)
@@ -251,9 +252,9 @@ contains
       allocate (UUsml(rmax, rmax), VVsml(rmax, rmax), Singularsml(rmax))
       call SVD_Truncate(mattemp, rmax, rmax, rmax, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
       if (present(Flops)) Flops = Flops + flop
-      do i = 1, ranknew
-         UUsml(1:rmax, i) = UUsml(1:rmax, i)*Singularsml(i)
-      enddo
+      ! do i = 1, ranknew
+      !    UUsml(1:rmax, i) = UUsml(1:rmax, i)*Singularsml(i)
+      ! enddo
       ! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
       call gemmf90(QQ1, M, UUsml, rmax, matU, ldaU, 'N', 'N', M, ranknew, rmax, cone, czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
@@ -262,6 +263,7 @@ contains
       if (present(Flops)) Flops = Flops + flop
 
       rank = ranknew
+      Singular(1:ranknew) = Singularsml(1:ranknew)
 
       deallocate (mattemp, RR1, QQ1, UUsml, VVsml, Singularsml)
       deallocate (QQ2, RR2)
