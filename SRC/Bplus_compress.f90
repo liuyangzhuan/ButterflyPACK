@@ -1781,7 +1781,7 @@ contains
    end subroutine BF_compress_NlogN_oneblock_C_rankreveal
 
 
-   subroutine Bplus_compress(bplus, option, Memory, stats, msh, ker, ptree)
+   subroutine Bplus_compress_entry(bplus, option, Memory, stats, msh, ker, ptree)
 
 
 
@@ -1846,7 +1846,7 @@ contains
 
       return
 
-   end subroutine Bplus_compress
+   end subroutine Bplus_compress_entry
 
    subroutine BF_compress_N15_seq(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
