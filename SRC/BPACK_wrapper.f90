@@ -286,7 +286,7 @@ contains
          valid_opt = 1
       endif
 
-      if (valid_opt == 0) write (*, *) 'invalid HODLR stats: '//trim(str)
+      if (valid_opt == 0) write (*, *) 'invalid BPACK stats: '//trim(str)
 
       deallocate (str)
 
@@ -357,6 +357,208 @@ contains
       call PrintOptions(option, ptree)
 
    end subroutine C_BPACK_Printoption
+
+
+!**** C interface of getting one entry in option, always returning double
+   !stats_Cptr: the structure containing stats
+   subroutine C_BPACK_Getoption(option_Cptr, nam, val_d) bind(c, name="c_bpack_getoption")
+      implicit none
+      real(kind=8)::val_d
+      character(kind=c_char, len=1) :: nam(*)
+      character(kind=c_char) :: tmpc
+      type(c_ptr) :: option_Cptr
+      type(Hoption), pointer::option
+      ! character::nam(:)
+      ! type(c_ptr),value :: val_Cptr
+      ! integer,pointer::val_i
+      ! real(kind=8),pointer::val_d
+      integer strlen
+      character(len=:), allocatable :: str
+      integer valid_opt
+
+      valid_opt = 0
+      strlen = 1
+      tmpc=nam(strlen)
+      do while (tmpc /= c_null_char)
+         strlen = strlen + 1
+         tmpc=nam(strlen)
+      enddo
+      strlen = strlen - 1
+      allocate (character(len=strlen) :: str)
+      str = transfer(nam(1:strlen), str)
+
+      call c_f_pointer(option_Cptr, option)
+
+      if (trim(str) == 'n_iter') then
+         val_d = option%n_iter
+         valid_opt = 1
+      endif
+      if (trim(str) == 'precon') then
+         val_d = option%precon
+         valid_opt = 1
+      endif
+      if (trim(str) == 'xyzsort') then
+         val_d = option%xyzsort
+         valid_opt = 1
+      endif
+      if (trim(str) == 'lnoBP') then
+         val_d = option%lnoBP
+         valid_opt = 1
+      endif
+      if (trim(str) == 'bp_cnt_lr') then
+         val_d = option%bp_cnt_lr
+         valid_opt = 1
+      endif
+      if (trim(str) == 'TwoLayerOnly') then
+         val_d = option%TwoLayerOnly
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzorder') then
+         val_d = option%schulzorder
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzlevel') then
+         val_d = option%schulzlevel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'LRlevel') then
+         val_d = option%LRlevel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'ErrFillFull') then
+         val_d = option%ErrFillFull
+         valid_opt = 1
+      endif
+      if (trim(str) == 'BACA_Batch') then
+         val_d = option%BACA_Batch
+         valid_opt = 1
+      endif
+      if (trim(str) == 'ErrSol') then
+         val_d = option%ErrSol
+         valid_opt = 1
+      endif
+      if (trim(str) == 'nogeo') then
+         val_d = option%nogeo
+         valid_opt = 1
+      endif
+      if (trim(str) == 'less_adapt') then
+         val_d = option%less_adapt
+         valid_opt = 1
+      endif
+      if (trim(str) == 'RecLR_leaf') then
+         val_d = option%RecLR_leaf
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Nmin_leaf') then
+         val_d = option%Nmin_leaf
+         valid_opt = 1
+      endif
+      if (trim(str) == 'LR_BLK_NUM') then
+         val_d = option%LR_BLK_NUM
+         valid_opt = 1
+      endif
+      if (trim(str) == 'rank0') then
+         val_d = option%rank0
+         valid_opt = 1
+      endif
+      if (trim(str) == 'itermax') then
+         val_d = option%itermax
+         valid_opt = 1
+      endif
+      if (trim(str) == 'powiter') then
+         val_d = option%powiter
+         valid_opt = 1
+      endif
+      if (trim(str) == 'ILU') then
+         val_d = option%ILU
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Nbundle') then
+         val_d = option%Nbundle
+         valid_opt = 1
+      endif
+      if (trim(str) == 'format') then
+         val_d = option%format
+         valid_opt = 1
+      endif
+      if (trim(str) == 'verbosity') then
+         val_d = option%verbosity
+         valid_opt = 1
+      endif
+      if (trim(str) == 'rmax') then
+         val_d = option%rmax
+         valid_opt = 1
+      endif
+      if (trim(str) == 'forwardN15flag') then
+         val_d = option%forwardN15flag
+         valid_opt = 1
+      endif
+      if (trim(str) == 'pat_comp') then
+         val_d = option%pat_comp
+         valid_opt = 1
+      endif
+      if (trim(str) == 'elem_extract') then
+         val_d = option%elem_extract
+         valid_opt = 1
+      endif
+      if (trim(str) == 'knn') then
+         val_d = option%knn
+         valid_opt = 1
+      endif
+      if (trim(str) == 'cpp') then
+         val_d = option%cpp
+         valid_opt = 1
+      endif
+      if (trim(str) == 'tol_comp') then
+         val_d = option%tol_comp
+         valid_opt = 1
+      endif
+      if (trim(str) == 'tol_Rdetect') then
+         val_d = option%tol_Rdetect
+         valid_opt = 1
+      endif
+      if (trim(str) == 'tol_LS') then
+         val_d = option%tol_LS
+         valid_opt = 1
+      endif
+      if (trim(str) == 'tol_itersol') then
+         val_d = option%tol_itersol
+         valid_opt = 1
+      endif
+      if (trim(str) == 'tol_rand') then
+         val_d = option%tol_rand
+         valid_opt = 1
+      endif
+      if (trim(str) == 'touch_para') then
+         val_d = option%touch_para
+         valid_opt = 1
+      endif
+      if (trim(str) == 'rankrate') then
+         val_d = option%rankrate
+         valid_opt = 1
+      endif
+      if (trim(str) == 'near_para') then
+         val_d = option%near_para
+         valid_opt = 1
+      endif
+      if (trim(str) == 'knn_near_para') then
+         val_d = option%knn_near_para
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sample_para') then
+         val_d = option%sample_para
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sample_para_outer') then
+         val_d = option%sample_para_outer
+         valid_opt = 1
+      endif
+
+      if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
+      deallocate (str)
+
+   end subroutine C_BPACK_Getoption
+
 
 !**** C interface of set one entry in option
    !option_Cptr: the structure containing option
@@ -605,12 +807,23 @@ contains
          valid_opt = 1
       endif
 
-      if (valid_opt == 0) write (*, *) 'invalid HODLR option: '//trim(str)
+      if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
 
       deallocate (str)
       option_Cptr = c_loc(option)
 
    end subroutine C_BPACK_Setoption
+
+
+
+
+
+
+
+
+
+
+
 
 !**** C interface of matrix construction
    !bmat_Cptr: the structure containing HODLR
