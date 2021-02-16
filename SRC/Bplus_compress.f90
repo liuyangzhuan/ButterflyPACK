@@ -1821,15 +1821,17 @@ contains
                   if (option%forwardN15flag == 1) then
                      call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                      call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+
+                     ! Move singular values to leftmost factor
+                     if(bplus%LL(ll)%matrices_block(bb)%level_butterfly>0)then
+                        call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
+                        call BF_MoveSingular_Ker(bplus%LL(ll)%matrices_block(bb), 'N', 1, bplus%LL(ll)%matrices_block(bb)%level_butterfly, ptree, stats, option%tol_comp)
+                        call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 1, 3, stats, ptree)
+                     endif
+
                   else
                      call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                   end if
-
-                  ! call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
-                  ! if(bplus%LL(ll)%matrices_block(bb)%level_butterfly>0)then
-                  ! call BF_MoveSingular_Ker(bplus%LL(ll)%matrices_block(bb), 'N', 1, bplus%LL(ll)%matrices_block(bb)%level_butterfly, ptree, stats)
-                  ! endif
-
 
                   Memory = Memory + rtemp
                   bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
@@ -6113,6 +6115,16 @@ contains
       call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
       flops = flops + flop
 
+      if(level==level_butterfly)then
+         do i=1,rank
+            VV(i, :) =  Singular(i)*VV(i, :)
+         enddo
+      else
+         do j=1,rank
+            UU(:, j) =  UU(:, j)*Singular(j)
+         enddo
+      endif
+
       if(levelm+1==level)then ! merge ButterflyMiddle into ButterflyKerl
          do j = 1, nn1
                VV(:, j) = VV(:, j)* ButterflyMiddle%blocks(index_ii_loc, index_jj_loc)%matrix(j, j)
@@ -6126,7 +6138,7 @@ contains
       ! !$omp parallel do default(shared) private(i,j,k,ctemp)
       do j = 1, rank
          do i = 1, mm
-            mat_tmp(i, j) = UU(i, j)*Singular(j)
+            mat_tmp(i, j) = UU(i, j)
          enddo
       enddo
       ! !$omp end parallel do
@@ -6341,11 +6353,22 @@ contains
       call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
       flops = flops + flop
 
+      if(level==1)then
+         do j=1,rank
+            UU(:, j) =  UU(:, j)*Singular(j)
+         enddo
+      else
+         do i=1,rank
+            VV(i, :) =  Singular(i)*VV(i, :)
+         enddo
+      endif
+
+
       allocate (mat_tmp(rank, nn))
       ! !$omp parallel do default(shared) private(i,j)
       do j = 1, nn
          do i = 1, rank
-            mat_tmp(i, j) = VV(i, j)*Singular(i)
+            mat_tmp(i, j) = VV(i, j)
          enddo
       enddo
       ! !$omp end parallel do
