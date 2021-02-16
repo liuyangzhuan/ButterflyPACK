@@ -2378,7 +2378,7 @@ contains
          call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
          if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
             call BF_ChangePattern(block_o, option%pat_comp, 1, stats, ptree)
-            call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats)
+            call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats, option%tol_rand)
          endif
          call BF_ChangePattern(block_o, 1, 2, stats, ptree)
 
@@ -2769,7 +2769,7 @@ contains
                   ! call BF_MoveSingulartoRight(block_o)
 
 
-                  call BF_MoveSingular_Ker(block_o, 'T', floor_safe(dble(level_butterfly_loc)/2d0)+ block_o%level_half +1, block_o%level_half, ptree, stats)
+                  call BF_MoveSingular_Ker(block_o, 'T', floor_safe(dble(level_butterfly_loc)/2d0)+ block_o%level_half +1, block_o%level_half, ptree, stats, option%tol_rand)
 
                   if(Bplus%LL(llplus+1)%Nbound>0)then
                   groupm = findgroup(edge_s, msh, levelm, block_o%row_group)

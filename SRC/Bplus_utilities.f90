@@ -12759,14 +12759,14 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-   subroutine BF_MoveSingular_Ker(blocks, chara, level_start, level_end, ptree, stats)
+   subroutine BF_MoveSingular_Ker(blocks, chara, level_start, level_end, ptree, stats, tolerance)
 
       implicit none
 
       integer level_start, level_end, index_i, index_j, na, nb, index_start, num_vectors, num_vectors1, num_vectors2
       integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
       integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
-      integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+      integer rank1, rank2, rank, ranknew, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
       integer vector_a, vector_b, nn1, nn2, mm1, mm2, level_half, level_final, pgno_sub
       integer idx_r, inc_r, nr, idx_c, inc_c, nc
       integer idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0
@@ -12776,7 +12776,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(proctree)::ptree
       integer pgno, comm, ierr, mn_min
       type(Hstat)::stats
-      real(kind=8)::flop, flops,n1,n2
+      real(kind=8)::flop, flops,n1,n2, tolerance
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
       real(kind=8), allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
@@ -12903,21 +12903,24 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (VV(mn_min, num_vectors1 + num_vectors2))
                            allocate (Singular(mn_min))
                            call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
+
+                           ! call SVD_Truncate(matrixtemp, rank, num_vectors1 + num_vectors2, mn_min, UU, VV, Singular, tolerance, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min)
+                           ranknew = mn_min
                            call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
 
-                           do ii = 1, mn_min
+                           do ii = 1, ranknew
                               UU(:, ii) = UU(:, ii)*Singular(ii)
                            end do
 
-                           allocate(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank, mn_min))
-                           BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = UU
+                           allocate(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank, ranknew))
+                           BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = UU(1:rank,1:ranknew)
                            deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
-                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mn_min,num_vectors1))
-                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = VV(1:mn_min, 1:num_vectors1)
+                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(ranknew,num_vectors1))
+                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = VV(1:ranknew, 1:num_vectors1)
                            deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix)
-                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(mn_min,num_vectors2))
-                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix = VV(1:mn_min, 1+num_vectors1:num_vectors1+num_vectors2)
+                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(ranknew,num_vectors2))
+                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix = VV(1:ranknew, 1+num_vectors1:num_vectors1+num_vectors2)
 
                            deallocate(UU,VV,Singular)
                         endif
@@ -13114,21 +13117,26 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (Singular(mn_min))
 
                            call assert(.not. ieee_is_nan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
+
+                           ! call SVD_Truncate(matrixtemp, num_vectors1 + num_vectors2, rank, mn_min, UU, VV, Singular, tolerance, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min)
+                           ranknew=mn_min
+
+
                            call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
 
-                           do ii = 1, mn_min
+                           do ii = 1, ranknew
                               VV(ii, :) = VV(ii, :)*Singular(ii)
                            end do
 
-                           allocate(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank,mn_min))
-                           call copymatT(VV, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mn_min,rank)
+                           allocate(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank,ranknew))
+                           call copymatT(VV, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, ranknew,rank)
                            deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
-                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(num_vectors1,mn_min))
-                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = UU(1:num_vectors1,1:mn_min)
+                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(num_vectors1,ranknew))
+                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = UU(1:num_vectors1,1:ranknew)
                            deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix)
-                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(num_vectors2,mn_min))
-                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix = UU(1+num_vectors1:num_vectors1+num_vectors2,1:mn_min)
+                           allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(num_vectors2,ranknew))
+                           blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix = UU(1+num_vectors1:num_vectors1+num_vectors2,1:ranknew)
 
                            deallocate(UU,VV,Singular)
                         endif
