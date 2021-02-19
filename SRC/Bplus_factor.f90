@@ -2750,7 +2750,11 @@ contains
                else
                   !!!!! invert I+B1 to be I+B2
                   level_butterfly = block_o%level_butterfly
-                  call BF_inverse_partitionedinverse_IplusButter(block_o, level_butterfly, 0, option, error, stats, ptree, msh, block_o%pgno)
+                  if (level_butterfly >= option%schulzlevel) then
+                     call BF_inverse_schulziteration_IplusButter(block_o, error, option, stats, ptree, msh)
+                  else
+                     call BF_inverse_partitionedinverse_IplusButter(block_o, level_butterfly, 0, option, error, stats, ptree, msh, block_o%pgno)
+                  endif
                   error_inout = max(error_inout, error)
                endif
                n2 = OMP_get_wtime()
