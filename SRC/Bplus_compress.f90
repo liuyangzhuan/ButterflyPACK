@@ -2549,8 +2549,40 @@ contains
                      call LR_BACA_noOverlap(matU, matV, Singular, idxs_m, idxs_n, mm, nn, rmax, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
                   elseif(option%RecLR_leaf == BACA)then
                      call LR_BACA(matU, matV, Singular, idxs_m, idxs_n, mm, nn, rmax, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
+                  elseif (option%RecLR_leaf == RRQR) then
+                        !!!!! RRQR
+                        mn = min(mm, nn)
+                        allocate (QQ(mm, nn))
+                        allocate (mrange(mm))
+                        allocate (nrange(nn))
+                        do ii = 1, mm
+                           mrange(ii) = idxs_m + ii - 1
+                        enddo
+                        do jj = 1, nn
+                           nrange(jj) = idxs_n + jj - 1
+                        enddo
+                        submats(1)%nr = mm
+                        submats(1)%nc = nn
+                        allocate(submats(1)%rows(submats(1)%nr))
+                        submats(1)%rows = mrange
+                        allocate(submats(1)%cols(submats(1)%nc))
+                        submats(1)%cols = nrange
+                        allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+                        call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+                        QQ = submats(1)%dat
+                        deallocate(submats(1)%rows)
+                        deallocate(submats(1)%cols)
+                        deallocate(submats(1)%dat)
+                        deallocate (mrange)
+                        deallocate (nrange)
+
+                        call RRQR_SVD(QQ, mm, nn, mn, rmax, matU, matV, Singular, option%tol_comp, rank, flops1)
+                        stats%Flop_Fill = stats%Flop_Fill + flops1
+
+                        deallocate(QQ)
+
                   else
-                     write(*,*)'unsupported LR compression in BF_compress_N15, try ACA, BACA, or BACANOVER instead'
+                     write(*,*)'unsupported LR compression in BF_compress_N15, try RRQR, ACA, BACA, or BACANOVER instead'
                      stop
                   endif
 
