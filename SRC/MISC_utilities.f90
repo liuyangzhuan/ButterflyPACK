@@ -3018,6 +3018,45 @@ contains
 
    end subroutine SVD_Truncate
 
+
+
+   subroutine RRQR_SVD(mat, mm, nn, mn, rmax, UU, VV, Singular, tolerance, rank, flop)
+         implicit none
+         integer mm, nn, mn, mns, rmax, rank, rank1, ii, jj
+         real(kind=8):: tolerance
+         DT::mat(mm, nn), UU(mm, rmax), VV(rmax, nn), UU1(mm, mn), VV1(mn, nn)
+         DT, allocatable::mats(:, :),UUs(:,:),VVs(:,:)
+         real(kind=8):: Singular(rmax)
+         integer::i, flag
+         real(kind=8), optional::flop
+         real(kind=8)::flop0
+
+         call RRQR_LQ(mat, mm, nn, mn, UU1, VV1, tolerance, rank1, 'R', flops=flop)
+         call assert(rank1<=rmax,'RRQR_SVD requires increasing rmax')
+         allocate(mats(rank1,nn))
+         mats = VV1(1:rank1,1:nn)
+         mns = min(rank1,nn)
+         allocate(UUs(1:rank1,1:mns))
+         allocate(VVs(1:mns,1:nn))
+         call SVD_Truncate(mats, rank1, nn, mns, UUs, VVs, Singular, tolerance, rank, flop=flop0)
+         if (present(flop)) flop = flop + flop0
+
+         VV(1:rank,1:nn) = VVs(1:rank,1:nn)
+
+         UU=0
+         call gemmf90(UU1, mm, UUs, rank1, UU, mm, 'N', 'N', mm, rank, rank1, cone, czero, flop=flop0)
+         if (present(flop)) flop = flop + flop0
+
+
+         deallocate (mats)
+         deallocate (UUs)
+         deallocate (VVs)
+
+   end subroutine RRQR_SVD
+
+
+
+
    subroutine PSVD_Truncate(mm, nn, mat, descMat, UU, VV, descUU, descVV, Singular, tolerance, rank, ctxt, flop)
       implicit none
       integer mm, nn, mnmin, rank, ii, jj
