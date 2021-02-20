@@ -5163,7 +5163,7 @@ contains
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             ! if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
-            call LR_FnormUp(matU, matV, M, N, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+            call LR_FnormUp(matU, matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
             ! else
             ! call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
             ! endif
@@ -5222,7 +5222,7 @@ contains
 
       implicit none
 
-      integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax
+      integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M, rmax
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
       DT::matU(M, rmax), matV(rmax, N)
       real(kind=8)::Singular(rmax)
@@ -5285,6 +5285,7 @@ contains
       normUV = 0
       itr = 0
       rank = 0
+      rank0 = 0
 
       !**** if nearest neighbour is available, select them first
       if (option%knn > 0) then
@@ -5396,21 +5397,24 @@ contains
                matV(rank + 1:rank + rankup, :) = row_Rtmp_knn(1:rankup, :)
 
                rank = rank + rankup
+               rank0 = rank
 
-               if (rank == rmax) goto 10 !*** skip ACA iteration
-
-               !**** update fnorm of UV and matUmatV
-               call LR_Fnorm(column_R_knn, row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
-               stats%Flop_Fill = stats%Flop_Fill + flop
-               call LR_FnormUp(matU, matV, M, N, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
-
-               stats%Flop_Fill = stats%Flop_Fill + flop
-
-               if (normA > SafeUnderflow) then
-                  error = normUV/normA
-               else
-                  error = 0
+               if (rank == rmax)then
+                  goto 10 !*** skip ACA iteration
                endif
+
+               ! !**** update fnorm of UV and matUmatV (this is commented out to leave normUV=normA=0 for aca iteration)
+               ! call LR_Fnorm(column_R_knn, row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
+               ! stats%Flop_Fill = stats%Flop_Fill + flop
+               ! call LR_FnormUp(matU, matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+
+               ! stats%Flop_Fill = stats%Flop_Fill + flop
+
+               ! if (normA > SafeUnderflow) then
+               !    error = normUV/normA
+               ! else
+               !    error = 0
+               ! endif
 
                !**** Find column pivots for the next iteration
                jpvt = 0
@@ -5546,7 +5550,7 @@ contains
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-            call LR_FnormUp(matU, matV, M, N, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+            call LR_FnormUp(matU, matV, M, N, rank0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
 
             stats%Flop_Fill = stats%Flop_Fill + flop
 
