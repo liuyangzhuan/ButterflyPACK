@@ -733,12 +733,12 @@ contains
 
 
 
-   subroutine LR_FnormUp(matU, matV, M, N, ruv, rup, ldV, normUV, normUVupdate, tolerance, Flops)
+   subroutine LR_FnormUp(matU, matV, M, N, rskip, ruv, rup, ldV, normUV, normUVupdate, tolerance, Flops)
 
 
       implicit none
 
-      integer N, M, ruv, rup, ldV
+      integer N, M, rskip, ruv, rup, ldV
       real(kind=8) normUVupdate, normUV, inner_UV
       real(kind=8), optional:: Flops
       real(kind=8):: flop
@@ -764,15 +764,18 @@ contains
       ! enddo
       ! !$omp end parallel do
 
+
+
+      !!!  rskip means that the first rskip columns/rows of matU/matV are not accounted for in normUV
       inner_UV = 0
-      if (ruv > 0) then
-         allocate (UU(ruv, rup))
+      if (ruv-rskip > 0) then
+         allocate (UU(ruv-rskip, rup))
          UU = 0
-         call gemmf77('T', 'N', ruv, rup, M, cone, matU, M, matU(1, ruv + 1), M, czero, UU, ruv)
-         allocate (VV(ruv, rup))
+         call gemmf77('T', 'N', ruv-rskip, rup, M, cone, matU(1, rskip + 1), M, matU(1, ruv + 1), M, czero, UU, ruv-rskip)
+         allocate (VV(ruv-rskip, rup))
          VV = 0
-         call gemmf77('N', 'T', ruv, rup, N, cone, matV, ldV, matV(ruv + 1, 1), ldV, czero, VV, ruv)
-         do j = 1, ruv
+         call gemmf77('N', 'T', ruv-rskip, rup, N, cone, matV(rskip+1,1), ldV, matV(ruv + 1, 1), ldV, czero, VV, ruv-rskip)
+         do j = 1, ruv-rskip
             do k = 1, rup
                inner_UV = inner_UV + 2*dble(UU(j, k)*VV(j, k))
             enddo
