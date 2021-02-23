@@ -2454,7 +2454,9 @@ contains
       integer ierr
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), core_knn(:,:)
       integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
+      type(intersect) :: submats_dummy(1)
 
+      ! write(*,*)'In: ',ptree%MyID,blocks%row_group,blocks%col_group
       flops=0
 
       level_butterfly = blocks%level_butterfly
@@ -2507,7 +2509,7 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
-#if 1
+#if 1 
 
          tolerance = option%tol_comp*0.1
          SVD_tolerance = option%tol_comp
@@ -2624,8 +2626,13 @@ contains
                endif
             enddo
          enddo
+
+         ! write(*,*)'myid ',ptree%MyID,'before element_Zmn_blocklist_user'
+
          ! the rows and columns from KNN
          call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+
+         ! write(*,*)'myid ',ptree%MyID,'after element_Zmn_blocklist_user'
 
          do index_i_loc = 1, nr
             do index_j_loc = 1, nc
@@ -2716,6 +2723,11 @@ contains
             enddo
          enddo
 
+
+         passflag = 0
+         do while (passflag == 0)
+            call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+         enddo   
 
          finish=.false.
          do while(.not. finish)
@@ -2910,12 +2922,17 @@ contains
 
          passflag = 0
          do while (passflag == 0)
-            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
+            call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
          enddo
          deallocate(submats)
          deallocate(acaquants)
 
 #else
+   
+         passflag = 0
+         do while (passflag == 0)
+            call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+         enddo   
 
          allocate(submats(1))
          ! construct the middle level and the left half
@@ -3037,7 +3054,7 @@ contains
          enddo
          passflag = 0
          do while (passflag == 0)
-            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
+            call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
          enddo
          deallocate(submats)
 #endif
@@ -3243,11 +3260,10 @@ contains
          stats%Flop_Fill = stats%Flop_Fill + flops
 
          ! stop
-         return
-
-
-
+         ! return
       endif
+
+      ! write(*,*)'Out: ',ptree%MyID,blocks%row_group,blocks%col_group      
 
    end subroutine BF_compress_N15
 
