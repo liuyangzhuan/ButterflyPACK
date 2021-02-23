@@ -2534,6 +2534,10 @@ contains
                acaquants(index_ij_loc)%N=N
                acaquants(index_ij_loc)%header_m=header_m
                acaquants(index_ij_loc)%header_n=header_n
+               submats(index_ij_loc*2-1)%nr=0
+               submats(index_ij_loc*2-1)%nc=0
+               submats(index_ij_loc*2)%nr=0
+               submats(index_ij_loc*2)%nc=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2550,10 +2554,6 @@ contains
                   allocate(acaquants(index_ij_loc)%matV(rank,N))
                   acaquants(index_ij_loc)%matV = 0
                   acaquants(index_ij_loc)%finish = .true.
-                  submats(index_ij_loc*2-1)%nr=0
-                  submats(index_ij_loc*2-1)%nc=0
-                  submats(index_ij_loc*2)%nr=0
-                  submats(index_ij_loc*2)%nc=0
                else
                   r_est = min(bsize, min(M, N))
                   acaquants(index_ij_loc)%itrmax = floor_safe(min(M, N)/dble(r_est))*2
@@ -2617,11 +2617,6 @@ contains
                            submats(index_ij_loc*2)%cols(j) = header_n + j - 1
                         enddo
                         allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
-                     else
-                        submats(index_ij_loc*2-1)%nr=0
-                        submats(index_ij_loc*2-1)%nc=0
-                        submats(index_ij_loc*2)%nr=0
-                        submats(index_ij_loc*2)%nc=0
                      endif
                      deallocate(select_column_knn)
                      deallocate(select_row_knn)
