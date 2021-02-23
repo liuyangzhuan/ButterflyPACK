@@ -6171,7 +6171,7 @@ contains
          call geqp3modf90(core, jpvt, tau, tolerance, SafeUnderflow, ranknew, flop=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop
          rankup = ranknew
-
+         if(rank+rankup>min(M,N))rankup = min(M,N)-rank
          if (rankup > 0) then
             row_Rtmp = row_R
             call un_or_mqrf90(core, tau, row_Rtmp, 'L', 'C', r_est, N, rankup, flop=flop)
