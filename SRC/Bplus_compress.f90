@@ -2421,21 +2421,22 @@ contains
       integer Nboundall, statflag
       integer boundary_map(*)
       integer groupm_start
-
-      integer inc_c, inc_r, nc, nr, idx_c, idx_r
+      logical finish
+      integer ranknew, rankup, Nqr, bsize, r_est, r_est_knn_r, r_est_knn_c, r_est_tmp, inc_c, inc_r, nc, nr, nrc, idx_c, idx_r
       integer blocks_idx, i, j, level_butterfly, num_blocks, k, attempt
-      integer group_m, group_n, mm, nn, mn, index_i, index_j, index_i_m, index_j_m, index_i_loc, index_i_loc_s, index_j_loc, index_j_loc_s, ii, jj, nn1, nn2, mm1, mm2, idxs_m, idxs_n
+      integer group_m, group_n, M,N, mm, nn, mn, index_i, index_j, index_i_m, index_j_m, index_ij_loc, index_i_loc, index_i_loc_s, index_j_loc, index_j_loc_s, ii, jj, iii, jjj, nn1, nn2, mm1, mm2, idxs_m, idxs_n, header_m, header_n
       integer level, levelm, level_half, level_final, level_loc, length_1, length_2, level_blocks, index_ij, edge_m, edge_n
-      integer rank, rank_new1, rank_new, rankmax, butterflyB_inuse, rank1, rank2, rmax
-      real(kind=8) rate, tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
+      integer rank, rank0, rank_new1, rank_new, rankmax, butterflyB_inuse, rank1, rank2, rmax
+      real(kind=8) rate, tolerance, SVD_tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
       real(kind=8) Memory, n1, n2
       DT ctemp
       type(butterfly_kerl) ButterflyMiddle, ButterflyP_old, ButterflyP_old1, ButterflyP_old2, ButterflyP
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
-      DT, allocatable :: tau_Q(:)
+      DT, allocatable :: tau_Q(:), tau(:)
+      integer, allocatable :: jpvt(:)
       real(kind=8), allocatable :: Singular(:)
       integer flag, tmpi, tmpj
-      real(kind=8):: a, b, error, flops, flops1
+      real(kind=8):: a, b, error, flops, flops1, flop
       real(kind=8):: maxvalue(1:20)
       real(kind=8):: minvalue(1:20)
       integer dimension_m, dimension_n, dimension_rank, num_col, num_row
@@ -2448,8 +2449,12 @@ contains
       type(proctree)::ptree
       integer, allocatable :: rankmax_for_butterfly(:), mrange(:), nrange(:)
       integer emptyflag
-      type(intersect)::submats(1)
+      type(intersect),allocatable::submats(:)
+      type(acaquant),allocatable::acaquants(:)
       integer ierr
+      DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), core_knn(:,:)
+      integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
+
       flops=0
 
       level_butterfly = blocks%level_butterfly
@@ -2502,6 +2507,422 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
+#if 1
+
+         tolerance = option%tol_comp*0.1
+         SVD_tolerance = option%tol_comp
+         bsize = option%BACA_Batch
+
+         nrc=nr*nc
+         allocate(submats(max(1,nrc*2)))  ! odd for columns, even for rows
+         allocate(acaquants(nrc))
+         do index_i_loc = 1, nr
+            do index_j_loc = 1, nc
+               index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+               index_i = (index_i_loc - 1)*inc_r + idx_r
+               index_j = (index_j_loc - 1)*inc_c + idx_c
+               group_m = blocks%row_group   ! Note: row_group and col_group interchanged here
+               group_n = blocks%col_group
+               group_m = group_m*2**level_half - 1 + index_i
+               group_n = group_n*2**(level_butterfly - level_half) - 1 + index_j
+
+               M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+               N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+               header_m = msh%basis_group(group_m)%head
+               header_n = msh%basis_group(group_n)%head
+               acaquants(index_ij_loc)%M=M
+               acaquants(index_ij_loc)%N=N
+               acaquants(index_ij_loc)%header_m=header_m
+               acaquants(index_ij_loc)%header_n=header_n
+
+               emptyflag = 0
+               if (Nboundall > 0) then
+                  if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+               endif
+
+               if (emptyflag == 1) then
+                  rank = 1
+                  acaquants(index_ij_loc)%rank=rank
+                  allocate(acaquants(index_ij_loc)%Singular(rank))
+                  acaquants(index_ij_loc)%Singular = 1
+                  allocate(acaquants(index_ij_loc)%matU(M,rank))
+                  acaquants(index_ij_loc)%matU = 0
+                  allocate(acaquants(index_ij_loc)%matV(rank,N))
+                  acaquants(index_ij_loc)%matV = 0
+                  acaquants(index_ij_loc)%finish = .true.
+                  submats(index_ij_loc*2-1)%nr=0
+                  submats(index_ij_loc*2-1)%nc=0
+                  submats(index_ij_loc*2)%nr=0
+                  submats(index_ij_loc*2)%nc=0
+               else
+                  r_est = min(bsize, min(M, N))
+                  acaquants(index_ij_loc)%itrmax = floor_safe(min(M, N)/dble(r_est))*2
+                  allocate(acaquants(index_ij_loc)%select_column(r_est))
+                  acaquants(index_ij_loc)%select_column=0
+                  allocate(acaquants(index_ij_loc)%select_row(r_est))
+                  acaquants(index_ij_loc)%select_row=0
+                  allocate(acaquants(index_ij_loc)%rows(M))
+                  allocate(acaquants(index_ij_loc)%columns(N))
+
+                  if (option%knn > 0) then
+                     allocate (select_column_knn(M*option%knn))
+                     allocate (select_row_knn(N*option%knn))
+                     r_est_knn_r = 0
+                     r_est_knn_c = 0
+
+                     do i = 1, M
+                        edge_m = header_m + i - 1
+                        do iii = 1, option%knn
+                           if (msh%nns(edge_m, iii) >= header_n .and. msh%nns(edge_m, iii) <= header_n + N - 1) then
+                              r_est_knn_c = r_est_knn_c + 1
+                              select_column_knn(r_est_knn_c) = msh%nns(edge_m, iii) + 1 - header_n
+                           endif
+                        enddo
+                     enddo
+                     r_est_tmp = r_est_knn_c
+                     if (r_est_knn_c > 0) call remove_dup_int(select_column_knn, r_est_tmp, r_est_knn_c)
+
+                     do j = 1, N
+                        edge_n = header_n + j - 1
+                        do jjj = 1, option%knn
+                           if (msh%nns(edge_n, jjj) >= header_m .and. msh%nns(edge_n, jjj) <= header_m + M - 1) then
+                              r_est_knn_r = r_est_knn_r + 1
+                              select_row_knn(r_est_knn_r) = msh%nns(edge_n, jjj) + 1 - header_m
+                           endif
+                        enddo
+                     enddo
+                     r_est_tmp = r_est_knn_r
+                     if (r_est_knn_r > 0) call remove_dup_int(select_row_knn, r_est_tmp, r_est_knn_r)
+                     if (r_est_knn_r > 0 .and. r_est_knn_c > 0) then
+                        submats(index_ij_loc*2-1)%nr=M
+                        submats(index_ij_loc*2-1)%nc=r_est_knn_c
+                        allocate(submats(index_ij_loc*2-1)%rows(submats(index_ij_loc*2-1)%nr))
+                        allocate(submats(index_ij_loc*2-1)%cols(submats(index_ij_loc*2-1)%nc))
+                        do i=1,M
+                           submats(index_ij_loc*2-1)%rows(i)=header_m + i - 1
+                        enddo
+                        do j = 1, r_est_knn_c
+                           submats(index_ij_loc*2-1)%cols(j) = header_n + select_column_knn(j) - 1
+                        enddo
+                        allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+
+                        submats(index_ij_loc*2)%nr=r_est_knn_r
+                        submats(index_ij_loc*2)%nc=N
+                        allocate(submats(index_ij_loc*2)%rows(submats(index_ij_loc*2)%nr))
+                        allocate(submats(index_ij_loc*2)%cols(submats(index_ij_loc*2)%nc))
+                        do i = 1, r_est_knn_r
+                           submats(index_ij_loc*2)%rows(i) = header_m + select_row_knn(i) - 1
+                        enddo
+                        do j = 1, N
+                           submats(index_ij_loc*2)%cols(j) = header_n + j - 1
+                        enddo
+                        allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                     else
+                        submats(index_ij_loc*2-1)%nr=0
+                        submats(index_ij_loc*2-1)%nc=0
+                        submats(index_ij_loc*2)%nr=0
+                        submats(index_ij_loc*2)%nc=0
+                     endif
+                     deallocate(select_column_knn)
+                     deallocate(select_row_knn)
+                  endif
+               endif
+            enddo
+         enddo
+         ! the rows and columns from KNN
+         call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+
+         do index_i_loc = 1, nr
+            do index_j_loc = 1, nc
+               index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+               M = acaquants(index_ij_loc)%M
+               N = acaquants(index_ij_loc)%N
+               header_m = acaquants(index_ij_loc)%header_m
+               header_n = acaquants(index_ij_loc)%header_n
+
+               if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                  if (option%knn > 0) then
+
+                     r_est_knn_r = submats(index_ij_loc*2)%nr
+                     r_est_knn_c = submats(index_ij_loc*2-1)%nc
+
+                     if (r_est_knn_r > 0 .and. r_est_knn_c > 0) then
+                        allocate (row_R_knn(r_est_knn_r, N))
+                        allocate (row_Rtmp_knn(r_est_knn_r, N))
+                        allocate (core_knn(r_est_knn_r, r_est_knn_c))
+                        allocate (column_R_knn(M, r_est_knn_c))
+
+                        column_R_knn = submats(index_ij_loc*2-1)%dat
+                        row_R_knn = submats(index_ij_loc*2)%dat
+                        do i = 1, r_est_knn_r
+                           core_knn(i, :) = column_R_knn(submats(index_ij_loc*2)%rows(i) - header_m + 1, :)
+                        enddo
+
+                        r_est = min(bsize, min(M, N))
+                        Nqr = max(max(M, N), r_est)
+                        allocate (jpvt(Nqr))
+                        allocate (tau(Nqr))
+                        jpvt = 0
+                        call geqp3modf90(core_knn, jpvt, tau, tolerance, SafeUnderflow, ranknew, flop=flop)
+                        stats%Flop_Fill = stats%Flop_Fill + flop
+                        rankup = ranknew
+                        if (rankup > 0) then
+                           rank = acaquants(index_ij_loc)%rank
+
+                           row_Rtmp_knn = row_R_knn
+                           call un_or_mqrf90(core_knn, tau, row_Rtmp_knn, 'L', 'C', r_est_knn_r, N, rankup, flop=flop)
+                           stats%Flop_Fill = stats%Flop_Fill + flop
+                           call trsmf90(core_knn, row_Rtmp_knn, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
+                           stats%Flop_Fill = stats%Flop_Fill + flop
+
+                           acaquants(index_ij_loc)%columns(rank + 1:rankup + rank) = submats(index_ij_loc*2-1)%cols(jpvt(1:rankup)) - header_n + 1
+                           acaquants(index_ij_loc)%rows(rank + 1:rankup + rank) = submats(index_ij_loc*2)%rows(1:rankup) - header_m + 1
+
+                           allocate(acaquants(index_ij_loc)%matU(M,rankup))
+                           allocate(acaquants(index_ij_loc)%matV(rankup,N))
+
+                           do j = 1, rankup
+                              acaquants(index_ij_loc)%matU(:, rank + j) = column_R_knn(:, jpvt(j))
+                           enddo
+                           acaquants(index_ij_loc)%matV(rank + 1:rank + rankup, :) = row_Rtmp_knn(1:rankup, :)
+
+                           rank = rank + rankup
+                           rank0 = rank
+                           acaquants(index_ij_loc)%rank = rank
+                           acaquants(index_ij_loc)%rank0 = rank0
+
+                           !**** Find column pivots for the next iteration
+                           jpvt = 0
+                           row_Rtmp_knn = row_R_knn
+                           if (rank > 0) row_Rtmp_knn(:, acaquants(index_ij_loc)%columns(1:rank)) = 0
+                           ! call geqp3modf90(row_Rtmp_knn,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+                           call geqp3f90(row_Rtmp_knn, jpvt, tau, flop=flop)
+                           stats%Flop_Fill = stats%Flop_Fill + flop
+                           acaquants(index_ij_loc)%select_column(1:r_est) = jpvt(1:r_est)
+                        endif
+                        deallocate(row_R_knn)
+                        deallocate(row_Rtmp_knn)
+                        deallocate(core_knn)
+                        deallocate(column_R_knn)
+                        deallocate(jpvt)
+                        deallocate(tau)
+                     endif
+                  endif
+                  if(acaquants(index_ij_loc)%rank==0)then
+                     allocate(perms(N))
+                     call rperm(N, perms)
+                     acaquants(index_ij_loc)%select_column = perms(1:r_est)
+                     ! do i=1,r_est
+                     !    acaquants(index_ij_loc)%select_column(i)=i
+                     ! enddo
+                     deallocate(perms)
+                  endif
+               endif
+            enddo
+         enddo
+
+
+         finish=.false.
+         do while(.not. finish)
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  M = acaquants(index_ij_loc)%M
+                  N = acaquants(index_ij_loc)%N
+                  header_m = acaquants(index_ij_loc)%header_m
+                  header_n = acaquants(index_ij_loc)%header_n
+                  r_est = min(bsize, min(M, N))
+
+                  ! need to reset submats
+                  submats(index_ij_loc*2-1)%nr=0
+                  submats(index_ij_loc*2-1)%nc=0
+                  if(allocated(submats(index_ij_loc*2-1)%dat))then
+                     deallocate(submats(index_ij_loc*2-1)%dat)
+                     deallocate(submats(index_ij_loc*2-1)%rows)
+                     deallocate(submats(index_ij_loc*2-1)%cols)
+                  endif
+                  submats(index_ij_loc*2)%nr=0
+                  submats(index_ij_loc*2)%nc=0
+                  if(allocated(submats(index_ij_loc*2)%dat))then
+                     deallocate(submats(index_ij_loc*2)%dat)
+                     deallocate(submats(index_ij_loc*2)%rows)
+                     deallocate(submats(index_ij_loc*2)%cols)
+                  endif
+
+                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                     submats(index_ij_loc*2-1)%nr = M
+                     submats(index_ij_loc*2-1)%nc = r_est
+                     allocate(submats(index_ij_loc*2-1)%rows(submats(index_ij_loc*2-1)%nr))
+                     do i=1,M
+                        submats(index_ij_loc*2-1)%rows(i) = header_m + i - 1
+                     enddo
+                     allocate(submats(index_ij_loc*2-1)%cols(submats(index_ij_loc*2-1)%nc))
+                     submats(index_ij_loc*2-1)%cols = acaquants(index_ij_loc)%select_column + header_n -1
+                     allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+                  endif
+               enddo
+            enddo
+
+            ! the columns
+            call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+
+
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  M = acaquants(index_ij_loc)%M
+                  N = acaquants(index_ij_loc)%N
+                  header_m = acaquants(index_ij_loc)%header_m
+                  header_n = acaquants(index_ij_loc)%header_n
+                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                     call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,0)
+                     ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'col', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
+                  endif
+               enddo
+            enddo
+
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  M = acaquants(index_ij_loc)%M
+                  N = acaquants(index_ij_loc)%N
+                  header_m = acaquants(index_ij_loc)%header_m
+                  header_n = acaquants(index_ij_loc)%header_n
+                  r_est = min(bsize, min(M, N))
+
+                  ! need to reset submats, the column data is not deleted since it's still needed, just set nr=nc=0
+                  submats(index_ij_loc*2-1)%nr=0
+                  submats(index_ij_loc*2-1)%nc=0
+                  ! if(allocated(submats(index_ij_loc*2-1)%dat))then
+                  !    deallocate(submats(index_ij_loc*2-1)%dat)
+                  !    deallocate(submats(index_ij_loc*2-1)%rows)
+                  !    deallocate(submats(index_ij_loc*2-1)%cols)
+                  ! endif
+                  submats(index_ij_loc*2)%nr=0
+                  submats(index_ij_loc*2)%nc=0
+                  if(allocated(submats(index_ij_loc*2)%dat))then
+                     deallocate(submats(index_ij_loc*2)%dat)
+                     deallocate(submats(index_ij_loc*2)%rows)
+                     deallocate(submats(index_ij_loc*2)%cols)
+                  endif
+
+                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                     submats(index_ij_loc*2)%nr = r_est
+                     submats(index_ij_loc*2)%nc = N
+                     allocate(submats(index_ij_loc*2)%rows(submats(index_ij_loc*2)%nr))
+                     submats(index_ij_loc*2)%rows = acaquants(index_ij_loc)%select_row + header_m -1
+                     allocate(submats(index_ij_loc*2)%cols(submats(index_ij_loc*2)%nc))
+                     do j=1,N
+                        submats(index_ij_loc*2)%cols(j) = header_n + j - 1
+                     enddo
+                     allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                  endif
+               enddo
+            enddo
+            ! the rows
+            call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  M = acaquants(index_ij_loc)%M
+                  N = acaquants(index_ij_loc)%N
+                  header_m = acaquants(index_ij_loc)%header_m
+                  header_n = acaquants(index_ij_loc)%header_n
+                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                     call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,1)
+                     ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'row', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
+                  endif
+               enddo
+            enddo
+
+            finish=.true.
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  finish = finish .and. acaquants(index_ij_loc)%finish
+               enddo
+            enddo
+         enddo
+
+         do index_i_loc = 1, nr
+            do index_j_loc = 1, nc
+               index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+               index_i = (index_i_loc - 1)*inc_r + idx_r
+               index_j = (index_j_loc - 1)*inc_c + idx_c
+               index_i_loc_s = (index_i - ButterflyP_old%idx_r)/ButterflyP_old%inc_r + 1
+               index_j_loc_s = (index_j - ButterflyP_old%idx_c)/ButterflyP_old%inc_c + 1
+               M = acaquants(index_ij_loc)%M
+               N = acaquants(index_ij_loc)%N
+
+               ! delete submats
+               submats(index_ij_loc*2-1)%nr=0
+               submats(index_ij_loc*2-1)%nc=0
+               if(allocated(submats(index_ij_loc*2-1)%dat))then
+                  deallocate(submats(index_ij_loc*2-1)%dat)
+                  deallocate(submats(index_ij_loc*2-1)%rows)
+                  deallocate(submats(index_ij_loc*2-1)%cols)
+               endif
+               submats(index_ij_loc*2)%nr=0
+               submats(index_ij_loc*2)%nc=0
+               if(allocated(submats(index_ij_loc*2)%dat))then
+                  deallocate(submats(index_ij_loc*2)%dat)
+                  deallocate(submats(index_ij_loc*2)%rows)
+                  deallocate(submats(index_ij_loc*2)%cols)
+               endif
+
+               rank = acaquants(index_ij_loc)%rank
+               rankmax_for_butterfly(level_half) = max(rank, rankmax_for_butterfly(level_half))
+               allocate (ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank, rank))
+               ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+               do ii = 1, rank
+                  ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(ii, ii) = 1d0/acaquants(index_ij_loc)%Singular(ii)
+               end do
+
+               allocate (mat_tmp(M, rank))
+               !!$omp parallel do default(shared) private(i,j,k,ctemp)
+               do j = 1, rank
+                  do i = 1, M
+                     mat_tmp(i, j) = acaquants(index_ij_loc)%matU(i, j)*acaquants(index_ij_loc)%Singular(j)
+                  enddo
+               enddo
+               !!$omp end parallel do
+               allocate (ButterflyP_old%blocks(index_i_loc_s, index_j_loc_s)%matrix(M, rank))
+               ButterflyP_old%blocks(index_i_loc_s, index_j_loc_s)%matrix = mat_tmp(1:M, 1:rank)
+               deallocate(mat_tmp)
+
+               allocate (mat_tmp(rank, N))
+               !!$omp parallel do default(shared) private(i,j,k,ctemp)
+               do j = 1, N
+                  do i = 1, rank
+                     mat_tmp(i, j) = acaquants(index_ij_loc)%matV(i, j)*acaquants(index_ij_loc)%Singular(i)
+                  enddo
+               enddo
+               !!$omp end parallel do
+               allocate (ButterflyP_old1%blocks(index_i_loc, index_j_loc)%matrix(rank, N))
+               ButterflyP_old1%blocks(index_i_loc, index_j_loc)%matrix = mat_tmp(1:rank, 1:N)
+               deallocate (mat_tmp)
+
+               if(allocated(acaquants(index_ij_loc)%Singular))deallocate(acaquants(index_ij_loc)%Singular)
+               if(allocated(acaquants(index_ij_loc)%matU))deallocate(acaquants(index_ij_loc)%matU)
+               if(allocated(acaquants(index_ij_loc)%matV))deallocate(acaquants(index_ij_loc)%matV)
+               if(allocated(acaquants(index_ij_loc)%select_column))deallocate(acaquants(index_ij_loc)%select_column)
+               if(allocated(acaquants(index_ij_loc)%select_row))deallocate(acaquants(index_ij_loc)%select_row)
+               if(allocated(acaquants(index_ij_loc)%rows))deallocate(acaquants(index_ij_loc)%rows)
+               if(allocated(acaquants(index_ij_loc)%columns))deallocate(acaquants(index_ij_loc)%columns)
+            enddo
+         enddo
+
+         passflag = 0
+         do while (passflag == 0)
+            call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
+         enddo
+         deallocate(submats)
+         deallocate(acaquants)
+
+#else
+
+         allocate(submats(1))
          ! construct the middle level and the left half
          do index_i_loc = 1, nr
             do index_j_loc = 1, nc
@@ -2623,6 +3044,8 @@ contains
          do while (passflag == 0)
             call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 1, passflag, ptree, stats)
          enddo
+         deallocate(submats)
+#endif
 
          call BF_exchange_matvec(blocks, ButterflyP_old, stats, ptree, level_half, 'R', 'B')
          call BF_exchange_matvec(blocks, ButterflyMiddle, stats, ptree, level_half, 'R', 'B')
@@ -2824,6 +3247,7 @@ contains
          call BF_get_rank(blocks, ptree)
          stats%Flop_Fill = stats%Flop_Fill + flops
 
+         ! stop
          return
 
 
@@ -5286,6 +5710,7 @@ contains
       itr = 0
       rank = 0
       rank0 = 0
+      error=1.0
 
       !**** if nearest neighbour is available, select them first
       if (option%knn > 0) then
@@ -5399,9 +5824,9 @@ contains
                rank = rank + rankup
                rank0 = rank
 
-               if (rank == rmax)then
-                  goto 10 !*** skip ACA iteration
-               endif
+               ! if (rank == rmax)then
+               !    goto 10 !*** skip ACA iteration
+               ! endif
 
                ! !**** update fnorm of UV and matUmatV (this is commented out to leave normUV=normA=0 for aca iteration)
                ! call LR_Fnorm(column_R_knn, row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
@@ -5424,19 +5849,22 @@ contains
                call geqp3f90(row_Rtmp_knn, jpvt, tau, flop=flop)
                stats%Flop_Fill = stats%Flop_Fill + flop
                select_column(1:r_est) = jpvt(1:r_est)
-            else
-               error = 0
-               goto 20   !*** no effective rank found using KNN, go to ACA iteration
+            ! else
+            !    error = 0
+               ! goto 20   !*** no effective rank found using KNN, go to ACA iteration
             endif
          endif
       endif
 
-20    do while (normUV >= tolerance*normA .and. itr < itrmax)
+      do while (normUV >= tolerance*normA .and. itr < itrmax .and. rank<rmax)
 
          !**** create random column index for the first iteration
          if (rank == 0) then
             call rperm(N, perms)
             select_column = perms(1:r_est)
+            ! do i=1,r_est
+            !    select_column(i)=i
+            ! enddo
          endif
 
          select_column1 = select_column
@@ -5480,6 +5908,9 @@ contains
          call geqp3f90(column_RT, jpvt, tau, flop=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop
          select_row(1:r_est) = jpvt(1:r_est)
+
+         ! write(*,*)itr, 'BACA ref col', select_column(1:r_est), 'row', select_row(1:r_est), normUV,normA, header_m, header_n, fnorm(column_R,M,r_est)
+
 
          !**** Compute rows row_R in CUR
          ! !$omp end parallel do
@@ -5581,7 +6012,7 @@ contains
 
       ! write(*,*)normUV,normA
 
-10    if (allocated(row_R_knn)) deallocate (row_R_knn)
+      if (allocated(row_R_knn)) deallocate (row_R_knn)
       if (allocated(row_Rtmp_knn)) deallocate (row_Rtmp_knn)
       if (allocated(column_R_knn)) deallocate (column_R_knn)
       if (allocated(core_knn)) deallocate (core_knn)
@@ -5620,6 +6051,235 @@ contains
       return
 
    end subroutine LR_BACA_noOverlap
+
+
+
+
+   subroutine LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants,submatc,submatr, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,rcflag)
+
+
+      implicit none
+      type(acaquant)::acaquants
+      integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M
+      DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
+      DT, allocatable:: matU(:,:), matV(:,:)
+      real(kind=8), allocatable::Singular(:)
+      DT, allocatable :: core(:, :), core_knn(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
+      real(kind=8):: normA, normUV, flop, maxvalue
+      integer itr, itrmax, r_est, r_est_knn_r, r_est_knn, r_est_knn_c, r_est_tmp, Nqr, bsize
+      integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
+      integer, allocatable :: jpvt(:)
+
+      integer i, j, ii, jj, iii, jjj, indx, rank_1, rank_2
+      real(kind=8) tolerance, SVD_tolerance
+      integer edge_m, edge_n, header_m, header_n, mn
+      real(kind=8) inner_UV, n1, n2, a, error
+      type(intersect)::submatc,submatr
+
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      integer rcflag ! rows or columns passed in
+
+      n1 = OMP_get_wtime()
+
+
+
+      r_est = min(bsize, min(M, N))
+      ! r_est=min(M,N)
+
+      Nqr = max(max(M, N), r_est)
+      allocate (jpvt(Nqr))
+      allocate (tau(Nqr))
+      allocate (select_column(r_est))
+      allocate (select_column1(r_est))
+      allocate (select_row(r_est))
+      select_column = 0
+      select_row = 0
+
+      allocate (row_R(r_est, N))
+      allocate (row_Rtmp(r_est, N))
+      allocate (column_R(M, r_est))
+      allocate (column_RT(r_est, M))
+      row_R = 0
+      row_Rtmp = 0
+      column_R = 0
+      column_RT = 0
+      allocate (perms(max(M, N)))
+      allocate (core(r_est, r_est))
+      ! allocate(core_inv(r_est,r_est))
+      core = 0
+      ! core_inv=0
+
+      normA = acaquants%normA
+      normUV = acaquants%normUV
+      itr = acaquants%itr
+      rank = acaquants%rank
+      rank0 = acaquants%rank0
+      select_column=acaquants%select_column
+      select_row=acaquants%select_row
+      select_column1 = select_column
+
+      column_R = submatc%dat
+
+
+      if(rcflag==0)then
+
+
+         if (rank > 0) then
+            do j = 1, r_est
+               call gemmf77('N', 'N', M, 1, rank, -cone, acaquants%matU, M, acaquants%matV(1, select_column(j)), rank, cone, column_R(1, j), M)
+               stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1, rank)
+               ! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
+            enddo
+            submatc%dat = column_R
+         endif
+
+         !**** Find row pivots from the columns column_R
+         call copymatT(column_R, column_RT, M, r_est)
+         if (rank > 0) column_RT(:, acaquants%rows(1:rank)) = 0
+         jpvt = 0
+         ! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+         call geqp3f90(column_RT, jpvt, tau, flop=flop)
+         stats%Flop_Fill = stats%Flop_Fill + flop
+         acaquants%select_row(1:r_est) = jpvt(1:r_est)
+
+         ! write(*,*)itr, 'BACA col', acaquants%select_column(1:r_est), 'row', acaquants%select_row(1:r_est), normUV,normA, header_m, header_n, fnorm(column_R,M,r_est)
+
+
+      else
+         row_R = submatr%dat
+         if (rank > 0) then
+            do i = 1, r_est
+               call gemmf77('N', 'N', 1, N, rank, -cone, acaquants%matU(select_row(i), 1), M, acaquants%matV, rank, cone, row_R(i, 1), r_est)
+               stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N, rank)
+               ! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
+            enddo
+         endif
+
+         !**** Compute the skeleton matrix in CUR
+         ! write(*,*)select_column(1:r_est),'jiba',header_m, header_n
+         do j = 1, r_est
+            core(:, j) = row_R(:, select_column(j))
+         enddo
+         maxvalue = abs(core(1, 1))
+
+
+         jpvt = 0
+         call geqp3modf90(core, jpvt, tau, tolerance, SafeUnderflow, ranknew, flop=flop)
+         stats%Flop_Fill = stats%Flop_Fill + flop
+         rankup = ranknew
+
+         if (rankup > 0) then
+            row_Rtmp = row_R
+            call un_or_mqrf90(core, tau, row_Rtmp, 'L', 'C', r_est, N, rankup, flop=flop)
+            stats%Flop_Fill = stats%Flop_Fill + flop
+            call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
+            stats%Flop_Fill = stats%Flop_Fill + flop
+
+            acaquants%columns(rank + 1:rankup + rank) = select_column1(jpvt(1:rankup))
+            acaquants%rows(rank + 1:rankup + rank) = select_row(1:rankup)
+
+            ! call assert(rank+rankup<=rmax,'try to increase rmax')
+            allocate(matU(M,rank+rankup))
+            allocate(matV(rank+rankup,N))
+            if(rank>0)then
+               matU(:,1:rank) = acaquants%matU(:,1:rank)
+               deallocate(acaquants%matU)
+            endif
+            do j = 1, rankup
+               matU(:, rank + j) = column_R(:, jpvt(j))
+            enddo
+            if(rank>0)then
+               matV(1:rank,:) = acaquants%matV(1:rank,:)
+               deallocate(acaquants%matV)
+            endif
+            matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
+            allocate(acaquants%matU(M,rank+rankup))
+            acaquants%matU=matU
+            deallocate(matU)
+            allocate(acaquants%matV(rank+rankup,N))
+            acaquants%matV=matV
+            deallocate(matV)
+
+            rank = rank + rankup
+            acaquants%rank=rank
+
+
+            !**** update fnorm of UV and matUmatV
+            call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, acaquants%normUV, tolerance*1e-2, Flops=flop)
+            stats%Flop_Fill = stats%Flop_Fill + flop
+            call LR_FnormUp(acaquants%matU, acaquants%matV, M, N, acaquants%rank0, rank - rankup, rankup, rank, acaquants%normA, acaquants%normUV, tolerance*1e-2, Flops=flop)
+
+            ! write(*,*)acaquants%normUV,acaquants%normA,'gana',rank,rankup
+
+            stats%Flop_Fill = stats%Flop_Fill + flop
+
+            if (acaquants%normA < SafeUnderflow) then
+               acaquants%finish = .true.
+            else
+               !**** Find column pivots for the next iteration
+               jpvt = 0
+               row_Rtmp = row_R
+               if (rank > 0) row_Rtmp(:, acaquants%columns(1:rank)) = 0
+               ! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
+               call geqp3f90(row_Rtmp, jpvt, tau, flop=flop)
+               stats%Flop_Fill = stats%Flop_Fill + flop
+               acaquants%select_column(1:r_est) = jpvt(1:r_est)
+            endif
+         else
+            acaquants%finish = .true.
+         endif
+         acaquants%itr = acaquants%itr + 1
+         if(acaquants%finish .eqv. .false.)acaquants%finish = .not. (acaquants%normUV >= tolerance*acaquants%normA .and. acaquants%itr < acaquants%itrmax)
+         if(acaquants%finish .eqv. .true.)then
+            if (rank > 0) then
+               if(allocated(acaquants%Singular))deallocate(acaquants%Singular)
+               allocate(acaquants%Singular(rank))
+               call LR_ReCompression(acaquants%matU, acaquants%matV, acaquants%Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
+               stats%Flop_Fill = stats%Flop_Fill + flop
+               rank = ranknew
+               acaquants%rank = rank
+            else
+               rank = 1
+               acaquants%rank = rank
+               allocate(acaquants%matU(M,rank))
+               acaquants%matU=0
+               allocate(acaquants%matV(rank,N))
+               acaquants%matV=0
+               allocate(acaquants%Singular(rank))
+               acaquants%Singular =1
+            endif
+         endif
+      endif
+
+
+      deallocate (jpvt)
+      deallocate (tau)
+      deallocate (select_column)
+      deallocate (select_column1)
+      deallocate (select_row)
+      deallocate (row_R)
+      deallocate (row_Rtmp)
+      deallocate (column_R)
+      deallocate (column_RT)
+      deallocate (core)
+      deallocate (perms)
+
+
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+      return
+
+   end subroutine LR_BACA_noOverlap_Oneiteration
+
+
+
+
+
 
    subroutine LR_SeudoSkeleton(blocks, header_m, header_n, M, N, rmaxc, rmaxr, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, ctxt, pgno)
 

@@ -153,6 +153,23 @@ module BPACK_DEFS
         DT, allocatable :: vector(:)
     end type vectorset
 
+    !**** information used for one ACA iteration
+    type acaquant
+        integer M,N ! matrix dimensions
+        integer:: header_m=0, header_n=0 ! matrix offsets
+        DT, allocatable:: matU(:,:),matV(:,:)
+        integer,allocatable:: select_column(:),select_row(:)
+        real(kind=8),allocatable:: Singular(:)
+        logical:: finish=.False. ! finish flag
+        real(kind=8):: normA=0,normUV=0
+        integer,allocatable:: rows(:),columns(:)
+        integer:: itr=0 ! iteration count
+        integer:: rank=0 ! rank of the aca
+        integer:: rank0=0 ! the first rank0 columns of matU don't count towards normA
+        integer:: itrmax=0 ! max iteration count
+    end type acaquant
+
+
     !**** one rank*rank butterfly block
     type butterflymatrix
         DT, pointer :: matrix(:, :)=> null() ! entries of the block
