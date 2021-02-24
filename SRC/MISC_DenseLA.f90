@@ -161,9 +161,10 @@ contains
    subroutine gesvd_robust(Matrix, Singular, UU, VV, mm, nn, mn_min, flop)
       implicit none
       integer mm, nn, mn_min
-      DT Matrix(:, :), UU(:, :), VV(:, :)
+      DT Matrix(:, :), UU(:, :), VV(:, :),Matrix0(mm,nn)
       real(kind=8) Singular(:)
       real(kind=8), optional::flop
+      integer INFO
 
       if (mm == 1) then
          UU(1, 1) = 1d0
@@ -193,12 +194,13 @@ contains
             Singular = 0
             UU = 0
             VV = 0
+            Matrix0 =Matrix(1:mm,1:nn)
+            call gesddf90(Matrix0, Singular, UU, VV, INFO, flop=flop) 
 
-            call gesddf90(Matrix, Singular, UU, VV, flop=flop)
-
-            !!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC)
-            ! call gesvdf90(Matrix,Singular,UU,VV,flop=flop)
-
+            if (INFO /= 0) then
+               !!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC)
+               call gesvdf90(Matrix,Singular,UU,VV,flop=flop)
+            endif
          endif
       endif
 
@@ -302,20 +304,21 @@ contains
       if (present(flop)) flop = flops_dgesvd(m, n)
    end subroutine dgesvdf90
 
-   subroutine gesddf90(Matrix, Singular, UU, VV, flop)
+   subroutine gesddf90(Matrix, Singular, UU, VV, INFO, flop)
       implicit none
       DT::Matrix(:, :), UU(:, :), VV(:, :)
       real(kind=8) Singular(:)
       real(kind=8), optional::flop
+      integer INFO
 
 #if DAT==1
-               call dgesddf90(Matrix, Singular, UU, VV, flop)
+               call dgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 #else
-               call zgesddf90(Matrix, Singular, UU, VV, flop)
+               call zgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 #endif
    end subroutine gesddf90
 
-   subroutine zgesddf90(Matrix, Singular, UU, VV, flop)
+   subroutine zgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 
 !
 
@@ -350,16 +353,16 @@ contains
 
       call ZGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, IWORK, INFO)
 
-      if (INFO /= 0) then
-         write (*, *) 'SDD failed!!', INFO
-         stop
-      endif
+      ! if (INFO /= 0) then
+      !    write (*, *) 'SDD failed!!', INFO
+      !    stop
+      ! endif
 
       deallocate (WORK, RWORK, IWORK)
       if (present(flop)) flop = flops_zgesdd(m, n)
    end subroutine zgesddf90
 
-   subroutine dgesddf90(Matrix, Singular, UU, VV, flop)
+   subroutine dgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 
 !
 
@@ -392,10 +395,10 @@ contains
 
       call DGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, IWORK, INFO)
 
-      if (INFO /= 0) then
-         write (*, *) 'SDD failed!!', INFO
-         stop
-      endif
+      ! if (INFO /= 0) then
+      !    write (*, *) 'SDD failed!!', INFO
+      !    stop
+      ! endif
 
       deallocate (WORK, IWORK)
       if (present(flop)) flop = flops_dgesdd(m, n)
