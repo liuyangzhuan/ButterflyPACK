@@ -2774,19 +2774,20 @@ contains
             call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
 
-            do index_i_loc = 1, nr
-               do index_j_loc = 1, nc
-                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
-                  M = acaquants(index_ij_loc)%M
-                  N = acaquants(index_ij_loc)%N
-                  header_m = acaquants(index_ij_loc)%header_m
-                  header_n = acaquants(index_ij_loc)%header_n
-                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
-                     call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,0)
-                     ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'col', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
-                  endif
-               enddo
+            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)            
+            do index_ij_loc = 1, nr*nc
+               M = acaquants(index_ij_loc)%M
+               N = acaquants(index_ij_loc)%N
+               header_m = acaquants(index_ij_loc)%header_m
+               header_n = acaquants(index_ij_loc)%header_n
+               flops1 = 0
+               if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                  call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,0, flops1)
+                  ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'col', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
+               endif
+               flops =flops+flops1
             enddo
+            !$omp end parallel do
 
             do index_i_loc = 1, nr
                do index_j_loc = 1, nc
@@ -2829,19 +2830,20 @@ contains
             ! the rows
             call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
-            do index_i_loc = 1, nr
-               do index_j_loc = 1, nc
-                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
-                  M = acaquants(index_ij_loc)%M
-                  N = acaquants(index_ij_loc)%N
-                  header_m = acaquants(index_ij_loc)%header_m
-                  header_n = acaquants(index_ij_loc)%header_n
-                  if(acaquants(index_ij_loc)%finish .eqv. .false.)then
-                     call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,1)
-                     ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'row', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
-                  endif
-               enddo
+            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)            
+            do index_ij_loc = 1, nr*nc
+               M = acaquants(index_ij_loc)%M
+               N = acaquants(index_ij_loc)%N
+               header_m = acaquants(index_ij_loc)%header_m
+               header_n = acaquants(index_ij_loc)%header_n
+               flops1 = 0
+               if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                  call LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants(index_ij_loc),submats(index_ij_loc*2-1),submats(index_ij_loc*2), tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,1,flops1)
+                  ! write(*,*)acaquants(index_ij_loc)%itr, index_ij_loc,'row', acaquants(index_ij_loc)%finish, acaquants(index_ij_loc)%rank, acaquants(index_ij_loc)%normUV, acaquants(index_ij_loc)%normA
+               endif
+               flops =flops+flops1
             enddo
+            !$omp end parallel do
 
             finish=.true.
             do index_i_loc = 1, nr
@@ -2928,7 +2930,6 @@ contains
          deallocate(acaquants)
 
 #else
-   
          passflag = 0
          do while (passflag == 0)
             call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
@@ -6066,7 +6067,7 @@ contains
 
 
 
-   subroutine LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants,submatc,submatr, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,rcflag)
+   subroutine LR_BACA_noOverlap_Oneiteration(header_m, header_n, M,N,acaquants,submatc,submatr, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option,rcflag,flops)
 
 
       implicit none
@@ -6076,7 +6077,7 @@ contains
       DT, allocatable:: matU(:,:), matV(:,:)
       real(kind=8), allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_knn(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
-      real(kind=8):: normA, normUV, flop, maxvalue
+      real(kind=8):: normA, normUV, flop, maxvalue,flops
       integer itr, itrmax, r_est, r_est_knn_r, r_est_knn, r_est_knn_c, r_est_tmp, Nqr, bsize
       integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
       integer, allocatable :: jpvt(:)
@@ -6097,7 +6098,7 @@ contains
       n1 = OMP_get_wtime()
 
 
-
+      flops=0
       r_est = min(bsize, min(M, N))
       ! r_est=min(M,N)
 
@@ -6142,7 +6143,7 @@ contains
          if (rank > 0) then
             do j = 1, r_est
                call gemmf77('N', 'N', M, 1, rank, -cone, acaquants%matU, M, acaquants%matV(1, select_column(j)), rank, cone, column_R(1, j), M)
-               stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1, rank)
+               flops = flops + flops_gemm(M, 1, rank)
                ! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
             enddo
             submatc%dat = column_R
@@ -6154,7 +6155,7 @@ contains
          jpvt = 0
          ! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
          call geqp3f90(column_RT, jpvt, tau, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         flops = flops + flop
          acaquants%select_row(1:r_est) = jpvt(1:r_est)
 
          ! write(*,*)itr, 'BACA col', acaquants%select_column(1:r_est), 'row', acaquants%select_row(1:r_est), normUV,normA, header_m, header_n, fnorm(column_R,M,r_est)
@@ -6165,7 +6166,7 @@ contains
          if (rank > 0) then
             do i = 1, r_est
                call gemmf77('N', 'N', 1, N, rank, -cone, acaquants%matU(select_row(i), 1), M, acaquants%matV, rank, cone, row_R(i, 1), r_est)
-               stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N, rank)
+               flops = flops + flops_gemm(1, N, rank)
                ! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
             enddo
          endif
@@ -6180,15 +6181,15 @@ contains
 
          jpvt = 0
          call geqp3modf90(core, jpvt, tau, tolerance, SafeUnderflow, ranknew, flop=flop)
-         stats%Flop_Fill = stats%Flop_Fill + flop
+         flops = flops + flop
          rankup = ranknew
          if(rank+rankup>min(M,N))rankup = min(M,N)-rank
          if (rankup > 0) then
             row_Rtmp = row_R
             call un_or_mqrf90(core, tau, row_Rtmp, 'L', 'C', r_est, N, rankup, flop=flop)
-            stats%Flop_Fill = stats%Flop_Fill + flop
+            flops = flops + flop
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
-            stats%Flop_Fill = stats%Flop_Fill + flop
+            flops = flops + flop
 
             acaquants%columns(rank + 1:rankup + rank) = select_column1(jpvt(1:rankup))
             acaquants%rows(rank + 1:rankup + rank) = select_row(1:rankup)
@@ -6221,12 +6222,12 @@ contains
 
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, acaquants%normUV, tolerance*1e-2, Flops=flop)
-            stats%Flop_Fill = stats%Flop_Fill + flop
+            flops = flops + flop
             call LR_FnormUp(acaquants%matU, acaquants%matV, M, N, acaquants%rank0, rank - rankup, rankup, rank, acaquants%normA, acaquants%normUV, tolerance*1e-2, Flops=flop)
 
             ! write(*,*)acaquants%normUV,acaquants%normA,'gana',rank,rankup
 
-            stats%Flop_Fill = stats%Flop_Fill + flop
+            flops = flops + flop
 
             if (acaquants%normA < SafeUnderflow) then
                acaquants%finish = .true.
@@ -6237,7 +6238,7 @@ contains
                if (rank > 0) row_Rtmp(:, acaquants%columns(1:rank)) = 0
                ! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,SafeUnderflow,ranknew)
                call geqp3f90(row_Rtmp, jpvt, tau, flop=flop)
-               stats%Flop_Fill = stats%Flop_Fill + flop
+               flops = flops + flop
                acaquants%select_column(1:r_est) = jpvt(1:r_est)
             endif
          else
@@ -6250,7 +6251,7 @@ contains
                if(allocated(acaquants%Singular))deallocate(acaquants%Singular)
                allocate(acaquants%Singular(rank))
                call LR_ReCompression(acaquants%matU, acaquants%matV, acaquants%Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
-               stats%Flop_Fill = stats%Flop_Fill + flop
+               flops = flops + flop
                rank = ranknew
                acaquants%rank = rank
             else
