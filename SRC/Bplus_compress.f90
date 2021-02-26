@@ -2509,7 +2509,7 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
-#if 1 
+if(option%elem_extract==1)then ! advancing multiple acas for entry evaluation
 
          tolerance = option%tol_comp*0.1
          SVD_tolerance = option%tol_comp
@@ -2727,7 +2727,7 @@ contains
          passflag = 0
          do while (passflag == 0)
             call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
-         enddo   
+         enddo
 
          finish=.false.
          do while(.not. finish)
@@ -2774,7 +2774,7 @@ contains
             call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
 
-            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)            
+            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
             do index_ij_loc = 1, nr*nc
                M = acaquants(index_ij_loc)%M
                N = acaquants(index_ij_loc)%N
@@ -2830,7 +2830,7 @@ contains
             ! the rows
             call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
-            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)            
+            !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
             do index_ij_loc = 1, nr*nc
                M = acaquants(index_ij_loc)%M
                N = acaquants(index_ij_loc)%N
@@ -2929,12 +2929,7 @@ contains
          deallocate(submats)
          deallocate(acaquants)
 
-#else
-         passflag = 0
-         do while (passflag == 0)
-            call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
-         enddo   
-
+else
          allocate(submats(1))
          ! construct the middle level and the left half
          do index_i_loc = 1, nr
@@ -3058,7 +3053,7 @@ contains
             call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
          enddo
          deallocate(submats)
-#endif
+endif
 
          call BF_exchange_matvec(blocks, ButterflyP_old, stats, ptree, level_half, 'R', 'B')
          call BF_exchange_matvec(blocks, ButterflyMiddle, stats, ptree, level_half, 'R', 'B')
@@ -3264,7 +3259,7 @@ contains
          ! return
       endif
 
-      ! write(*,*)'Out: ',ptree%MyID,blocks%row_group,blocks%col_group      
+      ! write(*,*)'Out: ',ptree%MyID,blocks%row_group,blocks%col_group
 
    end subroutine BF_compress_N15
 
