@@ -94,6 +94,10 @@ set(CDEXM InterfaceTest.cpp)
 add_executable(ctest ${CDEXM})
 target_link_libraries(ctest ${all_link_libs_d})
 
+set(CDEXM InterfaceTest_simple.cpp)
+add_executable(ctest_simple ${CDEXM})
+target_link_libraries(ctest_simple ${all_link_libs_d})
+add_dependencies(ctest_simple ctest)
 
 ########################################### double complex C++ drivers
 
