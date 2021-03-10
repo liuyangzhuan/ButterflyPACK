@@ -279,7 +279,10 @@ contains
          val_d = stats%Mem_Comp_for
          valid_opt = 1
       endif
-
+      if (trim(str) == 'Mem_Peak') then
+         val_d = stats%Mem_Peak
+         valid_opt = 1
+      endif
       if (trim(str) == 'Rank_max') then
          val_d = dble(maxval(stats%rankmax_of_level_global))
          if(allocated(stats%rankmax_of_level_global_factor))val_d = NINT(max(dble(val_d),dble(maxval(stats%rankmax_of_level_global_factor))))
