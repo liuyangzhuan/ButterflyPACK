@@ -2509,12 +2509,21 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
-if(option%elem_extract==1)then ! advancing multiple acas for entry evaluation
+if(option%elem_extract==1)then ! advancing multiple acas for entry extraction
 
          tolerance = option%tol_comp*0.1
+         ! tolerance = option%tol_comp
          SVD_tolerance = option%tol_comp
          bsize = option%BACA_Batch
 
+         if(allocated(stats%rankmax_of_level))then 
+            if(level_blocks>=1)then
+            if(stats%rankmax_of_level(level_blocks-1)/=0)then
+               bsize = max(64,ceiling_safe(stats%rankmax_of_level(level_blocks-1)/3d0))
+            endif
+            endif
+         endif
+ 
          nrc=nr*nc
          allocate(submats(max(1,nrc*2)))  ! odd for columns, even for rows
          allocate(acaquants(nrc))
