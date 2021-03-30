@@ -1116,18 +1116,18 @@ contains
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(ii*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
-         if (mm(bb) > 0) then
+         ! if (mm(bb) > 0) then
             if (bb == 1) then
-               allocate (matrixtemp1(mm(bb), ranks(ii*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matrixtemp1(max(1,mm(bb)), ranks(ii*2 - 1 + bb - 1 - Bidxs + 1)))
                matrixtemp => matrixtemp1
             endif
             if (bb == 2) then
-               allocate (matrixtemp2(mm(bb), ranks(ii*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matrixtemp2(max(1,mm(bb)), ranks(ii*2 - 1 + bb - 1 - Bidxs + 1)))
                matrixtemp => matrixtemp2
             endif
-         endif
+         ! endif
          n1 = OMP_get_wtime()
-         call Redistribute1Dto1D(AR, size(AR,1), block_inv%M_p, 0, block_inv%pgno, matrixtemp, mm(bb), M_p, offout(bb), block_off%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         call Redistribute1Dto1D(AR, size(AR,1), block_inv%M_p, 0, block_inv%pgno, matrixtemp, max(1,mm(bb)), M_p, offout(bb), block_off%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
          n2 = OMP_get_wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
       enddo
@@ -1162,9 +1162,7 @@ contains
          call Redistribute1Dto1D(matrixtemp, mm(bb), M_p, offout(bb), block_off%pgno, AR, size(AR,1),block_inv%M_p, 0, block_inv%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
          n2 = OMP_get_wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
-         if (mm(bb) > 0) then
-            deallocate (matrixtemp)
-         endif
+         deallocate (matrixtemp)
       enddo
 
    end subroutine PComputeRange_twoforward
@@ -1212,29 +1210,29 @@ contains
          block_off => ho_bf1%levels(level)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
          N_p => block_off%N_p
-         if (mm(bb) > 0) then
+         ! if (mm(bb) > 0) then
             if (bb == 1) then
-               allocate (matQ1(mm(bb), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matQ1(max(mm(bb),1), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
                matQ => matQ1
             endif
             if (bb == 2) then
-               allocate (matQ2(mm(bb), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matQ2(max(mm(bb),1), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
                matQ => matQ2
             endif
-         endif
-         call Redistribute1Dto1D(Q, size(Q,1), block_inv%M_p, 0, block_inv%pgno, matQ, mm(bb), M_p, offM(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         ! endif
+         call Redistribute1Dto1D(Q, size(Q,1), block_inv%M_p, 0, block_inv%pgno, matQ, max(mm(bb),1), M_p, offM(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
 
-         if (nn(bb) > 0) then
+         ! if (nn(bb) > 0) then
             if (bb == 1) then
-               allocate (matQcA_trans1(nn(bb), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matQcA_trans1(max(nn(bb),1), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
                matQcA_trans => matQcA_trans1
             endif
             if (bb == 2) then
-               allocate (matQcA_trans2(nn(bb), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
+               allocate (matQcA_trans2(max(nn(bb),1), ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1)))
                matQcA_trans => matQcA_trans2
             endif
-         endif
-         call Redistribute1Dto1D(QcA_trans, size(QcA_trans,1), block_inv%N_p, 0, block_inv%pgno, matQcA_trans, nn(bb), N_p, offN(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
+         ! endif
+         call Redistribute1Dto1D(QcA_trans, size(QcA_trans,1), block_inv%N_p, 0, block_inv%pgno, matQcA_trans, max(1,nn(bb)), N_p, offN(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -1253,9 +1251,9 @@ contains
          if (mm(bb) > 0) then
             call PQxSVDTruncate(block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matQ, matQcA_trans, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), rank, option, stats, ptree, flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-            deallocate (matQcA_trans)
-            deallocate (matQ)
          endif
+         deallocate (matQcA_trans)
+         deallocate (matQ)         
       enddo
 
    end subroutine PQxSVDTruncate_twoforward
@@ -1304,29 +1302,29 @@ contains
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
          N_p => block_off%N_p
-         if (nn(bb) > 0) then
+         ! if (nn(bb) > 0) then
             if (bb == 1) then
-               allocate (matOut1(nn(bb), num_vect_sub))
+               allocate (matOut1(max(1,nn(bb)), num_vect_sub))
                matOut => matOut1
             endif
             if (bb == 2) then
-               allocate (matOut2(nn(bb), num_vect_sub))
+               allocate (matOut2(max(1,nn(bb)), num_vect_sub))
                matOut => matOut2
             endif
-         endif
-         call Redistribute1Dto1D(RandVectOut, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matOut, nn(bb), N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
+         ! endif
+         call Redistribute1Dto1D(RandVectOut, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matOut, max(1,nn(bb)), N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
 
-         if (mm(bb) > 0) then
+         ! if (mm(bb) > 0) then
             if (bb == 1) then
-               allocate (matIn1(mm(bb), num_vect_sub))
+               allocate (matIn1(max(1,mm(bb)), num_vect_sub))
                matIn => matIn1
             endif
             if (bb == 2) then
-               allocate (matIn2(mm(bb), num_vect_sub))
+               allocate (matIn2(max(1,mm(bb)), num_vect_sub))
                matIn => matIn2
             endif
-         endif
-         call Redistribute1Dto1D(RandVectIn, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matIn, mm(bb),M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
+         ! endif
+         call Redistribute1Dto1D(RandVectIn, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matIn, max(1,mm(bb)),M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -1344,9 +1342,9 @@ contains
          if (bb == 2) matIn => matIn2
          if (mm(bb) > 0) then
             call BF_Resolving_Butterfly_LL_dat(num_vect_sub, nth_s, nth_e, Ng, level, block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matIn, matOut, option, ptree, msh, stats)
-            deallocate (matOut)
-            deallocate (matIn)
          endif
+         deallocate (matOut)
+         deallocate (matIn)         
       enddo
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 
@@ -1396,29 +1394,29 @@ contains
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
          N_p => block_off%N_p
-         if (mm(bb) > 0) then
+         ! if (mm(bb) > 0) then
             if (bb == 1) then
-               allocate (matOut1(mm(bb), num_vect_sub))
+               allocate (matOut1(max(1,mm(bb)), num_vect_sub))
                matOut => matOut1
             endif
             if (bb == 2) then
-               allocate (matOut2(mm(bb), num_vect_sub))
+               allocate (matOut2(max(1,mm(bb)), num_vect_sub))
                matOut => matOut2
             endif
-         endif
-         call Redistribute1Dto1D(RandVectOut, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matOut, mm(bb), M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
+         ! endif
+         call Redistribute1Dto1D(RandVectOut, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matOut, max(1,mm(bb)), M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
 
-         if (nn(bb) > 0) then
+         ! if (nn(bb) > 0) then
             if (bb == 1) then
-               allocate (matIn1(nn(bb), num_vect_sub))
+               allocate (matIn1(max(nn(bb),1), num_vect_sub))
                matIn => matIn1
             endif
             if (bb == 2) then
-               allocate (matIn2(nn(bb), num_vect_sub))
+               allocate (matIn2(max(nn(bb),1), num_vect_sub))
                matIn => matIn2
             endif
-         endif
-         call Redistribute1Dto1D(RandVectIn, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matIn, nn(bb),N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
+         ! endif
+         call Redistribute1Dto1D(RandVectIn, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matIn, max(1,nn(bb)),N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
@@ -1436,9 +1434,9 @@ contains
          if (bb == 2) matIn => matIn2
          if (mm(bb) > 0) then
             call BF_Resolving_Butterfly_RR_dat(num_vect_sub, nth_s, nth_e, Ng, level, block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matIn, matOut, option, ptree, msh, stats)
-            deallocate (matOut)
-            deallocate (matIn)
          endif
+         deallocate (matOut)
+         deallocate (matIn)         
       enddo
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 
