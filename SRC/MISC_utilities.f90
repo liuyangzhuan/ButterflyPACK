@@ -1477,6 +1477,7 @@ contains
          seed(i) = lcg(t)
       end do
       call random_seed(put=seed)
+      deallocate(seed)
    contains
 ! This simple PRNG might not be good enough for real work, but is
 ! sufficient for seeding a better PRNG.

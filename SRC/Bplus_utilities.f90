@@ -12009,9 +12009,13 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
                 mat1 = 0
                 mat1(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
                 call gemmf77('N', 'N', mm, nvec1, nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn1 + 2, czero, mat1(3, 1), mm + 2)
+#ifdef HAVE_TASKLOOP
                 !$omp atomic
+#endif
                 stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec1, nn1)
+#ifdef HAVE_TASKLOOP
                 !$omp end atomic
+#endif
             endif
 
             allocate (mat2(mm + 2, nvec2))
@@ -12019,9 +12023,13 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
                 mat2 = 0
                 mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(1:2, :)
                 call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
+#ifdef HAVE_TASKLOOP
                 !$omp atomic
+#endif
                 stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec2, nn2)
+#ifdef HAVE_TASKLOOP
                 !$omp end atomic
+#endif
             endif
 
             !**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
@@ -12112,9 +12120,13 @@ subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,pt
             mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
             call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
 
+#ifdef HAVE_TASKLOOP
             !$omp atomic
+#endif
             stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(mm, nvec2, nn2)
+#ifdef HAVE_TASKLOOP
             !$omp end atomic
+#endif
 
             if (associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
                nvec1 = size(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, 2)
@@ -12310,9 +12322,13 @@ subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, lev
       enddo
 
       call gemmf77('N', 'N', nr, nc, rank, cone, mat, nr, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, czero, Vpartial, nr)
+#ifdef HAVE_TASKLOOP
       !$omp atomic
+#endif
       stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(nr, nc, rank)
+#ifdef HAVE_TASKLOOP
       !$omp end atomic
+#endif
 
       do ii = 1, nr
          iii = BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%index(idxr + ii, 2)
