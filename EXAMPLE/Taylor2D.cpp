@@ -39,6 +39,7 @@
 
 #include "G2D/rt_nonfinite.h"
 #include "G2D/G2D.h"
+#include "G2D/bessel.h"
 
 
 #include "zC_BPACK_wrapper.h"
@@ -58,6 +59,7 @@ public:
   int _d = 0;   // data dimension 2 or 3
   int _n = 0;   // size of the matrix
   double _w = pi;   //angular frequency
+  double _dl = 0.01;   //length of each segment
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
   F2Cptr* bf;  //BF returned by Fortran code
@@ -69,18 +71,43 @@ public:
 
   C_QuantApp() = default;
 
-  C_QuantApp(vector<double> data, int d, double w)
-    : _data(move(data)), _d(d), _n(_data.size() / _d),_w(w){
+  C_QuantApp(vector<double> data, int d, double w, double dl)
+    : _data(move(data)), _d(d), _n(_data.size() / _d),_w(w),_dl(dl){
     assert(size_t(_n * _d) == _data.size());
+	}
+
+
+	_Complex double myhankel(double v, double z){
+	double eps1 = 1e-13;
+	_Complex double out =  {0.0,0.0};
+	if(v<0){
+		out = myhankel(-v,z);
+		out = out * (cos(-v*pi)+Im*sin(-v*pi));
+	}else if(fabs(round(v)-v)<eps1){   //v is integer
+		out = bessj(round(v),z) +Im*bessy(round(v),z);
+	}else if(fabs(v-0.5)<eps1){ // v=0.5
+		out = -Im*sqrt(2/(pi*z))*(cos(z)+Im*sin(z));
+	}else{
+		printf("wrong order in myhankel \n");
+		exit(0);
+	}
+	return out;
 	}
 
 
   inline void Sample(int m, int n, _Complex double* val){
 	  if(m==n){
-		  *val = 0;  //self term is not computed yet
+        double s0 = 1.0;
+        double gamma = 1.781072418;
+        // *val = 0;
+        *val = Im*_dl/4.0*(1+Im*2/pi*(log(gamma*_w*s0*_dl/4.0)-1));
 	  }else{
-		creal_T out =G2D(&_data[m * _d], &_data[n * _d], _w);
-		*val = (double)out.re+ Im*(double)out.im;
+		double tau=sqrt(pow(_data[m * _d]-_data[n * _d],2)+pow(_data[m * _d+1]-_data[n * _d+1],2));
+		*val = Im*_dl/4.0*myhankel(0,tau*_w);
+
+		// // call the 2D Taylor expansion
+		// creal_T out =G2D(&_data[m * _d], &_data[n * _d], _w);
+		// *val = (double)out.re+ Im*(double)out.im;
 	  }
   }
 };
@@ -343,9 +370,12 @@ if(myrank==master_rank){
 	/* Test the Taylor-expansion-based 2D Green function */
 
 	vector<double> data_geo;
+	double angle = pi;
 	data_geo.resize(Ndim*Npo);
-	double dtheta=(2*pi-eps)/(Npo);
-	double rmax=0.5;
+	double dtheta=(angle-eps)/(Npo);
+	double rmax=2;
+	double dl=dtheta*rmax;
+	double ppw=2*pi/w/dl;
 	double center[2];
 	center[0]=0.5;
 	center[1]=0.5;
@@ -354,7 +384,7 @@ if(myrank==master_rank){
 		data_geo[(ii-1) * Ndim+1] =rmax*sin(dtheta*(ii))+center[1];
 	}
 
-	quant_ptr=new C_QuantApp(data_geo, Ndim, w);
+	quant_ptr=new C_QuantApp(data_geo, Ndim, w, dl);
 	dat_ptr = new double[data_geo.size()];
 	for(int ii=0;ii<data_geo.size();ii++)
 		dat_ptr[ii] = data_geo.data()[ii];
@@ -364,7 +394,7 @@ if(myrank==master_rank){
 
 	/*****************************************************************/
 
-	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
+	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<" ppw "<<ppw<<std::endl;
 
 	int myseg=0;     // local number of unknowns
 	int* perms = new int[Npo]; //permutation vector returned by HODLR

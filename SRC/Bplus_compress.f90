@@ -1885,6 +1885,7 @@ contains
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:)
       integer emptyflag
       type(intersect)::submats(1)
+      type(SVD_quant)::SVD_Q
 
       level_butterfly = blocks%level_butterfly
       if(level_butterfly<=1)then
@@ -1960,10 +1961,10 @@ contains
                idxs_m = msh%basis_group(group_m)%head
                idxs_n = msh%basis_group(group_n)%head
 
-               rmax = min(option%rmax, min(mm, nn))
-               allocate (matU(mm, rmax))
-               allocate (matV(rmax, nn))
-               allocate (Singular(rmax))
+               rmax = min(option%BACA_Batch, min(mm, nn))
+               allocate (SVD_Q%matU(mm, rmax))
+               allocate (SVD_Q%matV(rmax, nn))
+               allocate (SVD_Q%Singular(rmax))
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -1983,14 +1984,14 @@ contains
                   end do
                else
                   frow = 1
-                  call LR_ACA(matU, matV, Singular, idxs_m, idxs_n, mm, nn, frow, rmax, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
+                  call LR_ACA(SVD_Q, idxs_m, idxs_n, mm, nn, frow, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
                   rankmax_for_butterfly(level_loc) = max(rank, rankmax_for_butterfly(level_loc))
                   rankmin_for_butterfly(level_loc) = min(rank, rankmin_for_butterfly(level_loc))
 
                   allocate (blocks%ButterflyMiddle(index_i_m, index_j_m)%matrix(rank, rank))
                   blocks%ButterflyMiddle(index_i_m, index_j_m)%matrix = 0
                   do ii = 1, rank
-                     blocks%ButterflyMiddle(index_i_m, index_j_m)%matrix(ii, ii) = 1d0/Singular(ii)
+                     blocks%ButterflyMiddle(index_i_m, index_j_m)%matrix(ii, ii) = 1d0/SVD_Q%Singular(ii)
                   end do
                end if
 
@@ -2001,7 +2002,7 @@ contains
                !$omp parallel do default(shared) private(i,j,k,ctemp)
                do j = 1, rank
                   do i = 1, mm
-                     mat_tmp(i, j) = matU(i, j)*Singular(j)
+                     mat_tmp(i, j) = SVD_Q%matU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
                !$omp end parallel do
@@ -2013,7 +2014,7 @@ contains
                ButterflyP_old%blocks(2*index_i_loc - 1, index_j_loc)%matrix = mat_tmp(1:mm1, 1:rank)
                ButterflyP_old%blocks(2*index_i_loc, index_j_loc)%matrix = mat_tmp(1 + mm1:mm, 1:rank)
 
-               deallocate (matU, matV, Singular, mat_tmp)
+               deallocate (SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, mat_tmp)
 
             end do
 
@@ -2118,10 +2119,10 @@ contains
                idxs_m = msh%basis_group(group_m)%head
                idxs_n = msh%basis_group(group_n)%head
 
-               rmax = min(option%rmax, min(mm, nn))
-               allocate (matU(mm, rmax))
-               allocate (matV(rmax, nn))
-               allocate (Singular(rmax))
+               rmax = min(option%BACA_Batch, min(mm, nn))
+               allocate (SVD_Q%matU(mm, rmax))
+               allocate (SVD_Q%matV(rmax, nn))
+               allocate (SVD_Q%Singular(rmax))
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2131,12 +2132,12 @@ contains
                if (emptyflag == 1) then
                   ! if(.not. near_or_far(group_m,group_n,2d0))then
                   rank = 1
-                  Singular(1:rank) = 0
-                  matV(1:rank, 1:nn) = 0
+                  SVD_Q%Singular(1:rank) = 0
+                  SVD_Q%matV(1:rank, 1:nn) = 0
                   ! if(blocks==342)write(111,*)Singular(1:rank)
                else
                   frow = 1
-                  call LR_ACA(matU, matV, Singular, idxs_m, idxs_n, mm, nn, frow, rmax, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
+                  call LR_ACA(SVD_Q, idxs_m, idxs_n, mm, nn, frow, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
                end if
 
                ! rank = min(rank,37)
@@ -2152,7 +2153,7 @@ contains
                !$omp parallel do default(shared) private(i,j,k,ctemp)
                do j = 1, nn
                   do i = 1, rank
-                     mat_tmp(i, j) = matV(i, j)*Singular(i)
+                     mat_tmp(i, j) = SVD_Q%matV(i, j)*SVD_Q%Singular(i)
                   enddo
                enddo
                !$omp end parallel do
@@ -2164,7 +2165,7 @@ contains
                ButterflyP_old%blocks(index_i_loc, 2*index_j_loc - 1)%matrix = mat_tmp(1:rank, 1:nn1)
                ButterflyP_old%blocks(index_i_loc, 2*index_j_loc)%matrix = mat_tmp(1:rank, 1 + nn1:nn)
 
-               deallocate (matU, matV, Singular, mat_tmp)
+               deallocate (SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, mat_tmp)
             end do
 
             n1 = OMP_get_wtime()
@@ -2455,6 +2456,7 @@ contains
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), core_knn(:,:)
       integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
       type(intersect) :: submats_dummy(1)
+      type(SVD_quant)::SVD_Q
 
       ! write(*,*)'In: ',ptree%MyID,blocks%row_group,blocks%col_group
       flops=0
@@ -2516,14 +2518,14 @@ if(option%elem_extract==1)then ! advancing multiple acas for entry extraction
          SVD_tolerance = option%tol_comp
          bsize = option%BACA_Batch
 
-         if(allocated(stats%rankmax_of_level))then 
+         if(allocated(stats%rankmax_of_level))then
             if(level_blocks>=1)then
             if(stats%rankmax_of_level(level_blocks-1)/=0)then
                bsize = max(64,ceiling_safe(stats%rankmax_of_level(level_blocks-1)/3d0))
             endif
             endif
          endif
- 
+
          nrc=nr*nc
          allocate(submats(max(1,nrc*2)))  ! odd for columns, even for rows
          allocate(acaquants(nrc))
@@ -2656,6 +2658,7 @@ if(option%elem_extract==1)then ! advancing multiple acas for entry extraction
 
                      r_est_knn_r = submats(index_ij_loc*2)%nr
                      r_est_knn_c = submats(index_ij_loc*2-1)%nc
+                     r_est = min(bsize, min(M, N))
 
                      if (r_est_knn_r > 0 .and. r_est_knn_c > 0) then
                         allocate (row_R_knn(r_est_knn_r, N))
@@ -2958,10 +2961,10 @@ else
                idxs_m = msh%basis_group(group_m)%head
                idxs_n = msh%basis_group(group_n)%head
 
-               rmax = min(option%rmax, min(mm, nn))
-               allocate (matU(mm, rmax))
-               allocate (matV(rmax, nn))
-               allocate (Singular(rmax))
+               rmax = min(option%BACA_Batch, min(mm, nn))
+               allocate (SVD_Q%matU(mm, rmax))
+               allocate (SVD_Q%matV(rmax, nn))
+               allocate (SVD_Q%Singular(rmax))
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2970,9 +2973,9 @@ else
 
                if (emptyflag == 1) then
                   rank = 1
-                  Singular(1:rank) = 0
-                  matU(1:mm, 1:rank) = 0
-                  matV(1:rank, 1:nn) = 0
+                  SVD_Q%Singular(1:rank) = 0
+                  SVD_Q%matU(1:mm, 1:rank) = 0
+                  SVD_Q%matV(1:rank, 1:nn) = 0
                   rankmax_for_butterfly(level_half) = max(rank, rankmax_for_butterfly(level_half))
                   allocate (ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank, rank))
                   ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
@@ -2982,11 +2985,11 @@ else
                else
                   if(option%RecLR_leaf == ACA)then
                      frow = 1
-                     call LR_ACA(matU, matV, Singular, idxs_m, idxs_n, mm, nn, frow, rmax, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
+                     call LR_ACA(SVD_Q, idxs_m, idxs_n, mm, nn, frow, rank, option%tol_comp*0.1, option%tol_comp, msh, ker, stats, ptree, option, error)
                   elseif(option%RecLR_leaf == BACANOVER)then
-                     call LR_BACA_noOverlap(matU, matV, Singular, idxs_m, idxs_n, mm, nn, rmax, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
+                     call LR_BACA_noOverlap(SVD_Q, idxs_m, idxs_n, mm, nn, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
                   elseif(option%RecLR_leaf == BACA)then
-                     call LR_BACA(matU, matV, Singular, idxs_m, idxs_n, mm, nn, rmax, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
+                     call LR_BACA(SVD_Q, idxs_m, idxs_n, mm, nn, rank, option%tol_comp*0.1, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
                   elseif (option%RecLR_leaf == RRQR) then
                         !!!!! RRQR
                         mn = min(mm, nn)
@@ -3014,7 +3017,7 @@ else
                         deallocate (mrange)
                         deallocate (nrange)
 
-                        call RRQR_SVD(QQ, mm, nn, mn, rmax, matU, matV, Singular, option%tol_comp, rank, flops1)
+                        call RRQR_SVD(QQ, mm, nn, mn, rmax, SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, option%tol_comp, rank, flops1)
                         stats%Flop_Fill = stats%Flop_Fill + flops1
 
                         deallocate(QQ)
@@ -3028,7 +3031,7 @@ else
                   allocate (ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(rank, rank))
                   ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                   do ii = 1, rank
-                     ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(ii, ii) = 1d0/Singular(ii)
+                     ButterflyMiddle%blocks(index_i_loc_s, index_j_loc_s)%matrix(ii, ii) = 1d0/SVD_Q%Singular(ii)
                   end do
                end if
 
@@ -3036,7 +3039,7 @@ else
                !!$omp parallel do default(shared) private(i,j,k,ctemp)
                do j = 1, rank
                   do i = 1, mm
-                     mat_tmp(i, j) = matU(i, j)*Singular(j)
+                     mat_tmp(i, j) = SVD_Q%matU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
                !!$omp end parallel do
@@ -3048,13 +3051,13 @@ else
                !!$omp parallel do default(shared) private(i,j,k,ctemp)
                do j = 1, nn
                   do i = 1, rank
-                     mat_tmp(i, j) = matV(i, j)*Singular(i)
+                     mat_tmp(i, j) = SVD_Q%matV(i, j)*SVD_Q%Singular(i)
                   enddo
                enddo
                !!$omp end parallel do
                allocate (ButterflyP_old1%blocks(index_i_loc, index_j_loc)%matrix(rank, nn))
                ButterflyP_old1%blocks(index_i_loc, index_j_loc)%matrix = mat_tmp(1:rank, 1:nn)
-               deallocate (matU, matV, Singular, mat_tmp)
+               deallocate (SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, mat_tmp)
             end do
          enddo
          passflag = 0
@@ -3927,7 +3930,7 @@ endif
       type(proctree)::ptree
       integer pgno, pgno1, pgno2
       integer:: cridx, info
-      DT, allocatable:: UU(:, :), VV(:, :), matU(:, :), matV(:, :), matU1(:, :), matV1(:, :), matU2(:, :), matV2(:, :), tmp(:, :), matU1D(:, :), matV1D(:, :), Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Fullmat(:, :), QQ1(:, :), matU2D(:, :), matV2D(:, :)
+      DT, allocatable:: UU(:,:),VV(:,:),matU(:, :), matV(:, :), matU1(:, :), matV1(:, :), matU2(:, :), matV2(:, :), tmp(:, :), matU1D(:, :), matV1D(:, :), Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Fullmat(:, :), QQ1(:, :), matU2D(:, :), matV2D(:, :)
       real(kind=8), allocatable::Singular(:)
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, M1, N1, M2, N2, rank1, rank2, ierr
       integer::descsmatU(9), descsmatV(9), descsmatU1(9), descsmatV1(9), descsmatU2(9), descsmatV2(9), descUU(9), descVV(9), descsmatU1c(9), descsmatU2c(9), descsmatV1c(9), descsmatV2c(9), descButterflyV(9), descButterflyU(9), descButterU1D(9), descButterV1D(9), descVin(9), descVout(9), descVinter(9), descFull(9)
@@ -3943,13 +3946,13 @@ endif
       integer::passflag = 0
       integer::Maxgrp
       type(intersect)::submats(1)
+      type(SVD_quant)::SVD_Q
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
       if (option%RecLR_leaf == ACANMERGE) then
          frow = 1
-         rmax = min(option%rmax, min(blocks%M, blocks%N))
-         call LR_ACA_Parallel(blocks, blocks%headm, blocks%headn, blocks%M, blocks%N, frow, rmax, rank, option%tol_comp, option%tol_comp, msh, ker, stats, ptree, option, error, ptree%pgrp(pgno)%ctxt, pgno)
+         call LR_ACA_Parallel(blocks, blocks%headm, blocks%headn, blocks%M, blocks%N, frow, rank, option%tol_comp, option%tol_comp, msh, ker, stats, ptree, option, error, ptree%pgrp(pgno)%ctxt, pgno)
          ! call LR_SeudoSkeleton(blocks,blocks%headm,blocks%headn,blocks%M,blocks%N,min(blocks%N,1000),min(blocks%M,1000),rank,option%tol_comp,option%tol_comp,msh,ker,stats,ptree,option,gd%ctxt)
 
       else
@@ -3977,10 +3980,10 @@ endif
 
             else if (option%RecLR_leaf == ACA) then
                !!!!! ACA-SVD
-               rmax = min(option%rmax, min(blocks%M, blocks%N))
-               allocate (UU(blocks%M, rmax))
-               allocate (VV(rmax, blocks%N))
-               allocate (Singular(rmax))
+               rmax = min(option%BACA_Batch, min(blocks%M, blocks%N))
+               allocate (SVD_Q%MatU(blocks%M, rmax))
+               allocate (SVD_Q%MatV(rmax, blocks%N))
+               allocate (SVD_Q%Singular(rmax))
                frow = 1
                ! !!!!!!!!!!!! picking a good first row may requires some geometry information. The following can be commented out if geometry info is not available
                ! Dimn = 0
@@ -4007,7 +4010,7 @@ endif
                ! deallocate(center)
                ! !!!!!!!!!!!!
 
-               call LR_ACA(UU, VV, Singular, blocks%headm, blocks%headn, blocks%M, blocks%N, frow, rmax, rank, option%tol_comp, option%tol_comp, msh, ker, stats, ptree, option, error)
+               call LR_ACA(SVD_Q, blocks%headm, blocks%headn, blocks%M, blocks%N, frow, rank, option%tol_comp, option%tol_comp, msh, ker, stats, ptree, option, error)
 
                ! if(error>option%tol_comp)then
                ! write(*,*)'niam',error
@@ -4023,7 +4026,7 @@ endif
                !$omp parallel do default(shared) private(i,j)
                do j = 1, rank
                   do i = 1, blocks%N
-                     blocks%ButterflyV%blocks(1)%matrix(i, j) = VV(j, i)
+                     blocks%ButterflyV%blocks(1)%matrix(i, j) = SVD_Q%MatV(j, i)
                   enddo
                enddo
                !$omp end parallel do
@@ -4033,22 +4036,22 @@ endif
                !$omp parallel do default(shared) private(i,j)
                do j = 1, rank
                   do i = 1, blocks%M
-                     blocks%ButterflyU%blocks(1)%matrix(i, j) = UU(i, j)*Singular(j)
+                     blocks%ButterflyU%blocks(1)%matrix(i, j) = SVD_Q%MatU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
                !$omp end parallel do
-               deallocate (UU, VV, Singular)
+               deallocate (SVD_Q%MatU, SVD_Q%MatV, SVD_Q%Singular)
 
             else if (option%RecLR_leaf == BACA .or. option%RecLR_leaf == BACANOVER) then
                !!! blocked ACA
 
-               rmax = min(option%rmax, min(blocks%M, blocks%N))
-               allocate (Singular(rmax))
-               allocate (UU(blocks%M, rmax))
-               allocate (VV(rmax, blocks%N))
+               rmax = min(option%BACA_Batch, min(blocks%M, blocks%N))
+               allocate (SVD_Q%Singular(rmax))
+               allocate (SVD_Q%MatU(blocks%M, rmax))
+               allocate (SVD_Q%MatV(rmax, blocks%N))
 
-               if (option%RecLR_leaf == BACA) call LR_BACA(UU, VV, Singular, blocks%headm, blocks%headn, blocks%M, blocks%N, rmax, rank, option%tol_comp, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
-               if (option%RecLR_leaf == BACANOVER) call LR_BACA_noOverlap(UU, VV, Singular, blocks%headm, blocks%headn, blocks%M, blocks%N, rmax, rank, option%tol_comp, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
+               if (option%RecLR_leaf == BACA) call LR_BACA(SVD_Q, blocks%headm, blocks%headn, blocks%M, blocks%N, rank, option%tol_comp, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
+               if (option%RecLR_leaf == BACANOVER) call LR_BACA_noOverlap(SVD_Q, blocks%headm, blocks%headn, blocks%M, blocks%N, rank, option%tol_comp, option%tol_comp, option%BACA_Batch, msh, ker, stats, ptree, option, error)
 
                blocks%rankmax = rank
                blocks%rankmin = rank
@@ -4058,7 +4061,7 @@ endif
                !$omp parallel do default(shared) private(i,j)
                do j = 1, rank
                   do i = 1, blocks%N
-                     blocks%ButterflyV%blocks(1)%matrix(i, j) = VV(j, i)
+                     blocks%ButterflyV%blocks(1)%matrix(i, j) = SVD_Q%MatV(j, i)
                   enddo
                enddo
                !$omp end parallel do
@@ -4068,11 +4071,11 @@ endif
                !$omp parallel do default(shared) private(i,j)
                do j = 1, rank
                   do i = 1, blocks%M
-                     blocks%ButterflyU%blocks(1)%matrix(i, j) = UU(i, j)*Singular(j)
+                     blocks%ButterflyU%blocks(1)%matrix(i, j) = SVD_Q%MatU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
                !$omp end parallel do
-               deallocate (UU, VV, Singular)
+               deallocate (SVD_Q%MatU, SVD_Q%MatV, SVD_Q%Singular)
 
             else if (option%RecLR_leaf == SVD) then
                !!!!! SVD
@@ -4297,25 +4300,27 @@ endif
 
    end subroutine LR_HBACA_Leaflevel
 
-   subroutine LR_ACA(matU, matV, Singular, header_m, header_n, rankmax_r, rankmax_c, frow, rmax, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error)
+   subroutine LR_ACA(SVD_Q,header_m, header_n, rankmax_r, rankmax_c, frow, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error)
 
 
       implicit none
 
+      type(SVD_quant)::SVD_Q
       integer i, j, ii, jj, indx, rank_1, rank_2
       integer blocks, index_j, group_nn, rank_blocks
       integer group_m, group_n, size_of_groupm, size_of_groupn
       real(kind=8) norm_Z, norm_U, norm_V, tolerance, SVD_tolerance, dist
       integer edgefine_m, edgefine_n, level_butterfly, level_blocks
       integer edge_m, edge_n, header_m, header_n, Dimn, mn, Navr, itr
-      integer rank, ranknew, row, column, rankmax, rankmax_c, rankmax_r, rankmax_min, rmax, idxs_r, idxs_c, frow
+      integer rank, ranknew, row, column, rankmax, rankmax_c, rankmax_r, rankmax_min, rmax, rmax0,idxs_r, idxs_c, frow
       DT value_Z, maxvalue
       DT inner_U, inner_V, ctemp, value_UVs
       real(kind=8) inner_UV, n1, n2, a, error, flop
       integer, allocatable:: select_column(:), select_row(:)
-      DT::matU(rankmax_r, rmax), matV(rmax, rankmax_c)
+      DT,allocatable::matU(:, :), matV(:, :)
       DT::matr(1, rankmax_c), matc(rankmax_r, 1)
-      real(kind=8)::Singular(rmax)
+      real(kind=8),allocatable::Singular(:)
+
       DT, allocatable:: row_R(:), column_R(:), value_UV(:)
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:), norm_UVavrbynorm_Z(:)
       type(mesh)::msh
@@ -4375,6 +4380,7 @@ endif
 
       ! call element_Zmn_block_user(1, rankmax_c, mrange, nrange, matr, msh, option, ker, 0, passflag, ptree, stats)
 
+      rmax=size(SVD_Q%MatU,2)
 
       row_R = matr(1, :)
       norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
@@ -4441,9 +4447,9 @@ endif
          end do
          if (abs(maxvalue) < SafeUnderflow) then
             rank = 1
-            matU(:, 1) = 0
-            matV(1, :) = 0
-            Singular(1) = 0
+            SVD_Q%matU(:, 1) = 0
+            SVD_Q%matV(1, :) = 0
+            SVD_Q%Singular(1) = 0
 
             deallocate (select_column)
             deallocate (select_row)
@@ -4462,7 +4468,7 @@ endif
       ! !$omp end parallel do
       ! !$omp parallel do default(shared) private(j)
       do j = 1, rankmax_c
-         matV(1, j) = row_R(j)
+         SVD_Q%matV(1, j) = row_R(j)
       enddo
       ! !$omp end parallel do
 
@@ -4507,7 +4513,7 @@ endif
 
       ! !$omp parallel do default(shared) private(i)
       do i = 1, rankmax_r
-         matU(i, 1) = column_R(i)
+         SVD_Q%matU(i, 1) = column_R(i)
       enddo
       ! !$omp end parallel do
 
@@ -4559,9 +4565,9 @@ endif
          ! enddo
          ! !$omp end parallel do
 
-         call gemmf77('N', 'N', 1, rankmax_c, rank, cone, matU(select_row(rank + 1), 1), rankmax_r, matV, rmax, czero, value_UV, 1)
+         call gemmf77('N', 'N', 1, rankmax_c, rank, cone, SVD_Q%matU(select_row(rank + 1), 1), rankmax_r, SVD_Q%matV, rmax, czero, value_UV, 1)
 
-         ! call gemmf90(matU(select_row(rank+1),1), rankmax_r,matV,rmax,value_UV,1,'N','N',1,rankmax_c,rank,cone,czero)
+         ! call gemmf90(SVD_Q%matU(select_row(rank+1),1), rankmax_r,SVD_Q%matV,rmax,value_UV,1,'N','N',1,rankmax_c,rank,cone,czero)
 
          row_R = row_R - value_UV(1:rankmax_c)
          norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
@@ -4585,10 +4591,34 @@ endif
          endif
          ! !$omp parallel do default(shared) private(j)
 
+         if (rank+1 > rmax) then
+
+            allocate(matU(rankmax_r,rmax))
+            allocate(matV(rmax,rankmax_c))
+            allocate(Singular(rmax))
+            matU=SVD_Q%matU
+            matV=SVD_Q%matV
+            Singular=SVD_Q%Singular
+
+            rmax0=rmax
+            rmax = min(2*rmax,rankmax_min)
+            deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
+            allocate(SVD_Q%matU(rankmax_r,rmax))
+            allocate(SVD_Q%matV(rmax,rankmax_c))
+            allocate(SVD_Q%Singular(rmax))
+            SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
+            SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
+            SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
+            deallocate(matU)
+            deallocate(matV)
+            deallocate(Singular)
+         end if
+
+
          ! !$omp end parallel do
          ! !$omp parallel do default(shared) private(j)
          do j = 1, rankmax_c
-            matV(rank + 1, j) = row_R(j)
+            SVD_Q%matV(rank + 1, j) = row_R(j)
          enddo
          ! !$omp end parallel do
 
@@ -4624,9 +4654,9 @@ endif
          ! enddo
          ! !$omp end parallel do
 
-         call gemmf77('N', 'N', rankmax_r, 1, rank, cone, matU, rankmax_r, matV(1, select_column(rank + 1)), rmax, czero, value_UV, rankmax_r)
+         call gemmf77('N', 'N', rankmax_r, 1, rank, cone, SVD_Q%matU, rankmax_r, SVD_Q%matV(1, select_column(rank + 1)), rmax, czero, value_UV, rankmax_r)
 
-         ! call gemmf90(matU, rankmax_r,matV(1,select_column(rank+1)),rmax,value_UV,rankmax_r,'N','N',rankmax_r,1,rank,cone,czero)
+         ! call gemmf90(matU, rankmax_r,SVD_Q%matV(1,select_column(rank+1)),rmax,value_UV,rankmax_r,'N','N',rankmax_r,1,rank,cone,czero)
 
          column_R = column_R - value_UV(1:rankmax_r)
          norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
@@ -4638,7 +4668,7 @@ endif
 
          ! !$omp parallel do default(shared) private(i)
          do i = 1, rankmax_r
-            matU(i, rank + 1) = column_R(i)
+            SVD_Q%matU(i, rank + 1) = column_R(i)
          enddo
          ! !$omp end parallel do
 
@@ -4652,13 +4682,13 @@ endif
             inner_V = 0
             ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_U)
             do i = 1, rankmax_r
-               ctemp = matU(i, rank + 1)*conjg(cmplx(matU(i, j), kind=8))
+               ctemp = SVD_Q%matU(i, rank + 1)*conjg(cmplx(SVD_Q%matU(i, j), kind=8))
                inner_U = inner_U + ctemp
             enddo
             ! !$omp end parallel do
             ! !$omp parallel do default(shared) private(i,ctemp) reduction(+:inner_V)
             do i = 1, rankmax_c
-               ctemp = matV(rank + 1, i)*conjg(cmplx(matV(j, i), kind=8))
+               ctemp = SVD_Q%matV(rank + 1, i)*conjg(cmplx(SVD_Q%matV(j, i), kind=8))
                inner_V = inner_V + ctemp
             enddo
             ! !$omp end parallel do
@@ -4684,11 +4714,10 @@ endif
          stats%Flop_Fill = stats%Flop_Fill + rank*rankmax_c + rank*rankmax_r
 
          rank = rank + 1
-         if (rank > rmax) then
-            ! write(*,*)'increase rmax',rank,rmax
-            ! stop
+
+         if(rankmax_min<=rmax)then
             exit
-         end if
+         endif
          if (rank < rankmax_min) then
             select_row(rank + 1) = maxloc(norm_column_R, 1)
          endif
@@ -4714,8 +4743,8 @@ endif
 ! ACA followed by SVD
 
       allocate (QQ1(rankmax_r, rank))
-      QQ1 = matU(1:rankmax_r, 1:rank)
-      ! call copymatN(matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
+      QQ1 = SVD_Q%matU(1:rankmax_r, 1:rank)
+      ! call copymatN(SVD_Q%matU(1:rankmax_r,1:rank),QQ1,rankmax_r,rank)
       allocate (tau_Q(rank))
       call geqrff90(QQ1, tau_Q, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
@@ -4734,7 +4763,7 @@ endif
       stats%Flop_Fill = stats%Flop_Fill + flop
 
       allocate (QQ2(rankmax_c, rank))
-      call copymatT(matV(1:rank, 1:rankmax_c), QQ2, rank, rankmax_c)
+      call copymatT(SVD_Q%matV(1:rank, 1:rankmax_c), QQ2, rank, rankmax_c)
       allocate (tau_Q(rank))
       call geqrff90(QQ2, tau_Q, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
@@ -4760,15 +4789,15 @@ endif
       allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
       call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
-      ! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-      call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, cone, czero, flop=flop)
+      ! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,SVD_Q%matU,rankmax_r)
+      call gemmf90(QQ1, rankmax_r, UUsml, rank, SVD_Q%matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, cone, czero, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
-      ! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax)
-      call gemmf90(VVsml, rank, QQ2, rankmax_c, matV, rmax, 'N', 'T', ranknew, rankmax_c, rank, cone, czero, flop=flop)
+      ! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,SVD_Q%matV,rmax)
+      call gemmf90(VVsml, rank, QQ2, rankmax_c, SVD_Q%matV, rmax, 'N', 'T', ranknew, rankmax_c, rank, cone, czero, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
 
       rank = ranknew
-      Singular(1:ranknew) = Singularsml(1:ranknew)
+      SVD_Q%Singular(1:ranknew) = Singularsml(1:ranknew)
 
       deallocate (mattemp, RR1, QQ1, UUsml, VVsml, Singularsml)
       deallocate (QQ2, RR2)
@@ -4781,7 +4810,7 @@ endif
 
    end subroutine LR_ACA
 
-   subroutine LR_ACA_Parallel(blocks, header_m, header_n, M, N, frow, rmax, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error, ctxt, pgno)
+   subroutine LR_ACA_Parallel(blocks, header_m, header_n, M, N, frow, rank, tolerance, SVD_tolerance, msh, ker, stats, ptree, option, error, ctxt, pgno)
 
 
       implicit none
@@ -4793,15 +4822,14 @@ endif
       real(kind=8) norm_Z, norm_U, norm_V, tolerance, SVD_tolerance, dist
       integer edgefine_m, edgefine_n, level_butterfly, level_blocks
       integer edge_m, edge_n, header_m, header_n, Dimn, mn, Navr, itr
-      integer rank, rank1, rank2, ranknew, row, column, rankmax, N, M, rankmax_min, rmax, idxs_r, idxs_c, frow, mn1, mn2
+      integer rank, rank1, rank2, ranknew, row, column, rankmax, N, M, rankmax_min, rmax0, rmax, idxs_r, idxs_c, frow, mn1, mn2
       DT value_Z, maxvalue
       DT inner_U, inner_V, ctemp, value_UVs
       real(kind=8) inner_UV, n1, n2, a, error, flop
       integer:: select_column(N), select_row(M)
-      DT, allocatable::matU(:, :), matV(:, :), matU2D(:, :), matV2D(:, :)
-      DT::tmpval(rmax)
-      DT::matr(1, N), matc(M, 1)
-      real(kind=8)::Singular(rmax)
+      DT, allocatable::matU(:, :), matV(:, :),matU0(:, :), matV0(:, :), matU2D(:, :), matV2D(:, :)
+      DT,allocatable::tmpval(:)
+      DT::matr(1, blocks%N_loc), matc(blocks%M_loc, 1)
       DT, allocatable:: value_UV(:)
       DT:: row_R(N), column_R(M)
       real(kind=8):: norm_row_R(N), norm_column_R(M)
@@ -4827,8 +4855,11 @@ endif
       headm_loc = blocks%M_p(pp, 1)
       headn_loc = blocks%N_p(pp, 1)
 
+      rmax = option%BACA_Batch
+
       allocate (matU(blocks%M_loc, rmax))
       allocate (matV(rmax, blocks%N_loc))
+      allocate (tmpval(rmax))
 
       Navr = 3 !5 !10
       itr = 1
@@ -5009,6 +5040,31 @@ endif
          endif
          ! !$omp parallel do default(shared) private(j)
 
+
+         if (rank+1 > rmax) then
+            rmax0=rmax
+            rmax = rmax*2
+            deallocate(tmpval)
+            allocate(tmpval(rmax))
+
+            allocate(matU0(blocks%M_loc,rmax0))
+            allocate(matV0(rmax0,blocks%N_loc))
+            matU0=matU
+            matV0=matV
+            deallocate(matU)
+            deallocate(matV)
+            allocate(matU(blocks%M_loc,rmax))
+            allocate(matV(rmax,blocks%N_loc))
+            matU(:,1:rmax0)=matU0(:,1:rmax0)
+            matV(1:rmax0,:)=matV0(1:rmax0,:)
+            deallocate(matU0)
+            deallocate(matV0)
+
+            ! write(*,*)'increase rmax',rank,rmax
+            ! stop
+            ! exit
+         end if
+
          ! !$omp end parallel do
          ! !$omp parallel do default(shared) private(j)
          do j = 1, blocks%N_loc
@@ -5111,11 +5167,6 @@ endif
          ! if(ptree%MyID==Main_ID)write(*,*)rank,norm_U*norm_V,norm_Z,select_column(rank+1),select_row(rank+1)
 
          rank = rank + 1
-         if (rank > rmax) then
-            ! write(*,*)'increase rmax',rank,rmax
-            ! stop
-            exit
-         end if
          if (rank < rankmax_min) then
             select_row(rank + 1) = maxloc(norm_column_R, 1)
          endif
@@ -5361,27 +5412,28 @@ endif
       deallocate (value_UV)
       deallocate (matU)
       deallocate (matV)
+      deallocate (tmpval)
 
       return
 
    end subroutine LR_ACA_Parallel
 
-   subroutine LR_BACA(matU, matV, Singular, header_m, header_n, M, N, rmax, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
+   subroutine LR_BACA(SVD_Q, header_m, header_n, M, N, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
 
 
       implicit none
 
-      integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax
+      integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax, rmax0
       DT, allocatable:: row_R(:, :), row_Rtmp(:, :), column_R(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
-      DT::matU(M, rmax), matV(rmax, N)
-      real(kind=8)::Singular(rmax)
+      DT,allocatable::matU(:, :), matV(:, :)
+      real(kind=8),allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
       real(kind=8):: normA, normUV, flop
       integer itr, itrmax, r_est, Nqr, bsize
       integer, allocatable:: select_column(:), select_row(:), perms(:)
       integer, allocatable :: jpvt(:)
 
-      integer i, j, ii, jj, indx, rank_1, rank_2
+      integer i, j, ii, jj, indx, rank_1, rank_2, rankmax_min
       real(kind=8) tolerance, SVD_tolerance
       integer edge_m, edge_n, header_m, header_n, mn
       real(kind=8) inner_UV, n1, n2, a, error
@@ -5394,9 +5446,12 @@ endif
       integer::mrange(M), nrange(N)
       integer::passflag = 0
       type(intersect)::submats(1)
+      type(SVD_quant)::SVD_Q
 
       n1 = OMP_get_wtime()
 
+      rmax = size(SVD_Q%MatU,2)
+      rankmax_min = min(M, N)
       r_est = min(bsize, min(M, N))
       ! r_est=min(M,N)
       itrmax = floor_safe(min(M, N)/dble(r_est))*2
@@ -5462,7 +5517,7 @@ endif
 
          if (rank > 0) then
             do j = 1, r_est
-               call gemmf77('N', 'N', M, 1, rank, -cone, matU, M, matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
+               call gemmf77('N', 'N', M, 1, rank, -cone, SVD_Q%matU, M, SVD_Q%matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1, rank)
             enddo
          endif
@@ -5511,7 +5566,7 @@ endif
 
          if (rank > 0) then
             do i = 1, r_est
-               call gemmf77('N', 'N', 1, N, rank, -cone, matU(select_row(i), 1), M, matV, rmax, cone, row_R(i, 1), r_est)
+               call gemmf77('N', 'N', 1, N, rank, -cone, SVD_Q%matU(select_row(i), 1), M, SVD_Q%matV, rmax, cone, row_R(i, 1), r_est)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N, rank)
             enddo
          endif
@@ -5550,7 +5605,7 @@ endif
 
          if (rank > 0) then
             do j = 1, r_est
-               call gemmf77('N', 'N', M, 1, rank, -cone, matU, M, matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
+               call gemmf77('N', 'N', M, 1, rank, -cone, SVD_Q%matU, M, SVD_Q%matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1, rank)
             enddo
          endif
@@ -5588,13 +5643,35 @@ endif
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
 
-            if (rank + rankup > rmax) rankup = rmax - rank
+            if (rank + rankup > rmax)then
+               allocate(matU(M,rmax))
+               allocate(matV(rmax,N))
+               allocate(Singular(rmax))
+               matU=SVD_Q%matU
+               matV=SVD_Q%matV
+               Singular=SVD_Q%Singular
+               if(rankmax_min<=rmax)then
+                  rankup=rankmax_min-rank
+               endif
+               rmax0=rmax
+               rmax = min(2*rmax,rankmax_min)
+               deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
+               allocate(SVD_Q%matU(M,rmax))
+               allocate(SVD_Q%matV(rmax,N))
+               allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
+               SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
+               SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
+               deallocate(matU)
+               deallocate(matV)
+               deallocate(Singular)
+            endif
 
             ! call assert(rank+rankup<=rmax,'try to increase rmax')
             do j = 1, rankup
-               matU(:, rank + j) = column_R(:, jpvt(j))
+               SVD_Q%matU(:, rank + j) = column_R(:, jpvt(j))
             enddo
-            matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
+            SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
             rank = rank + rankup
 
             if (rank == rmax) exit
@@ -5603,9 +5680,9 @@ endif
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             ! if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
-            call LR_FnormUp(matU, matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+            call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
             ! else
-            ! call LR_Fnorm(matU,matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
+            ! call LR_Fnorm(SVD_Q%matU,SVD_Q%matV,M,N,rank,normA,tolerance*1e-2,Flops=flop)
             ! endif
             stats%Flop_Fill = stats%Flop_Fill + flop
 
@@ -5628,14 +5705,14 @@ endif
       ! write(*,*)normUV,normA
 
       if (rank > 0) then
-         call LR_ReCompression(matU, matV, Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
+         call LR_ReCompression(SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop
          rank = ranknew
       else
          rank = 1
-         matU(:, 1) = 0
-         matV(1, :) = 0
-         Singular(1) = 0
+         SVD_Q%matU(:, 1) = 0
+         SVD_Q%matV(1, :) = 0
+         SVD_Q%Singular(1) = 0
       endif
 
       deallocate (jpvt)
@@ -5657,22 +5734,22 @@ endif
 
    end subroutine LR_BACA
 
-   subroutine LR_BACA_noOverlap(matU, matV, Singular, header_m, header_n, M, N, rmax, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
+   subroutine LR_BACA_noOverlap(SVD_Q, header_m, header_n, M, N, rank, tolerance, SVD_tolerance, bsize, msh, ker, stats, ptree, option, error)
 
 
       implicit none
 
-      integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M, rmax
+      integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M, rmax, rmax0
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
-      DT::matU(M, rmax), matV(rmax, N)
-      real(kind=8)::Singular(rmax)
+      DT,allocatable::matU(:, :), matV(:, :)
+      real(kind=8),allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_knn(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
       real(kind=8):: normA, normUV, flop, maxvalue
       integer itr, itrmax, r_est, r_est_knn_r, r_est_knn, r_est_knn_c, r_est_tmp, Nqr, bsize
       integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:), rows(:), columns(:)
       integer, allocatable :: jpvt(:)
 
-      integer i, j, ii, jj, iii, jjj, indx, rank_1, rank_2
+      integer i, j, ii, jj, iii, jjj, indx, rank_1, rank_2, rankmax_min
       real(kind=8) tolerance, SVD_tolerance
       integer edge_m, edge_n, header_m, header_n, mn
       real(kind=8) inner_UV, n1, n2, a, error
@@ -5685,9 +5762,12 @@ endif
       type(Hoption)::option
       integer::mrange(M), nrange(N)
       integer::passflag = 0
+      type(SVD_quant)::SVD_Q
 
       n1 = OMP_get_wtime()
 
+      rmax = size(SVD_Q%MatU,2)
+      rankmax_min = min(M, N)
       r_est = min(bsize, min(M, N))
       ! r_est=min(M,N)
       itrmax = floor_safe(min(M, N)/dble(r_est))*2
@@ -5820,7 +5900,29 @@ endif
             rankup = ranknew
             if (rankup > 0) then
 
-               if (rank + rankup > rmax) rankup = rmax - rank
+               if (rank + rankup > rmax)then
+                  allocate(matU(M,rmax))
+                  allocate(matV(rmax,N))
+                  allocate(Singular(rmax))
+                  matU=SVD_Q%matU
+                  matV=SVD_Q%matV
+                  Singular=SVD_Q%Singular
+                  if(rankmax_min<=rmax)then
+                     rankup=rankmax_min-rank
+                  endif
+                  rmax0=rmax
+                  rmax = min(2*rmax,rankmax_min)
+                  deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
+                  allocate(SVD_Q%matU(M,rmax))
+                  allocate(SVD_Q%matV(rmax,N))
+                  allocate(SVD_Q%Singular(rmax))
+                  SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
+                  SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
+                  SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
+                  deallocate(matU)
+                  deallocate(matV)
+                  deallocate(Singular)
+               endif
 
                row_Rtmp_knn = row_R_knn
                call un_or_mqrf90(core_knn, tau, row_Rtmp_knn, 'L', 'C', r_est_knn_r, N, rankup, flop=flop)
@@ -5833,9 +5935,9 @@ endif
 
                ! call assert(rank+rankup<=rmax,'try to increase rmax')
                do j = 1, rankup
-                  matU(:, rank + j) = column_R_knn(:, jpvt(j))
+                  SVD_Q%matU(:, rank + j) = column_R_knn(:, jpvt(j))
                enddo
-               matV(rank + 1:rank + rankup, :) = row_Rtmp_knn(1:rankup, :)
+               SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp_knn(1:rankup, :)
 
                rank = rank + rankup
                rank0 = rank
@@ -5847,7 +5949,7 @@ endif
                ! !**** update fnorm of UV and matUmatV (this is commented out to leave normUV=normA=0 for aca iteration)
                ! call LR_Fnorm(column_R_knn, row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
                ! stats%Flop_Fill = stats%Flop_Fill + flop
-               ! call LR_FnormUp(matU, matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+               ! call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
 
                ! stats%Flop_Fill = stats%Flop_Fill + flop
 
@@ -5910,9 +6012,9 @@ endif
 
          if (rank > 0) then
             do j = 1, r_est
-               call gemmf77('N', 'N', M, 1, rank, -cone, matU, M, matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
+               call gemmf77('N', 'N', M, 1, rank, -cone, SVD_Q%matU, M, SVD_Q%matV(1, select_column(j)), rmax, cone, column_R(1, j), M)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(M, 1, rank)
-               ! call gemmf90(matU, M,matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
+               ! call gemmf90(SVD_Q%matU, M,SVD_Q%matV(1,select_column(j)),rmax,column_R(1,j),M,'N','N',M,1,rank,-cone,cone)
             enddo
          endif
 
@@ -5954,9 +6056,9 @@ endif
 
          if (rank > 0) then
             do i = 1, r_est
-               call gemmf77('N', 'N', 1, N, rank, -cone, matU(select_row(i), 1), M, matV, rmax, cone, row_R(i, 1), r_est)
+               call gemmf77('N', 'N', 1, N, rank, -cone, SVD_Q%matU(select_row(i), 1), M, SVD_Q%matV, rmax, cone, row_R(i, 1), r_est)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(1, N, rank)
-               ! call gemmf90(matU(select_row(i),1), M,matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
+               ! call gemmf90(SVD_Q%matU(select_row(i),1), M,SVD_Q%matV,rmax,row_R(i,1),r_est,'N','N',1,N,rank,-cone,cone)
             enddo
          endif
 
@@ -5979,16 +6081,38 @@ endif
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
 
-            if (rank + rankup > rmax) rankup = rmax - rank
+            if (rank + rankup > rmax)then
+               allocate(matU(M,rmax))
+               allocate(matV(rmax,N))
+               allocate(Singular(rmax))
+               matU=SVD_Q%matU
+               matV=SVD_Q%matV
+               Singular=SVD_Q%Singular
+               if(rankmax_min<=rmax)then
+                  rankup=rankmax_min-rank
+               endif
+               rmax0=rmax
+               rmax = min(2*rmax,rankmax_min)
+               deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
+               allocate(SVD_Q%matU(M,rmax))
+               allocate(SVD_Q%matV(rmax,N))
+               allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
+               SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
+               SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
+               deallocate(matU)
+               deallocate(matV)
+               deallocate(Singular)
+            endif
 
             columns(rank + 1:rankup + rank) = select_column1(jpvt(1:rankup))
             rows(rank + 1:rankup + rank) = select_row(1:rankup)
 
             ! call assert(rank+rankup<=rmax,'try to increase rmax')
             do j = 1, rankup
-               matU(:, rank + j) = column_R(:, jpvt(j))
+               SVD_Q%matU(:, rank + j) = column_R(:, jpvt(j))
             enddo
-            matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
+            SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
 
             rank = rank + rankup
 
@@ -5997,7 +6121,7 @@ endif
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-            call LR_FnormUp(matU, matV, M, N, rank0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
+            call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, rank0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
 
             stats%Flop_Fill = stats%Flop_Fill + flop
 
@@ -6036,14 +6160,14 @@ endif
       if (allocated(select_row_knn)) deallocate (select_row_knn)
 
       if (rank > 0) then
-         call LR_ReCompression(matU, matV, Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
+         call LR_ReCompression(SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, M, N, rank, ranknew, SVD_tolerance, Flops=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop
          rank = ranknew
       else
          rank = 1
-         matU(:, 1) = 0
-         matV(1, :) = 0
-         Singular(1) = 0
+         SVD_Q%matU(:, 1) = 0
+         SVD_Q%matV(1, :) = 0
+         SVD_Q%Singular(1) = 0
       endif
 
       deallocate (jpvt)
