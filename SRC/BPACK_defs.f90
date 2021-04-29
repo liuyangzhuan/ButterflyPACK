@@ -349,6 +349,11 @@ module BPACK_DEFS
         type(blockplus)::BP, BP_inverse ! a single butterfly plus for the entire matrix
     end type hssbf
 
+    type SVD_quant
+        DT, allocatable:: matU(:,:),matV(:,:)
+        real(kind=8),allocatable:: Singular(:)
+    end type SVD_quant
+
     type Bmatrix
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
