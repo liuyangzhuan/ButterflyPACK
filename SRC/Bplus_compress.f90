@@ -2654,11 +2654,11 @@ if(option%elem_extract==1)then ! advancing multiple acas for entry extraction
                header_n = acaquants(index_ij_loc)%header_n
 
                if(acaquants(index_ij_loc)%finish .eqv. .false.)then
+                  r_est = min(bsize, min(M, N))
                   if (option%knn > 0) then
 
                      r_est_knn_r = submats(index_ij_loc*2)%nr
                      r_est_knn_c = submats(index_ij_loc*2-1)%nc
-                     r_est = min(bsize, min(M, N))
 
                      if (r_est_knn_r > 0 .and. r_est_knn_c > 0) then
                         allocate (row_R_knn(r_est_knn_r, N))
