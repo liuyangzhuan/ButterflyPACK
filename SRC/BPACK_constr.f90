@@ -831,8 +831,8 @@ contains
       do nn = 1, Npmap
          nprow = floor_safe(sqrt(dble(npavr)))
          npcol = floor_safe(npavr/dble(nprow))
-         pmaps(nn, 1) = nprow
-         pmaps(nn, 2) = npcol
+         pmaps(nn, 1) = 1   ! nprow   ! this makes sure the intersection is on 1 processor, this makes it easier for cpp user-defined extraction function 
+         pmaps(nn, 2) = 1   ! npcol
          pmaps(nn, 3) = (nn - 1)*npavr
       enddo
 
@@ -1648,9 +1648,9 @@ contains
       allocate (pmaps(Npmap, 3))
       do nn = 1, Npmap
          nprow = floor_safe(sqrt(dble(npavr)))
-         npcol = floor_safe(npavr/dble(nprow))
-         pmaps(nn, 1) = nprow
-         pmaps(nn, 2) = npcol
+         npcol = floor_safe(npavr/dble(nprow)) 
+         pmaps(nn, 1) = 1   ! nprow   ! this makes sure the intersection is on 1 processor, this makes it easier for cpp user-defined extraction function 
+         pmaps(nn, 2) = 1   ! npcol
          pmaps(nn, 3) = (nn - 1)*npavr
       enddo
 
