@@ -2511,7 +2511,7 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
-if(option%elem_extract==1)then ! advancing multiple acas for entry extraction
+if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
 
          tolerance = option%tol_comp*0.1
          ! tolerance = option%tol_comp
