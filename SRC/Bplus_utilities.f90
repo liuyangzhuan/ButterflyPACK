@@ -14300,7 +14300,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          stats%Time_Entry = stats%Time_Entry + t2 - t1
 
          passflag = 2
-      else if (option%elem_extract == 1) then
+      else if (option%elem_extract >= 1) then
 
          allocate (flags(ptree%nproc))
 
@@ -14847,6 +14847,107 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          stats%Time_Entry = stats%Time_Entry + t2 - t1
          deallocate (flags)
          ! write(*,*)ptree%MyID,'out'
+
+
+      else if (option%elem_extract == 2) then
+         if(Ninter_loc>0)then
+            allocate(rowidx(Ninter_loc))  ! rowidx
+            allocate(colidx(Ninter_loc))  ! colidx
+            allocate(allrows(nr))             ! allrows
+            allocate(allcols(nc))             ! allcols
+            idx_row=nr
+            idx_col=nc
+
+            nr=0
+            nc=0
+            do nn=1,Ninter_loc
+               do i = 1, submats1(nn)%nr
+                  nr =nr +1
+                  allrows(nr)=submats1(nn)%rows(i)
+               enddo
+               rowidx(nn) = submats1(nn)%nr
+               do i = 1, submats1(nn)%nc
+                  nc =nc +1
+                  allcols(nc)=submats1(nn)%cols(i)
+               enddo
+               colidx(nn) = submats1(nn)%nc
+            enddo
+
+            !***** Generate pmaps and pgidx for all intersections
+            Npmap = 1
+            Ninter = Ninter_loc
+            allocate (pmaps(Npmap, 3))
+            do pp = 1, Npmap
+               pmaps(pp, 1) = 1
+               pmaps(pp, 2) = 1
+               pmaps(pp, 3) = ptree%MyID
+            enddo
+
+            allocate (pgidx(Ninter))
+            pgidx=1
+
+            !***** count number of local data
+            idx_dat = 0
+            do nn = 1, Ninter
+               nrow = rowidx(nn)
+               ncol = colidx(nn)
+               ! datidx(nn)=ntot_loc
+               nprow = pmaps(pgidx(nn), 1)
+               npcol = pmaps(pgidx(nn), 2)
+               call Gridinfo_2D(pmaps(pgidx(nn), :), ptree%MyID, myrow, mycol)
+               if (myrow /= -1 .and. mycol /= -1) then
+                  myArows = numroc_wp(nrow, nbslpk, myrow, 0, nprow)
+                  myAcols = numroc_wp(ncol, nbslpk, mycol, 0, npcol)
+                  idx_dat = idx_dat + myArows*myAcols
+               endif
+            enddo
+            allocate (alldat_loc(idx_dat))
+            if (idx_dat > 0) alldat_loc = 0
+
+            if (option%cpp == 1) then
+               call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
+               ! !***** parallel extraction of the data
+               do ii = 1, idx_row
+                  allrows(ii) = abs(msh%new2old(allrows(ii)))
+               enddo
+               do jj = 1, idx_col
+                  allcols(jj) = abs(msh%new2old(allcols(jj)))
+               enddo
+               pgidx = pgidx - 1
+               call proc_C(Ninter, idx_row, idx_col, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
+            else
+               proc => ker%FuncZmnBlock
+               ! !***** parallel extraction of the data
+               do ii = 1, idx_row
+                  allrows(ii) = abs(msh%new2old(allrows(ii)))
+               enddo
+               do jj = 1, idx_col
+                  allcols(jj) = abs(msh%new2old(allcols(jj)))
+               enddo
+               call proc(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%QuantApp)
+            endif
+
+            idx = 0
+            do nn=1,Ninter_loc
+            do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
+            do ii = 1, submats1(nn)%nr
+               idx = idx + 1
+               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)
+            enddo
+            enddo
+            enddo
+
+            deallocate (allrows)
+            deallocate (allcols)
+            deallocate (colidx)
+            deallocate (rowidx)
+            deallocate (alldat_loc)
+            deallocate (pgidx)
+            deallocate (pmaps)
+         endif
+         passflag=2
+         t2 = OMP_get_wtime()
+         stats%Time_Entry = stats%Time_Entry + t2 - t1
       endif
 
 
