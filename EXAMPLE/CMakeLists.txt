@@ -107,6 +107,12 @@ target_link_libraries(cfio ${all_link_libs_d})
 target_link_libraries(cfio ${all_link_libs_z})
 add_dependencies(cfio ctest)
 
+set(CIFEXM InverseFIO_Driver.cpp)
+add_executable(cifio ${CIFEXM})
+target_link_libraries(cifio ${all_link_libs_d})
+target_link_libraries(cifio ${all_link_libs_z})
+add_dependencies(cifio cfio)
+
 
 
 
