@@ -5654,7 +5654,7 @@ endif
                   rankup=rankmax_min-rank
                endif
                rmax0=rmax
-               rmax = min(2*rmax,rankmax_min)
+               rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
@@ -5911,7 +5911,7 @@ endif
                      rankup=rankmax_min-rank
                   endif
                   rmax0=rmax
-                  rmax = min(2*rmax,rankmax_min)
+                  rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                   deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                   allocate(SVD_Q%matU(M,rmax))
                   allocate(SVD_Q%matV(rmax,N))
@@ -6092,7 +6092,7 @@ endif
                   rankup=rankmax_min-rank
                endif
                rmax0=rmax
-               rmax = min(2*rmax,rankmax_min)
+               rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
