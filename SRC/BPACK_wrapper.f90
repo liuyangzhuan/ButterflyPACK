@@ -420,6 +420,18 @@ contains
          val_d = option%schulzorder
          valid_opt = 1
       endif
+      if (trim(str) == 'schulzhardstart') then
+         val_d = option%schulzhardstart
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzsplitlevel') then
+         val_d = option%schulzsplitlevel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzsplitlevel') then
+         val_d = option%schulzsplitlevel
+         valid_opt = 1
+      endif
       if (trim(str) == 'schulzlevel') then
          val_d = option%schulzlevel
          valid_opt = 1
@@ -623,6 +635,16 @@ contains
       if (trim(str) == 'schulzorder') then
          call c_f_pointer(val_Cptr, val_i)
          option%schulzorder = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzhardstart') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%schulzhardstart = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'schulzsplitlevel') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%schulzsplitlevel = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'schulzlevel') then

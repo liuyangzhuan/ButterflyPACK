@@ -2620,18 +2620,18 @@ contains
 
 
       implicit none
-      integer level, ii, M, N, num_vect_sub, mv, nv, mi
+      integer level, ii, M, N, num_vect_sub, mv, nv, mi, pp
       character trans
       integer ldi, ldo
       DT :: Vin(ldi, *), Vout(ldo, *)
-      DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vbuff1(:, :), Vout_tmp(:, :)
+      DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vbuff1(:, :), Vout_tmp(:, :),Vout_buff(:, :)
       DT :: ctemp1, ctemp2, a, b
       type(matrixblock)::block_Xn
       integer groupn, groupm, mm, nn
       class(*)::schulz_op
       class(*), optional::operand1
       type(matrixblock)::block_o
-      real(kind=8)::scale_new
+      real(kind=8)::scale_new,rr
       type(proctree)::ptree
       type(Hstat)::stats
 
@@ -2646,139 +2646,98 @@ contains
             mm = block_Xn%M_loc
             call assert(mm == nn, 'block nonsquare')
 
-            if (schulz_op%order == 2) then
-               if (trans == 'N') then
-                  mv = M
-                  mi = N
-                  nv = num_vect_sub
-               else if (trans == 'T') then
-                  mv = N
-                  mi = M
-                  nv = num_vect_sub
-               endif
-               allocate (Vout_tmp(mv, nv))
-               Vout_tmp = Vout(1:mv,1:nv)
+            if (trans == 'N') then
+               mv = M
+               mi = N
+               nv = num_vect_sub
+            else if (trans == 'T') then
+               mv = N
+               mi = M
+               nv = num_vect_sub
+            endif
+            allocate (Vout_tmp(mv, nv))
+            Vout_tmp = Vout(1:mv,1:nv)
+            allocate (Vin_tmp(N, num_vect_sub))
+            Vin_tmp = Vin(1:mi,1:nv)
 
-               allocate (Vin_tmp(N, num_vect_sub))
-               Vin_tmp = Vin(1:mi,1:nv)
-               Vout(1:mv,1:nv) = 0
+            allocate (Vout_buff(mv, nv))
+            allocate (Vbuff(nn, num_vect_sub))
 
-               allocate (Vbuff(nn, num_vect_sub))
-               Vbuff = 0
+            if (trans == 'N') then
+               Vout_buff = Vin(1:mi,1:nv)
 
-               if (trans == 'N') then
+               do pp=1,schulz_op%order-1
+
                   ctemp1 = 1.0d0; ctemp2 = 0.0d0
-                  ! XnR
+                  ! Vbuff:Xn*Vin
+                  Vbuff = 0
                   call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
 
-                  ! AXnR
+                  ! Vout: AXn*Vin
+                  Vout(1:mv,1:nv) = 0
                   call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                   Vout(1:mv,1:nv) = Vbuff + Vout(1:mv,1:nv)
 
-                  ! (2-AXn)R
-                  Vbuff = 2*Vin(1:mi,1:nv) - Vout(1:mv,1:nv)
+                  ! Vin: (I-AXn)*Vin
+                  Vin(1:mi,1:nv) = Vin(1:mi,1:nv) - Vout(1:mv,1:nv)
 
-                  ! Xn(2-AXn)R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
+                  ! Vout_buff: Vout_buff+Vin
+                  Vout_buff(1:mi,1:nv) = Vout_buff(1:mi,1:nv) + Vin(1:mi,1:nv)
+               enddo
 
-               else if (trans == 'T') then
-                  ctemp1 = 1.0d0; ctemp2 = 0.0d0
-                  ! RXn
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
+               call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vout_buff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
-                  ! RXnA
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vout, ldo, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
-                  Vbuff = Vout(1:mv,1:nv) + Vbuff
 
-                  ! RXnAXn
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vin, ldi, ctemp1, ctemp2, ptree, stats, operand1)
 
-                  ! 2RXn - RXnAXn
-                  Vout(1:mv,1:nv) = 2*Vout(1:mv,1:nv) - Vin(1:mi,1:nv)
-               end if
+            else if (trans == 'T') then
+               ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
-               Vin(1:mi,1:nv) = Vin_tmp
+               ! Vout_buff: Vin*Xn
+               Vout_buff(1:mv,1:nv) = 0
+               call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vout_buff, nn, ctemp1, ctemp2, ptree, stats, operand1)
 
-               scale_new = schulz_op%scale*(2 - schulz_op%scale)
 
-               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) - Vin(1:mi,1:nv)*scale_new ! Xn(2-AXn)-I
+               ! Vin: Vout_buff
+               Vin(1:mv,1:nv)=Vout_buff(1:mv,1:nv)
 
-               deallocate (Vin_tmp)
-               deallocate (Vbuff)
-
-            else if (schulz_op%order == 3) then
-
-               if (trans == 'N') then
-                  mv = M
-                  mi = N
-                  nv = num_vect_sub
-               else if (trans == 'T') then
-                  mv = N
-                  mi = M
-                  nv = num_vect_sub
-               endif
-               allocate (Vout_tmp(mv, nv))
-               Vout_tmp = Vout(1:mv,1:nv)
-
-               allocate (Vin_tmp(nn, num_vect_sub))
-               Vin_tmp = Vin(1:mi,1:nv)
-               Vout(1:mv,1:nv) = 0
-
-               allocate (Vbuff(nn, num_vect_sub))
-               Vbuff = 0
-               allocate (Vbuff1(nn, num_vect_sub))
-               Vbuff1 = 0
-
-               if (trans == 'N') then
-                  ctemp1 = 1.0d0; ctemp2 = 0.0d0
-
-                  ! AXnR
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vbuff1, nn, ctemp1, ctemp2, ptree, stats)
-                  Vbuff1 = Vbuff + Vbuff1
-
-                  ! (AXn)^2R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vbuff, nn, ctemp1, ctemp2, ptree, stats, operand1)
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats)
-                  Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vbuff
-
-                  ! (3-3AXn+(AXn)^2)R
-                  Vbuff1 = 3*Vin(1:mi,1:nv) - 3*Vbuff1 + Vout(1:mv,1:nv)
-
-                  ! Xn(3-3AXn+(AXn)^2)R
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
-
-               else if (trans == 'T') then
-                  ctemp1 = 1.0d0; ctemp2 = 0.0d0
-                  ! RXn
-                  Vout(1:mv,1:nv) = Vin(1:mi,1:nv)
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vout, ldo, Vin, ldi, ctemp1, ctemp2, ptree, stats, operand1)
-
-                  ! RXn*AXn
+               do pp=1,schulz_op%order-1
+                  ! Vbuff: Vin*A
+                  Vbuff = 0
                   call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vin, ldi, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
-                  Vbuff = Vin(1:mi,1:nv) + Vbuff
-                  call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vbuff1, nn, ctemp1, ctemp2, ptree, stats, operand1)
+                  Vbuff = Vin(1:mv,1:nv) + Vbuff
 
-                  ! RXn*(AXn)^2
-                  call BF_block_MVP_dat(schulz_op%matrices_block, trans, mm, nn, num_vect_sub, Vbuff1, nn, Vbuff, nn, ctemp1, ctemp2, ptree, stats)
-                  Vbuff = Vbuff1 + Vbuff
+                  ! Vout: Vin*A*Xn
+                  Vout(1:mv,1:nv) = 0
                   call BF_block_MVP_schulz_Xn_dat(schulz_op, block_Xn, trans, mm, nn, num_vect_sub, Vbuff, nn, Vout, ldo, ctemp1, ctemp2, ptree, stats, operand1)
 
-                  ! RXn*(3-3AXn+(AXn)^2)
-                  Vout(1:mv,1:nv) = 3*Vin(1:mi,1:nv) - 3*Vbuff1 + Vout(1:mv,1:nv)
-               end if
+                  ! Vin: Vin*(I-AXn)
+                  Vin(1:mi,1:nv) = Vin(1:mi,1:nv) - Vout(1:mv,1:nv)
 
-               Vin(1:mi,1:nv) = Vin_tmp
+                  ! Vout_buff: Vout_buff+Vin
+                  Vout_buff(1:mi,1:nv) = Vout_buff(1:mi,1:nv) + Vin(1:mi,1:nv)
+               enddo
+               ! Vout: Vout_buff
+               Vout(1:mi,1:nv)=Vout_buff(1:mi,1:nv)
+            end if
 
-               scale_new = schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
+            Vin(1:mi,1:nv) = Vin_tmp
 
-               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) - Vin(1:mi,1:nv)*scale_new ! Xn(2-AXn)-I
+            deallocate (Vin_tmp)
+            deallocate (Vout_buff)
+            deallocate (Vbuff)
 
-               deallocate (Vin_tmp)
-               deallocate (Vbuff)
-               deallocate (Vbuff1)
 
-            endif
+            scale_new = 1d0
+            rr=1d0
+            do pp=1,schulz_op%order-1
+               rr = (1-schulz_op%scale)*rr
+               scale_new = scale_new + rr
+            enddo
+            scale_new = schulz_op%scale*scale_new
+
+
+            Vout(1:mv,1:nv) = Vout(1:mv,1:nv) - Vin(1:mi,1:nv)*scale_new ! Bn = Xn-alpha_n*I
+
 
             Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
             deallocate (Vout_tmp)
@@ -2799,7 +2758,7 @@ contains
       integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans, trans_new
       real(kind=8)::eps, memory
-      integer ldi, ldo
+      integer ldi, ldo, bb, qq, pp, idx_start_glo, head, tail, idx_start_loc, idx_end_loc
       DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :), matrixtmp(:, :)
       DT :: ctemp1, ctemp2, a, b
@@ -2826,31 +2785,46 @@ contains
                nv = num_vect_sub
             endif
 
-            eps = 0.8d0
+
             ctemp1 = 1d0
             ctemp2 = 0d0
             if (operand1 == 1) then ! X0
-               Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
-               if (trans == 'N') trans_new = 'T'
-               if (trans == 'T') trans_new = 'N'
-               call BF_block_MVP_dat(schulz_op%matrices_block, trans_new, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
-               Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vin(1:mi,1:nv)
-               Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
-               Vout(1:mv,1:nv) = conjg(cmplx(Vout(1:mv,1:nv), kind=8))
-               schulz_op%scale = (2d0 - eps)/schulz_op%A2norm**2d0
-               Vout(1:mv,1:nv) = Vout(1:mv,1:nv)*schulz_op%scale
+               if(schulz_op%hardstart==0)then
+                  pp = ptree%myid - ptree%pgrp(schulz_op%matrices_block%pgno)%head + 1
+                  idx_start_glo = schulz_op%matrices_block%headm + schulz_op%matrices_block%M_p(pp, 1) - 1
+                  do bb = schulz_op%bdiags%Bidxs,schulz_op%bdiags%Bidxe
+                     qq = ptree%myid - ptree%pgrp(schulz_op%bdiags%BF_inverse(bb)%pgno)%head + 1
+                     head = schulz_op%bdiags%BF_inverse(bb)%headm + schulz_op%bdiags%BF_inverse(bb)%M_p(qq, 1) - 1
+                     tail = head + schulz_op%bdiags%BF_inverse(bb)%M_loc - 1
+                     idx_start_loc = head - idx_start_glo + 1
+                     idx_end_loc = tail - idx_start_glo + 1
 
-               ! if(trans=='N')trans_new='T'
-               ! if(trans=='T')trans_new='N'
-               ! call BF_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
-               ! Vout = Vin - Vout/schulz_op%A2norm
+                     call BF_block_MVP_dat(schulz_op%bdiags%BF_inverse(bb), trans, schulz_op%bdiags%BF_inverse(bb)%M_loc, schulz_op%bdiags%BF_inverse(bb)%N_loc, num_vect_sub, Vin(idx_start_loc,1), ldi, Vout(idx_start_loc,1), ldo, ctemp1, ctemp2, ptree, stats)
+                     Vout(idx_start_loc:idx_end_loc,1:num_vect_sub)=Vout(idx_start_loc:idx_end_loc,1:num_vect_sub)+Vin(idx_start_loc:idx_end_loc,1:num_vect_sub)
+                  enddo
+                  schulz_op%scale=1d0
+               else
+                  eps = 0.8d0
+                  Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
+                  if (trans == 'N') trans_new = 'T'
+                  if (trans == 'T') trans_new = 'N'
+                  call BF_block_MVP_dat(schulz_op%matrices_block, trans_new, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
+                  Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vin(1:mi,1:nv)
+                  Vin(1:mi,1:nv) = conjg(cmplx(Vin(1:mi,1:nv), kind=8))
+                  Vout(1:mv,1:nv) = conjg(cmplx(Vout(1:mv,1:nv), kind=8))
+                  schulz_op%scale = (2d0 - eps)/schulz_op%A2norm**2d0
+                  Vout(1:mv,1:nv) = Vout(1:mv,1:nv)*schulz_op%scale
+                  ! if(trans=='N')trans_new='T'
+                  ! if(trans=='T')trans_new='N'
+                  ! call BF_block_MVP_dat(schulz_op%matrices_block,trans_new,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+                  ! Vout = Vin - Vout/schulz_op%A2norm
 
-               ! call BF_copy('N',schulz_op%matrices_block,block_o,memory)
-               ! call LR_SMW(block_o,memory)
+                  ! call BF_copy('N',schulz_op%matrices_block,block_o,memory)
+                  ! call LR_SMW(block_o,memory)
 
-               ! call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
-               ! Vout = Vout + Vin
-
+                  ! call BF_block_MVP_dat(block_o,trans,M,N,num_vect_sub,Vin,Vout,ctemp1,ctemp2)
+                  ! Vout = Vout + Vin
+               endif
             else ! Xn
                call BF_block_MVP_dat(block_Xn, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp1, ctemp2, ptree, stats)
                Vout(1:mv,1:nv) = Vout(1:mv,1:nv) + Vin(1:mi,1:nv)*schulz_op%scale
