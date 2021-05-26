@@ -4889,7 +4889,11 @@ contains
       implicit none
       integer pgno
       type(proctree)::ptree
-      IOwnPgrp = ptree%MyID >= ptree%pgrp(pgno)%head .and. ptree%MyID <= ptree%pgrp(pgno)%tail
+      if(pgno==-1)then
+         IOwnPgrp = .false.
+      else
+         IOwnPgrp = ptree%MyID >= ptree%pgrp(pgno)%head .and. ptree%MyID <= ptree%pgrp(pgno)%tail
+      endif
    end function IOwnPgrp
 
    pure subroutine g2l(i, n, np, nb, p, il)

@@ -583,10 +583,12 @@ contains
       option%TwoLayerOnly = 1
       option%touch_para = 0d0
       option%schulzorder = 3
+      option%schulzhardstart = 0
+      option%schulzsplitlevel = 1
       option%schulzlevel = 3000
       option%LRlevel = 0
       option%ErrFillFull = 0
-      option%BACA_Batch = 16
+      option%BACA_Batch = 64
       option%RecLR_leaf = BACA
       option%nogeo = 0
       option%ErrSol = 0
@@ -657,6 +659,10 @@ contains
                   read (strings1, *) option%xyzsort
                else if (trim(strings) == '--schulzorder') then
                   read (strings1, *) option%schulzorder
+               else if (trim(strings) == '--schulzhardstart') then
+                  read (strings1, *) option%schulzhardstart
+               else if (trim(strings) == '--schulzsplitlevel') then
+                  read (strings1, *) option%schulzsplitlevel
                else if (trim(strings) == '--schulzlevel') then
                   read (strings1, *) option%schulzlevel
                else if (trim(strings) == '--lrlevel') then
@@ -751,6 +757,8 @@ contains
       option1%TwoLayerOnly = option%TwoLayerOnly
       option1%touch_para = option%touch_para
       option1%schulzorder = option%schulzorder
+      option1%schulzhardstart = option%schulzhardstart
+      option1%schulzsplitlevel = option%schulzsplitlevel
       option1%schulzlevel = option%schulzlevel
       option1%LRlevel = option%LRlevel
       option1%ErrFillFull = option%ErrFillFull
@@ -801,6 +809,8 @@ contains
          write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
          write (*, '(A18,I8)') 'TwoLayerOnly', option%TwoLayerOnly
          write (*, '(A18,I8)') 'schulzorder', option%schulzorder
+         write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
+         write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
          write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
          write (*, '(A18,I8)') 'LRlevel', option%LRlevel
          write (*, '(A18,I8)') 'BACA_Batch', option%BACA_Batch

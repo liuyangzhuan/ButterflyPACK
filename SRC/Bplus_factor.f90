@@ -917,7 +917,7 @@ contains
 
       integer level_c, rowblock
       integer groupm, blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
-      integer num_col, num_row, level, mm, nn, ii, jj, tt, ll
+      integer num_col, num_row, level, mm, nn, ii, jj, tt, ll, pp
       character chara
       real(kind=8) T0
       type(matrixblock)::block_o, block_Xn
@@ -926,7 +926,7 @@ contains
       integer niter
       real(kind=8):: error_inout, rate, err_avr
       integer itermax, ntry, converged
-      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2
+      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr
       type(Hoption)::option
       type(Hstat)::stats
       type(proctree)::ptree
@@ -955,7 +955,7 @@ contains
       call BF_copy('N', block_o, schulz_op%matrices_block, memory_temp)
       call BF_copy('N', block_o, block_Xn, memory_temp)
 
-      call BF_compute_schulz_init(schulz_op, option, ptree, stats)
+      call BF_compute_schulz_init(schulz_op, option, ptree, stats, msh)
 
       itermax = 100
       converged = 0
@@ -970,8 +970,16 @@ contains
          call BF_randomized(block_Xn%pgno, level_butterfly, rank0, rate, block_Xn, schulz_op, BF_block_MVP_schulz_dat, error, 'schulz iter'//TRIM(iternumber), option, stats, ptree, msh, operand1=ii)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 
-         if (schulz_op%order == 2) schulz_op%scale = schulz_op%scale*(2 - schulz_op%scale)
-         if (schulz_op%order == 3) schulz_op%scale = schulz_op%scale*(3 - 3*schulz_op%scale + schulz_op%scale**2d0)
+
+         scale_new = 1d0
+         rr=1d0
+         do pp=1,schulz_op%order-1
+            rr = (1-schulz_op%scale)*rr
+            scale_new = scale_new + rr
+         enddo
+         scale_new = schulz_op%scale*scale_new
+         schulz_op%scale = scale_new
+
 
          ! test error
 
@@ -1015,7 +1023,13 @@ contains
          rank_new_max = block_Xn%rankmax
          call BF_copy_delete(block_Xn, block_o, Memory)
          call BF_delete(schulz_op%matrices_block, 1)
+         if(option%schulzhardstart==0)then
          if (allocated(schulz_op%diags)) deallocate (schulz_op%diags)
+            do ii=schulz_op%bdiags%Bidxs,schulz_op%bdiags%Bidxe
+               call BF_delete(schulz_op%bdiags%BF_inverse(ii),1)
+            enddo
+            deallocate(schulz_op%bdiags%BF_inverse)
+         endif
       endif
 
       deallocate (VecIn)
@@ -1026,11 +1040,133 @@ contains
 
    end subroutine BF_inverse_schulziteration_IplusButter
 
-   subroutine BF_compute_schulz_init(schulz_op, option, ptree, stats)
+
+
+   recursive subroutine BF_bdiag_approximation_precompute(recurlevel, bidx,bdiags, option, stats, ptree, msh, pgno)
+      use omp_lib
+
+      implicit none
+
+      integer level_c, rowblock,bidx, Maxgrp
+      type(bdiag)::bdiags
+      integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
+      integer num_col, num_row, recurlevel, mm, nn, ii, jj, tt, kk1, kk2, rank, err_cnt
+      character chara
+      real(kind=8) T0, err_avr
+      integer rank_new_max, rank0
+      real(kind=8):: rank_new_avr, error, rate, norm
+      integer niter
+      real(kind=8):: error_inout
+      integer itermax, ntry
+      real(kind=8):: n1, n2, Memory
+      DT, allocatable::matrix_small(:, :),vecin(:,:),vecout(:,:)
+      type(matrixblock)::block_rand
+      type(Hoption)::option
+      type(Hstat)::stats
+      integer level_butterfly_target, pgno, pgno1,pgnoA,pgnoD
+      type(proctree)::ptree
+      type(mesh)::msh
+      integer ierr
+      type(matrixblock)::partitioned_block
+
+      if(recurlevel==bdiags%splitlevel)then
+         bdiags%bidxs = min(bdiags%bidxs,bidx)
+         bdiags%bidxe = max(bdiags%bidxe,bidx)
+      else
+         !*** split process groups row-wise
+         Maxgrp = 2**(ptree%nlevel) - 1
+         pgnoA = pgno
+         pgnoD = pgno
+         if (pgnoA*2 <= Maxgrp) then
+            pgnoA = pgno*2
+            pgnoD = pgno*2+1
+         endif
+
+         if (IOwnPgrp(ptree, pgnoA)) then
+            call BF_bdiag_approximation_precompute(recurlevel+1, bidx*2-1, bdiags, option, stats, ptree, msh, pgnoA)
+         endif
+         if (IOwnPgrp(ptree, pgnoD)) then
+            call BF_bdiag_approximation_precompute(recurlevel+1, bidx*2, bdiags, option, stats, ptree, msh, pgnoD)
+         endif
+      endif
+
+   end subroutine BF_bdiag_approximation_precompute
 
 
 
 
+   recursive subroutine BF_bdiag_approximation(recurlevel, bidx, blocks_io,bdiags, option, stats, ptree, msh, pgno)
+      use omp_lib
+
+      implicit none
+
+      integer level_c, rowblock,bidx
+      type(bdiag)::bdiags
+      integer blocks1, blocks2, blocks3, level_butterfly, i, j, k, num_blocks
+      integer num_col, num_row, recurlevel, mm, nn, ii, jj, tt, kk1, kk2, rank, err_cnt
+      character chara
+      real(kind=8) T0, err_avr
+      type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
+      type(matrixblock)::blocks_io
+      type(matrixblock)::blocks_schur
+      integer rank_new_max, rank0
+      real(kind=8):: rank_new_avr, error, rate, norm
+      integer niter
+      real(kind=8):: error_inout
+      integer itermax, ntry
+      real(kind=8):: n1, n2, Memory
+      DT, allocatable::matrix_small(:, :),vecin(:,:),vecout(:,:)
+      type(matrixblock)::block_rand
+      type(Hoption)::option
+      type(Hstat)::stats
+      integer level_butterfly_target, pgno, pgno1
+      type(proctree)::ptree
+      type(mesh)::msh
+      integer ierr
+      type(matrixblock)::partitioned_block
+
+      if(recurlevel==bdiags%splitlevel)then
+         call BF_copy('N',blocks_io,bdiags%BF_inverse(bidx))
+         call BF_inverse_partitionedinverse_IplusButter(bdiags%BF_inverse(bidx), blocks_io%level_butterfly, 0, option, error_inout, stats, ptree, msh, pgno)
+      else
+
+         allocate (partitioned_block%sons(2, 2))
+
+         blocks_A => partitioned_block%sons(1, 1)
+         blocks_B => partitioned_block%sons(1, 2)
+         blocks_C => partitioned_block%sons(2, 1)
+         blocks_D => partitioned_block%sons(2, 2)
+
+         ! split into four smaller butterflies
+         n1 = OMP_get_wtime()
+         call BF_split(blocks_io, partitioned_block, ptree, stats, msh, option,1)
+         n2 = OMP_get_wtime()
+         stats%Time_split = stats%Time_split + n2 - n1
+
+         if (IOwnPgrp(ptree, blocks_A%pgno)) then
+            call BF_bdiag_approximation(recurlevel+1, bidx*2-1, blocks_A,bdiags, option, stats, ptree, msh, blocks_A%pgno)
+         endif
+         if (IOwnPgrp(ptree, blocks_D%pgno)) then
+            call BF_bdiag_approximation(recurlevel+1, bidx*2, blocks_D,bdiags, option, stats, ptree, msh, blocks_D%pgno)
+         endif
+
+         do ii = 1, 2
+         do jj = 1, 2
+            call BF_delete(partitioned_block%sons(ii, jj), 1)
+         enddo
+         enddo
+         deallocate (partitioned_block%sons)
+      endif
+
+   end subroutine BF_bdiag_approximation
+
+
+
+
+
+
+
+   subroutine BF_compute_schulz_init(schulz_op, option, ptree, stats, msh)
       use omp_lib
 
       implicit none
@@ -1040,7 +1176,7 @@ contains
       real(kind=8) T0
 
       real(kind=8):: error
-      integer niter, groupm, groupn
+      integer niter, groupm, groupn, Nblock
       real(kind=8):: error_inout
       integer num_vect, rank, ranktmp, q, qq
       real(kind=8):: n1, n2, memory_temp, flop
@@ -1050,83 +1186,79 @@ contains
       DT, allocatable::UU(:, :), VV(:, :), RandVectIn(:, :), RandVectOut(:, :), matrixtmp(:, :), matrixtmp1(:, :)
       type(proctree)::ptree
       type(Hstat)::stats
+      type(mesh)::msh
 
       stats%Flop_tmp = 0
 
       schulz_op%order = option%schulzorder
+      schulz_op%hardstart = option%schulzhardstart
 
       error_inout = 0
 
       level_butterfly = schulz_op%matrices_block%level_butterfly
 
-      mm = schulz_op%matrices_block%M_loc
-      nn = mm
-      num_vect = min(10, nn)
+      if(option%schulzhardstart==0)then
+         schulz_op%bdiags%splitlevel = min(level_butterfly,option%schulzsplitlevel)
+         Nblock = 2**schulz_op%bdiags%splitlevel
+         schulz_op%bdiags%bidxs=10000000
+         schulz_op%bdiags%bidxe=-10000000
+         call BF_bdiag_approximation_precompute(0, 1, schulz_op%bdiags, option, stats, ptree, msh, schulz_op%matrices_block%pgno)
+         allocate(schulz_op%bdiags%BF_inverse(schulz_op%bdiags%bidxs:schulz_op%bdiags%bidxe))
+         call BF_bdiag_approximation(0, 1, schulz_op%matrices_block, schulz_op%bdiags, option, stats, ptree, msh, schulz_op%matrices_block%pgno)
+      else
+         mm = schulz_op%matrices_block%M_loc
+         nn = mm
+         num_vect = min(10, nn)
 
-      allocate (RandVectIn(nn, num_vect))
-      allocate (RandVectOut(mm, num_vect))
-      RandVectOut = 0
-      call RandomMat(nn, num_vect, min(nn, num_vect), RandVectIn, 1)
+         allocate (RandVectIn(nn, num_vect))
+         allocate (RandVectOut(mm, num_vect))
+         RandVectOut = 0
+         call RandomMat(nn, num_vect, min(nn, num_vect), RandVectIn, 1)
 
-      ! computation of AR
-      call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
-      RandVectOut = RandVectIn + RandVectOut
-
-      ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
-      q = 6
-      do qq = 1, q
-         RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
-         RandVectIn = RandVectOut + RandVectIn
-
-         RandVectIn = conjg(cmplx(RandVectIn, kind=8))
-
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
+         ! computation of AR
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
          RandVectOut = RandVectIn + RandVectOut
 
-      enddo
+         ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
+         q = 6
+         do qq = 1, q
+            RandVectOut = conjg(cmplx(RandVectOut, kind=8))
 
-      ! computation of range Q of AR
-      call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, option%tol_Rdetect, ptree, schulz_op%matrices_block%pgno, flop)
-      stats%Flop_Tmp = stats%Flop_Tmp + flop
+            call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
+            RandVectIn = RandVectOut + RandVectIn
 
-      ! computation of B = Q^c*A
-      RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-      call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm,RandVectIn, nn,cone, czero, ptree, stats)
-      RandVectIn = RandVectOut + RandVectIn
-      RandVectOut = conjg(cmplx(RandVectOut, kind=8))
+            RandVectIn = conjg(cmplx(RandVectIn, kind=8))
 
-      ! computation of singular values of B
-      mn = min(schulz_op%matrices_block%M, ranktmp)
-      allocate (Singular(mn))
-      Singular = 0
-      call PSVDTruncateSigma(schulz_op%matrices_block, RandVectIn, ranktmp, rank, Singular, option, stats, ptree, flop)
-      stats%Flop_Tmp = stats%Flop_Tmp + flop
-      schulz_op%A2norm = Singular(1)
-      deallocate (Singular)
+            call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
+            RandVectOut = RandVectIn + RandVectOut
 
-      deallocate (RandVectIn)
-      deallocate (RandVectOut)
+         enddo
 
-      ! allocate(matrixtmp1(nn,nn))
-      ! matrixtmp1=0
-      ! do ii=1,nn
-      ! matrixtmp1(ii,ii)=1d0
-      ! enddo
-      ! allocate(matrixtmp(nn,nn))
-      ! matrixtmp=0
-      ! call BF_block_MVP_dat(schulz_op%matrices_block,'N',mm,nn,nn,matrixtmp1,matrixtmp,cone,czero)
-      ! matrixtmp = matrixtmp+matrixtmp1
-      ! allocate (UU(nn,nn),VV(nn,nn),Singular(nn))
-      ! call SVD_Truncate(matrixtmp,nn,nn,nn,UU,VV,Singular,option%tol_comp,rank)
-      ! write(*,*)Singular(1),schulz_op%A2norm,'nimade'
-      ! schulz_op%A2norm=Singular(1)
-      ! deallocate(UU,VV,Singular)
-      ! deallocate(matrixtmp)
-      ! deallocate(matrixtmp1)
+         ! computation of range Q of AR
+         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, option%tol_Rdetect, ptree, schulz_op%matrices_block%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
 
-      stats%Flop_factor = stats%Flop_tmp
+         ! computation of B = Q^c*A
+         RandVectOut = conjg(cmplx(RandVectOut, kind=8))
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm,RandVectIn, nn,cone, czero, ptree, stats)
+         RandVectIn = RandVectOut + RandVectIn
+         RandVectOut = conjg(cmplx(RandVectOut, kind=8))
+
+         ! computation of singular values of B
+         mn = min(schulz_op%matrices_block%M, ranktmp)
+         allocate (Singular(mn))
+         Singular = 0
+         call PSVDTruncateSigma(schulz_op%matrices_block, RandVectIn, ranktmp, rank, Singular, option, stats, ptree, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         schulz_op%A2norm = Singular(1)
+         deallocate (Singular)
+
+         deallocate (RandVectIn)
+         deallocate (RandVectOut)
+         stats%Flop_factor = stats%Flop_tmp
+      endif
+
+
 
    end subroutine BF_compute_schulz_init
 
@@ -1902,7 +2034,7 @@ contains
 
    end subroutine BF_Aggregate
 
-   subroutine BF_split(blocks_i, blocks_o, ptree, stats, msh, option)
+   subroutine BF_split(blocks_i, blocks_o, ptree, stats, msh, option, splitpg)
 
 
 
@@ -1921,12 +2053,13 @@ contains
       type(mesh)::msh
       type(proctree)::ptree
       type(Hstat)::stats
-      integer pgno, Maxlevel, ld
+      integer pgno, pgnos(2,2), Maxlevel, ld
       integer, allocatable::M_p_sub(:, :), M_p_sub1(:, :), N_p_sub(:, :), N_p_sub1(:, :)
       type(matrixblock), pointer::block_c_o
-      integer rank, ierr
+      integer rank, ierr, Maxgrp
       type(Hoption)::option
       real(kind=8)::n3,n4
+      integer,optional:: splitpg
 
       blocks_A => blocks_o%sons(1, 1)
       blocks_B => blocks_o%sons(1, 2)
@@ -1942,15 +2075,27 @@ contains
       endif
 
       Maxlevel = GetTreelevel(msh%Maxgroup) - 1
-      !*** try to use the same process group as blocks_i
-      pgno = blocks_i_copy%pgno
-      do while (Maxlevel - blocks_i%level - 1 < ptree%nlevel - GetTreelevel(pgno))
-         ! do while(level_butterfly<ptree%nlevel-GetTreelevel(pgno))
-         pgno = pgno*2
-      enddo
 
       do iii = 1, 2
       do jjj = 1, 2
+
+         if(present(splitpg))then
+            !*** split process groups row-wise
+            Maxgrp = 2**(ptree%nlevel) - 1
+            pgno = blocks_i_copy%pgno
+            if (pgno*2 <= Maxgrp) then
+               pgno = pgno*2 + iii-1
+            endif
+         else
+            !*** try to use the same process group as blocks_i
+            pgno = blocks_i_copy%pgno
+            do while (Maxlevel - blocks_i%level - 1 < ptree%nlevel - GetTreelevel(pgno))
+               ! do while(level_butterfly<ptree%nlevel-GetTreelevel(pgno))
+               pgno = pgno*2
+            enddo
+         endif
+         pgnos(iii,jjj)=pgno
+
          blocks => blocks_o%sons(iii, jjj)
          blocks%level = blocks_i_copy%level + 1
          blocks%row_group = blocks_i_copy%row_group*2 + iii - 1
@@ -2069,123 +2214,126 @@ contains
 
          do level = 0, blocks_dummy%level_butterfly + 1
             if (level == 0) then
-               call BF_all2all_V_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, blocks_o%sons(1, 1)%pgno, level, stats, ptree)
+               call BF_all2all_V_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, pgnos, level, stats, ptree)
             elseif (level == blocks_i_copy%level_butterfly + 1) then
-               call BF_all2all_U_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, blocks_o%sons(1, 1)%pgno, level, stats, ptree)
+               call BF_all2all_U_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, pgnos, level, stats, ptree)
             else
-               call BF_all2all_ker_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, blocks_o%sons(1, 1)%pgno, level, stats, ptree)
+               call BF_all2all_ker_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, pgnos, level, stats, ptree)
             endif
          enddo
          !**** next convert blocks_dummy%sons into  blocks_o%sons
          call BF_convert_to_smallBF(blocks_dummy, blocks_o, stats, ptree)
 
-         if (IOwnPgrp(ptree, pgno)) then
-            level_butterfly = max(blocks_i_copy%level_butterfly - 2, 0)
-            call GetPgno_Sub(ptree, pgno, level_butterfly, pgno_sub_mine)
-            if (ptree%pgrp(pgno_sub_mine)%nproc > 1) then
-               do iii = 1, 2
-               do jjj = 1, 2
-                  block_c_o => blocks_o%sons(iii, jjj)
-                  block_c_o%level_butterfly = level_butterfly
-                  block_c_o%level_half = floor_safe(dble(block_c_o%level_butterfly)/2d0) ! from outer to inner
+         do iii = 1, 2
+            do jjj = 1, 2
+               pgno = pgnos(iii,jjj)
+               if (IOwnPgrp(ptree, pgno)) then
+                  level_butterfly = max(blocks_i_copy%level_butterfly - 2, 0)
+                  call GetPgno_Sub(ptree, pgno, level_butterfly, pgno_sub_mine)
+                  if (ptree%pgrp(pgno_sub_mine)%nproc > 1) then
 
-                  if (ptree%pgrp(pgno_sub_mine)%head /= ptree%MyID) then
-                     if (block_c_o%level_butterfly > 0) then
-                        allocate (block_c_o%ButterflyKerl(block_c_o%level_butterfly))
+                     block_c_o => blocks_o%sons(iii, jjj)
+                     block_c_o%level_butterfly = level_butterfly
+                     block_c_o%level_half = floor_safe(dble(block_c_o%level_butterfly)/2d0) ! from outer to inner
+
+                     if (ptree%pgrp(pgno_sub_mine)%head /= ptree%MyID) then
+                        if (block_c_o%level_butterfly > 0) then
+                           allocate (block_c_o%ButterflyKerl(block_c_o%level_butterfly))
+                        endif
                      endif
+                     do level = 0, block_c_o%level_butterfly + 1
+                        if (level == 0) then
+                           block_c_o%ButterflyV%num_blk = 1
+                           block_c_o%ButterflyV%nblk_loc = 1
+                           block_c_o%ButterflyV%inc = 1
+                           if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+                              rank = size(block_c_o%ButterflyV%blocks(1)%matrix, 2)
+                           endif
+                           call MPI_Bcast(block_c_o%ButterflyV%idx, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
+                           call MPI_Bcast(rank, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
+
+                           allocate (N_p_sub(ptree%pgrp(pgno_sub_mine)%nproc, 2))
+                           gg = block_c_o%col_group*2**block_c_o%level_butterfly + block_c_o%ButterflyV%idx - 1
+                           call ComputeParallelIndicesSub(gg, pgno_sub_mine, ptree, msh, N_p_sub)
+                           allocate (N_p_sub1(ptree%pgrp(pgno_sub_mine)%nproc, 2))
+                           N_p_sub1 = -1
+                           N_p_sub1(1, 1) = 1
+                           N_p_sub1(1, 2) = msh%basis_group(gg)%tail - msh%basis_group(gg)%head + 1
+
+                           if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+                              allocate (matrixtemp1(N_p_sub1(1, 2), rank))
+                              ld = N_p_sub1(1, 2)
+                              matrixtemp1 = block_c_o%ButterflyV%blocks(1)%matrix
+                              deallocate (block_c_o%ButterflyV%blocks(1)%matrix)
+                           else
+                              allocate (matrixtemp1(1, 1))
+                              ld = 1
+                              matrixtemp1 = 0
+                              allocate (block_c_o%ButterflyV%blocks(1))
+                           endif
+                           allocate (block_c_o%ButterflyV%blocks(1)%matrix(block_c_o%N_loc, rank))
+                           n3 = OMP_get_wtime()
+                           call Redistribute1Dto1D(matrixtemp1, ld, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, block_c_o%N_loc, N_p_sub, 0, pgno_sub_mine, rank, ptree)
+                           n4 = OMP_get_wtime()
+                           stats%Time_RedistB = stats%Time_RedistB + n4-n3
+                           deallocate (N_p_sub)
+                           deallocate (N_p_sub1)
+                           deallocate (matrixtemp1)
+                        elseif (level == block_c_o%level_butterfly + 1) then
+
+                           block_c_o%ButterflyU%num_blk = 1
+                           block_c_o%ButterflyU%nblk_loc = 1
+                           block_c_o%ButterflyU%inc = 1
+                           if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+                              rank = size(block_c_o%ButterflyU%blocks(1)%matrix, 2)
+                           endif
+                           call MPI_Bcast(block_c_o%ButterflyU%idx, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
+                           call MPI_Bcast(rank, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
+
+                           allocate (M_p_sub(ptree%pgrp(pgno_sub_mine)%nproc, 2))
+                           gg = block_c_o%row_group*2**block_c_o%level_butterfly + block_c_o%ButterflyU%idx - 1
+                           call ComputeParallelIndicesSub(gg, pgno_sub_mine, ptree, msh, M_p_sub)
+                           allocate (M_p_sub1(ptree%pgrp(pgno_sub_mine)%nproc, 2))
+                           M_p_sub1 = -1
+                           M_p_sub1(1, 1) = 1
+                           M_p_sub1(1, 2) = msh%basis_group(gg)%tail - msh%basis_group(gg)%head + 1
+
+                           if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+                              allocate (matrixtemp1(M_p_sub1(1, 2), rank))
+                              ld=M_p_sub1(1, 2)
+                              matrixtemp1 = block_c_o%ButterflyU%blocks(1)%matrix
+                              deallocate (block_c_o%ButterflyU%blocks(1)%matrix)
+                           else
+                              allocate (matrixtemp1(1, 1))
+                              ld=1
+                              matrixtemp1 = 0
+                              allocate (block_c_o%ButterflyU%blocks(1))
+                           endif
+                           allocate (block_c_o%ButterflyU%blocks(1)%matrix(block_c_o%M_loc, rank))
+                           n3 = OMP_get_wtime()
+                           call Redistribute1Dto1D(matrixtemp1, ld, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, block_c_o%M_loc, M_p_sub, 0, pgno_sub_mine, rank, ptree)
+                           n4 = OMP_get_wtime()
+                           stats%Time_RedistB = stats%Time_RedistB + n4-n3
+                           deallocate (M_p_sub)
+                           deallocate (M_p_sub1)
+                           deallocate (matrixtemp1)
+
+                        else
+                           if (ptree%pgrp(pgno_sub_mine)%head /= ptree%MyID) then
+                              block_c_o%ButterflyKerl(level)%nr = 0
+                              block_c_o%ButterflyKerl(level)%inc_r = 0
+                              block_c_o%ButterflyKerl(level)%idx_r = 0
+                              block_c_o%ButterflyKerl(level)%nc = 0
+                              block_c_o%ButterflyKerl(level)%inc_c = 0
+                              block_c_o%ButterflyKerl(level)%idx_c = 0
+                           endif
+                        endif
+                     enddo
                   endif
-                  do level = 0, block_c_o%level_butterfly + 1
-                     if (level == 0) then
-                        block_c_o%ButterflyV%num_blk = 1
-                        block_c_o%ButterflyV%nblk_loc = 1
-                        block_c_o%ButterflyV%inc = 1
-                        if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-                           rank = size(block_c_o%ButterflyV%blocks(1)%matrix, 2)
-                        endif
-                        call MPI_Bcast(block_c_o%ButterflyV%idx, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
-                        call MPI_Bcast(rank, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
+               endif
+            enddo
+         enddo
 
-                        allocate (N_p_sub(ptree%pgrp(pgno_sub_mine)%nproc, 2))
-                        gg = block_c_o%col_group*2**block_c_o%level_butterfly + block_c_o%ButterflyV%idx - 1
-                        call ComputeParallelIndicesSub(gg, pgno_sub_mine, ptree, msh, N_p_sub)
-                        allocate (N_p_sub1(ptree%pgrp(pgno_sub_mine)%nproc, 2))
-                        N_p_sub1 = -1
-                        N_p_sub1(1, 1) = 1
-                        N_p_sub1(1, 2) = msh%basis_group(gg)%tail - msh%basis_group(gg)%head + 1
-
-                        if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-                           allocate (matrixtemp1(N_p_sub1(1, 2), rank))
-                           ld = N_p_sub1(1, 2)
-                           matrixtemp1 = block_c_o%ButterflyV%blocks(1)%matrix
-                           deallocate (block_c_o%ButterflyV%blocks(1)%matrix)
-                        else
-                           allocate (matrixtemp1(1, 1))
-                           ld = 1
-                           matrixtemp1 = 0
-                           allocate (block_c_o%ButterflyV%blocks(1))
-                        endif
-                        allocate (block_c_o%ButterflyV%blocks(1)%matrix(block_c_o%N_loc, rank))
-                        n3 = OMP_get_wtime()
-                        call Redistribute1Dto1D(matrixtemp1, ld, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, block_c_o%N_loc, N_p_sub, 0, pgno_sub_mine, rank, ptree)
-                        n4 = OMP_get_wtime()
-                        stats%Time_RedistB = stats%Time_RedistB + n4-n3
-                        deallocate (N_p_sub)
-                        deallocate (N_p_sub1)
-                        deallocate (matrixtemp1)
-                     elseif (level == block_c_o%level_butterfly + 1) then
-
-                        block_c_o%ButterflyU%num_blk = 1
-                        block_c_o%ButterflyU%nblk_loc = 1
-                        block_c_o%ButterflyU%inc = 1
-                        if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-                           rank = size(block_c_o%ButterflyU%blocks(1)%matrix, 2)
-                        endif
-                        call MPI_Bcast(block_c_o%ButterflyU%idx, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
-                        call MPI_Bcast(rank, 1, MPI_integer, Main_ID, ptree%pgrp(pgno_sub_mine)%Comm, ierr)
-
-                        allocate (M_p_sub(ptree%pgrp(pgno_sub_mine)%nproc, 2))
-                        gg = block_c_o%row_group*2**block_c_o%level_butterfly + block_c_o%ButterflyU%idx - 1
-                        call ComputeParallelIndicesSub(gg, pgno_sub_mine, ptree, msh, M_p_sub)
-                        allocate (M_p_sub1(ptree%pgrp(pgno_sub_mine)%nproc, 2))
-                        M_p_sub1 = -1
-                        M_p_sub1(1, 1) = 1
-                        M_p_sub1(1, 2) = msh%basis_group(gg)%tail - msh%basis_group(gg)%head + 1
-
-                        if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-                           allocate (matrixtemp1(M_p_sub1(1, 2), rank))
-                           ld=M_p_sub1(1, 2)
-                           matrixtemp1 = block_c_o%ButterflyU%blocks(1)%matrix
-                           deallocate (block_c_o%ButterflyU%blocks(1)%matrix)
-                        else
-                           allocate (matrixtemp1(1, 1))
-                           ld=1
-                           matrixtemp1 = 0
-                           allocate (block_c_o%ButterflyU%blocks(1))
-                        endif
-                        allocate (block_c_o%ButterflyU%blocks(1)%matrix(block_c_o%M_loc, rank))
-                        n3 = OMP_get_wtime()
-                        call Redistribute1Dto1D(matrixtemp1, ld, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, block_c_o%M_loc, M_p_sub, 0, pgno_sub_mine, rank, ptree)
-                        n4 = OMP_get_wtime()
-                        stats%Time_RedistB = stats%Time_RedistB + n4-n3
-                        deallocate (M_p_sub)
-                        deallocate (M_p_sub1)
-                        deallocate (matrixtemp1)
-
-                     else
-                        if (ptree%pgrp(pgno_sub_mine)%head /= ptree%MyID) then
-                           block_c_o%ButterflyKerl(level)%nr = 0
-                           block_c_o%ButterflyKerl(level)%inc_r = 0
-                           block_c_o%ButterflyKerl(level)%idx_r = 0
-                           block_c_o%ButterflyKerl(level)%nc = 0
-                           block_c_o%ButterflyKerl(level)%inc_c = 0
-                           block_c_o%ButterflyKerl(level)%idx_c = 0
-                        endif
-                     endif
-                  enddo
-               enddo
-               enddo
-            endif
-         endif
 
          do ii = 1, 2
          do jj = 1, 2
@@ -2202,9 +2350,9 @@ contains
       enddo
 
       call BF_delete(blocks_i_copy, 1)
-
+      if(.not. present(splitpg))then
       call BF_split_checkerror(blocks_i, blocks_o, ptree, stats, option)
-
+      endif
    end subroutine BF_split
 
 ! Compare a block with its children

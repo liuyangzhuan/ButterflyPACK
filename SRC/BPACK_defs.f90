@@ -294,13 +294,24 @@ module BPACK_DEFS
         type(onelplus), pointer:: LL(:) => null() !
     end type blockplus
 
+
+    !**** Structure holding block-diagonal approximations as the Schultz initial guess
+    type bdiag
+        integer splitlevel  ! level number
+        integer N_block ! # of diagonal blocks
+        integer Bidxs, Bidxe   ! indice range of my local groups
+        type(matrixblock), pointer:: BF_inverse(:) => null() ! inverse blocks
+    end type bdiag
+
     !**** Structure holding operand in Schulz iteration
     type schulz_operand
+        type(bdiag)::bdiags ! block diagonal preconditioner as the initial guess
         type(matrixblock):: matrices_block ! the original butterfly B in I+B
         real(kind=8)::A2norm ! largest singular value of B in I+B
         real(kind=8)::scale ! scalar carried on Identities
         real(kind=8), allocatable::diags(:)
         integer order ! order of schulz iteration
+        integer hardstart ! 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
     end type schulz_operand
 
     !**** One level in HODLR
@@ -410,7 +421,9 @@ module BPACK_DEFS
         real(kind=8) tol_rand     ! tolerance for randomized contruction
         integer powiter     ! order of power iteration in randomized LR
         integer less_adapt     ! 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
-        integer::schulzorder ! order (2 or 3) of schultz iteration
+        integer::schulzorder ! order (>=2) of schultz iteration
+        integer::schulzhardstart ! 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
+        integer::schulzsplitlevel ! number of levels to split A for block-diagonal approximation
         integer::schulzlevel ! (I+B)^-1 is computed by schultz iteration for butterfly with more than schulzlevel levels
         integer::rank0 ! intial guess of ranks
         real(kind=8)::rankrate ! increasing rate of rank estimates per iteration

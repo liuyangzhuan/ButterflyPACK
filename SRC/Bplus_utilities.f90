@@ -4656,17 +4656,14 @@ contains
       real(kind=8)::t1, t2
       DT, allocatable::matrixtemp1(:, :), matrixtemp2(:, :)
 
-      if (IOwnPgrp(ptree, block_o%sons(1, 1)%pgno)) then
+      t1 = OMP_get_wtime()
 
-         level_butterfly_o_true = max(block_i%level_butterfly - 2, 0)
-         call GetPgno_Sub(ptree, block_o%sons(1, 1)%pgno, level_butterfly_o_true, pgno_sub_mine)
-
-         if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-
-            t1 = OMP_get_wtime()
-
-            do iii = 1, 2
-            do jjj = 1, 2
+      do iii = 1, 2
+         do jjj = 1, 2
+         if (IOwnPgrp(ptree, block_o%sons(iii, jjj)%pgno)) then
+            level_butterfly_o_true = max(block_i%level_butterfly - 2, 0)
+            call GetPgno_Sub(ptree, block_o%sons(iii, jjj)%pgno, level_butterfly_o_true, pgno_sub_mine)
+            if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                block_c_o => block_o%sons(iii, jjj)
                block_c_i => block_i%sons(iii, jjj)
                if (block_i%level_butterfly == 1) then  ! l-level butterfly becomes 0-level butterfly
@@ -4787,24 +4784,24 @@ contains
                      endif
                   enddo
                endif
-            enddo
-            enddo
-
-            t2 = OMP_get_wtime()
-            ! time_tmp = time_tmp + t2 - t1
+            endif
          endif
-      endif
+         enddo
+      enddo
+      t2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + t2 - t1
    end subroutine BF_convert_to_smallBF
 
 !*********** all to all communication of one level of a butterfly into four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
-   subroutine BF_all2all_ker_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
+   subroutine BF_all2all_ker_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
 
       implicit none
       integer pgno_sub, pgno_i, pgno_o, pgno, level_i, level_o
       integer i, j, level_butterfly_i, level_butterfly_o, level_butterfly_c_o, level_butterfly_o_true, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
       integer group_m, group_n, mm, nn, index_i, index_ic, index_i0, index_i_loc_k, index_i_loc_s, index_j, index_jc, index_j0, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt, iii, jjj
+      integer pgnos_o(2,2)
       integer level, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
@@ -4835,8 +4832,14 @@ contains
 
       n1 = OMP_get_wtime()
 
-      nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
-      pgno = min(pgno_i, pgno_o)
+      nproc = ptree%pgrp(pgno_i)%nproc
+      pgno = pgno_i
+      do iii=1,2
+      do jjj=1,2
+      nproc = max(nproc, ptree%pgrp(pgnos_o(iii,jjj))%nproc)
+      pgno = min(pgno_i, pgnos_o(iii,jjj))
+      enddo
+      enddo
       tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
@@ -4845,7 +4848,7 @@ contains
          level_butterfly_i = -1
          block_i%level_half = -1
       endif
-      if (IOwnPgrp(ptree, pgno_o)) then
+      if (IOwnPgrp(ptree, pgnos_o(1,1))) then
          level_butterfly_o = block_o%level_butterfly
       else
          level_butterfly_o = -1
@@ -4858,9 +4861,6 @@ contains
 
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
 
-      call GetPgno_Sub(ptree, pgno_i, level_butterfly_i, pgno_sub_i_mine)
-      call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
-
       if (level_i <= block_i%level_half) then
          call assert(level_o <= block_o%level_half, 'row-wise ordering is only redistributed to row-wise ordering')
          mode = 'R'
@@ -4871,41 +4871,48 @@ contains
          mode = 'C'
       endif
 
-      call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgno_o)%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgno_o)%tail) .or. (ptree%pgrp(pgno_o)%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgno_o)%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+      do iii=1,2
+         do jjj=1,2
+             call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgnos_o(iii,jjj))%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgnos_o(iii,jjj))%tail) .or. (ptree%pgrp(pgnos_o(iii,jjj))%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgnos_o(iii,jjj))%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+         enddo
+      enddo
+      call GetPgno_Sub(ptree, pgno_i, level_butterfly_i, pgno_sub_i_mine)
 
       num_row = 2**level_o
       num_col = 2**(level_butterfly_o - level_o + 1)
       level_butterfly_c_o = max(level_butterfly_o - 2, 0)
-      call GetLocalBlockRange(ptree, pgno_o, level_o - 1, level_butterfly_c_o, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
-      if (mode == 'R') then
-         idx_c = idx_c*2 - 1
-         inc_c = inc_c
-         if (level_butterfly_o > 1) nc = nc*2
-      elseif (mode == 'C') then
-         idx_r = idx_r*2 - 1
-         inc_r = inc_r
-         if (level_butterfly_o > 1) nr = nr*2
-      endif
 
-      if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
       do iii = 1, 2
-      do jjj = 1, 2
-         if (nr > 0 .and. nc > 0) then
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_r = idx_r + (iii - 1)*num_row/2
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_c = idx_c + (jjj - 1)*num_col/2
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_r = inc_r
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_c = inc_c
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr = nr
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc = nc
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%num_row = num_row
-            block_o%sons(iii, jjj)%ButterflyKerl(level_o)%num_col = num_col
-            allocate (block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc))
-         endif
+         do jjj = 1, 2
+             pgno_o=pgnos_o(iii,jjj)
+             if (IOwnPgrp(ptree, pgno_o)) then
+               call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+               call GetLocalBlockRange(ptree, pgno_o, level_o - 1, level_butterfly_c_o, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
+               if (mode == 'R') then
+                  idx_c = idx_c*2 - 1
+                  inc_c = inc_c
+                  if (level_butterfly_o > 1) nc = nc*2
+               elseif (mode == 'C') then
+                  idx_r = idx_r*2 - 1
+                  inc_r = inc_r
+                  if (level_butterfly_o > 1) nr = nr*2
+               endif
+               if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+                  if (nr > 0 .and. nc > 0) then
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_r = idx_r + (iii - 1)*num_row/2
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_c = idx_c + (jjj - 1)*num_col/2
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_r = inc_r
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_c = inc_c
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr = nr
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc = nc
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%num_row = num_row
+                     block_o%sons(iii, jjj)%ButterflyKerl(level_o)%num_col = num_col
+                     allocate (block_o%sons(iii, jjj)%ButterflyKerl(level_o)%blocks(block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc))
+                  endif
+               endif
+            endif
+         enddo
       enddo
-      enddo
-      endif
-      endif
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -4927,37 +4934,41 @@ contains
       Nsendactive = 0
       Nrecvactive = 0
 
-      if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
-         ! calculate send buffer sizes in the first pass
-         do iii = 1, 2
+
+      ! calculate send buffer sizes in the first pass
+      do iii = 1, 2
          do jjj = 1, 2
-         do ii = 1, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr
-         do jj = 1, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc
-            index_i = (ii - 1)*block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_r + block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_r
-            index_j = (jj - 1)*block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_c + block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_c
-            if (mode == 'R') then
-               index_j0 = floor_safe((index_j - 1)/2d0) + 1
-               index_i0 = index_i
+             pgno_o=pgnos_o(iii,jjj)
+             if (IOwnPgrp(ptree, pgno_o)) then
+               call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+               if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+                  do ii = 1, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nr
+                  do jj = 1, block_o%sons(iii, jjj)%ButterflyKerl(level_o)%nc
+                     index_i = (ii - 1)*block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_r + block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_r
+                     index_j = (jj - 1)*block_o%sons(iii, jjj)%ButterflyKerl(level_o)%inc_c + block_o%sons(iii, jjj)%ButterflyKerl(level_o)%idx_c
+                     if (mode == 'R') then
+                        index_j0 = floor_safe((index_j - 1)/2d0) + 1
+                        index_i0 = index_i
+                     endif
+                     if (mode == 'C') then
+                        index_i0 = floor_safe((index_i - 1)/2d0) + 1
+                        index_j0 = index_j
+                     endif
+                     call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i0, index_j0, mode, pgno_sub)
+                     pid = ptree%pgrp(pgno_sub)%head
+                     pp = pid - ptree%pgrp(pgno)%head + 1
+                     if (recvquant(pp)%active == 0) then
+                        recvquant(pp)%active = 1
+                        Nrecvactive = Nrecvactive + 1
+                        recvIDactive(Nrecvactive) = pp
+                     endif
+                  enddo
+                  enddo
+               endif
             endif
-            if (mode == 'C') then
-               index_i0 = floor_safe((index_i - 1)/2d0) + 1
-               index_j0 = index_j
-            endif
-            call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i0, index_j0, mode, pgno_sub)
-            pid = ptree%pgrp(pgno_sub)%head
-            pp = pid - ptree%pgrp(pgno)%head + 1
-            if (recvquant(pp)%active == 0) then
-               recvquant(pp)%active = 1
-               Nrecvactive = Nrecvactive + 1
-               recvIDactive(Nrecvactive) = pp
-            endif
          enddo
-         enddo
-         enddo
-         enddo
-      endif
-      endif
+      enddo
+
 
       if (IOwnPgrp(ptree, pgno_i)) then
       if (ptree%pgrp(pgno_sub_i_mine)%head == ptree%MyID) then
@@ -4968,8 +4979,18 @@ contains
             index_j = (jj - 1)*block_i%ButterflyKerl(level_i)%inc_c + block_i%ButterflyKerl(level_i)%idx_c
             index_ic = index_i
             index_jc = index_j
-            if (index_ic > num_row/2) index_ic = index_ic - num_row/2
-            if (index_jc > num_col/2) index_jc = index_jc - num_col/2
+
+            iii = 1
+            jjj = 1
+            if (index_ic > num_row/2)then
+                index_ic = index_ic - num_row/2
+                iii=2
+            endif
+            if (index_jc > num_col/2)then
+               index_jc = index_jc - num_col/2
+               jjj=2
+            endif
+            pgno_o=pgnos_o(iii,jjj)
 
             if (mode == 'R') then
                index_j0 = floor_safe((index_jc - 1)/2d0) + 1
@@ -5032,8 +5053,17 @@ contains
 
             index_ic = index_i
             index_jc = index_j
-            if (index_ic > num_row/2) index_ic = index_ic - num_row/2
-            if (index_jc > num_col/2) index_jc = index_jc - num_col/2
+            iii = 1
+            jjj = 1
+            if (index_ic > num_row/2)then
+                index_ic = index_ic - num_row/2
+                iii=2
+            endif
+            if (index_jc > num_col/2)then
+               index_jc = index_jc - num_col/2
+               jjj=2
+            endif
+            pgno_o=pgnos_o(iii,jjj)
 
             if (mode == 'R') then
                index_j0 = floor_safe((index_jc - 1)/2d0) + 1
@@ -5461,7 +5491,7 @@ contains
 
 !*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
-   subroutine BF_all2all_U_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
+   subroutine BF_all2all_U_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
 
       implicit none
@@ -5470,6 +5500,7 @@ contains
       integer group_m, group_n, mm, nn, index_i, index_i0, index_i_loc_k, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
       integer level, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
+      integer pgnos_o(2,2)
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1, iii, jjj, si, sj, ni, nj, pgno_sub_i_mine, pgno_sub_o_mine
       real(kind=8) flop
@@ -5497,9 +5528,15 @@ contains
       character::mode
 
       n1 = OMP_get_wtime()
+      nproc = ptree%pgrp(pgno_i)%nproc
+      pgno = pgno_i
+      do iii=1,2
+      do jjj=1,2
+      nproc = max(nproc, ptree%pgrp(pgnos_o(iii,jjj))%nproc)
+      pgno = min(pgno_i, pgnos_o(iii,jjj))
+      enddo
+      enddo
 
-      nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
-      pgno = min(pgno_i, pgno_o)
       tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
@@ -5508,7 +5545,7 @@ contains
          level_butterfly_i = -1
          block_i%level_half = -1
       endif
-      if (IOwnPgrp(ptree, pgno_o)) then
+      if (IOwnPgrp(ptree, pgnos_o(1,1))) then
          level_butterfly_o = block_i%level_butterfly
       else
          level_butterfly_o = -1
@@ -5519,6 +5556,8 @@ contains
 
       level_butterfly_c_o = max(level_butterfly_o - 1, 0)
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
+      num_blk = 2**level_butterfly_o
+
       ! if(level_i<=block_i%level_half)then
       ! mode='R'
       ! level_c_o=0
@@ -5528,48 +5567,52 @@ contains
       mode = 'C'
       level_c_o = level_butterfly_c_o + 1
       ! endif
-
-      call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgno_o)%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgno_o)%tail) .or. (ptree%pgrp(pgno_o)%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgno_o)%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+      do iii=1,2
+      do jjj=1,2
+         call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgnos_o(iii,jjj))%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgnos_o(iii,jjj))%tail) .or. (ptree%pgrp(pgnos_o(iii,jjj))%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgnos_o(iii,jjj))%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+      enddo
+      enddo
 
       call GetPgno_Sub(ptree, pgno_i, level_butterfly_i, pgno_sub_i_mine)
-      call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
 
-      call GetLocalBlockRange(ptree, pgno_o, level_butterfly_o_true + 1, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
 
-      ! if(mode=='R')then
-      ! num_blk=2**level_butterfly_o
-      ! idx=idx_c
-      ! inc=inc_c
-      ! nblk_loc=nc
-      ! elseif(mode=='C')then
-      if (level_butterfly_c_o == 0) then
-         num_blk = 2**level_butterfly_o
-         idx = idx_r
-         inc = inc_r
-         nblk_loc = nr
-      else
-         num_blk = 2**level_butterfly_o
-         idx = idx_r*2 - 1
-         inc = inc_r
-         nblk_loc = nr*2
-      endif
-      ! endif
-
-      if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
       do iii = 1, 2
       do jjj = 1, 2
-         if (nblk_loc > 0) then
-            block_o%sons(iii, jjj)%ButterflyU%idx = idx + (iii - 1)*num_blk/2
-            block_o%sons(iii, jjj)%ButterflyU%inc = inc
-            block_o%sons(iii, jjj)%ButterflyU%nblk_loc = nblk_loc
-            block_o%sons(iii, jjj)%ButterflyU%num_blk = num_blk
-            allocate (block_o%sons(iii, jjj)%ButterflyU%blocks(block_o%sons(iii, jjj)%ButterflyU%nblk_loc))
+         pgno_o=pgnos_o(iii,jjj)
+         if (IOwnPgrp(ptree, pgno_o)) then
+            call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+            call GetLocalBlockRange(ptree, pgno_o, level_butterfly_o_true + 1, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
+
+            ! if(mode=='R')then
+            ! num_blk=2**level_butterfly_o
+            ! idx=idx_c
+            ! inc=inc_c
+            ! nblk_loc=nc
+            ! elseif(mode=='C')then
+            if (level_butterfly_c_o == 0) then
+               idx = idx_r
+               inc = inc_r
+               nblk_loc = nr
+            else
+               idx = idx_r*2 - 1
+               inc = inc_r
+               nblk_loc = nr*2
+            endif
+            ! endif
+            if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+               if (nblk_loc > 0) then
+                  block_o%sons(iii, jjj)%ButterflyU%idx = idx + (iii - 1)*num_blk/2
+                  block_o%sons(iii, jjj)%ButterflyU%inc = inc
+                  block_o%sons(iii, jjj)%ButterflyU%nblk_loc = nblk_loc
+                  block_o%sons(iii, jjj)%ButterflyU%num_blk = num_blk
+                  allocate (block_o%sons(iii, jjj)%ButterflyU%blocks(block_o%sons(iii, jjj)%ButterflyU%nblk_loc))
+               endif
+            endif
          endif
       enddo
       enddo
-      endif
-      endif
+
+
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -5591,41 +5634,54 @@ contains
       Nsendactive = 0
       Nrecvactive = 0
 
-      ! if(mode=='R')then
-      ! nj=2
-      ! ni=1
-      ! elseif(mode=='C')then
-      nj = 1
-      ni = 2
-      ! endif
 
-      if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
-         ! calculate send buffer sizes in the first pass
-         do iii = 1, ni
-         do jjj = 1, nj
-         do ii = 1, nblk_loc
-            ! convert indices from output to input
+      ! calculate send buffer sizes in the first pass
+      do iii = 1, 2
+      do jjj = 1, 2
+         pgno_o=pgnos_o(iii,jjj)
+         if (IOwnPgrp(ptree, pgno_o)) then
+            call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+            call GetLocalBlockRange(ptree, pgno_o, level_butterfly_o_true + 1, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
+
             ! if(mode=='R')then
-            ! index_i = 1
-            ! index_j = (ii-1)*block_o%sons(iii,jjj)%ButterflyU%inc+block_o%sons(iii,jjj)%ButterflyU%idx
+            ! num_blk=2**level_butterfly_o
+            ! idx=idx_c
+            ! inc=inc_c
+            ! nblk_loc=nc
             ! elseif(mode=='C')then
-            index_i = (ii - 1)*block_o%sons(iii, jjj)%ButterflyU%inc + block_o%sons(iii, jjj)%ButterflyU%idx
-            index_j = 1
-            ! endif
-            call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i, index_j, mode, pgno_sub)
-            pid = ptree%pgrp(pgno_sub)%head
-            pp = pid - ptree%pgrp(pgno)%head + 1
-            if (recvquant(pp)%active == 0) then
-               recvquant(pp)%active = 1
-               Nrecvactive = Nrecvactive + 1
-               recvIDactive(Nrecvactive) = pp
+            if (level_butterfly_c_o == 0) then
+               idx = idx_r
+               inc = inc_r
+               nblk_loc = nr
+            else
+               idx = idx_r*2 - 1
+               inc = inc_r
+               nblk_loc = nr*2
             endif
-         enddo
-         enddo
-         enddo
-      endif
-      endif
+            if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+               do ii = 1, nblk_loc
+                  ! convert indices from output to input
+                  ! if(mode=='R')then
+                  ! index_i = 1
+                  ! index_j = (ii-1)*block_o%sons(iii,jjj)%ButterflyU%inc+block_o%sons(iii,jjj)%ButterflyU%idx
+                  ! elseif(mode=='C')then
+                  index_i = (ii - 1)*block_o%sons(iii, jjj)%ButterflyU%inc + block_o%sons(iii, jjj)%ButterflyU%idx
+                  index_j = 1
+                  ! endif
+                  call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i, index_j, mode, pgno_sub)
+                  pid = ptree%pgrp(pgno_sub)%head
+                  pp = pid - ptree%pgrp(pgno)%head + 1
+                  if (recvquant(pp)%active == 0) then
+                     recvquant(pp)%active = 1
+                     Nrecvactive = Nrecvactive + 1
+                     recvIDactive(Nrecvactive) = pp
+                  endif
+               enddo
+            endif
+         endif
+      enddo
+      enddo
+
 
       if (IOwnPgrp(ptree, pgno_i)) then
       if (ptree%pgrp(pgno_sub_i_mine)%head == ptree%MyID) then
@@ -5642,19 +5698,27 @@ contains
          index_j = 1
          index_j0 = 1
          index_i0 = index_i
-         if (index_i0 > num_blk/2) index_i0 = index_i0 - num_blk/2
-         ! endif
-
-         call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, ceiling_safe(index_i0/2d0), index_j0, mode, pgno_sub)
-         pid = ptree%pgrp(pgno_sub)%head
-
-         pp = pid - ptree%pgrp(pgno)%head + 1
-         if (sendquant(pp)%active == 0) then
-            sendquant(pp)%active = 1
-            Nsendactive = Nsendactive + 1
-            sendIDactive(Nsendactive) = pp
+         si=1
+         if (index_i0 > num_blk/2)then
+            index_i0 = index_i0 - num_blk/2
+            si=2
          endif
-         sendquant(pp)%size = sendquant(pp)%size + 4 + size(block_i%ButterflyU%blocks(ii)%matrix, 1)*size(block_i%ButterflyU%blocks(ii)%matrix, 2)
+         ! endif
+         do iii = si, si
+            do jjj = 1, 2
+               pgno_o=pgnos_o(iii,jjj)
+               call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, ceiling_safe(index_i0/2d0), index_j0, mode, pgno_sub)
+               pid = ptree%pgrp(pgno_sub)%head
+
+               pp = pid - ptree%pgrp(pgno)%head + 1
+               if (sendquant(pp)%active == 0) then
+                  sendquant(pp)%active = 1
+                  Nsendactive = Nsendactive + 1
+                  sendIDactive(Nsendactive) = pp
+               endif
+               sendquant(pp)%size = sendquant(pp)%size + 6 + size(block_i%ButterflyU%blocks(ii)%matrix, 1)*size(block_i%ButterflyU%blocks(ii)%matrix, 2)
+            enddo
+         enddo
       enddo
       endif
       endif
@@ -5704,28 +5768,38 @@ contains
             index_j = 1
             index_j0 = 1
             index_i0 = index_i
-            if (index_i0 > num_blk/2) index_i0 = index_i0 - num_blk/2
+            si=1
+            if (index_i0 > num_blk/2)then
+               index_i0 = index_i0 - num_blk/2
+               si=2
+            endif
             ! endif
+            do iii = si, si
+            do jjj = 1, 2
+               pgno_o=pgnos_o(iii,jjj)
+               call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, ceiling_safe(index_i0/2d0), index_j0, mode, pgno_sub)
+               pid = ptree%pgrp(pgno_sub)%head
 
-            call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, ceiling_safe(index_i0/2d0), index_j0, mode, pgno_sub)
-            pid = ptree%pgrp(pgno_sub)%head
+               pp = pid - ptree%pgrp(pgno)%head + 1
+               Nrow = size(block_i%ButterflyU%blocks(ii)%matrix, 1)
+               Ncol = size(block_i%ButterflyU%blocks(ii)%matrix, 2)
 
-            pp = pid - ptree%pgrp(pgno)%head + 1
-            Nrow = size(block_i%ButterflyU%blocks(ii)%matrix, 1)
-            Ncol = size(block_i%ButterflyU%blocks(ii)%matrix, 2)
-
-            sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
-            sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
-            sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
-            sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
-            sendquant(pp)%size = sendquant(pp)%size + 4
-            do i = 1, Nrow*Ncol
-               rr = mod(i - 1, Nrow) + 1
-               cc = (i - 1)/Nrow + 1
-               sendquant(pp)%dat(sendquant(pp)%size + i, 1) = block_i%ButterflyU%blocks(ii)%matrix(rr, cc)
+               sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
+               sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
+               sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+               sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
+               sendquant(pp)%dat(sendquant(pp)%size + 5, 1) = iii
+               sendquant(pp)%dat(sendquant(pp)%size + 6, 1) = jjj
+               sendquant(pp)%size = sendquant(pp)%size + 6
+               do i = 1, Nrow*Ncol
+                  rr = mod(i - 1, Nrow) + 1
+                  cc = (i - 1)/Nrow + 1
+                  sendquant(pp)%dat(sendquant(pp)%size + i, 1) = block_i%ButterflyU%blocks(ii)%matrix(rr, cc)
+               enddo
+               sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+               ! deallocate(block_i%ButterflyU%blocks(ii)%matrix)
             enddo
-            sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
-            ! deallocate(block_i%ButterflyU%blocks(ii)%matrix)
+            enddo
          enddo
          ! if(allocated(block_i%ButterflyU%blocks))deallocate(block_i%ButterflyU%blocks)
       endif
@@ -5767,38 +5841,23 @@ contains
             index_i = NINT(dble(recvquant(pp)%dat(i, 1)))
             i = i + 1
             index_j = NINT(dble(recvquant(pp)%dat(i, 1)))
-
-            ! if(mode=='R')then
-            ! nj=1
-            ! sj=1
-            ! if(index_j>num_blk/2)sj=2
-            ! ni=2
-            ! si=1
-            ! ii=(index_j-block_o%sons(si,sj)%ButterflyU%idx)/block_o%sons(si,sj)%ButterflyU%inc+1
-            ! elseif(mode=='C')then
-            ni = 1
-            si = 1
-            if (index_i > num_blk/2) si = 2
-            nj = 2
-            sj = 1
-            ii = (index_i - block_o%sons(si, sj)%ButterflyU%idx)/block_o%sons(si, sj)%ButterflyU%inc + 1
-            ! endif
             i = i + 1
             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
             i = i + 1
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
-            do iii = si, si + ni - 1
-            do jjj = sj, sj + nj - 1
-               call assert(.not. associated(block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix), 'receiving dat alreay exists locally')
-               allocate (block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(Nrow, Ncol))
-               j=0
-               do cc = 1, Ncol
-                  do rr = 1, Nrow
-                     j = j + 1
-                     block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
-                  enddo
+            i = i + 1
+            iii = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            jjj = NINT(dble(recvquant(pp)%dat(i, 1)))
+            ii = (index_i - block_o%sons(iii, jjj)%ButterflyU%idx)/block_o%sons(iii, jjj)%ButterflyU%inc + 1
+            call assert(.not. associated(block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix), 'receiving dat alreay exists locally')
+            allocate (block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(Nrow, Ncol))
+            j=0
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  j = j + 1
+                  block_o%sons(iii, jjj)%ButterflyU%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
                enddo
-            enddo
             enddo
             i = i + Nrow*Ncol
          enddo
@@ -5832,7 +5891,7 @@ contains
 
 !*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
-   subroutine BF_all2all_V_split(block_i, pgno_i, level_i, block_o, pgno_o, level_o, stats, ptree)
+   subroutine BF_all2all_V_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
 
       implicit none
@@ -5842,6 +5901,7 @@ contains
       integer level, length_1, length_2, level_blocks
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
       real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+      integer pgnos_o(2,2)
       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1, iii, jjj, si, sj, ni, nj, pgno_sub_i_mine, pgno_sub_o_mine
       real(kind=8) flop
       DT ctemp
@@ -5869,8 +5929,14 @@ contains
 
       n1 = OMP_get_wtime()
 
-      nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
-      pgno = min(pgno_i, pgno_o)
+      nproc = ptree%pgrp(pgno_i)%nproc
+      pgno = pgno_i
+      do iii=1,2
+      do jjj=1,2
+      nproc = max(nproc, ptree%pgrp(pgnos_o(iii,jjj))%nproc)
+      pgno = min(pgno_i, pgnos_o(iii,jjj))
+      enddo
+      enddo
       tag = pgno+level_i*10
 
       if (IOwnPgrp(ptree, pgno_i)) then
@@ -5879,7 +5945,7 @@ contains
          level_butterfly_i = -1
          block_i%level_half = -1
       endif
-      if (IOwnPgrp(ptree, pgno_o)) then
+      if (IOwnPgrp(ptree, pgnos_o(1,1))) then
          level_butterfly_o = block_i%level_butterfly
       else
          level_butterfly_o = -1
@@ -5890,8 +5956,7 @@ contains
 
       level_butterfly_c_o = max(level_butterfly_o - 1, 0)
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
-      call GetPgno_Sub(ptree, pgno_i, level_butterfly_i, pgno_sub_i_mine)
-      call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+      num_blk = 2**level_butterfly_o
 
       ! if(level_i<=block_i%level_half)then
       mode = 'R'
@@ -5903,45 +5968,45 @@ contains
       ! level_c_o=level_butterfly_c_o+1
       ! endif
 
-      call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgno_o)%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgno_o)%tail) .or. (ptree%pgrp(pgno_o)%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgno_o)%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+      do iii=1,2
+      do jjj=1,2
+          call assert((ptree%pgrp(pgno_i)%head <= ptree%pgrp(pgnos_o(iii,jjj))%head .and. ptree%pgrp(pgno_i)%tail >= ptree%pgrp(pgnos_o(iii,jjj))%tail) .or. (ptree%pgrp(pgnos_o(iii,jjj))%head <= ptree%pgrp(pgno_i)%head .and. ptree%pgrp(pgnos_o(iii,jjj))%tail >= ptree%pgrp(pgno_i)%tail), 'pgno_i or pgno_o should be contained in the other')
+      enddo
+      enddo
+      call GetPgno_Sub(ptree, pgno_i, level_butterfly_i, pgno_sub_i_mine)
 
-      call GetLocalBlockRange(ptree, pgno_o, level_c_o, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
 
-      ! if(mode=='R')then
-      if (level_butterfly_c_o == 0) then
-         num_blk = 2**level_butterfly_o
-         idx = idx_c
-         inc = inc_c
-         nblk_loc = nc
-      else
-         num_blk = 2**level_butterfly_o
-         idx = idx_c*2 - 1
-         inc = inc_c
-         nblk_loc = nc*2
-      endif
-      ! elseif(mode=='C')then
-      ! num_blk=2**level_butterfly_o
-      ! idx=idx_r
-      ! inc=inc_r
-      ! nblk_loc=nr
-      ! endif
-
+  do iii = 1, 2
+  do jjj = 1, 2
+      pgno_o=pgnos_o(iii,jjj)
       if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
-      do iii = 1, 2
-      do jjj = 1, 2
-         if (nblk_loc > 0) then
-            block_o%sons(iii, jjj)%ButterflyV%idx = idx + (jjj - 1)*num_blk/2
-            block_o%sons(iii, jjj)%ButterflyV%inc = inc
-            block_o%sons(iii, jjj)%ButterflyV%nblk_loc = nblk_loc
-            block_o%sons(iii, jjj)%ButterflyV%num_blk = num_blk
-            allocate (block_o%sons(iii, jjj)%ButterflyV%blocks(block_o%sons(iii, jjj)%ButterflyV%nblk_loc))
-         endif
+          call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+          call GetLocalBlockRange(ptree, pgno_o, level_c_o, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
 
-      enddo
-      enddo
+          if (level_butterfly_c_o == 0) then
+              idx = idx_c
+              inc = inc_c
+              nblk_loc = nc
+          else
+              idx = idx_c*2 - 1
+              inc = inc_c
+              nblk_loc = nc*2
+          endif
+
+          if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+              if (nblk_loc > 0) then
+                  block_o%sons(iii, jjj)%ButterflyV%idx = idx + (jjj - 1)*num_blk/2
+                  block_o%sons(iii, jjj)%ButterflyV%inc = inc
+                  block_o%sons(iii, jjj)%ButterflyV%nblk_loc = nblk_loc
+                  block_o%sons(iii, jjj)%ButterflyV%num_blk = num_blk
+                  allocate (block_o%sons(iii, jjj)%ButterflyV%blocks(block_o%sons(iii, jjj)%ButterflyV%nblk_loc))
+              endif
+          endif
       endif
-      endif
+  enddo
+  enddo
+
+
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -5963,41 +6028,47 @@ contains
       Nsendactive = 0
       Nrecvactive = 0
 
-      ! if(mode=='R')then
-      nj = 2
-      ni = 1
-      ! elseif(mode=='C')then
-      ! nj=1
-      ! ni=2
-      ! endif
 
-      if (IOwnPgrp(ptree, pgno_o)) then
-      if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
-         ! calculate send buffer sizes in the first pass
-         do iii = 1, ni
-         do jjj = 1, nj
-         do ii = 1, nblk_loc
-            ! convert indices from output to input
-            ! if(mode=='R')then
-            index_i = 1
-            index_j = (ii - 1)*block_o%sons(iii, jjj)%ButterflyV%inc + block_o%sons(iii, jjj)%ButterflyV%idx
-            ! elseif(mode=='C')then
-            ! index_i = (ii-1)*block_o%sons(iii,jjj)%ButterflyV%inc+block_o%sons(iii,jjj)%ButterflyV%idx
-            ! index_j = 1
-            ! endif
-            call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i, index_j, mode, pgno_sub)
-            pid = ptree%pgrp(pgno_sub)%head
-            pp = pid - ptree%pgrp(pgno)%head + 1
-            if (recvquant(pp)%active == 0) then
-               recvquant(pp)%active = 1
-               Nrecvactive = Nrecvactive + 1
-               recvIDactive(Nrecvactive) = pp
-            endif
-         enddo
-         enddo
-         enddo
-      endif
-      endif
+      ! calculate send buffer sizes in the first pass
+      do iii = 1, 2
+      do jjj = 1, 2
+          pgno_o=pgnos_o(iii,jjj)
+          if (IOwnPgrp(ptree, pgno_o)) then
+              call GetPgno_Sub(ptree, pgno_o, level_butterfly_o_true, pgno_sub_o_mine)
+              call GetLocalBlockRange(ptree, pgno_o, level_c_o, level_butterfly_o_true, idx_r, inc_r, nr, idx_c, inc_c, nc, mode)
+
+              if (level_butterfly_c_o == 0) then
+                  idx = idx_c
+                  inc = inc_c
+                  nblk_loc = nc
+              else
+                  idx = idx_c*2 - 1
+                  inc = inc_c
+                  nblk_loc = nc*2
+              endif
+              if (ptree%pgrp(pgno_sub_o_mine)%head == ptree%MyID) then
+                  do ii = 1, nblk_loc
+                      ! convert indices from output to input
+                      ! if(mode=='R')then
+                      index_i = 1
+                      index_j = (ii - 1)*block_o%sons(iii, jjj)%ButterflyV%inc + block_o%sons(iii, jjj)%ButterflyV%idx
+                      ! elseif(mode=='C')then
+                      ! index_i = (ii-1)*block_o%sons(iii,jjj)%ButterflyV%inc+block_o%sons(iii,jjj)%ButterflyV%idx
+                      ! index_j = 1
+                      ! endif
+                      call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i, index_j, mode, pgno_sub)
+                      pid = ptree%pgrp(pgno_sub)%head
+                      pp = pid - ptree%pgrp(pgno)%head + 1
+                      if (recvquant(pp)%active == 0) then
+                          recvquant(pp)%active = 1
+                          Nrecvactive = Nrecvactive + 1
+                          recvIDactive(Nrecvactive) = pp
+                      endif
+                  enddo
+              endif
+          endif
+      enddo
+      enddo
 
       if (IOwnPgrp(ptree, pgno_i)) then
       if (ptree%pgrp(pgno_sub_i_mine)%head == ptree%MyID) then
@@ -6008,7 +6079,11 @@ contains
          index_j = (ii - 1)*block_i%ButterflyV%inc + block_i%ButterflyV%idx
          index_i0 = 1
          index_j0 = index_j
-         if (index_j0 > num_blk/2) index_j0 = index_j0 - num_blk/2
+         sj=1
+         if (index_j0 > num_blk/2)then
+            index_j0 = index_j0 - num_blk/2
+            sj=2
+         endif
          ! elseif(mode=='C')then
          ! index_i = (ii-1)*block_i%ButterflyV%inc+block_i%ButterflyV%idx
          ! index_j = 1
@@ -6016,16 +6091,21 @@ contains
          ! index_i0 = index_i
          ! if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
          ! endif
-         call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, index_i0, ceiling_safe(index_j0/2d0), mode, pgno_sub)
-         pid = ptree%pgrp(pgno_sub)%head
+         do iii = 1, 2
+          do jjj = sj, sj
+             pgno_o=pgnos_o(iii,jjj)
+              call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, index_i0, ceiling_safe(index_j0/2d0), mode, pgno_sub)
+              pid = ptree%pgrp(pgno_sub)%head
 
-         pp = pid - ptree%pgrp(pgno)%head + 1
-         if (sendquant(pp)%active == 0) then
-            sendquant(pp)%active = 1
-            Nsendactive = Nsendactive + 1
-            sendIDactive(Nsendactive) = pp
-         endif
-         sendquant(pp)%size = sendquant(pp)%size + 4 + size(block_i%ButterflyV%blocks(ii)%matrix, 1)*size(block_i%ButterflyV%blocks(ii)%matrix, 2)
+              pp = pid - ptree%pgrp(pgno)%head + 1
+              if (sendquant(pp)%active == 0) then
+                  sendquant(pp)%active = 1
+                  Nsendactive = Nsendactive + 1
+                  sendIDactive(Nsendactive) = pp
+              endif
+              sendquant(pp)%size = sendquant(pp)%size + 6 + size(block_i%ButterflyV%blocks(ii)%matrix, 1)*size(block_i%ButterflyV%blocks(ii)%matrix, 2)
+              enddo
+          enddo
       enddo
       endif
       endif
@@ -6069,7 +6149,11 @@ contains
             index_j = (ii - 1)*block_i%ButterflyV%inc + block_i%ButterflyV%idx
             index_i0 = 1
             index_j0 = index_j
-            if (index_j0 > num_blk/2) index_j0 = index_j0 - num_blk/2
+            sj=1
+            if (index_j0 > num_blk/2)then
+               index_j0 = index_j0 - num_blk/2
+               sj=2
+            endif
             ! elseif(mode=='C')then
             ! index_i = (ii-1)*block_i%ButterflyV%inc+block_i%ButterflyV%idx
             ! index_j = 1
@@ -6077,27 +6161,36 @@ contains
             ! index_i0 = index_i
             ! if(index_i0>num_blk/2)index_i0=index_i0-num_blk/2
             ! endif
+            do iii = 1, 2
+              do jjj = sj, sj
+                 pgno_o=pgnos_o(iii,jjj)
+                  call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, index_i0, ceiling_safe(index_j0/2d0), mode, pgno_sub)
+                  pid = ptree%pgrp(pgno_sub)%head
 
-            call GetBlockPID(ptree, pgno_o, level_c_o, level_butterfly_o_true, index_i0, ceiling_safe(index_j0/2d0), mode, pgno_sub)
-            pid = ptree%pgrp(pgno_sub)%head
+                  pp = pid - ptree%pgrp(pgno)%head + 1
+                  Nrow = size(block_i%ButterflyV%blocks(ii)%matrix, 1)
+                  Ncol = size(block_i%ButterflyV%blocks(ii)%matrix, 2)
 
-            pp = pid - ptree%pgrp(pgno)%head + 1
-            Nrow = size(block_i%ButterflyV%blocks(ii)%matrix, 1)
-            Ncol = size(block_i%ButterflyV%blocks(ii)%matrix, 2)
+                  sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
+                  sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
+                  sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                  sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
+                  sendquant(pp)%dat(sendquant(pp)%size + 5, 1) = iii
+                  sendquant(pp)%dat(sendquant(pp)%size + 6, 1) = jjj
+                  sendquant(pp)%size = sendquant(pp)%size + 6
+                  do i = 1, Nrow*Ncol
+                      rr = mod(i - 1, Nrow) + 1
+                      cc = (i - 1)/Nrow + 1
+                      sendquant(pp)%dat(sendquant(pp)%size + i, 1) = block_i%ButterflyV%blocks(ii)%matrix(rr, cc)
+                  enddo
+                  sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
 
-            sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = index_i
-            sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = index_j
-            sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
-            sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
-            sendquant(pp)%size = sendquant(pp)%size + 4
-            do i = 1, Nrow*Ncol
-               rr = mod(i - 1, Nrow) + 1
-               cc = (i - 1)/Nrow + 1
-               sendquant(pp)%dat(sendquant(pp)%size + i, 1) = block_i%ButterflyV%blocks(ii)%matrix(rr, cc)
-            enddo
-            sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
-            ! deallocate(block_i%ButterflyV%blocks(ii)%matrix)
-         enddo
+                  ! write(*,*)pid,iii,jjj,'send', index_i, index_j,Nrow,Ncol
+
+                  ! deallocate(block_i%ButterflyV%blocks(ii)%matrix)
+              enddo
+              enddo
+          enddo
       endif
       endif
       ! if(allocated(block_i%ButterflyV%blocks))deallocate(block_i%ButterflyV%blocks)
@@ -6139,38 +6232,25 @@ contains
             i = i + 1
             index_j = NINT(dble(recvquant(pp)%dat(i, 1)))
 
-            ! if(mode=='R')then
-            nj = 1
-            sj = 1
-            if (index_j > num_blk/2) sj = 2
-            ni = 2
-            si = 1
-            ii = (index_j - block_o%sons(si, sj)%ButterflyV%idx)/block_o%sons(si, sj)%ButterflyV%inc + 1
-            ! elseif(mode=='C')then
-            ! ni=1
-            ! si=1
-            ! if(index_i>num_blk/2)si=2
-            ! nj=2
-            ! sj=1
-            ! ii=(index_i-block_o%sons(si,sj)%ButterflyV%idx)/block_o%sons(si,sj)%ButterflyV%inc+1
-            ! endif
             i = i + 1
             Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
             i = i + 1
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
-            do iii = si, si + ni - 1
-            do jjj = sj, sj + nj - 1
-               call assert(.not. associated(block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix), 'receiving dat alreay exists locally V')
-               allocate (block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(Nrow, Ncol))
-               j=0
-               do cc = 1, Ncol
-                  do rr = 1, Nrow
-                     j = j + 1
-                     block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
-                  enddo
-               enddo
-            enddo
-            enddo
+            i = i + 1
+            iii = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            jjj = NINT(dble(recvquant(pp)%dat(i, 1)))
+            ! write(*,*)ptree%MyID,iii,jjj,'recv', index_i, index_j,Nrow,Ncol,block_o%sons(iii, jjj)%ButterflyV%idx, block_o%sons(iii, jjj)%ButterflyV%inc,block_i%level_butterfly,num_blk
+          ii = (index_j - block_o%sons(iii, jjj)%ButterflyV%idx)/block_o%sons(iii, jjj)%ButterflyV%inc + 1
+              call assert(.not. associated(block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix), 'receiving dat alreay exists locally V')
+              allocate (block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(Nrow, Ncol))
+              j=0
+              do cc = 1, Ncol
+              do rr = 1, Nrow
+                  j = j + 1
+                  block_o%sons(iii, jjj)%ButterflyV%blocks(ii)%matrix(rr, cc) = recvquant(pp)%dat(i+j, 1)
+              enddo
+              enddo
             i = i + Nrow*Ncol
          enddo
       enddo
