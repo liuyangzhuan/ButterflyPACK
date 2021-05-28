@@ -265,45 +265,58 @@ PROGRAM ButterflyPACK_IE_3D
 	! quant%ports(2)%type=0
 
 
-	!!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
-	quant%Nport=4
-	allocate(quant%ports(quant%Nport))
-	quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
-	quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	quant%ports(1)%y=(/0d0,0d0,1d0/)
-	quant%ports(1)%z=(/0d0,1d0,0d0/)
-	quant%ports(1)%type=1
-	quant%ports(1)%a=0.07d0
-	quant%ports(1)%b=0.02d0
+	! !!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
+	! quant%Nport=4
+	! allocate(quant%ports(quant%Nport))
+	! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+	! quant%ports(1)%y=(/0d0,0d0,1d0/)
+	! quant%ports(1)%z=(/0d0,1d0,0d0/)
+	! quant%ports(1)%type=1
+	! quant%ports(1)%a=0.07d0
+	! quant%ports(1)%b=0.02d0
 
-	quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
-	quant%ports(2)%x=(/0d0,-1d0,0d0/)
-	quant%ports(2)%y=(/0d0,0d0,1d0/)
-	quant%ports(2)%z=(/-1d0,0d0,0d0/)
-	quant%ports(2)%type=1
-	quant%ports(2)%a=0.07d0
-	quant%ports(2)%b=0.02d0
+	! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+	! quant%ports(2)%x=(/0d0,-1d0,0d0/)
+	! quant%ports(2)%y=(/0d0,0d0,1d0/)
+	! quant%ports(2)%z=(/-1d0,0d0,0d0/)
+	! quant%ports(2)%type=1
+	! quant%ports(2)%a=0.07d0
+	! quant%ports(2)%b=0.02d0
 
-	quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
-	quant%ports(3)%z=(/0d0,0d0,-1d0/)
-	quant%ports(3)%x=(/1d0,0d0,0d0/)
-	quant%ports(3)%R=0.025
-	quant%ports(3)%type=0
-	quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
-	quant%ports(4)%z=(/0d0,0d0,1d0/)
-	quant%ports(4)%x=(/1d0,0d0,0d0/)
-	quant%ports(4)%R=0.025
-	quant%ports(4)%type=0
+	! quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
+	! quant%ports(3)%z=(/0d0,0d0,-1d0/)
+	! quant%ports(3)%x=(/1d0,0d0,0d0/)
+	! quant%ports(3)%R=0.025
+	! quant%ports(3)%type=0
+	! quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
+	! quant%ports(4)%z=(/0d0,0d0,1d0/)
+	! quant%ports(4)%x=(/1d0,0d0,0d0/)
+	! quant%ports(4)%R=0.025
+	! quant%ports(4)%type=0
 
-	quant%Nobs=1000
-	allocate(quant%obs_points(3,quant%Nobs))
-	allocate(quant%obs_Efields(3,quant%Nobs))
-	offset=0.001
-	do ii=1,quant%Nobs
-		quant%obs_points(1,ii)=0
-		quant%obs_points(2,ii)=0
-		quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
-	enddo
+	! quant%Nobs=1000
+	! allocate(quant%obs_points(3,quant%Nobs))
+	! allocate(quant%obs_Efields(3,quant%Nobs))
+	! offset=0.001
+	! do ii=1,quant%Nobs
+	! 	quant%obs_points(1,ii)=0
+	! 	quant%obs_points(2,ii)=0
+	! 	quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
+	! enddo
+
+
+	! !!!!!!!! RFQ no port
+	! quant%Nport=0
+	! quant%Nobs=1000
+	! allocate(quant%obs_points(3,quant%Nobs))
+	! allocate(quant%obs_Efields(3,quant%Nobs))
+	! offset=0.001
+	! do ii=1,quant%Nobs
+	! 	quant%obs_points(1,ii)=0
+	! 	quant%obs_points(2,ii)=0
+	! 	quant%obs_points(3,ii)=(2.115227780-2*offset)/(quant%Nobs-1)*(ii-1)+offset - 1.05761389
+	! enddo
 
 
 
