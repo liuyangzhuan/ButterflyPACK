@@ -5674,8 +5674,6 @@ endif
             SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
             rank = rank + rankup
 
-            if (rank == rmax) exit
-
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
@@ -6115,8 +6113,6 @@ endif
             SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
 
             rank = rank + rankup
-
-            if (rank == rmax) exit
 
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
