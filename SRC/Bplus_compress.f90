@@ -1965,6 +1965,9 @@ contains
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2123,6 +2126,9 @@ contains
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2965,6 +2971,9 @@ else
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -4606,6 +4615,9 @@ endif
             allocate(SVD_Q%matU(rankmax_r,rmax))
             allocate(SVD_Q%matV(rmax,rankmax_c))
             allocate(SVD_Q%Singular(rmax))
+            SVD_Q%matU=0
+            SVD_Q%matV=0
+            SVD_Q%Singular=0
             SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
             SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
             SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -5659,6 +5671,9 @@ endif
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
                allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
                SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -5914,6 +5929,9 @@ endif
                   allocate(SVD_Q%matU(M,rmax))
                   allocate(SVD_Q%matV(rmax,N))
                   allocate(SVD_Q%Singular(rmax))
+                  SVD_Q%matU=0
+                  SVD_Q%matV=0
+                  SVD_Q%Singular=0
                   SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                   SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                   SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -6095,6 +6113,9 @@ endif
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
                allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
                SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
