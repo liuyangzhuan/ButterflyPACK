@@ -5654,7 +5654,9 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-
+            if(rank + rankup > rankmax_min)then
+               rankup=rankmax_min-rank
+            endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
                allocate(matV(rmax,N))
@@ -5662,9 +5664,6 @@ endif
                matU=SVD_Q%matU
                matV=SVD_Q%matV
                Singular=SVD_Q%Singular
-               if(rankmax_min<=rmax)then
-                  rankup=rankmax_min-rank
-               endif
                rmax0=rmax
                rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
@@ -5912,7 +5911,9 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             rankup = ranknew
             if (rankup > 0) then
-
+               if(rank + rankup > rankmax_min)then
+                  rankup=rankmax_min-rank
+               endif
                if (rank + rankup > rmax)then
                   allocate(matU(M,rmax))
                   allocate(matV(rmax,N))
@@ -5920,9 +5921,6 @@ endif
                   matU=SVD_Q%matU
                   matV=SVD_Q%matV
                   Singular=SVD_Q%Singular
-                  if(rankmax_min<=rmax)then
-                     rankup=rankmax_min-rank
-                  endif
                   rmax0=rmax
                   rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                   deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
@@ -6096,7 +6094,9 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-
+            if(rank + rankup > rankmax_min)then
+               rankup=rankmax_min-rank
+            endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
                allocate(matV(rmax,N))
@@ -6104,9 +6104,6 @@ endif
                matU=SVD_Q%matU
                matV=SVD_Q%matV
                Singular=SVD_Q%Singular
-               if(rankmax_min<=rmax)then
-                  rankup=rankmax_min-rank
-               endif
                rmax0=rmax
                rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
