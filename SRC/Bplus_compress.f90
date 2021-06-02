@@ -5656,6 +5656,7 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             if(rank + rankup > rankmax_min)then
                rankup=rankmax_min-rank
+               if(rankup==0)exit
             endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
@@ -5913,6 +5914,7 @@ endif
             if (rankup > 0) then
                if(rank + rankup > rankmax_min)then
                   rankup=rankmax_min-rank
+                  call assert(rankup>0,"rankup should not be zero here")
                endif
                if (rank + rankup > rmax)then
                   allocate(matU(M,rmax))
@@ -6096,6 +6098,7 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             if(rank + rankup > rankmax_min)then
                rankup=rankmax_min-rank
+               if(rankup==0)exit
             endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
