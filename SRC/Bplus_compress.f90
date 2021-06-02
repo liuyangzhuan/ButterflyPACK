@@ -5990,7 +5990,7 @@ endif
          endif
       endif
 
-      do while (normUV >= tolerance*normA .and. itr < itrmax .and. rank<rmax)
+      do while (normUV >= tolerance*normA .and. itr < itrmax)
 
          !**** create random column index for the first iteration
          if (rank == 0) then
