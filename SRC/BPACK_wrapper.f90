@@ -974,7 +974,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
-      integer(kind=8) idx,kk
+      integer(kind=8) idx,kk,knn
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1086,7 +1086,8 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
-            idx=kk + (msh%new2old(ii) - 1)*option%knn
+            knn = option%knn
+            idx=kk + (msh%new2old(ii) - 1)*knn
             if (nns(idx) /= 0) then
                msh%nns(ii, kk) = msh%old2new(nns(idx))
             else
@@ -1196,7 +1197,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
-      integer(kind=8)::idx,kk
+      integer(kind=8)::idx,kk,knn
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1306,8 +1307,8 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
-
-            idx=kk + (msh%new2old(ii) - 1)*option%knn
+            knn = option%knn
+            idx=kk + (msh%new2old(ii) - 1)*knn
 
             if (nns(idx) /= 0) then
                msh%nns(ii, kk) = msh%old2new(nns(idx))
@@ -1456,7 +1457,7 @@ contains
       real(kind=8) t1, t2
       character(len=1024)  :: strings
       integer Maxgroup_rc
-      integer(kind=8)::idx,kk
+      integer(kind=8)::idx,kk,knn
 
       type(c_ptr), intent(in), target :: C_QuantApp
       type(c_funptr), intent(in), value, target :: C_FuncDistmn
@@ -1546,7 +1547,8 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, M
          do kk = 1, option%knn
-            idx=kk + (ii - 1)*option%knn
+            knn = option%knn
+            idx=kk + (ii - 1)*knn
             if (nnsr(idx) /= 0) then
                msh%nns(ii, kk) = nnsr(idx) + M
             else
@@ -1556,7 +1558,8 @@ contains
          enddo
          do ii = 1, N
          do kk = 1, option%knn
-            idx=kk + (ii - 1)*option%knn
+            knn = option%knn
+            idx=kk + (ii - 1)*knn
             msh%nns(ii + M, kk) = nnsc(idx)
          enddo
          enddo
