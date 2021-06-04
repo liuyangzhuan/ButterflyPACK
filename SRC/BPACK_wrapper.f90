@@ -923,7 +923,7 @@ contains
    !N: matrix size (in)
    !Ndim: data set dimensionality (not used if nogeo=1)
    !Locations: coordinates used for clustering (not used if nogeo=1)
-   !nns: nearest neighbours provided by user (referenced if nogeo=3)
+   !nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
    !nlevel: the number of top levels that have been ordered (in)
    !tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
    !Permutation: return the permutation vector new2old (indexed from 1) (out)
@@ -1059,7 +1059,7 @@ contains
       tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 
       !**** the geometry points are provided by user
-      if (option%nogeo == 0) then
+      if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
@@ -1081,7 +1081,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
       t2 = OMP_get_wtime()
 
-      if (option%nogeo == 3 .and. option%knn > 0) then
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
@@ -1143,7 +1143,7 @@ contains
    !N: matrix size (in)
    !Ndim: data set dimensionality (not used if nogeo=1)
    !Locations: coordinates used for clustering (not used if nogeo=1)
-   !nns: nearest neighbours provided by user (referenced if nogeo=3)
+   !nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
    !nlevel: the number of top levels that have been ordered (in)
    !tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
    !Permutation: return the permutation vector new2old (indexed from 1) (out)
@@ -1277,7 +1277,7 @@ contains
       tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 
       !**** the geometry points are provided by user
-      if (option%nogeo == 0) then
+      if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
@@ -1299,7 +1299,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
       t2 = OMP_get_wtime()
 
-      if (option%nogeo == 3 .and. option%knn > 0) then
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
@@ -1409,8 +1409,8 @@ contains
 !**** C interface of BF construction via blackbox matvec or entry extraction
    !M,N: matrix size (in)
    !M_loc,N_loc: number of local row/column indices (out)
-   !nnsr: (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3)
-   !nnsc: (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3)
+   !nnsr: (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !nnsc: (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
    !bf_Cptr: the structure containing the block (out)
    !option_Cptr: the structure containing option (in)
    !stats_Cptr: the structure containing statistics (inout)
@@ -1518,7 +1518,7 @@ contains
          msh%new2old(ii) = -(ii - M)
       enddo
       !**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
-      if (option%nogeo ==0) then
+      if (option%nogeo ==0 .or. option%nogeo ==4) then
          Dimn = size(mshr%xyz,1)
          allocate(msh%xyz(1:Dimn,-N:M))
          msh%xyz=0
@@ -1531,11 +1531,11 @@ contains
       endif
 
       !**** construct a list of k-nearest neighbours for each point
-      if (option%nogeo /= 3 .and. option%knn > 0) then
+      if (option%nogeo /= 3 .and. option%nogeo /= 4 .and. option%knn > 0) then
          call FindKNNs(option, msh, ker, stats, ptree, 2, 3)
       endif
 
-      if (option%nogeo == 3 .and. option%knn > 0) then
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, M
          do kk = 1, option%knn
