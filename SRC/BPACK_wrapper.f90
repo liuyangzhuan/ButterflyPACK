@@ -945,7 +945,7 @@ contains
       real(kind=8) para
       real(kind=8) tolerance, h, lam
       integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
-      integer i, j, k, ii, kk, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
       real(kind=8), parameter :: cd = 299792458d0
       integer, allocatable:: groupmembers(:)
       integer nlevel, level
@@ -974,6 +974,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
+      integer(kind=8) idx,kk
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1085,8 +1086,9 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
-            if (nns(kk + (msh%new2old(ii) - 1)*option%knn) /= 0) then
-               msh%nns(ii, kk) = msh%old2new(nns(kk + (msh%new2old(ii) - 1)*option%knn))
+            idx=kk + (msh%new2old(ii) - 1)*option%knn
+            if (nns(idx) /= 0) then
+               msh%nns(ii, kk) = msh%old2new(nns(idx))
             else
                msh%nns(ii, kk) = 0
             endif
@@ -1165,7 +1167,7 @@ contains
       real(kind=8) para
       real(kind=8) tolerance, h, lam
       integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
-      integer i, j, k, ii, kk, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
       real(kind=8), parameter :: cd = 299792458d0
       integer, allocatable:: groupmembers(:)
       integer nlevel, level
@@ -1194,6 +1196,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
+      integer(kind=8)::idx,kk
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1303,8 +1306,11 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
-            if (nns(kk + (msh%new2old(ii) - 1)*option%knn) /= 0) then
-               msh%nns(ii, kk) = msh%old2new(nns(kk + (msh%new2old(ii) - 1)*option%knn))
+
+            idx=kk + (msh%new2old(ii) - 1)*option%knn
+
+            if (nns(idx) /= 0) then
+               msh%nns(ii, kk) = msh%old2new(nns(idx))
             else
                msh%nns(ii, kk) = 0
             endif
@@ -1427,7 +1433,7 @@ contains
       integer M, N
 
       integer Maxlevel
-      integer i, j, k, ii, kk, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
       integer, allocatable:: groupmembers(:)
       integer level
       integer M_loc, N_loc
@@ -1450,6 +1456,7 @@ contains
       real(kind=8) t1, t2
       character(len=1024)  :: strings
       integer Maxgroup_rc
+      integer(kind=8)::idx,kk
 
       type(c_ptr), intent(in), target :: C_QuantApp
       type(c_funptr), intent(in), value, target :: C_FuncDistmn
@@ -1539,8 +1546,9 @@ contains
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, M
          do kk = 1, option%knn
-            if (nnsr(kk + (ii - 1)*option%knn) /= 0) then
-               msh%nns(ii, kk) = nnsr(kk + (ii - 1)*option%knn) + M
+            idx=kk + (ii - 1)*option%knn
+            if (nnsr(idx) /= 0) then
+               msh%nns(ii, kk) = nnsr(idx) + M
             else
                msh%nns(ii, kk) = 0
             endif
@@ -1548,7 +1556,8 @@ contains
          enddo
          do ii = 1, N
          do kk = 1, option%knn
-            msh%nns(ii + M, kk) = nnsc(kk + (ii - 1)*option%knn)
+            idx=kk + (ii - 1)*option%knn
+            msh%nns(ii + M, kk) = nnsc(idx)
          enddo
          enddo
       endif
