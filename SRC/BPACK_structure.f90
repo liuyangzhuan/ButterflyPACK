@@ -31,7 +31,7 @@ contains
       procedure(F_Compressibility), POINTER :: proc1
       procedure(C_Compressibility), POINTER :: proc1_c
 
-      if (option%nogeo == 0) then  ! geometrical information is provided
+      if (option%nogeo == 0 .or. option%nogeo == 4) then  ! geometrical information is provided
          near_or_far_user = near_or_far_geo(group_m, group_n, msh, option, ker, para)
       else if (option%nogeo == 1) then ! no geometrical information is provided, ! only return 0 for self elements
          if (group_m == group_n) then
@@ -110,7 +110,7 @@ contains
       procedure(F_Dist), POINTER :: proc1
       procedure(C_Dist), POINTER :: proc1_c
 
-      if (option%nogeo == 0) then  ! geometrical information is provided
+      if (option%nogeo == 0 .or. option%nogeo == 4) then  ! geometrical information is provided
          distance_user = distance_geo(edgem, edgen, ker, msh, option, ptree, stats)
       else if (option%nogeo == 1) then ! no geometrical information is provided
          if (option%xyzsort == TM_GRAM) then ! try gram distance
@@ -842,7 +842,7 @@ end function distance_geo
       endif
 
 !**** construct a list of k-nearest neighbours for each point
-      if (option%knn > 0 .and. option%nogeo /= 3) then
+      if (option%knn > 0 .and. option%nogeo /= 3 .and. option%nogeo /= 4) then
          call FindKNNs(option, msh, ker, stats, ptree, 1, 1)
       endif
 
