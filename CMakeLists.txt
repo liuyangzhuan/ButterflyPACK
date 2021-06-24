@@ -355,7 +355,7 @@ if(APPLE)
 
 # by default assume BSD sed command is used on macOS
 set(USING_MACOS_SED TRUE)
-set(SED_TOOL_CMD "${SED_TOOL} -i \"\"") # mac (BSD) sed
+set(SED_ARG "\"\"") # mac (BSD) sed
 
 # detect version of SED_TOOL versionL
 message(STATUS "detecting sed version...")
@@ -363,16 +363,17 @@ execute_process (
     COMMAND ${SED_TOOL} --version
     WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
     OUTPUT_VARIABLE SED_TOOL_VERSION
+    ERROR_QUIET
     )
 message( STATUS "${SED_TOOL_VERSION}" )
 
 if (SED_TOOL_VERSION MATCHES ".*GNU sed.*")
     message(STATUS "using GNU sed...")
-    set(SED_TOOL_CMD "${SED_TOOL} -i") # GNU sed
+    set(SED_ARG "") # GNU sed
     set(USING_MACOS_SED FALSE)
 endif()
 
-message(STATUS "sed command [${SED_TOOL_CMD}]")
+message(STATUS "sed command [${SED_TOOL} -i ${SED_ARG}]")
 
 execute_process (
      COMMAND cp PrecisionPreprocessing.sh PrecisionPreprocessing_mac.sh
@@ -381,25 +382,25 @@ execute_process (
 
 if (USING_MACOS_SED)
 execute_process (
-     COMMAND ${SED_TOOL_CMD} -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i ${SED_ARG} -e "s/sed -i/sed -i \"\"/g" PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 endif()
 
 execute_process (
-     COMMAND ${SED_TOOL_CMD} -e "s/eval//g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i ${SED_ARG} -e "s/eval//g" PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 execute_process (
-     COMMAND ${SED_TOOL_CMD} -e "/\r\"/d" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i ${SED_ARG} -e "/\r\"/d" PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 execute_process (
-     COMMAND ${SED_TOOL_CMD} -e "s/lb=.*/lb=\"[[:<:]]\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i ${SED_ARG} -e "s/lb=.*/lb=\"[[:<:]]\"/g" PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 execute_process (
-     COMMAND ${SED_TOOL_CMD} -e "s/rb=.*/rb=\"[[:>:]]\"/g" PrecisionPreprocessing_mac.sh
+     COMMAND ${SED_TOOL} -i ${SED_ARG} -e "s/rb=.*/rb=\"[[:>:]]\"/g" PrecisionPreprocessing_mac.sh
      WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
 )
 execute_process (
