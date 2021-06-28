@@ -142,9 +142,9 @@ contains
       endif
 
       !**** copy geometry points if present
-      if (option%nogeo == 0) then
+      if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder"
-         call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0')
+         call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0 or 4')
          Ndim = size(Coordinates, 1)
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
@@ -163,8 +163,8 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
       t2 = OMP_get_wtime()
 
-      if (option%nogeo == 3 .and. option%knn > 0) then
-         call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3')
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+         call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3 or 4')
          allocate (msh%nns(msh%Nunk, option%knn))
          do ii = 1, msh%Nunk
          do kk = 1, option%knn

@@ -1965,6 +1965,9 @@ contains
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2123,6 +2126,9 @@ contains
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -2965,6 +2971,9 @@ else
                allocate (SVD_Q%matU(mm, rmax))
                allocate (SVD_Q%matV(rmax, nn))
                allocate (SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
 
                emptyflag = 0
                if (Nboundall > 0) then
@@ -4606,6 +4615,9 @@ endif
             allocate(SVD_Q%matU(rankmax_r,rmax))
             allocate(SVD_Q%matV(rmax,rankmax_c))
             allocate(SVD_Q%Singular(rmax))
+            SVD_Q%matU=0
+            SVD_Q%matV=0
+            SVD_Q%Singular=0
             SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
             SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
             SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -5642,7 +5654,10 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-
+            if(rank + rankup > rankmax_min)then
+               rankup=rankmax_min-rank
+               if(rankup==0)exit
+            endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
                allocate(matV(rmax,N))
@@ -5650,15 +5665,15 @@ endif
                matU=SVD_Q%matU
                matV=SVD_Q%matV
                Singular=SVD_Q%Singular
-               if(rankmax_min<=rmax)then
-                  rankup=rankmax_min-rank
-               endif
                rmax0=rmax
                rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
                allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
                SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -5673,8 +5688,6 @@ endif
             enddo
             SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
             rank = rank + rankup
-
-            if (rank == rmax) exit
 
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
@@ -5899,7 +5912,10 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             rankup = ranknew
             if (rankup > 0) then
-
+               if(rank + rankup > rankmax_min)then
+                  rankup=rankmax_min-rank
+                  call assert(rankup>0,"rankup should not be zero here")
+               endif
                if (rank + rankup > rmax)then
                   allocate(matU(M,rmax))
                   allocate(matV(rmax,N))
@@ -5907,15 +5923,15 @@ endif
                   matU=SVD_Q%matU
                   matV=SVD_Q%matV
                   Singular=SVD_Q%Singular
-                  if(rankmax_min<=rmax)then
-                     rankup=rankmax_min-rank
-                  endif
                   rmax0=rmax
                   rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                   deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                   allocate(SVD_Q%matU(M,rmax))
                   allocate(SVD_Q%matV(rmax,N))
                   allocate(SVD_Q%Singular(rmax))
+                  SVD_Q%matU=0
+                  SVD_Q%matV=0
+                  SVD_Q%Singular=0
                   SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                   SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                   SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -5974,7 +5990,7 @@ endif
          endif
       endif
 
-      do while (normUV >= tolerance*normA .and. itr < itrmax .and. rank<rmax)
+      do while (normUV >= tolerance*normA .and. itr < itrmax)
 
          !**** create random column index for the first iteration
          if (rank == 0) then
@@ -6080,7 +6096,10 @@ endif
             stats%Flop_Fill = stats%Flop_Fill + flop
             call trsmf90(core, row_Rtmp, 'L', 'U', 'N', 'N', rankup, N, flop=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
-
+            if(rank + rankup > rankmax_min)then
+               rankup=rankmax_min-rank
+               if(rankup==0)exit
+            endif
             if (rank + rankup > rmax)then
                allocate(matU(M,rmax))
                allocate(matV(rmax,N))
@@ -6088,15 +6107,15 @@ endif
                matU=SVD_Q%matU
                matV=SVD_Q%matV
                Singular=SVD_Q%Singular
-               if(rankmax_min<=rmax)then
-                  rankup=rankmax_min-rank
-               endif
                rmax0=rmax
                rmax = min(max(rank + rankup,2*rmax),rankmax_min)
                deallocate(SVD_Q%matU,SVD_Q%matV,SVD_Q%Singular)
                allocate(SVD_Q%matU(M,rmax))
                allocate(SVD_Q%matV(rmax,N))
                allocate(SVD_Q%Singular(rmax))
+               SVD_Q%matU=0
+               SVD_Q%matV=0
+               SVD_Q%Singular=0
                SVD_Q%matU(:,1:rmax0) = matU(:,1:rmax0)
                SVD_Q%matV(1:rmax0,:) = matV(1:rmax0,:)
                SVD_Q%Singular(1:rmax0) = Singular(1:rmax0)
@@ -6115,8 +6134,6 @@ endif
             SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
 
             rank = rank + rankup
-
-            if (rank == rmax) exit
 
             !**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
