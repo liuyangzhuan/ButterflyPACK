@@ -1218,25 +1218,24 @@ contains
          ! computation of AR
          call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
          RandVectOut = RandVectIn + RandVectOut
+         ! computation of range Q of AR
+         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
 
          ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
          q = 6
          do qq = 1, q
             RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-
             call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
             RandVectIn = RandVectOut + RandVectIn
-
             RandVectIn = conjg(cmplx(RandVectIn, kind=8))
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectIn, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
 
             call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
             RandVectOut = RandVectIn + RandVectOut
-
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
          enddo
 
-         ! computation of range Q of AR
-         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, option%tol_Rdetect, ptree, schulz_op%matrices_block%pgno, flop)
-         stats%Flop_Tmp = stats%Flop_Tmp + flop
 
          ! computation of B = Q^c*A
          RandVectOut = conjg(cmplx(RandVectOut, kind=8))

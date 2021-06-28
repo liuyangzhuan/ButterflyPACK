@@ -1515,14 +1515,20 @@ contains
          endif
          val = a + junit*b
 
-         ! ! ! Normal distribution
-         ! ! call random_number(a)
-         ! ! seed = a*10000000
-         ! ! random_dp_number =  c8_normal_01 ( seed )
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  c8_normal_01 ( seed )
 #else
          ! Uniform distribution
          call random_number(a)
          val = a*2d0 - 1d0
+
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  dble(c8_normal_01 ( seed ))
+
 #endif
 
       return
@@ -1741,7 +1747,7 @@ contains
       integer floor_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          floor_safe = input_nint
       else
          floor_safe = floor(input)
@@ -1754,7 +1760,7 @@ contains
       integer ceiling_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          ceiling_safe = input_nint
       else
          ceiling_safe = ceiling(input)
@@ -1767,7 +1773,7 @@ contains
       integer INT_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          INT_safe = input_nint
       else
          INT_safe = INT(input)
