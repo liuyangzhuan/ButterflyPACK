@@ -1469,8 +1469,8 @@ contains
              + dt(8)
       end if
 
-! pid = getpid()
-      pid = 0
+      pid = getpid()
+      ! pid = 0
 
       t = ieor(t, int(pid, kind(t)))
       do i = 1, n
