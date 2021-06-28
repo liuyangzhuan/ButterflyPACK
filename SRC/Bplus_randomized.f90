@@ -1513,18 +1513,26 @@ contains
       endif
 
       call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+      ! computation of range Q
+      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+      stats%Flop_Tmp = stats%Flop_Tmp + flop
 
-      ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
+      ! power iteration of order q, orthognalize each matvec due to algorithm 4.4 Halko 2010
       do qq = 1, option%powiter
          if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
          call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
          if (mm > 0) RandVectInR = conjg(cmplx(RandVectInR, kind=8))
+         ! computation of range Q
+         call PComputeRange(block_rand%N_p, num_vect, RandVectInR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+
          call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+         ! computation of range Q
+         call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
       enddo
 
-      ! computation of range Q
-      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, option%tol_Rdetect, ptree, block_rand%pgno, flop)
-      stats%Flop_Tmp = stats%Flop_Tmp + flop
+
 
       ! computation of B^T = (Q^c*A)^T
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
