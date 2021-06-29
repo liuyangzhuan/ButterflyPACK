@@ -700,7 +700,7 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(mn1, mn2)))
-         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
+         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
@@ -737,7 +737,7 @@ contains
          call descinit(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVu(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, flop=flop)
+         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, SafeUnderflow, flop=flop)
          do ii = 1, rank1
             call g2l(ii, rank1, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -756,7 +756,7 @@ contains
          call descinit(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVv(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, flop=flop)
+         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, SafeUnderflow, flop=flop)
          do ii = 1, rank2
             call g2l(ii, rank2, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -782,7 +782,7 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(rank1, rank2)))
-         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
+         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
