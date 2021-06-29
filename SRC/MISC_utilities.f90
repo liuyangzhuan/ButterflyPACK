@@ -2190,7 +2190,7 @@ contains
          allocate (VV(max(1,myArows), max(1,myAcols)))
          allocate (Singular(mn))
 
-         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, flop=flop)
+         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, SafeUnderflow, flop=flop)
          if (present(Flops))Flops=Flops+flop
 
          do ii=1,size(UU,1)
@@ -3067,10 +3067,10 @@ contains
 
 
 
-   subroutine PSVD_Truncate(mm, nn, mat, descMat, UU, VV, descUU, descVV, Singular, tolerance, rank, ctxt, flop)
+   subroutine PSVD_Truncate(mm, nn, mat, descMat, UU, VV, descUU, descVV, Singular, tolerance, rank, ctxt, tolerance_abs,flop)
       implicit none
       integer mm, nn, mnmin, rank, ii, jj
-      real(kind=8):: tolerance
+      real(kind=8):: tolerance, tolerance_abs
       DT::mat(:, :), UU(:, :), VV(:, :)
       DT, allocatable::mat0(:, :)
       real(kind=8):: Singular(:)
@@ -3088,8 +3088,9 @@ contains
       if (Singular(1) > SafeUnderflow) then
          rank = mnmin
          do i = 1, mnmin
-            if (Singular(i)/Singular(1) <= tolerance) then
+            if (Singular(i)/Singular(1) <= tolerance .or. Singular(i)<=tolerance_abs) then
                rank = i
+               if (Singular(i)<=tolerance_abs)exit
                if (Singular(i) < Singular(1)*tolerance/10) rank = i - 1
                exit
             end if
