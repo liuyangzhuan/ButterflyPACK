@@ -120,7 +120,7 @@ contains
 
       tmp1 = fnorm(RandVectOut, Nloc, num_vect)**2d0
       call MPI_ALLREDUCE(tmp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
-      norm1 = sqrt(norm1)
+      norm1 = sqrt(norm1/num_vect)
 
       ! computation of range Q of AR
       call PComputeRange(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)
