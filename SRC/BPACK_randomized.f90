@@ -84,13 +84,15 @@ contains
       type(hobf)::ho_bf1
       type(Hoption)::option
       type(Hstat)::stats
-      real(kind=8):: time_gemm1
+      real(kind=8):: time_gemm1, tolerance_abs
       type(kernelquant)::ker
       procedure(HMatVec)::blackbox_HODLR_MVP
       type(proctree)::ptree
       type(mesh)::msh
       integer Bidxs, Bidxe, ierr, tt
-      integer vecCNT
+      integer vecCNT,num_vect,nn,mm,ranktmp,rank,mn
+      DT, allocatable:: RandVectIn(:, :),RandVectOut(:, :)
+      real(kind=8), allocatable:: Singular(:)
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:ho_bf1%Maxlevel))
       stats%rankmax_of_level = 0
@@ -103,6 +105,42 @@ contains
       call assert(option%less_adapt == 0, 'HODLR_randomized does not support less_adapt=1 currently')
 
       n3 = OMP_get_wtime()
+
+
+      !!!!!!!!!!!!!!!!!!  get the 2-norm of the HODLR and compute an absolute tolerance
+      nn=msh%Nunk
+      mm=msh%Nunk
+      num_vect = min(10, msh%Nunk)
+      allocate (RandVectIn(Nloc, num_vect))
+      allocate (RandVectOut(Nloc, num_vect))
+      RandVectOut = 0
+      call RandomMat(Nloc, num_vect, min(Nloc, num_vect), RandVectIn, 1)
+      ! computation of AR
+      call blackbox_HODLR_MVP('N', Nloc, Nloc, num_vect, RandVectIn, RandVectOut, ker)
+
+      tmp1 = fnorm(RandVectOut, Nloc, num_vect)**2d0
+      call MPI_ALLREDUCE(tmp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+      norm1 = sqrt(norm1/num_vect)
+
+      ! computation of range Q of AR
+      call PComputeRange(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)
+      ! computation of B = Q^c*A
+      RandVectOut = conjg(cmplx(RandVectOut, kind=8))
+      call blackbox_HODLR_MVP('T', Nloc, Nloc, num_vect, RandVectOut, RandVectIn, ker)
+      RandVectOut = conjg(cmplx(RandVectOut, kind=8))
+      ! computation of singular values of B
+      mn = min(mm, ranktmp)
+      allocate (Singular(mn))
+      Singular = 0
+      call PSVDTruncateSigma(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1), RandVectIn, ranktmp, rank, Singular, option, stats, ptree)
+      tolerance_abs = min(Singular(1)*sqrt(dble(mm)),norm1)*option%tol_Rdetect
+      ! if(ptree%MyID==0)write(*,*)Singular(1)*sqrt(dble(mm)),norm1
+
+      deallocate (Singular)
+      deallocate (RandVectIn)
+      deallocate (RandVectOut)
+
+
       Memory = 0
       do level_c = 1, ho_bf1%Maxlevel + 1
          if (level_c == ho_bf1%Maxlevel + 1) then
@@ -143,7 +181,7 @@ contains
                   n2 = OMP_get_wtime()
                   stats%Time_random(1) = stats%Time_random(1) + n2 - n1
 
-                  call HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rank_pre_max, option, ker, ptree, stats, msh)
+                  call HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rank_pre_max, option, ker, ptree, stats, msh, tolerance_abs)
                else
 
                   n1 = OMP_get_wtime()
@@ -253,11 +291,11 @@ contains
 
    end subroutine HODLR_randomized
 
-   subroutine HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rmax, option, ker, ptree, stats, msh)
+   subroutine HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rmax, option, ker, ptree, stats, msh, tolerance_abs)
 
 
       implicit none
-      real(kind=8):: n1, n2, Memory, error_inout, Memtmp
+      real(kind=8):: n1, n2, Memory, error_inout, Memtmp, tolerance_abs
       integer mn, rankref, level_c, rmax, rmaxloc, level_butterfly, bb, bb1, bb_inv, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn
       type(matrixblock), pointer::block_o, block_ref, block_inv
       DT, allocatable::RandVectTmp(:, :)
@@ -320,27 +358,47 @@ contains
       end do
 
       call HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
-
-      ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
-      do qq = 1, option%powiter
-         RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
-         call HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, 'T', RandVectOutR, RandVectInR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
-         RandVectInR = conjg(cmplx(RandVectInR, kind=8))
-         call HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
-      enddo
-
       ! computation of range Q
       do bb_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
-
          pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
          head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp, 1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn - 1
          tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
          idx_start_loc = head - msh%idxs + 1
          idx_end_loc = tail - msh%idxs + 1
-
-         call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), option%tol_Rdetect, ptree, stats)
-
+         call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
       end do
+
+
+      ! power iteration of order q, orthogonalize each multiplication results , see algorithm 4.4 Halko 2010
+      do qq = 1, option%powiter
+         RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
+         call HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, 'T', RandVectOutR, RandVectInR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
+         RandVectInR = conjg(cmplx(RandVectInR, kind=8))
+         ! computation of range Q
+         do bb_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+            pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
+            head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp, 1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn - 1
+            tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
+            idx_start_loc = head - msh%idxs + 1
+            idx_end_loc = tail - msh%idxs + 1
+            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectInR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
+         end do
+
+
+         call HODLR_MVP_randomized_OneL(ho_bf1, blackbox_HODLR_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
+         ! computation of range Q
+         do bb_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+            pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
+            head = ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_p(pp, 1) + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%headn - 1
+            tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
+            idx_start_loc = head - msh%idxs + 1
+            idx_end_loc = tail - msh%idxs + 1
+            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
+         end do
+
+      enddo
+
+
 
       !!!!!!!!!!!!!!!!!!!! need add a redistrubtion here
 
@@ -359,7 +417,7 @@ contains
          idx_start_loc = head - msh%idxs + 1
          idx_end_loc = tail - msh%idxs + 1
 
-         call PQxSVDTruncate_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), RandVectInR(idx_start_loc:idx_end_loc, 1:num_vect), block_rand, option, ptree, stats)
+         call PQxSVDTruncate_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), RandVectInR(idx_start_loc:idx_end_loc, 1:num_vect), block_rand, option, ptree, stats,tolerance_abs)
 
       end do
 
@@ -1169,7 +1227,7 @@ contains
 
 !!!!!***** this subroutine is part of the randomized SVD.
 ! Given B^T = (Q^cA)^T (N_loc x ranks(bb)) and Q (M_loc x ranks(bb)) in the process layout of hodlr, it computes SVD B=USV and output A = (QU)*(SV)
-   subroutine PQxSVDTruncate_twoforward(ho_bf1, level, Bidxs, bb_inv, ranks, Q, QcA_trans, block_rand, option, ptree, stats)
+   subroutine PQxSVDTruncate_twoforward(ho_bf1, level, Bidxs, bb_inv, ranks, Q, QcA_trans, block_rand, option, ptree, stats,tolerance_abs)
 
       implicit none
       integer ranks(:)
@@ -1182,7 +1240,7 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
-      real(kind=8)::n1, n2, eps, flop
+      real(kind=8)::n1, n2, eps, flop, tolerance_abs
       integer, pointer::M_p(:, :), N_p(:, :)
       real(kind=8), pointer::Singular(:)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -1249,11 +1307,11 @@ contains
          if (bb == 1) matQ => matQ1
          if (bb == 2) matQ => matQ2
          if (mm(bb) > 0) then
-            call PQxSVDTruncate(block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matQ, matQcA_trans, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), rank, option, stats, ptree, flop)
+            call PQxSVDTruncate(block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matQ, matQcA_trans, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), rank, option, stats, ptree, tolerance_abs, flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
          endif
          deallocate (matQcA_trans)
-         deallocate (matQ)         
+         deallocate (matQ)
       enddo
 
    end subroutine PQxSVDTruncate_twoforward
@@ -1344,7 +1402,7 @@ contains
             call BF_Resolving_Butterfly_LL_dat(num_vect_sub, nth_s, nth_e, Ng, level, block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matIn, matOut, option, ptree, msh, stats)
          endif
          deallocate (matOut)
-         deallocate (matIn)         
+         deallocate (matIn)
       enddo
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 
@@ -1436,7 +1494,7 @@ contains
             call BF_Resolving_Butterfly_RR_dat(num_vect_sub, nth_s, nth_e, Ng, level, block_rand(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), matIn, matOut, option, ptree, msh, stats)
          endif
          deallocate (matOut)
-         deallocate (matIn)         
+         deallocate (matIn)
       enddo
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
 

@@ -1469,8 +1469,8 @@ contains
              + dt(8)
       end if
 
-! pid = getpid()
-      pid = 0
+      pid = getpid()
+      ! pid = 0
 
       t = ieor(t, int(pid, kind(t)))
       do i = 1, n
@@ -1515,14 +1515,20 @@ contains
          endif
          val = a + junit*b
 
-         ! ! ! Normal distribution
-         ! ! call random_number(a)
-         ! ! seed = a*10000000
-         ! ! random_dp_number =  c8_normal_01 ( seed )
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  c8_normal_01 ( seed )
 #else
          ! Uniform distribution
          call random_number(a)
          val = a*2d0 - 1d0
+
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  dble(c8_normal_01 ( seed ))
+
 #endif
 
       return
@@ -1741,7 +1747,7 @@ contains
       integer floor_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          floor_safe = input_nint
       else
          floor_safe = floor(input)
@@ -1754,7 +1760,7 @@ contains
       integer ceiling_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          ceiling_safe = input_nint
       else
          ceiling_safe = ceiling(input)
@@ -1767,7 +1773,7 @@ contains
       integer INT_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < 1d-13) then
+      if (abs(input_nint - input) < SafeEps) then
          INT_safe = input_nint
       else
          INT_safe = INT(input)
@@ -2184,7 +2190,7 @@ contains
          allocate (VV(max(1,myArows), max(1,myAcols)))
          allocate (Singular(mn))
 
-         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, flop=flop)
+         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, SafeUnderflow, flop=flop)
          if (present(Flops))Flops=Flops+flop
 
          do ii=1,size(UU,1)
@@ -3061,10 +3067,10 @@ contains
 
 
 
-   subroutine PSVD_Truncate(mm, nn, mat, descMat, UU, VV, descUU, descVV, Singular, tolerance, rank, ctxt, flop)
+   subroutine PSVD_Truncate(mm, nn, mat, descMat, UU, VV, descUU, descVV, Singular, tolerance, rank, ctxt, tolerance_abs,flop)
       implicit none
       integer mm, nn, mnmin, rank, ii, jj
-      real(kind=8):: tolerance
+      real(kind=8):: tolerance, tolerance_abs
       DT::mat(:, :), UU(:, :), VV(:, :)
       DT, allocatable::mat0(:, :)
       real(kind=8):: Singular(:)
@@ -3082,8 +3088,9 @@ contains
       if (Singular(1) > SafeUnderflow) then
          rank = mnmin
          do i = 1, mnmin
-            if (Singular(i)/Singular(1) <= tolerance) then
+            if (Singular(i)/Singular(1) <= tolerance .or. Singular(i)<=tolerance_abs) then
                rank = i
+               if (Singular(i)<=tolerance_abs)exit
                if (Singular(i) < Singular(1)*tolerance/10) rank = i - 1
                exit
             end if

@@ -1008,8 +1008,8 @@ contains
       call OMP_set_num_threads(threads_num)
 
       !**** create a random seed
-      call DATE_AND_TIME(values=times)     ! Get the current time
-      seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
       ! call RANDOM_SEED(PUT=seed_myid)
       call init_random_seed()
@@ -1231,8 +1231,8 @@ contains
       call OMP_set_num_threads(threads_num)
 
       !**** create a random seed
-      call DATE_AND_TIME(values=times)     ! Get the current time
-      seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
       ! call RANDOM_SEED(PUT=seed_myid)
       call init_random_seed()
@@ -1486,8 +1486,8 @@ contains
       call OMP_set_num_threads(threads_num)
 
       !**** create a random seed
-      call DATE_AND_TIME(values=times)     ! Get the current time
-      seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
       ! call RANDOM_SEED(PUT=seed_myid)
       call init_random_seed()
