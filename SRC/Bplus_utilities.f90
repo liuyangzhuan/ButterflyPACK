@@ -14517,7 +14517,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             do jj = 1, ncol ! note that alldat_loc has column major
             do ii = 1, nrow
                idx = idx + 1
-               values(ii, jj) = alldat_loc(idx)
+               values(ii, jj) = alldat_loc(idx)*option%scale_factor
             enddo
             enddo
 
