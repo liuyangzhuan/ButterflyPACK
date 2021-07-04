@@ -700,7 +700,7 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(mn1, mn2)))
-         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
+         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
@@ -737,7 +737,7 @@ contains
          call descinit(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVu(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, flop=flop)
+         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, SafeUnderflow, flop=flop)
          do ii = 1, rank1
             call g2l(ii, rank1, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -756,7 +756,7 @@ contains
          call descinit(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVv(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, flop=flop)
+         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, SafeUnderflow, flop=flop)
          do ii = 1, rank2
             call g2l(ii, rank2, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -782,7 +782,7 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(rank1, rank2)))
-         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, flop=flop)
+         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
@@ -1218,25 +1218,24 @@ contains
          ! computation of AR
          call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
          RandVectOut = RandVectIn + RandVectOut
+         ! computation of range Q of AR
+         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
 
          ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
          q = 6
          do qq = 1, q
             RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-
             call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
             RandVectIn = RandVectOut + RandVectIn
-
             RandVectIn = conjg(cmplx(RandVectIn, kind=8))
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectIn, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
 
             call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
             RandVectOut = RandVectIn + RandVectOut
-
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
          enddo
 
-         ! computation of range Q of AR
-         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, option%tol_Rdetect, ptree, schulz_op%matrices_block%pgno, flop)
-         stats%Flop_Tmp = stats%Flop_Tmp + flop
 
          ! computation of B = Q^c*A
          RandVectOut = conjg(cmplx(RandVectOut, kind=8))

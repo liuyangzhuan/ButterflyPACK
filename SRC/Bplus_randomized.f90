@@ -1513,18 +1513,26 @@ contains
       endif
 
       call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+      ! computation of range Q
+      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+      stats%Flop_Tmp = stats%Flop_Tmp + flop
 
-      ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
+      ! power iteration of order q, orthognalize each matvec due to algorithm 4.4 Halko 2010
       do qq = 1, option%powiter
          if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
          call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
          if (mm > 0) RandVectInR = conjg(cmplx(RandVectInR, kind=8))
+         ! computation of range Q
+         call PComputeRange(block_rand%N_p, num_vect, RandVectInR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+
          call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+         ! computation of range Q
+         call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
       enddo
 
-      ! computation of range Q
-      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, option%tol_Rdetect, ptree, block_rand%pgno, flop)
-      stats%Flop_Tmp = stats%Flop_Tmp + flop
+
 
       ! computation of B^T = (Q^c*A)^T
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
@@ -1532,14 +1540,14 @@ contains
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
 
       ! computation of SVD B=USV and output A = (QU)*(SV)
-      call PQxSVDTruncate(block_rand, RandVectOutR, RandVectInR, ranks, rank, option, stats, ptree, flop)
+      call PQxSVDTruncate(block_rand, RandVectOutR, RandVectInR, ranks, rank, option, stats, ptree, SafeUnderflow, flop)
       stats%Flop_Tmp = stats%Flop_Tmp + flop
 
       if (mm > 0) deallocate (RandVectOutR, RandVectInR)
 
    end subroutine BF_Reconstruction_Lowrank
 
-   subroutine PQxSVDTruncate(block_rand, matQ, matQcA_trans, rmax, rank, option, stats, ptree, flops)
+   subroutine PQxSVDTruncate(block_rand, matQ, matQcA_trans, rmax, rank, option, stats, ptree, tolerance_abs, flops)
 
 
       implicit none
@@ -1548,7 +1556,7 @@ contains
       integer rank, rmax, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
       integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
 
-      real(kind=8)::n1, n2, flop
+      real(kind=8)::n1, n2, flop, tolerance_abs
       real(kind=8), optional::flops
       type(proctree)::ptree
       type(matrixblock)::block_rand
@@ -1631,7 +1639,7 @@ contains
 !!!!**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
          rank = 0
          if (myrow /= -1 .and. mycol /= -1) then
-            call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, flop=flop)
+            call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
             if (present(flops)) flops = flops + flop/dble(nprow*npcol)
             ! do ii=1,rank
             ! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
@@ -1762,7 +1770,7 @@ contains
 !!!!**** compute singular values
       rank = 0
       if (myrow /= -1 .and. mycol /= -1) then
-         call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, flop=flop)
+         call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, SafeUnderflow, flop=flop)
          if (present(flops)) flops = flops + flop/dble(nprow*npcol)
       else
       endif

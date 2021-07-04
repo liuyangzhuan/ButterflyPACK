@@ -84,6 +84,8 @@ contains
       character(len=1024)  :: strings
       integer threads_num
 
+      call init_random_seed()
+
       call assert(associated(ker%QuantApp), 'ker%QuantApp is not assigned')
       call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')
 
