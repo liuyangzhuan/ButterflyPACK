@@ -888,6 +888,7 @@ contains
 
       n1 = OMP_get_wtime()
       ! if(block_o%level==3)then
+      call BF_get_rank(block_o, ptree)
       if (level_butterfly >= option%schulzlevel) then
          call BF_inverse_schulziteration_IplusButter(block_o, error, option, stats, ptree, msh)
       else
@@ -2897,6 +2898,7 @@ contains
                else
                   !!!!! invert I+B1 to be I+B2
                   level_butterfly = block_o%level_butterfly
+                  call BF_get_rank(block_o, ptree)
                   if (level_butterfly >= option%schulzlevel) then
                      call BF_inverse_schulziteration_IplusButter(block_o, error, option, stats, ptree, msh)
                   else
