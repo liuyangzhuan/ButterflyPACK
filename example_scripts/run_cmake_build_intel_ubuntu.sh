@@ -1,3 +1,9 @@
+module purge
+module load compiler
+module load mpi
+module load mkl
+module load cmake
+
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 # bash PrecisionPreprocessing.sh
@@ -11,21 +17,20 @@ rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
-	-DCMAKE_CXX_FLAGS="-I/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/include " \
-	-DTPL_BLAS_LIBRARIES="" \
-	-DTPL_LAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_intel_lp64.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_intel_thread.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_core.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/compiler/lib/intel64/libiomp5.a" \
-	-DTPL_SCALAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.a;/opt/intel/compilers_and_libraries_2019.1.144/linux/mkl/lib/intel64/libmkl_scalapack_lp64.a" \
-	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/software/arpack-ng-intel/build/lib/libparpack.a;/home/administrator/Desktop/software/arpack-ng-intel/build/lib/libarpack.a" \
+	-DCMAKE_CXX_FLAGS="-I$MKLROOT/include " \
+	-DTPL_BLAS_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.a;$MKLROOT//lib/intel64/libmkl_intel_thread.a;$MKLROOT//lib/intel64/libmkl_core.a" \
+	-DTPL_LAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.a;$MKLROOT//lib/intel64/libmkl_intel_thread.a;$MKLROOT//lib/intel64/libmkl_core.a" \
+	-DTPL_SCALAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_blacs_intelmpi_lp64.a;$MKLROOT//lib/intel64/libmkl_scalapack_lp64.a" \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_Fortran_COMPILER=mpiifort \
-	-DCMAKE_EXE_LINKER_FLAGS="-qopenmp -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64 -lmkl_intel_thread -lmkl_intel_lp64 -lmkl_core" \
 	-DCMAKE_CXX_COMPILER=mpiicpc \
 	-DCMAKE_C_COMPILER=mpiicc \
-	-DMPI_CXX_COMPILER=/opt/intel/compilers_and_libraries_2019.1.144/linux/mpi/intel64/bin/mpiicpc \
-	-DMPI_C_COMPILER=/opt/intel/compilers_and_libraries_2019.1.144/linux/mpi/intel64/bin/mpiicc \
-	-DMPI_Fortran_COMPILER=/opt/intel/compilers_and_libraries_2019.1.144/linux/mpi/intel64/bin/mpiifort \
+	-DMPI_CXX_COMPILER=mpiicpc \
+	-DMPI_C_COMPILER=mpiicc \
+	-DMPI_Fortran_COMPILER=mpiifort \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 	# -DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel -lpthread" \
 
+	# -DCMAKE_EXE_LINKER_FLAGS="-qopenmp -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64 -lmkl_intel_thread -lmkl_intel_lp64 -lmkl_core" \
