@@ -18,9 +18,9 @@ rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
 	-DCMAKE_CXX_FLAGS="-I$MKLROOT/include " \
-	-DTPL_BLAS_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.a;$MKLROOT//lib/intel64/libmkl_intel_thread.a;$MKLROOT//lib/intel64/libmkl_core.a" \
-	-DTPL_LAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.a;$MKLROOT//lib/intel64/libmkl_intel_thread.a;$MKLROOT//lib/intel64/libmkl_core.a" \
-	-DTPL_SCALAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_blacs_intelmpi_lp64.a;$MKLROOT//lib/intel64/libmkl_scalapack_lp64.a" \
+	-DTPL_BLAS_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.so;$MKLROOT//lib/intel64/libmkl_intel_thread.so;$MKLROOT//lib/intel64/libmkl_core.so" \
+	-DTPL_LAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.so;$MKLROOT//lib/intel64/libmkl_intel_thread.so;$MKLROOT//lib/intel64/libmkl_core.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_blacs_intelmpi_lp64.so;$MKLROOT//lib/intel64/libmkl_scalapack_lp64.so" \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_Fortran_COMPILER=mpiifort \
 	-DCMAKE_CXX_COMPILER=mpiicpc \
@@ -32,5 +32,5 @@ cmake .. \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 	# -DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel -lpthread" \
-
+make ie2d
 	# -DCMAKE_EXE_LINKER_FLAGS="-qopenmp -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64 -lmkl_intel_thread -lmkl_intel_lp64 -lmkl_core" \
