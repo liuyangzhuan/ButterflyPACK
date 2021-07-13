@@ -17,13 +17,20 @@
 #include "ButterflyPACK_config.fi"
 
 module BPACK_DEFS
+
+#ifdef DMPIMODULE
     use MPI
     use iso_c_binding
     use ieee_arithmetic
     use BPACK_linkedlist
     implicit none
-!    INCLUDE 'mpif.h'
-
+#else
+    use iso_c_binding
+    use ieee_arithmetic
+    use BPACK_linkedlist
+    implicit none
+    INCLUDE 'mpif.h'
+#endif
     integer, parameter:: BPACK_MAJOR_VERSION = 1
     integer, parameter:: BPACK_MINOR_VERSION = 2
     integer, parameter:: BPACK_PATCH_VERSION = 1
