@@ -18,7 +18,7 @@
 
 module BPACK_DEFS
 
-#ifdef DMPIMODULE
+#ifdef MPIMODULE
     use MPI
     use iso_c_binding
     use ieee_arithmetic
