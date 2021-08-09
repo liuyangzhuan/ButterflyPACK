@@ -2597,7 +2597,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	write(*,*)'   eigval: ', eigval
 	write(*,*)'   norm_1/norm_inf: ', norm
 	write(*,*)'   acceleration voltage: ', abs(volt_acc)
-
+	write(*,*)'   normalize_factor: ', quant%normalize_factor
+	
 	endif
 	n2 = OMP_get_wtime()
 	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
