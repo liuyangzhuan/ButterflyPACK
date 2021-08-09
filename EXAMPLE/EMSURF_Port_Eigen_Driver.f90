@@ -192,7 +192,9 @@ PROGRAM ButterflyPACK_IE_3D
 						else if	(trim(strings)=='--model')then
 							substring2=trim(strings1)
 						else if	(trim(strings)=='--which')then
-							quant%which=trim(strings1)
+							quant%which=trim(strings1)						
+						else if	(trim(strings)=='--noport')then
+							read(strings1,*)quant%noport
 						else if	(trim(strings)=='--mesh_normal')then
 							read(strings1,*)quant%mesh_normal
 						else
@@ -224,99 +226,112 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%Nport=0
 
 
-	! !!!!!!!! pillbox ports
-	! quant%Nport=2
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0d0,0d0,0d0/)
-	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	! quant%ports(1)%R=0.1
-	! quant%ports(1)%type=0
-	! quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
-	! quant%ports(2)%z=(/0d0,0d0,1d0/)
-	! quant%ports(2)%x=(/1d0,0d0,0d0/)
-	! quant%ports(2)%R=0.1
-	! quant%ports(2)%type=0
+	if(index(substring2,'pillbox')>0)then
+	!!!!!!! pillbox ports
+	if(quant%noport==0)then	
+		quant%Nport=2
+		allocate(quant%ports(quant%Nport))
+		quant%ports(1)%origin=(/0d0,0d0,0d0/)
+		quant%ports(1)%z=(/0d0,0d0,-1d0/)
+		quant%ports(1)%x=(/-1d0,0d0,0d0/)
+		quant%ports(1)%R=0.1
+		quant%ports(1)%type=0
+		quant%ports(2)%origin=(/0d0,0d0,0.1d0/)
+		quant%ports(2)%z=(/0d0,0d0,1d0/)
+		quant%ports(2)%x=(/1d0,0d0,0d0/)
+		quant%ports(2)%R=0.1
+		quant%ports(2)%type=0
+	endif
 
-	! quant%Nobs=1000
-	! allocate(quant%obs_points(3,quant%Nobs))
-	! allocate(quant%obs_Efields(3,quant%Nobs))
-	! offset=0.001
-	! do ii=1,quant%Nobs
-	! 	quant%obs_points(1,ii)=0
-	! 	quant%obs_points(2,ii)=0
-	! 	quant%obs_points(3,ii)=(0.1-2*offset)/(quant%Nobs-1)*(ii-1)+offset
-	! enddo
-
-
-
-	! !!!!!!!!! cavity wakefield
-	! quant%Nport=2
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0d0,0d0,-0.1995d0/)
-	! quant%ports(1)%z=(/0d0,0d0,-1d0/)
-	! quant%ports(1)%x=(/1d0,0d0,0d0/)
-	! quant%ports(1)%R=0.037
-	! quant%ports(1)%type=0
-	! quant%ports(2)%origin=(/0d0,0d0,0.1995d0/)
-	! quant%ports(2)%z=(/0d0,0d0,1d0/)
-	! quant%ports(2)%x=(/1d0,0d0,0d0/)
-	! quant%ports(2)%R=0.037
-	! quant%ports(2)%type=0
+	quant%Nobs=1000
+	allocate(quant%obs_points(3,quant%Nobs))
+	allocate(quant%obs_Efields(3,quant%Nobs))
+	offset=0.001
+	do ii=1,quant%Nobs
+		quant%obs_points(1,ii)=0
+		quant%obs_points(2,ii)=0
+		quant%obs_points(3,ii)=(0.1-2*offset)/(quant%Nobs-1)*(ii-1)+offset
+	enddo
+	endif
 
 
-	! !!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
-	! quant%Nport=4
-	! allocate(quant%ports(quant%Nport))
-	! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
-	! quant%ports(1)%x=(/-1d0,0d0,0d0/)
-	! quant%ports(1)%y=(/0d0,0d0,1d0/)
-	! quant%ports(1)%z=(/0d0,1d0,0d0/)
-	! quant%ports(1)%type=1
-	! quant%ports(1)%a=0.07d0
-	! quant%ports(1)%b=0.02d0
 
-	! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
-	! quant%ports(2)%x=(/0d0,-1d0,0d0/)
-	! quant%ports(2)%y=(/0d0,0d0,1d0/)
-	! quant%ports(2)%z=(/-1d0,0d0,0d0/)
-	! quant%ports(2)%type=1
-	! quant%ports(2)%a=0.07d0
-	! quant%ports(2)%b=0.02d0
-
-	! quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
-	! quant%ports(3)%z=(/0d0,0d0,-1d0/)
-	! quant%ports(3)%x=(/1d0,0d0,0d0/)
-	! quant%ports(3)%R=0.025
-	! quant%ports(3)%type=0
-	! quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
-	! quant%ports(4)%z=(/0d0,0d0,1d0/)
-	! quant%ports(4)%x=(/1d0,0d0,0d0/)
-	! quant%ports(4)%R=0.025
-	! quant%ports(4)%type=0
-
-	! quant%Nobs=1000
-	! allocate(quant%obs_points(3,quant%Nobs))
-	! allocate(quant%obs_Efields(3,quant%Nobs))
-	! offset=0.001
-	! do ii=1,quant%Nobs
-	! 	quant%obs_points(1,ii)=0
-	! 	quant%obs_points(2,ii)=0
-	! 	quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
-	! enddo
+	if(index(substring2,'cavity_wakefield')>0)then
+	!!!!!!!!! cavity wakefield
+	if(quant%noport==0)then	
+		quant%Nport=2
+		allocate(quant%ports(quant%Nport))
+		quant%ports(1)%origin=(/0d0,0d0,-0.1995d0/)
+		quant%ports(1)%z=(/0d0,0d0,-1d0/)
+		quant%ports(1)%x=(/1d0,0d0,0d0/)
+		quant%ports(1)%R=0.037
+		quant%ports(1)%type=0
+		quant%ports(2)%origin=(/0d0,0d0,0.1995d0/)
+		quant%ports(2)%z=(/0d0,0d0,1d0/)
+		quant%ports(2)%x=(/1d0,0d0,0d0/)
+		quant%ports(2)%R=0.037
+		quant%ports(2)%type=0
+	endif
+	endif
 
 
-	! !!!!!!!! RFQ no port
-	! quant%Nport=0
-	! quant%Nobs=1000
-	! allocate(quant%obs_points(3,quant%Nobs))
-	! allocate(quant%obs_Efields(3,quant%Nobs))
-	! offset=0.001
-	! do ii=1,quant%Nobs
-	! 	quant%obs_points(1,ii)=0
-	! 	quant%obs_points(2,ii)=0
-	! 	quant%obs_points(3,ii)=(2.115227780-2*offset)/(quant%Nobs-1)*(ii-1)+offset - 1.05761389
-	! enddo
+	if(index(substring2,'cavity_rec')>0)then
+	!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
+	if(quant%noport==0)then	
+		quant%Nport=4
+		allocate(quant%ports(quant%Nport))
+		quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+		quant%ports(1)%x=(/-1d0,0d0,0d0/)
+		quant%ports(1)%y=(/0d0,0d0,1d0/)
+		quant%ports(1)%z=(/0d0,1d0,0d0/)
+		quant%ports(1)%type=1
+		quant%ports(1)%a=0.07d0
+		quant%ports(1)%b=0.02d0
+
+		quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+		quant%ports(2)%x=(/0d0,-1d0,0d0/)
+		quant%ports(2)%y=(/0d0,0d0,1d0/)
+		quant%ports(2)%z=(/-1d0,0d0,0d0/)
+		quant%ports(2)%type=1
+		quant%ports(2)%a=0.07d0
+		quant%ports(2)%b=0.02d0
+
+		quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
+		quant%ports(3)%z=(/0d0,0d0,-1d0/)
+		quant%ports(3)%x=(/1d0,0d0,0d0/)
+		quant%ports(3)%R=0.025
+		quant%ports(3)%type=0
+		quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
+		quant%ports(4)%z=(/0d0,0d0,1d0/)
+		quant%ports(4)%x=(/1d0,0d0,0d0/)
+		quant%ports(4)%R=0.025
+		quant%ports(4)%type=0
+	endif
+
+	quant%Nobs=1000
+	allocate(quant%obs_points(3,quant%Nobs))
+	allocate(quant%obs_Efields(3,quant%Nobs))
+	offset=0.001
+	do ii=1,quant%Nobs
+		quant%obs_points(1,ii)=0
+		quant%obs_points(2,ii)=0
+		quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
+	enddo
+	endif
+
+	if(index(substring2,'rfq_mirror')>0)then
+	!!!!!!!! RFQ no port
+	quant%Nport=0
+	quant%Nobs=1000
+	allocate(quant%obs_points(3,quant%Nobs))
+	allocate(quant%obs_Efields(3,quant%Nobs))
+	offset=0.001
+	do ii=1,quant%Nobs
+		quant%obs_points(1,ii)=0
+		quant%obs_points(2,ii)=0
+		quant%obs_points(3,ii)=(2.115227780-2*offset)/(quant%Nobs-1)*(ii-1)+offset - 1.05761389
+	enddo
+	endif
 
 
 
@@ -427,7 +442,7 @@ PROGRAM ButterflyPACK_IE_3D
     call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
 
-	if(.not. (quant%SI==1 .and. abs(quant%shift)<1e-14))then 
+	if(.not. (quant%SI==1 .and. abs(quant%shift)<1e-14))then
 		call PrintStat(stats_A,ptree_A)
 	endif
 
@@ -539,6 +554,9 @@ PROGRAM ButterflyPACK_IE_3D
 		normi = fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
 		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
 		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		! if(ptree_A%MyID==Main_ID)then
+		! 	write(*,*)norm1,normi,norm1/normi
+		! endif
 		norm1 =norm1/normi
 		if(norm1>maxnorm)then
 			nn1=nn
