@@ -2576,7 +2576,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		enddo
 		quant%normalize_factor=abs(volt_acc)
 
-		
+
 		quant%obs_Efields=quant%obs_Efields/quant%normalize_factor
 		volt_acc=volt_acc/quant%normalize_factor
 
@@ -2627,7 +2627,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 	Enormal_at_patch = Enormal_at_patch/quant%normalize_factor
-	
+
 	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
 	do ii=1,quant%Nobs
 	do patch =1,quant%maxpatch
@@ -2672,7 +2672,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	!!!!! Compute the maximum normal electric fields using GF, but there is a delta offset at each patch to avoid singularity
 	n1 = OMP_get_wtime()
-	
+
 	Enormal_GF = Enormal_GF/quant%normalize_factor
 	Enormal_at_patch=0
 	allocate(cnt_patch(quant%maxpatch))
@@ -2697,7 +2697,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			Enormal_at_patch(patch)=Enormal_at_patch(patch)/cnt_patch(patch)
 		endif
 	enddo
-	
+
 
 
 	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
@@ -2865,7 +2865,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 						an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						Et_at_patch(:,(patch-1)*quant%integral_points+j) = Et_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2*area)*eigvec(edge-msh%idxs+1)*impedence0
+						Et_at_patch(:,(patch-1)*quant%integral_points+j) = Et_at_patch(:,(patch-1)*quant%integral_points+j)+ (-1)**(jj+1)*an*ln/(2)*eigvec(edge-msh%idxs+1)*impedence0
 
 						! if(port_of_patch(patch)==2)then
 						! 	write(*,*)port_of_patch(patch),patch, abs(Et_at_patch(:,(patch-1)*quant%integral_points+j)),abs(Ht_at_patch(:,(patch-1)*quant%integral_points+j))
