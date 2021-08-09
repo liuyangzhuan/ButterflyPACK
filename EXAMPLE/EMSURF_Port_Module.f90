@@ -104,6 +104,7 @@ implicit none
 		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
 
 		integer:: Nport=0 ! number of ports
+		integer:: noport=0 ! whether to treat the cavity as closed cavity
 		type(port), allocatable:: ports(:)   ! the open ports
 
 		integer:: postprocess = 1 ! whether postprocessing is carried out
@@ -130,7 +131,7 @@ implicit none
 		integer::nev=1 ! nubmer of requested eigen values
 		character(len=2) which ! which portion of eigen spectrum
 		real(kind=8) tol_eig ! tolerance in arpack
-
+		real(kind=8):: normalize_factor=1d0 ! normalization factor (default to be the acceleration voltage)
 	end type quant_EMSURF
 
 contains
@@ -324,7 +325,7 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
 						call curl(nr_n,an,nxan)
 						call scalar(am,nxan,temp)
-						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)  ! note that a factor of 1/(2.*area) was removed from both LHS and RHS of the MOM system
+						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)  ! note that wm contains the factor of 2
 					else
 						do j=1,quant%integral_points
 							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
@@ -880,13 +881,14 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 			ln= max(l1,max(l2,l3))
 
 			! if(abs(point(3)-0.14454)<1e-4 .or. abs(point(3)+0.14454)<1e-4)write(*,*)point(3),nr_m(3)
-			point = point - nr_m*(ln)  ! use largest edge length as an offset inwards, to avoid singularity
+			! point = point - nr_m*(ln)  ! use largest edge length as an offset inwards, to avoid singularity
+			point = point- nr_m*(ln)/20
 			call Field_EMSURF(point,field,n,quant)
 			value0 = dot_product(field,nr_m)
 			value0 = value0*impedence0
 			value = value + value0
 			enddo
-			value = value/2
+			! value = value/2
 		endif
 
 	class default
@@ -2572,7 +2574,11 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			dx =  quant%obs_points(:,ii) - quant%obs_points(:,ii-1)
 			volt_acc = volt_acc + dot_product(quant%obs_Efields(:,ii),dx)
 		enddo
+		quant%normalize_factor=abs(volt_acc)
 
+		
+		quant%obs_Efields=quant%obs_Efields/quant%normalize_factor
+		volt_acc=volt_acc/quant%normalize_factor
 
 	! write(*,*)abs(quant%obs_Efields(1,quant%Nobs/2))
 	! write(*,*)'x'
@@ -2613,14 +2619,15 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			patch = quant%info_unk(jj,edge_n)
 			if(patch/=-1)then
 				area=triangle_area(patch,quant)
-				Enormal_at_patch(patch) = Enormal_at_patch(patch)-ln/area*(-1)**(jj+1)*eigvec(edge-msh%idxs+1)*cd**2d0*mu0/junit/quant%freq/(2*pi)/2  ! note that a fator of 2 is needed here
+				Enormal_at_patch(patch) = Enormal_at_patch(patch)-ln/area*(-1)**(jj+1)*eigvec(edge-msh%idxs+1)*cd**2d0*mu0/junit/quant%freq/(2*pi)
 			endif
 			enddo
 		endif
 	enddo
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-
+	Enormal_at_patch = Enormal_at_patch/quant%normalize_factor
+	
 	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
 	do ii=1,quant%Nobs
 	do patch =1,quant%maxpatch
@@ -2665,6 +2672,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 	!!!!! Compute the maximum normal electric fields using GF, but there is a delta offset at each patch to avoid singularity
 	n1 = OMP_get_wtime()
+	
+	Enormal_GF = Enormal_GF/quant%normalize_factor
 	Enormal_at_patch=0
 	allocate(cnt_patch(quant%maxpatch))
 	cnt_patch=0
@@ -2688,7 +2697,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			Enormal_at_patch(patch)=Enormal_at_patch(patch)/cnt_patch(patch)
 		endif
 	enddo
-
+	
 
 
 	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
@@ -2756,9 +2765,10 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	do edge_n=1,quant%Nunk-quant%Nunk_port
 		do jj=3,4
 			patch = quant%info_unk(jj,edge_n)
+			area=triangle_area(patch,quant)
 			call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 			do j=1,quant%integral_points
-				weight_at_patch((patch-1)*quant%integral_points+j) = wn(j)
+				weight_at_patch((patch-1)*quant%integral_points+j) = wn(j)/area*2d0
 			enddo
 		enddo
 	enddo
@@ -2770,6 +2780,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 			ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
 			do jj=3,4
 				patch = quant%info_unk(jj,edge_n)
+				! area=triangle_area(patch,quant)
 				call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 				do j=1,quant%integral_points
 					an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
@@ -2782,6 +2793,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	enddo
 
 	call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+    Ht_at_patch = Ht_at_patch/quant%normalize_factor
 
 	if(ptree%MyID==Main_ID)then
 		Ht2int=0
@@ -2809,6 +2821,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		ExH_at_ports=0
 		allocate(port_of_patch(quant%maxpatch))
 		port_of_patch=0
+		Ht_at_patch=0
 
 		do edge=msh%idxs,msh%idxe
 			edge_n = msh%new2old(edge)
@@ -2827,6 +2840,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				enddo
 			endif
 		enddo
+		Ht_at_patch = Ht_at_patch/quant%normalize_factor
 
 		do edge=msh%idxs,msh%idxe
 			edge_n = msh%new2old(edge)
@@ -2861,6 +2875,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				enddo
 			endif
 		enddo
+		Et_at_patch = Et_at_patch/quant%normalize_factor
+
 		call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 		call MPI_ALLREDUCE(MPI_IN_PLACE,Et_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 		call MPI_ALLREDUCE(MPI_IN_PLACE,port_of_patch,quant%maxpatch,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
@@ -2954,7 +2970,7 @@ subroutine Field_EMSURF_K(point,field,n,quant)
 				dg(2)=(point(2)-yn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 				dg(3)=(point(3)-zn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 				call ccurl(an,dg,dg2)
-				field = field - (-1)**(jj+1)*dg2*wn(j)*ln/(2)
+				field = field - (-1)**(jj+1)*dg2*wn(j)*ln
 			enddo
 		enddo
 		deallocate(xn,yn,zn,wn)
@@ -3004,7 +3020,7 @@ subroutine Field_EMSURF_T(point,field,n,quant)
 				an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 				an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 				an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-				an = an/(2d0)*(-1)**(jj+1)
+				an = an*(-1)**(jj+1)
 				distance=sqrt((point(1)-xn(j))**2+(point(2)-yn(j))**2+(point(3)-zn(j))**2)
 
 				phase = -quant%wavenum*distance
@@ -3016,7 +3032,7 @@ subroutine Field_EMSURF_T(point,field,n,quant)
 				dg(2)=(point(2)-yn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
 				dg(3)=(point(3)-zn(j))*(1+junit*quant%wavenum*distance)*ctemp/(distance**3)
 
-				field_phi = field_phi + wn(j)*dg*(-1)**(jj+1)
+				field_phi = field_phi + 2d0*wn(j)*dg*(-1)**(jj+1)
 
 			enddo
 		enddo
@@ -3060,6 +3076,7 @@ subroutine Field_EMSURF(point,field,n,quant)
 		edge = edge-quant%Nunk_port
 		call Field_EMSURF_K(point,field,edge,quant)
 	endif
+	! field=field*2d0
 end subroutine Field_EMSURF
 
 end module EMSURF_PORT_MODULE
