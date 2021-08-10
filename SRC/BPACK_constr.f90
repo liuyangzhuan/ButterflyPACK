@@ -2017,9 +2017,9 @@ contains
             recvquant(pp)%dat = sendquant(pp)%dat
             endif
          else
-            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr,ierr)
+            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr(:,1),ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
-            call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+            call MPI_Get_count(statusr(:,1), MPI_DT, recvquant(pp)%size,ierr)
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
             cnt = cnt + 1
             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)
@@ -2276,9 +2276,9 @@ contains
             recvquant(pp)%dat = sendquant(pp)%dat
             endif
          else
-            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr,ierr)
+            call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(pgno)%Comm, statusr(:,1),ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
-            call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+            call MPI_Get_count(statusr(:,1), MPI_DT, recvquant(pp)%size,ierr)
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
             cnt = cnt + 1
             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)

@@ -2932,7 +2932,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -3167,7 +3167,7 @@ contains
 !          if(tt==1 .and. Nreqr+1== Nrecvactive)then
 !             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
 !          else
-!             call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+!             call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
 !             pp = statusr(MPI_SOURCE, 1) + 1
 !          endif
 !          ! n1 = OMP_get_wtime()
@@ -3401,7 +3401,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -3705,7 +3705,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -3938,9 +3938,9 @@ contains
 !             recvquant(pp)%dat = sendquant(pp)%dat
 !             endif
 !          else
-!             call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(blocks%pgno)%Comm, statusr,ierr)
+!             call MPI_Probe(MPI_ANY_SOURCE, tag+1, ptree%pgrp(blocks%pgno)%Comm, statusr(:,1),ierr)
 !             pp = statusr(MPI_SOURCE, 1) + 1
-!             call MPI_Get_count(statusr, MPI_DT, recvquant(pp)%size,ierr)
+!             call MPI_Get_count(statusr(:,1), MPI_DT, recvquant(pp)%size,ierr)
 !             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
 !             cnt = cnt + 1
 !             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(cnt), ierr)
@@ -4268,7 +4268,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -4575,7 +4575,7 @@ contains
             if(tt==1 .and. Nreqr+1== Nrecvactive)then
                pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
             else
-               call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+               call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
                pp = statusr(MPI_SOURCE, 1) + 1
             endif
             i = 0
@@ -5125,7 +5125,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -5432,7 +5432,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -5832,7 +5832,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -6222,7 +6222,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
@@ -11366,7 +11366,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0

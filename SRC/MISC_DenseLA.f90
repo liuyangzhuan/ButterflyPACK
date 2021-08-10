@@ -195,7 +195,7 @@ contains
             UU = 0
             VV = 0
             Matrix0 =Matrix(1:mm,1:nn)
-            call gesddf90(Matrix0, Singular, UU, VV, INFO, flop=flop) 
+            call gesddf90(Matrix0, Singular, UU, VV, INFO, flop=flop)
 
             if (INFO /= 0) then
                !!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC)
