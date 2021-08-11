@@ -77,7 +77,11 @@ contains
       maxn = Nunk
       ldv = Nunk_loc
       maxnev = nev
-      maxncv = nev*4
+      maxncv = nev*2
+      if(maxncv>Nunk_loc)then
+         if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce #MPI or nev'
+         stop
+      endif
 
       n = maxn
       ncv = maxncv
