@@ -192,7 +192,7 @@ PROGRAM ButterflyPACK_IE_3D
 						else if	(trim(strings)=='--model')then
 							substring2=trim(strings1)
 						else if	(trim(strings)=='--which')then
-							quant%which=trim(strings1)						
+							quant%which=trim(strings1)
 						else if	(trim(strings)=='--noport')then
 							read(strings1,*)quant%noport
 						else if	(trim(strings)=='--mesh_normal')then
@@ -228,7 +228,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 	if(index(substring2,'pillbox')>0)then
 	!!!!!!! pillbox ports
-	if(quant%noport==0)then	
+	if(quant%noport==0)then
 		quant%Nport=2
 		allocate(quant%ports(quant%Nport))
 		quant%ports(1)%origin=(/0d0,0d0,0d0/)
@@ -258,7 +258,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 	if(index(substring2,'cavity_wakefield')>0)then
 	!!!!!!!!! cavity wakefield
-	if(quant%noport==0)then	
+	if(quant%noport==0)then
 		quant%Nport=2
 		allocate(quant%ports(quant%Nport))
 		quant%ports(1)%origin=(/0d0,0d0,-0.1995d0/)
@@ -277,7 +277,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 	if(index(substring2,'cavity_rec')>0)then
 	!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
-	if(quant%noport==0)then	
+	if(quant%noport==0)then
 		quant%Nport=4
 		allocate(quant%ports(quant%Nport))
 		quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
@@ -318,6 +318,21 @@ PROGRAM ButterflyPACK_IE_3D
 		quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
 	enddo
 	endif
+
+
+	if(index(substring2,'cavity_no_wg')>0)then
+		!!!!!!! cavity with 2 circular beam ports
+		quant%Nobs=1000
+		allocate(quant%obs_points(3,quant%Nobs))
+		allocate(quant%obs_Efields(3,quant%Nobs))
+		offset=0.001
+		do ii=1,quant%Nobs
+			quant%obs_points(1,ii)=0
+			quant%obs_points(2,ii)=0
+			quant%obs_points(3,ii)=(0.289-2*offset)/(quant%Nobs-1)*(ii-1)+offset-0.144
+		enddo
+	endif
+
 
 	if(index(substring2,'rfq_mirror')>0)then
 	!!!!!!!! RFQ no port
