@@ -1212,7 +1212,7 @@ contains
          if(tt==1 .and. Nreqr+1== Nrecvactive)then
             pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
          else
-            call MPI_waitany(Nreqr, R_req, sendid, statusr, ierr)
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
