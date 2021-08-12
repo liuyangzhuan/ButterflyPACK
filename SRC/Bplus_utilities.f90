@@ -14901,7 +14901,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
             do ii = 1, submats1(nn)%nr
                idx = idx + 1
-               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)
+               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
             enddo
             enddo
             enddo
@@ -15012,7 +15012,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
             do ii = 1, submats1(nn)%nr
                idx = idx + 1
-               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)
+               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
             enddo
             enddo
             enddo
