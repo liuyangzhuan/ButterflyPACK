@@ -74,8 +74,9 @@ PROGRAM ButterflyPACK_IE_3D
     complex(kind=8) sigma
     real(kind=8) tol, retval(2), offset, rtemp1, rtemp2
     real(kind=8) dtheta,theta,phi,rcs
+    real(kind=8) freq0,val0,valmin
     real(kind=8):: norm_thresh=1000d0
-    real(kind=8):: dotproduct_thresh=0.8d0
+    real(kind=8):: dotproduct_thresh=0.4d0
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
 	logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
@@ -84,7 +85,7 @@ PROGRAM ButterflyPACK_IE_3D
 	integer Nfreq,Nmode,nth_mode
 
 	integer nargs,flag
-	integer parent
+	integer parent,io
 
 	logical :: exist, f_exist
 
@@ -663,6 +664,7 @@ PROGRAM ButterflyPACK_IE_3D
 					if(.not. f_exist)then
 						Nmode = Nmode+1
 						order(ii)=Nmode
+						write(*,*)'New mode detected!'
 						write(12,*)Nmode
 
 						write(strings, *) Nmode
@@ -671,6 +673,23 @@ PROGRAM ButterflyPACK_IE_3D
 							write(13,*) dble(eigvec_glo(nn)),aimag(eigvec_glo(nn))
 						enddo
 						close(13)
+					else
+						write(strings, *) nth_mode 
+						open(15, file=trim(adjustl(substring2))//'_EigVals_'//trim(adjustl(strings))//'.out', status="old", action="read")
+						valmin=1e30
+						do
+							read(unit=15,fmt=*,iostat=io) freq0,val0
+							if (io/=0) exit
+							valmin = min(valmin,val0)
+						enddo 
+						close(15)
+						if(valmin>abs(eigval(ii)))then
+							open(13, file=trim(adjustl(substring2))//"_mode_vec"//trim(adjustl(strings))//".out", status="old", action="write")
+							do nn=1,quant%Nunk
+								write(13,*) dble(eigvec_glo(nn)),aimag(eigvec_glo(nn))
+							enddo
+							close(13)						
+						endif					
 					endif
 					close(12)
 				else
