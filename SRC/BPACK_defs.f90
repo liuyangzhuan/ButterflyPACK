@@ -31,9 +31,9 @@ module BPACK_DEFS
     implicit none
     INCLUDE 'mpif.h'
 #endif
-    integer, parameter:: BPACK_MAJOR_VERSION = 1
-    integer, parameter:: BPACK_MINOR_VERSION = 2
-    integer, parameter:: BPACK_PATCH_VERSION = 1
+    integer, parameter:: BPACK_MAJOR_VERSION = 2
+    integer, parameter:: BPACK_MINOR_VERSION = 0
+    integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !**** common parameters
 #ifdef PGI
