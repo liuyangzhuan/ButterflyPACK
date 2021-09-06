@@ -256,7 +256,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 					ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 				enddo
 			enddo
-			value_e=ln*lm*junit*(ctemp1-ctemp2)/2./quant%freq/eps0
+			value_e=ln*lm*junit*(ctemp1-ctemp2)/8./pi**2d0/quant%freq/eps0
 			value=value_e/impedence0
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
@@ -2598,7 +2598,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	write(*,*)'   norm_1/norm_inf: ', norm
 	write(*,*)'   acceleration voltage: ', abs(volt_acc)
 	write(*,*)'   normalize_factor: ', quant%normalize_factor
-	
+
 	endif
 	n2 = OMP_get_wtime()
 	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
