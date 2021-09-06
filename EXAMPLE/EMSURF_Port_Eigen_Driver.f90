@@ -674,22 +674,22 @@ PROGRAM ButterflyPACK_IE_3D
 						enddo
 						close(13)
 					else
-						write(strings, *) nth_mode 
+						write(strings, *) nth_mode
 						open(15, file=trim(adjustl(substring2))//'_EigVals_'//trim(adjustl(strings))//'.out', status="old", action="read")
 						valmin=1e30
 						do
 							read(unit=15,fmt=*,iostat=io) freq0,val0
 							if (io/=0) exit
 							valmin = min(valmin,val0)
-						enddo 
+						enddo
 						close(15)
 						if(valmin>abs(eigval(ii)))then
 							open(13, file=trim(adjustl(substring2))//"_mode_vec"//trim(adjustl(strings))//".out", status="old", action="write")
 							do nn=1,quant%Nunk
 								write(13,*) dble(eigvec_glo(nn)),aimag(eigvec_glo(nn))
 							enddo
-							close(13)						
-						endif					
+							close(13)
+						endif
 					endif
 					close(12)
 				else

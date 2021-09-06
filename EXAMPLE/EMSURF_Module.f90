@@ -207,7 +207,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 				ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 			enddo
 		enddo
-		value_e=ln*lm*junit*(ctemp1-ctemp2)/2./quant%freq/eps0
+		value_e=ln*lm*junit*(ctemp1-ctemp2)/8./pi**2d0/quant%freq/eps0
 		value_m=value_m*lm*ln
 
 		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*impedence0*value_m
