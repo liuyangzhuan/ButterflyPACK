@@ -12680,7 +12680,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
 
       if (allocated(blocks%ButterflyMiddle)) then
@@ -12874,7 +12874,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(Hstat)::stats
       real(kind=8)::flop, flops,n1,n2, tolerance
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
 
       type(butterfly_vec) :: BFvec
@@ -13361,7 +13361,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
 
       group_m = blocks%row_group ! Note: row_group and col_group interchanged here
@@ -13530,7 +13530,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
 
       group_m = blocks%row_group ! Note: row_group and col_group interchanged here
@@ -13708,7 +13708,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT ctemp
       type(matrixblock)::block, block_rand
       DT, allocatable::matrixtemp1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       type(mesh)::msh
       ! type(Hoption)::option
       type(proctree)::ptree

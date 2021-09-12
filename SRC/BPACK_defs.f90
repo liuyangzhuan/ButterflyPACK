@@ -167,7 +167,7 @@ module BPACK_DEFS
         integer:: header_m=0, header_n=0 ! matrix offsets
         DT, allocatable:: matU(:,:),matV(:,:)
         integer,allocatable:: select_column(:),select_row(:)
-        real(kind=8),allocatable:: Singular(:)
+        DTR,allocatable:: Singular(:)
         logical:: finish=.False. ! finish flag
         real(kind=8):: normA=0,normUV=0
         integer,allocatable:: rows(:),columns(:)
@@ -370,7 +370,7 @@ module BPACK_DEFS
 
     type SVD_quant
         DT, allocatable:: matU(:,:),matV(:,:)
-        real(kind=8),allocatable:: Singular(:)
+        DTR,allocatable:: Singular(:)
     end type SVD_quant
 
     type Bmatrix

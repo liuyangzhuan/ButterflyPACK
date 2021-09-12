@@ -92,7 +92,7 @@ contains
       integer Bidxs, Bidxe, ierr, tt
       integer vecCNT,num_vect,nn,mm,ranktmp,rank,mn
       DT, allocatable:: RandVectIn(:, :),RandVectOut(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:ho_bf1%Maxlevel))
       stats%rankmax_of_level = 0
@@ -300,7 +300,7 @@ contains
       type(matrixblock), pointer::block_o, block_ref, block_inv
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :), matrixtemp(:, :), matrixtemp1(:, :), matrixtempQ(:, :), matrixtempin(:, :), matrixtempout(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       DT::ctemp1, ctemp2
       DT, allocatable::UU(:, :), VV(:, :)
       integer q, qq, Nloc, pp
@@ -434,7 +434,7 @@ contains
       type(matrixblock), pointer::block_o, block_ref
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :), matrixtemp(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       DT::ctemp1, ctemp2
       complex(kind=8), allocatable::UU(:, :), VV(:, :)
       integer, allocatable::perms(:)
@@ -650,7 +650,7 @@ contains
       type(matrixblock), pointer::block_o, block_ref
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       DT::ctemp1, ctemp2
       type(hobf)::ho_bf1
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :), RandVectInL(:, :), RandVectOutL(:, :)
@@ -1057,7 +1057,7 @@ contains
 
       type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
       DT, allocatable::vec_old(:, :), vec_new(:, :), matrixtemp1(:, :)
 
@@ -1242,7 +1242,7 @@ contains
       type(Hoption)::option
       real(kind=8)::n1, n2, eps, flop, tolerance_abs
       integer, pointer::M_p(:, :), N_p(:, :)
-      real(kind=8), pointer::Singular(:)
+      DTR, pointer::Singular(:)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
       integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
       type(matrixblock)::block_rand(:)
@@ -1332,7 +1332,7 @@ contains
       type(Hoption)::option
       real(kind=8)::n1, n2, eps, flop
       integer, pointer::M_p(:, :), N_p(:, :)
-      real(kind=8), pointer::Singular(:)
+      DTR, pointer::Singular(:)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
       integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
       type(matrixblock)::block_rand(:)
@@ -1424,7 +1424,7 @@ contains
       type(Hoption)::option
       real(kind=8)::n1, n2, eps, flop
       integer, pointer::M_p(:, :), N_p(:, :)
-      real(kind=8), pointer::Singular(:)
+      DTR, pointer::Singular(:)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
       integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
       type(matrixblock)::block_rand(:)
