@@ -25,10 +25,14 @@ contains
       DT Matrix(:, :)
       integer M, N
       character, optional:: norm
-#if DAT==1
-         fnorm = dlangef90(Matrix, M, N, norm)
-#else
-         fnorm = zlangef90(Matrix, M, N, norm)
+#if DAT==0
+      fnorm = zlangef90(Matrix, M, N, norm)
+#elif DAT==1
+      fnorm = dlangef90(Matrix, M, N, norm)
+#elif DAT==2
+      fnorm = clangef90(Matrix, M, N, norm)
+#elif DAT==3
+      fnorm = slangef90(Matrix, M, N, norm)
 #endif
 
    end function fnorm
@@ -61,10 +65,38 @@ contains
 
    end function dlangef90
 
-   real(kind=8) function zlangef90(Matrix, M, N, norm)
+
+   real(kind=4) function slangef90(Matrix, M, N, norm)
 
 !
 
+      implicit none
+      real(kind=4) Matrix(:, :)
+      integer M, N, lda
+      character, optional:: norm
+      character::opt
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=4) slange
+
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i') then
+         allocate (WORK(M))
+         WORK = 0
+      end if
+
+      lda = size(Matrix, 1)
+      slangef90 = slange(opt, M, N, Matrix, lda, WORK)
+
+      if (opt == 'I' .or. opt == 'i') then
+         deallocate (WORK)
+      end if
+
+   end function slangef90
+
+
+   real(kind=8) function zlangef90(Matrix, M, N, norm)
+!
       implicit none
       complex(kind=8) Matrix(:, :)
       integer M, N, lda
@@ -92,15 +124,49 @@ contains
    end function zlangef90
 
 
+   real(kind=4) function clangef90(Matrix, M, N, norm)
+!
+      implicit none
+      complex(kind=4) Matrix(:, :)
+      integer M, N, lda
+      character, optional:: norm
+      character::opt
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=4) clange
+
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i') then
+         allocate (WORK(M))
+         WORK = 0
+      else
+         allocate(WORK(1))
+      end if
+
+      lda = size(Matrix, 1)
+      clangef90 = clange(opt, M, N, Matrix, lda, WORK)
+
+      ! if (opt == 'I' .or. opt == 'i') then
+         deallocate (WORK)
+      ! end if
+
+   end function clangef90
+
+
    real(kind=8) function pfnorm(M, N, Matrix, ia, ja, desca, norm)
       integer M, N, ia, ja
       DT Matrix(:, :)
       integer desca(9)
       character, optional:: norm
-#if DAT==1
-         pfnorm = pdlangef90(M, N, Matrix, ia, ja, desca, norm)
-#else
+
+#if DAT==0
          pfnorm = pzlangef90(M, N, Matrix, ia, ja, desca, norm)
+#elif DAT==1
+         pfnorm = pdlangef90(M, N, Matrix, ia, ja, desca, norm)
+#elif DAT==2
+         pfnorm = pclangef90(M, N, Matrix, ia, ja, desca, norm)
+#elif DAT==3
+         pfnorm = pslangef90(M, N, Matrix, ia, ja, desca, norm)
 #endif
    end function pfnorm
 
@@ -131,6 +197,32 @@ contains
    end function pdlangef90
 
 
+   real(kind=4) function pslangef90(M, N, Matrix, ia, ja, desca, norm)
+      implicit none
+      integer M, N, ia, ja
+      real(kind=4) Matrix(:, :)
+      integer desca(9)
+      character, optional:: norm
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=4) pslange
+      character::opt
+      integer IROFFA,ICOFFA
+
+      IROFFA = MOD( ia-1, nbslpk )
+      ICOFFA = MOD( ja-1, nbslpk )
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         allocate (WORK(max(M+IROFFA,N+ICOFFA)))
+         WORK = 0
+      end if
+      pslangef90 = pslange(opt, M, N, Matrix, ia, ja, desca, WORK)
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         deallocate (WORK)
+      end if
+   end function pslangef90
+
+
    real(kind=8) function pzlangef90(M, N, Matrix, ia, ja, desca, norm)
       implicit none
       integer M, N, ia, ja
@@ -156,13 +248,37 @@ contains
       end if
    end function pzlangef90
 
+   real(kind=4) function pclangef90(M, N, Matrix, ia, ja, desca, norm)
+      implicit none
+      integer M, N, ia, ja
+      complex(kind=4) Matrix(:, :)
+      integer desca(9)
+      character, optional:: norm
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=4) pclange
+      character::opt
+      integer IROFFA,ICOFFA
+
+      IROFFA = MOD( ia-1, nbslpk )
+      ICOFFA = MOD( ja-1, nbslpk )
+      opt = 'F'
+      if (present(norm)) opt = norm
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         allocate (WORK(max(M+IROFFA,N+ICOFFA)))
+         WORK = 0
+      end if
+      pclangef90 = pclange(opt, M, N, Matrix, ia, ja, desca, WORK)
+      if (opt == 'I' .or. opt == 'i' .or. opt == '1') then
+         deallocate (WORK)
+      end if
+   end function pclangef90
 
 
    subroutine gesvd_robust(Matrix, Singular, UU, VV, mm, nn, mn_min, flop)
       implicit none
       integer mm, nn, mn_min
       DT Matrix(:, :), UU(:, :), VV(:, :),Matrix0(mm,nn)
-      real(kind=8) Singular(:)
+      DTR Singular(:)
       real(kind=8), optional::flop
       integer INFO
 
@@ -209,13 +325,17 @@ contains
    subroutine gesvdf90(Matrix, Singular, UU, VV, flop)
       implicit none
       DT::Matrix(:, :), UU(:, :), VV(:, :)
-      real(kind=8) Singular(:)
+      DTR Singular(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-      call dgesvdf90(Matrix, Singular, UU, VV, flop)
-#else
+#if DAT==0
       call zgesvdf90(Matrix, Singular, UU, VV, flop)
+#elif DAT==1
+      call dgesvdf90(Matrix, Singular, UU, VV, flop)
+#elif DAT==2
+      call cgesvdf90(Matrix, Singular, UU, VV, flop)
+#elif DAT==3
+      call sgesvdf90(Matrix, Singular, UU, VV, flop)
 #endif
 
 
@@ -265,6 +385,49 @@ contains
 
    end subroutine zgesvdf90
 
+
+   subroutine cgesvdf90(Matrix, Singular, UU, VV, flop)
+   !
+         implicit none
+         complex(kind=4) Matrix(:, :), UU(:, :), VV(:, :)
+         real(kind=4) Singular(:)
+         integer m, n, mn_min
+         real(kind=8), optional::flop
+
+         integer LWORK, INFO
+         complex(kind=4):: TEMP(1)
+         real(kind=4), allocatable::RWORK(:)
+
+         complex(kind=4), allocatable:: WORK(:)
+
+         m = size(Matrix, 1)
+         n = size(Matrix, 2)
+         mn_min = min(m, n)
+
+         allocate (RWORK(5*mn_min))
+         RWORK = 0
+         LWORK = -1
+         call CGESVD('S', 'S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, INFO)
+
+         LWORK = NINT(dble(TEMP(1)*2.001 + 1))  ! increase this 2.001 factor when not converging
+         allocate (WORK(LWORK))
+         WORK = 0
+
+   ! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+         call CGESVD('S', 'S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, INFO)
+
+         if (INFO /= 0) then
+            write (*, *) 'SVD failed!!', INFO
+            stop
+         endif
+
+         deallocate (WORK, RWORK)
+
+         if (present(flop)) flop = flops_zgesvd(m, n)
+   end subroutine cgesvdf90
+
+
    subroutine dgesvdf90(Matrix, Singular, UU, VV, flop)
 
 !
@@ -304,24 +467,69 @@ contains
       if (present(flop)) flop = flops_dgesvd(m, n)
    end subroutine dgesvdf90
 
+
+   subroutine sgesvdf90(Matrix, Singular, UU, VV, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), UU(:, :), VV(:, :)
+      real(kind=4) Singular(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+
+      real(kind=4), allocatable:: WORK(:)
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call SGESVD('S', 'S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))  ! increase this 2.001 factor when not converging
+      allocate (WORK(LWORK))
+      WORK = 0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+      call SGESVD('S', 'S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'SVD failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+      if (present(flop)) flop = flops_dgesvd(m, n)
+   end subroutine sgesvdf90
+
+
    subroutine gesddf90(Matrix, Singular, UU, VV, INFO, flop)
       implicit none
       DT::Matrix(:, :), UU(:, :), VV(:, :)
-      real(kind=8) Singular(:)
+      DTR Singular(:)
       real(kind=8), optional::flop
       integer INFO
 
-#if DAT==1
-               call dgesddf90(Matrix, Singular, UU, VV, INFO, flop)
-#else
-               call zgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+#if DAT==0
+      call zgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+#elif DAT==1
+      call dgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+#elif DAT==2
+      call cgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+#elif DAT==3
+      call sgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 #endif
+
+
+
+
    end subroutine gesddf90
 
    subroutine zgesddf90(Matrix, Singular, UU, VV, INFO, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), UU(:, :), VV(:, :)
       real(kind=8) Singular(:)
@@ -361,6 +569,49 @@ contains
       deallocate (WORK, RWORK, IWORK)
       if (present(flop)) flop = flops_zgesdd(m, n)
    end subroutine zgesddf90
+
+   subroutine cgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), UU(:, :), VV(:, :)
+      real(kind=4) Singular(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      real(kind=4), allocatable::RWORK(:)
+      integer, allocatable::IWORK(:)
+
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      allocate (RWORK(max(1, min(m, n)*max(5*min(m, n) + 7, 2*max(m, n) + 2*min(m, n) + 1))))
+      allocate (IWORK(8*mn_min))
+      RWORK = 0
+      LWORK = -1
+      call CGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, RWORK, IWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+      call CGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, RWORK, IWORK, INFO)
+
+      ! if (INFO /= 0) then
+      !    write (*, *) 'SDD failed!!', INFO
+      !    stop
+      ! endif
+
+      deallocate (WORK, RWORK, IWORK)
+      if (present(flop)) flop = flops_zgesdd(m, n)
+   end subroutine cgesddf90
+
 
    subroutine dgesddf90(Matrix, Singular, UU, VV, INFO, flop)
 
@@ -404,16 +655,61 @@ contains
       if (present(flop)) flop = flops_dgesdd(m, n)
    end subroutine dgesddf90
 
+   subroutine sgesddf90(Matrix, Singular, UU, VV, INFO, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), UU(:, :), VV(:, :)
+      real(kind=4) Singular(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable::RWORK(:)
+      integer, allocatable::IWORK(:)
+
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      allocate (IWORK(8*mn_min))
+      LWORK = -1
+      call SGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, TEMP, LWORK, IWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+
+! write(*,*)'sssss', TEMP(1),LWORK,fnorm(Matrix,m,n)
+
+      call SGESDD('S', m, n, Matrix, m, Singular, UU, m, VV, mn_min, WORK, LWORK, IWORK, INFO)
+
+      ! if (INFO /= 0) then
+      !    write (*, *) 'SDD failed!!', INFO
+      !    stop
+      ! endif
+
+      deallocate (WORK, IWORK)
+      if (present(flop)) flop = flops_dgesdd(m, n)
+   end subroutine sgesddf90
+
    subroutine geqrff90(Matrix, tau, flop)
       implicit none
       DT::Matrix(:, :), tau(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-            call dgeqrff90(Matrix, tau, flop)
-#else
+#if DAT==0
             call zgeqrff90(Matrix, tau, flop)
+#elif DAT==1
+            call dgeqrff90(Matrix, tau, flop)
+#elif DAT==2
+            call cgeqrff90(Matrix, tau, flop)
+#elif DAT==3
+            call sgeqrff90(Matrix, tau, flop)
 #endif
+
 
    end subroutine geqrff90
 
@@ -454,6 +750,41 @@ contains
       if (present(flop)) flop = flops_zgetrf(m, n)
    end subroutine zgeqrff90
 
+   subroutine cgeqrff90(Matrix, tau, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer m, n, mn_min
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+
+      complex(kind=4), allocatable:: WORK(:)
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call CGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call CGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'cgeqrff90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call geqrf(Matrix,tau)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+   end subroutine cgeqrff90
+
    subroutine dgeqrff90(Matrix, tau, flop)
 
 !
@@ -491,6 +822,42 @@ contains
       if (present(flop)) flop = flops_dgetrf(m, n)
    end subroutine dgeqrff90
 
+   subroutine sgeqrff90(Matrix, tau, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), tau(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call SGEQRF(m, n, Matrix, m, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call SGEQRF(m, n, Matrix, m, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'sgeqrff90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call geqrf(Matrix,tau)
+      if (present(flop)) flop = flops_dgetrf(m, n)
+   end subroutine sgeqrff90
+
+
    subroutine geqp3f90(Matrix, jpvt, tau, flop)
 
 !
@@ -500,11 +867,18 @@ contains
       integer jpvt(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-            call dgeqp3f90(Matrix, jpvt, tau, flop)
-#else
+
+#if DAT==0
             call zgeqp3f90(Matrix, jpvt, tau, flop)
+#elif DAT==1
+            call dgeqp3f90(Matrix, jpvt, tau, flop)
+#elif DAT==2
+            call cgeqp3f90(Matrix, jpvt, tau, flop)
+#elif DAT==3
+            call sgeqp3f90(Matrix, jpvt, tau, flop)
 #endif
+
+
    end subroutine geqp3f90
 
    subroutine zgeqp3f90(Matrix, jpvt, tau, flop)
@@ -549,6 +923,46 @@ contains
       if (present(flop)) flop = flops_zgetrf(m, n)
    end subroutine zgeqp3f90
 
+   subroutine cgeqp3f90(Matrix, jpvt, tau, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer jpvt(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      real(kind=4), allocatable::RWORK(:)
+
+      complex(kind=4), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      allocate (RWORK(2*max(m, n)))
+      RWORK = 0
+      LWORK = -1
+      call CGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call CGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'geqp3f90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+      deallocate (RWORK)
+
+! call geqp3(Matrix,jpvt,tau)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+   end subroutine cgeqp3f90
+
    subroutine dgeqp3f90(Matrix, jpvt, tau, flop)
 
 !
@@ -586,6 +1000,42 @@ contains
       if (present(flop)) flop = flops_dgetrf(m, n)
    end subroutine dgeqp3f90
 
+   subroutine sgeqp3f90(Matrix, jpvt, tau, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), tau(:)
+      integer jpvt(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call SGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call SGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'geqp3f90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call geqp3(Matrix,jpvt,tau)
+      if (present(flop)) flop = flops_dgetrf(m, n)
+   end subroutine sgeqp3f90
+
+
    subroutine geqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
 
 !
@@ -604,11 +1054,16 @@ contains
       if(mn_min==0)then
          rank=0
       else
-#if DAT==1
-               call dgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
-#else
-               call zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+#if DAT==0
+         call zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+#elif DAT==1
+         call dgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+#elif DAT==2
+         call cgeqp3modf90(Matrix, jpvt, tau, real(rtol), real(atol), rank, flop)
+#elif DAT==3
+         call sgeqp3modf90(Matrix, jpvt, tau, real(rtol), real(atol), rank, flop)
 #endif
+
       endif
 
    end subroutine geqp3modf90
@@ -654,10 +1109,49 @@ contains
       if (present(flop)) flop = flops_dgeqpfmod(m, n, rank)
    end subroutine dgeqp3modf90
 
+
+   subroutine sgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), tau(:)
+      integer jpvt(:)
+      integer m, n, mn_min
+
+      real(kind=4)::rtol, atol
+      integer LWORK, INFO, rank
+      real(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+      real(kind=4), allocatable:: WORK(:)
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+      rank = 0
+
+      LWORK = -1
+! call DGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO)
+      call SGEQP3mod(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, INFO, RANK, RTOL, ATOL)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+! call DGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO)
+      call SGEQP3mod(m, n, Matrix, m, jpvt, tau, WORK, LWORK, INFO, RANK, RTOL, ATOL)
+
+      if (INFO /= 0) then
+         write (*, *) 'geqp3modf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call geqp3(Matrix,jpvt,tau)
+      if (present(flop)) flop = flops_dgeqpfmod(m, n, rank)
+   end subroutine sgeqp3modf90
+
+
    subroutine zgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), tau(:)
       integer jpvt(:)
@@ -700,6 +1194,50 @@ contains
       if (present(flop)) flop = flops_zgeqpfmod(m, n, rank)
    end subroutine zgeqp3modf90
 
+   subroutine cgeqp3modf90(Matrix, jpvt, tau, rtol, atol, rank, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer jpvt(:)
+      integer m, n, mn_min
+
+      real(kind=4)::rtol, atol
+      integer LWORK, INFO, rank
+      complex(kind=8):: TEMP(1)
+      real(kind=4), allocatable::RWORK(:)
+
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+      rank = 0
+
+      allocate (RWORK(2*max(m, n)))
+      RWORK = 0
+      LWORK = -1
+! call ZGEQP3(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO)
+      call CGEQP3mod(m, n, Matrix, m, jpvt, tau, TEMP, LWORK, RWORK, INFO, RANK, RTOL, ATOL)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+! call ZGEQP3(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO)
+      call CGEQP3mod(m, n, Matrix, m, jpvt, tau, WORK, LWORK, RWORK, INFO, RANK, RTOL, ATOL)
+
+      if (INFO /= 0) then
+         write (*, *) 'geqp3modf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+      deallocate (RWORK)
+
+! call geqp3(Matrix,jpvt,tau)
+      if (present(flop)) flop = flops_zgeqpfmod(m, n, rank)
+   end subroutine cgeqp3modf90
+
    subroutine un_or_mqrf90(a, tau, c, side, trans, m, n, k, flop)
 
 !
@@ -710,17 +1248,21 @@ contains
       character:: side, trans
       real(kind=8), optional::flop
 
-#if DAT==1
-               call ormqrf90(a, tau, c, side, trans, m, n, k, flop)
-#else
-               call unmqrf90(a, tau, c, side, trans, m, n, k, flop)
+#if DAT==0
+         call zunmqrf90(a, tau, c, side, trans, m, n, k, flop)
+#elif DAT==1
+         call dormqrf90(a, tau, c, side, trans, m, n, k, flop)
+#elif DAT==2
+         call cunmqrf90(a, tau, c, side, trans, m, n, k, flop)
+#elif DAT==3
+         call sormqrf90(a, tau, c, side, trans, m, n, k, flop)
 #endif
+
+
    end subroutine un_or_mqrf90
 
-   subroutine ormqrf90(a, tau, c, side, trans, m, n, k, flop)
-
+   subroutine dormqrf90(a, tau, c, side, trans, m, n, k, flop)
 !
-
       implicit none
       real(kind=8) a(:, :), tau(:), c(:, :)
       integer m, n, k, lda, ldc, mn_min
@@ -746,7 +1288,7 @@ contains
       call DORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'ormqrf90 failed!!', INFO
+         write (*, *) 'dormqrf90 failed!!', INFO
          stop
       endif
 
@@ -754,12 +1296,48 @@ contains
 
 ! call unmqr(a,tau,c,side,trans)
       if (present(flop)) flop = flops_dunmqr(side, m, n, k)
-   end subroutine ormqrf90
+   end subroutine dormqrf90
 
-   subroutine unmqrf90(a, tau, c, side, trans, m, n, k, flop)
+   subroutine sormqrf90(a, tau, c, side, trans, m, n, k, flop)
+      !
+      implicit none
+      real(kind=4) a(:, :), tau(:), c(:, :)
+      integer m, n, k, lda, ldc, mn_min
 
+      character:: side, trans, trans1
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      trans1 = trans
+      if (trans1 == 'C') trans1 = 'T'
+
+      ldc = size(c, 1)
+      lda = size(a, 1)
+
+      LWORK = -1
+      call SORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call SORMQR(side, trans1, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'sormqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call unmqr(a,tau,c,side,trans)
+      if (present(flop)) flop = flops_dunmqr(side, m, n, k)
+   end subroutine sormqrf90
+
+
+   subroutine zunmqrf90(a, tau, c, side, trans, m, n, k, flop)
 !
-
       implicit none
       complex(kind=8) a(:, :), tau(:), c(:, :)
       integer m, n, k, lda, ldc, mn_min
@@ -781,7 +1359,7 @@ contains
       call ZUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'unmqrf90 failed!!', INFO
+         write (*, *) 'zunmqrf90 failed!!', INFO
          stop
       endif
 
@@ -789,18 +1367,60 @@ contains
 
 ! call unmqr(a,tau,c,side,trans)
       if (present(flop)) flop = flops_zunmqr(side, m, n, k)
-   end subroutine unmqrf90
+   end subroutine zunmqrf90
+
+   subroutine cunmqrf90(a, tau, c, side, trans, m, n, k, flop)
+      !
+      implicit none
+      complex(kind=4) a(:, :), tau(:), c(:, :)
+      integer m, n, k, lda, ldc, mn_min
+      real(kind=8), optional::flop
+      character:: side, trans
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      complex(kind=4), allocatable:: WORK(:)
+
+      ldc = size(c, 1)
+      lda = size(a, 1)
+
+      LWORK = -1
+      call CUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, TEMP, LWORK, INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call CUNMQR(side, trans, m, n, k, a, lda, tau, c, ldc, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'cunmqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call unmqr(a,tau,c,side,trans)
+      if (present(flop)) flop = flops_zunmqr(side, m, n, k)
+   end subroutine cunmqrf90
+
 
    subroutine un_or_gqrf90(Matrix, tau, m, n, k, flop)
       DT Matrix(:, :), tau(:)
       real(kind=8), optional::flop
       integer m, n, k
 
-#if DAT==1
-            call orgqrf90(Matrix, tau, m, n, k, flop)
-#else
-            call ungqrf90(Matrix, tau, m, n, k, flop)
+
+#if DAT==0
+            call zungqrf90(Matrix, tau, m, n, k, flop)
+#elif DAT==1
+            call dorgqrf90(Matrix, tau, m, n, k, flop)
+#elif DAT==2
+            call cungqrf90(Matrix, tau, m, n, k, flop)
+#elif DAT==3
+            call sorgqrf90(Matrix, tau, m, n, k, flop)
 #endif
+
+
+
    end subroutine un_or_gqrf90
 
    subroutine pun_or_gqrf90(ctxt, Matrix, tau, m, n, k, desca, ia, ja, flop)
@@ -814,20 +1434,25 @@ contains
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
-#if DAT==1
-            call porgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
-#else
-            call pungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+#if DAT==0
+      call zpungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+#elif DAT==1
+      call dporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+#elif DAT==2
+      call cpungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+#elif DAT==3
+      call sporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 #endif
+
+
+
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
    end subroutine pun_or_gqrf90
 
-   subroutine orgqrf90(Matrix, tau, m, n, k, flop)
-
+   subroutine dorgqrf90(Matrix, tau, m, n, k, flop)
 !
-
       implicit none
       real(kind=8) Matrix(:, :), tau(:)
       integer m, n, k, lda
@@ -849,7 +1474,7 @@ contains
       call DORGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'orgqrf90 failed!!', INFO
+         write (*, *) 'dorgqrf90 failed!!', INFO
          stop
       endif
 
@@ -857,12 +1482,43 @@ contains
 
 ! call ungqr(Matrix,tau)
       if (present(flop)) flop = flops_dungqr(m, n, k)
-   end subroutine orgqrf90
+   end subroutine dorgqrf90
 
-   subroutine porgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+   subroutine sorgqrf90(Matrix, tau, m, n, k, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), tau(:)
+      integer m, n, k, lda
 
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      lda = size(Matrix, 1)
+
+      LWORK = -1
+      call SORGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call SORGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'sorgqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call ungqr(Matrix,tau)
+      if (present(flop)) flop = flops_dungqr(m, n, k)
+   end subroutine sorgqrf90
+
+   subroutine dporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 !
-
       implicit none
       real(kind=8) Matrix(:, :), tau(:)
       integer m, n, k, lda
@@ -883,7 +1539,7 @@ contains
       call PDORGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'porgqrf90 failed!!', INFO
+         write (*, *) 'dporgqrf90 failed!!', INFO
          stop
       endif
 
@@ -891,12 +1547,43 @@ contains
 
 ! call ungqr(Matrix,tau)
       if (present(flop)) flop = flops_dungqr(m, n, k)
-   end subroutine porgqrf90
+   end subroutine dporgqrf90
 
-   subroutine ungqrf90(Matrix, tau, m, n, k, flop)
+   subroutine sporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), tau(:)
+      integer m, n, k, lda
 
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      integer desca(9)
+      integer ia, ja
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      call PSORGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PSORGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'sporgqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call ungqr(Matrix,tau)
+      if (present(flop)) flop = flops_dungqr(m, n, k)
+   end subroutine sporgqrf90
+
+
+   subroutine zungqrf90(Matrix, tau, m, n, k, flop)
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), tau(:)
       integer m, n, k, lda
@@ -917,7 +1604,7 @@ contains
       call ZUNGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'ungqrf90 failed!!', INFO
+         write (*, *) 'zungqrf90 failed!!', INFO
          stop
       endif
 
@@ -926,12 +1613,44 @@ contains
       if (present(flop)) flop = flops_zungqr(m, n, k)
 ! call ungqr(Matrix,tau)
 
-   end subroutine ungqrf90
+   end subroutine zungqrf90
 
-   subroutine pungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 
+   subroutine cungqrf90(Matrix, tau, m, n, k, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer m, n, k, lda
+      real(kind=8), optional::flop
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+
+      complex(kind=4), allocatable:: WORK(:)
+
+      lda = size(Matrix, 1)
+
+      LWORK = -1
+      call CUNGQR(m, n, k, Matrix, lda, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call CUNGQR(m, n, k, Matrix, lda, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'cungqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+      if (present(flop)) flop = flops_zungqr(m, n, k)
+! call ungqr(Matrix,tau)
+
+   end subroutine cungqrf90
+
+   subroutine zpungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), tau(:)
       integer m, n, k, lda
@@ -951,7 +1670,7 @@ contains
       call PZUNGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
 
       if (INFO /= 0) then
-         write (*, *) 'pungqrf90 failed!!', INFO
+         write (*, *) 'zpungqrf90 failed!!', INFO
          stop
       endif
 
@@ -960,63 +1679,63 @@ contains
       if (present(flop)) flop = flops_zungqr(m, n, k)
 ! call ungqr(Matrix,tau)
 
-   end subroutine pungqrf90
+   end subroutine zpungqrf90
+
+
+   subroutine cpungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer m, n, k, lda
+      real(kind=8), optional::flop
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      integer desca(9)
+      integer ia, ja
+      complex(kind=4), allocatable:: WORK(:)
+
+      LWORK = -1
+      call PCUNGQR(m, n, k, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PCUNGQR(m, n, k, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'cpungqrf90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+      if (present(flop)) flop = flops_zungqr(m, n, k)
+! call ungqr(Matrix,tau)
+
+   end subroutine cpungqrf90
 
    subroutine getrff90(Matrix, ipiv, flop)
       DT Matrix(:, :)
       integer ipiv(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-         call dgetrff90(Matrix, ipiv, flop)
-#else
-         call zgetrff90(Matrix, ipiv, flop)
+
+#if DAT==0
+      call zgetrff90(Matrix, ipiv, flop)
+#elif DAT==1
+      call dgetrff90(Matrix, ipiv, flop)
+#elif DAT==2
+      call cgetrff90(Matrix, ipiv, flop)
+#elif DAT==3
+      call sgetrff90(Matrix, ipiv, flop)
 #endif
+
 
    end subroutine getrff90
 
-#if DAT==1
-   subroutine dgetrff90(Matrix, ipiv, flop)
-
-!
-
-      implicit none
-      real(kind=8) Matrix(:, :)
-      integer ipiv(:)
-      integer m, n, mn_min, ii
-
-      integer INFO
-      real(kind=8), optional::flop
-      real(kind=8)::norm1,dlamch
-
-      m = size(Matrix, 1)
-      n = size(Matrix, 2)
-      mn_min = min(m, n)
-
-      call DGETRF(m, n, Matrix, m, ipiv, INFO)
-
-      if (INFO /= 0) then
-         write (*, *) 'getrff90 failed!!', INFO
-         stop
-      endif
-
-! call getrf(Matrix,ipiv)
-      if (present(flop)) flop = flops_dgeqrf(m, n)
-
-      norm1 = fnorm(Matrix,m, n,'1')
-      do ii=1,mn_min
-         if(abs(Matrix(ii, ii))<dlamch('E'))then
-            Matrix(ii, ii) = sign(1d0,dble(Matrix(ii, ii)))*sqrt(dlamch('E'))*norm1
-         endif
-      enddo
-
-
-   end subroutine dgetrff90
-#else
+#if DAT==0
    subroutine zgetrff90(Matrix, ipiv, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :)
       integer ipiv(:)
@@ -1048,6 +1767,106 @@ contains
       enddo
 
    end subroutine zgetrff90
+#elif DAT==1
+   subroutine dgetrff90(Matrix, ipiv, flop)
+   !
+      implicit none
+      real(kind=8) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+
+      integer INFO
+      real(kind=8), optional::flop
+      real(kind=8)::norm1,dlamch
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call DGETRF(m, n, Matrix, m, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrff90 failed!!', INFO
+         stop
+      endif
+
+! call getrf(Matrix,ipiv)
+      if (present(flop)) flop = flops_dgeqrf(m, n)
+
+      norm1 = fnorm(Matrix,m, n,'1')
+      do ii=1,mn_min
+         if(abs(Matrix(ii, ii))<dlamch('E'))then
+            Matrix(ii, ii) = sign(1d0,dble(Matrix(ii, ii)))*sqrt(dlamch('E'))*norm1
+         endif
+      enddo
+   end subroutine dgetrff90
+
+#elif DAT==2
+   subroutine cgetrff90(Matrix, ipiv, flop)
+!
+      implicit none
+      complex(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+      real(kind=8), optional::flop
+      integer INFO
+      real(kind=4)::norm1,slamch
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call CGETRF(m, n, Matrix, m, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrff90 failed!!', INFO
+         stop
+      endif
+
+! call getrf(Matrix,ipiv)
+      if (present(flop)) flop = flops_zgeqrf(m, n)
+
+
+      norm1 = fnorm(Matrix,m, n,'1')
+      do ii=1,mn_min
+         if(abs(Matrix(ii, ii))<slamch('E'))then
+            Matrix(ii, ii) = sqrt(slamch('E'))*norm1
+         endif
+      enddo
+   end subroutine cgetrff90
+#elif DAT==3
+   subroutine sgetrff90(Matrix, ipiv, flop)
+   !
+      implicit none
+      real(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+
+      integer INFO
+      real(kind=8), optional::flop
+      real(kind=4)::norm1,slamch
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call SGETRF(m, n, Matrix, m, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrff90 failed!!', INFO
+         stop
+      endif
+
+! call getrf(Matrix,ipiv)
+      if (present(flop)) flop = flops_dgeqrf(m, n)
+
+      norm1 = fnorm(Matrix,m, n,'1')
+      do ii=1,mn_min
+         if(abs(Matrix(ii, ii))<slamch('E'))then
+            Matrix(ii, ii) = sign(1d0,dble(Matrix(ii, ii)))*sqrt(slamch('E'))*norm1
+         endif
+      enddo
+   end subroutine sgetrff90
 #endif
 
    subroutine getrsf90(Matrix, ipiv, B, trans, flop)
@@ -1056,11 +1875,19 @@ contains
       character:: trans
       real(kind=8), optional::flop
 
-#if DAT==1
-            call dgetrsf90(Matrix, ipiv, B, trans, flop)
-#else
-            call zgetrsf90(Matrix, ipiv, B, trans, flop)
+
+#if DAT==0
+      call zgetrsf90(Matrix, ipiv, B, trans, flop)
+#elif DAT==1
+      call dgetrsf90(Matrix, ipiv, B, trans, flop)
+#elif DAT==2
+      call cgetrsf90(Matrix, ipiv, B, trans, flop)
+#elif DAT==3
+      call sgetrsf90(Matrix, ipiv, B, trans, flop)
 #endif
+
+
+
    end subroutine getrsf90
 
    subroutine dgetrsf90(Matrix, ipiv, B, trans, flop)
@@ -1092,10 +1919,36 @@ contains
       if (present(flop)) flop = flops_dgetrs(n, nrhs)
    end subroutine dgetrsf90
 
+   subroutine sgetrsf90(Matrix, ipiv, B, trans, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), B(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, nrhs
+      character:: trans, trans1
+      real(kind=8), optional::flop
+      integer INFO
+
+      n = size(Matrix, 1)
+      nrhs = size(B, 2)
+
+      trans1 = trans
+      if (trans1 == 'C') trans1 = 'T'
+
+      call SGETRS(trans1, n, nrhs, Matrix, n, ipiv, B, n, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrsf90 failed!!', INFO
+         stop
+      endif
+
+! call getrs(Matrix,ipiv,B,trans)
+      if (present(flop)) flop = flops_dgetrs(n, nrhs)
+   end subroutine sgetrsf90
+
+
    subroutine zgetrsf90(Matrix, ipiv, B, trans, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), B(:, :)
       integer ipiv(:)
@@ -1118,6 +1971,30 @@ contains
       if (present(flop)) flop = flops_zgetrs(n, nrhs)
    end subroutine zgetrsf90
 
+   subroutine cgetrsf90(Matrix, ipiv, B, trans, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), B(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, nrhs
+      character:: trans
+      real(kind=8), optional::flop
+      integer INFO
+
+      n = size(Matrix, 1)
+      nrhs = size(B, 2)
+
+      call CGETRS(trans, n, nrhs, Matrix, n, ipiv, B, n, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrsf90 failed!!', INFO
+         stop
+      endif
+
+! call getrs(Matrix,ipiv,B,trans)
+      if (present(flop)) flop = flops_zgetrs(n, nrhs)
+   end subroutine cgetrsf90
+
    subroutine getrif90(Matrix, ipiv, flop)
 
       implicit none
@@ -1125,18 +2002,21 @@ contains
       integer ipiv(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-         call dgetrif90(Matrix, ipiv, flop)
-#else
-         call zgetrif90(Matrix, ipiv, flop)
+#if DAT==0
+      call zgetrif90(Matrix, ipiv, flop)
+#elif DAT==1
+      call dgetrif90(Matrix, ipiv, flop)
+#elif DAT==2
+      call cgetrif90(Matrix, ipiv, flop)
+#elif DAT==3
+      call sgetrif90(Matrix, ipiv, flop)
 #endif
+
 
    end subroutine getrif90
 
    subroutine dgetrif90(Matrix, ipiv, flop)
-
 !
-
       implicit none
       real(kind=8) Matrix(:, :)
       integer ipiv(:)
@@ -1176,10 +2056,49 @@ contains
       if (present(flop)) flop = flops_dgetri(mn_min)
    end subroutine dgetrif90
 
+   subroutine sgetrif90(Matrix, ipiv, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+
+      if (m > n) then
+         write (*, *) 'size of Matrix incorrect'
+         stop
+      endif
+
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call SGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call SGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrif90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call getri(Matrix,ipiv)
+      if (present(flop)) flop = flops_dgetri(mn_min)
+   end subroutine sgetrif90
+
    subroutine zgetrif90(Matrix, ipiv, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :)
       integer ipiv(:)
@@ -1217,6 +2136,45 @@ contains
       if (present(flop)) flop = flops_zgetri(mn_min)
    end subroutine zgetrif90
 
+   subroutine cgetrif90(Matrix, ipiv, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+      complex(kind=4), allocatable:: WORK(:)
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      if (m > n) then
+         write (*, *) 'size of Matrix incorrect'
+         stop
+      endif
+      mn_min = min(m, n)
+
+      LWORK = -1
+      call CGETRI(m, Matrix, m, ipiv, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call CGETRI(m, Matrix, m, ipiv, WORK, LWORK, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrif90 failed!!', INFO
+         stop
+      endif
+
+      deallocate (WORK)
+
+! call getri(Matrix,ipiv)
+      if (present(flop)) flop = flops_zgetri(mn_min)
+   end subroutine cgetrif90
+
    subroutine trsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
 
       implicit none
@@ -1225,17 +2183,20 @@ contains
       character side, uplo, transa, diag
       real(kind=8), optional::flop
 
-#if DAT==1
-            call dtrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
-#else
-            call ztrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+#if DAT==0
+      call ztrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+#elif DAT==1
+      call dtrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+#elif DAT==2
+      call ctrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+#elif DAT==3
+      call strsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
 #endif
+
    end subroutine trsmf90
 
    subroutine dtrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
-
 !
-
       implicit none
       real(kind=8) Matrix(:, :), B(:, :), alpha
       integer m, n, lda, ldb
@@ -1254,10 +2215,28 @@ contains
       if (present(flop)) flop = flops_dtrsm(side, m, n)
    end subroutine dtrsmf90
 
+   subroutine strsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+      !
+      implicit none
+      real(kind=4) Matrix(:, :), B(:, :), alpha
+      integer m, n, lda, ldb
+      character side, uplo, transa, diag
+      real(kind=8), optional::flop
+      integer INFO
+
+      alpha = 1d0
+
+      ldb = size(B, 1)
+      lda = size(Matrix, 1)
+
+      call STRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
+
+! call trsm(Matrix,B,side,uplo,transa,diag)
+      if (present(flop)) flop = flops_dtrsm(side, m, n)
+   end subroutine strsmf90
+
    subroutine ztrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
-
 !
-
       implicit none
       complex(kind=8) Matrix(:, :), B(:, :), alpha
       integer m, n, lda, ldb
@@ -1277,6 +2256,27 @@ contains
       if (present(flop)) flop = flops_ztrsm(side, m, n)
    end subroutine ztrsmf90
 
+   subroutine ctrsmf90(Matrix, B, side, uplo, transa, diag, m, n, flop)
+      !
+      implicit none
+      complex(kind=4) Matrix(:, :), B(:, :), alpha
+      integer m, n, lda, ldb
+      character side, uplo, transa, diag
+      real(kind=8), optional::flop
+      integer INFO
+
+      alpha = 1d0
+
+      ldb = size(B, 1)
+      lda = size(Matrix, 1)
+
+! write(*,*)shape(Matrix),lda,shape(B),ldb
+      call CTRSM(side, uplo, transa, diag, m, n, alpha, Matrix, lda, B, ldb)
+
+! call trsm(Matrix,B,side,uplo,transa,diag)
+      if (present(flop)) flop = flops_ztrsm(side, m, n)
+   end subroutine ctrsmf90
+
 #ifdef HAVE_MKL
    subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop)
       character*1::transa_array(:),transb_array(:)
@@ -1286,31 +2286,25 @@ contains
       real(kind=8), optional::flop
       integer m,n,k,group_count,ii
 
-#if DAT==1
-         call dgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
-
-         if (present(flop))then
-         flop=0
-         do ii=1,group_count
-            m=m_array(ii)
-            n=n_array(ii)
-            k=k_array(ii)
-            flop = flop + flops_gemm(m, n, k)
-         enddo
-         endif
-#else
-         call zgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
-         if (present(flop))then
-            flop=0
-            do ii=1,group_count
-               m=m_array(ii)
-               n=n_array(ii)
-               k=k_array(ii)
-               flop = flop + flops_gemm(m, n, k)
-            enddo
-         endif
+#if DAT==0
+      call zgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+#elif DAT==1
+      call dgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+#elif DAT==2
+      call cgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+#elif DAT==3
+      call sgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
 #endif
 
+      if (present(flop))then
+      flop=0
+      do ii=1,group_count
+         m=m_array(ii)
+         n=n_array(ii)
+         k=k_array(ii)
+         flop = flop + flops_gemm(m, n, k)
+      enddo
+      endif
    end subroutine gemm_batch_mkl
 #endif
 
@@ -1336,11 +2330,18 @@ contains
       integer desca(9), descc(9)
       real(kind=8), optional::flop
 
-#if DAT==1
-               call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
-#else
-               call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+
+#if DAT==0
+      call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+#elif DAT==1
+      call pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+#elif DAT==2
+      call pcunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+#elif DAT==3
+      call psormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
 #endif
+
+
 
    end subroutine pun_or_mqrf90
 
@@ -1366,6 +2367,28 @@ contains
 
    end subroutine pdormqrf90
 
+   subroutine psormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+      implicit none
+      character side, trans
+      integer m, n, k, ia, ja, ic, jc
+      real(kind=4) MatA(:, :), MatC(:, :), tau(:)
+      integer desca(9), descc(9)
+      real(kind=4), allocatable:: WORK(:)
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+      LWORK = -1
+      call psormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call psormqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
+      deallocate (WORK)
+
+      if (present(flop)) flop = flops_dunmqr(side, m, n, k)
+
+   end subroutine psormqrf90
+
    subroutine pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
       implicit none
       character side, trans
@@ -1388,6 +2411,30 @@ contains
       if (present(flop)) flop = flops_zunmqr(side, m, n, k)
    end subroutine pzunmqrf90
 
+   subroutine pcunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
+      implicit none
+      character side, trans
+      integer m, n, k, ia, ja, ic, jc
+      complex(kind=4) MatA(:, :), MatC(:, :), tau(:)
+      integer desca(9), descc(9)
+      complex(kind=4), allocatable:: WORK(:)
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      call pcunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, TEMP, lwork, info)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call pcunmqr(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, WORK, lwork, info)
+
+      deallocate (WORK)
+      if (present(flop)) flop = flops_zunmqr(side, m, n, k)
+   end subroutine pcunmqrf90
+
+
+
    subroutine pgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
       implicit none
       integer M, N, ia, ja
@@ -1396,10 +2443,14 @@ contains
       integer desca(9)
       real(kind=8), optional::flop
 
-#if DAT==1
-            call pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
-#else
-            call pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+#if DAT==0
+      call pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==1
+      call pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==2
+      call pcgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==3
+      call psgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
 #endif
 
    end subroutine pgeqrff90
@@ -1408,7 +2459,7 @@ contains
       implicit none
 
       integer M, N, ia, ja
-      DT Matrix(:, :), tau(:)
+      complex(kind=8):: Matrix(:, :), tau(:)
       integer rank
       integer desca(9)
       integer LWORK, INFO, ierr
@@ -1428,11 +2479,36 @@ contains
       if (present(flop)) flop = flops_zgeqpfmod(m, n, min(m, n))
    end subroutine pzgeqrff90
 
+   subroutine pcgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+
+      integer M, N, ia, ja
+      complex(kind=4):: Matrix(:, :), tau(:)
+      integer rank
+      integer desca(9)
+      integer LWORK, INFO, ierr
+      complex(kind=4):: TEMP(1)
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      call PCGEQRF(M, N, Matrix, ia, ja, desca, tau, TEMP, lwork, info)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call PCGEQRF(M, N, Matrix, ia, ja, desca, tau, WORK, lwork, info)
+
+      deallocate (WORK)
+
+      if (present(flop)) flop = flops_zgeqpfmod(m, n, min(m, n))
+   end subroutine pcgeqrff90
+
+
    subroutine pdgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
       implicit none
 
       integer M, N, ia, ja
-      DT Matrix(:, :), tau(:)
+      real(kind=8):: Matrix(:, :), tau(:)
       integer rank
       integer desca(9)
       integer LWORK, INFO, ierr
@@ -1452,6 +2528,31 @@ contains
       if (present(flop)) flop = flops_dgeqpfmod(m, n, min(m, n))
    end subroutine pdgeqrff90
 
+   subroutine psgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+
+      integer M, N, ia, ja
+      real(kind=4):: Matrix(:, :), tau(:)
+      integer rank
+      integer desca(9)
+      integer LWORK, INFO, ierr
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable:: WORK(:)
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      call PSGEQRF(M, N, Matrix, 1, 1, desca, tau, TEMP, lwork, info)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call PSGEQRF(M, N, Matrix, 1, 1, desca, tau, WORK, lwork, info)
+
+      deallocate (WORK)
+
+      if (present(flop)) flop = flops_dgeqpfmod(m, n, min(m, n))
+   end subroutine psgeqrff90
+
+
    subroutine pgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
       implicit none
       integer M, N, ia, ja
@@ -1462,11 +2563,17 @@ contains
       real(kind=8)::rtol, atol
       real(kind=8), optional::flop
 
-#if DAT==1
-            call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
-#else
-            call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
+#if DAT==0
+      call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
+#elif DAT==1
+      call pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
+#elif DAT==2
+      call pcgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, real(rtol), real(atol), flop)
+#elif DAT==3
+      call psgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, real(rtol), real(atol), flop)
 #endif
+
+
    end subroutine pgeqpfmodf90
 
    subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
@@ -1501,6 +2608,39 @@ contains
       if (present(flop)) flop = flops_zgeqpfmod(m, n, rank)
    end subroutine pzgeqpfmodf90
 
+   subroutine pcgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
+      implicit none
+      integer M, N, ia, ja
+      complex(kind=4) Matrix(:, :), tau(:)
+      integer ipiv(:), jpiv(:), JPERM(:)
+      integer rank
+      integer desca(9)
+      real(kind=4)::rtol, atol
+      integer LWORK, LRWORK, INFO, ierr
+      complex(kind=4):: TEMP(1)
+      real(kind=4), allocatable::RWORK(:)
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=4):: RTEMP(1)
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      LRWORK = -1
+      call PCGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, RTEMP, lrwork, info, JPERM, jpiv, rank, rtol, atol)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      lrwork = NINT(dble(RTEMP(1)*2.001 + 1))
+      allocate (RWORK(lrwork))
+      RWORK = 0
+      call PCGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, RWORK, lrwork, info, JPERM, jpiv, rank, rtol, atol)
+
+      deallocate (WORK)
+      deallocate (RWORK)
+
+      if (present(flop)) flop = flops_zgeqpfmod(m, n, rank)
+   end subroutine pcgeqpfmodf90
+
+
    subroutine pdgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
       implicit none
       integer M, N, ia, ja
@@ -1527,6 +2667,33 @@ contains
 
    end subroutine pdgeqpfmodf90
 
+   subroutine psgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
+      implicit none
+      integer M, N, ia, ja
+      real(kind=4) Matrix(:, :), tau(:)
+      integer ipiv(:), jpiv(:), JPERM(:)
+      integer rank
+      integer desca(9)
+      real(kind=4)::rtol, atol
+      integer LWORK, INFO, ierr
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+      LWORK = -1
+
+      call PSGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, TEMP, lwork, info, JPERM, jpiv, rank, rtol, atol)
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call PSGEQPFmod(M, N, Matrix, 1, 1, desca, ipiv, tau, WORK, lwork, info, JPERM, jpiv, rank, rtol, atol)
+
+      deallocate (WORK)
+      if (present(flop)) flop = flops_dgeqpfmod(m, n, rank)
+
+   end subroutine psgeqpfmodf90
+
+
    subroutine pgemr2df90(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
       implicit none
       integer M, N, ia, ja, ib, jb
@@ -1534,11 +2701,16 @@ contains
       integer desca(9), descb(9)
       integer ictxt
 
-#if DAT==1
-            call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
-#else
-            call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+#if DAT==0
+      call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+#elif DAT==1
+      call pdgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+#elif DAT==2
+      call pcgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
+#elif DAT==3
+      call psgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 #endif
+
    end subroutine pgemr2df90
 
    subroutine pgemmf90(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc, flop)
@@ -1548,13 +2720,21 @@ contains
       DT alpha, beta, a(:, :), b(:, :), c(:, :)
       integer desca(9), descb(9), descc(9)
       real(kind=8), optional::flop
-#if DAT==1
-                     call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-                     if (present(flop)) flop = flops_gemm(m, n, k)
-#else
-                     call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
-                     if (present(flop)) flop = flops_gemm(m, n, k)
+
+#if DAT==0
+      call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+      if (present(flop)) flop = flops_gemm(m, n, k)
+#elif DAT==1
+      call pdgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+      if (present(flop)) flop = flops_gemm(m, n, k)
+#elif DAT==2
+      call pcgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+      if (present(flop)) flop = flops_gemm(m, n, k)
+#elif DAT==3
+      call psgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
+      if (present(flop)) flop = flops_gemm(m, n, k)
 #endif
+
    end subroutine pgemmf90
 
    subroutine ptrsmf90(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb, flop)
@@ -1565,13 +2745,20 @@ contains
       DT a(:, :), b(:, :), alpha
       real(kind=8), optional::flop
 
-#if DAT==1
-               call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
-               if (present(flop)) flop = flops_dtrsm(side, m, n)
-#else
-               call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
-               if (present(flop)) flop = flops_ztrsm(side, m, n)
+#if DAT==0
+      call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+      if (present(flop)) flop = flops_ztrsm(side, m, n)
+#elif DAT==1
+      call pdtrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+      if (present(flop)) flop = flops_dtrsm(side, m, n)
+#elif DAT==2
+      call pctrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+      if (present(flop)) flop = flops_ztrsm(side, m, n)
+#elif DAT==3
+      call pstrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
+      if (present(flop)) flop = flops_dtrsm(side, m, n)
 #endif
+
    end subroutine ptrsmf90
 
    subroutine pgetrff90(m, n, a, ia, ja, desca, ipiv, info, flop)
@@ -1583,13 +2770,20 @@ contains
       integer info
       real(kind=8), optional::flop
 
-#if DAT==1
-         call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
-         if (present(flop)) flop = flops_dgetrf(m, n)
-#else
-         call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)
-         if (present(flop)) flop = flops_zgetrf(m, n)
+#if DAT==0
+      call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+#elif DAT==1
+      call pdgetrf(m, n, a, ia, ja, desca, ipiv, info)
+      if (present(flop)) flop = flops_dgetrf(m, n)
+#elif DAT==2
+      call pcgetrf(m, n, a, ia, ja, desca, ipiv, info)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+#elif DAT==3
+      call psgetrf(m, n, a, ia, ja, desca, ipiv, info)
+      if (present(flop)) flop = flops_dgetrf(m, n)
 #endif
+
    end subroutine pgetrff90
 
    subroutine pgetrif90(n, a, ia, ja, desca, ipiv, flop)
@@ -1600,11 +2794,16 @@ contains
       integer ipiv(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-         call pdgetrif90(n, a, ia, ja, desca, ipiv, flop)
-#else
-         call pzgetrif90(n, a, ia, ja, desca, ipiv, flop)
+#if DAT==0
+      call pzgetrif90(n, a, ia, ja, desca, ipiv, flop)
+#elif DAT==1
+      call pdgetrif90(n, a, ia, ja, desca, ipiv, flop)
+#elif DAT==2
+      call pcgetrif90(n, a, ia, ja, desca, ipiv, flop)
+#elif DAT==3
+      call psgetrif90(n, a, ia, ja, desca, ipiv, flop)
 #endif
+
 
    end subroutine pgetrif90
 
@@ -1637,6 +2836,36 @@ contains
 
    end subroutine pdgetrif90
 
+   subroutine psgetrif90(n, a, ia, ja, desca, ipiv, flop)
+      implicit none
+      integer n, ia, ja
+      real(kind=4):: a(:, :)
+      real(kind=4):: TEMP(1)
+      integer desca(9)
+      integer ipiv(:)
+      integer info
+      integer TEMPI(1)
+      integer lwork, liwork
+      integer, allocatable :: iwork(:)
+      real(kind=4), allocatable:: work(:)
+      real(kind=8), optional::flop
+
+      call psgetri(n, a, 1, 1, desca, ipiv, TEMP, -1, TEMPI, -1, info)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (work(lwork))
+      work = 0
+      liwork = TEMPI(1)
+      allocate (iwork(liwork))
+      iwork = 0
+      call psgetri(n, a, 1, 1, desca, ipiv, work, lwork, iwork, liwork, info)
+      deallocate (iwork)
+      deallocate (work)
+
+      if (present(flop)) flop = flops_dgetri(n)
+
+   end subroutine psgetrif90
+
+
    subroutine pzgetrif90(n, a, ia, ja, desca, ipiv, flop)
       implicit none
       integer n, ia, ja
@@ -1667,6 +2896,37 @@ contains
 
    end subroutine pzgetrif90
 
+
+   subroutine pcgetrif90(n, a, ia, ja, desca, ipiv, flop)
+      implicit none
+      integer n, ia, ja
+      complex(kind=4):: a(:, :)
+      complex(kind=4):: TEMP(1)
+      integer desca(9)
+      integer ipiv(:)
+      integer info
+      integer TEMPI(1)
+      integer lwork, liwork
+      integer, allocatable :: iwork(:)
+      complex(kind=4), allocatable:: work(:)
+      real(kind=8), optional::flop
+
+      call pcgetri(n, a, 1, 1, desca, ipiv, TEMP, -1, TEMPI, -1, info)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (work(lwork))
+      work = 0
+      liwork = TEMPI(1)
+      allocate (iwork(liwork))
+      iwork = 0
+      call pcgetri(n, a, 1, 1, desca, ipiv, work, lwork, iwork, liwork, info)
+
+      deallocate (iwork)
+      deallocate (work)
+
+      if (present(flop)) flop = flops_zgetri(n)
+
+   end subroutine pcgetrif90
+
    subroutine pgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
       implicit none
 
@@ -1674,14 +2934,20 @@ contains
       integer m, n, ia, ja, iu, ju, ivt, jvt
       DT:: a(:, :), u(:, :), vt(:, :)
       integer desca(9), descu(9), descvt(9)
-      real(kind=8):: s(:)
+      DTR:: s(:)
       real(kind=8), optional::flop
 
-#if DAT==1
-               call pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
-#else
-               call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+#if DAT==0
+      call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+#elif DAT==1
+      call pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+#elif DAT==2
+      call pcgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+#elif DAT==3
+      call psgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
 #endif
+
+
    end subroutine pgesvdf90
 
    subroutine pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
@@ -1712,6 +2978,36 @@ contains
       if (present(flop)) flop = flops_dgesvd(m, n)
 
    end subroutine pdgesvdf90
+
+   subroutine psgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+      implicit none
+
+      character jobu, jobvt
+      integer m, n, ia, ja, iu, ju, ivt, jvt
+      real(kind=4):: a(:, :), u(:, :), vt(:, :)
+      integer desca(9), descu(9), descvt(9)
+      real(kind=4):: s(:)
+      real(kind=4):: TEMP(1)
+      integer LWORK, mnmax, mnmin
+      real(kind=4), allocatable:: WORK(:)
+      integer info
+      real(kind=8), optional::flop
+      mnmax = max(m, n)
+      mnmin = min(m, n)
+
+      lwork = -1
+      call psgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, info)
+
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call psgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, info)
+
+      deallocate (WORK)
+      if (present(flop)) flop = flops_dgesvd(m, n)
+
+   end subroutine psgesvdf90
+
 
    subroutine pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
       implicit none
@@ -1745,6 +3041,40 @@ contains
       if (present(flop)) flop = flops_zgesvd(m, n)
 
    end subroutine pzgesvdf90
+
+   subroutine pcgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
+      implicit none
+
+      character jobu, jobvt
+      integer m, n, ia, ja, iu, ju, ivt, jvt
+      complex(kind=4):: a(:, :), u(:, :), vt(:, :)
+      integer desca(9), descu(9), descvt(9)
+      real(kind=4):: s(:)
+      complex(kind=4):: TEMP(1)
+      integer LWORK, mnmax, mnmin
+      complex(kind=4), allocatable:: WORK(:)
+      real(kind=4), allocatable::RWORK(:)
+      integer info
+      real(kind=8), optional::flop
+
+      mnmax = max(m, n)
+      mnmin = min(m, n)
+
+      allocate (rwork(1 + 4*mnmax))
+      rwork = 0
+      lwork = -1
+      call pcgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, TEMP, lwork, rwork, info)
+
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call pcgesvd(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, WORK, lwork, rwork, info)
+
+      deallocate (WORK, rwork)
+      if (present(flop)) flop = flops_zgesvd(m, n)
+
+   end subroutine pcgesvdf90
+
 
    real(kind=8) function flops_zgesdd(m, n)
       implicit none
@@ -2006,6 +3336,10 @@ contains
 #if DAT==0
    flops_gemm = 6.*fmuls_gemm(m, n, k) + 2.*fadds_gemm(m, n, k)
 #elif DAT==1
+   flops_gemm = fmuls_gemm(m, n, k) + fadds_gemm(m, n, k)
+#elif DAT==2
+   flops_gemm = 6.*fmuls_gemm(m, n, k) + 2.*fadds_gemm(m, n, k)
+#elif DAT==3
    flops_gemm = fmuls_gemm(m, n, k) + fadds_gemm(m, n, k)
 #endif
 

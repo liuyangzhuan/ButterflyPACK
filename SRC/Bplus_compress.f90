@@ -1869,7 +1869,7 @@ contains
       type(butterfly_kerl) ButterflyP_old, ButterflyP
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer flag, tmpi, tmpj
       real(kind=8):: a, b, error
       real(kind=8):: maxvalue(1:20)
@@ -2441,7 +2441,7 @@ contains
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:), tau(:)
       integer, allocatable :: jpvt(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer flag, tmpi, tmpj
       real(kind=8):: a, b, error, flops, flops1, flop
       real(kind=8):: maxvalue(1:20)
@@ -3487,7 +3487,7 @@ endif
       integer:: cridx, info
       DT::tmp(1, 1)
       DT, allocatable:: UU(:, :), VV(:, :), matU(:, :), matV(:, :), matU1(:, :), matV1(:, :), matU2(:, :), matV2(:, :), matU1D(:, :), matV1D(:, :), Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Fullmat(:, :), QQ1(:, :), matU2D(:, :), matV2D(:, :)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, M1, N1, M2, N2, rank1, rank2, ierr
       integer::descsmatU(9), descsmatV(9), descsmatU1(9), descsmatV1(9), descsmatU2(9), descsmatV2(9), descUU(9), descVV(9), descsmatU1c(9), descsmatU2c(9), descsmatV1c(9), descsmatV2c(9), descButterflyV(9), descButterflyU(9), descButterU1D(9), descButterV1D(9), descVin(9), descVout(9), descVinter(9), descFull(9)
       integer dims(6), dims_tmp(6) ! M1,N1,rank1,M2,N2,rank2
@@ -3940,7 +3940,7 @@ endif
       integer pgno, pgno1, pgno2
       integer:: cridx, info
       DT, allocatable:: UU(:,:),VV(:,:),matU(:, :), matV(:, :), matU1(:, :), matV1(:, :), matU2(:, :), matV2(:, :), tmp(:, :), matU1D(:, :), matV1D(:, :), Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Fullmat(:, :), QQ1(:, :), matU2D(:, :), matV2D(:, :)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, M1, N1, M2, N2, rank1, rank2, ierr
       integer::descsmatU(9), descsmatV(9), descsmatU1(9), descsmatV1(9), descsmatU2(9), descsmatV2(9), descUU(9), descVV(9), descsmatU1c(9), descsmatU2c(9), descsmatV1c(9), descsmatV2c(9), descButterflyV(9), descButterflyU(9), descButterU1D(9), descButterV1D(9), descVin(9), descVout(9), descVinter(9), descFull(9)
       integer dims(6), dims_tmp(6) ! M1,N1,rank1,M2,N2,rank2
@@ -4328,7 +4328,7 @@ endif
       integer, allocatable:: select_column(:), select_row(:)
       DT,allocatable::matU(:, :), matV(:, :)
       DT::matr(1, rankmax_c), matc(rankmax_r, 1)
-      real(kind=8),allocatable::Singular(:)
+      DTR,allocatable::Singular(:)
 
       DT, allocatable:: row_R(:), column_R(:), value_UV(:)
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:), norm_UVavrbynorm_Z(:)
@@ -4336,7 +4336,7 @@ endif
       type(kernelquant)::ker
       type(proctree)::ptree
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
       integer::mrange(rankmax_r), nrange(rankmax_c)
       type(Hstat)::stats
       type(Hoption)::option
@@ -4850,7 +4850,7 @@ endif
       type(kernelquant)::ker
       type(proctree)::ptree
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :), UUu(:, :), UUv(:, :), VVu(:, :), VVv(:, :)
-      real(kind=8), allocatable :: Singularsml(:), Singularuv(:)
+      DTR, allocatable :: Singularsml(:), Singularuv(:)
       integer::mrange(M), nrange(N)
       type(Hstat)::stats
       type(Hoption)::option
@@ -5438,7 +5438,7 @@ endif
       integer rank, rankup, ranknew, row, column, rankmax, N, M, rmax, rmax0
       DT, allocatable:: row_R(:, :), row_Rtmp(:, :), column_R(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
       DT,allocatable::matU(:, :), matV(:, :)
-      real(kind=8),allocatable::Singular(:)
+      DTR,allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
       real(kind=8):: normA, normUV, flop
       integer itr, itrmax, r_est, Nqr, bsize
@@ -5755,7 +5755,7 @@ endif
       integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M, rmax, rmax0
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
       DT,allocatable::matU(:, :), matV(:, :)
-      real(kind=8),allocatable::Singular(:)
+      DTR,allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_knn(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
       real(kind=8):: normA, normUV, flop, maxvalue
       integer itr, itrmax, r_est, r_est_knn_r, r_est_knn, r_est_knn_c, r_est_tmp, Nqr, bsize
@@ -6220,7 +6220,7 @@ endif
       integer rank, rank0, rankup, ranknew, row, column, rankmax, N, M
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), fullmat(:, :), fullmat1(:, :)
       DT, allocatable:: matU(:,:), matV(:,:)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       DT, allocatable :: core(:, :), core_knn(:, :), core_inv(:, :), tau(:), matUtmp(:, :), matVtmp(:, :)
       real(kind=8):: normA, normUV, flop, maxvalue,flops
       integer itr, itrmax, r_est, r_est_knn_r, r_est_knn, r_est_knn_c, r_est_tmp, Nqr, bsize
@@ -6454,7 +6454,7 @@ endif
       DT inner_U, inner_V, ctemp
       real(kind=8) inner_UV, flop
       DT, allocatable::matU(:, :), matV(:, :), matV_tmp(:, :), UU(:, :), VV(:, :), MatrixSubselection(:, :)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       DT, allocatable:: row_R(:), column_R(:)
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:)
       type(mesh)::msh
@@ -6463,7 +6463,7 @@ endif
       type(Hstat)::stats
 
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :), matU2D(:, :), matV2D(:, :), matU1D(:, :), matV1D(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
       type(proctree)::ptree
       type(Hoption)::option
       integer ctxt, myrow, mycol, iproc, jproc, myi, myj, mnmax
@@ -6912,7 +6912,7 @@ endif
       type(butterfly_kerl) ButterflyP_old, ButterflyP, ButterflyMiddle
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       type(matrixblock)::blocks
       real(kind=8):: SVD_tolerance, flops, flop
       type(Hoption)::option
@@ -7031,7 +7031,7 @@ endif
       type(butterfly_kerl) ButterflyP_old, ButterflyP
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       type(matrixblock)::blocks
       real(kind=8):: SVD_tolerance
       type(Hoption)::option
@@ -7152,7 +7152,7 @@ endif
       type(butterfly_kerl) ButterflyP_old, ButterflyP
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       type(matrixblock)::blocks
       real(kind=8):: SVD_tolerance,flops,flop
       type(Hoption)::option
@@ -7262,7 +7262,7 @@ endif
       type(butterfly_kerl) ButterflyP_old, ButterflyP
       DT, allocatable :: QQ(:, :), RR(:, :), UU(:, :), VV(:, :), mat_tmp(:, :), matU(:, :), matV(:, :)
       DT, allocatable :: tau_Q(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       type(matrixblock)::blocks
       real(kind=8):: SVD_tolerance
       type(Hoption)::option

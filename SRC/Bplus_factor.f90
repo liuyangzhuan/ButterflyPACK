@@ -195,7 +195,7 @@ contains
 
       ! type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
       ! DT,allocatable::vec_old(:,:),vec_new(:,:),matrixtemp1(:,:),myA(:,:),BUold(:,:),BVold(:,:),CUold(:,:),CVold(:,:),BU(:,:),BV(:,:),CU(:,:),CV(:,:),BVCU(:,:),BUBVCU(:,:)
 
@@ -280,7 +280,7 @@ contains
       DT ctemp, TEMP(1)
       type(matrixblock)::block_o
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), matrixtemp2(:, :), matrixtemp3(:, :), UU(:, :), VV(:, :), matrix_small(:, :), matrix_small1(:, :), vin(:, :), vout1(:, :), vout2(:, :), vout3(:, :), matU(:, :), matU2D(:, :), matU2D1(:, :), matV2D(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer, allocatable :: ipiv(:), iwork(:)
       type(proctree)::ptree
       integer pgno, ctxt, ctxt_head, myrow, mycol, myArows, myAcols, iproc, myi, jproc, myj, info
@@ -445,7 +445,7 @@ contains
 
       type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_end_diag, idx_start_loc, idx_end_loc
       DT, allocatable::vec_old(:, :), vec_new(:, :)
 
@@ -548,7 +548,7 @@ contains
       DT, allocatable:: matU(:, :), matV(:, :), matU2D(:, :), matV2D(:, :), matU2Dnew(:, :), matV2Dnew(:, :)
       integer::descsMatU2D(9), descsMatV2D(9), descsMatSml(9), descsMatSmlRR1(9), descsMatSmlRR2(9), descsMatU2Dnew(9), descsMatV2Dnew(9), descsUUSml(9), descsVVSml(9), descsUU_u(9), descsVV_u(9), descsUU_v(9), descsVV_v(9)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), UUu(:, :), UUv(:, :), VVu(:, :), VVv(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:), Singularuv(:)
+      DTR, allocatable :: Singularsml(:), Singularuv(:)
       real(kind=8)::flop
       integer ierr, mn1, mn2, jj, ranknew
 
@@ -1183,7 +1183,7 @@ contains
       real(kind=8):: n1, n2, memory_temp, flop
       type(Hoption)::option
       type(schulz_operand)::schulz_op
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       DT, allocatable::UU(:, :), VV(:, :), RandVectIn(:, :), RandVectOut(:, :), matrixtmp(:, :), matrixtmp1(:, :)
       type(proctree)::ptree
       type(Hstat)::stats
@@ -1477,7 +1477,7 @@ contains
       integer pgno
       integer:: cridx, info
       DT, allocatable:: UU(:, :), UU1(:, :), UU2(:, :), VV(:, :), VV1(:, :), VV2(:, :), SS1(:, :), TT1(:, :), matU(:, :), matV(:, :), matU1(:, :), matV1(:, :), matU2(:, :), matV2(:, :), tmp(:, :), matU1D(:, :), matV1D(:, :), Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Fullmat(:, :), QQ1(:, :), matU2D(:, :), matV2D(:, :)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, M1, N1, M2, N2, rank1, rank2, ierr
       integer::descsmatU(9), descsmatV(9), descsmatU1(9), descsmatV1(9), descsmatU2(9), descsmatV2(9), descUU(9), descVV(9), descsmatU1c(9), descsmatU2c(9), descsmatV1c(9), descsmatV2c(9), descButterflyV(9), descButterflyU(9), descButterU1D(9), descButterV1D(9), descVin(9), descVout(9), descVinter(9), descFull(9)
       integer dims(6), dims_tmp(6) ! M1,N1,rank1,M2,N2,rank2
@@ -1670,7 +1670,7 @@ contains
       type(Hoption)::option
       type(mesh)::msh
       integer pgno_i, pgno_o, pgno
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       DT, allocatable::UU(:, :), VV(:, :)
       integer idx_r, inc_r, nr, idx_c, inc_c, nc, idx, inc, index_i, index_j, mn, nblk_loc, num_blk, rank, row_group, col_group, level_o
       integer ierr
