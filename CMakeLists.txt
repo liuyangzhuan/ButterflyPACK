@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 # Project version numbers
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "2")
-set(VERSION_MINOR "0")
+set(VERSION_MINOR "1")
 set(VERSION_BugFix "0")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
@@ -426,6 +426,8 @@ endif()
 
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
+add_subdirectory(SRC_SINGLE)
+add_subdirectory(SRC_COMPLEX)
 add_subdirectory(EXAMPLE)
 
 if(enable_doc)

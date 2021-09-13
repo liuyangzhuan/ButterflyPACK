@@ -711,7 +711,6 @@ contains
 
       ! type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
 
       DT, allocatable::vec_old(:, :), vec_new(:, :)
@@ -806,7 +805,6 @@ contains
 
       ! type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
 
       DT, allocatable::vec_old(:, :), vec_new(:, :)
@@ -857,7 +855,6 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
 
-      real(kind=8), allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
 
       DT, allocatable::vec_old(:, :), vec_new(:, :)
@@ -937,7 +934,6 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
 
-      real(kind=8), allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
 
       DT, allocatable::vec_old(:, :), vec_new(:, :)
@@ -1033,7 +1029,6 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
 
-      real(kind=8), allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc, Nmax, Nmsg
       type(matrixblock), pointer :: blocks_i, blocks_j
       DT, allocatable::vec_old(:, :), vec_new(:, :), vin_tmp(:, :), vout_tmp(:, :), vec_buffer(:, :)

@@ -183,9 +183,9 @@ contains
       integer rank, ranknew, ldaU, ldaV
 
       DT::matU(:, :), matV(:, :)
-      real(kind=8)::Singular(:)
+      DTR::Singular(:)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
       integer, allocatable :: jpvt1(:), jpvt2(:)
 
       if (present(Flops)) Flops = 0d0
@@ -415,11 +415,11 @@ contains
       integer, allocatable:: select_column(:), select_row(:)
       DT::matU(rankmax_r, rmax), matV(rmax, rankmax_c),matU0(rankmax_r, rmax), matV0(rmax, rankmax_c)
       DT::matr(1, rankmax_c), matc(rankmax_r, 1)
-      real(kind=8)::Singular(rmax)
+      DTR::Singular(rmax)
       DT, allocatable:: row_R(:), column_R(:), value_UV(:)
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:), norm_UVavrbynorm_Z(:)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
       real(kind=8),optional::flops
 
       if (present(flops)) flops=0
@@ -748,7 +748,7 @@ contains
       DT::ctemp, inner_V, inner_U
       DT::matU(:, :), matV(:, :)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable :: Singularsml(:), Singular(:)
+      DTR, allocatable :: Singularsml(:), Singular(:)
       integer, allocatable :: jpvt(:), jpvt1(:), jpvt2(:)
 
       if (present(Flops)) Flops = 0
@@ -805,7 +805,7 @@ contains
 
       DT::matU(:, :), matV(:, :)
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable :: Singularsml(:), Singular(:)
+      DTR, allocatable :: Singularsml(:), Singular(:)
       integer, allocatable :: jpvt(:), jpvt1(:), jpvt2(:)
 
       if (present(Flops)) Flops = 0
@@ -993,7 +993,7 @@ contains
       DT::mat(:, :)
       real(kind=8) eps
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:), mat1(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer, allocatable :: jpvt(:)
       real(kind=8), optional::flop
 
@@ -1092,7 +1092,7 @@ contains
       real(kind=8) eps
       logical::small
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:), mat1D(:, :), mat2D(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       real(kind=8) :: flop,norm
       integer, allocatable :: jpvt(:)
       integer, allocatable :: ipiv(:), jpiv(:), JPERM(:)
@@ -1208,7 +1208,7 @@ contains
       DT::mat(:, :)
       real(kind=8) eps
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer, allocatable :: jpvt(:)
       real(kind=8), optional:: Flops
       real(kind=8), optional:: norm_tol
@@ -1273,7 +1273,7 @@ contains
       DT, allocatable::mat1(:, :), mat2(:, :)
       real(kind=8) tolerance, Smax
       DT, allocatable :: UU(:, :), VV(:, :), matrix_U(:, :), matrix_V(:, :), U_new(:, :), V_new(:, :), U_new1(:, :), V_new1(:, :), test_in(:, :), test_out1(:, :), test_out2(:, :), test_out3(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer, allocatable:: select_row(:), select_column(:)
       DT, allocatable::MatrixSubselection(:, :)
 
@@ -1501,7 +1501,6 @@ contains
       DT val
 
 #if DAT==0
-
          ! Uniform distribution
          call random_number(a)
          call random_number(b)
@@ -1519,7 +1518,7 @@ contains
          ! call random_number(a)
          ! seed = a*10000000
          ! val =  c8_normal_01 ( seed )
-#else
+#elif DAT==1
          ! Uniform distribution
          call random_number(a)
          val = a*2d0 - 1d0
@@ -1529,6 +1528,33 @@ contains
          ! seed = a*10000000
          ! val =  dble(c8_normal_01 ( seed ))
 
+#elif DAT==2
+         ! Uniform distribution
+         call random_number(a)
+         call random_number(b)
+         call random_number(c)
+         call random_number(d)
+         if (c < 0.5d0) then
+            a = -a
+         endif
+         if (d < 0.5d0) then
+            b = -b
+         endif
+         val = a + junit*b
+
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  c8_normal_01 ( seed )
+#elif DAT==3
+         ! Uniform distribution
+         call random_number(a)
+         val = a*2d0 - 1d0
+
+         ! ! Normal distribution
+         ! call random_number(a)
+         ! seed = a*10000000
+         ! val =  dble(c8_normal_01 ( seed ))
 #endif
 
       return
@@ -1876,7 +1902,7 @@ contains
 
       integer m, n, k, mn_min
       DT:: A(m, n), x(n, k), b(m, k)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       DT, allocatable:: Atmp(:, :), xtmp(:, :), tau(:), A_tmp(:, :), UU(:, :), VV(:, :), UU_h(:, :), VV_h(:, :), VV_h2(:, :), z_arb(:, :), x_arb(:, :), matrixtemp(:, :), A_tmp_rank(:, :), xtmp_rank(:, :), xtmp_rank3(:, :), A_tmp_rank2(:, :), xtmp_rank2(:, :)
       real(kind=8):: eps_r
       integer ii, jj, i, j, flag0, rank
@@ -2075,7 +2101,7 @@ contains
 
       integer m, n, mn_min
       DT:: A(:, :), A_inv(:, :)
-      real(kind=8), allocatable::Singular(:)
+      DTR, allocatable::Singular(:)
       DT, allocatable:: Atmp(:, :), tau(:), UU(:, :), VV(:, :), UU_h(:, :), VV_h(:, :), matrixtemp(:, :), A_tmp_rank(:, :), xtmp_rank(:, :), xtmp_rank3(:, :), A_tmp_rank2(:, :), xtmp_rank2(:, :)
       real(kind=8):: eps_r
       integer ii, jj, i, j, flag0, rank
@@ -2165,7 +2191,7 @@ contains
 
       integer:: nprow, npcol, myrow, mycol, myArows, myAcols, info
       integer::descsMatA(9), descsMatAinv(9), descsMatU(9), descsMatV(9)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
 
       if (present(Flops))Flops=0
 
@@ -2243,12 +2269,12 @@ contains
       DT::matU(rankmax_r, rmax), matV(rmax, rankmax_c), matRcol(rankmax_c, rmax), matZRcol(rankmax_r, rmax), matRrow(rankmax_r, rmax), matZcRrow(rankmax_c, rmax)
       DT, allocatable::matZRcol1(:, :), matZcRrow1(:, :), tau(:)
       DT, allocatable::QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), RrowcZRcol(:, :)
-      real(kind=8)::Singular(rmax)
+      DTR::Singular(rmax)
       DT, allocatable:: row_R(:), column_R(:), matM(:, :), matrixtemp(:, :)
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:)
 
       DT, allocatable :: RrowcQ1(:, :), RrowcQ1inv(:, :), Q2cRcol(:, :), Q2cRcolinv(:, :), QQ2tmp(:, :), RR2tmp(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
       integer, allocatable:: jpvt(:)
       real(kind=8), optional::Flops
       real(kind=8)::flop
@@ -2509,7 +2535,7 @@ contains
       integer m, n, k, mn_min, ktmp
       DT:: A(:, :)
       real(kind=8):: c
-      real(kind=8), allocatable::Singular(:), Ar(:, :), Ai(:, :)
+      DTR, allocatable::Singular(:), Ar(:, :), Ai(:, :)
       complex(kind=8):: ctemp
       complex(kind=8), allocatable:: UU(:, :), VV(:, :)
       integer ii, jj, kk, i, j, flag0, rank
@@ -2531,7 +2557,6 @@ contains
 #ifdef USEVSL
 
 #if DAT==0
-
          allocate (Ar(m, n))
          allocate (Ai(m, n))
          brng = VSL_BRNG_MCG31
@@ -2550,8 +2575,39 @@ contains
          A = Ar + junit*Ai
          deallocate (Ar)
          deallocate (Ai)
-#else
-
+#elif DAT==1
+         allocate (Ar(m, n))
+         brng = VSL_BRNG_MCG31
+         method = VSL_RNG_METHOD_UNIFORM_STD
+         call random_number(c)
+         seedd = NINT(1000*c)
+         ierror = vslnewstream(stream(1), brng, seedd)
+         call random_number(c)
+         seedd = NINT(1000*c)
+         ierror = vsrnguniform(method, stream(1), M*N, Ar, -1d0, 1d0)
+         ierror = vsldeletestream(stream(1))
+         A = Ar
+         deallocate (Ar)
+#elif DAT==2
+         allocate (Ar(m, n))
+         allocate (Ai(m, n))
+         brng = VSL_BRNG_MCG31
+         method = VSL_RNG_METHOD_UNIFORM_STD
+         call random_number(c)
+         seedd = NINT(1000*c)
+         ierror = vslnewstream(stream(1), brng, seedd)
+         call random_number(c)
+         seedd = NINT(1000*c)
+         ierror = vslnewstream(stream(2), brng, seedd)
+         ierror = vsrnguniform(method, stream(1), M*N, Ar, -1d0, 1d0)
+         ierror = vsrnguniform(method, stream(2), M*N, Ai, -1d0, 1d0)
+         ! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0)
+         ierror = vsldeletestream(stream(1))
+         ierror = vsldeletestream(stream(2))
+         A = Ar + junit*Ai
+         deallocate (Ar)
+         deallocate (Ai)
+#elif DAT==3
          allocate (Ar(m, n))
          brng = VSL_BRNG_MCG31
          method = VSL_RNG_METHOD_UNIFORM_STD
@@ -2564,7 +2620,6 @@ contains
          ierror = vsldeletestream(stream(1))
          A = Ar
          deallocate (Ar)
-
 #endif
 #else
       do ii = 1, m
@@ -2694,7 +2749,7 @@ contains
       real(kind=8), allocatable:: norm_row_R(:), norm_column_R(:)
 
       DT, allocatable :: QQ1(:, :), RR1(:, :), QQ2(:, :), RR2(:, :), QQ2tmp(:, :), RR2tmp(:, :), UUsml(:, :), VVsml(:, :), tau_Q(:), mattemp(:, :), matU1(:, :), matV1(:, :)
-      real(kind=8), allocatable :: Singularsml(:)
+      DTR, allocatable :: Singularsml(:)
 
       rankmax_min = min(rankmax_r, rankmax_c)
       norm_Z = 0
@@ -2931,7 +2986,7 @@ contains
       real(kind=8):: tolerance
       DT::mat(mm, nn), UU(mm, mn), VV(mn, nn)
       DT, allocatable::mat0(:, :), UUt(:, :), VVt(:, :), tau(:), RR1(:, :)
-      real(kind=8):: Singular(mn)
+      DTR:: Singular(mn)
       integer::i, j, flag
       real(kind=8), optional::flops
       real(kind=8)::flop
@@ -2996,7 +3051,7 @@ contains
       real(kind=8):: tolerance
       DT::mat(mm, nn), UU(mm, mn), VV(mn, nn)
       DT, allocatable::mat0(:, :)
-      real(kind=8):: Singular(mn)
+      DTR:: Singular(mn)
       integer::i, flag
       real(kind=8), optional::flop
 
@@ -3036,7 +3091,7 @@ contains
          real(kind=8):: tolerance
          DT::mat(mm, nn), UU(mm, rmax), VV(rmax, nn), UU1(mm, mn), VV1(mn, nn)
          DT, allocatable::mats(:, :),UUs(:,:),VVs(:,:)
-         real(kind=8):: Singular(rmax)
+         DTR:: Singular(rmax)
          integer::i, flag
          real(kind=8), optional::flop
          real(kind=8)::flop0
@@ -3073,7 +3128,7 @@ contains
       real(kind=8):: tolerance, tolerance_abs
       DT::mat(:, :), UU(:, :), VV(:, :)
       DT, allocatable::mat0(:, :)
-      real(kind=8):: Singular(:)
+      DTR:: Singular(:)
       integer::i, flag
       real(kind=8), optional::flop
       integer::descMat(9), descUU(9), descVV(9)
