@@ -1,12 +1,23 @@
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX)
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_SINGLE)
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_COMPLEX)
 include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX)
+include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_SINGLE)
+include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_COMPLEX)
 # Libs linked to all of the examples
 set(all_link_libs_z zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
 set(all_link_libs_d dbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_c cbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_s sbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 
+########################################### single complex Fortran drivers
+
+set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
+add_executable(ie3d_sp ${FCEXM1})
+target_link_libraries(ie3d_sp ${all_link_libs_c})
 
 ########################################### double complex Fortran drivers
 
@@ -18,7 +29,6 @@ set(FZEXM2 EMCURV_Eigen_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2deigen ${FZEXM2})
 target_link_libraries(ie2deigen ${all_link_libs_z})
 add_dependencies(ie2deigen ie2d)
-
 
 set(FZEXM3 EMSURF_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3d ${FZEXM3})

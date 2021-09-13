@@ -1203,7 +1203,7 @@ contains
 
       real(kind=4)::rtol, atol
       integer LWORK, INFO, rank
-      complex(kind=8):: TEMP(1)
+      complex(kind=4):: TEMP(1)
       real(kind=4), allocatable::RWORK(:)
 
       complex(kind=4), allocatable:: WORK(:)
