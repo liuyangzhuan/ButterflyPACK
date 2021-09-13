@@ -166,7 +166,7 @@ contains
       DT ctemp
       type(matrixblock)::block, block_rand
       DT, allocatable::matrixtemp1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer rankmax
       type(mesh)::msh
       type(Hoption)::option
@@ -380,7 +380,7 @@ contains
       DT ctemp
       type(matrixblock)::block, block_rand
       DT, allocatable::matrixtemp1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer rankmax,pgno_sub
       type(mesh)::msh
       type(Hoption)::option
@@ -610,7 +610,7 @@ contains
       type(Hstat)::stats
       DT:: RandVectIn(:, :), RandVectOut(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: matrixtemp(:, :), vectortemp(:), vectorstemp(:, :), tau(:), vectorstemp1(:, :), vectorstemp2(:, :)
       DT, allocatable :: matrixtemp1(:, :), matA(:, :), matB(:, :), matC(:, :), matinv(:, :), matinv1(:, :), matinv2(:, :)
       integer num_vect_sub, num_vect_subsub, nth, ind_r, noe, Ng, dimension_nn, nn1, nn2, ieo, level_butterfly
@@ -722,7 +722,7 @@ contains
       type(Hstat)::stats
       DT, allocatable::RandVectTmp(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: matrixtemp(:, :), vectortemp(:), vectorstemp(:, :), tau(:), vectorstemp1(:, :), vectorstemp2(:, :)
       DT, allocatable :: matrixtemp1(:, :), matA(:, :), matB(:, :), matC(:, :), matinv(:, :), matinv1(:, :), matinv2(:, :)
       integer nth, ind_r, noe, Ng, dimension_nn, nn1, nn2, ieo, level_butterfly, num_vect, pgno_sub_mine
@@ -879,7 +879,7 @@ contains
       type(Hstat)::stats
       DT:: RandVectIn(:, :), RandVectOut(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer, allocatable::M_p(:, :)
       DT, allocatable :: matrixtemp(:, :), vectortemp(:), vectorstemp(:, :), tau(:), vectorstemp1(:, :), vectorstemp2(:, :)
       DT, allocatable :: matrixtemp1(:, :), matA(:, :), matB(:, :), matC(:, :), matinv(:, :), matinv1(:, :), matinv2(:, :)
@@ -1017,7 +1017,7 @@ contains
       type(Hstat)::stats
       DT, allocatable::RandVectTmp(:, :)
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable :: matrixtemp(:, :), vectortemp(:), vectorstemp(:, :), tau(:), vectorstemp1(:, :), vectorstemp2(:, :)
       DT, allocatable :: matrixtemp1(:, :), matA(:, :), matB(:, :), matC(:, :), matinv(:, :), matinv1(:, :), matinv2(:, :)
       integer nth, ind_r, noe, Ng, dimension_nn, nn1, nn2, ieo, level_butterfly, num_vect, pgno_sub_mine
@@ -1262,7 +1262,7 @@ contains
       integer itermax, ntry
       real(kind=8):: n1, n2, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable::Vin(:, :), Vout1(:, :), Vout2(:, :), Vout3(:, :), Vout4(:, :), Vout(:, :), Vinter(:, :)
       DT::ctemp1, ctemp2
       DT, allocatable:: matin(:, :), matout(:, :), matsub_tmp(:, :)
@@ -1376,7 +1376,7 @@ contains
       integer itermax, ntry
       real(kind=8):: n1, n2, n3, n4, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       DT, allocatable::Vin(:, :), Vout1(:, :), Vout2(:, :), Vout3(:, :), Vout4(:, :), Vout(:, :), Vinter(:, :)
       DT::ctemp1, ctemp2
       DT, allocatable:: matin(:, :), matout(:, :), matsub_tmp(:, :)
@@ -1490,7 +1490,7 @@ contains
       DT::ctemp1, ctemp2
       integer num_vect, level_butterfly, rmax
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer mm, nn, q, qq, Nloc, pp
       DT, pointer :: matQ2D(:, :), matQcA_trans2D(:, :), matQUt2D(:, :), UU(:, :), VV(:, :)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -1565,7 +1565,7 @@ contains
       DT::matQ(:, :), matQcA_trans(:, :)
       integer num_vect, level_butterfly
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer q, qq, Nloc, pp
       DT, pointer :: matQ2D(:, :), matQcA_trans2D(:, :), matQUt2D(:, :), UU(:, :), VV(:, :)
       integer descQ2D(9), descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -1712,7 +1712,7 @@ contains
       DT::matQcA_trans(:, :)
       integer num_vect, level_butterfly
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
-      real(kind=8):: Singular(:)
+      DTR:: Singular(:)
       integer q, qq, Nloc, pp
       DT, pointer :: matQ2D(:, :), matQcA_trans2D(:, :), matQUt2D(:, :), UU(:, :), VV(:, :)
       integer descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -2859,7 +2859,7 @@ contains
 
       ! type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_end_diag, idx_start_loc, idx_end_loc, rank
       DT, allocatable::vec_old(:, :), vec_new(:, :), matrixtemp1(:, :), Vbuff(:, :), Vout_tmp(:, :), tmpU(:, :), tmpV(:, :)
 
@@ -3100,7 +3100,7 @@ contains
 
       ! type(vectorsblock), pointer :: random1, random2
 
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer idx_start_glo, N_diag, idx_start_diag, idx_end_diag, idx_start_loc, idx_end_loc, rank
       DT, allocatable::vec_old(:, :), vec_new(:, :), matrixtemp1(:, :), Vbuff(:, :), tmpU(:, :), tmpV(:, :), Vout_tmp(:,:)
 
@@ -5230,7 +5230,7 @@ contains
       type(matrixblock)::blocks
       type(matrixblock)::block_dummy
       DT, allocatable :: matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), matrix_small(:, :)
-      real(kind=8), allocatable :: Singular(:)
+      DTR, allocatable :: Singular(:)
       integer level_c, rowblock, Nactive
       integer, allocatable::boxindex(:)
       integer Chunksize, Nchunk, Nidx, idx_s, cc
@@ -5441,7 +5441,7 @@ contains
       real(kind=8) a, b, c, d
       DT ctemp
       DT, allocatable::matrixtemp1(:, :), UU(:, :), VV(:, :)
-      real(kind=8), allocatable:: Singular(:)
+      DTR, allocatable:: Singular(:)
       integer mn_min, index_i, index_j, blocks_idx
       type(matrixblock)::block
       type(blockplus)::Bplus, Bplus_randomized
