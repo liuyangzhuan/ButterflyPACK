@@ -1015,7 +1015,9 @@ contains
       ! n2 = OMP_get_wtime()
 
       if (converged == 0) then
-         write (*, *) 'Schulz Iteration does not converge, consider decreasing tol_Rdetect such that the randomized contruction in each iteration is accurate'
+         write (*, *) 'Schulz Iteration does not converge, consider:'
+         write (*, *) '  1: decrease tol_Rdetect such that the randomized contruction in each iteration is accurate'
+         write (*, *) '  2: decrease schulzsplitlevel such that initial guess is good enough'
          stop
       else
          ! write(*,*)'Schulz Iteration Time:',n2-n1
