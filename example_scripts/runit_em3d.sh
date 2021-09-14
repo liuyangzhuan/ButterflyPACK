@@ -1,9 +1,9 @@
 # module swap PrgEnv-intel/6.0.4 PrgEnv-gnu
-NTH=16
+NTH=4
 CORES_PER_NODE=32
 THREADS_PER_RANK=`expr $NTH \* 2`								 
 
-export EXEC=./EXAMPLE/ie3d
+export EXEC=./EXAMPLE/ie3d_sp
 export OMP_NUM_THREADS=$NTH
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
@@ -16,16 +16,17 @@ tol=1d-6
 errcheck=0
 # lrcomp=5
 # bACAbatch=16
-LRlevel=0
+LRlevel=100
 xyzsort=1
 leafsize=200
 para=0.01d0
-sample_para=2.0d0
+sample_para=8.0d0
+sample_para_outer=8.0d0
 pat_comp=3
 schulzlevel=3000
 Nbundle=1
 format=1
-knn=0
+knn=100
 
 
 for com_opt in 5
@@ -43,10 +44,21 @@ do
 # filename=halfsphere_1200
 # srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC ../EXAMPLE/preprocessor_3dmesh/$filename $wavelength $precon $sort | tee $filename.out_precon_$precon_sort_$sort
 
-# nmpi=4
-# wavelength=1.0
-# filename=halfsphere_2300
-# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC ../EXAMPLE/preprocessor_3dmesh/$filename $wavelength $precon $sort | tee $filename.out_precon_$precon_sort_$sort
+# nmpi=32
+# wavelength=2.0
+# filename=sphere_2300
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --knn $knn | tee $filename.out_precon_$precon_sort_$sort
+
+
+nmpi=32
+wavelength=4.0
+filename=sphere_9000
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --sample_para_outer $sample_para_outer --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --knn $knn | tee $filename.out_precon_$precon_sort_$sort
+
+
+
+
+
 
 # nmpi=4
 # wavelength=0.5
@@ -60,20 +72,20 @@ do
 
 
 
-# ######## sphere
-nmpi=2
+# # ######## sphere
+# nmpi=2
 
-# wavelength=0.5
-# filename=plate_8000
-wavelength=0.25
-filename=halfsphere_32000
-# wavelength=2.0
-# filename=sphere_2300
-
+# # wavelength=0.5
+# # filename=plate_8000
 # wavelength=0.25
-# filename=plate_32000
+# filename=halfsphere_32000
+# # wavelength=2.0
+# # filename=sphere_2300
 
-mpirun -n $nmpi $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history
+# # wavelength=0.25
+# # filename=plate_32000
+
+# mpirun -n $nmpi $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history
 
 
 # nmpi=4

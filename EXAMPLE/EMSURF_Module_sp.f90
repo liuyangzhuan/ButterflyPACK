@@ -73,6 +73,7 @@ implicit none
 
 contains
 
+
 subroutine delete_quant_EMSURF(quant)
 implicit none
 type(quant_EMSURF):: quant
@@ -97,19 +98,19 @@ subroutine Zelem_EMSURF(m,n,value,quant)
     integer flag,edge_m,edge_n,nodetemp_n,patch
     complex(kind=4) value_e,value_m,value
     integer i,j,ii,jj,iii,jjj
-    real(kind=8) ln,lm,am(3),an(3),nr_m(3)
-    real(kind=8) nr_n(3)
-    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
-    complex(kind=8) imp,imp1,imp2,imp3
-    real(kind=8) temp
-    real(kind=8) distance
-    real(kind=8) ianl,ianl1,ianl2
-    real(kind=8) area
+    real(kind=4) ln,lm,am(3),an(3),nr_m(3)
+    real(kind=4) nr_n(3)
+    complex(kind=4) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
+    complex(kind=4) imp,imp1,imp2,imp3
+    real(kind=4) temp
+    real(kind=4) distance
+    real(kind=4) ianl,ianl1,ianl2
+    real(kind=4) area
 
 	class(*),pointer :: quant
 
 
-    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+    real(kind=4),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
 
 
 	select TYPE(quant)
@@ -131,7 +132,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 		value_m=(0.,0.)
 
 		do ii=3,4
-			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+			call gau_grobal_sp(edge_m,ii,xm,ym,zm,wm,quant)
 			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
 			do i=1,quant%integral_points
 				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
@@ -140,7 +141,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 				bb(1)=(0.,0.)
 				aa(1:3)=(0.,0.)
 				do jj=3,4
-					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
+					call gau_grobal_sp(edge_n,jj,xn,yn,zn,wn,quant)
 					nr_n(1:3)=quant%normal_of_patch(1:3,quant%info_unk(jj,edge_n))
 					if (quant%info_unk(ii,edge_m)==quant%info_unk(jj,edge_n)) then
 						area=triangle_area(quant%info_unk(ii,edge_m),quant)
@@ -148,7 +149,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						call scalar(am,an,temp)
+						call scalar_sp(am,an,temp)
 						value_m=value_m+(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
 						do j=1,quant%integral_points
 							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
@@ -185,9 +186,9 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							dg(1)=(xm(i)-xn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
-							 call ccurl(an,dg,dg1)
-							 call ccurl(nr_m,dg1,dg2)
-							 call cscalar(dg2,am,ctemp)
+							 call ccurl_sp(an,dg,dg1)
+							 call ccurl_sp(nr_m,dg1,dg2)
+							 call cscalar_sp(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
 							imp=imp+wn(j)*exp(-junit*quant%wavenum*distance)/distance
 							imp1=imp1+quant%ng1(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
@@ -202,7 +203,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 						bb(1)=bb(1)+(-1)**(jj+1)*imp
 					endif
 				enddo
-				call cscalar(aa,am,ctemp)
+				call cscalar_sp(aa,am,ctemp)
 				ctemp1=ctemp1+(-1)**(ii+1)*ctemp*wm(i)
 				ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 			enddo
@@ -322,6 +323,55 @@ end subroutine Zelem_EMSURF
 ! 	w(7)=wc
   return
   end subroutine gau_grobal
+
+
+  subroutine gau_grobal_sp(nn,j,x,y,z,w,quant)
+
+	use BPACK_DEFS
+	implicit none
+	type(quant_EMSURF)::quant
+	integer nn ,flag
+	real(kind=4) x(:),y(:),z(:),w(:)
+	integer i,j,ii
+  !	wa=area*9./40
+  !	wb=area*(155.-sqrt(15.))/1200.
+  !	wc=area*(155.+sqrt(15.))/1200.
+
+	 ! if(flag==1) then
+
+  !		ii=quant%info_unkfine(j,nn)
+  !  do i=1,integral_points
+  !	x(i)=quant%ng1(i)*quant%xyz(1,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(1,node_of_patchfine(2,ii))+&
+  !     quant%ng3(i)*quant%xyz(1,node_of_patchfine(3,ii))
+  !	y(i)=quant%ng1(i)*quant%xyz(2,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(2,node_of_patchfine(2,ii))+&
+  !     quant%ng3(i)*quant%xyz(2,node_of_patchfine(3,ii))
+  !	z(i)=quant%ng1(i)*quant%xyz(3,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(3,node_of_patchfine(2,ii))+&
+  !     quant%ng3(i)*quant%xyz(3,node_of_patchfine(3,ii))
+  !  enddo
+
+  !  elseif(flag==2) then
+
+	ii=quant%info_unk(j,nn)
+	   do i=1,quant%integral_points
+	  x(i)=quant%ng1(i)*quant%xyz(1,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(1,quant%node_of_patch(2,ii))+&
+	   quant%ng3(i)*quant%xyz(1,quant%node_of_patch(3,ii))
+	  y(i)=quant%ng1(i)*quant%xyz(2,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(2,quant%node_of_patch(2,ii))+&
+	   quant%ng3(i)*quant%xyz(2,quant%node_of_patch(3,ii))
+	  z(i)=quant%ng1(i)*quant%xyz(3,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(3,quant%node_of_patch(2,ii))+&
+	   quant%ng3(i)*quant%xyz(3,quant%node_of_patch(3,ii))
+	enddo
+
+	w=quant%gauss_w
+
+  ! 	w(1)=wa
+  ! 	w(2)=wb
+  ! 	w(3)=wb
+  ! 	w(4)=wb
+  ! 	w(5)=wc
+  ! 	w(6)=wc
+  ! 	w(7)=wc
+	return
+	end subroutine gau_grobal_sp
 
 
   subroutine gauss_points(quant)
@@ -461,15 +511,15 @@ function ianalytic(mm,jj,xi,yi,zi,quant)
 
 use     BPACK_DEFS
 integer mm,jj,j,i
-real(kind=8) xi,yi,zi
-real(kind=8)    temp,ianalytic
+real(kind=4) xi,yi,zi
+real(kind=4)    temp,ianalytic
 integer ii,node1,node2,node3
-real(kind=8)    u3,v3,u0,v0,w0,l(3)
-real(kind=8)    u(3),w(3),v(3),a(3),b(3)
-real(kind=8)    s(2,3),t(-1:1,3)
-real(kind=8)    f2(3),beta(3)
-real(kind=8)    r(-1:1,3)
-real(kind=8)    area
+real(kind=4)    u3,v3,u0,v0,w0,l(3)
+real(kind=4)    u(3),w(3),v(3),a(3),b(3)
+real(kind=4)    s(2,3),t(-1:1,3)
+real(kind=4)    f2(3),beta(3)
+real(kind=4)    r(-1:1,3)
+real(kind=4)    area
 type(quant_EMSURF)::quant
 
 ii=quant%info_unk(jj,mm)
@@ -480,7 +530,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
- call curl(a,b,w)
+ call curl_sp(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -494,16 +544,16 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call curl(w,u,v)
- call scalar(u,b,u3)
+ call curl_sp(w,u,v)
+ call scalar_sp(u,b,u3)
 v3=2.*area/l(3)
 
 b(1)=xi-quant%xyz(1,node1)
 b(2)=yi-quant%xyz(2,node1)
 b(3)=zi-quant%xyz(3,node1)
- call scalar(u,b,u0)
- call scalar(v,b,v0)
- call scalar(w,b,w0)
+ call scalar_sp(u,b,u0)
+ call scalar_sp(v,b,v0)
+ call scalar_sp(w,b,w0)
 
 s(1,1)=-((l(3)-u0)*(l(3)-u3)+v0*v3)/l(1)
 s(2,1)=((u3-u0)*(u3-l(3))+v3*(v3-v0))/l(1)
@@ -561,20 +611,20 @@ function ianalytic2(mm,jj,xi,yi,zi,iii,quant)
 
 use BPACK_DEFS
 integer mm,jj,j,i
-real(kind=8) ianalytic2
+real(kind=4) ianalytic2
 integer ii,node1,node2,node3,iii
-real(kind=8) xi,yi,zi
-real(kind=8) u3,v3,u0,v0,w0,l(3)
-real(kind=8) u(3),w(3),v(3),a(3),b(3)
-real(kind=8) m1(3),m2(3),m3(3)
-real(kind=8) s1(3),s2(3),s3(3)
-real(kind=8) s(2,3),t(-1:1,3)
-real(kind=8) f2(3),beta(3),f3(3)
-real(kind=8) r(-1:1,3)
-real(kind=8) temp,temp1,temp2,temp3
-real(kind=8) iua,iva
-real(kind=8) n0(3)
-real(kind=8)    area
+real(kind=4) xi,yi,zi
+real(kind=4) u3,v3,u0,v0,w0,l(3)
+real(kind=4) u(3),w(3),v(3),a(3),b(3)
+real(kind=4) m1(3),m2(3),m3(3)
+real(kind=4) s1(3),s2(3),s3(3)
+real(kind=4) s(2,3),t(-1:1,3)
+real(kind=4) f2(3),beta(3),f3(3)
+real(kind=4) r(-1:1,3)
+real(kind=4) temp,temp1,temp2,temp3
+real(kind=4) iua,iva
+real(kind=4) n0(3)
+real(kind=4)    area
 type(quant_EMSURF)::quant
 
 ii=quant%info_unk(jj,mm)
@@ -585,7 +635,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
-call curl(a,b,w)
+call curl_sp(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -599,16 +649,16 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call curl(w,u,v)
- call scalar(u,b,u3)
+ call curl_sp(w,u,v)
+ call scalar_sp(u,b,u3)
 v3=2.*area/l(3)
 
 b(1)=xi-quant%xyz(1,node1)
 b(2)=yi-quant%xyz(2,node1)
 b(3)=zi-quant%xyz(3,node1)
- call scalar(u,b,u0)
- call scalar(v,b,v0)
- call scalar(w,b,w0)
+ call scalar_sp(u,b,u0)
+ call scalar_sp(v,b,v0)
+ call scalar_sp(w,b,w0)
 
 
 s(1,1)=-((l(3)-u0)*(l(3)-u3)+v0*v3)/l(1)
@@ -659,22 +709,22 @@ do i=1,3
    s2(i)=(quant%xyz(i,node1)-quant%xyz(i,node3))/l(2)
    s3(i)=(quant%xyz(i,node2)-quant%xyz(i,node1))/l(3)
 enddo
-call curl(s1,w,m1)
-call curl(s2,w,m2)
-call curl(s3,w,m3)
-call scalar(u,m1,temp1)
+call curl_sp(s1,w,m1)
+call curl_sp(s2,w,m2)
+call curl_sp(s3,w,m3)
+call scalar_sp(u,m1,temp1)
 temp1=temp1*f3(1)/2
-call scalar(u,m2,temp2)
+call scalar_sp(u,m2,temp2)
 temp2=temp2*f3(2)/2
-call scalar(u,m3,temp3)
+call scalar_sp(u,m3,temp3)
 temp3=temp3*f3(3)/2
 iua=temp1+temp2+temp3
 
-call scalar(v,m1,temp1)
+call scalar_sp(v,m1,temp1)
 temp1=temp1*f3(1)/2
-call scalar(v,m2,temp2)
+call scalar_sp(v,m2,temp2)
 temp2=temp2*f3(2)/2
-call scalar(v,m3,temp3)
+call scalar_sp(v,m3,temp3)
 temp3=temp3*f3(3)/2
 iva=temp1+temp2+temp3
 
