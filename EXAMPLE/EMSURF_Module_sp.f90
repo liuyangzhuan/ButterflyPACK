@@ -36,16 +36,15 @@ implicit none
 
 	!**** quantities related to geometries, meshes, unknowns and points
 	type quant_EMSURF
-		real(kind=8) wavenum    ! CEM: wave number
-		real(kind=8) wavelength  ! CEM: wave length
-		real(kind=8) freq       ! CEM: frequency
-		real(kind=8) rank_approximate_para1, rank_approximate_para2, rank_approximate_para3 ! CEM: rank estimation parameter
+		real(kind=4) wavenum    ! CEM: wave number
+		real(kind=4) wavelength  ! CEM: wave length
+		real(kind=4) freq       ! CEM: frequency
 		integer RCS_static  ! CEM: 1: monostatic or 2: bistatic RCS
 		integer RCS_Nsample ! CEM: number of RCS samples
-		real(kind=8):: CFIE_alpha ! CEM: combination parameter in CFIE
+		real(kind=4):: CFIE_alpha ! CEM: combination parameter in CFIE
 
 		integer Nunk ! size of the matrix
-		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
+		real(kind=4),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: info_unk(:,:)
 		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
 
@@ -56,9 +55,9 @@ implicit none
 		integer integral_points ! #of Gauss quadrature points on a triangular
 		integer maxpatch ! # of triangular patches
 		integer mesh_normal	 ! flags to flip the unit normal vectors of a triangular patch
-		real(kind=8) scaling  ! scaling factor of the coordinates of vertices of a 3D mesh
-		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
-		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
+		real(kind=4) scaling  ! scaling factor of the coordinates of vertices of a 3D mesh
+		real(kind=4), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
+		real(kind=4),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
 		type(edge_node),allocatable:: edge_of_node(:) ! edges of each vertice
 		CHARACTER (LEN=1000) DATA_DIR
@@ -1238,7 +1237,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     integer node, patch, edge,edge1, flag
     integer node1, node2,found
     integer node_temp(2)
-    real(kind=8) a(3),b(3),c(3),r0
+    real(kind=8) a(3),b(3),c(3),r0,rtemp(3)
 	! type(mesh)::msh
 	type(quant_EMSURF)::quant
 	! type(proctree)::ptree
@@ -1272,8 +1271,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     !************quant%xyz****************
     i=1
     do while(i<=quant%maxnode)
-        read(11,*)intemp,quant%xyz(1:3,i)
-        quant%xyz(1:3,i)=quant%xyz(1:3,i)/quant%scaling
+        read(11,*)intemp,rtemp
+        quant%xyz(1:3,i)=rtemp/quant%scaling
         i=i+1
     enddo
     close(11)
