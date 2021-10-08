@@ -81,13 +81,13 @@ implicit none
 		real(kind=8):: impedance_TM_nm(3,3)  ! mode impedance of TM_nm
 		complex(kind=8),allocatable::nxe_dot_rwg(:,:,:,:,:)  ! int_nxe_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
 		complex(kind=8),allocatable::e_dot_rwg(:,:,:,:,:)  ! int_e_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
-		
-		
+
+
 		character(len=1024)  :: string_arbi ! name of the file storing tabulated E fields for arbitary shaped ports
 		integer::nmode_arbi=1 ! number of modes loaded from file for arbitary shaped ports
 		real(kind=8):: A_n_arbi(nmodemax) ! normalization factor for arbitary shaped ports
 		real(kind=8):: impedance_n_arbi(nmodemax)  ! mode impedance for arbitary shaped ports
-		integer:: TETM_arbi(nmodemax) ! TE (1) or TM (2) modes for arbitary shaped ports 
+		integer:: TETM_arbi(nmodemax) ! TE (1) or TM (2) modes for arbitary shaped ports
 		real(kind=8):: kc_arbi(nmodemax) ! cutoff wavenumbers for arbitary shaped ports
 		integer::Nx_arbi,Ny_arbi ! discretization of the tabulated modes for arbitary shaped ports
 		! real(kind=8),allocatable:: Ex_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ex of each mode tabulated on a regular grid for arbitary shaped ports
@@ -272,7 +272,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 							do jjj=1,3
 								aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
 							enddo
-							bb(1)=bb(1)+(-1)**(jj+1)* 
+							bb(1)=bb(1)+(-1)**(jj+1)*imp
 						endif
 					enddo
 					call cscalar(aa,am,ctemp)
@@ -911,14 +911,14 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							enddo
 						enddo
 					enddo
-					value = value +ctemp				
+					value = value +ctemp
 				elseif(quant%ports(ppm)%type==2)then
 					ctemp=0
 					do nn=1,quant%ports(ppm)%nmode_arbi
 						ctemp1=quant%ports(ppm)%nxe_dot_rwg_arbi(edge_m-cntm,nn)
 						ctemp2=quant%ports(ppm)%nxe_dot_rwg_arbi(edge_n-cntn,nn)
 						ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_n_arbi(nn)*ctemp1*ctemp2
-					enddo	
+					enddo
 					value = value +ctemp
 				else
 					write(*,*)'unrecognized port type',quant%ports(ppm)%type
@@ -2466,7 +2466,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 			elseif(quant%ports(pp)%type==1)then
 				npolar=1
 				off=1
-			endif			
+			endif
 			allocate(quant%ports(pp)%nxe_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
 			allocate(quant%ports(pp)%e_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
 			do cnt=1,quant%ports(pp)%Nunk
@@ -2503,8 +2503,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 				write(string2 , *) quant%ports(pp)%Ny_arbi
 				write(string3 , *) nn
 				open(22, file=trim(adjustl(quant%ports(pp)%string_arbi))//"_Nx_"//trim(adjustl(string1))//"_Ny_"//trim(adjustl(string2))//"_mode_"//trim(adjustl(string3))//".txt", status="old", action="read")
-				read(22,*)quant%ports(pp)%kc_arbi(nn),dx,quant%ports(pp)%TETM_arbi(nn),quant%ports(pp)%A_n_arbi(nn) 
-				
+				read(22,*)quant%ports(pp)%kc_arbi(nn),dx,quant%ports(pp)%TETM_arbi(nn),quant%ports(pp)%A_n_arbi(nn)
+
 				if(quant%ports(pp)%TETM_arbi(nn)==1)then
 					quant%ports(pp)%impedance_n_arbi(nn)=Bigvalue
 					if(quant%wavenum > quant%ports(pp)%kc_arbi(nn))then
@@ -2518,9 +2518,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 						betanm=sqrt(quant%wavenum**2d0-quant%ports(pp)%kc_arbi(nn)**2d0)
 						quant%ports(pp)%impedance_n_arbi(nn)=betanm*impedence0/quant%wavenum
 						if(MyID==Main_ID)write(*,*)pp,'ARBITARY',nn,'TM',quant%ports(pp)%kc_arbi(nn),quant%wavenum,quant%ports(pp)%impedance_n_arbi(nn)
-					endif				
+					endif
 				endif
-				
+
 
 				do ii=1,quant%ports(pp)%Ny_arbi
 					read(22,*)Ex_arbi((ii-1)*quant%ports(pp)%Nx_arbi+1:ii*quant%ports(pp)%Nx_arbi)
