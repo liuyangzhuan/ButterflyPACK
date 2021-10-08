@@ -70,7 +70,7 @@ PROGRAM ButterflyPACK_IE_3D
 
     character bmattype
 	character(len=10) which
-    integer ido, n, nx, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
+    integer ido, n, nev, ncv, lworkl, info, nconv, maxitr, ishfts, mode
     complex(kind=8) sigma
     real(kind=8) tol, retval(2), offset, rtemp1, rtemp2
     real(kind=8) dtheta,theta,phi,rcs
@@ -80,14 +80,45 @@ PROGRAM ButterflyPACK_IE_3D
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
 	logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
-	character(len=1024)  :: substring,substring1,substring2
+	character(len=1024)  :: substring,substring1,substring2,substring3,substring4
 	integer v_major,v_minor,v_bugfix
-	integer Nfreq,Nmode,nth_mode
+	integer Nfreq,Nmode,nth_mode,Nx,Ny
 
 	integer nargs,flag
 	integer parent,io
 
 	logical :: exist, f_exist
+	integer,parameter::Nx0=101,Ny0=101
+	real(kind=8):: x0(Nx0),y0(Ny0),u(Nx0*Ny0),xx1(1000),yy1(1000), dx, v1(1000),vref(1000)
+
+#if 0
+
+	dx=0.01
+	do ii = 1, Nx0
+		x0(ii)= dx*(ii-1)
+	enddo
+	do jj = 1, Ny0
+		y0(jj)= dx*(jj-1)
+	enddo
+	do ii=1,Nx0
+	do jj=1,Ny0
+		u(ii+(jj-1)*Nx0) = sin(x0(ii)*pi)
+	enddo
+	enddo
+
+	do ii=1,1000
+		xx1(ii) = ii*dx/10
+		yy1(ii) = 0.5d0
+		vref(ii) = sin(xx1(ii)*pi)
+	enddo
+
+	call CubicInterp2D_F(x0,y0,u,Nx0,Ny0,xx1,yy1,v1,1000)
+	write(*,*)'testing cubic interpolation:', maxval(abs(v1-vref))
+#endif
+
+
+
+
 
 
 	write(substring2 , *) 'pillbox'
@@ -279,7 +310,7 @@ PROGRAM ButterflyPACK_IE_3D
 	if(index(substring2,'cavity_rec')>0)then
 	!!!!!!! cavity with 2 rectangular dumping ports and 2 circular beam ports
 	if(quant%noport==0)then
-		quant%Nport=4
+		quant%Nport=2
 		allocate(quant%ports(quant%Nport))
 		quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
 		quant%ports(1)%x=(/-1d0,0d0,0d0/)
@@ -297,16 +328,46 @@ PROGRAM ButterflyPACK_IE_3D
 		quant%ports(2)%a=0.07d0
 		quant%ports(2)%b=0.02d0
 
-		quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
-		quant%ports(3)%z=(/0d0,0d0,-1d0/)
-		quant%ports(3)%x=(/1d0,0d0,0d0/)
-		quant%ports(3)%R=0.025
-		quant%ports(3)%type=0
-		quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
-		quant%ports(4)%z=(/0d0,0d0,1d0/)
-		quant%ports(4)%x=(/1d0,0d0,0d0/)
-		quant%ports(4)%R=0.025
-		quant%ports(4)%type=0
+
+
+
+		! quant%ports(1)%origin=(/0.035d0,0.2d0,0.01d0/)
+		! quant%ports(1)%x=(/-1d0,0d0,0d0/)
+		! quant%ports(1)%y=(/0d0,0d0,1d0/)
+		! quant%ports(1)%z=(/0d0,1d0,0d0/)
+		! quant%ports(1)%type=2
+		! quant%ports(1)%a=0.07d0
+		! quant%ports(1)%b=0.02d0
+		! quant%ports(1)%Nx_arbi = 1400
+		! quant%ports(1)%Ny_arbi = 400
+		! quant%ports(1)%string_arbi="cavity_rec_port"
+		! quant%ports(1)%nmode_arbi=4
+
+		! quant%ports(2)%origin=(/-0.2d0,0.035d0,-0.03d0/)
+		! quant%ports(2)%x=(/0d0,-1d0,0d0/)
+		! quant%ports(2)%y=(/0d0,0d0,1d0/)
+		! quant%ports(2)%z=(/-1d0,0d0,0d0/)
+		! quant%ports(2)%type=2
+		! quant%ports(2)%a=0.07d0
+		! quant%ports(2)%b=0.02d0
+		! quant%ports(2)%Nx_arbi = 1400
+		! quant%ports(2)%Ny_arbi = 400
+		! quant%ports(2)%string_arbi="cavity_rec_port"
+		! quant%ports(2)%nmode_arbi=4
+
+
+
+
+		! quant%ports(3)%origin=(/0d0,0d0,-0.1445476695d0/)
+		! quant%ports(3)%z=(/0d0,0d0,-1d0/)
+		! quant%ports(3)%x=(/1d0,0d0,0d0/)
+		! quant%ports(3)%R=0.025
+		! quant%ports(3)%type=0
+		! quant%ports(4)%origin=(/0d0,0d0,0.1445476695d0/)
+		! quant%ports(4)%z=(/0d0,0d0,1d0/)
+		! quant%ports(4)%x=(/1d0,0d0,0d0/)
+		! quant%ports(4)%R=0.025
+		! quant%ports(4)%type=0
 	endif
 
 	quant%Nobs=1000
@@ -674,7 +735,7 @@ PROGRAM ButterflyPACK_IE_3D
 						enddo
 						close(13)
 					else
-						write(strings, *) nth_mode
+						write(strings, *) order(ii)
 						open(15, file=trim(adjustl(substring2))//'_EigVals_'//trim(adjustl(strings))//'.out', status="old", action="read")
 						valmin=1e30
 						do
@@ -729,7 +790,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call MPI_Bcast(order, quant%nev, MPI_integer, Main_ID, ptree_A%Comm, ierr)
 
 
-	if(quant%postprocess==1)then
+	if(quant%postprocess==1 .and. maxval(order)>0)then
 
 		if(ptree_A%MyID==Main_ID)then
 			write(*,*)'Postprocessing: '

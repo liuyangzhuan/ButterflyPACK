@@ -24,5 +24,6 @@ cmake .. \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DTPL_BLAS_LIBRARIES="/opt/cray/pe/libsci/19.06.1/GNU/8.1/x86_64/lib/libsci_gnu_82_mpi_mp.so" \
 	-DTPL_LAPACK_LIBRARIES="/opt/cray/pe/libsci/19.06.1/GNU/8.1/x86_64/lib/libsci_gnu_82_mpi_mp.so" \
+	-DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu_libsci/build/lib/libarpack.so;/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu_libsci/build/lib/libparpack.so" \
 	-DTPL_SCALAPACK_LIBRARIES="/opt/cray/pe/libsci/19.06.1/GNU/8.1/x86_64/lib/libsci_gnu_82_mpi_mp.so"
     

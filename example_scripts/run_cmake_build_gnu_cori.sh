@@ -14,7 +14,7 @@ rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-I${MKLROOT}/include"\
 	-DCMAKE_CXX_FLAGS="" \
-	-DBUILD_SHARED_LIBS=OFF \
+	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
@@ -23,6 +23,5 @@ cmake .. \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DTPL_BLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_gf_lp64.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;${MKLROOT}/lib/intel64/libmkl_core.so"\
 	-DTPL_LAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_gf_lp64.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;${MKLROOT}/lib/intel64/libmkl_core.so" \
-	-DTPL_SCALAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_blacs_intelmpi_lp64.so;${MKLROOT}/lib/intel64/libmkl_scalapack_lp64.so" \
-	-DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu/build/lib/libarpack.so;/global/homes/l/liuyangz/Cori/my_software/arpack-ng-gnu/build/lib/libparpack.so"
+	-DTPL_SCALAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_blacs_intelmpi_lp64.so;${MKLROOT}/lib/intel64/libmkl_scalapack_lp64.so"
 # -DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -fno-range-check " \
