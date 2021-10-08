@@ -61,7 +61,7 @@ target_link_libraries(go3d ${all_link_libs_z})
 add_dependencies(go3d go2d)
 
 
-set(FZEXM9 EMSURF_Port_Eigen_Driver.f90 EMSURF_Port_Module.f90)
+set(FZEXM9 EMSURF_Port_Eigen_Driver.f90 EMSURF_Port_Module.f90 DoCubicInterp2D.c)
 add_executable(ie3dporteigen ${FZEXM9})
 target_link_libraries(ie3dporteigen ${all_link_libs_z})
 add_dependencies(ie3dporteigen ie3d)

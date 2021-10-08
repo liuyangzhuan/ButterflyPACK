@@ -27,6 +27,7 @@ implicit none
 
 	!**** define your application-related variables here
 
+	integer,parameter::nmodemax=40
 
 	real(kind=8):: r_TE_nm(3,3)	=	&
 	reshape((/3.8317,	1.8412,		3.0542,		&
@@ -66,12 +67,12 @@ implicit none
 
 	!**** define a port
 	type port
-		integer type   ! 0: circular 1: rectangular
+		integer type   ! 0: circular 1: rectangular 2: arbitary shape
 		real(kind=8) origin(3)  ! origin of the local coordinate system
 		real(kind=8) x(3),y(3),z(3)   ! local coordinate units
 		integer:: Nunk=0            ! number of internal edges on the port
 		real(kind=8) R  ! radius of the port if it's circular
-		real(kind=8) a, b ! sizes of the port if it's rectangular
+		real(kind=8) a, b ! sizes of the port if it's rectangular; bounding box of the port if arbitary shape
 		integer:: nmax=1   ! TM_nm and TE_nm
 		integer:: mmax=1   ! TM_nm and TE_nm
 		real(kind=8):: A_TE_nm(3,3) ! normalization factor of TE_nm
@@ -80,6 +81,21 @@ implicit none
 		real(kind=8):: impedance_TM_nm(3,3)  ! mode impedance of TM_nm
 		complex(kind=8),allocatable::nxe_dot_rwg(:,:,:,:,:)  ! int_nxe_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
 		complex(kind=8),allocatable::e_dot_rwg(:,:,:,:,:)  ! int_e_dot_rwg of shape Nunk * nmax+1 * mmax * 2 * npolar, the third dimension differentiate TM and TE, the last represents polarization degeneracy of circular waveguide
+		
+		
+		character(len=1024)  :: string_arbi ! name of the file storing tabulated E fields for arbitary shaped ports
+		integer::nmode_arbi=1 ! number of modes loaded from file for arbitary shaped ports
+		real(kind=8):: A_n_arbi(nmodemax) ! normalization factor for arbitary shaped ports
+		real(kind=8):: impedance_n_arbi(nmodemax)  ! mode impedance for arbitary shaped ports
+		integer:: TETM_arbi(nmodemax) ! TE (1) or TM (2) modes for arbitary shaped ports 
+		real(kind=8):: kc_arbi(nmodemax) ! cutoff wavenumbers for arbitary shaped ports
+		integer::Nx_arbi,Ny_arbi ! discretization of the tabulated modes for arbitary shaped ports
+		! real(kind=8),allocatable:: Ex_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ex of each mode tabulated on a regular grid for arbitary shaped ports
+		! real(kind=8),allocatable:: Ey_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ey of each mode tabulated on a regular grid for arbitary shaped ports
+		complex(kind=8),allocatable::nxe_dot_rwg_arbi(:,:)  ! int_nxe_dot_rwg for arbitary shaped ports
+		complex(kind=8),allocatable::e_dot_rwg_arbi(:,:)  ! int_e_dot_rwg for arbitary shaped ports
+
+
 	end type port
 
 
@@ -133,6 +149,14 @@ implicit none
 		real(kind=8) tol_eig ! tolerance in arpack
 		real(kind=8):: normalize_factor=1d0 ! normalization factor (default to be the acceleration voltage)
 	end type quant_EMSURF
+
+	interface
+		subroutine CubicInterp2D_F(x,y,u,Nx,Ny,xx1,yy1,v,No) bind(C,name='CubicInterp2D')
+			use,intrinsic :: ISO_C_BINDING
+			integer(C_INT),value::Nx,Ny,No
+			real(C_DOUBLE)::x(Nx),y(Ny),u(Nx*Ny),xx1(No),yy1(No),v(No)
+		end subroutine CubicInterp2D_F
+	end interface
 
 contains
 
@@ -248,7 +272,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 							do jjj=1,3
 								aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
 							enddo
-							bb(1)=bb(1)+(-1)**(jj+1)*imp
+							bb(1)=bb(1)+(-1)**(jj+1)* 
 						endif
 					enddo
 					call cscalar(aa,am,ctemp)
@@ -256,7 +280,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 					ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 				enddo
 			enddo
-			value_e=ln*lm*junit*(ctemp1-ctemp2)/8./pi**2d0/quant%freq/eps0
+			value_e=ln*lm*junit*(ctemp1-ctemp2)/8./pi**2d0/quant%freq/eps0 ! 4*pi was missing in the green function, 2*pi was missing as omega=2pi*f
 			value=value_e/impedence0
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
@@ -436,6 +460,61 @@ subroutine Zelem_EMSURF_K_Self(m,n,value,quant,sign)
 end subroutine Zelem_EMSURF_K_Self
 
 
+subroutine Port_e_nxe_dot_rwg_arbi(m,pp,nn,value_e,value_nxe,quant,Exs,Eys,xs,ys,Nx,Ny)
+
+    use BPACK_DEFS
+    implicit none
+
+    integer, INTENT(IN):: m,pp,nn,Nx,Ny
+    integer flag,edge_m,patch
+    complex(kind=8) value_m_e,value_m_nxe,value_e,value_nxe
+    integer i,ii
+    real(kind=8) lm,am(3),nr_m(3),nxe(3),e(3)
+    real(kind=8) temp
+	type(quant_EMSURF) :: quant
+	real(kind=8)Exs(:),Eys(:),xs(:),ys(:)
+
+
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+
+		edge_m = m
+		allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+
+		lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+
+		value_m_nxe=(0.,0.)
+		value_m_e=(0.,0.)
+
+		do ii=3,4
+			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
+			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
+			do i=1,quant%integral_points
+				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+				am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+
+				call Port_e_nxe_arbi(xm(i),ym(i),zm(i),e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
+				call scalar(am,nxe,temp)
+				value_m_nxe=value_m_nxe+(-1)**(ii+1)*temp*wm(i)
+				call scalar(am,e,temp)
+				value_m_e=value_m_e+(-1)**(ii+1)*temp*wm(i)
+
+			enddo
+		enddo
+		value_m_nxe=value_m_nxe*lm
+		value_m_e=value_m_e*lm
+
+		value_nxe=value_m_nxe
+		value_e=value_m_e
+
+		deallocate(xm,ym,zm,wm)
+
+
+    return
+
+end subroutine Port_e_nxe_dot_rwg_arbi
+
+
 subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
     use BPACK_DEFS
@@ -469,7 +548,7 @@ subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
 				call Port_nxe(xm(i),ym(i),zm(i),nxe,quant,pp,mm,nn,TETM,rr)
 				call scalar(am,nxe,temp)
-				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
+				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
 			enddo
 		enddo
 		value_m=value_m*lm
@@ -516,7 +595,7 @@ subroutine Port_e_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
 				call Port_e(xm(i),ym(i),zm(i),e,quant,pp,mm,nn,TETM,rr)
 				call scalar(am,e,temp)
-				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
+				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
 			enddo
 		enddo
 		value_m=value_m*lm
@@ -714,6 +793,41 @@ end subroutine Port_e
 
 
 
+
+subroutine Port_e_nxe_arbi(xm,ym,zm,e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
+	real(kind=8) xm,ym,zm,e(3),nxe(3),r,theta,phi,Erho,Ephi,Ex(1),Ey(1),kc,x,y,z,x1(1),y1(1),nhat(3),rhat(3),phihat(3),rho(3),a,b
+	type(quant_EMSURF) :: quant
+	integer:: pp,mm,nn,TETM,rr,Nx,Ny
+	real(kind=8)Exs(:),Eys(:),xs(:),ys(:)
+
+	if(quant%ports(pp)%type==2)then
+		Ex=0
+		Ey=0
+		rho(1)=xm
+		rho(2)=ym
+		rho(3)=zm
+		rho = rho - quant%ports(pp)%origin
+		x = dot_product(rho,quant%ports(pp)%x)
+		y = dot_product(rho,quant%ports(pp)%y)
+		z = dot_product(rho,quant%ports(pp)%z)
+		x1 = x
+		y1 = y
+
+		call CubicInterp2D_F(xs,ys,Exs,Nx,Ny,x1,y1,Ex,1)
+		call CubicInterp2D_F(xs,ys,Eys,Nx,Ny,x1,y1,Ey,1)
+		e = (Ex(1)*quant%ports(pp)%x+Ey(1)*quant%ports(pp)%y)*quant%ports(pp)%A_n_arbi(nn)
+
+		call curl(quant%ports(pp)%z,e,nxe)
+	else
+		write(*,*)'unrecognized port type',quant%ports(pp)%type
+		stop
+	endif
+
+end subroutine Port_e_nxe_arbi
+
+
+
+
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF(m,n,value,quant)
 
@@ -767,38 +881,49 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 				cntn = cntn + quant%ports(ppn)%Nunk
 			enddo
 			if(ppm==ppn)then
-				if(quant%ports(ppm)%type==0)then
-					npolar=2
-					off=0
-				elseif(quant%ports(ppm)%type==1)then
-					npolar=1
-					off=1
+
+				if(quant%ports(ppm)%type==0 .or. quant%ports(ppm)%type==1)then
+					if(quant%ports(ppm)%type==0)then
+						npolar=2
+						off=0
+					elseif(quant%ports(ppm)%type==1)then
+						npolar=1
+						off=1
+					endif
+					ctemp=0
+					do rr=1,npolar
+						do nn=0,quant%ports(ppm)%nmax
+							do mm=1-off,quant%ports(ppm)%mmax
+								if(mm>0 .or. nn>0)then
+								ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,1,rr)
+								ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,1,rr)
+								ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off)*ctemp1*ctemp2
+								endif
+							enddo
+						enddo
+						do nn=0,quant%ports(ppm)%nmax
+							do mm=1-off,quant%ports(ppm)%mmax
+								if(mm>0 .or. nn>0)then
+								ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,2,rr)
+								ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,2,rr)
+								ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TM_nm(nn+1,mm+off)*ctemp1*ctemp2
+								endif
+							enddo
+						enddo
+					enddo
+					value = value +ctemp				
+				elseif(quant%ports(ppm)%type==2)then
+					ctemp=0
+					do nn=1,quant%ports(ppm)%nmode_arbi
+						ctemp1=quant%ports(ppm)%nxe_dot_rwg_arbi(edge_m-cntm,nn)
+						ctemp2=quant%ports(ppm)%nxe_dot_rwg_arbi(edge_n-cntn,nn)
+						ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_n_arbi(nn)*ctemp1*ctemp2
+					enddo	
+					value = value +ctemp
 				else
 					write(*,*)'unrecognized port type',quant%ports(ppm)%type
 					stop
 				endif
-				ctemp=0
-				do rr=1,npolar
-					do nn=0,quant%ports(ppm)%nmax
-						do mm=1-off,quant%ports(ppm)%mmax
-							if(mm>0 .or. nn>0)then
-							ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,1,rr)
-							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,1,rr)
-							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off)*ctemp1*ctemp2
-							endif
-						enddo
-					enddo
-					do nn=0,quant%ports(ppm)%nmax
-						do mm=1-off,quant%ports(ppm)%mmax
-							if(mm>0 .or. nn>0)then
-							ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,2,rr)
-							ctemp2=quant%ports(ppm)%nxe_dot_rwg(edge_n-cntn,nn+1,mm+off,2,rr)
-							ctemp = ctemp + impedence0/2/quant%ports(ppm)%impedance_TM_nm(nn+1,mm+off)*ctemp1*ctemp2
-							endif
-						enddo
-					enddo
-				enddo
-				value = value +ctemp
 			endif
 
 
@@ -885,7 +1010,7 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 			point = point- nr_m*(ln)/20
 			call Field_EMSURF(point,field,n,quant)
 			value0 = dot_product(field,nr_m)
-			value0 = value0*impedence0
+			value0 = value0*impedence0 ! the solution vector is J and M/impedence0, this makes it easier to compare with ie3deigen
 			value = value + value0
 			enddo
 			! value = value/2
@@ -2023,12 +2148,13 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     integer node, patch, edge,edge1, flag
     integer node1, node2,found,npolar,off
     integer node_temp(2)
-    real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2
+    real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2,dx,betanm
 	! type(mesh)::msh
 	type(quant_EMSURF)::quant
 	! type(proctree)::ptree
 	integer MPIcomm,MyID,ierr
 	CHARACTER (*) DATA_DIR
+	character(len=1024)  :: string1,string2,string3,filename
 	integer Maxedge
 	integer,parameter:: NperNode=10
 	integer,allocatable::tmpint(:,:)
@@ -2036,6 +2162,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	real(kind=8),allocatable::distance(:)
 	integer,allocatable::order(:)
 	integer v1,v2
+	real(kind=8),allocatable:: Ex_arbi(:),Ey_arbi(:)
+	real(kind=8),allocatable:: xx(:),yy(:)
 
 	call MPI_Comm_rank(MPIcomm,MyID,ierr)
 
@@ -2263,7 +2391,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 					quant%ports(ii)%Nunk=quant%ports(ii)%Nunk+1
 					quant%Nunk_port = quant%Nunk_port+1
 				endif
-			else if(quant%ports(ii)%type==1)then
+			else if(quant%ports(ii)%type==1 .or. quant%ports(ii)%type==2)then
 				x1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%x)
 				y1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%y)
 				z1 = dot_product(quant%xyz(:,v1)-quant%ports(ii)%origin, quant%ports(ii)%z)
@@ -2331,39 +2459,99 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	T0=secnds(0.0)
 	edge=quant%Nunk_int
 	do pp=1,quant%Nport
-		if(quant%ports(pp)%type==0)then
-			npolar=2
-			off=0
-		elseif(quant%ports(pp)%type==1)then
-			npolar=1
-			off=1
+		if(quant%ports(pp)%type==0 .or. quant%ports(pp)%type==1)then
+			if(quant%ports(pp)%type==0)then
+				npolar=2
+				off=0
+			elseif(quant%ports(pp)%type==1)then
+				npolar=1
+				off=1
+			endif			
+			allocate(quant%ports(pp)%nxe_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
+			allocate(quant%ports(pp)%e_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
+			do cnt=1,quant%ports(pp)%Nunk
+				do rr=1,npolar
+					do nn=0,quant%ports(pp)%nmax
+						do mm=1-off,quant%ports(pp)%mmax
+							if(mm>0 .or. nn>0)then
+							call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
+							call Port_e_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
+							endif
+						enddo
+					enddo
+					do nn=0,quant%ports(pp)%nmax
+						do mm=1-off,quant%ports(pp)%mmax
+							if(mm>0 .or. nn>0)then
+							call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
+							call Port_e_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
+							endif
+						enddo
+					enddo
+				enddo
+			enddo
+		elseif(quant%ports(pp)%type==2)then
+			allocate(Ex_arbi(quant%ports(pp)%Nx_arbi*quant%ports(pp)%Ny_arbi))
+			allocate(Ey_arbi(quant%ports(pp)%Nx_arbi*quant%ports(pp)%Ny_arbi))
+			allocate(xx(quant%ports(pp)%Nx_arbi))
+			allocate(yy(quant%ports(pp)%Ny_arbi))
+			allocate(quant%ports(pp)%nxe_dot_rwg_arbi(quant%ports(pp)%Nunk,quant%ports(pp)%nmode_arbi))
+			allocate(quant%ports(pp)%e_dot_rwg_arbi(quant%ports(pp)%Nunk,quant%ports(pp)%nmode_arbi))
+
+
+			do nn=1,quant%ports(pp)%nmode_arbi
+				write(string1 , *) quant%ports(pp)%Nx_arbi
+				write(string2 , *) quant%ports(pp)%Ny_arbi
+				write(string3 , *) nn
+				open(22, file=trim(adjustl(quant%ports(pp)%string_arbi))//"_Nx_"//trim(adjustl(string1))//"_Ny_"//trim(adjustl(string2))//"_mode_"//trim(adjustl(string3))//".txt", status="old", action="read")
+				read(22,*)quant%ports(pp)%kc_arbi(nn),dx,quant%ports(pp)%TETM_arbi(nn),quant%ports(pp)%A_n_arbi(nn) 
+				
+				if(quant%ports(pp)%TETM_arbi(nn)==1)then
+					quant%ports(pp)%impedance_n_arbi(nn)=Bigvalue
+					if(quant%wavenum > quant%ports(pp)%kc_arbi(nn))then
+						betanm=sqrt(quant%wavenum**2d0-quant%ports(pp)%kc_arbi(nn)**2d0)
+						quant%ports(pp)%impedance_n_arbi(nn)=quant%wavenum*impedence0/betanm
+						if(MyID==Main_ID)write(*,*)pp,'ARBITARY',nn,'TE',quant%ports(pp)%kc_arbi(nn),quant%wavenum,quant%ports(pp)%impedance_n_arbi(nn)
+					endif
+				else if(quant%ports(pp)%TETM_arbi(nn)==2)then
+					quant%ports(pp)%impedance_n_arbi(nn)=Bigvalue
+					if(quant%wavenum > quant%ports(pp)%kc_arbi(nn))then
+						betanm=sqrt(quant%wavenum**2d0-quant%ports(pp)%kc_arbi(nn)**2d0)
+						quant%ports(pp)%impedance_n_arbi(nn)=betanm*impedence0/quant%wavenum
+						if(MyID==Main_ID)write(*,*)pp,'ARBITARY',nn,'TM',quant%ports(pp)%kc_arbi(nn),quant%wavenum,quant%ports(pp)%impedance_n_arbi(nn)
+					endif				
+				endif
+				
+
+				do ii=1,quant%ports(pp)%Ny_arbi
+					read(22,*)Ex_arbi((ii-1)*quant%ports(pp)%Nx_arbi+1:ii*quant%ports(pp)%Nx_arbi)
+				enddo
+				do ii=1,quant%ports(pp)%Ny_arbi
+					read(22,*)Ey_arbi((ii-1)*quant%ports(pp)%Nx_arbi+1:ii*quant%ports(pp)%Nx_arbi)
+				enddo
+				close(22)
+
+				do ii=1,quant%ports(pp)%Nx_arbi
+					xx(ii)=(ii-1)*dx+dx/2
+				enddo
+				do ii=1,quant%ports(pp)%Ny_arbi
+					yy(ii)=(ii-1)*dx+dx/2
+				enddo
+
+				do cnt=1,quant%ports(pp)%Nunk
+					call Port_e_nxe_dot_rwg_arbi(edge+cnt,pp,nn,quant%ports(pp)%e_dot_rwg_arbi(cnt,nn),quant%ports(pp)%nxe_dot_rwg_arbi(cnt,nn),quant,Ex_arbi,Ey_arbi,xx,yy,quant%ports(pp)%Nx_arbi,quant%ports(pp)%Ny_arbi)
+				enddo
+
+			enddo
+			deallocate(Ex_arbi)
+			deallocate(Ey_arbi)
+			deallocate(xx)
+			deallocate(yy)
+
 		else
 			write(*,*)'unrecognized port type',quant%ports(pp)%type
 			stop
 		endif
 
-		allocate(quant%ports(pp)%nxe_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
-		allocate(quant%ports(pp)%e_dot_rwg(quant%ports(pp)%Nunk,quant%ports(pp)%nmax+1,quant%ports(pp)%mmax+off,2,npolar))
-		do cnt=1,quant%ports(pp)%Nunk
-			do rr=1,npolar
-				do nn=0,quant%ports(pp)%nmax
-					do mm=1-off,quant%ports(pp)%mmax
-						if(mm>0 .or. nn>0)then
-						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
-						call Port_e_dot_rwg(edge+cnt,pp,mm,nn,1,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,1,rr),quant)
-						endif
-					enddo
-				enddo
-				do nn=0,quant%ports(pp)%nmax
-					do mm=1-off,quant%ports(pp)%mmax
-						if(mm>0 .or. nn>0)then
-						call Port_nxe_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%nxe_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
-						call Port_e_dot_rwg(edge+cnt,pp,mm,nn,2,rr,quant%ports(pp)%e_dot_rwg(cnt,nn+1,mm+off,2,rr),quant)
-						endif
-					enddo
-				enddo
-			enddo
-		enddo
 		edge =edge+quant%ports(pp)%Nunk
 	enddo
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',secnds(T0),'Seconds'
@@ -2545,7 +2733,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	integer,allocatable:: port_of_patch(:),cnt_patch(:)
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:),Ht_at_patch(:,:),Et_at_patch(:,:)
 	complex(kind=8):: field(3),cpoint(3), volt_acc
-	real(kind=8) ln, area,point(3), Ht2int, dx(3)
+	real(kind=8) ln, area,point(3), Ht2int, dx(3),Pport
 	character(4096)::string
 	real(kind=8),allocatable::xn(:),yn(:),zn(:),wn(:), weight_at_patch(:),ExH_at_ports(:,:)
 	character(len=1024)  :: substring,substring1,model
@@ -2826,8 +3014,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 		do edge=msh%idxs,msh%idxe
 			edge_n = msh%new2old(edge)
-			if(edge_n>quant%Nunk-quant%Nunk_port)then
-				edge_n = edge_n - quant%Nunk_port
+			if(edge_n>quant%Nunk_int .and. edge_n<=quant%Nunk-quant%Nunk_port)then
+				! edge_n = edge_n - quant%Nunk_port
 				ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
 				do jj=3,4
 					patch = quant%info_unk(jj,edge_n)
@@ -2851,15 +3039,6 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				do jj=3,4
 					patch = quant%info_unk(jj,edge_n)
 					area=triangle_area(patch,quant)
-
-					cntn = quant%Nunk_int
-					do ppn=1,quant%Nport
-						if(edge_n<=cntn+quant%ports(ppn)%Nunk)then
-							port_of_patch(patch)=ppn
-							exit
-						endif
-						cntn = cntn + quant%ports(ppn)%Nunk
-					enddo
 
 					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 					do j=1,quant%integral_points
@@ -2895,9 +3074,12 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 					ExH_at_ports(:,port) = ExH_at_ports(:,port) + point
 				endif
 			enddo
+			Pport = 0
 			do pp=1,quant%Nport
 				write(*,*)'   power at port ',pp, dot_product(ExH_at_ports(:,pp),quant%ports(pp)%z)
+				Pport = Pport + dot_product(ExH_at_ports(:,pp),quant%ports(pp)%z)
 			enddo
+			write(*,*)'   P_wall/P_ports: ', Ht2int/abs(Pport)
 		endif
 		deallocate(Et_at_patch)
 		deallocate(port_of_patch)
