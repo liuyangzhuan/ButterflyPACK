@@ -2449,6 +2449,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     if(MyID==Main_ID)write (*,*) ''
     if(MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
     if(MyID==Main_ID)write (*,*) 'Nunk:',quant%Nunk
+    if(MyID==Main_ID)write (*,*) 'Nunk_int:',quant%Nunk_int
+    if(MyID==Main_ID)write (*,*) 'Nunk_port:',quant%Nunk_port
 	if(MyID==Main_ID)write (*,*) 'minedgelength:',quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'wavelength/minedgelength:',quant%wavelength/quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'maxedgelength:',quant%maxedgelength
@@ -3039,7 +3041,14 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				do jj=3,4
 					patch = quant%info_unk(jj,edge_n)
 					area=triangle_area(patch,quant)
-
+					cntn = quant%Nunk_int
+					do ppn=1,quant%Nport
+						if(edge_n<=cntn+quant%ports(ppn)%Nunk)then
+							port_of_patch(patch)=ppn
+							exit
+						endif
+						cntn = cntn + quant%ports(ppn)%Nunk
+					enddo
 					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 					do j=1,quant%integral_points
 						an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
