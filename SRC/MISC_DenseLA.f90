@@ -285,7 +285,7 @@ contains
       if (mm == 1) then
          UU(1, 1) = 1d0
          Singular(1) = fnorm(Matrix, mm, nn)
-         if (Singular(1) < SafeUnderflow) then
+         if (Singular(1) < BPACK_SafeUnderflow) then
             VV = 0d0
          else
             VV = Matrix/Singular(1)
@@ -294,14 +294,14 @@ contains
       elseif (nn == 1) then
          VV(1, 1) = 1d0
          Singular(1) = fnorm(Matrix, mm, nn)
-         if (Singular(1) < SafeUnderflow) then
+         if (Singular(1) < BPACK_SafeUnderflow) then
             UU = 0d0
          else
             UU = Matrix/Singular(1)
          endif
          if (present(flop)) flop = mm*nn
       else
-         if (fnorm(Matrix, mm, nn) < SafeUnderflow) then
+         if (fnorm(Matrix, mm, nn) < BPACK_SafeUnderflow) then
             Singular = 0
             UU = 0
             VV = 0

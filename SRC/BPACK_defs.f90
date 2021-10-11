@@ -39,15 +39,14 @@ module BPACK_DEFS
 #ifdef PGI
     integer, external :: iargc
 #endif
-    integer, parameter::dp = kind(0.0d0), sp = kind(0.0)
-    real(kind=8), parameter :: pi = 4d0*atan(1d0)
-    complex(kind=8), parameter :: junit = (0d0, 1d0)
-    real(kind=8), parameter :: Bigvalue = 1d300
-    integer, parameter :: BigINT = 2147483647
-    real(kind=8), parameter:: SafeUnderflow = 1D-30
-    real(kind=8), parameter:: SafeEps = 1D-14
-    DT, parameter :: cone = 1d0
-    DT, parameter :: czero = 0d0
+    real(kind=8), parameter :: BPACK_pi = 4d0*atan(1d0)
+    complex(kind=8), parameter :: BPACK_junit = (0d0, 1d0)
+    real(kind=8), parameter :: BPACK_Bigvalue = 1d300
+    integer, parameter :: BPACK_BigINT = 2147483647
+    real(kind=8), parameter:: BPACK_SafeUnderflow = 1D-30
+    real(kind=8), parameter:: BPACK_SafeEps = 1D-14
+    DT, parameter :: BPACK_cone = 1d0
+    DT, parameter :: BPACK_czero = 0d0
     integer, parameter :: Main_ID = 0 ! Head MPI rank
     integer, parameter :: nbslpk = 32 ! blacs/scalapack block size
     integer, parameter :: Rows_per_processor = 1 ! depreciated
@@ -57,11 +56,11 @@ module BPACK_DEFS
     integer, parameter:: msg_chunk = 100000 ! used to determine message tag and hence the massage size
 
     !**** parameters for CEM
-    real(kind=8), parameter :: cd = 299792458d0 ! free-space speed of light
-    real(kind=8), parameter :: eps0 = 1d7/(4d0*pi*cd**2) ! free-space permittivity
-    real(kind=8), parameter :: mu0 = pi*4d-7 ! free-space permeability
-    real(kind=8), parameter :: gamma = 1.781072418d0 ! gamma constant
-    real(kind=8), parameter :: impedence0 = sqrt(mu0/eps0) ! free-space wave impedance
+    real(kind=8), parameter :: BPACK_cd = 299792458d0 ! free-space speed of light
+    real(kind=8), parameter :: BPACK_eps0 = 1d7/(4d0*BPACK_pi*BPACK_cd**2) ! free-space permittivity
+    real(kind=8), parameter :: BPACK_mu0 = BPACK_pi*4d-7 ! free-space permeability
+    real(kind=8), parameter :: BPACK_gamma = 1.781072418d0 ! BPACK_gamma constant
+    real(kind=8), parameter :: BPACK_impedence0 = sqrt(BPACK_mu0/BPACK_eps0) ! free-space wave impedance
 
     !**** solver parameters
     integer, parameter:: DIRECT = 1         ! use factored HODLR as direct solver
@@ -249,7 +248,7 @@ module BPACK_DEFS
         integer level_butterfly ! butterfly levels
         integer:: level_half = 0 ! the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 ! maximum butterfly ranks
-        integer:: rankmin=BigINT ! minimum butterfly ranks
+        integer:: rankmin=BPACK_BigINT ! minimum butterfly ranks
         integer dimension_rank ! estimated maximum rank
         integer M, N ! size of the block
         integer M_loc, N_loc ! local size of the block

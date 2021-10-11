@@ -107,16 +107,16 @@ contains
 
 					if (flag==1) then
 
-						value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*(1-junit/pi*(3*LOG(3*gamma*quant%wavenum*quant%Delta_ll/4.0)-LOG(gamma*quant%wavenum*quant%Delta_ll/4.0)-2))
+						value_e=quant%wavenum*BPACK_impedence0/4.0*quant%Delta_ll*(1-BPACK_junit/BPACK_pi*(3*LOG(3*BPACK_gamma*quant%wavenum*quant%Delta_ll/4.0)-LOG(BPACK_gamma*quant%wavenum*quant%Delta_ll/4.0)-2))
 
 					else
 
 						r_mn=(quant%xyz(1,quant%info_unk(0,edge_m))-quant%xyz(1,quant%info_unk(0,edge_n)))**2+(quant%xyz(2,quant%info_unk(0,edge_m))-quant%xyz(2,quant%info_unk(0,edge_n)))**2
 						r_mn=sqrt(r_mn)
-						value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*Hankel02_Func(quant%wavenum*r_mn)
+						value_e=quant%wavenum*BPACK_impedence0/4.0*quant%Delta_ll*Hankel02_Func(quant%wavenum*r_mn)
 					endif
 				else
-					value_e=quant%wavenum*impedence0/4.0*quant%Delta_ll*(1.0-junit*2.0/pi*(LOG(gamma*quant%wavenum*quant%Delta_ll/4.0)-1.0))
+					value_e=quant%wavenum*BPACK_impedence0/4.0*quant%Delta_ll*(1.0-BPACK_junit*2.0/BPACK_pi*(LOG(BPACK_gamma*quant%wavenum*quant%Delta_ll/4.0)-1.0))
 				endif
 
 			class default
@@ -189,7 +189,7 @@ contains
 		type(mesh)::msh
 		type(quant_EMCURV)::quant
 
-		phase=junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(dphi*pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(dphi*pi/180.))
+		phase=BPACK_junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(dphi*BPACK_pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(dphi*BPACK_pi/180.))
 		ctemp_1=curr*quant%Delta_ll*exp(phase)
 
 		return
@@ -230,7 +230,7 @@ contains
 
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
+			rcs=(abs(BPACK_impedence0*ctemp))**2/4d0*quant%wavenum
 			!rcs=rcs/quant%wavelength
 			rcs=10*log10(rcs)
 			if(ptree%MyID==Main_ID)write(100,*)dphi,rcs
@@ -269,7 +269,7 @@ contains
 
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-			rcs=(abs(impedence0*ctemp))**2/4d0*quant%wavenum
+			rcs=(abs(BPACK_impedence0*ctemp))**2/4d0*quant%wavenum
 			!rcs=rcs/quant%wavelength
 			rcs=10*log10(rcs)
 
@@ -290,7 +290,7 @@ contains
 		type(mesh)::msh
 		type(quant_EMCURV)::quant
 
-		phase=junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(phi*pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(phi*pi/180.))
+		phase=BPACK_junit*quant%wavenum*(quant%xyz(1,quant%info_unk(0,edge))*cos(phi*BPACK_pi/180.)+quant%xyz(2,quant%info_unk(0,edge))*sin(phi*BPACK_pi/180.))
 		value=exp(phase)
 
 		return
@@ -424,7 +424,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 
     elseif (quant%model2d==5) then !************cylinder*****************
 
-        quant%Delta_ll=  2.0d0*pi/Maxedge
+        quant%Delta_ll=  2.0d0*BPACK_pi/Maxedge
         quant%maxnode=2*Maxedge
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         quant%xyz(1,0)=1.0d0 ; quant%xyz(2,0)=0.0d0
@@ -520,16 +520,16 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 
 
 
-        quant%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
+        quant%Delta_ll=1d0*BPACK_pi/Maxedge !2.0d0*BPACK_pi*5d0/6d0/Maxedge
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
-        quant%xyz(1,0)=cos(0*pi) ; quant%xyz(2,0)=sin(0*pi)
+        quant%xyz(1,0)=cos(0*BPACK_pi) ; quant%xyz(2,0)=sin(0*BPACK_pi)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
             dx=node*quant%Delta_ll
-            quant%xyz(1,node*2)=cos(0*pi+dx)
-            quant%xyz(2,node*2)=sin(0*pi+dx)
+            quant%xyz(1,node*2)=cos(0*BPACK_pi+dx)
+            quant%xyz(2,node*2)=sin(0*BPACK_pi+dx)
         enddo
         !$omp end parallel do
 
@@ -552,9 +552,9 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
     elseif (quant%model2d==8) then   !************corrugated open cylinder*****************
 		M = 0.2d0*quant%wavelength
 		L = 1.5d0*quant%wavelength
-        phi_start = 3d0/2d0*pi
+        phi_start = 3d0/2d0*BPACK_pi
 
-		quant%Delta_ll=1d0*pi/Maxedge !2.0d0*pi*5d0/6d0/Maxedge
+		quant%Delta_ll=1d0*BPACK_pi/Maxedge !2.0d0*BPACK_pi*5d0/6d0/Maxedge
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
@@ -562,8 +562,8 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
             dx=node*quant%Delta_ll
-            quant%xyz(1,node*2)=(1+M*sin(2*pi*dx/L))*cos(phi_start+dx)
-            quant%xyz(2,node*2)=(1+M*sin(2*pi*dx/L))*sin(phi_start+dx)
+            quant%xyz(1,node*2)=(1+M*sin(2*BPACK_pi*dx/L))*cos(phi_start+dx)
+            quant%xyz(2,node*2)=(1+M*sin(2*BPACK_pi*dx/L))*sin(phi_start+dx)
         enddo
         !$omp end parallel do
 
@@ -593,13 +593,13 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
 
-		Am = M*sin(pi/2-2*pi/L)-M
+		Am = M*sin(BPACK_pi/2-2*BPACK_pi/L)-M
 		quant%xyz(1,0)=-1d0/sqrt(2d0)+Am/sqrt(2d0); quant%xyz(2,0)=1d0/sqrt(2d0)+Am/sqrt(2d0)
 
         !$omp parallel do default(shared) private(node,dx,Am)
         do node=1, Maxedge/2
             dx=node*quant%Delta_ll
-			Am = M*sin(2*pi*dx/L+pi/2-2*pi/L)-M
+			Am = M*sin(2*BPACK_pi*dx/L+BPACK_pi/2-2*BPACK_pi/L)-M
 
             quant%xyz(1,node*2)=(dx-1d0)/sqrt(2d0)+Am/sqrt(2d0)
             quant%xyz(2,node*2)=(1d0-dx)/sqrt(2d0)+Am/sqrt(2d0)
@@ -608,7 +608,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         !$omp parallel do default(shared) private(node,dx,Am)
         do node=1, Maxedge/2
             dx=node*quant%Delta_ll
-			Am = M*sin(2*pi*(dx+1)/L+pi/2-2*pi/L)-M
+			Am = M*sin(2*BPACK_pi*(dx+1)/L+BPACK_pi/2-2*BPACK_pi/L)-M
 
             quant%xyz(1,node*2+Maxedge)=dx/sqrt(2d0)-Am/sqrt(2d0)
             quant%xyz(2,node*2+Maxedge)=dx/sqrt(2d0)+Am/sqrt(2d0)
@@ -780,20 +780,20 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		quant%corner_points(2,6) = (L3)/sqrt(2d0)
 
     elseif (quant%model2d==12) then   !************ spiral line *****************
-		angle=2*pi !3*pi !2*pi
+		angle=2*BPACK_pi !3*BPACK_pi !2*BPACK_pi
 		r_st=1d0
-		r_ed=1d0+angle/pi
+		r_ed=1d0+angle/BPACK_pi
 		delta_r = (r_ed-r_st)/Maxedge
         quant%Delta_ll=angle/Maxedge
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
-        quant%xyz(1,0)=r_st*cos(0*pi) ; quant%xyz(2,0)=r_st*sin(0*pi)
+        quant%xyz(1,0)=r_st*cos(0*BPACK_pi) ; quant%xyz(2,0)=r_st*sin(0*BPACK_pi)
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge
             dx=node*quant%Delta_ll
-            quant%xyz(1,node*2)=cos(0*pi+dx)*(r_st+node*delta_r)
-            quant%xyz(2,node*2)=sin(0*pi+dx)*(r_st+node*delta_r)
+            quant%xyz(1,node*2)=cos(0*BPACK_pi+dx)*(r_st+node*delta_r)
+            quant%xyz(2,node*2)=sin(0*BPACK_pi+dx)*(r_st+node*delta_r)
         enddo
         !$omp end parallel do
 
@@ -823,7 +823,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 
 		Maxedge_cell = Maxedge/(nr*nc)
 
-        quant%Delta_ll=3d0/2d0*pi/Maxedge_cell !2.0d0*pi*5d0/6d0/Maxedge
+        quant%Delta_ll=3d0/2d0*BPACK_pi/Maxedge_cell !2.0d0*BPACK_pi*5d0/6d0/Maxedge
         quant%maxnode=nr*nc*(2*Maxedge_cell+1)
 		allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
@@ -833,12 +833,12 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		nodeoff = ((ii-1)*nc+jj-1)*(2*Maxedge_cell+1)
 		edgeoff = ((ii-1)*nc+jj-1)*Maxedge_cell
 
-        quant%xyz(1,0+nodeoff)=cos(0*pi)+ (jj-1)*spacec ; quant%xyz(2,0+nodeoff)=sin(0*pi) + (ii-1)*spacer
+        quant%xyz(1,0+nodeoff)=cos(0*BPACK_pi)+ (jj-1)*spacec ; quant%xyz(2,0+nodeoff)=sin(0*BPACK_pi) + (ii-1)*spacer
         !$omp parallel do default(shared) private(node,dx)
         do node=1, Maxedge_cell
             dx=node*quant%Delta_ll
-            quant%xyz(1,node*2+nodeoff)=cos(0*pi+dx) + (jj-1)*spacec
-            quant%xyz(2,node*2+nodeoff)=sin(0*pi+dx) + (ii-1)*spacer
+            quant%xyz(1,node*2+nodeoff)=cos(0*BPACK_pi+dx) + (jj-1)*spacec
+            quant%xyz(2,node*2+nodeoff)=sin(0*BPACK_pi+dx) + (ii-1)*spacer
         enddo
         !$omp end parallel do
 
@@ -868,7 +868,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		quant%maxedgelength = max(quant%maxedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge))))**2))
 	end do
 
-	quant%minedgelength = BigValue
+	quant%minedgelength = BPACK_Bigvalue
 	do edge=1,Maxedge
 		quant%minedgelength = min(quant%minedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
 	end do
@@ -1057,7 +1057,7 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
 	real(kind=8) wavelength
 	integer MPIcomm
 
-	real(kind=8),parameter :: cd = 299792458d0
+	real(kind=8),parameter :: BPACK_cd = 299792458d0
 	integer seed_myid(50)
 	integer times(8)
 	integer edge
@@ -1078,8 +1078,8 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
 	quant%wavelength=wavelength
 	quant%RCS_static=1
     quant%RCS_Nsample=2000
-    quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
-    quant%wavenum=2*pi/quant%wavelength
+    quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
+    quant%wavenum=2*BPACK_pi/quant%wavelength
 	! quant%rank_approximate_para1=6.0
     ! quant%rank_approximate_para2=6.0
     ! quant%rank_approximate_para3=6.0

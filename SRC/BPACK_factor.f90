@@ -99,7 +99,7 @@ contains
             stats%Flop_Factor = stats%Flop_Factor + flop
             deallocate (ipiv)
 #else
-         call GeneralInverse(nn, nn, ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, SafeEps, Flops=flop)
+         call GeneralInverse(nn, nn, ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, BPACK_SafeEps, Flops=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop
 #endif
 
@@ -1903,14 +1903,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 block_agent%butterflyU%blocks(1)%matrix = block1%butterflyU%blocks(1)%matrix
                 allocate(block_agent%butterflyV%blocks(1)%matrix(block_agent%N_loc,rank))
                 block_agent%butterflyV%blocks(1)%matrix=0
-                call Hmat_block_MVP_dat(block2, 'T', block2%headm, block2%headn, rank, block1%butterflyV%blocks(1)%matrix, block1%N_loc, block_agent%butterflyV%blocks(1)%matrix, block_agent%N_loc, cone, ptree, stats)
+                call Hmat_block_MVP_dat(block2, 'T', block2%headm, block2%headn, rank, block1%butterflyV%blocks(1)%matrix, block1%N_loc, block_agent%butterflyV%blocks(1)%matrix, block_agent%N_loc, BPACK_cone, ptree, stats)
             elseif (block2%style == 2) then
                 rank = size(block2%butterflyV%blocks(1)%matrix,2)
                 allocate(block_agent%butterflyV%blocks(1)%matrix(block_agent%N_loc,rank))
                 block_agent%butterflyV%blocks(1)%matrix = block2%butterflyV%blocks(1)%matrix
                 allocate(block_agent%butterflyU%blocks(1)%matrix(block_agent%M_loc,rank))
                 block_agent%butterflyU%blocks(1)%matrix=0
-                call Hmat_block_MVP_dat(block1, 'N', block1%headm, block1%headn, rank, block2%butterflyU%blocks(1)%matrix, block2%M_loc, block_agent%butterflyU%blocks(1)%matrix, block_agent%M_loc, cone, ptree, stats)
+                call Hmat_block_MVP_dat(block1, 'N', block1%headm, block1%headn, rank, block2%butterflyU%blocks(1)%matrix, block2%M_loc, block_agent%butterflyU%blocks(1)%matrix, block_agent%M_loc, BPACK_cone, ptree, stats)
             else
                 write(*,*)'not supported style of block1 and block2 in Hmat_add_multiply_Hblock3'
                 stop

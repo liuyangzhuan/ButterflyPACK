@@ -1812,7 +1812,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix(rank, dimension_n))
                      ! call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j-1)%matrix, block_i%ButterflyV%blocks(2*index_j-1)%matrix, &
                      ! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j-1)%matrix,rank,dimension_n,nn)
-                     call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, rank, block_i%ButterflyV%blocks(2*index_j - 1)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
+                     call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, rank, block_i%ButterflyV%blocks(2*index_j - 1)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, 'N', 'T', rank, dimension_n, nn, BPACK_cone, BPACK_czero)
 
 #ifndef NDEBUG
                      if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
@@ -1826,7 +1826,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix(rank, dimension_n))
                      ! call gemmNT_omp(block_i%ButterflyKerl(level)%blocks(index_i,2*index_j)%matrix, block_i%ButterflyV%blocks(2*index_j)%matrix, &
                      ! &block_o%ButterflyKerl(level_butterfly-level_butterfly_loc+level)%blocks(index_i+index_i_start,2*index_j)%matrix,rank,dimension_n,nn)
-                     call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, rank, block_i%ButterflyV%blocks(2*index_j)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, 'N', 'T', rank, dimension_n, nn, cone, czero)
+                     call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, rank, block_i%ButterflyV%blocks(2*index_j)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, 'N', 'T', rank, dimension_n, nn, BPACK_cone, BPACK_czero)
 
 #ifndef NDEBUG
                      if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
@@ -1894,7 +1894,7 @@ contains
                      ! call gemm_omp(block_i%ButterflyU%blocks(2*index_i-1)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i-1,index_j)%matrix,&
                      ! &block_o%ButterflyKerl(level)%blocks(2*index_i-1,index_j+index_j_start)%matrix,dimension_m,rank,mm)
 
-                     call gemmf90(block_i%ButterflyU%blocks(2*index_i - 1)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, cone, czero)
+                     call gemmf90(block_i%ButterflyU%blocks(2*index_i - 1)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, BPACK_cone, BPACK_czero)
 
 ! write(*,*)'good 1.1'
 #ifndef NDEBUG
@@ -1910,7 +1910,7 @@ contains
                      ! call gemm_omp(block_i%ButterflyU%blocks(2*index_i)%matrix, block_i%ButterflyKerl(level)%blocks(2*index_i,index_j)%matrix,&
                      ! &block_o%ButterflyKerl(level)%blocks(2*index_i,index_j+index_j_start)%matrix,dimension_m,rank,mm)
 
-                     call gemmf90(block_i%ButterflyU%blocks(2*index_i)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, cone, czero)
+                     call gemmf90(block_i%ButterflyU%blocks(2*index_i)%matrix, dimension_m, block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix, mm, block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, 'N', 'N', dimension_m, rank, mm, BPACK_cone, BPACK_czero)
 
 ! write(*,*)'good 2'
 #ifndef NDEBUG
@@ -4689,7 +4689,7 @@ contains
 
                   allocate (block_c_o%ButterflyU%blocks(1)%matrix(M1, nn1))
                   allocate (block_c_o%ButterflyV%blocks(1)%matrix(N1, nn1))
-                  call gemmf90(block_c_i%ButterflyU%blocks(1)%matrix, M1, block_c_i%ButterflyKerl(1)%blocks(1, 1)%matrix, mm1, block_c_o%ButterflyU%blocks(1)%matrix, M1, 'N', 'N', M1, nn1, mm1, cone, czero)
+                  call gemmf90(block_c_i%ButterflyU%blocks(1)%matrix, M1, block_c_i%ButterflyKerl(1)%blocks(1, 1)%matrix, mm1, block_c_o%ButterflyU%blocks(1)%matrix, M1, 'N', 'N', M1, nn1, mm1, BPACK_cone, BPACK_czero)
                   block_c_o%ButterflyV%blocks(1)%matrix = block_c_i%ButterflyV%blocks(1)%matrix
                else ! L-level butterfly becomes (L-2)-level butterfly
                   block_c_o%level_butterfly = block_i%level_butterfly - 2
@@ -4720,8 +4720,8 @@ contains
                            matrixtemp1 = 0
                            allocate (matrixtemp2(mm2, kk))
                            matrixtemp2 = 0
-                           call gemmf90(block_c_i%ButterflyV%blocks(2*ii - 1)%matrix, mm1, block_c_i%ButterflyKerl(1)%blocks(1, 2*ii - 1)%matrix, kk, matrixtemp1, mm1, 'N', 'T', mm1, kk, nn1, cone, czero)
-                           call gemmf90(block_c_i%ButterflyV%blocks(2*ii)%matrix, mm2, block_c_i%ButterflyKerl(1)%blocks(1, 2*ii)%matrix, kk, matrixtemp2, mm2, 'N', 'T', mm2, kk, nn2, cone, czero)
+                           call gemmf90(block_c_i%ButterflyV%blocks(2*ii - 1)%matrix, mm1, block_c_i%ButterflyKerl(1)%blocks(1, 2*ii - 1)%matrix, kk, matrixtemp1, mm1, 'N', 'T', mm1, kk, nn1, BPACK_cone, BPACK_czero)
+                           call gemmf90(block_c_i%ButterflyV%blocks(2*ii)%matrix, mm2, block_c_i%ButterflyKerl(1)%blocks(1, 2*ii)%matrix, kk, matrixtemp2, mm2, 'N', 'T', mm2, kk, nn2, BPACK_cone, BPACK_czero)
                            block_c_o%ButterflyV%blocks(ii)%matrix(1:mm1, 1:kk) = matrixtemp1
                            block_c_o%ButterflyV%blocks(ii)%matrix(1 + mm1:mm1 + mm2, 1:kk) = matrixtemp2
                            deallocate (matrixtemp1)
@@ -4748,8 +4748,8 @@ contains
                            matrixtemp1 = 0
                            allocate (matrixtemp2(mm2, kk))
                            matrixtemp2 = 0
-                           call gemmf90(block_c_i%ButterflyU%blocks(2*ii - 1)%matrix, mm1, block_c_i%ButterflyKerl(block_c_i%level_butterfly)%blocks(2*ii - 1, 1)%matrix, nn1, matrixtemp1, mm1, 'N', 'N', mm1, kk, nn1, cone, czero)
-                           call gemmf90(block_c_i%ButterflyU%blocks(2*ii)%matrix, mm2, block_c_i%ButterflyKerl(block_c_i%level_butterfly)%blocks(2*ii, 1)%matrix, nn2, matrixtemp2, mm2, 'N', 'N', mm2, kk, nn2, cone, czero)
+                           call gemmf90(block_c_i%ButterflyU%blocks(2*ii - 1)%matrix, mm1, block_c_i%ButterflyKerl(block_c_i%level_butterfly)%blocks(2*ii - 1, 1)%matrix, nn1, matrixtemp1, mm1, 'N', 'N', mm1, kk, nn1, BPACK_cone, BPACK_czero)
+                           call gemmf90(block_c_i%ButterflyU%blocks(2*ii)%matrix, mm2, block_c_i%ButterflyKerl(block_c_i%level_butterfly)%blocks(2*ii, 1)%matrix, nn2, matrixtemp2, mm2, 'N', 'N', mm2, kk, nn2, BPACK_cone, BPACK_czero)
                            block_c_o%ButterflyU%blocks(ii)%matrix(1:mm1, 1:kk) = matrixtemp1
                            block_c_o%ButterflyU%blocks(ii)%matrix(1 + mm1:mm1 + mm2, 1:kk) = matrixtemp2
                            deallocate (matrixtemp1)
@@ -6362,21 +6362,21 @@ contains
          if (chara == 'N') then !Vout=U*V^T*Vin
             allocate (Vout_tmp(M,Nrnd))
             Vout_tmp = 0
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
             allocate (Vout_tmp(N,Nrnd))
             Vout_tmp = 0
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
@@ -6477,7 +6477,7 @@ contains
                         allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
                         BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, random1(1 + arr_acc_n(j), 1), ldi, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, random1(1 + arr_acc_n(j), 1), ldi, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -6532,7 +6532,7 @@ contains
                         allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
                         BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, cone, cone, flop=flop)
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -6540,7 +6540,7 @@ contains
 #ifdef HAVE_TASKLOOP
                         !$omp end atomic
 #endif
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, cone, cone, flop=flop)
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -6710,7 +6710,7 @@ contains
                                  allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
                                  BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                               endif
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                               !$omp atomic
 #endif
@@ -6727,7 +6727,7 @@ contains
                                  BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix = 0
                               endif
                               ! !$omp end critical
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                               !$omp atomic
 #endif
@@ -6770,7 +6770,7 @@ contains
                               allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
                               BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                            endif
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                            !$omp atomic
 #endif
@@ -6787,7 +6787,7 @@ contains
                               BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix = 0
                            endif
                            ! !$omp end critical
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, cone, cone, flop=flop)
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                            !$omp atomic
 #endif
@@ -6891,7 +6891,7 @@ contains
                         allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
                         BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, random1(1 + arr_acc_m(i), 1), ldi, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, random1(1 + arr_acc_m(i), 1), ldi, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, BPACK_cone, BPACK_czero, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -6946,7 +6946,7 @@ contains
                         allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
                         BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, cone, cone, flop=flop)
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -6954,7 +6954,7 @@ contains
 #ifdef HAVE_TASKLOOP
                         !$omp end atomic
 #endif
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, cone, cone, flop=flop)
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                         !$omp atomic
 #endif
@@ -7122,7 +7122,7 @@ contains
                                  BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                               endif
                               ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                               !$omp atomic
 #endif
@@ -7139,7 +7139,7 @@ contains
                                  BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
                               endif
                               ! !$omp end critical
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                               !$omp atomic
 #endif
@@ -7179,7 +7179,7 @@ contains
                               BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
                            endif
                            ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                            !$omp atomic
 #endif
@@ -7194,7 +7194,7 @@ contains
                               allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
                               BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
                            endif
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, cone, cone, flop=flop)
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
 #ifdef HAVE_TASKLOOP
                            !$omp atomic
 #endif
@@ -7327,21 +7327,21 @@ contains
          if (chara == 'N') then !Vout=U*V^T*Vin
             allocate (Vout_tmp(M,Nrnd))
             Vout_tmp = 0
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
             allocate (Vout_tmp(N,Nrnd))
             Vout_tmp = 0
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
@@ -7436,8 +7436,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=BPACK_cone
+                     beta_array=BPACK_cone
                      group_size=1
 
                      cnt=0
@@ -7483,8 +7483,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='N'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=BPACK_cone
+                     beta_array=BPACK_cone
                      group_size=1
 
                      do j=1,2
@@ -7667,8 +7667,8 @@ contains
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='N'
                         transb_array='N'
-                        alpha_array=cone
-                        beta_array=cone
+                        alpha_array=BPACK_cone
+                        beta_array=BPACK_cone
                         group_size=1
 
 
@@ -7738,8 +7738,8 @@ contains
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='N'
                         transb_array='N'
-                        alpha_array=cone
-                        beta_array=cone
+                        alpha_array=BPACK_cone
+                        beta_array=BPACK_cone
                         group_size=1
 
                         cnt=0
@@ -7885,8 +7885,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=BPACK_cone
+                     beta_array=BPACK_cone
                      group_size=1
                      cnt=0
                      do i = 1, blocks%ButterflyU%nblk_loc
@@ -7930,8 +7930,8 @@ contains
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
                      transb_array='N'
-                     alpha_array=cone
-                     beta_array=cone
+                     alpha_array=BPACK_cone
+                     beta_array=BPACK_cone
                      group_size=1
 
                      do i=1,2
@@ -8106,8 +8106,8 @@ contains
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='T'
                         transb_array='N'
-                        alpha_array=cone
-                        beta_array=cone
+                        alpha_array=BPACK_cone
+                        beta_array=BPACK_cone
                         group_size=1
 
                         do ii = 1, 2
@@ -8175,8 +8175,8 @@ contains
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='T'
                         transb_array='N'
-                        alpha_array=cone
-                        beta_array=cone
+                        alpha_array=BPACK_cone
+                        beta_array=BPACK_cone
                         group_size=1
 
                         cnt=0
@@ -8367,21 +8367,21 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
       if (chara == 'N') then !Vout=U*V^T*Vin
          allocate (Vout_tmp(M,Nrnd))
          Vout_tmp = 0
-         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), cone, czero, flop)
+         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
          call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
          call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
          random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
       else if (chara == 'T') then !Vout=V*U^T*Vin
          allocate (Vout_tmp(N,Nrnd))
          Vout_tmp = 0
-         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), cone, czero, flop)
+         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
          call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
          call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, cone, czero, flop)
+         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
          random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
       endif
@@ -8475,8 +8475,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaTrans
                   transb_magma=MagmaNoTrans
-                  alpha_magma=cone
-                  beta_magma=cone
+                  alpha_magma=BPACK_cone
+                  beta_magma=BPACK_cone
                   cnt=0
                   asize=0
                   bsize=0
@@ -8624,8 +8624,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaNoTrans
                      transb_magma=MagmaNoTrans
-                     alpha_magma=cone
-                     beta_magma=cone
+                     alpha_magma=BPACK_cone
+                     beta_magma=BPACK_cone
 
                      cnt=0
                      asize=0
@@ -9058,8 +9058,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_magma=MagmaNoTrans
                         transb_magma=MagmaNoTrans
-                        alpha_magma=cone
-                        beta_magma=cone
+                        alpha_magma=BPACK_cone
+                        beta_magma=BPACK_cone
 
                         cnt=0
                         asize=0
@@ -9305,8 +9305,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaNoTrans
                      transb_magma=MagmaNoTrans
-                     alpha_magma=cone
-                     beta_magma=cone
+                     alpha_magma=BPACK_cone
+                     beta_magma=BPACK_cone
 
                      cnt=0
                      asize=0
@@ -9615,8 +9615,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaTrans
                   transb_magma=MagmaNoTrans
-                  alpha_magma=cone
-                  beta_magma=cone
+                  alpha_magma=BPACK_cone
+                  beta_magma=BPACK_cone
 
                   cnt=0
                   asize=0
@@ -9771,8 +9771,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaTrans
                      transb_magma=MagmaNoTrans
-                     alpha_magma=cone
-                     beta_magma=cone
+                     alpha_magma=BPACK_cone
+                     beta_magma=BPACK_cone
 
                      cnt=0
                      asize=0
@@ -10174,8 +10174,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                         allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_magma=MagmaTrans
                         transb_magma=MagmaNoTrans
-                        alpha_magma=cone
-                        beta_magma=cone
+                        alpha_magma=BPACK_cone
+                        beta_magma=BPACK_cone
 
                         cnt=0
                         asize=0
@@ -10393,8 +10393,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_magma=MagmaTrans
                      transb_magma=MagmaNoTrans
-                     alpha_magma=cone
-                     beta_magma=cone
+                     alpha_magma=BPACK_cone
+                     beta_magma=BPACK_cone
 
                      cnt=0
                      asize=0
@@ -10784,7 +10784,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                      allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
                      BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
-                     call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
                      flops = flops + flop
                   enddo
                   !$omp end parallel do
@@ -10810,7 +10810,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
                      BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, BFvec%vec(level + 1)%blocks(1, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, BFvec%vec(level + 1)%blocks(1, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -10821,7 +10821,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                         allocate (BFvec%vec(level + 1)%blocks(i, 1)%matrix(mm, num_vectors))
                         BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
 
-                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(i, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(i, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
                      enddo
                      !$omp end parallel do
@@ -10855,10 +10855,10 @@ end subroutine BF_block_MVP_dat_batch_magma
                      allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
                      BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, cone, cone, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, BPACK_cone, BPACK_cone, flop=flop)
                      flops = flops + flop
 
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, cone, cone, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, BPACK_cone, BPACK_cone, flop=flop)
                      flops = flops + flop
                   enddo
                   !$omp end parallel do
@@ -10956,7 +10956,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
                      allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
                      BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(0)%blocks(i, 1)%matrix, mm, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, BPACK_cone, BPACK_czero, flop=flop)
                      flops = flops + flop
 
                   enddo
@@ -10984,7 +10984,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
                      allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
                      BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
-                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix, nn, 'N', 'N', nn, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
@@ -10994,7 +10994,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                         rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
                         allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
                         BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
-                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, j)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, cone, czero, flop=flop)
+                        call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, j)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
                      enddo
                      !$omp end parallel do
@@ -11025,9 +11025,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
                      BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
 
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, cone, cone, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, BPACK_cone, BPACK_cone, flop=flop)
                      flops = flops + flop
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, cone, cone, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, BPACK_cone, BPACK_cone, flop=flop)
                      flops = flops + flop
 
                   enddo
@@ -11125,7 +11125,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                matU(ii, :) = blocks%ButterflyU%blocks(1)%matrix(ri, :)
             enddo
             if (blocks%inters(nn)%nc > 0) then
-               call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, czero, blocks%inters(nn)%dat_loc(1, 1), blocks%inters(nn)%nr_loc)
+               call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, BPACK_czero, blocks%inters(nn)%dat_loc(1, 1), blocks%inters(nn)%nr_loc)
             endif
             stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank)
          endif
@@ -12088,7 +12088,7 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
             if (nvec1 > 0) then
                 mat1 = 0
                 mat1(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
-                call gemmf77('N', 'N', mm, nvec1, nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn1 + 2, czero, mat1(3, 1), mm + 2)
+                call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn1 + 2, BPACK_czero, mat1(3, 1), mm + 2)
 #ifdef HAVE_TASKLOOP
                 !$omp atomic
 #endif
@@ -12102,7 +12102,7 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
             if (nvec2 > 0) then
                 mat2 = 0
                 mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(1:2, :)
-                call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
+                call gemmf77('N', 'N', mm, nvec2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(3, 1), nn2 + 2, BPACK_czero, mat2(3, 1), mm + 2)
 #ifdef HAVE_TASKLOOP
                 !$omp atomic
 #endif
@@ -12198,7 +12198,7 @@ subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,pt
             allocate (mat2(mm + 2, nvec2))
             mat2 = 0
             mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
-            call gemmf77('N', 'N', mm, nvec2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn2 + 2, czero, mat2(3, 1), mm + 2)
+            call gemmf77('N', 'N', mm, nvec2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn2 + 2, BPACK_czero, mat2(3, 1), mm + 2)
 
 #ifdef HAVE_TASKLOOP
             !$omp atomic
@@ -12401,7 +12401,7 @@ subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, lev
          mat(ii, :) = blocks%ButterflyU%blocks(index_i_loc_s)%matrix(ri, :)
       enddo
 
-      call gemmf77('N', 'N', nr, nc, rank, cone, mat, nr, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, czero, Vpartial, nr)
+      call gemmf77('N', 'N', nr, nc, rank, BPACK_cone, mat, nr, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, BPACK_czero, Vpartial, nr)
 #ifdef HAVE_TASKLOOP
       !$omp atomic
 #endif
@@ -12711,13 +12711,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             allocate (matrixtemp(mm, nn1))
             matrixtemp = blocks%ButterflyKerl(level)%blocks(i, j)%matrix
             ! call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j)%matrix,mm,nn1,mm)
-            call gemmf90(blocks%ButterflyMiddle(i, index_j)%matrix, mm, matrixtemp, mm, blocks%ButterflyKerl(level)%blocks(i, j)%matrix, mm, 'N', 'N', mm, nn1, mm, cone, czero)
+            call gemmf90(blocks%ButterflyMiddle(i, index_j)%matrix, mm, matrixtemp, mm, blocks%ButterflyKerl(level)%blocks(i, j)%matrix, mm, 'N', 'N', mm, nn1, mm, BPACK_cone, BPACK_czero)
             deallocate (matrixtemp)
 
             allocate (matrixtemp(mm, nn2))
             matrixtemp = blocks%ButterflyKerl(level)%blocks(i, j + 1)%matrix
             ! call gemm_omp(blocks%ButterflyMiddle(i,index_j)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,mm,nn2,mm)
-            call gemmf90(blocks%ButterflyMiddle(i, index_j)%matrix, mm, matrixtemp, mm, blocks%ButterflyKerl(level)%blocks(i, j + 1)%matrix, mm, 'N', 'N', mm, nn2, mm, cone, czero)
+            call gemmf90(blocks%ButterflyMiddle(i, index_j)%matrix, mm, matrixtemp, mm, blocks%ButterflyKerl(level)%blocks(i, j + 1)%matrix, mm, 'N', 'N', mm, nn2, mm, BPACK_cone, BPACK_czero)
             deallocate (matrixtemp)
 
             deallocate (blocks%ButterflyMiddle(i, index_j)%matrix)
@@ -12758,7 +12758,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   allocate (matrixtemp1(mm1, mn_min))
                   matrixtemp1 = 0
                   ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
-                  call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, cone, czero)
+                  call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, BPACK_cone, BPACK_czero)
 
                   deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix)
                   allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix(mm1, mn_min))
@@ -12768,7 +12768,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   mm2 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, 1)
                   allocate (matrixtemp1(mm2, mn_min))
                   ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
-                  call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, cone, czero)
+                  call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, BPACK_cone, BPACK_czero)
                   deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix)
                   allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix(mm2, mn_min))
                   blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix = matrixtemp1
@@ -12823,7 +12823,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      mm1 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, 1)
                      allocate (matrixtemp1(mm1, mn_min))
                      ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
-                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, BPACK_cone, BPACK_czero)
                      deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix)
                      allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix(mm1, mn_min))
                      blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix = matrixtemp1
@@ -12832,7 +12832,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      mm2 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, 1)
                      allocate (matrixtemp1(mm2, mn_min))
                      ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
-                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, BPACK_cone, BPACK_czero)
                      deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix)
                      allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix(mm2, mn_min))
                      blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix = matrixtemp1
@@ -12979,8 +12979,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                            allocate (matrixtemp(rank, num_vectors1 + num_vectors2))
                            matrixtemp=0
-                           call gemmf77('N', 'N', rank, num_vectors1, nn1, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, czero, matrixtemp(1, 1), rank)
-                           call gemmf77('N', 'N', rank, num_vectors2, nn2, cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+1)%matrix, nn2, czero, matrixtemp(1, 1+num_vectors1), rank)
+                           call gemmf77('N', 'N', rank, num_vectors1, nn1, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BPACK_czero, matrixtemp(1, 1), rank)
+                           call gemmf77('N', 'N', rank, num_vectors2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+1)%matrix, nn2, BPACK_czero, matrixtemp(1, 1+num_vectors1), rank)
                         endif
 
                         if(level==level_end)then
@@ -13071,7 +13071,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      num_vectors = size(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)
                      allocate (matrixtemp(mm, num_vectors))
                      matrixtemp = 0
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm, num_vectors))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrixtemp
@@ -13082,7 +13082,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      num_vectors = size(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)
                      allocate (matrixtemp(mm, num_vectors))
                      matrixtemp = 0
-                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, cone, czero, flop=flop)
+                     call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(mm, num_vectors))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix = matrixtemp
@@ -13188,9 +13188,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                            allocate (matrixtemp(num_vectors1 + num_vectors2, rank))
                            matrixtemp=0
-                           call gemmf77('T', 'N', num_vectors1,rank, mm1, cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, czero, matrixtemp(1, 1), num_vectors1 + num_vectors2)
+                           call gemmf77('T', 'N', num_vectors1,rank, mm1, BPACK_cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BPACK_czero, matrixtemp(1, 1), num_vectors1 + num_vectors2)
 
-                           call gemmf77('T', 'N', num_vectors2,rank, mm2, cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+1, index_jj_loc)%matrix, mm2, blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm2, czero, matrixtemp(1+num_vectors1, 1), num_vectors1 + num_vectors2)
+                           call gemmf77('T', 'N', num_vectors2,rank, mm2, BPACK_cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+1, index_jj_loc)%matrix, mm2, blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm2, BPACK_czero, matrixtemp(1+num_vectors1, 1), num_vectors1 + num_vectors2)
                         endif
 
                         if(level==level_end)then
@@ -13287,7 +13287,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      num_vectors = size(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)
                      allocate (matrixtemp(num_vectors,nn))
                      matrixtemp = 0
-                     call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, cone, cone, flop=flop)
+                     call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, BPACK_cone, BPACK_cone, flop=flop)
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(num_vectors,nn))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrixtemp
@@ -13298,7 +13298,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      num_vectors = size(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)
                      allocate (matrixtemp(num_vectors,nn))
                      matrixtemp = 0
-                     call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, cone, cone, flop=flop)
+                     call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, BPACK_cone, BPACK_cone, flop=flop)
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(num_vectors,nn))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix = matrixtemp
@@ -13403,7 +13403,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                mm1 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, 1)
                allocate (matrixtemp1(mm1, mn_min))
                ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
-               call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, cone, czero)
+               call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, BPACK_cone, BPACK_czero)
 
                deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix)
                allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix(mm1, mn_min))
@@ -13413,7 +13413,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                mm2 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, 1)
                allocate (matrixtemp1(mm2, mn_min))
                ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
-               call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, cone, czero)
+               call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, BPACK_cone, BPACK_czero)
                deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix)
                allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix(mm2, mn_min))
                blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix = matrixtemp1
@@ -13472,7 +13472,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      allocate (matrixtemp1(mm1, mn_min))
                      ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2-1,index_j)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
 
-                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, BPACK_cone, BPACK_czero)
 
                      deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix)
                      allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2 - 1, index_j)%matrix(mm1, mn_min))
@@ -13482,7 +13482,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      mm2 = size(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, 1)
                      allocate (matrixtemp1(mm2, mn_min))
                      ! call gemm_omp(blocks%ButterflyKerl(level+1)%blocks(index_i*2,index_j)%matrix,UU,matrixtemp1,mm2,mn_min,rank)
-                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix, mm2, UU, rank, matrixtemp1, mm2, 'N', 'N', mm2, mn_min, rank, BPACK_cone, BPACK_czero)
 
                      deallocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix)
                      allocate (blocks%ButterflyKerl(level + 1)%blocks(index_i*2, index_j)%matrix(mm2, mn_min))
@@ -13492,7 +13492,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      mm1 = size(blocks%ButterflyU%blocks(i)%matrix, 1)
                      allocate (matrixtemp1(mm1, mn_min))
                      ! call gemm_omp(blocks%ButterflyU%blocks(i)%matrix,UU,matrixtemp1,mm1,mn_min,rank)
-                     call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm1, UU, rank, matrixtemp1, mm1, 'N', 'N', mm1, mn_min, rank, BPACK_cone, BPACK_czero)
                      deallocate (blocks%ButterflyU%blocks(i)%matrix)
                      allocate (blocks%ButterflyU%blocks(i)%matrix(mm1, mn_min))
                      blocks%ButterflyU%blocks(i)%matrix = matrixtemp1
@@ -13574,7 +13574,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                nn1 = size(blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix, 2)
                allocate (matrixtemp1(mn_min, nn1))
                ! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,nn1,rank)
-               call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn1, rank, cone, czero)
+               call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn1, rank, BPACK_cone, BPACK_czero)
 
                deallocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix)
                allocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix(mn_min, nn1))
@@ -13584,7 +13584,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                nn2 = size(blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, 2)
                allocate (matrixtemp1(mn_min, nn2))
                ! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,nn2,rank)
-               call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn2, rank, cone, czero)
+               call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn2, rank, BPACK_cone, BPACK_czero)
                deallocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix)
                allocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix(mn_min, nn2))
                blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix = matrixtemp1
@@ -13657,7 +13657,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                      allocate (matrixtemp1(mn_min, nn1))
                      ! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2-1)%matrix,matrixtemp1,mn_min,nn1,rank)
-                     call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn1, rank, cone, czero)
+                     call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn1, rank, BPACK_cone, BPACK_czero)
 
                      deallocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix)
                      allocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2 - 1)%matrix(mn_min, nn1))
@@ -13667,7 +13667,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      nn2 = size(blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, 2)
                      allocate (matrixtemp1(mn_min, nn2))
                      ! call gemm_omp(VV,blocks%ButterflyKerl(level-1)%blocks(index_i,index_j*2)%matrix,matrixtemp1,mn_min,nn2,rank)
-                     call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn2, rank, cone, czero)
+                     call gemmf90(VV, mn_min, blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix, rank, matrixtemp1, mn_min, 'N', 'N', mn_min, nn2, rank, BPACK_cone, BPACK_czero)
 
                      deallocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix)
                      allocate (blocks%ButterflyKerl(level - 1)%blocks(index_i, index_j*2)%matrix(mn_min, nn2))
@@ -13677,7 +13677,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      nn1 = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                      allocate (matrixtemp1(nn1, mn_min))
                      ! call gemmNT_omp(blocks%ButterflyV%blocks(j)%matrix,VV,matrixtemp1,nn1,mn_min,rank)
-                     call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn1, VV, mn_min, matrixtemp1, nn1, 'N', 'T', nn1, mn_min, rank, cone, czero)
+                     call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn1, VV, mn_min, matrixtemp1, nn1, 'N', 'T', nn1, mn_min, rank, BPACK_cone, BPACK_czero)
                      deallocate (blocks%ButterflyV%blocks(j)%matrix)
                      allocate (blocks%ButterflyV%blocks(j)%matrix(nn1, mn_min))
                      blocks%ButterflyV%blocks(j)%matrix = matrixtemp1
@@ -13973,11 +13973,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       if (blocks_l%style == 4) then
          if (trans == 'N') then
             call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -BPACK_cone, ptree, stats)
             call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          else
             call Hmat_Lsolve(blocks_l%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l%sons(2, 1), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -BPACK_cone, ptree, stats)
             call Hmat_Lsolve(blocks_l%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          end if
       else
@@ -14041,11 +14041,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       if (blocks_u%style == 4) then
          if (trans == 'N') then
             call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -BPACK_cone, ptree, stats)
             call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          else
             call Hmat_Usolve(blocks_u%sons(1, 1), trans, idx_start, nvec, Vinout, ld, ptree, stats)
-            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u%sons(1, 2), trans, idx_start, idx_start, nvec, Vinout, ld, Vinout, ld, -BPACK_cone, ptree, stats)
             call Hmat_Usolve(blocks_u%sons(2, 2), trans, idx_start, nvec, Vinout, ld, ptree, stats)
          end if
 
@@ -14098,7 +14098,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                Vintmp = Vin(idxs_n:idxs_n + nn - 1, 1:Nrnd)
                allocate (Vouttmp(mm, Nrnd))
                Vouttmp = 0
-               call gemmf90(blocks%fullmat, mm, Vintmp, nn, Vouttmp, mm, trans, 'N', mm, Nrnd, nn, a, czero)
+               call gemmf90(blocks%fullmat, mm, Vintmp, nn, Vouttmp, mm, trans, 'N', mm, Nrnd, nn, a, BPACK_czero)
                Vout(idxs_m:idxs_m + mm - 1, 1:Nrnd) = Vout(idxs_m:idxs_m + mm - 1, 1:Nrnd) + Vouttmp
                deallocate (Vintmp)
                deallocate (Vouttmp)
@@ -14107,16 +14107,16 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                Vintmp = Vin(idxs_m:idxs_m + mm - 1, 1:Nrnd)
                allocate (Vouttmp(nn, Nrnd))
                Vouttmp = 0
-               call gemmf90(blocks%fullmat, mm, Vintmp, mm, Vouttmp, nn, trans, 'N', nn, Nrnd, mm, a, czero)
+               call gemmf90(blocks%fullmat, mm, Vintmp, mm, Vouttmp, nn, trans, 'N', nn, Nrnd, mm, a, BPACK_czero)
                Vout(idxs_n:idxs_n + nn - 1, 1:Nrnd) = Vout(idxs_n:idxs_n + nn - 1, 1:Nrnd) + Vouttmp
                deallocate (Vintmp)
                deallocate (Vouttmp)
             endif
          else
             if (trans == 'N') then
-               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_n, 1), ldi, Vout(idxs_m, 1), ldo, a, cone, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_n, 1), ldi, Vout(idxs_m, 1), ldo, a, BPACK_cone, ptree, stats)
             else
-               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_m, 1), ldi, Vout(idxs_n, 1), ldo, a, cone, ptree, stats)
+               call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_m, 1), ldi, Vout(idxs_n, 1), ldo, a, BPACK_cone, ptree, stats)
             endif
          endif
       endif
@@ -14166,7 +14166,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          ! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
 
          ! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'N', 'N', M, N, M, cone, czero)
+         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'N', 'N', M, N, M, BPACK_cone, BPACK_czero)
       elseif (chara == 'T') then
          group_m = blocks%row_group  ! Note: row_group and col_group interchanged here
          group_n = blocks%col_group
@@ -14264,8 +14264,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       nproc = ptree%pgrp(pgno)%nproc
       num_blocks = 2**level_p
 
-      MN_p(:, 1) = BigINT
-      MN_p(:, 2) = -BigINT
+      MN_p(:, 1) = BPACK_BigINT
+      MN_p(:, 2) = -BPACK_BigINT
 
       do ii = 1, num_blocks
          ii_new = ii

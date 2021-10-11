@@ -148,7 +148,7 @@ contains
 
 		!!!!**** perform gemm on 2d grid
 		if(myrow/=-1 .and. mycol/=-1)then
-			call pgemmf90(trans,'N',N,num_vect,N,cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,czero,Vout_tmp_2D,1,1,descsVout2D)
+			call pgemmf90(trans,'N',N,num_vect,N,BPACK_cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,BPACK_czero,Vout_tmp_2D,1,1,descsVout2D)
 		endif
 
 

@@ -101,7 +101,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%mesh_normal=1
 	quant%scaling=1d0
 	quant%wavelength=2.0
-	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+	quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1.0
@@ -134,10 +134,10 @@ PROGRAM ButterflyPACK_IE_3D
 							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
-							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+							quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
-							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
+							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -156,7 +156,7 @@ PROGRAM ButterflyPACK_IE_3D
 		endif
 	enddo
 
-    quant%wavenum=2*pi/quant%wavelength
+    quant%wavenum=2*BPACK_pi/quant%wavelength
 
 
    !***********************************************************************

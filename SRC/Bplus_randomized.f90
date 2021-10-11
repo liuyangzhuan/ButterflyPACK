@@ -70,31 +70,31 @@ contains
 
       if (trans == 'N') then
          call BF_block_MVP_dat(block_off1, trans, mm, nn, num_vect_sub,&
-         &Vin2, nn, Vin1, mm, -cone, cone, ptree, stats)
+         &Vin2, nn, Vin1, mm, -BPACK_cone, BPACK_cone, ptree, stats)
 
          ! write(2111,*)abs(Vout)
          Vout1 = Vin1
          call BF_block_MVP_dat(block_schur, trans, mm, mm, num_vect_sub,&
-         &Vout1, mm, Vin1, mm, cone, cone, ptree, stats)
+         &Vout1, mm, Vin1, mm, BPACK_cone, BPACK_cone, ptree, stats)
 
          ! write(2112,*)abs(Vin)
 
          call BF_block_MVP_dat(block_off2, trans, nn, mm, num_vect_sub,&
-         &Vin1, mm, Vin2, nn, -cone, cone, ptree, stats)
+         &Vin1, mm, Vin2, nn, -BPACK_cone, BPACK_cone, ptree, stats)
 
          ! write(2113,*)abs(Vout)
          ! stop
 
       else if (trans == 'T') then
          call BF_block_MVP_dat(block_off2, trans, nn, mm, num_vect_sub,&
-         &Vin2, nn, Vin1, mm, -cone, cone, ptree, stats)
+         &Vin2, nn, Vin1, mm, -BPACK_cone, BPACK_cone, ptree, stats)
 
          Vout1 = Vin1
          call BF_block_MVP_dat(block_schur, trans, mm, mm, num_vect_sub,&
-         &Vout1, mm, Vin1, mm, cone, cone, ptree, stats)
+         &Vout1, mm, Vin1, mm, BPACK_cone, BPACK_cone, ptree, stats)
 
          call BF_block_MVP_dat(block_off1, trans, mm, nn, num_vect_sub,&
-         &Vin1, mm, Vin2, nn, -cone, cone, ptree, stats)
+         &Vin1, mm, Vin2, nn, -BPACK_cone, BPACK_cone, ptree, stats)
 
       end if
 
@@ -1512,23 +1512,23 @@ contains
          call RandomMat(nn, num_vect, min(nn, num_vect), RandVectInR, 1)
       endif
 
-      call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
       ! computation of range Q
-      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+      call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, BPACK_SafeEps, ptree, block_rand%pgno, flop)
       stats%Flop_Tmp = stats%Flop_Tmp + flop
 
       ! power iteration of order q, orthognalize each matvec due to algorithm 4.4 Halko 2010
       do qq = 1, option%powiter
          if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
-         call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
+         call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
          if (mm > 0) RandVectInR = conjg(cmplx(RandVectInR, kind=8))
          ! computation of range Q
-         call PComputeRange(block_rand%N_p, num_vect, RandVectInR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         call PComputeRange(block_rand%N_p, num_vect, RandVectInR, ranks, BPACK_SafeEps, ptree, block_rand%pgno, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
 
-         call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+         call blackbox_MVP_dat(operand, blocks_o, 'N', mm, nn, num_vect, RandVectInR, block_rand%N_loc, RandVectOutR, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
          ! computation of range Q
-         call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, SafeEps, ptree, block_rand%pgno, flop)
+         call PComputeRange(block_rand%M_p, num_vect, RandVectOutR, ranks, BPACK_SafeEps, ptree, block_rand%pgno, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
       enddo
 
@@ -1536,11 +1536,11 @@ contains
 
       ! computation of B^T = (Q^c*A)^T
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
-      call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, 'T', mm, nn, num_vect, RandVectOutR, block_rand%M_loc, RandVectInR, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
       if (mm > 0) RandVectOutR = conjg(cmplx(RandVectOutR, kind=8))
 
       ! computation of SVD B=USV and output A = (QU)*(SV)
-      call PQxSVDTruncate(block_rand, RandVectOutR, RandVectInR, ranks, rank, option, stats, ptree, SafeUnderflow, flop)
+      call PQxSVDTruncate(block_rand, RandVectOutR, RandVectInR, ranks, rank, option, stats, ptree, BPACK_SafeUnderflow, flop)
       stats%Flop_Tmp = stats%Flop_Tmp + flop
 
       if (mm > 0) deallocate (RandVectOutR, RandVectInR)
@@ -1663,7 +1663,7 @@ contains
             call assert(info == 0, 'descinit fail for descQUt2D')
             matQUt2D = 0
 
-            call pgemmf90('N', 'T', block_rand%M, rank, rmax, cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
+            call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
             if (present(flops)) flops = flops + flop/dble(nprow*npcol)
          else
             allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
@@ -1770,7 +1770,7 @@ contains
 !!!!**** compute singular values
       rank = 0
       if (myrow /= -1 .and. mycol /= -1) then
-         call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, BPACK_SafeUnderflow, flop=flop)
          if (present(flops)) flops = flops + flop/dble(nprow*npcol)
       else
       endif
@@ -1879,7 +1879,7 @@ contains
                   vecin=1/sqrt(dble(block_rand%M))
                   allocate(vecout(block_rand%N_loc,1))
                   vecout=0
-                  call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, cone, czero, ptree, stats, operand1)
+                  call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%N_loc,1)**2d0
                   call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
@@ -1997,7 +1997,7 @@ contains
                   vecin=1/sqrt(dble(block_rand%N))
                   allocate(vecout(block_rand%M_loc,1))
                   vecout=0
-                  call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, cone, czero, ptree, stats, operand1)
+                  call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%M_loc,1)**2d0
                   call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
@@ -2070,12 +2070,12 @@ contains
       endif
 
       n1=OMP_Get_wtime()
-      call blackbox_MVP_dat(operand, block_o, 'N', mm, nn, num_vect, Id, nn, Vdref, mm, cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, block_o, 'N', mm, nn, num_vect, Id, nn, Vdref, mm, BPACK_cone, BPACK_czero, ptree, stats, operand1)
       n2=OMP_get_wtime()
       time_tmp = (n2-n1)/num_vect
 
       if (IOwnPgrp(ptree, block_rand%pgno)) then
-         call BF_block_MVP_dat(block_rand, 'N', mm, nn, num_vect, Id, nn, Vd, mm, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(block_rand, 'N', mm, nn, num_vect, Id, nn, Vd, mm, BPACK_cone, BPACK_czero, ptree, stats)
 
          tmp1 = fnorm(Vd - Vdref, mm, num_vect)**2d0
          call MPI_ALLREDUCE(tmp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
@@ -2086,7 +2086,7 @@ contains
          ! if(ptree%MyID==ptree%pgrp(block_rand%pgno)%head)write(*,*)'fnorm',block_rand%row_group,block_rand%col_group,norm2,norm3
          error = sqrt(norm1)/sqrt(norm2)
 
-         if(norm1<SafeUnderflow .and. norm2<SafeUnderflow)then
+         if(norm1<BPACK_SafeUnderflow .and. norm2<BPACK_SafeUnderflow)then
             error = 0d0
          else
             error = sqrt(norm1)/sqrt(norm2)
@@ -2240,7 +2240,7 @@ contains
       mm = blocks_o%M_loc
       nn = blocks_o%N_loc
       n1 = OMP_get_wtime()
-      call blackbox_MVP_dat(operand, blocks_o, trans, mm, nn, num_vect_sub, RandVectIn, size(RandVectIn,1), RandVectOut, size(RandVectOut,1), cone, czero, ptree, stats, operand1)
+      call blackbox_MVP_dat(operand, blocks_o, trans, mm, nn, num_vect_sub, RandVectIn, size(RandVectIn,1), RandVectOut, size(RandVectOut,1), BPACK_cone, BPACK_czero, ptree, stats, operand1)
       n2 = OMP_get_wtime()
       time_tmp3 = time_tmp3 + n2-n1
       return
@@ -2319,9 +2319,9 @@ contains
          if (IOwnPgrp(ptree, blocks_A%pgno)) then
             if (trans == 'N') then
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &V2, nn, Vbuff, nn, cone, cone, ptree, stats)
+               &V2, nn, Vbuff, nn, BPACK_cone, BPACK_cone, ptree, stats)
                call BF_block_MVP_dat(blocks_B, trans, mm, nn, num_vect_sub,&
-               &Vbuff, nn, Vin(1, 1), ld, -cone, cone, ptree, stats)
+               &Vbuff, nn, Vin(1, 1), ld, -BPACK_cone, BPACK_cone, ptree, stats)
 ! #ifndef NDEBUG
 !                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD11N'
@@ -2364,9 +2364,9 @@ contains
             else if (trans == 'T') then
 
                call BF_block_MVP_dat(blocks_D, trans, nn, nn, num_vect_sub,&
-               &V2, nn, Vbuff, nn, cone, cone, ptree, stats)
+               &V2, nn, Vbuff, nn, BPACK_cone, BPACK_cone, ptree, stats)
                call BF_block_MVP_dat(blocks_C, trans, nn, mm, num_vect_sub,&
-               &Vbuff, nn, Vin(1, 1), ld, -cone, cone, ptree, stats)
+               &Vbuff, nn, Vin(1, 1), ld, -BPACK_cone, BPACK_cone, ptree, stats)
 ! #ifndef NDEBUG
 !                if (ieee_is_nan(fnorm(Vout, N, num_vect_sub))) then
 !                   write (*, *) fnorm(Vin, N, num_vect_sub), fnorm(Vout, N, num_vect_sub), 'ABCD11T'
@@ -2489,18 +2489,18 @@ contains
          ! V_tmp2 = 0
 
          if (trans == 'N') then
-            call BF_block_MVP_dat(blocks_C, 'N', nn, mm, num_vect_sub, Vin, ldi, V_tmp1, nn, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_C, 'N', nn, mm, num_vect_sub, Vin, ldi, V_tmp1, nn, BPACK_cone, BPACK_czero, ptree, stats)
             V_tmp2 = V_tmp1
-            call BF_block_MVP_dat(blocks_D, 'N', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn,cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn,BPACK_cone, BPACK_cone, ptree, stats)
             call BF_block_MVP_dat(blocks_B, 'N', mm, nn, num_vect_sub, V_tmp2, nn, Vout, ldo, -a, b, ptree, stats)
-            call BF_block_MVP_dat(blocks_A, 'N', mm, mm, num_vect_sub, Vin, ldi, Vout, ldo, a, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', mm, mm, num_vect_sub, Vin, ldi, Vout, ldo, a, BPACK_cone, ptree, stats)
 
          else if (trans == 'T') then
-            call BF_block_MVP_dat(blocks_B, 'T', mm, nn, num_vect_sub, Vin, ldi, V_tmp1, nn, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'T', mm, nn, num_vect_sub, Vin, ldi, V_tmp1, nn, BPACK_cone, BPACK_czero, ptree, stats)
             V_tmp2 = V_tmp1
-            call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn, cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', nn, nn, num_vect_sub, V_tmp1, nn, V_tmp2, nn, BPACK_cone, BPACK_cone, ptree, stats)
             call BF_block_MVP_dat(blocks_C, 'T', nn, mm, num_vect_sub, V_tmp2, nn, Vout, ldo, -a, b, ptree, stats)
-            call BF_block_MVP_dat(blocks_A, 'T', mm, mm, num_vect_sub, Vin, ldi, Vout, ldo, a, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', mm, mm, num_vect_sub, Vin, ldi, Vout, ldo, a, BPACK_cone, ptree, stats)
          end if
 
          ! Vin(1:mi,1:nv) = Vin_tmp
@@ -2575,11 +2575,11 @@ contains
          ! allocate(Vbuff(rank,num_vect_sub))
          ! Vbuff=0
          ! if(trans=='N')then
-         ! call gemmf90(tmpV,rank,Vin,mm,Vbuff,rank,'N','N',rank,num_vect_sub,mm,cone,czero)
-         ! call gemmf90(tmpU,mm,Vbuff,rank,Vout,M,'N','N',mm,num_vect_sub,rank,cone,czero)
+         ! call gemmf90(tmpV,rank,Vin,mm,Vbuff,rank,'N','N',rank,num_vect_sub,mm,BPACK_cone,BPACK_czero)
+         ! call gemmf90(tmpU,mm,Vbuff,rank,Vout,M,'N','N',mm,num_vect_sub,rank,BPACK_cone,BPACK_czero)
          ! else
-         ! call gemmf90(tmpU,mm,Vin,mm,Vbuff,rank,'T','N',rank,num_vect_sub,mm,cone,czero)
-         ! call gemmf90(tmpV,rank,Vbuff,rank,Vout,N,'T','N',mm,num_vect_sub,rank,cone,czero)
+         ! call gemmf90(tmpU,mm,Vin,mm,Vbuff,rank,'T','N',rank,num_vect_sub,mm,BPACK_cone,BPACK_czero)
+         ! call gemmf90(tmpV,rank,Vbuff,rank,Vout,N,'T','N',mm,num_vect_sub,rank,BPACK_cone,BPACK_czero)
          ! endif
 
          ! deallocate(tmpU)
@@ -2925,7 +2925,7 @@ contains
                idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
 
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi ,Vbuff, mm, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi ,Vbuff, mm, BPACK_cone, BPACK_czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
                mm = block_o%M_loc
@@ -2952,7 +2952,7 @@ contains
                               Vbufflag=0
                               if (level == ho_bf1%Maxlevel + 1) then
                                  call Full_block_MVP_dat(blocks, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-                  &Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, cone, czero)
+                  &Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, BPACK_cone, BPACK_czero)
                               else
                                  call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                               endif
@@ -2960,7 +2960,7 @@ contains
                               Vbufflag=1
                               if (level == ho_bf1%Maxlevel + 1) then
                                  call Full_block_MVP_dat(blocks, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-                  &vec_new(idx_start_loc, 1), mm, Vbuff(idx_start_loc, 1), mm, cone, czero)
+                  &vec_new(idx_start_loc, 1), mm, Vbuff(idx_start_loc, 1), mm, BPACK_cone, BPACK_czero)
                               else
                                  call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_new(idx_start_loc, 1), mm, Vbuff(idx_start_loc, 1), mm, ptree, stats)
                               endif
@@ -3023,7 +3023,7 @@ contains
                               Vbufflag=0
                               if (level == ho_bf1%Maxlevel + 1) then
                                  call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-   &Vbuff(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1), mm, cone, czero)
+   &Vbuff(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1), mm, BPACK_cone, BPACK_czero)
                               else
                                  call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, Vbuff(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                               endif
@@ -3031,7 +3031,7 @@ contains
                               Vbufflag=1
                               if (level == ho_bf1%Maxlevel + 1) then
                                  call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-   &vec_new(idx_start_loc, 1),mm, Vbuff(idx_start_loc, 1), mm, cone, czero)
+   &vec_new(idx_start_loc, 1),mm, Vbuff(idx_start_loc, 1), mm, BPACK_cone, BPACK_czero)
                               else
                                  call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'T', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_new(idx_start_loc, 1), mm, Vbuff(idx_start_loc, 1), mm, ptree, stats)
                               endif
@@ -3163,7 +3163,7 @@ contains
                idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
 
                n1 = OMP_get_wtime()
-               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi, Vbuff, mm, cone, czero, ptree, stats)
+               call BF_block_MVP_dat(block_o, 'N', mm, nn, num_vect_sub, Vin, ldi, Vbuff, mm, BPACK_cone, BPACK_czero, ptree, stats)
                n2 = OMP_get_wtime()
                ! time_tmp = time_tmp + n2 - n1
                mm = block_o%M_loc
@@ -3290,23 +3290,23 @@ contains
                   call assert(kk == nn, 'block dimensions do not match')
                   Vbuff = Vin(1:mi, 1:nv)
                else
-                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vin, ldi, Vbuff, kk, cone, ptree, stats)
+                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vin, ldi, Vbuff, kk, BPACK_cone, ptree, stats)
                endif
-               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vbuff, kk, Vout, ldo, cone, ptree, stats)
+               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vbuff, kk, Vout, ldo, BPACK_cone, ptree, stats)
             else if (trans == 'T') then
-               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vin, ldi, Vbuff, kk, cone, ptree, stats)
+               call Hmat_block_MVP_dat(block_off1, trans, block_off1%headm, block_off1%headn, num_vect_sub, Vin, ldi, Vbuff, kk, BPACK_cone, ptree, stats)
                if (chara == 'a' .or. chara == 's') then  ! block_o +- block_1
                   call assert(kk == nn, 'block dimensions do not match')
                   Vout(1:mv, 1:nv) = Vbuff
                else
-                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vbuff, kk, Vout, ldo, cone, ptree, stats)
+                  call Hmat_block_MVP_dat(block_off2, trans, block_off2%headm, block_off2%headn, num_vect_sub, Vbuff, kk, Vout, ldo, BPACK_cone, ptree, stats)
                endif
             endif
 
             if (chara == '+' .or. chara == 'a') then ! block_o + block_1 x block_2 or block_o + block_1
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, cone, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, BPACK_cone, BPACK_cone, ptree, stats)
             else if (chara == '-' .or. chara == 's') then ! block_o - block_1 x block_2 or block_o - block_1
-               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, -cone, ptree, stats)
+               call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, BPACK_cone, -BPACK_cone, ptree, stats)
             else if (chara == 'm') then ! block_1 x block_2
                !!!! nothing needs to be done here
             endif
@@ -3369,14 +3369,14 @@ contains
 
          if (trans == 'N') then
 
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, mm, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, mm, BPACK_cone, BPACK_czero, ptree, stats)
             Vout(1:mv, 1:nv) = Vbuff
             call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vout, ldo, ptree, stats)
 
          else if (trans == 'T') then
             Vbuff = Vin(1:mi, 1:nv)
             call Hmat_Lsolve(blocks_l, trans, blocks_l%headm, num_vect_sub, Vbuff, mm, ptree, stats)
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, mm, Vout, ldo, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, mm, Vout, ldo, BPACK_cone, BPACK_czero, ptree, stats)
          endif
 
          Vin(1:mi, 1:nv) = Vin_tmp
@@ -3437,10 +3437,10 @@ contains
          if (trans == 'N') then
             Vbuff = Vin(1:mi, 1:nv)
             call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vbuff, nn, ptree, stats)
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, nn, Vout, ldo, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vbuff, nn, Vout, ldo, BPACK_cone, BPACK_czero, ptree, stats)
 
          else if (trans == 'T') then
-            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, nn, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(block_o, trans, M, N, num_vect_sub, Vin, ldi, Vbuff, nn, BPACK_cone, BPACK_czero, ptree, stats)
             Vout(1:mv, 1:nv) = Vbuff
             call Hmat_Usolve(blocks_u, trans, blocks_u%headm, num_vect_sub, Vout, ldo, ptree, stats)
          endif
@@ -3568,7 +3568,7 @@ contains
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout,ldo, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_Exact_dat(bplus, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout,ldo, BPACK_cone, BPACK_czero, ptree, stats, operand1)
 
             call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
@@ -3723,7 +3723,7 @@ contains
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_minusBC_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, BPACK_cone, BPACK_czero, ptree, stats, operand1)
             call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
 
@@ -3940,7 +3940,7 @@ contains
 
          select TYPE (operand1)
          type is (blockplus)
-            call Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, cone, czero, ptree, stats, operand1)
+            call Bplus_block_MVP_Sblock_dat(ho_bf1, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, BPACK_cone, BPACK_czero, ptree, stats, operand1)
             call Bplus_block_MVP_dat(operand1, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, ctemp3, ctemp4, ptree, stats, 2, operand1%Lplus)
          end select
 
@@ -4697,7 +4697,7 @@ contains
                      idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%M_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, BPACK_cone, BPACK_cone, ptree, stats)
                   endif
                enddo
                endif
@@ -4726,7 +4726,7 @@ contains
                      idx_start_glo = block_o%headm + block_o%M_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%M_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, BPACK_cone, BPACK_cone, ptree, stats)
                   endif
                enddo
                endif
@@ -5154,7 +5154,7 @@ contains
                      idx_start_glo = block_o%headn + block_o%N_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%N_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, Vin(idx_start_loc, 1), ldi, vec_new(idx_start_loc, 1), mi, BPACK_cone, BPACK_cone, ptree, stats)
                   endif
                enddo
                endif
@@ -5187,7 +5187,7 @@ contains
                      idx_start_glo = block_o%headn + block_o%N_p(pp, 1) - 1
                      idx_start_loc = idx_start_glo_tmp - idx_start_glo + 1
                      idx_end_loc = idx_start_loc + blocks_sml%N_loc - 1
-                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, cone, cone, ptree, stats)
+                     call BF_block_MVP_dat(blocks_sml, trans, blocks_sml%M_loc, blocks_sml%N_loc, num_vect_sub, vec_new(idx_start_loc, 1), mv, Vout(idx_start_loc, 1), ldo, BPACK_cone, BPACK_cone, ptree, stats)
                   endif
                   enddo
                   endif

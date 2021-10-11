@@ -360,19 +360,19 @@ contains
       integer, intent(in)::ntotal
       integer::iter, itmax, it, nn_loc
       DT, dimension(1:nn_loc)::x, bb, b, ytmp
-      real(kind=dp)::err, rerr
+      real(kind=8)::err, rerr
       DT, dimension(1:nn_loc)::w, yo, ayo, ye, aye, r, d, v
-      real(kind=dp)::ta, we, cm
+      real(kind=8)::ta, we, cm
       DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
-      real(kind=dp)::bmag
-      real(kind=dp)::tim1, tim2
+      real(kind=8)::bmag
+      real(kind=8)::tim1, tim2
       integer::kk, ll
       ! Variables for storing current
       integer::count_unk, srcbox_id
       DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
-      real(kind=dp)::mem_est
+      real(kind=8)::mem_est
       character:: trans
       type(Hstat)::stats
 
@@ -423,7 +423,7 @@ contains
       call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
 
       v = ayo
-      we = 0.0_dp
+      we = 0d0
       etha = 0d0
 
       ta_local = dot_product(r, r)
@@ -477,7 +477,7 @@ contains
          x = x + etha*d
 
          !  check if the result has converged.
-         if (mod(it, 1) == 0 .or. rerr < 1.0_dp*err) then
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
             ! write(*,*)'4'
             ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
             call BPACK_Mult('N', nn_loc, 1, x, ytmp, bmat, ptree, option, stats)
@@ -824,7 +824,7 @@ contains
          Vin = conjg(cmplx(Vin, kind=8))
       endif
       Vout=0
-      call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, cone, czero, ptree, stats)
+      call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats)
 
       if (trans == 'C') then
          Vout = conjg(cmplx(Vout, kind=8))
@@ -948,7 +948,7 @@ contains
       endif
       Vout=0
       stats%Flop_Tmp = 0
-      call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, cone, czero, ptree, stats)
+      call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats)
 
       if (trans == 'C') then
          Vout = conjg(cmplx(Vout, kind=8))
@@ -1073,7 +1073,7 @@ contains
             blocks_i => h_mat%Local_blocks_copy(j, 1)
             allocate (vin_tmp(blocks_i%N, num_vectors))
             vin_tmp = vec_buffer(1:blocks_i%N, 1:num_vectors)
-            call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, blocks_i%N, Vout, Ns, cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, blocks_i%N, Vout, Ns, BPACK_cone, ptree, stats)
             deallocate (vin_tmp)
 
             Nmsg = Nmsg - 1
@@ -1152,7 +1152,7 @@ contains
                vin(iii, jjj) = recv_buf(j)
             enddo
             enddo
-            call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, xloc, size(xloc,1),-cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, xloc, size(xloc,1),-BPACK_cone, ptree, stats)
             deallocate (vin)
             Nmod = Nmod - 1
          enddo
@@ -1234,7 +1234,7 @@ contains
             enddo
             enddo
 
-            call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, xloc, size(xloc,1), -cone, ptree, stats)
+            call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, xloc, size(xloc,1), -BPACK_cone, ptree, stats)
 
             deallocate (vin)
 

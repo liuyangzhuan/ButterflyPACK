@@ -560,9 +560,9 @@ int main(int argc, char* argv[])
 	//   std::istringstream iss(optarg);
   	//   iss >> fullmatfile;
     } break;
-	case 'h': { 
+	case 'h': {
 		if(myrank==master_rank)
-		std::cout<<" tst=1: testing data sets with csv formats with ker 1:5 \n "<<std::endl; 
+		std::cout<<" tst=1: testing data sets with csv formats with ker 1:5 \n "<<std::endl;
 	} break;
     default: break;
     }
@@ -687,8 +687,8 @@ if(tst==1){
 	d_c_bpack_set_I_option(&option, "format", format);
 
 	// set command-line butterflypack options
-	set_option_from_command_line(argc, argv,option);	
-	
+	set_option_from_command_line(argc, argv,option);
+
 	// print out butterflypack options
 	d_c_bpack_printoption(&option,&ptree);
 
@@ -707,13 +707,13 @@ if(tst==1){
     vector<double> x_glo(Npo*nrhs,0.0);
     vector<double> b_glo(Npo*nrhs,0.0);
 	b_glo.data()[0]=1.0; // all but 1 element is zero in the RHS
-    
+
 	// map b_glo to the local rhs vector b
 	for (int i=0; i<myseg; i++){
       int i_new_loc = i+1;
       int i_old;
       d_c_bpack_new2old(&msh,&i_new_loc,&i_old);
-      for (int nth=0; nth<nrhs; nth++){      
+      for (int nth=0; nth<nrhs; nth++){
         b[i+nth*myseg] = b_glo.data()[i_old-1+nth*Npo];
       }
     }
@@ -726,7 +726,7 @@ if(tst==1){
       int i_new_loc = i+1;
       int i_old;
       d_c_bpack_new2old(&msh,&i_new_loc,&i_old);
-      for (int nth=0; nth<nrhs; nth++){      
+      for (int nth=0; nth<nrhs; nth++){
         x_glo.data()[i_old-1+nth*Npo] = x[i+nth*myseg];
       }
     }
@@ -746,7 +746,7 @@ if(tst==1){
 	delete quant_ptr;
 	delete[] perms;
 	delete[] tree;
-	
+
 	delete[] b;
 	delete[] x;
 

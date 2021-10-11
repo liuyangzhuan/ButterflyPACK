@@ -114,7 +114,7 @@ PROGRAM ButterflyPACK_IE_2D
     quant%RCS_Nsample=2000
 	quant%model2d=10
 	quant%wavelength=0.08
-	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+	quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 	quant%Nunk=5000
 
 	!**** default parameters for the eigen solvers
@@ -158,10 +158,10 @@ PROGRAM ButterflyPACK_IE_2D
 							read(strings1,*)quant%Nunk
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
-							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+							quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
-							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
+							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
 						else if	(trim(strings)=='--cmmode')then
 							read(strings1,*)quant%CMmode
 						else if	(trim(strings)=='--si')then
@@ -192,7 +192,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	call PrintOptions(option_A,ptree_A)
 
-    quant%wavenum=2*pi/quant%wavelength
+    quant%wavenum=2*BPACK_pi/quant%wavelength
 
 
    !***********************************************************************

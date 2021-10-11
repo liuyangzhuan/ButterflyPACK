@@ -478,7 +478,7 @@ end function distance_geo
             rows(2) = ind_j
             cols(2) = ind_j
             call element_Zmn_block_user(2, 2, rows, cols, rr, msh, option, ker, 0, passflag, ptree, stats)
-            if (abs(aimag(cmplx(rr(1, 1), kind=8))) > SafeUnderflow .or. abs(aimag(cmplx(rr(2, 2), kind=8))) > SafeUnderflow .or. abs(rr(1, 2) - conjg(cmplx(rr(2, 1), kind=8))) > abs(rr(1, 2))*SafeEps) then
+            if (abs(aimag(cmplx(rr(1, 1), kind=8))) > BPACK_SafeUnderflow .or. abs(aimag(cmplx(rr(2, 2), kind=8))) > BPACK_SafeUnderflow .or. abs(rr(1, 2) - conjg(cmplx(rr(2, 1), kind=8))) > abs(rr(1, 2))*BPACK_SafeEps) then
                write (*, *) 'Matrix not hermitian. The gram distance is undefined'
             endif
          endif
@@ -645,7 +645,7 @@ end function distance_geo
                   mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
                   allocate (distance(mm))
 
-                  distance(1:mm) = Bigvalue
+                  distance(1:mm) = BPACK_Bigvalue
                   !$omp parallel do default(shared) private(i)
                   do i = msh%basis_group(group)%head, msh%basis_group(group)%tail
                      distance(i - msh%basis_group(group)%head + 1) = distance_user(msh%new2old(i), msh%new2old(center_edge), ker, msh, option, ptree, stats)
@@ -690,7 +690,7 @@ end function distance_geo
                   mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
                   allocate (distance(mm))
 
-                  distance(1:mm) = Bigvalue
+                  distance(1:mm) = BPACK_Bigvalue
 
                   allocate (dist_gram(msh%basis_group(group)%tail - msh%basis_group(group)%head + 1, 1))
                   allocate (rows_gram(msh%basis_group(group)%tail - msh%basis_group(group)%head + 1))
@@ -892,7 +892,7 @@ end function distance_geo
       allocate (distance(msh%Nunk, num_threads))
       allocate (order(msh%Nunk, num_threads))
       allocate (edge_temp(msh%Nunk, num_threads))
-      distance = Bigvalue
+      distance = BPACK_Bigvalue
       ! call MPI_barrier(ptree%Comm, ierr)
       ! if(ptree%MyID==Main_ID)write(*,*)'nn0',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3, msh%Nunk*option%knn*4/1024.0d3
 

@@ -402,10 +402,10 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 		! allocate(matrixtemp(ntest,N_unk))
 		! matrixtemp=quant%matZ_glo(quant%ntrain+1:quant%ntrain+quant%ntest,msh%new2old)
-		! call gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,cone,czero)
+		! call gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,BPACK_cone,BPACK_czero)
 		! allocate (vout(ntest,1))
 		! vout=0
-		! call gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,cone,czero)
+		! call gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,BPACK_cone,BPACK_czero)
 
 
 	if (ptree%MyID==Main_ID) then

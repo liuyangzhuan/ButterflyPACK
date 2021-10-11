@@ -368,7 +368,7 @@ PROGRAM ButterflyPACK_FULL
 		enddo
 		do ii=1,quant%Nunk
 			read(10,*) datain
-			quant%matZ_glo(ii,:)=quant%matZ_glo(ii,:)+datain(:)*junit
+			quant%matZ_glo(ii,:)=quant%matZ_glo(ii,:)+datain(:)*BPACK_junit
 		enddo
 		close(10)
 		endif

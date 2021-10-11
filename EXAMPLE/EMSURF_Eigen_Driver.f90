@@ -121,7 +121,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%mesh_normal=1
 	quant%scaling=1d0
 	quant%wavelength=2.0
-	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+	quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=0
@@ -162,10 +162,10 @@ PROGRAM ButterflyPACK_IE_3D
 							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
-							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+							quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
-							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
+							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--scaling')then
 							read(strings1,*)quant%scaling
 						else if	(trim(strings)=='--cmmode')then
@@ -199,7 +199,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call PrintOptions(option_A,ptree_A)
 
 
-    quant%wavenum=2*pi/quant%wavelength
+    quant%wavenum=2*BPACK_pi/quant%wavelength
 	! option_A%touch_para = 3* quant%minedgelength
 
    !***********************************************************************
@@ -339,7 +339,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
 
-			rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+			rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
 			!rcs=rcs/quant%wavelength
 			rcs=10*log10(rcs)
 			if(ptree_A%MyID==Main_ID)write(100,*)theta,rcs

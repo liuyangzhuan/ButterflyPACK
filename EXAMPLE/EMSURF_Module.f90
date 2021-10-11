@@ -153,9 +153,9 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 						do j=1,quant%integral_points
 							distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
 							if(distance==0)then
-								imp=imp+wn(j)*(-junit*quant%wavenum)
-								imp1=imp1+quant%ng1(j)*wn(j)*(-junit*quant%wavenum)
-								imp2=imp2+quant%ng2(j)*wn(j)*(-junit*quant%wavenum)
+								imp=imp+wn(j)*(-BPACK_junit*quant%wavenum)
+								imp1=imp1+quant%ng1(j)*wn(j)*(-BPACK_junit*quant%wavenum)
+								imp2=imp2+quant%ng2(j)*wn(j)*(-BPACK_junit*quant%wavenum)
 								ianl=ianalytic(edge_n,jj,xn(j),yn(j),zn(j),quant)
 								ianl1=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),1,quant)
 								ianl2=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),2,quant)
@@ -163,9 +163,9 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 								imp1=imp1+ianl1
 								imp2=imp2+ianl2
 							else
-								imp=imp+wn(j)*exp(-junit*quant%wavenum*distance)/distance
-								imp1=imp1+quant%ng1(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
-								imp2=imp2+quant%ng2(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
+								imp=imp+wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+								imp1=imp1+quant%ng1(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+								imp2=imp2+quant%ng2(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
 							endif
 						enddo
 						imp3=imp-imp1-imp2
@@ -182,16 +182,16 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 							an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 							an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-							dg(1)=(xm(i)-xn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
-							dg(2)=(ym(i)-yn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
-							dg(3)=(zm(i)-zn(j))*(1+junit*quant%wavenum*distance)*exp(-junit*quant%wavenum*distance)/(4*pi*distance**3)
+							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
+							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
+							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							 call ccurl(an,dg,dg1)
 							 call ccurl(nr_m,dg1,dg2)
 							 call cscalar(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
-							imp=imp+wn(j)*exp(-junit*quant%wavenum*distance)/distance
-							imp1=imp1+quant%ng1(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
-							imp2=imp2+quant%ng2(j)*wn(j)*exp(-junit*quant%wavenum*distance)/distance
+							imp=imp+wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+							imp1=imp1+quant%ng1(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+							imp2=imp2+quant%ng2(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
 						enddo
 						imp3=imp-imp1-imp2
 						nodetemp_n=quant%info_unk(jj+2,edge_n)
@@ -207,10 +207,10 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 				ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 			enddo
 		enddo
-		value_e=ln*lm*junit*(ctemp1-ctemp2)/8./pi**2d0/quant%freq/eps0
+		value_e=ln*lm*BPACK_junit*(ctemp1-ctemp2)/8./BPACK_pi**2d0/quant%freq/BPACK_eps0
 		value_m=value_m*lm*ln
 
-		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*impedence0*value_m
+		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*BPACK_impedence0*value_m
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
 	class default
@@ -841,12 +841,12 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 	allocate(w(quant%integral_points))
 
 
-    einc(1)=cos(theta*pi/180.)*cos(phi*pi/180.)
-    einc(2)=cos(theta*pi/180.)*sin(phi*pi/180.)
-    einc(3)=-sin(theta*pi/180.)
-    k(1)=sin(theta*pi/180.)*cos(phi*pi/180.)
-    k(2)=sin(theta*pi/180.)*sin(phi*pi/180.)
-    k(3)=cos(theta*pi/180.)
+    einc(1)=cos(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)
+    einc(2)=cos(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)
+    einc(3)=-sin(theta*BPACK_pi/180.)
+    k(1)=sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)
+    k(2)=sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)
+    k(3)=cos(theta*BPACK_pi/180.)
 
     value_h=(0,0); value_e=(0,0)
 
@@ -858,7 +858,7 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 	   node3=quant%info_unk(jj+2,edge)
        call gau_grobal(edge,jj,x,y,z,w,quant)
 	   do ii=1,quant%integral_points
-          phase=junit*quant%wavenum*(sin(theta*pi/180.)*cos(phi*pi/180.)*x(ii)+sin(theta*pi/180.)*sin(phi*pi/180.)*y(ii)+cos(theta*pi/180.)*z(ii))
+          phase=BPACK_junit*quant%wavenum*(sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)*x(ii)+sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)*y(ii)+cos(theta*BPACK_pi/180.)*z(ii))
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
@@ -901,12 +901,12 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 	allocate(z(quant%integral_points))
 	allocate(w(quant%integral_points))
 
-    einc(1)=-sin(phi*pi/180.)
-    einc(2)=cos(phi*pi/180.)
+    einc(1)=-sin(phi*BPACK_pi/180.)
+    einc(2)=cos(phi*BPACK_pi/180.)
     einc(3)=0.
-    k(1)=sin(theta*pi/180.)*cos(phi*pi/180.)
-    k(2)=sin(theta*pi/180.)*sin(phi*pi/180.)
-    k(3)=cos(theta*pi/180.)
+    k(1)=sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)
+    k(2)=sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)
+    k(3)=cos(theta*BPACK_pi/180.)
 
     value_h=(0,0); value_e=(0,0)
 
@@ -918,7 +918,7 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 	   node3=quant%info_unk(jj+2,edge)
        call gau_grobal(edge,jj,x,y,z,w,quant)
 	   do ii=1,quant%integral_points
-          phase=junit*quant%wavenum*(sin(theta*pi/180.)*cos(phi*pi/180.)*x(ii)+sin(theta*pi/180.)*sin(phi*pi/180.)*y(ii)+cos(theta*pi/180.)*z(ii))
+          phase=BPACK_junit*quant%wavenum*(sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)*x(ii)+sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)*y(ii)+cos(theta*BPACK_pi/180.)*z(ii))
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
@@ -979,7 +979,7 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
 
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-        rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+        rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
         if(ptree%MyID==Main_ID)write(100,*)phi,rcs
@@ -1001,7 +1001,7 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
         !$omp end parallel do
 
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-        rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+        rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
         if(ptree%MyID==Main_ID)write(1000,*)phi,rcs
@@ -1046,14 +1046,14 @@ subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
 				    a(1)=x(ii)-quant%xyz(1,quant%info_unk(jj+2,edge))
 		            a(2)=y(ii)-quant%xyz(2,quant%info_unk(jj+2,edge))
 		            a(3)=z(ii)-quant%xyz(3,quant%info_unk(jj+2,edge))
-		            phase=junit*quant%wavenum*(x(ii)*sin(theta*pi/180.)*cos(phi*pi/180.)+y(ii)*sin(theta*pi/180.)*sin(phi*pi/180.)+z(ii)*cos(theta*pi/180.))
+		            phase=BPACK_junit*quant%wavenum*(x(ii)*sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)+y(ii)*sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)+z(ii)*cos(theta*BPACK_pi/180.))
 		            do i=1,3
                         ctemp_rcs(i)=ctemp_rcs(i)+(-1)**(jj+1)*l_edge*a(i)*curr*exp(phase)*w(ii)
                         !ctemp_rcs(i)=ctemp_rcs(i)+(-1)**(jj+1)*l_edge*a(i)*vectors_block(0)%vector(edge,1)*exp(phase)*w(ii)  !current
 		            enddo
                 enddo
             enddo
-            ctemp_1=impedence0*(cos(theta*pi/180.)*cos(phi*pi/180.)*ctemp_rcs(1)+cos(theta*pi/180.)*sin(phi*pi/180.)*ctemp_rcs(2)-sin(theta*pi/180.)*ctemp_rcs(3))
+            ctemp_1=BPACK_impedence0*(cos(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)*ctemp_rcs(1)+cos(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)*ctemp_rcs(2)-sin(theta*BPACK_pi/180.)*ctemp_rcs(3))
 
 	deallocate(x,y,z,w)
 
@@ -1093,14 +1093,14 @@ subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
 				    a(1)=x(ii)-quant%xyz(1,quant%info_unk(jj+2,edge))  !free node coordinate
 		            a(2)=y(ii)-quant%xyz(2,quant%info_unk(jj+2,edge))
 		            a(3)=z(ii)-quant%xyz(3,quant%info_unk(jj+2,edge))
-		            phase=junit*quant%wavenum*(x(ii)*sin(theta*pi/180.)*cos(phi*pi/180.)+y(ii)*sin(theta*pi/180.)*sin(phi*pi/180.)+z(ii)*cos(theta*pi/180.))
+		            phase=BPACK_junit*quant%wavenum*(x(ii)*sin(theta*BPACK_pi/180.)*cos(phi*BPACK_pi/180.)+y(ii)*sin(theta*BPACK_pi/180.)*sin(phi*BPACK_pi/180.)+z(ii)*cos(theta*BPACK_pi/180.))
 		            do i=1,3
                         ctemp_rcs(i)=ctemp_rcs(i)+(-1)**(jj+1)*l_edge*a(i)*curr*exp(phase)*w(ii)
                         !ctemp_rcs(i)=ctemp_rcs(i)+(-1)**(jj+1)*l_edge*a(i)*vectors_block(0)%vector(edge,1)*exp(phase)*w(ii)  !current
 		            enddo
                 enddo
 	        enddo
-            ctemp_1=impedence0*(-sin(phi*pi/180.)*ctemp_rcs(1)+cos(phi*pi/180.)*ctemp_rcs(2))
+            ctemp_1=BPACK_impedence0*(-sin(phi*BPACK_pi/180.)*ctemp_rcs(1)+cos(phi*BPACK_pi/180.)*ctemp_rcs(2))
 	deallocate(x,y,z,w)
 
     return
@@ -1134,7 +1134,7 @@ subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-        rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+        rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
 
@@ -1167,7 +1167,7 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
-        rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+        rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
 
@@ -1425,7 +1425,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 	end do
 
 
-	quant%minedgelength = BigValue
+	quant%minedgelength = BPACK_Bigvalue
 	do edge=1,Maxedge
 		quant%minedgelength = min(quant%minedgelength,sqrt(sum(abs(quant%xyz(:,quant%info_unk(1,edge))-quant%xyz(:,quant%info_unk(2,edge)))**2)))
 	end do

@@ -123,7 +123,7 @@ contains
       norm1 = sqrt(norm1/num_vect)
 
       ! computation of range Q of AR
-      call PComputeRange(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)
+      call PComputeRange(ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%M_p, num_vect, RandVectOut, ranktmp, BPACK_SafeEps, ptree, ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%pgno)
       ! computation of B = Q^c*A
       RandVectOut = conjg(cmplx(RandVectOut, kind=8))
       call blackbox_HODLR_MVP('T', Nloc, Nloc, num_vect, RandVectOut, RandVectIn, ker)
@@ -164,7 +164,7 @@ contains
 
             converged = 0
             rank_max_lastiter = rank_max_lastlevel
-            error_lastiter = Bigvalue
+            error_lastiter = BPACK_Bigvalue
             do tt = 1, option%itermax
                rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt - 1)) + 1
 
@@ -365,7 +365,7 @@ contains
          tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
          idx_start_loc = head - msh%idxs + 1
          idx_end_loc = tail - msh%idxs + 1
-         call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
+         call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), BPACK_SafeEps, ptree, stats)
       end do
 
 
@@ -381,7 +381,7 @@ contains
             tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
             idx_start_loc = head - msh%idxs + 1
             idx_end_loc = tail - msh%idxs + 1
-            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectInR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
+            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectInR(idx_start_loc:idx_end_loc, 1:num_vect), BPACK_SafeEps, ptree, stats)
          end do
 
 
@@ -393,7 +393,7 @@ contains
             tail = head + ho_bf1%levels(level_c)%BP_inverse(bb_inv)%LL(1)%matrices_block(1)%N_loc - 1
             idx_start_loc = head - msh%idxs + 1
             idx_end_loc = tail - msh%idxs + 1
-            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), SafeEps, ptree, stats)
+            call PComputeRange_twoforward(ho_bf1, level_c, Bidxs, bb_inv, ranks, RandVectOutR(idx_start_loc:idx_end_loc, 1:num_vect), BPACK_SafeEps, ptree, stats)
          end do
 
       enddo
@@ -1008,9 +1008,9 @@ contains
          idx_end_loc = tail - msh%idxs + 1
          if (level_c == ho_bf1%Maxlevel + 1) then
             call Full_block_MVP_dat(block_rand(bb_inv - Bidxs + 1), 'N', idx_end_loc - idx_start_loc + 1, num_vect,&
-                        &RandomVectors_InOutput(1)%vector(idx_start_loc, 1),Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1),Nloc, cone, czero)
+                        &RandomVectors_InOutput(1)%vector(idx_start_loc, 1),Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1),Nloc, BPACK_cone, BPACK_czero)
          else
-            call BF_block_MVP_twoforward_dat(ho_bf1, level_c, bb_inv, block_rand, 'N', idx_end_loc - idx_start_loc + 1, num_vect, RandomVectors_InOutput(1)%vector(idx_start_loc, 1), Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1), Nloc, cone, czero, ptree, stats)
+            call BF_block_MVP_twoforward_dat(ho_bf1, level_c, bb_inv, block_rand, 'N', idx_end_loc - idx_start_loc + 1, num_vect, RandomVectors_InOutput(1)%vector(idx_start_loc, 1), Nloc, RandomVectors_InOutput(2)%vector(idx_start_loc, 1), Nloc, BPACK_cone, BPACK_czero, ptree, stats)
          endif
       end do
 

@@ -599,7 +599,7 @@ contains
       option%powiter = 0
       option%ILU = 0
       option%Nbundle = 1
-      option%near_para = SafeEps
+      option%near_para = BPACK_SafeEps
       option%knn_near_para = 20d0
       option%format = HODLR
       option%verbosity = 0
