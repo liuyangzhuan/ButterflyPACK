@@ -246,8 +246,8 @@ contains
 
       allocate (mattemp(rmax, rmax))
       mattemp = 0
-      ! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,RR2,rmax,czero,mattemp,rmax)
-      call gemmf90(RR1, rmax, RR2, rmax, mattemp, rmax, 'N', 'T', rmax, rmax, rmax, cone, czero, flop=flop)
+      ! call zgemm('N','T',rmax,rmax,rmax, BPACK_cone, RR1, rmax,RR2,rmax,BPACK_czero,mattemp,rmax)
+      call gemmf90(RR1, rmax, RR2, rmax, mattemp, rmax, 'N', 'T', rmax, rmax, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
       allocate (UUsml(rmax, rmax), VVsml(rmax, rmax), Singularsml(rmax))
       call SVD_Truncate(mattemp, rmax, rmax, rmax, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
@@ -255,11 +255,11 @@ contains
       ! do i = 1, ranknew
       !    UUsml(1:rmax, i) = UUsml(1:rmax, i)*Singularsml(i)
       ! enddo
-      ! call zgemm('N','N',M,ranknew,rmax, cone, QQ1, M,UUsml,rmax,czero,matU,ldaU)
-      call gemmf90(QQ1, M, UUsml, rmax, matU, ldaU, 'N', 'N', M, ranknew, rmax, cone, czero, flop=flop)
+      ! call zgemm('N','N',M,ranknew,rmax, BPACK_cone, QQ1, M,UUsml,rmax,BPACK_czero,matU,ldaU)
+      call gemmf90(QQ1, M, UUsml, rmax, matU, ldaU, 'N', 'N', M, ranknew, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
-      ! call zgemm('N','T',ranknew,N,rmax, cone, VVsml, rmax,QQ2,N,czero,matV,ldaV)
-      call gemmf90(VVsml, rmax, QQ2, N, matV, ldaV, 'N', 'T', ranknew, N, rmax, cone, czero, flop=flop)
+      ! call zgemm('N','T',ranknew,N,rmax, BPACK_cone, VVsml, rmax,QQ2,N,BPACK_czero,matV,ldaV)
+      call gemmf90(VVsml, rmax, QQ2, N, matV, ldaV, 'N', 'T', ranknew, N, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       rank = ranknew
@@ -333,13 +333,13 @@ contains
           ranknew = ranknew1
           matU(1:M, 1:ranknew1)=QQ1(1:M, 1:ranknew1)
           matV1=matV
-          call gemmf90(RR1, min(M,rank), matV1, rank, matV, rank, 'N', 'N', ranknew1, N, rank, cone, czero, flop=flop)
+          call gemmf90(RR1, min(M,rank), matV1, rank, matV, rank, 'N', 'N', ranknew1, N, rank, BPACK_cone, BPACK_czero, flop=flop)
           if (present(flops)) flops = flops + flop
       else
           ranknew = ranknew2
           matV(1:ranknew2, 1:N)=RR3(1:ranknew2,1:N)
           matU1=matU
-          call gemmf90(matU1, M, QQ3, rank, matU, M, 'N', 'N', M, ranknew2, rank, cone, czero, flop=flop)
+          call gemmf90(matU1, M, QQ3, rank, matU, M, 'N', 'N', M, ranknew2, rank, BPACK_cone, BPACK_czero, flop=flop)
           if (present(flops)) flops = flops + flop
       endif
 #endif
@@ -378,13 +378,13 @@ contains
       if (present(flops)) flops = flops + flop
 
       mattemp = 0
-      call gemmf90(RR1, min(M,rank), RR2, min(N,rank), mattemp, min(M,rank), 'N', 'T', min(M,rank), min(N,rank), rank, cone, czero, flop=flop)
+      call gemmf90(RR1, min(M,rank), RR2, min(N,rank), mattemp, min(M,rank), 'N', 'T', min(M,rank), min(N,rank), rank, BPACK_cone, BPACK_czero, flop=flop)
       if (present(flops)) flops = flops + flop
       call SVD_Truncate(mattemp, min(M,rank), min(N,rank), min(min(M,rank), min(N,rank)), UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
       if (present(flops)) flops = flops + flop
-      call gemmf90(QQ1, M, UUsml, min(M,rank), matU, M, 'N', 'N', M, ranknew, min(M,rank), cone, czero, flop=flop)
+      call gemmf90(QQ1, M, UUsml, min(M,rank), matU, M, 'N', 'N', M, ranknew, min(M,rank), BPACK_cone, BPACK_czero, flop=flop)
       if (present(flops)) flops = flops + flop
-      call gemmf90(VVsml, min(min(M,rank), min(N,rank)), QQ2, N, matV, rank, 'N', 'T', ranknew, N, min(N,rank), cone, czero, flop=flop)
+      call gemmf90(VVsml, min(min(M,rank), min(N,rank)), QQ2, N, matV, rank, 'N', 'T', ranknew, N, min(N,rank), BPACK_cone, BPACK_czero, flop=flop)
       if (present(flops)) flops = flops + flop
 
       do jj=1,ranknew
@@ -454,7 +454,7 @@ contains
 
       select_row(1) = frow
 
-      call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+      call gemmf77('N', 'N', 1, rankmax_c, rmax, BPACK_cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, BPACK_czero, matr, 1)
 
       row_R = matr(1, :)
       norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
@@ -462,22 +462,22 @@ contains
       select_column(1) = maxloc(norm_row_R, 1)
       maxvalue = row_R(select_column(1))
 
-      if (abs(maxvalue) < SafeUnderflow) then
+      if (abs(maxvalue) < BPACK_SafeUnderflow) then
 
          do ii = 1, 100
             a = 0
             call random_number(a)
             select_row(1) = floor_safe(a*(rankmax_r - 1)) + 1
 
-            call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+            call gemmf77('N', 'N', 1, rankmax_c, rmax, BPACK_cone, matU0(select_row(1), 1), rankmax_r, matV0, rmax, BPACK_czero, matr, 1)
             row_R = matr(1, :)
             norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
 
             select_column(1) = maxloc(norm_row_R, 1)
             maxvalue = row_R(select_column(1))
-            if (abs(maxvalue) > SafeUnderflow) exit
+            if (abs(maxvalue) > BPACK_SafeUnderflow) exit
          end do
-         if (abs(maxvalue) < SafeUnderflow) then
+         if (abs(maxvalue) < BPACK_SafeUnderflow) then
             rank = 1
             matU(:, 1) = 0
             matV(1, :) = 0
@@ -504,7 +504,7 @@ contains
       enddo
       ! !$omp end parallel do
 
-      call gemmf77('N', 'N', rankmax_r, 1, rmax, cone, matU0, rankmax_r, matV0(1,select_column(1)), rmax, czero, matc, rankmax_r)
+      call gemmf77('N', 'N', rankmax_r, 1, rmax, BPACK_cone, matU0, rankmax_r, matV0(1,select_column(1)), rmax, BPACK_czero, matc, rankmax_r)
       column_R = matc(:, 1)
       norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
 
@@ -519,7 +519,7 @@ contains
       norm_U = norm_vector(column_R, rankmax_r)
       norm_V = norm_vector(row_R, rankmax_c)
       norm_Z = norm_Z + norm_U*norm_V
-      if (norm_Z > SafeUnderflow) then
+      if (norm_Z > BPACK_SafeUnderflow) then
          norm_UVavrbynorm_Z(itr) = norm_U*norm_V/norm_Z
       else
          norm_UVavrbynorm_Z(itr) = 0
@@ -534,9 +534,9 @@ contains
       ! write(*,*)norm_Z*ACA_tolerance_forward**2,norm_U*norm_V,'hehe',ACA_tolerance_forward
       do while (tolerance**2 < (sum(norm_UVavrbynorm_Z)/min(Navr, rank)) .and. rank < rankmax_min)
 
-         call gemmf77('N', 'N', 1, rankmax_c, rmax, cone, matU0(select_row(rank + 1), 1), rankmax_r, matV0, rmax, czero, matr, 1)
+         call gemmf77('N', 'N', 1, rankmax_c, rmax, BPACK_cone, matU0(select_row(rank + 1), 1), rankmax_r, matV0, rmax, BPACK_czero, matr, 1)
          row_R = matr(1, :)
-         call gemmf77('N', 'N', 1, rankmax_c, rank, cone, matU(select_row(rank + 1), 1), rankmax_r, matV, rmax, czero, value_UV, 1)
+         call gemmf77('N', 'N', 1, rankmax_c, rank, BPACK_cone, matU(select_row(rank + 1), 1), rankmax_r, matV, rmax, BPACK_czero, value_UV, 1)
 
          row_R = row_R - value_UV(1:rankmax_c)
          norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
@@ -549,7 +549,7 @@ contains
          select_column(rank + 1) = maxloc(norm_row_R, 1)
          maxvalue = row_R(select_column(rank + 1))
 
-         if (abs(maxvalue) < SafeUnderflow) then
+         if (abs(maxvalue) < BPACK_SafeUnderflow) then
             ! write(*,*)'warning: zero pivot ',maxvalue,' in ACA, exiting with residual', sqrt((sum(norm_UVavrbynorm_Z)/Navr))
             exit
             row_R = 0
@@ -568,9 +568,9 @@ contains
          ! !$omp end parallel do
 
 
-         call gemmf77('N', 'N', rankmax_r, 1, rmax, cone, matU0, rankmax_r, matV0(1,select_column(rank+1)), rmax, czero, matc, rankmax_r)
+         call gemmf77('N', 'N', rankmax_r, 1, rmax, BPACK_cone, matU0, rankmax_r, matV0(1,select_column(rank+1)), rmax, BPACK_czero, matc, rankmax_r)
          column_R = matc(:, 1)
-         call gemmf77('N', 'N', rankmax_r, 1, rank, cone, matU, rankmax_r, matV(1, select_column(rank + 1)), rmax, czero, value_UV, rankmax_r)
+         call gemmf77('N', 'N', rankmax_r, 1, rank, BPACK_cone, matU, rankmax_r, matV(1, select_column(rank + 1)), rmax, BPACK_czero, value_UV, rankmax_r)
          column_R = column_R - value_UV(1:rankmax_r)
          norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
          if (present(flops)) flops = flops + rank*rankmax_r
@@ -617,7 +617,7 @@ contains
          ! stop
          ! endif
 
-         if (norm_Z > SafeUnderflow) then
+         if (norm_Z > BPACK_SafeUnderflow) then
             norm_UVavrbynorm_Z(itr) = norm_U*norm_V/norm_Z
          else
             norm_UVavrbynorm_Z(itr) = 0
@@ -699,17 +699,17 @@ contains
 
 !         allocate (mattemp(rank, rank))
 !         mattemp = 0
-!         call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'T', rank, rank, rank, cone, czero, flop=flop)
-!         ! call zgemm('N','T',rank,rank,rank, cone, RR1, rank,RR2,rank,czero,mattemp,rank)
+!         call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'T', rank, rank, rank, BPACK_cone, BPACK_czero, flop=flop)
+!         ! call zgemm('N','T',rank,rank,rank, BPACK_cone, RR1, rank,RR2,rank,BPACK_czero,mattemp,rank)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
 !         allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
 !         call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
-!         ! call zgemm('N','N',rankmax_r,ranknew,rank, cone, QQ1, rankmax_r,UUsml,rank,czero,matU,rankmax_r)
-!         call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, cone, czero, flop=flop)
+!         ! call zgemm('N','N',rankmax_r,ranknew,rank, BPACK_cone, QQ1, rankmax_r,UUsml,rank,BPACK_czero,matU,rankmax_r)
+!         call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, BPACK_cone, BPACK_czero, flop=flop)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
-!         ! call zgemm('N','T',ranknew,rankmax_c,rank, cone, VVsml, rank,QQ2,rankmax_c,czero,matV,rmax)
-!         call gemmf90(VVsml, rank, QQ2, rankmax_c, matV, rmax, 'N', 'T', ranknew, rankmax_c, rank, cone, czero, flop=flop)
+!         ! call zgemm('N','T',ranknew,rankmax_c,rank, BPACK_cone, VVsml, rank,QQ2,rankmax_c,BPACK_czero,matV,rmax)
+!         call gemmf90(VVsml, rank, QQ2, rankmax_c, matV, rmax, 'N', 'T', ranknew, rankmax_c, rank, BPACK_cone, BPACK_czero, flop=flop)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
 
 !         rank = ranknew
@@ -771,10 +771,10 @@ contains
       if (ruv-rskip > 0) then
          allocate (UU(ruv-rskip, rup))
          UU = 0
-         call gemmf77('T', 'N', ruv-rskip, rup, M, cone, matU(1, rskip + 1), M, matU(1, ruv + 1), M, czero, UU, ruv-rskip)
+         call gemmf77('T', 'N', ruv-rskip, rup, M, BPACK_cone, matU(1, rskip + 1), M, matU(1, ruv + 1), M, BPACK_czero, UU, ruv-rskip)
          allocate (VV(ruv-rskip, rup))
          VV = 0
-         call gemmf77('N', 'T', ruv-rskip, rup, N, cone, matV(rskip+1,1), ldV, matV(ruv + 1, 1), ldV, czero, VV, ruv-rskip)
+         call gemmf77('N', 'T', ruv-rskip, rup, N, BPACK_cone, matV(rskip+1,1), ldV, matV(ruv + 1, 1), ldV, BPACK_czero, VV, ruv-rskip)
          do j = 1, ruv-rskip
             do k = 1, rup
                inner_UV = inner_UV + 2*dble(UU(j, k)*VV(j, k))
@@ -827,7 +827,7 @@ contains
 
       ! allocate(mattemp(mn,N))
       ! mattemp=0
-      ! call zgemm('N','N',mn,N,rmax, cone, VV, mn,matV,size(matV,1),czero,mattemp,mn)
+      ! call zgemm('N','N',mn,N,rmax, BPACK_cone, VV, mn,matV,size(matV,1),BPACK_czero,mattemp,mn)
 
       ! norm = fnorm(mattemp,mn,N)
 
@@ -874,8 +874,8 @@ contains
 
       allocate (mattemp(rmax, rmax))
       mattemp = 0
-      ! call zgemm('N','T',rmax,rmax,rmax, cone, RR1, rmax,,rmax,czero,mattemp,rmax)
-      call gemmf90(RR1, rmax, RR2, rmax, mattemp, rmax, 'N', 'T', rmax, rmax, rmax, cone, czero, flop=flop)
+      ! call zgemm('N','T',rmax,rmax,rmax, BPACK_cone, RR1, rmax,,rmax,BPACK_czero,mattemp,rmax)
+      call gemmf90(RR1, rmax, RR2, rmax, mattemp, rmax, 'N', 'T', rmax, rmax, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
       norm = fnorm(mattemp, rmax, rmax)
 
@@ -887,7 +887,7 @@ contains
       ! allocate (tau_Q(rmax))
       ! allocate (jpvt1(rmax))
       ! jpvt1=0
-      ! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,SafeUnderflow,ranknew1,flop=flop)
+      ! call geqp3modf90(QQ1,jpvt1,tau_Q,tolerance,BPACK_SafeUnderflow,ranknew1,flop=flop)
       ! if(present(Flops))Flops= Flops + flop
       ! deallocate(tau_Q)
 
@@ -896,7 +896,7 @@ contains
       ! allocate (tau_Q(rmax))
       ! allocate (jpvt2(rmax))
       ! jpvt2=0
-      ! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,SafeUnderflow,ranknew2,flop=flop)
+      ! call geqp3modf90(QQ2,jpvt2,tau_Q,tolerance,BPACK_SafeUnderflow,ranknew2,flop=flop)
       ! if(present(Flops))Flops= Flops + flop
       ! deallocate(tau_Q)
 
@@ -923,8 +923,8 @@ contains
 
       ! allocate(mattemp(ranknew1,ranknew2))
       ! mattemp=0
-      ! ! call zgemm('N','T',ranknew1,ranknew2,rmax, cone, RR1, ranknew1,RR2,ranknew2,czero,mattemp,ranknew1)
-      ! call gemmf90(RR1, ranknew1,RR2,ranknew2,mattemp,ranknew1,'N','T',ranknew1,ranknew2,rmax, cone,czero,flop=flop)
+      ! ! call zgemm('N','T',ranknew1,ranknew2,rmax, BPACK_cone, RR1, ranknew1,RR2,ranknew2,BPACK_czero,mattemp,ranknew1)
+      ! call gemmf90(RR1, ranknew1,RR2,ranknew2,mattemp,ranknew1,'N','T',ranknew1,ranknew2,rmax, BPACK_cone,BPACK_czero,flop=flop)
 
       ! norm = fnorm(mattemp,rmax,rmax)
 
@@ -943,7 +943,7 @@ contains
       ! allocate (tau_Q(rmax))
       ! allocate (jpvt(rmax))
       ! jpvt=0
-      ! call geqp3modf90(QQ1,jpvt,tau_Q,tolerance,SafeUnderflow,ranknew,flop=flop)
+      ! call geqp3modf90(QQ1,jpvt,tau_Q,tolerance,BPACK_SafeUnderflow,ranknew,flop=flop)
       ! if(present(Flops))Flops= Flops + flop
       ! ! call geqp3f90(QQ1,jpvt,tau_Q)
       ! ranknew=rmax
@@ -968,8 +968,8 @@ contains
       ! enddo
       ! allocate(mattemp(ranknew,N))
       ! mattemp=0
-      ! ! call zgemm('N','N',ranknew,N,rmax, cone, RR1, ranknew,QQ2,rmax,czero,mattemp,ranknew)
-      ! call gemmf90(RR1, ranknew,QQ2,rmax,mattemp,ranknew,'N','N',ranknew,N,rmax, cone,czero,flop=flop)
+      ! ! call zgemm('N','N',ranknew,N,rmax, BPACK_cone, RR1, ranknew,QQ2,rmax,BPACK_czero,mattemp,ranknew)
+      ! call gemmf90(RR1, ranknew,QQ2,rmax,mattemp,ranknew,'N','N',ranknew,N,rmax, BPACK_cone,BPACK_czero,flop=flop)
 
       ! norm = fnorm(mattemp,ranknew,rmax)
 
@@ -1013,7 +1013,7 @@ contains
 
       call gesvd_robust(mat1, Singular, UU, VV, M, N, mn, flop)
 ! write(*,*)Singular,'hh'
-      if (Singular(1) < SafeUnderflow) then
+      if (Singular(1) < BPACK_SafeUnderflow) then
          rank = 1
          deallocate (UU, VV, Singular)
       else
@@ -1053,7 +1053,7 @@ contains
             do i = 1, mn
                if (abs(A_tmp(i, i))/abs(A_tmp(1, 1))/mnl <= eps) then
                   rank = i
-                  if (abs(A_tmp(i, i)) < SafeUnderflow) rank = i - 1
+                  if (abs(A_tmp(i, i)) < BPACK_SafeUnderflow) rank = i - 1
                   exit
                end if
             end do
@@ -1165,7 +1165,7 @@ contains
                   jpiv = 0
                   allocate (JPERM(N))
                   JPERM = 0
-                  call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank, eps, SafeUnderflow, flop=flop)
+                  call pgeqpfmodf90(M, N, mat2D, 1, 1, descsMat2D, ipiv, tau, JPERM, jpiv, rank, eps, BPACK_SafeUnderflow, flop=flop)
                   if (present(Flops)) Flops = Flops + flop/dble(nprow*npcol)
 
                   if (rank > 0) then
@@ -1236,7 +1236,7 @@ contains
             rank = 1
             mat(1:M, 1) = 0d0
          else
-            call geqp3modf90(mat, jpvt, tau, eps, SafeUnderflow, rank, flop=flop)
+            call geqp3modf90(mat, jpvt, tau, eps, BPACK_SafeUnderflow, rank, flop=flop)
             if (present(Flops)) Flops = Flops + flop
 
             if (rank > 0) then
@@ -1368,7 +1368,7 @@ contains
       deallocate (matrix_V, UU, Singular)
 
 ! call gemm_omp(U_new,V_new,mat1,M,N,rank_new)
-      call gemmf90(U_new, M, V_new, rank_new, mat1, M, 'N', 'N', M, N, rank_new, cone, czero)
+      call gemmf90(U_new, M, V_new, rank_new, mat1, M, 'N', 'N', M, N, rank_new, BPACK_cone, BPACK_czero)
 
       write (*, *) M, N
       do j = 1, N
@@ -1389,9 +1389,9 @@ contains
       end do
 
 ! call gemm_omp(mat,test_in,test_out1,M,1,N)
-      call gemmf90(mat, M, test_in, N, test_out1, M, 'N', 'N', M, 1, N, cone, czero)
+      call gemmf90(mat, M, test_in, N, test_out1, M, 'N', 'N', M, 1, N, BPACK_cone, BPACK_czero)
 ! call gemm_omp(mat1,test_in,test_out2,M,1,N)
-      call gemmf90(mat1, M, test_in, N, test_out2, M, 'N', 'N', M, 1, N, cone, czero)
+      call gemmf90(mat1, M, test_in, N, test_out2, M, 'N', 'N', M, 1, N, BPACK_cone, BPACK_czero)
 
 ! call gemm_omp(mat2,test_in,test_out3,M,1,N)
 ! write(*,*)'testing vector error:', fnorm(test_out1-test_out2,M,1)/fnorm(test_out1,M,1),fnorm(test_out1-test_out3,M,1)/fnorm(test_out1,M,1)
@@ -1406,7 +1406,7 @@ contains
       call ACA_CompressionFull(mat, matrix_U, matrix_V, M, N, rmax, rank_new, tolerance*0.3d0, tolerance)
 
 ! call gemm_omp(matrix_U(1:M,1:rank_new),matrix_V(1:rank_new,1:N),mat2,M,N,rank_new)
-      call gemmf90(matrix_U, M, matrix_V, rmax, mat2, M, 'N', 'N', M, N, rank_new, cone, czero)
+      call gemmf90(matrix_U, M, matrix_V, rmax, mat2, M, 'N', 'N', M, N, rank_new, BPACK_cone, BPACK_czero)
 
       write (*, *) 'F-norm residual:', fnorm(mat - mat2, M, N)/fnorm(mat, M, N), ' rank:', rank_new
 
@@ -1512,7 +1512,7 @@ contains
          if (d < 0.5d0) then
             b = -b
          endif
-         val = a + junit*b
+         val = a + BPACK_junit*b
 
          ! ! Normal distribution
          ! call random_number(a)
@@ -1540,7 +1540,7 @@ contains
          if (d < 0.5d0) then
             b = -b
          endif
-         val = a + junit*b
+         val = a + BPACK_junit*b
 
          ! ! Normal distribution
          ! call random_number(a)
@@ -1773,7 +1773,7 @@ contains
       integer floor_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < SafeEps) then
+      if (abs(input_nint - input) < BPACK_SafeEps) then
          floor_safe = input_nint
       else
          floor_safe = floor(input)
@@ -1786,7 +1786,7 @@ contains
       integer ceiling_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < SafeEps) then
+      if (abs(input_nint - input) < BPACK_SafeEps) then
          ceiling_safe = input_nint
       else
          ceiling_safe = ceiling(input)
@@ -1799,7 +1799,7 @@ contains
       integer INT_safe
       integer input_nint
       input_nint = NINT(input)
-      if (abs(input_nint - input) < SafeEps) then
+      if (abs(input_nint - input) < BPACK_SafeEps) then
          INT_safe = input_nint
       else
          INT_safe = INT(input)
@@ -2004,7 +2004,7 @@ contains
       ! if (m < n) write (*, *) m, n
       ! call assert(m >= n, 'm should not be less than n for least square')
 
-      if (fnorm(b, m, k) < SafeUnderflow) then
+      if (fnorm(b, m, k) < BPACK_SafeUnderflow) then
 !                write(*,*)'warning: RHS zero in least square. |b|= ',fnorm(b,m,k),'size b: ',m,k,'size A',m,n
          x = 0
       else
@@ -2056,7 +2056,7 @@ contains
          ! do i=1,n
          ! if (abs(A_tmp(i,i))/abs(A_tmp(1,1))/m<=eps_r) then
          ! rank=i
-         ! if(abs(A_tmp(i,i))<SafeUnderflow)rank = i -1
+         ! if(abs(A_tmp(i,i))<BPACK_SafeUnderflow)rank = i -1
          ! ! write(*,*)rank,n
          ! exit
          ! end if
@@ -2103,7 +2103,7 @@ contains
 
          ! deallocate(A_tmp_rank,xtmp_rank)
          ! else
-         if (Singular(1) < SafeUnderflow) then
+         if (Singular(1) < BPACK_SafeUnderflow) then
             if(verbose>=2)write (*, *) 'warning: Matrix zero in LinearSolve'
             rank = 1
             x = 0
@@ -2208,7 +2208,7 @@ contains
       call gesvd_robust(Atmp, Singular, UU, VV, m, n, mn_min, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
-      if (Singular(1) < SafeUnderflow) then
+      if (Singular(1) < BPACK_SafeUnderflow) then
          write (*, *) 'Warning: A zero in GeneralInverse'
          A_inv = 0
       else
@@ -2291,7 +2291,7 @@ contains
          allocate (VV(max(1,myArows), max(1,myAcols)))
          allocate (Singular(mn))
 
-         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(m, n, A, descsMatA, UU, VV, descsMatU, descsMatV, Singular, eps_r, rank, ctxt, BPACK_SafeUnderflow, flop=flop)
          if (present(Flops))Flops=Flops+flop
 
          do ii=1,size(UU,1)
@@ -2314,7 +2314,7 @@ contains
 
 
          A_inv=0
-         call pgemmf90('T', 'T', n, m, rank, cone, VV, 1, 1, descsMatV, UU, 1, 1, descsMatU, czero, A_inv, 1, 1, descsMatAinv, flop=flop)
+         call pgemmf90('T', 'T', n, m, rank, BPACK_cone, VV, 1, 1, descsMatV, UU, 1, 1, descsMatU, BPACK_czero, A_inv, 1, 1, descsMatAinv, flop=flop)
          if (present(Flops))Flops=Flops+flop
 
          deallocate(UU,VV)
@@ -2390,14 +2390,14 @@ contains
 
       ! write(*,*)fnorm(QQ1,rankmax_r,rmax),rankmax_r,rmax,fnorm(RR1,rmax,rmax),rmax,rmax,'really'
 
-      if (abs(RR1(1, 1)) < SafeUnderflow) then
+      if (abs(RR1(1, 1)) < BPACK_SafeUnderflow) then
          rank1 = 1
       else
          rank1 = rmax
          do i = 1, rmax
             if (abs(RR1(i, i))/abs(RR1(1, 1))/rankmax_r <= tolerance) then   ! be careful with the tolerance here
                rank1 = i
-               if (abs(RR1(i, i)) < SafeUnderflow) rank1 = i - 1
+               if (abs(RR1(i, i)) < BPACK_SafeUnderflow) rank1 = i - 1
                exit
             end if
          end do
@@ -2421,14 +2421,14 @@ contains
       call un_or_gqrf90(QQ2, tau, rankmax_c, rmax, rmax, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
-      if (abs(RR2(1, 1)) < SafeUnderflow) then
+      if (abs(RR2(1, 1)) < BPACK_SafeUnderflow) then
          rank2 = 1
       else
          rank2 = rmax
          do i = 1, rmax
             if (abs(RR2(i, i))/abs(RR2(1, 1))/rankmax_c <= tolerance) then  ! be careful with the tolerance here
                rank2 = i
-               if (abs(RR2(i, i)) < SafeUnderflow) rank2 = i - 1
+               if (abs(RR2(i, i)) < BPACK_SafeUnderflow) rank2 = i - 1
                exit
             end if
          end do
@@ -2454,7 +2454,7 @@ contains
       allocate (RrowcQ1inv(rank1, rmax))
       RrowcQ1inv = 0
       ! call gemmHN_omp(matRrow,QQ1(1:rankmax_r,1:rank1),RrowcQ1,rmax,rank1,rankmax_r)
-      call gemmf90(matRrow, rankmax_r, QQ1, rankmax_r, RrowcQ1, rmax, 'C', 'N', rmax, rank1, rankmax_r, cone, czero, flop=flop)
+      call gemmf90(matRrow, rankmax_r, QQ1, rankmax_r, RrowcQ1, rmax, 'C', 'N', rmax, rank1, rankmax_r, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       call GeneralInverse(rmax, rank1, RrowcQ1, RrowcQ1inv, tolerance, Flops=flop)
@@ -2473,7 +2473,7 @@ contains
       allocate (Q2cRcolinv(rmax, rank2))
       Q2cRcolinv = 0
       ! call gemmHN_omp(QQ2(1:rankmax_c,1:rank2),matRcol,Q2cRcol,rank2,rmax,rankmax_c)
-      call gemmf90(QQ2, rankmax_c, matRcol, rankmax_c, Q2cRcol, rank2, 'C', 'N', rank2, rmax, rankmax_c, cone, czero, flop=flop)
+      call gemmf90(QQ2, rankmax_c, matRcol, rankmax_c, Q2cRcol, rank2, 'C', 'N', rank2, rmax, rankmax_c, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
       call GeneralInverse(rank2, rmax, Q2cRcol, Q2cRcolinv, tolerance, Flops=flop)
       if (present(Flops)) Flops = Flops + flop
@@ -2487,7 +2487,7 @@ contains
       ! deallocate(Q2cRcol)
 
       ! call gemmHN_omp(matRrow,matZRcol,RrowcZRcol,rmax,rmax,rankmax_r)
-      call gemmf90(matRrow, rankmax_r, matZRcol, rankmax_r, RrowcZRcol, rmax, 'C', 'N', rmax, rmax, rankmax_r, cone, czero, flop=flop)
+      call gemmf90(matRrow, rankmax_r, matZRcol, rankmax_r, RrowcZRcol, rmax, 'C', 'N', rmax, rmax, rankmax_r, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       allocate (matrixtemp(rmax, rank2))
@@ -2495,11 +2495,11 @@ contains
       allocate (matM(rank1, rank2))
       matM = 0
       ! call gemm_omp(RrowcZRcol,Q2cRcolinv,matrixtemp,rmax,rank2,rmax)
-      call gemmf90(RrowcZRcol, rmax, Q2cRcolinv, rmax, matrixtemp, rmax, 'N', 'N', rmax, rank2, rmax, cone, czero, flop=flop)
+      call gemmf90(RrowcZRcol, rmax, Q2cRcolinv, rmax, matrixtemp, rmax, 'N', 'N', rmax, rank2, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       ! call gemm_omp(RrowcQ1inv,matrixtemp,matM,rank1,rank2,rmax)
-      call gemmf90(RrowcQ1inv, rank1, matrixtemp, rmax, matM, rank1, 'N', 'N', rank1, rank2, rmax, cone, czero, flop=flop)
+      call gemmf90(RrowcQ1inv, rank1, matrixtemp, rmax, matM, rank1, 'N', 'N', rank1, rank2, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       deallocate (matrixtemp, RrowcQ1inv, Q2cRcolinv)
@@ -2522,11 +2522,11 @@ contains
       ! stop
 
       ! call gemm_omp(QQ1(1:rankmax_r,1:rank1),UUsml(1:rank1,1:rank),matU(1:rankmax_r,1:rank),rankmax_r,rank,rank1)
-      call gemmf90(QQ1, rankmax_r, UUsml, rank1, matU, rankmax_r, 'N', 'N', rankmax_r, rank, rank1, cone, czero, flop=flop)
+      call gemmf90(QQ1, rankmax_r, UUsml, rank1, matU, rankmax_r, 'N', 'N', rankmax_r, rank, rank1, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       ! call gemmNH_omp(VVsml(1:rank,1:rank2),QQ2(1:rankmax_c,1:rank2),matV(1:rank,1:rankmax_c),rank,rankmax_c,rank2)
-      call gemmf90(VVsml, rank12, QQ2, rankmax_c, matV, rmax, 'N', 'H', rank, rankmax_c, rank2, cone, czero, flop=flop)
+      call gemmf90(VVsml, rank12, QQ2, rankmax_c, matV, rmax, 'N', 'H', rank, rankmax_c, rank2, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       Singular(1:rank) = Singularsml(1:rank)
@@ -2647,7 +2647,7 @@ contains
          ! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0)
          ierror = vsldeletestream(stream(1))
          ierror = vsldeletestream(stream(2))
-         A = Ar + junit*Ai
+         A = Ar + BPACK_junit*Ai
          deallocate (Ar)
          deallocate (Ai)
 #elif DAT==1
@@ -2679,7 +2679,7 @@ contains
          ! ierror=vdrnggaussian( VSL_RNG_METHOD_GAUSSIAN_BOXMULLER2, stream, M*N, mati, 1d0, 1d0)
          ierror = vsldeletestream(stream(1))
          ierror = vsldeletestream(stream(2))
-         A = Ar + junit*Ai
+         A = Ar + BPACK_junit*Ai
          deallocate (Ar)
          deallocate (Ai)
 #elif DAT==3
@@ -2776,7 +2776,7 @@ contains
       allocate (tau(max(m, n)))
 
       jpvt = 0
-      call geqp3modf90(Mat1T, jpvt, tau, tolerance, SafeUnderflow, rank_r)
+      call geqp3modf90(Mat1T, jpvt, tau, tolerance, BPACK_SafeUnderflow, rank_r)
       select_row(1:rank_r) = jpvt(1:rank_r)
       if (rank_r == 0) then
          rank_r = 1
@@ -2784,7 +2784,7 @@ contains
       endif
 
       jpvt = 0
-      call geqp3modf90(Mat1, jpvt, tau, tolerance, SafeUnderflow, rank_c)
+      call geqp3modf90(Mat1, jpvt, tau, tolerance, BPACK_SafeUnderflow, rank_c)
       select_column(1:rank_c) = jpvt(1:rank_c)
       if (rank_c == 0) then
          rank_c = 1
@@ -3029,15 +3029,15 @@ contains
       deallocate (QQ2tmp, RR2tmp)
       allocate (mattemp(rank, rank))
       ! call gemm_omp(RR1,RR2,mattemp,rank,rank,rank)
-      call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'N', rank, rank, rank, cone, czero)
+      call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'N', rank, rank, rank, BPACK_cone, BPACK_czero)
 
       allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
       call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew)
 
       ! call gemm_omp(QQ1,UUsml(1:rank,1:ranknew),matU(1:rankmax_r,1:ranknew),rankmax_r,ranknew,rank)
-      call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, cone, czero)
+      call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, BPACK_cone, BPACK_czero)
       ! call gemm_omp(VVsml(1:ranknew,1:rank),QQ2,matV(1:ranknew,1:rankmax_c),ranknew,rankmax_c,rank)
-      call gemmf90(VVsml, rank, QQ2, rank, matV, rmax, 'N', 'N', ranknew, rankmax_c, rank, cone, czero)
+      call gemmf90(VVsml, rank, QQ2, rank, matV, rmax, 'N', 'N', ranknew, rankmax_c, rank, BPACK_cone, BPACK_czero)
       ! write(*,*)'aca rank:',rank,'after svd',ranknew
 
       rank = ranknew
@@ -3087,7 +3087,7 @@ contains
          jpiv = 0
          allocate (tau(mn))
          tau = 0
-         call geqp3modf90(mat0, jpiv, tau, tolerance, SafeUnderflow, rank, flop=flop)
+         call geqp3modf90(mat0, jpiv, tau, tolerance, BPACK_SafeUnderflow, rank, flop=flop)
          if (present(flops)) flops = flops + flop
          if (rank > 0) then
             allocate (RR1(1:rank, nn))
@@ -3139,7 +3139,7 @@ contains
       call gesvd_robust(mat0, Singular, UU, VV, mm, nn, mn, flop=flop)
       rank = mn
 
-      if (Singular(1) < SafeUnderflow) then
+      if (Singular(1) < BPACK_SafeUnderflow) then
          rank = 1
          UU = 0
          VV = 0
@@ -3184,7 +3184,7 @@ contains
          VV(1:rank,1:nn) = VVs(1:rank,1:nn)
 
          UU=0
-         call gemmf90(UU1, mm, UUs, rank1, UU, mm, 'N', 'N', mm, rank, rank1, cone, czero, flop=flop0)
+         call gemmf90(UU1, mm, UUs, rank1, UU, mm, 'N', 'N', mm, rank, rank1, BPACK_cone, BPACK_czero, flop=flop0)
          if (present(flop)) flop = flop + flop0
 
 
@@ -3215,7 +3215,7 @@ contains
       call pgesvdf90('V', 'V', mm, nn, mat, 1, 1, descMat, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, flop=flop)
 
       rank = mnmin
-      if (Singular(1) > SafeUnderflow) then
+      if (Singular(1) > BPACK_SafeUnderflow) then
          rank = mnmin
          do i = 1, mnmin
             if (Singular(i)/Singular(1) <= tolerance .or. Singular(i)<=tolerance_abs) then
@@ -3452,21 +3452,21 @@ contains
       theta = acos(z/r)
       if (r == 0) theta = 0
       if (x == 0 .and. y >= 0) then
-         phi = pi/2
+         phi = BPACK_pi/2
       else if (x == 0 .and. y < 0) then
-         phi = 3*pi/2
+         phi = 3*BPACK_pi/2
 
       else
          if (y == 0 .and. x >= 0) then
             phi = 0
          else if (y == 0 .and. x < 0) then
-            phi = pi
+            phi = BPACK_pi
          else
 
             phi = atan(y/x)
-            if (phi > 0 .and. x < 0) phi = phi + pi
-            if (phi < 0 .and. x > 0) phi = phi + 2*pi
-            if (phi < 0 .and. x < 0) phi = phi + pi
+            if (phi > 0 .and. x < 0) phi = phi + BPACK_pi
+            if (phi < 0 .and. x > 0) phi = phi + 2*BPACK_pi
+            if (phi < 0 .and. x < 0) phi = phi + BPACK_pi
          end if
       end if
    end subroutine Cart2Sph
@@ -3479,7 +3479,7 @@ contains
       real(kind=8) x
       complex(kind=8) y
 
-      Hankel02_Func = BesselJ0_func(x) - junit*BesselY0_func(x)
+      Hankel02_Func = BesselJ0_func(x) - BPACK_junit*BesselY0_func(x)
 
       return
 

@@ -946,7 +946,7 @@ contains
       real(kind=8) tolerance, h, lam
       integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
       integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
-      real(kind=8), parameter :: cd = 299792458d0
+      real(kind=8), parameter :: BPACK_cd = 299792458d0
       integer, allocatable:: groupmembers(:)
       integer nlevel, level
       integer Permutation(N), tree(*)
@@ -1169,7 +1169,7 @@ contains
       real(kind=8) tolerance, h, lam
       integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
       integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
-      real(kind=8), parameter :: cd = 299792458d0
+      real(kind=8), parameter :: BPACK_cd = 299792458d0
       integer, allocatable:: groupmembers(:)
       integer nlevel, level
       integer Permutation(N), tree(*)
@@ -1362,7 +1362,7 @@ contains
       real(kind=8) tolerance, h, lam
       integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
       integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
-      real(kind=8), parameter :: cd = 299792458d0
+      real(kind=8), parameter :: BPACK_cd = 299792458d0
       integer, allocatable:: groupmembers(:)
       integer level
       ! type(matricesblock), pointer :: blocks_i
@@ -1915,9 +1915,9 @@ contains
       stats%Time_C_Mult = 0
       xout = 0
       if (trim(str) == 'N') then
-         call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       else
-         call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       endif
 
       t2 = OMP_get_wtime()

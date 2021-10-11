@@ -45,7 +45,7 @@ contains
 		implicit none
 
 		type(quant_app)::quant
-		arg_thresh_Zmn=-log(SafeUnderflow)*2.0*quant%sigma**2
+		arg_thresh_Zmn=-log(BPACK_SafeUnderflow)*2.0*quant%sigma**2
 	end function arg_thresh_Zmn
 
 

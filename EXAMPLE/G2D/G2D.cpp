@@ -7943,13 +7943,13 @@ creal_T G2D(const double z[2], const double z0[2], double w)
 
   //  define hankel function using besselj and besselh and bessely are not supported in Matlab Coder 
   //  v is integer
-  //  nonzero even integer v will fail here due to csc(v*pi)!
+  //  nonzero even integer v will fail here due to csc(v*BPACK_pi)!
   //      if(round(v)==v && mod(v,2)==0)
   //          v1 = v + 1e-9;
   //      else
   //          v1 = v;
   //      end
-  //      out = i * csc(v1*pi)*(exp(-i*pi*v1)*besselj(v1,z)-besselj(-v1,z)); %
+  //      out = i * csc(v1*BPACK_pi)*(exp(-i*BPACK_pi*v1)*besselj(v1,z)-besselj(-v1,z)); %
   //      this is correct
   zd.re = c_z;
   zd.im = 0.0;

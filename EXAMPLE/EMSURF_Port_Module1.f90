@@ -280,7 +280,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 					ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 				enddo
 			enddo
-			value_e=ln*lm*BPACK_junit*(ctemp1-ctemp2)/8./BPACK_pi**2d0/quant%freq/BPACK_eps0 ! 4*BPACK_pi was missing in the green function, 2*BPACK_pi was missing as omega=2pi*f
+			value_e=ln*lm*BPACK_junit*(ctemp1-ctemp2)/8./BPACK_pi**2d0/quant%freq/BPACK_eps0
 			value=value_e/BPACK_impedence0
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
@@ -495,9 +495,9 @@ subroutine Port_e_nxe_dot_rwg_arbi(m,pp,nn,value_e,value_nxe,quant,Exs,Eys,xs,ys
 
 				call Port_e_nxe_arbi(xm(i),ym(i),zm(i),e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
 				call scalar(am,nxe,temp)
-				value_m_nxe=value_m_nxe+(-1)**(ii+1)*temp*wm(i)
+				value_m_nxe=value_m_nxe+(-1)**(ii+1)*temp/2.*wm(i)
 				call scalar(am,e,temp)
-				value_m_e=value_m_e+(-1)**(ii+1)*temp*wm(i)
+				value_m_e=value_m_e+(-1)**(ii+1)*temp/2.*wm(i)
 
 			enddo
 		enddo
@@ -548,7 +548,7 @@ subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
 				call Port_nxe(xm(i),ym(i),zm(i),nxe,quant,pp,mm,nn,TETM,rr)
 				call scalar(am,nxe,temp)
-				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
+				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
 			enddo
 		enddo
 		value_m=value_m*lm
@@ -595,7 +595,7 @@ subroutine Port_e_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
 				call Port_e(xm(i),ym(i),zm(i),e,quant,pp,mm,nn,TETM,rr)
 				call scalar(am,e,temp)
-				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
+				value_m=value_m+(-1)**(ii+1)*temp/2.*wm(i)
 			enddo
 		enddo
 		value_m=value_m*lm
@@ -1010,7 +1010,7 @@ subroutine Zelem_EMSURF_Post(m,n,value,quant)
 			point = point- nr_m*(ln)/20
 			call Field_EMSURF(point,field,n,quant)
 			value0 = dot_product(field,nr_m)
-			value0 = value0*BPACK_impedence0 ! the solution vector is J and M/BPACK_impedence0, this makes it easier to compare with ie3deigen
+			value0 = value0*BPACK_impedence0
 			value = value + value0
 			enddo
 			! value = value/2
@@ -2449,8 +2449,6 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     if(MyID==Main_ID)write (*,*) ''
     if(MyID==Main_ID)write (*,*) 'Maxedge:',Maxedge
     if(MyID==Main_ID)write (*,*) 'Nunk:',quant%Nunk
-    if(MyID==Main_ID)write (*,*) 'Nunk_int:',quant%Nunk_int
-    if(MyID==Main_ID)write (*,*) 'Nunk_port:',quant%Nunk_port
 	if(MyID==Main_ID)write (*,*) 'minedgelength:',quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'wavelength/minedgelength:',quant%wavelength/quant%minedgelength
 	if(MyID==Main_ID)write (*,*) 'maxedgelength:',quant%maxedgelength
@@ -2735,7 +2733,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	integer,allocatable:: port_of_patch(:),cnt_patch(:)
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:),Ht_at_patch(:,:),Et_at_patch(:,:)
 	complex(kind=8):: field(3),cpoint(3), volt_acc
-	real(kind=8) ln, area,point(3), Ht2int, dx(3),Pport
+	real(kind=8) ln, area,point(3), Ht2int, dx(3)
 	character(4096)::string
 	real(kind=8),allocatable::xn(:),yn(:),zn(:),wn(:), weight_at_patch(:),ExH_at_ports(:,:)
 	character(len=1024)  :: substring,substring1,model
@@ -3016,8 +3014,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 		do edge=msh%idxs,msh%idxe
 			edge_n = msh%new2old(edge)
-			if(edge_n>quant%Nunk_int .and. edge_n<=quant%Nunk-quant%Nunk_port)then
-				! edge_n = edge_n - quant%Nunk_port
+			if(edge_n>quant%Nunk-quant%Nunk_port)then
+				edge_n = edge_n - quant%Nunk_port
 				ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
 				do jj=3,4
 					patch = quant%info_unk(jj,edge_n)
@@ -3041,6 +3039,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				do jj=3,4
 					patch = quant%info_unk(jj,edge_n)
 					area=triangle_area(patch,quant)
+
 					cntn = quant%Nunk_int
 					do ppn=1,quant%Nport
 						if(edge_n<=cntn+quant%ports(ppn)%Nunk)then
@@ -3049,6 +3048,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 						endif
 						cntn = cntn + quant%ports(ppn)%Nunk
 					enddo
+
 					call gau_grobal(edge_n,jj,xn,yn,zn,wn,quant)
 					do j=1,quant%integral_points
 						an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
@@ -3083,12 +3083,9 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 					ExH_at_ports(:,port) = ExH_at_ports(:,port) + point
 				endif
 			enddo
-			Pport = 0
 			do pp=1,quant%Nport
 				write(*,*)'   power at port ',pp, dot_product(ExH_at_ports(:,pp),quant%ports(pp)%z)
-				Pport = Pport + dot_product(ExH_at_ports(:,pp),quant%ports(pp)%z)
 			enddo
-			write(*,*)'   P_wall/P_ports: ', Ht2int/abs(Pport)
 		endif
 		deallocate(Et_at_patch)
 		deallocate(port_of_patch)

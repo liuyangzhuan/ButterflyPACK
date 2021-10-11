@@ -47,7 +47,7 @@
 
 //------------------------------------------------------------------------------
 using namespace std;
-const double pi = 4.0*atan(1.0);
+const double BPACK_pi = 4.0*atan(1.0);
 const _Complex double Im={0.0,1.0};
 
 
@@ -57,7 +57,7 @@ public:
   vector<double> _data;
   int _d = 0;   // data dimension 2 or 3
   int _n = 0;   // size of the matrix
-  double _w = pi;   //angular frequency
+  double _w = BPACK_pi;   //angular frequency
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
   F2Cptr* bf;  //BF returned by Fortran code
@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
 	int Ndim=3; //data dimension
 	double starttime, endtime;
 	double* dat_ptr;
-	double w=16*pi; //angular frequency
+	double w=16*BPACK_pi; //angular frequency
 	int* nns_ptr;
 	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
 
@@ -347,9 +347,9 @@ if(myrank==master_rank){
 
 	vector<double> data_geo;
 	data_geo.resize(Ndim*Npo);
-	double dtheta=(2*pi-eps)/(sqrt(Npo));
-	dtheta=(2*pi-eps-dtheta)/(sqrt(Npo));
-	double dphi=(2*pi-eps)/(sqrt(Npo));
+	double dtheta=(2*BPACK_pi-eps)/(sqrt(Npo));
+	dtheta=(2*BPACK_pi-eps-dtheta)/(sqrt(Npo));
+	double dphi=(2*BPACK_pi-eps)/(sqrt(Npo));
 	double rmax=0.25;
 	double center[3];
 	center[0]=0.25;

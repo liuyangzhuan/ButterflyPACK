@@ -106,8 +106,8 @@ contains
       allocate (fullmatrix(mm, nn))
       fullmatrix = 0d0
 
-      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, cone, ptree, stats)
-      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, cone, ptree, stats)
+      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, BPACK_cone, ptree, stats)
+      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, BPACK_cone, ptree, stats)
 
       if (chara == '-') fullmatrix = -fullmatrix
       block3%fullmat = block3%fullmat + fullmatrix
@@ -163,7 +163,7 @@ contains
       allocate (fullmatrix(mm, nn))
       fullmatrix = 0d0
 
-      call BF_block_MVP_dat(block1, 'N', mm, nn, nn, Vin, nn, fullmatrix, mm, cone, czero, ptree, stats)
+      call BF_block_MVP_dat(block1, 'N', mm, nn, nn, Vin, nn, fullmatrix, mm, BPACK_cone, BPACK_czero, ptree, stats)
 
       if (chara == '-') fullmatrix = -fullmatrix
 
@@ -304,7 +304,7 @@ contains
          allocate (matU(block_o%M_loc, rank))
          matU = block_o%ButterflyU%blocks(1)%matrix
 
-         call gemmf90(block_o%ButterflyV%blocks(1)%matrix, block_o%M_loc, block_o%ButterflyU%blocks(1)%matrix, block_o%M_loc, matrixtemp, rank, 'T', 'N', rank, rank, block_o%M_loc, cone, czero, flop=flop)
+         call gemmf90(block_o%ButterflyV%blocks(1)%matrix, block_o%M_loc, block_o%ButterflyU%blocks(1)%matrix, block_o%M_loc, matrixtemp, rank, 'T', 'N', rank, rank, block_o%M_loc, BPACK_cone, BPACK_czero, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
 
          ! write(*,*)'goog1'
@@ -326,11 +326,11 @@ contains
          deallocate (ipiv)
 #else
          matrixtemp = matrixtemp1
-         call GeneralInverse(rank, rank, matrixtemp, matrixtemp1, SafeEps, Flops=flop)
+         call GeneralInverse(rank, rank, matrixtemp, matrixtemp1, BPACK_SafeEps, Flops=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
 #endif
 
-         call gemmf90(matU, block_o%M_loc, matrixtemp1, rank, block_o%ButterflyU%blocks(1)%matrix, block_o%M_loc, 'N', 'N', block_o%M_loc, rank, rank, cone, czero, flop=flop)
+         call gemmf90(matU, block_o%M_loc, matrixtemp1, rank, block_o%ButterflyU%blocks(1)%matrix, block_o%M_loc, 'N', 'N', block_o%M_loc, rank, rank, BPACK_cone, BPACK_czero, flop=flop)
          block_o%ButterflyU%blocks(1)%matrix = -block_o%ButterflyU%blocks(1)%matrix
          stats%Flop_Factor = stats%Flop_Factor + flop
 
@@ -371,7 +371,7 @@ contains
             call descinit(descsmall, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
             call assert(info == 0, 'descinit fail for descsmall')
 
-            call pgemmf90('T', 'N', rank, rank, block_o%N, cone, matV2D, 1, 1, descV, matU2D, 1, 1, descU, czero, matrix_small, 1, 1, descsmall, flop=flop)
+            call pgemmf90('T', 'N', rank, rank, block_o%N, BPACK_cone, matV2D, 1, 1, descV, matU2D, 1, 1, descU, BPACK_czero, matrix_small, 1, 1, descsmall, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             do ii = 1, rank
                call g2l(ii, rank, nprow, nbslpk, iproc, myi)
@@ -401,13 +401,13 @@ contains
 #else
             allocate (matrix_small1(max(1,myArows), max(1,myAcols)))
             matrix_small1=0
-            call PGeneralInverse(rank, rank, matrix_small, matrix_small1, SafeEps, ctxt, Flops=flop)
+            call PGeneralInverse(rank, rank, matrix_small, matrix_small1, BPACK_SafeEps, ctxt, Flops=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             matrix_small=matrix_small1
             deallocate(matrix_small1)
 
 #endif
-            call pgemmf90('N', 'N', block_o%M, rank, rank, cone, matU2D, 1, 1, descU, matrix_small, 1, 1, descsmall, czero, matU2D1, 1, 1, descU, flop=flop)
+            call pgemmf90('N', 'N', block_o%M, rank, rank, BPACK_cone, matU2D, 1, 1, descU, matrix_small, 1, 1, descsmall, BPACK_czero, matU2D1, 1, 1, descU, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             matU2D1 = -matU2D1
             deallocate (matrix_small)
@@ -505,7 +505,7 @@ contains
                   idx_end_loc = tail - idx_start_glo + 1
                   if (level == ho_bf1%Maxlevel + 1) then
                      call Full_block_MVP_dat(blocks, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub,&
-               &vec_old(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1),mm, cone, czero)
+               &vec_old(idx_start_loc, 1),mm, vec_new(idx_start_loc, 1),mm, BPACK_cone, BPACK_czero)
                   else
                      call BF_block_MVP_inverse_dat(ho_bf1, level, ii, 'N', idx_end_loc - idx_start_loc + 1, num_vect_sub, vec_old(idx_start_loc, 1), mm, vec_new(idx_start_loc, 1), mm, ptree, stats)
                   endif
@@ -688,7 +688,7 @@ contains
          allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
          call descinit(descsMatSml, mn1, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'T', mn1, mn2, rank, cone, RR1, 1, 1, descsMatSmlRR1, RR2, 1, 1, descsMatSmlRR2, czero, mattemp, 1, 1, descsMatSml, flop=flop)
+         call pgemmf90('N', 'T', mn1, mn2, rank, BPACK_cone, RR1, 1, 1, descsMatSmlRR1, RR2, 1, 1, descsMatSmlRR2, BPACK_czero, mattemp, 1, 1, descsMatSml, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(mn1, mn2), nbslpk, mycol, 0, npcol)
@@ -700,14 +700,14 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(mn1, mn2)))
-         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(mn1, mn2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, BPACK_SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'N', blocks_A%M, ranknew, mn1, cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
+         call pgemmf90('N', 'N', blocks_A%M, ranknew, mn1, BPACK_cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsUUSml, BPACK_czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
@@ -719,7 +719,7 @@ contains
          allocate (matV2Dnew(max(1,myArows), max(1,myAcols)))
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'T', blocks_A%N, ranknew, mn2, cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
+         call pgemmf90('N', 'T', blocks_A%N, ranknew, mn2, BPACK_cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsVVSml, BPACK_czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
 
@@ -737,7 +737,7 @@ contains
          call descinit(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVu(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(blocks_A%M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, option%tol_rand, rank1, ctxt, BPACK_SafeUnderflow, flop=flop)
          do ii = 1, rank1
             call g2l(ii, rank1, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -756,7 +756,7 @@ contains
          call descinit(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVv(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
-         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(blocks_A%N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, option%tol_rand, rank2, ctxt, BPACK_SafeUnderflow, flop=flop)
          do ii = 1, rank2
             call g2l(ii, rank2, nprow, nbslpk, iproc, myi)
             if (iproc == myrow) then
@@ -770,7 +770,7 @@ contains
          allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
          call descinit(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'T', rank1, rank2, rank, cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, czero, mattemp, 1, 1, descsMatSml, flop=flop)
+         call pgemmf90('N', 'T', rank1, rank2, rank, BPACK_cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, BPACK_czero, mattemp, 1, 1, descsMatSml, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(rank1, rank2), nbslpk, mycol, 0, npcol)
@@ -782,14 +782,14 @@ contains
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
 
          allocate (Singularsml(min(rank1, rank2)))
-         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, SafeUnderflow, flop=flop)
+         call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, option%tol_rand, ranknew, ctxt, BPACK_SafeUnderflow, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(blocks_A%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (matU2Dnew(max(1,myArows), max(1,myAcols)))
          matU2Dnew = 0
          call descinit(descsMatU2Dnew, blocks_A%M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'N', blocks_A%M, ranknew, rank1, cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
+         call pgemmf90('N', 'N', blocks_A%M, ranknew, rank1, BPACK_cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, BPACK_czero, matU2Dnew, 1, 1, descsMatU2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
             call l2g(myj, mycol, ranknew, npcol, nbslpk, jj)
@@ -801,7 +801,7 @@ contains
          allocate (matV2Dnew(max(1,myArows), max(1,myAcols)))
          matV2Dnew = 0
          call descinit(descsMatV2Dnew, blocks_A%N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call pgemmf90('N', 'T', blocks_A%N, ranknew, rank2, cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
+         call pgemmf90('N', 'T', blocks_A%N, ranknew, rank2, BPACK_cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, BPACK_czero, matV2Dnew, 1, 1, descsMatV2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
 
@@ -1219,30 +1219,30 @@ contains
          call RandomMat(nn, num_vect, min(nn, num_vect), RandVectIn, 1)
 
          ! computation of AR
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn,RandVectOut, mm, BPACK_cone, BPACK_czero, ptree, stats)
          RandVectOut = RandVectIn + RandVectOut
          ! computation of range Q of AR
-         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
+         call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, BPACK_SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
          stats%Flop_Tmp = stats%Flop_Tmp + flop
 
          ! power iteration of order q, the following is prone to roundoff error, see algorithm 4.4 Halko 2010
          q = 6
          do qq = 1, q
             RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-            call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm, RandVectIn, nn, BPACK_cone, BPACK_czero, ptree, stats)
             RandVectIn = RandVectOut + RandVectIn
             RandVectIn = conjg(cmplx(RandVectIn, kind=8))
-            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectIn, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectIn, ranktmp, BPACK_SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
 
-            call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(schulz_op%matrices_block, 'N', mm, nn, num_vect, RandVectIn, nn, RandVectOut, mm, BPACK_cone, BPACK_czero, ptree, stats)
             RandVectOut = RandVectIn + RandVectOut
-            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
+            call PComputeRange(schulz_op%matrices_block%M_p, num_vect, RandVectOut, ranktmp, BPACK_SafeEps, ptree, schulz_op%matrices_block%pgno, flop)
          enddo
 
 
          ! computation of B = Q^c*A
          RandVectOut = conjg(cmplx(RandVectOut, kind=8))
-         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm,RandVectIn, nn,cone, czero, ptree, stats)
+         call BF_block_MVP_dat(schulz_op%matrices_block, 'T', mm, nn, num_vect, RandVectOut, mm,RandVectIn, nn,BPACK_cone, BPACK_czero, ptree, stats)
          RandVectIn = RandVectOut + RandVectIn
          RandVectOut = conjg(cmplx(RandVectOut, kind=8))
 
@@ -1373,7 +1373,7 @@ contains
             vecin=1/sqrt(dble(blocks_io%N))
             allocate(vecout(blocks_io%M_loc,1))
             vecout=0
-            call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
             call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
             norm = sqrt(norm)
@@ -1523,40 +1523,40 @@ contains
             rank = blocks_B%rankmax
             allocate (UU(blocks_B%M_loc, rank))
             UU = 0
-            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_B%ButterflyU%blocks(1)%matrix, blocks_A%N_loc, UU, blocks_A%M_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_B%ButterflyU%blocks(1)%matrix, blocks_A%N_loc, UU, blocks_A%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             UU = -UU - blocks_B%ButterflyU%blocks(1)%matrix
             allocate (VV(blocks_B%N_loc, rank))
             VV = 0
-            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_B%ButterflyV%blocks(1)%matrix, blocks_D%M_loc, VV, blocks_D%N_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_B%ButterflyV%blocks(1)%matrix, blocks_D%M_loc, VV, blocks_D%N_loc, BPACK_cone, BPACK_czero, ptree, stats)
             VV = VV + blocks_B%ButterflyV%blocks(1)%matrix
 
          elseif (blocks%row_group == blocks_C%row_group .and. blocks%col_group == blocks_C%col_group) then
             rank = blocks_C%rankmax
             allocate (UU(blocks_C%M_loc, rank))
             UU = 0
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_C%ButterflyU%blocks(1)%matrix, blocks_D%N_loc, UU, blocks_D%M_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank, blocks_C%ButterflyU%blocks(1)%matrix, blocks_D%N_loc, UU, blocks_D%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             UU = -UU - blocks_C%ButterflyU%blocks(1)%matrix
             allocate (VV(blocks_C%N_loc, rank))
             VV = 0
-            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_C%ButterflyV%blocks(1)%matrix,blocks_A%M_loc, VV, blocks_A%N_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank, blocks_C%ButterflyV%blocks(1)%matrix,blocks_A%M_loc, VV, blocks_A%N_loc, BPACK_cone, BPACK_czero, ptree, stats)
             VV = VV + blocks_C%ButterflyV%blocks(1)%matrix
 
          elseif (blocks%row_group == blocks_D%row_group .and. blocks%col_group == blocks_D%col_group) then
             rank1 = blocks_C%rankmax
             allocate (UU1(blocks_C%M_loc, rank1))
             UU1 = 0
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank1, blocks_C%ButterflyU%blocks(1)%matrix,blocks_D%N_loc, UU1, blocks_D%M_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, rank1, blocks_C%ButterflyU%blocks(1)%matrix,blocks_D%N_loc, UU1, blocks_D%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             UU1 = UU1 + blocks_C%ButterflyU%blocks(1)%matrix
             allocate (TT1(blocks_A%N_loc, rank1))
             TT1 = 0
-            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank1, blocks_C%ButterflyV%blocks(1)%matrix, blocks_A%M_loc, TT1, blocks_A%N_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'T', blocks_A%M_loc, blocks_A%N_loc, rank1, blocks_C%ButterflyV%blocks(1)%matrix, blocks_A%M_loc, TT1, blocks_A%N_loc, BPACK_cone, BPACK_czero, ptree, stats)
             TT1 = TT1 + blocks_C%ButterflyV%blocks(1)%matrix
             allocate (SS1(blocks_B%N_loc, rank1))
             SS1 = 0
-            call BF_block_MVP_dat(blocks_B, 'T', blocks_B%M_loc, blocks_B%N_loc, rank1, TT1, blocks_B%M_loc, SS1, blocks_B%N_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'T', blocks_B%M_loc, blocks_B%N_loc, rank1, TT1, blocks_B%M_loc, SS1, blocks_B%N_loc, BPACK_cone, BPACK_czero, ptree, stats)
             allocate (VV1(blocks_B%N_loc, rank1))
             VV1 = 0
-            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank1, SS1, blocks_D%M_loc, VV1, blocks_D%N_loc, cone, czero, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'T', blocks_D%M_loc, blocks_D%N_loc, rank1, SS1, blocks_D%M_loc, VV1, blocks_D%N_loc, BPACK_cone, BPACK_czero, ptree, stats)
             VV1 = VV1 + SS1
 
             rank2 = blocks_D%rankmax
@@ -2389,7 +2389,7 @@ contains
          vout1 = 0
          allocate (vout2(blocks_i%M_loc, num_vect_sub))
          vout2 = 0
-         call BF_block_MVP_dat(blocks_i, 'N', blocks_i%M_loc, blocks_i%N_loc, num_vect_sub, vin, blocks_i%N_loc, vout1, blocks_i%M_loc, cone, czero, ptree, stats)
+         call BF_block_MVP_dat(blocks_i, 'N', blocks_i%M_loc, blocks_i%N_loc, num_vect_sub, vin, blocks_i%N_loc, vout1, blocks_i%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
 
          allocate (V1(max(1, blocks_A%N_loc), num_vect_sub))
          allocate (V2(max(1, blocks_B%N_loc), num_vect_sub))
@@ -2411,10 +2411,10 @@ contains
 
 
          if (blocks_A%M_loc > 0) then
-            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo1, max(1, blocks_A%M_loc), cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_B, 'N', blocks_B%M_loc, blocks_B%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo1, max(1, blocks_A%M_loc), cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_C, 'N', blocks_C%M_loc, blocks_C%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo2, max(1, blocks_C%M_loc), cone, cone, ptree, stats)
-            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo2, max(1, blocks_C%M_loc), cone, cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_A, 'N', blocks_A%M_loc, blocks_A%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo1, max(1, blocks_A%M_loc), BPACK_cone, BPACK_cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_B, 'N', blocks_B%M_loc, blocks_B%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo1, max(1, blocks_A%M_loc), BPACK_cone, BPACK_cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_C, 'N', blocks_C%M_loc, blocks_C%N_loc, num_vect_sub, V1, max(1, blocks_A%N_loc), Vo2, max(1, blocks_C%M_loc), BPACK_cone, BPACK_cone, ptree, stats)
+            call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo2, max(1, blocks_C%M_loc), BPACK_cone, BPACK_cone, ptree, stats)
          endif
 
          n1 = OMP_get_wtime()
@@ -2425,7 +2425,7 @@ contains
          n2 = OMP_get_wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
-         if(fnorm(vout1, blocks_i%M_loc, 1)<SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<SafeUnderflow)then
+         if(fnorm(vout1, blocks_i%M_loc, 1)<BPACK_SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<BPACK_SafeUnderflow)then
             error = 0d0
          else
             error = fnorm(vout1 - vout2, blocks_i%M_loc, 1)/fnorm(vout1, blocks_i%M_loc, 1)
@@ -2548,7 +2548,7 @@ contains
                   index_i_loc_k = (index_i - block_o%ButterflyU%idx)/block_o%ButterflyU%inc + 1
                   num_vect_sub = size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,2)
                   call Full_block_MVP_dat(blocks, 'N', blocks%M, num_vect_sub,&
-                     &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1),block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1), cone, czero)
+                     &block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1),block_o%ButterflyU%blocks(index_i_loc_k)%matrix, size(block_o%ButterflyU%blocks(index_i_loc_k)%matrix,1), BPACK_cone, BPACK_czero)
                end do
                !!$omp end parallel do
 
@@ -2893,7 +2893,7 @@ contains
 #else
                   allocate(matrixtemp(block_o%M,block_o%M))
                   matrixtemp = block_o%fullmat
-                  call GeneralInverse(block_o%M, block_o%M, matrixtemp, block_o%fullmat, SafeEps, Flops=flop)
+                  call GeneralInverse(block_o%M, block_o%M, matrixtemp, block_o%fullmat, BPACK_SafeEps, Flops=flop)
                   stats%Flop_Factor = stats%Flop_Factor + flop
                   deallocate(matrixtemp)
 #endif

@@ -196,10 +196,10 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
       xout[ii]=conj(xout[ii]);
   }else if(*trans=='T'){
     for (int ii=0; ii<cnt; ii++)
-      xin1[ii]=conj(xin[ii]);    
+      xin1[ii]=conj(xin[ii]);
     z_c_bf_mult(&transN, xin1, xbuf1, nin, &(Q->_m_rand), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
     for (int ii=0; ii<(*nvec)*(Q->_m_rand); ii++)
-      xbuf1[ii]=conj(xbuf1[ii]);  
+      xbuf1[ii]=conj(xbuf1[ii]);
     z_c_bf_mult(trans, xbuf1, xout, &(Q->_m_rand), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
   }
 
@@ -658,7 +658,7 @@ if(myrank==master_rank){
   z_c_bf_mult(&transN, xtrue, b, &myseg_n, &myseg_m, &nrhs, &bf_a, &option, &stats_a, &ptree);
 
 
-  //////////////////// Generate an approximate solution using (A^*A)^-1A^*b 
+  //////////////////// Generate an approximate solution using (A^*A)^-1A^*b
 	for (int i = 0; i < nrhs*myseg_m; i++)
 		b[i]=conj(b[i]);
   z_c_bf_mult(&transT, b, xbuf, &myseg_m, &myseg_n, &nrhs, &bf_a, &option, &stats_a, &ptree);

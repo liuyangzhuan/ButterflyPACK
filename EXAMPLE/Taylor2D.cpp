@@ -48,7 +48,7 @@
 
 //------------------------------------------------------------------------------
 using namespace std;
-const double pi = 4.0*atan(1.0);
+const double BPACK_pi = 4.0*atan(1.0);
 const _Complex double Im={0.0,1.0};
 
 
@@ -58,7 +58,7 @@ public:
   vector<double> _data;
   int _d = 0;   // data dimension 2 or 3
   int _n = 0;   // size of the matrix
-  double _w = pi;   //angular frequency
+  double _w = BPACK_pi;   //angular frequency
   double _dl = 0.01;   //length of each segment
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
@@ -82,11 +82,11 @@ public:
 	_Complex double out =  {0.0,0.0};
 	if(v<0){
 		out = myhankel(-v,z);
-		out = out * (cos(-v*pi)+Im*sin(-v*pi));
+		out = out * (cos(-v*BPACK_pi)+Im*sin(-v*BPACK_pi));
 	}else if(fabs(round(v)-v)<eps1){   //v is integer
 		out = bessj(round(v),z) +Im*bessy(round(v),z);
 	}else if(fabs(v-0.5)<eps1){ // v=0.5
-		out = -Im*sqrt(2/(pi*z))*(cos(z)+Im*sin(z));
+		out = -Im*sqrt(2/(BPACK_pi*z))*(cos(z)+Im*sin(z));
 	}else{
 		printf("wrong order in myhankel \n");
 		exit(0);
@@ -98,9 +98,9 @@ public:
   inline void Sample(int m, int n, _Complex double* val){
 	  if(m==n){
         double s0 = 1.0;
-        double gamma = 1.781072418;
+        double BPACK_gamma = 1.781072418;
         // *val = 0;
-        *val = Im*_dl/4.0*(1+Im*2/pi*(log(gamma*_w*s0*_dl/4.0)-1));
+        *val = Im*_dl/4.0*(1+Im*2/BPACK_pi*(log(BPACK_gamma*_w*s0*_dl/4.0)-1));
 	  }else{
 		double tau=sqrt(pow(_data[m * _d]-_data[n * _d],2)+pow(_data[m * _d+1]-_data[n * _d+1],2));
 		*val = Im*_dl/4.0*myhankel(0,tau*_w);
@@ -283,7 +283,7 @@ int main(int argc, char* argv[])
 	int Ndim=2; //data dimension
 	double starttime, endtime;
 	double* dat_ptr;
-	double w=128*pi; //angular frequency
+	double w=128*BPACK_pi; //angular frequency
 	int* nns_ptr;
 	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
 
@@ -370,12 +370,12 @@ if(myrank==master_rank){
 	/* Test the Taylor-expansion-based 2D Green function */
 
 	vector<double> data_geo;
-	double angle = pi;
+	double angle = BPACK_pi;
 	data_geo.resize(Ndim*Npo);
 	double dtheta=(angle-eps)/(Npo);
 	double rmax=2;
 	double dl=dtheta*rmax;
-	double ppw=2*pi/w/dl;
+	double ppw=2*BPACK_pi/w/dl;
 	double center[2];
 	center[0]=0.5;
 	center[1]=0.5;

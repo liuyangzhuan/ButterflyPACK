@@ -378,7 +378,7 @@ contains
             ! write(*,*)ii,abs(ctemp)
          enddo
       enddo
-      if (scale_factor < SafeUnderflow) scale_factor = 1d0
+      if (scale_factor < BPACK_SafeUnderflow) scale_factor = 1d0
 
       passflag = 0
       do while (passflag == 0)

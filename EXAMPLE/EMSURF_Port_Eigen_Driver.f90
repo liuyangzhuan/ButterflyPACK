@@ -102,14 +102,14 @@ PROGRAM ButterflyPACK_IE_3D
 	enddo
 	do ii=1,Nx0
 	do jj=1,Ny0
-		u(ii+(jj-1)*Nx0) = sin(x0(ii)*pi)
+		u(ii+(jj-1)*Nx0) = sin(x0(ii)*BPACK_pi)
 	enddo
 	enddo
 
 	do ii=1,1000
 		xx1(ii) = ii*dx/10
 		yy1(ii) = 0.5d0
-		vref(ii) = sin(xx1(ii)*pi)
+		vref(ii) = sin(xx1(ii)*BPACK_pi)
 	enddo
 
 	call CubicInterp2D_F(x0,y0,u,Nx0,Ny0,xx1,yy1,v1,1000)
@@ -162,7 +162,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%mesh_normal=1
 	quant%scaling=1d0
 	quant%wavelength=2.0
-	quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+	quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 	quant%RCS_static=2
     quant%RCS_Nsample=1000
 	quant%CFIE_alpha=1
@@ -203,14 +203,14 @@ PROGRAM ButterflyPACK_IE_3D
 							quant%data_dir=trim(strings1)
 						else if	(trim(strings)=='--wavelength')then
 							read(strings1,*)quant%wavelength
-							quant%freq=1/quant%wavelength/sqrt(mu0*eps0)
+							quant%freq=1/quant%wavelength/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--scaling')then
 							read(strings1,*)quant%scaling
 						else if (trim(strings)=='--norm_thresh')then
 							read(strings1,*)norm_thresh
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
-							quant%wavelength=1/quant%freq/sqrt(mu0*eps0)
+							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
 						else if	(trim(strings)=='--cmmode')then
 							read(strings1,*)quant%CMmode
 						else if	(trim(strings)=='--si')then
@@ -250,7 +250,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call PrintOptions(option_A,ptree_A)
 
 
-    quant%wavenum=2*pi/quant%wavelength
+    quant%wavenum=2*BPACK_pi/quant%wavelength
 	! option_A%touch_para = 3* quant%minedgelength
 
 
@@ -427,18 +427,18 @@ PROGRAM ButterflyPACK_IE_3D
 			do mm=1,quant%ports(pp)%mmax
 				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
 				quant%ports(pp)%A_TE_nm(nn+1,mm)=A_TE_nm_cir(nn+1,mm)
-				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=Bigvalue
+				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=BPACK_Bigvalue
 				if(quant%wavenum > kc)then
 					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-					quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*impedence0/betanm
+					quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*BPACK_impedence0/betanm
 					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm)
 				endif
 				kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
 				quant%ports(pp)%A_TM_nm(nn+1,mm)=A_TM_nm_cir(nn+1,mm)
-				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=Bigvalue
+				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=BPACK_Bigvalue
 				if(quant%wavenum > kc)then
 					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-					quant%ports(pp)%impedance_TM_nm(nn+1,mm)=impedence0*betanm/quant%wavenum
+					quant%ports(pp)%impedance_TM_nm(nn+1,mm)=BPACK_impedence0*betanm/quant%wavenum
 					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm)
 				endif
 			enddo
@@ -447,13 +447,13 @@ PROGRAM ButterflyPACK_IE_3D
 			do nn=0,quant%ports(pp)%nmax
 				do mm=0,quant%ports(pp)%mmax
 					quant%ports(pp)%A_TE_nm(nn+1,mm+1)=0
-					quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=Bigvalue
+					quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=BPACK_Bigvalue
 					if(nn>0 .or. mm>0)then ! the lowest TE mode is 01 or 10
-						kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
 						quant%ports(pp)%A_TE_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*A_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*B_nm_rec(nn+1,mm+1))
 						if(quant%wavenum > kc)then
 							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-							quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*impedence0/betanm
+							quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*BPACK_impedence0/betanm
 							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)
 						endif
 					endif
@@ -463,13 +463,13 @@ PROGRAM ButterflyPACK_IE_3D
 			do nn=0,quant%ports(pp)%nmax
 				do mm=0,quant%ports(pp)%mmax
 					quant%ports(pp)%A_TM_nm(nn+1,mm+1)=0
-					quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=Bigvalue
+					quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=BPACK_Bigvalue
 					if(nn>0 .and. mm>0)then ! the lowest TM mode is 11
-						kc = sqrt((nn*pi/quant%ports(pp)%a)**2d0+(mm*pi/quant%ports(pp)%b)**2d0)
+						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
 						quant%ports(pp)%A_TM_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*B_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*A_nm_rec(nn+1,mm+1))
 						if(quant%wavenum > kc)then
 							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
-							quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=impedence0*betanm/quant%wavenum
+							quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=BPACK_impedence0*betanm/quant%wavenum
 							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)
 						endif
 					endif
@@ -712,7 +712,7 @@ PROGRAM ButterflyPACK_IE_3D
 						open(13, file=trim(adjustl(substring2))//"_mode_vec"//trim(adjustl(strings))//".out", status="old", action="read")
 						do i=1,quant%Nunk
 							read(13,*)rtemp1,rtemp2
-							eigvec_glo_ref(i) = rtemp1 + junit*rtemp2
+							eigvec_glo_ref(i) = rtemp1 + BPACK_junit*rtemp2
 						enddo
 						close(13)
 						write(*,*)abs(dot_product(eigvec_glo_ref,eigvec_glo)),'comparing eigenvector',ii, ' to existing mode',nn
@@ -820,7 +820,7 @@ PROGRAM ButterflyPACK_IE_3D
 
 						call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
 
-						rcs=(abs(quant%wavenum*ctemp))**2/4/pi
+						rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
 						!rcs=rcs/quant%wavelength
 						rcs=10*log10(rcs)
 						if(ptree_A%MyID==Main_ID)write(100,*)theta,rcs
