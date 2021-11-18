@@ -40,13 +40,13 @@ case "${TEST_NUMBER}" in
    sh file_merge.sh Frontal_elastic
    cd $ROOT_DIR/build
     mpirun --allow-run-as-root --oversubscribe "-n" "4" "$EXAMPLE_FOLDER/frontaldist" "-quant" "--nunk" "2500" "--data_dir" "$DATA_FOLDER/FULLMAT_DATA/Frontal_elastic/Frontal_elastic_2500" "--explicitflag" "0" "-option" "--nmin_leaf" "100" "--tol_comp" "1e-3" "--lrlevel" "100";; # test sampling-based construction of HODLR with BF for an 3D elastic Helmholtz frontal matrix stored parallel in file
-15) cd $DATA_FOLDER/FULLMAT_DATA
-   sh file_merge.sh FullMatKrr
-   cd $ROOT_DIR/build
-    mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/fullkrr" "-quant" "-lambda" "0.03" "-option" "--reclr_leaf" "5" "--tol_comp" "1e-7" "--xyzsort" "3";; # test full matrix kernel regression with entry-based construction of HODLR with LR for a kernel matrix stored in file, with angular gram distance-based reordering and H-BACA
-16) mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/go2d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1" # test the taylor-expansion-based 2D approximate Green function 
+# 15) cd $DATA_FOLDER/FULLMAT_DATA
+#    sh file_merge.sh FullMatKrr
+#    cd $ROOT_DIR/build
+#     mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/fullkrr" "-quant" "-lambda" "0.03" "-option" "--reclr_leaf" "5" "--tol_comp" "1e-7" "--xyzsort" "3";; # test full matrix kernel regression with entry-based construction of HODLR with LR for a kernel matrix stored in file, with angular gram distance-based reordering and H-BACA
+15) mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/go2d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1" # test the taylor-expansion-based 2D approximate Green function 
     mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/go3d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1";; # test the taylor-expansion-based 3D approximate Green function 
-17) mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cfio" "--tst" "2" "--M" "1500" "--N" "1000" "--K" "2000" "--L" "1800" "--lrlevel" "100";; # test CPP interface for compressing product of three FIOs    
+16) mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cfio" "--tst" "2" "--M" "1500" "--N" "1000" "--K" "2000" "--L" "1800" "--lrlevel" "100";; # test CPP interface for compressing product of three FIOs    
 *) printf "${RED} ###YL: Unknown test\n" ;;
 esac
 
