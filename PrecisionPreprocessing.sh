@@ -171,7 +171,7 @@ while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.f
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.h
 done < "$TMP_FILE"
-sed -i -e "s/C_DT/double/g" $SSRCDIR/*.h
+sed -i -e "s/C_DT/float/g" $SSRCDIR/*.h
 sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.h
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/s_BPACK_WRAP/g" $SSRCDIR/*.h
