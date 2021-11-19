@@ -1659,11 +1659,14 @@ contains
 
       call BF_randomized(blocks%pgno, blocks%level_butterfly, option%rank0, option%rankrate, blocks, ker, Bmatvec_user_C, error, 'CMatVec', option, stats, ptree, msh)
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction finished"
-
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
       t2 = OMP_get_wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction finished in", t2-t1, 'Seconds with', stats%Mem_Comp_for,'MB Memory'
+
+
+
 
       stats%rankmax_of_level(0) = blocks%rankmax
       stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
@@ -1755,12 +1758,11 @@ contains
       end if
 
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree)
-
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished"
-
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
       t2 = OMP_get_wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
       if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
