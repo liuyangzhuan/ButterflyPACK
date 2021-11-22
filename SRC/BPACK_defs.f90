@@ -627,7 +627,7 @@ module BPACK_DEFS
             type(c_ptr) :: quant
             integer(kind=C_INT):: Ninter, Nallrows, Nallcols, Nalldat_loc
             integer(kind=C_INT):: allrows(Nallrows), allcols(Nallcols)
-            CBIND_DT::alldat_loc(Nalldat_loc)
+            CBIND_DT,target::alldat_loc(Nalldat_loc)
             integer(kind=C_INT)::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
             integer(kind=C_INT)::Npmap, pmaps(Npmap, 3)
         end subroutine C_Zelem_block
