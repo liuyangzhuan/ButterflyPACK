@@ -234,7 +234,7 @@ module BPACK_DEFS
         integer, allocatable::rows_loc(:) ! store indices in rows
         integer, allocatable::glo2loc(:) ! store index mapping from rows to rows_loc
         DT, allocatable::dat(:, :)
-        DT, allocatable::dat_loc(:, :)
+        DT, pointer::dat_loc(:, :) => null()
     end type intersect
 
     !**** butterfly or LR structure
@@ -596,7 +596,7 @@ module BPACK_DEFS
             class(*), pointer :: quant
             integer:: Ninter
             integer:: allrows(:), allcols(:)
-            DT::alldat_loc(:)
+            DT,target::alldat_loc(:)
             integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
             integer::Npmap, pmaps(Npmap, 3)
         end subroutine F_Zelem_block

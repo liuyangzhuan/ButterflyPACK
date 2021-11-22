@@ -909,7 +909,7 @@ contains
       ! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
       t2 = OMP_get_wtime()
 
-      !**** delete neighours in msh 
+      !**** delete neighours in msh
       if(allocated(msh%nns))deallocate(msh%nns)
 
       !**** return the C address of hodlr structures to C caller
@@ -1763,7 +1763,7 @@ contains
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
-      !**** delete neighours in msh 
+      !**** delete neighours in msh
       if(allocated(msh%nns))deallocate(msh%nns)
 
       t2 = OMP_get_wtime()
@@ -1967,7 +1967,7 @@ contains
       integer:: allrows(Nallrows), allcols(Nallcols)
       integer, allocatable::datidx(:)
       integer:: Ninter, nr, nc, ntot_loc
-      DT::alldat_loc(Nalldat_loc)
+      DT,target::alldat_loc(Nalldat_loc)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3), flag2D
       type(iarray)::lst
@@ -2062,7 +2062,7 @@ contains
       integer:: allrows(Nallrows), allcols(Nallcols)
       integer, allocatable:: allrows1(:), allcols1(:), pgidx1(:)
       integer:: Ninter, idx_row, idx_col
-      DT::alldat_loc(Nalldat_loc)
+      DT,target::alldat_loc(Nalldat_loc)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3)
       real(kind=8) t1, t2
