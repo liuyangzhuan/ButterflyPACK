@@ -909,6 +909,9 @@ contains
       ! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
       t2 = OMP_get_wtime()
 
+      !**** delete neighours in msh 
+      if(allocated(msh%nns))deallocate(msh%nns)
+
       !**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
@@ -1759,6 +1762,9 @@ contains
 
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+      !**** delete neighours in msh 
+      if(allocated(msh%nns))deallocate(msh%nns)
 
       t2 = OMP_get_wtime()
 
