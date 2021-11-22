@@ -31,7 +31,7 @@ contains
       class(*), pointer :: quant
       integer:: Ninter
       integer:: allrows(:), allcols(:)
-      DT::alldat_loc(:)
+      DT,target::alldat_loc(:)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3)
 
@@ -799,7 +799,7 @@ contains
       integer num_blocks, idx_row, idx_col, idx_dat
       integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
-      DT, allocatable::alldat_loc(:)
+      DT, target, allocatable::alldat_loc(:)
       integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect)::submats(1)
 
@@ -1006,7 +1006,7 @@ contains
       integer:: allrows(:), allcols(:)
       integer, allocatable::datidx(:)
       integer:: Ninter, nr, nc, ntot_loc
-      DT::alldat_loc(:)
+      DT,target::alldat_loc(:)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3), flag2D
       type(iarray)::lst
@@ -1214,7 +1214,7 @@ contains
 
       ntot_loc = 0
       do nn = 1, Ninter
-         if (allocated(inters(nn)%dat_loc)) then
+         if (associated(inters(nn)%dat_loc)) then
             nr_loc = size(inters(nn)%dat_loc, 1)
             nc_loc = size(inters(nn)%dat_loc, 2)
             do jj = 1, nc_loc
@@ -1234,7 +1234,7 @@ contains
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
                if (allocated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
-               if (allocated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
+               if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
                if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
@@ -1254,7 +1254,7 @@ contains
       ! deallocate global intersections
       do nn = 1, Ninter
          if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
-         if (allocated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
+         if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
          if (allocated(inters(nn)%rows_loc)) deallocate (inters(nn)%rows_loc)
@@ -1304,7 +1304,7 @@ contains
       integer:: allrows(:), allcols(:)
       integer, allocatable::datidx(:)
       integer:: Ninter, nr, nc, ntot_loc
-      DT::alldat_loc(:)
+      DT,target::alldat_loc(:)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3), flag2D
       type(iarray)::lst
@@ -1516,7 +1516,7 @@ contains
 
       ntot_loc = 0
       do nn = 1, Ninter
-         if (allocated(inters(nn)%dat_loc)) then
+         if (associated(inters(nn)%dat_loc)) then
             nr_loc = size(inters(nn)%dat_loc, 1)
             nc_loc = size(inters(nn)%dat_loc, 2)
             do jj = 1, nc_loc
@@ -1536,7 +1536,7 @@ contains
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
                if (allocated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
-               if (allocated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
+               if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
                if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
@@ -1556,7 +1556,7 @@ contains
       ! deallocate global intersections
       do nn = 1, Ninter
          if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
-         if (allocated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
+         if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
          if (allocated(inters(nn)%rows_loc)) deallocate (inters(nn)%rows_loc)
@@ -1606,7 +1606,7 @@ contains
       integer num_blocks, idx_row, idx_col, idx_dat
       integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
-      DT, allocatable::alldat_loc(:)
+      DT, target, allocatable::alldat_loc(:)
       integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect)::submats(1)
 
