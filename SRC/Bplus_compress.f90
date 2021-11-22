@@ -2456,13 +2456,14 @@ contains
       type(proctree)::ptree
       integer, allocatable :: rankmax_for_butterfly(:), mrange(:), nrange(:)
       integer emptyflag
-      type(intersect),allocatable::submats(:)
+      type(intersect),allocatable::submats(:),submats_full(:)
       type(acaquant),allocatable::acaquants(:)
       integer ierr
       DT, allocatable:: row_R(:, :), row_R_knn(:, :), row_Rtmp(:, :), row_Rtmp_knn(:, :), column_R(:, :), column_R_knn(:, :), column_RT(:, :), core_knn(:,:)
       integer, allocatable:: select_column(:), select_column_knn(:), select_row_knn(:), select_column1(:), select_row(:), perms(:)
       type(intersect) :: submats_dummy(1)
       type(SVD_quant)::SVD_Q
+      integer :: fullmatflag
 
       ! write(*,*)'In: ',ptree%MyID,blocks%row_group,blocks%col_group
       flops=0
@@ -2517,6 +2518,9 @@ contains
          allocate (ButterflyP_old%blocks(ButterflyP_old%nr, ButterflyP_old%nc))
          allocate (ButterflyP_old1%blocks(ButterflyP_old1%nr, ButterflyP_old1%nc))
 
+
+
+
 if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
 
          tolerance = option%tol_comp*0.1
@@ -2531,6 +2535,57 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
             endif
             endif
          endif
+
+
+         fullmatflag=0
+
+         if(fullmatflag==1)then
+            nrc=nr*nc
+            allocate(submats_full(max(1,nrc)))
+            do index_i_loc = 1, nr
+               do index_j_loc = 1, nc
+                  index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+                  index_i = (index_i_loc - 1)*inc_r + idx_r
+                  index_j = (index_j_loc - 1)*inc_c + idx_c
+                  group_m = blocks%row_group   ! Note: row_group and col_group interchanged here
+                  group_n = blocks%col_group
+                  group_m = group_m*2**level_half - 1 + index_i
+                  group_n = group_n*2**(level_butterfly - level_half) - 1 + index_j
+
+                  M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+                  N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+                  header_m = msh%basis_group(group_m)%head
+                  header_n = msh%basis_group(group_n)%head
+
+                  submats_full(index_ij_loc)%nr=0
+                  submats_full(index_ij_loc)%nc=0
+
+                  emptyflag = 0
+                  if (Nboundall > 0) then
+                     if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                  endif
+
+                  if (emptyflag == 1) then
+                  else
+                     submats_full(index_ij_loc)%nr=M
+                     submats_full(index_ij_loc)%nc=N
+                     allocate(submats_full(index_ij_loc)%rows(submats_full(index_ij_loc)%nr))
+                     allocate(submats_full(index_ij_loc)%cols(submats_full(index_ij_loc)%nc))
+                     do i=1,M
+                        submats_full(index_ij_loc)%rows(i)=header_m + i - 1
+                     enddo
+                     do j = 1, N
+                        submats_full(index_ij_loc)%cols(j) = header_n + j - 1
+                     enddo
+                     allocate(submats_full(index_ij_loc)%dat(submats_full(index_ij_loc)%nr,submats_full(index_ij_loc)%nc))
+                  endif
+               enddo
+            enddo
+            call element_Zmn_blocklist_user(submats_full, nrc, msh, option, ker, 0, passflag, ptree, stats)
+         endif
+
+
+         n1 = OMP_get_wtime()
 
          nrc=nr*nc
          allocate(submats(max(1,nrc*2)))  ! odd for columns, even for rows
@@ -2624,6 +2679,13 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                            submats(index_ij_loc*2-1)%cols(j) = header_n + select_column_knn(j) - 1
                         enddo
                         allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+                        if(fullmatflag==1)then
+                           do i=1,M
+                              do j = 1, r_est_knn_c
+                                 submats(index_ij_loc*2-1)%dat(i,j) = submats_full(index_ij_loc)%dat(i,select_column_knn(j))
+                              enddo
+                           enddo
+                        endif
 
                         submats(index_ij_loc*2)%nr=r_est_knn_r
                         submats(index_ij_loc*2)%nc=N
@@ -2636,6 +2698,13 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                            submats(index_ij_loc*2)%cols(j) = header_n + j - 1
                         enddo
                         allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                        if(fullmatflag==1)then
+                           do i=1,r_est_knn_r
+                              do j = 1, N
+                                 submats(index_ij_loc*2)%dat(i,j) = submats_full(index_ij_loc)%dat(select_row_knn(i),j)
+                              enddo
+                           enddo
+                        endif
                      endif
                      deallocate(select_column_knn)
                      deallocate(select_row_knn)
@@ -2647,7 +2716,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
          ! write(*,*)'myid ',ptree%MyID,'before element_Zmn_blocklist_user'
 
          ! the rows and columns from KNN
-         call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+         if(fullmatflag==0)call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
          ! write(*,*)'myid ',ptree%MyID,'after element_Zmn_blocklist_user'
 
@@ -2741,11 +2810,12 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
             enddo
          enddo
 
-
+         if(fullmatflag==0)then
          passflag = 0
          do while (passflag == 0)
             call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
          enddo
+         endif
 
          finish=.false.
          do while(.not. finish)
@@ -2784,12 +2854,19 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                      allocate(submats(index_ij_loc*2-1)%cols(submats(index_ij_loc*2-1)%nc))
                      submats(index_ij_loc*2-1)%cols = acaquants(index_ij_loc)%select_column + header_n -1
                      allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+                     if(fullmatflag==1)then
+                        do i=1,M
+                           do j = 1, r_est
+                              submats(index_ij_loc*2-1)%dat(i,j) = submats_full(index_ij_loc)%dat(i,acaquants(index_ij_loc)%select_column(j))
+                           enddo
+                        enddo
+                     endif
                   endif
                enddo
             enddo
 
             ! the columns
-            call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+            if(fullmatflag==0)call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
 
             !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
@@ -2842,11 +2919,18 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                         submats(index_ij_loc*2)%cols(j) = header_n + j - 1
                      enddo
                      allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                     if(fullmatflag==1)then
+                        do i=1,r_est
+                           do j = 1, N
+                              submats(index_ij_loc*2)%dat(i,j) = submats_full(index_ij_loc)%dat(acaquants(index_ij_loc)%select_row(i),j)
+                           enddo
+                        enddo
+                     endif
                   endif
                enddo
             enddo
             ! the rows
-            call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
+            if(fullmatflag==0)call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
             !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
             do index_ij_loc = 1, nr*nc
@@ -2896,6 +2980,16 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   deallocate(submats(index_ij_loc*2)%dat)
                   deallocate(submats(index_ij_loc*2)%rows)
                   deallocate(submats(index_ij_loc*2)%cols)
+               endif
+
+               if(fullmatflag==1)then
+                  submats_full(index_ij_loc)%nr=0
+                  submats_full(index_ij_loc)%nc=0
+                  if(allocated(submats_full(index_ij_loc)%dat))then
+                     deallocate(submats_full(index_ij_loc)%dat)
+                     deallocate(submats_full(index_ij_loc)%rows)
+                     deallocate(submats_full(index_ij_loc)%cols)
+                  endif
                endif
 
                rank = acaquants(index_ij_loc)%rank
@@ -3075,6 +3169,13 @@ else
          enddo
          deallocate(submats)
 endif
+
+
+
+n2 = OMP_get_wtime()
+time_tmp = time_tmp + n2 - n1
+
+
 
          call BF_exchange_matvec(blocks, ButterflyP_old, stats, ptree, level_half, 'R', 'B')
          call BF_exchange_matvec(blocks, ButterflyMiddle, stats, ptree, level_half, 'R', 'B')
@@ -6965,6 +7066,8 @@ endif
 
       mn = min(mm, nn)
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
+
+#if 1
       call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
       flops = flops + flop
 
@@ -6977,6 +7080,14 @@ endif
             UU(:, j) =  UU(:, j)*Singular(j)
          enddo
       endif
+#else
+      if(level==level_butterfly)then
+         call RRQR_LQ(QQ, mm, nn, mn, UU, VV, option%tol_comp, rank, 'L', flops=flop)
+      else
+         call RRQR_LQ(QQ, mm, nn, mn, UU, VV, option%tol_comp, rank, 'R', flops=flop)
+      endif
+      flops = flops + flop
+#endif
 
       if(levelm+1==level)then ! merge ButterflyMiddle into ButterflyKerl
          do j = 1, nn1
@@ -7203,6 +7314,8 @@ endif
 
       mn = min(mm, nn)
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
+
+#if 1
       call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
       flops = flops + flop
 
@@ -7215,7 +7328,14 @@ endif
             VV(i, :) =  Singular(i)*VV(i, :)
          enddo
       endif
-
+#else
+      if(level==1)then
+         call RRQR_LQ(QQ, mm, nn, mn, UU, VV, option%tol_comp, rank, 'L', flops=flop)
+      else
+         call RRQR_LQ(QQ, mm, nn, mn, UU, VV, option%tol_comp, rank, 'R', flops=flop)
+      endif
+      flops = flops + flop
+#endif
 
       allocate (mat_tmp(rank, nn))
       ! !$omp parallel do default(shared) private(i,j)
