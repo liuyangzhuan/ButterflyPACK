@@ -1023,6 +1023,7 @@ contains
       lstblk = list()
       idx_row = 0
       idx_col = 0
+      ntot_loc = 0
       do nn = 1, Ninter
          nr = rowidx(nn)
          nc = colidx(nn)
@@ -1035,8 +1036,12 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-            allocate (inters(nn)%dat_loc(myArows, myAcols))
-            if (myArows > 0 .and. myAcols > 0) inters(nn)%dat_loc = 0
+            nr_loc = myArows
+            nc_loc = myAcols
+            if (nr_loc > 0 .and. nc_loc > 0)then
+               call Array1DtoPointer2D(alldat_loc(ntot_loc+1:ntot_loc + nr_loc*nc_loc), inters(nn)%dat_loc, nr_loc, nc_loc)
+               ntot_loc = ntot_loc + nr_loc*nc_loc
+            endif
          endif
          if (nprow*npcol > 1) flag2D = 1
          allocate (inters(nn)%rows(nr))
@@ -1212,20 +1217,6 @@ contains
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
 
 
-      ntot_loc = 0
-      do nn = 1, Ninter
-         if (associated(inters(nn)%dat_loc)) then
-            nr_loc = size(inters(nn)%dat_loc, 1)
-            nc_loc = size(inters(nn)%dat_loc, 2)
-            do jj = 1, nc_loc
-            do ii = 1, nr_loc
-               alldat_loc(ntot_loc + ii + (jj - 1)*nr_loc) = inters(nn)%dat_loc(ii, jj)
-            enddo
-            enddo
-            ntot_loc = ntot_loc + nr_loc*nc_loc
-         endif
-      enddo
-
       ! deallocate intersections at each block
       cur => lstblk%head
       do ii = 1, lstblk%num_nods
@@ -1254,7 +1245,7 @@ contains
       ! deallocate global intersections
       do nn = 1, Ninter
          if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
-         if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
+         ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
          if (allocated(inters(nn)%rows_loc)) deallocate (inters(nn)%rows_loc)
@@ -1320,6 +1311,7 @@ contains
       lstblk = list()
       idx_row = 0
       idx_col = 0
+      ntot_loc = 0
       do nn = 1, Ninter
          nr = rowidx(nn)
          nc = colidx(nn)
@@ -1332,8 +1324,12 @@ contains
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(nr, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(nc, nbslpk, mycol, 0, npcol)
-            allocate (inters(nn)%dat_loc(myArows, myAcols))
-            if (myArows > 0 .and. myAcols > 0) inters(nn)%dat_loc = 0
+            nr_loc = myArows
+            nc_loc = myAcols
+            if (nr_loc > 0 .and. nc_loc > 0)then
+               call Array1DtoPointer2D(alldat_loc(ntot_loc+1:ntot_loc + nr_loc*nc_loc), inters(nn)%dat_loc, nr_loc, nc_loc)
+               ntot_loc = ntot_loc + nr_loc*nc_loc
+            endif
          endif
          if (nprow*npcol > 1) flag2D = 1
          allocate (inters(nn)%rows(nr))
@@ -1360,6 +1356,8 @@ contains
          call append(lstc, lst)
          call iarray_finalizer(lst)
       enddo
+
+      if(ntot_loc>0)alldat_loc(1:ntot_loc)=0
 
       n1 = OMP_get_wtime()
 
@@ -1514,20 +1512,6 @@ contains
       n4 = OMP_get_wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
 
-      ntot_loc = 0
-      do nn = 1, Ninter
-         if (associated(inters(nn)%dat_loc)) then
-            nr_loc = size(inters(nn)%dat_loc, 1)
-            nc_loc = size(inters(nn)%dat_loc, 2)
-            do jj = 1, nc_loc
-            do ii = 1, nr_loc
-               alldat_loc(ntot_loc + ii + (jj - 1)*nr_loc) = inters(nn)%dat_loc(ii, jj)
-            enddo
-            enddo
-            ntot_loc = ntot_loc + nr_loc*nc_loc
-         endif
-      enddo
-
       ! deallocate intersections at each block
       cur => lstblk%head
       do ii = 1, lstblk%num_nods
@@ -1556,7 +1540,7 @@ contains
       ! deallocate global intersections
       do nn = 1, Ninter
          if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
-         if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
+         ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
          if (allocated(inters(nn)%rows_loc)) deallocate (inters(nn)%rows_loc)

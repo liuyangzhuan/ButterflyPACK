@@ -5103,4 +5103,13 @@ contains
       endif
    end subroutine Gridinfo_2D
 
+
+   subroutine Array1DtoPointer2D(x, p, n1, n2)
+      integer::         n1, n2
+      DT, target::    x(n1, n2)
+      DT, pointer::   p(:,:)
+      p => x
+   end subroutine Array1DtoPointer2D
+
+
 end module MISC_Utilities
