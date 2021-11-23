@@ -1068,6 +1068,7 @@ contains
          call append(lstc, lst)
          call iarray_finalizer(lst)
       enddo
+      if(ntot_loc>0)alldat_loc(1:ntot_loc)=0
 
       n1 = OMP_get_wtime()
 
@@ -1224,7 +1225,7 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
-               if (allocated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
+               if (associated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
                if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
@@ -1244,7 +1245,7 @@ contains
 
       ! deallocate global intersections
       do nn = 1, Ninter
-         if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
+         if (associated(inters(nn)%dat)) deallocate (inters(nn)%dat)
          ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
@@ -1519,7 +1520,7 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
-               if (allocated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
+               if (associated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
                if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
@@ -1539,7 +1540,7 @@ contains
 
       ! deallocate global intersections
       do nn = 1, Ninter
-         if (allocated(inters(nn)%dat)) deallocate (inters(nn)%dat)
+         if (associated(inters(nn)%dat)) deallocate (inters(nn)%dat)
          ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
