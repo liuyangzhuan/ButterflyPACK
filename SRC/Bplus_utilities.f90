@@ -14839,6 +14839,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                alldat_loc => alldat_loc_in
             else
                allocate (alldat_loc(idx_dat))
+               call LogMemory(stats, SIZEOF(alldat_loc)/1024.0d3)
             endif
             if (idx_dat > 0) alldat_loc(1:idx_dat) = 0
 
@@ -15000,6 +15001,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                alldat_loc => alldat_loc_in
             else
                allocate (alldat_loc(idx_dat))
+               call LogMemory(stats, SIZEOF(alldat_loc)/1024.0d3)
             endif
             if (idx_dat > 0) alldat_loc(1:idx_dat) = 0
 

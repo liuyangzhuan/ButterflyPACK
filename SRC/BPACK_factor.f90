@@ -203,7 +203,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
 
         stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
-        stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
+        call LogMemory(stats, stats%Mem_Factor)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_SMW, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -301,7 +301,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
 
-        stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
+        call LogMemory(stats, stats%Mem_Factor)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -405,7 +405,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             enddo
         enddo
 
-        stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Factor
+        call LogMemory(stats, stats%Mem_Factor)
 
         call MPI_verbose_barrier('after printing', ptree)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then

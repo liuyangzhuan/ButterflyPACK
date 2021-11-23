@@ -267,7 +267,7 @@ contains
       stats%Mem_Comp_for = stats%Mem_Comp_for + Memory
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel), stats%rankmax_of_level_global(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
-      stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+      call LogMemory(stats, stats%Mem_Fill)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level
 

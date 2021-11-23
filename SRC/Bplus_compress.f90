@@ -167,6 +167,7 @@ contains
             ! time_tmp = time_tmp + n2 - n1
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
+               call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
             else
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
@@ -188,15 +189,21 @@ contains
 
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
+                  call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
                   if(associated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
                endif
                if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
                if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
-               if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
+               if(allocated(submats(index_ij)%masks))then
+                  call LogMemory(stats, -SIZEOF(submats(index_ij)%masks)/1024.0d3)
+                  deallocate(submats(index_ij)%masks)
+               endif
             enddo
             deallocate(submats)
-            if(allocated(alldat_loc_in))deallocate(alldat_loc_in)
-
+            if(allocated(alldat_loc_in))then
+               call LogMemory(stats, -SIZEOF(alldat_loc_in)/1024.0d3)
+               deallocate(alldat_loc_in)
+            endif
 
             passflag = 0
             do while (passflag == 0)
@@ -279,6 +286,7 @@ contains
             ! time_tmp = time_tmp + n2 - n1
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
+               call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
             else
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
@@ -303,15 +311,20 @@ contains
             if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
-                  if(associated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+                  if(associated(submats(index_ij)%dat))then
+                     call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
+                     deallocate(submats(index_ij)%dat)
+                  endif
                endif
                if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
                if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
                if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
             enddo
             deallocate(submats)
-            if(allocated(alldat_loc_in))deallocate(alldat_loc_in)
-
+            if(allocated(alldat_loc_in))then
+               call LogMemory(stats, -SIZEOF(alldat_loc_in)/1024.0d3)
+               deallocate(alldat_loc_in)
+            endif
 
             passflag = 0
             do while (passflag == 0)
@@ -485,6 +498,7 @@ contains
          if (Nboundall > 0) then
             allocate (submats(index_ij)%dat(rankmax_r, nn))
             submats(index_ij)%dat=0
+            call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
          endif
          nnz_loc = nnz_loc + rankmax_r*nn
 
@@ -501,6 +515,7 @@ contains
 
          if (Nboundall > 0) then
             allocate (submats(index_ij)%masks(rankmax_r, nn))
+            call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
             submats(index_ij)%masks = 1
             do i = 1, rankmax_r
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
@@ -527,6 +542,7 @@ contains
          if (Nboundall > 0) then
             allocate (submats(index_ij)%dat(mm, rank_new))
             submats(index_ij)%dat=0
+            call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
          endif
          nnz_loc = nnz_loc + mm*rank_new
 
@@ -543,6 +559,7 @@ contains
 
          if (Nboundall > 0) then
             allocate (submats(index_ij)%masks(mm, rank_new))
+            call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
             submats(index_ij)%masks = 1
             do i = 1, mm
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
@@ -570,6 +587,7 @@ contains
          if (Nboundall > 0) then
             allocate (submats(index_ij)%dat(rankmax_r, nn))
             submats(index_ij)%dat=0
+            call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
          endif
          nnz_loc = nnz_loc + rankmax_r*nn
 
@@ -591,6 +609,7 @@ contains
          if (Nboundall > 0) then
 
             allocate (submats(index_ij)%masks(rankmax_r, nn))
+            call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
             submats(index_ij)%masks = 1
 
             do i = 1, rankmax_r
@@ -1416,6 +1435,7 @@ contains
             if (Nboundall > 0) then
                allocate (submats(index_ij)%dat(mm, rank_new))
                submats(index_ij)%dat=0
+               call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
             endif
             nnz_loc = nnz_loc + mm*rank_new
 
@@ -1433,6 +1453,7 @@ contains
             if (Nboundall > 0) then
 
                allocate (submats(index_ij)%masks(mm, rank_new))
+               call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
                submats(index_ij)%masks = 1
 
                do i = 1, mm
@@ -1452,6 +1473,7 @@ contains
             if (Nboundall > 0) then
                allocate (submats(index_ij)%dat(mm,rankmax_c))
                submats(index_ij)%dat=0
+               call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
             endif
             nnz_loc = nnz_loc + mm*rankmax_c
 
@@ -1469,6 +1491,7 @@ contains
             if (Nboundall > 0) then
 
                allocate (submats(index_ij)%masks(mm, rankmax_c))
+               call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
                submats(index_ij)%masks = 1
 
                do i = 1, mm
@@ -1496,6 +1519,7 @@ contains
          ! allocate (matrix_V_tmp(rank_new, nn))
          if (Nboundall > 0) then
             allocate (submats(index_ij)%dat(rank_new, nn))
+            call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
             submats(index_ij)%dat=0
          endif
          nnz_loc = nnz_loc + rank_new*nn
@@ -1515,6 +1539,7 @@ contains
          if (Nboundall > 0) then
 
             allocate (submats(index_ij)%masks(rank_new, nn))
+            call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
             submats(index_ij)%masks = 1
 
             do i = 1, rank_new
@@ -1548,6 +1573,7 @@ contains
             if (Nboundall > 0) then
                allocate (submats(index_ij)%dat(mm1 + mm2, rank_new))
                submats(index_ij)%dat=0
+               call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
             endif
             nnz_loc = nnz_loc + (mm1 + mm2)*rank_new
 
@@ -1570,6 +1596,7 @@ contains
 
                allocate (submats(index_ij)%masks(mm1 + mm2, rank_new))
                submats(index_ij)%masks = 1
+               call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
 
                do i = 1, mm1 + mm2
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
@@ -1591,6 +1618,7 @@ contains
             if (Nboundall > 0) then
                allocate (submats(index_ij)%dat(mm,rankmax_c))
                submats(index_ij)%dat=0
+               call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
             endif
             nnz_loc = nnz_loc + mm*rankmax_c
             allocate (submats(index_ij)%rows(mm))
@@ -1612,6 +1640,7 @@ contains
 
                allocate (submats(index_ij)%masks(mm, rankmax_c))
                submats(index_ij)%masks = 1
+               call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
 
                do i = 1, mm
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
@@ -2622,6 +2651,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                         submats_full(index_ij_loc)%cols(j) = header_n + j - 1
                      enddo
                      allocate(submats_full(index_ij_loc)%dat(submats_full(index_ij_loc)%nr,submats_full(index_ij_loc)%nc))
+                     call LogMemory(stats, SIZEOF(submats_full(index_ij_loc)%dat)/1024.0d3)
                   endif
                enddo
             enddo
@@ -2723,6 +2753,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                            submats(index_ij_loc*2-1)%cols(j) = header_n + select_column_knn(j) - 1
                         enddo
                         allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+                        call LogMemory(stats, SIZEOF(submats(index_ij_loc*2-1)%dat)/1024.0d3)
                         if(fullmatflag==1)then
                            do i=1,M
                               do j = 1, r_est_knn_c
@@ -2742,6 +2773,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                            submats(index_ij_loc*2)%cols(j) = header_n + j - 1
                         enddo
                         allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                        call LogMemory(stats, SIZEOF(submats(index_ij_loc*2)%dat)/1024.0d3)
                         if(fullmatflag==1)then
                            do i=1,r_est_knn_r
                               do j = 1, N
@@ -2813,6 +2845,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
 
                            allocate(acaquants(index_ij_loc)%matU(M,rankup))
                            allocate(acaquants(index_ij_loc)%matV(rankup,N))
+                           call LogMemory(stats, SIZEOF(acaquants(index_ij_loc)%matU)/1024.0d3 + SIZEOF(acaquants(index_ij_loc)%matV)/1024.0d3)
 
                            do j = 1, rankup
                               acaquants(index_ij_loc)%matU(:, rank + j) = column_R_knn(:, jpvt(j))
@@ -2876,6 +2909,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   submats(index_ij_loc*2-1)%nr=0
                   submats(index_ij_loc*2-1)%nc=0
                   if(associated(submats(index_ij_loc*2-1)%dat))then
+                     call LogMemory(stats, -SIZEOF(submats(index_ij_loc*2-1)%dat)/1024.0d3)
                      deallocate(submats(index_ij_loc*2-1)%dat)
                      deallocate(submats(index_ij_loc*2-1)%rows)
                      deallocate(submats(index_ij_loc*2-1)%cols)
@@ -2883,6 +2917,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   submats(index_ij_loc*2)%nr=0
                   submats(index_ij_loc*2)%nc=0
                   if(associated(submats(index_ij_loc*2)%dat))then
+                     call LogMemory(stats, -SIZEOF(submats(index_ij_loc*2)%dat)/1024.0d3)
                      deallocate(submats(index_ij_loc*2)%dat)
                      deallocate(submats(index_ij_loc*2)%rows)
                      deallocate(submats(index_ij_loc*2)%cols)
@@ -2898,6 +2933,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                      allocate(submats(index_ij_loc*2-1)%cols(submats(index_ij_loc*2-1)%nc))
                      submats(index_ij_loc*2-1)%cols = acaquants(index_ij_loc)%select_column + header_n -1
                      allocate(submats(index_ij_loc*2-1)%dat(submats(index_ij_loc*2-1)%nr,submats(index_ij_loc*2-1)%nc))
+                     call LogMemory(stats, SIZEOF(submats(index_ij_loc*2-1)%dat)/1024.0d3)
                      if(fullmatflag==1)then
                         do i=1,M
                            do j = 1, r_est
@@ -2948,6 +2984,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   submats(index_ij_loc*2)%nr=0
                   submats(index_ij_loc*2)%nc=0
                   if(associated(submats(index_ij_loc*2)%dat))then
+                     call LogMemory(stats, -SIZEOF(submats(index_ij_loc*2)%dat)/1024.0d3)
                      deallocate(submats(index_ij_loc*2)%dat)
                      deallocate(submats(index_ij_loc*2)%rows)
                      deallocate(submats(index_ij_loc*2)%cols)
@@ -2963,6 +3000,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                         submats(index_ij_loc*2)%cols(j) = header_n + j - 1
                      enddo
                      allocate(submats(index_ij_loc*2)%dat(submats(index_ij_loc*2)%nr,submats(index_ij_loc*2)%nc))
+                     call LogMemory(stats, SIZEOF(submats(index_ij_loc*2)%dat)/1024.0d3)
                      if(fullmatflag==1)then
                         do i=1,r_est
                            do j = 1, N
@@ -3014,6 +3052,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                submats(index_ij_loc*2-1)%nr=0
                submats(index_ij_loc*2-1)%nc=0
                if(associated(submats(index_ij_loc*2-1)%dat))then
+                  call LogMemory(stats, -SIZEOF(submats(index_ij_loc*2-1)%dat)/1024.0d3)
                   deallocate(submats(index_ij_loc*2-1)%dat)
                   deallocate(submats(index_ij_loc*2-1)%rows)
                   deallocate(submats(index_ij_loc*2-1)%cols)
@@ -3021,6 +3060,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                submats(index_ij_loc*2)%nr=0
                submats(index_ij_loc*2)%nc=0
                if(associated(submats(index_ij_loc*2)%dat))then
+                  call LogMemory(stats, -SIZEOF(submats(index_ij_loc*2)%dat)/1024.0d3)
                   deallocate(submats(index_ij_loc*2)%dat)
                   deallocate(submats(index_ij_loc*2)%rows)
                   deallocate(submats(index_ij_loc*2)%cols)
@@ -3030,6 +3070,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   submats_full(index_ij_loc)%nr=0
                   submats_full(index_ij_loc)%nc=0
                   if(associated(submats_full(index_ij_loc)%dat))then
+                     call LogMemory(stats, -SIZEOF(submats_full(index_ij_loc)%dat)/1024.0d3)
                      deallocate(submats_full(index_ij_loc)%dat)
                      deallocate(submats_full(index_ij_loc)%rows)
                      deallocate(submats_full(index_ij_loc)%cols)
@@ -3069,8 +3110,14 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                deallocate (mat_tmp)
 
                if(allocated(acaquants(index_ij_loc)%Singular))deallocate(acaquants(index_ij_loc)%Singular)
-               if(allocated(acaquants(index_ij_loc)%matU))deallocate(acaquants(index_ij_loc)%matU)
-               if(allocated(acaquants(index_ij_loc)%matV))deallocate(acaquants(index_ij_loc)%matV)
+               if(allocated(acaquants(index_ij_loc)%matU))then
+                  call LogMemory(stats, -SIZEOF(acaquants(index_ij_loc)%matU)/1024.0d3)
+                  deallocate(acaquants(index_ij_loc)%matU)
+               endif
+               if(allocated(acaquants(index_ij_loc)%matV))then
+                  call LogMemory(stats, -SIZEOF(acaquants(index_ij_loc)%matV)/1024.0d3)
+                  deallocate(acaquants(index_ij_loc)%matV)
+               endif
                if(allocated(acaquants(index_ij_loc)%select_column))deallocate(acaquants(index_ij_loc)%select_column)
                if(allocated(acaquants(index_ij_loc)%select_row))deallocate(acaquants(index_ij_loc)%select_row)
                if(allocated(acaquants(index_ij_loc)%rows))deallocate(acaquants(index_ij_loc)%rows)

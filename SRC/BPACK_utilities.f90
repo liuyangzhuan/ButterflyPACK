@@ -208,17 +208,30 @@ contains
       if (allocated(ker%matZ_glo)) deallocate (ker%matZ_glo)
    end subroutine delete_kernelquant
 
-   subroutine delete_mesh(msh)
+   subroutine delete_mesh(msh,stats)
       use BPACK_DEFS
       use MISC_Utilities
       implicit none
       type(mesh)::msh
+      type(Hstat),optional::stats
       integer ii
 
-      if (allocated(msh%xyz)) deallocate (msh%xyz)
-      if (allocated(msh%nns)) deallocate (msh%nns)
-      if (allocated(msh%new2old)) deallocate (msh%new2old)
-      if (allocated(msh%old2new)) deallocate (msh%old2new)
+      if (allocated(msh%xyz))then
+         if(present(stats))call LogMemory(stats, -SIZEOF(msh%xyz)/1024.0d3)
+         deallocate (msh%xyz)
+      endif
+      if (allocated(msh%nns))then
+         if(present(stats))call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
+         deallocate (msh%nns)
+      endif
+      if (allocated(msh%new2old))then
+         if(present(stats))call LogMemory(stats, -SIZEOF(msh%new2old)/1024.0d3)
+         deallocate (msh%new2old)
+      endif
+      if (allocated(msh%old2new))then
+         if(present(stats))call LogMemory(stats, -SIZEOF(msh%old2new)/1024.0d3)
+         deallocate (msh%old2new)
+      endif
       if (allocated(msh%pretree)) deallocate (msh%pretree)
       if (allocated(msh%basis_group)) then
       do ii = 1, msh%Maxgroup
@@ -226,6 +239,7 @@ contains
          if (allocated(msh%basis_group(ii)%nlist)) deallocate (msh%basis_group(ii)%nlist)
          msh%basis_group(ii)%nn = 0
       enddo
+      if(present(stats))call LogMemory(stats, -SIZEOF(msh%basis_group)/1024.0d3)
       deallocate (msh%basis_group)
       endif
 
@@ -373,6 +387,7 @@ contains
       stats_o%Time_Entry_BF = stats_i%Time_Entry_BF
       stats_o%Time_Entry_Comm = stats_i%Time_Entry_Comm
       stats_o%Mem_peak = stats_i%Mem_peak
+      stats_o%Mem_Current = stats_i%Mem_Current
       stats_o%Mem_Sblock = stats_i%Mem_Sblock
       stats_o%Mem_SMW = stats_i%Mem_SMW
       stats_o%Mem_Direct_for = stats_i%Mem_Direct_for
@@ -461,6 +476,7 @@ contains
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
       stats%Mem_peak = 0
+      stats%Mem_Current = 0
       stats%Mem_Sblock = 0
       stats%Mem_SMW = 0
       stats%Mem_Direct_for = 0
@@ -491,6 +507,16 @@ contains
       time_tmp4 = 0
       time_tmp5 = 0
    end subroutine InitStat
+
+
+   subroutine LogMemory(stats, mem)
+      implicit none
+      type(Hstat)::stats
+      real(kind=8):: mem
+      stats%Mem_Current = stats%Mem_Current + mem
+      if(mem>0)stats%Mem_Peak = max(stats%Mem_Peak,stats%Mem_Current)
+   end subroutine
+
 
    subroutine PrintStat(stats, ptree)
       implicit none
