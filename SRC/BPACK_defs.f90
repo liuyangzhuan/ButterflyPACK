@@ -128,6 +128,7 @@ module BPACK_DEFS
     type commquant1D
         integer offset ! offset in my local array
         integer size ! size of the message along first dimension
+        integer size_i ! size of the message along first dimension
         integer active ! whether this communication pair is active
         DT, allocatable::dat(:, :) ! communication buffer
         integer, allocatable::dat_i(:, :) ! communication buffer

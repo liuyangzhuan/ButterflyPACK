@@ -841,12 +841,12 @@ contains
       allocate (R_req(nproc))
       allocate (sendquant(nproc))
       do ii = 1, nproc
-         sendquant(ii)%size = 0
+         sendquant(ii)%size_i = 0
          sendquant(ii)%active = 0
       enddo
       allocate (recvquant(nproc))
       do ii = 1, nproc
-         recvquant(ii)%size = 0
+         recvquant(ii)%size_i = 0
          recvquant(ii)%active = 0
       enddo
       allocate (sendIDactive(nproc))
@@ -897,7 +897,7 @@ contains
                Nsendactive = Nsendactive + 1
                sendIDactive(Nsendactive) = pp
             endif
-            sendquant(pp)%size = sendquant(pp)%size + 3 + size(skels%inds(ii, jj)%array)
+            sendquant(pp)%size_i = sendquant(pp)%size_i + 3 + size(skels%inds(ii, jj)%array)
          endif
       enddo
       enddo
@@ -905,15 +905,15 @@ contains
       ! communicate receive buffer sizes
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         allocate (sendquant(pp)%dat_i(sendquant(pp)%size, 1))
+         allocate (sendquant(pp)%dat_i(sendquant(pp)%size_i, 1))
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
       enddo
 
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
       enddo
       if (Nsendactive > 0) then
          call MPI_waitall(Nsendactive, S_req, statuss, ierr)
@@ -924,11 +924,11 @@ contains
 
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         sendquant(pp)%size = 0
+         sendquant(pp)%size_i = 0
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         allocate (recvquant(pp)%dat_i(recvquant(pp)%size, 1))
+         allocate (recvquant(pp)%dat_i(recvquant(pp)%size_i, 1))
       enddo
 
       ! pack the send buffer in the second pass
@@ -965,14 +965,14 @@ contains
          if (sendflag) then
             pp = pid - ptree%pgrp(blocks%pgno)%head + 1
             Nskel = size(skels%inds(ii, jj)%array)
-            sendquant(pp)%dat_i(sendquant(pp)%size + 1, 1) = index_i
-            sendquant(pp)%dat_i(sendquant(pp)%size + 2, 1) = index_j
-            sendquant(pp)%dat_i(sendquant(pp)%size + 3, 1) = Nskel
-            sendquant(pp)%size = sendquant(pp)%size + 3
+            sendquant(pp)%dat_i(sendquant(pp)%size_i + 1, 1) = index_i
+            sendquant(pp)%dat_i(sendquant(pp)%size_i + 2, 1) = index_j
+            sendquant(pp)%dat_i(sendquant(pp)%size_i + 3, 1) = Nskel
+            sendquant(pp)%size_i = sendquant(pp)%size_i + 3
             do i = 1, Nskel
-               sendquant(pp)%dat_i(sendquant(pp)%size + i, 1) = skels%inds(ii, jj)%array(i)
+               sendquant(pp)%dat_i(sendquant(pp)%size_i + i, 1) = skels%inds(ii, jj)%array(i)
             enddo
-            sendquant(pp)%size = sendquant(pp)%size + Nskel
+            sendquant(pp)%size_i = sendquant(pp)%size_i + Nskel
          endif
       enddo
       enddo
@@ -981,13 +981,13 @@ contains
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
       enddo
 
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
       enddo
 
       if (Nsendactive > 0) then
@@ -1001,7 +1001,7 @@ contains
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          i = 0
-         do while (i < recvquant(pp)%size)
+         do while (i < recvquant(pp)%size_i)
             i = i + 1
             index_i = NINT(dble(recvquant(pp)%dat_i(i, 1)))
             ii = (index_i - skels%idx_r)/skels%inc_r + 1
@@ -1104,12 +1104,12 @@ contains
       allocate (R_req(nproc))
       allocate (sendquant(nproc))
       do ii = 1, nproc
-         sendquant(ii)%size = 0
+         sendquant(ii)%size_i = 0
          sendquant(ii)%active = 0
       enddo
       allocate (recvquant(nproc))
       do ii = 1, nproc
-         recvquant(ii)%size = 0
+         recvquant(ii)%size_i = 0
          recvquant(ii)%active = 0
       enddo
       allocate (sendIDactive(nproc))
@@ -1145,22 +1145,22 @@ contains
             Nsendactive = Nsendactive + 1
             sendIDactive(Nsendactive) = pp
          endif
-         sendquant(pp)%size = sendquant(pp)%size + 3 + size(skels%inds(ii, jj)%array)
+         sendquant(pp)%size_i = sendquant(pp)%size_i + 3 + size(skels%inds(ii, jj)%array)
       enddo
       enddo
 
       ! communicate receive buffer sizes
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         allocate (sendquant(pp)%dat_i(sendquant(pp)%size, 1))
+         allocate (sendquant(pp)%dat_i(sendquant(pp)%size_i, 1))
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
       enddo
 
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%size, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
       enddo
       if (Nsendactive > 0) then
          call MPI_waitall(Nsendactive, S_req, statuss, ierr)
@@ -1171,11 +1171,11 @@ contains
 
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         sendquant(pp)%size = 0
+         sendquant(pp)%size_i = 0
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         allocate (recvquant(pp)%dat_i(recvquant(pp)%size, 1))
+         allocate (recvquant(pp)%dat_i(recvquant(pp)%size_i, 1))
       enddo
 
       ! pack the send buffer in the second pass
@@ -1189,15 +1189,15 @@ contains
          pp = pid - ptree%pgrp(blocks%pgno)%head + 1
 
          Nskel = size(skels%inds(ii, jj)%array)
-         sendquant(pp)%dat_i(sendquant(pp)%size + 1, 1) = index_i
-         sendquant(pp)%dat_i(sendquant(pp)%size + 2, 1) = index_j
-         sendquant(pp)%dat_i(sendquant(pp)%size + 3, 1) = Nskel
-         sendquant(pp)%size = sendquant(pp)%size + 3
+         sendquant(pp)%dat_i(sendquant(pp)%size_i + 1, 1) = index_i
+         sendquant(pp)%dat_i(sendquant(pp)%size_i + 2, 1) = index_j
+         sendquant(pp)%dat_i(sendquant(pp)%size_i + 3, 1) = Nskel
+         sendquant(pp)%size_i = sendquant(pp)%size_i + 3
          do i = 1, Nskel
-            sendquant(pp)%dat_i(sendquant(pp)%size + i, 1) = skels%inds(ii, jj)%array(i)
+            sendquant(pp)%dat_i(sendquant(pp)%size_i + i, 1) = skels%inds(ii, jj)%array(i)
          enddo
          deallocate (skels%inds(ii, jj)%array)
-         sendquant(pp)%size = sendquant(pp)%size + Nskel
+         sendquant(pp)%size_i = sendquant(pp)%size_i + Nskel
       enddo
       enddo
 
@@ -1218,9 +1218,9 @@ contains
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
          if (recvid /= ptree%MyID) then
             Nreqs = Nreqs + 1
-            call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+            call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
          else
-            if (sendquant(pp)%size > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
+            if (sendquant(pp)%size_i > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
          endif
       enddo
 
@@ -1230,7 +1230,7 @@ contains
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
          if (sendid /= ptree%MyID) then
             Nreqr = Nreqr + 1
-            call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+            call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
          endif
       enddo
 
@@ -1243,7 +1243,7 @@ contains
             pp = statusr(MPI_SOURCE, 1) + 1
          endif
          i = 0
-         do while (i < recvquant(pp)%size)
+         do while (i < recvquant(pp)%size_i)
             i = i + 1
             index_i = NINT(dble(recvquant(pp)%dat_i(i, 1)))
             ii = (index_i - skels%idx_r)/skels%inc_r + 1
