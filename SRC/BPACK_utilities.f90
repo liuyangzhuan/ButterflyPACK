@@ -508,16 +508,6 @@ contains
       time_tmp5 = 0
    end subroutine InitStat
 
-
-   subroutine LogMemory(stats, mem)
-      implicit none
-      type(Hstat)::stats
-      real(kind=8):: mem
-      stats%Mem_Current = stats%Mem_Current + mem
-      if(mem>0)stats%Mem_Peak = max(stats%Mem_Peak,stats%Mem_Current)
-   end subroutine
-
-
    subroutine PrintStat(stats, ptree)
       implicit none
       type(Hstat)::stats

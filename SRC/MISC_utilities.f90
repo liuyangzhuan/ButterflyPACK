@@ -5111,5 +5111,14 @@ contains
       p => x
    end subroutine Array1DtoPointer2D
 
+   subroutine LogMemory(stats, mem)
+      use BPACK_DEFS
+      implicit none
+      type(Hstat)::stats
+      real(kind=8):: mem
+      stats%Mem_Current = stats%Mem_Current + mem
+      if(mem>0)stats%Mem_Peak = max(stats%Mem_Peak,stats%Mem_Current)
+   end subroutine LogMemory
+
 
 end module MISC_Utilities
