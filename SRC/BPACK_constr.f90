@@ -148,7 +148,7 @@ contains
          Ndim = size(Coordinates, 1)
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%xyz)/1024.0d3
+         call LogMemory(stats, SIZEOF(msh%xyz)/1024.0d3)
          msh%xyz = Coordinates
       endif
 
@@ -166,6 +166,7 @@ contains
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3 or 4')
          allocate (msh%nns(msh%Nunk, option%knn))
+         call LogMemory(stats, SIZEOF(msh%nns)/1024.0d3)
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
             if (nns(kk, msh%new2old(ii)) /= 0) then
@@ -422,7 +423,7 @@ contains
          enddo
          stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp1
          stats%Mem_Direct_for = stats%Mem_Direct_for + rtemp2
-         stats%Mem_Peak = stats%Mem_Peak + rtemp1 + rtemp2 + rtemp1 + rtemp2
+         call LogMemory(stats, rtemp1 + rtemp2 + rtemp1 + rtemp2)
 
          T4 = OMP_get_wtime()
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
@@ -606,7 +607,7 @@ contains
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
-      stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+      call LogMemory(stats, stats%Mem_Fill)
 
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel), stats%rankmax_of_level_global(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
@@ -693,7 +694,7 @@ contains
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
-      stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+      call LogMemory(stats, stats%Mem_Fill)
 
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:hss_bf1%Maxlevel), stats%rankmax_of_level_global(0:hss_bf1%Maxlevel), hss_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
@@ -1176,6 +1177,7 @@ contains
                   endif
                enddo
                allocate (blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc))
+               call LogMemory(stats, SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
             enddo
 
             ! extract entries on an array of intersections for each block
@@ -1225,8 +1227,14 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
-               if (associated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
-               if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
+               if (associated(blocks%inters(nn)%dat)) then
+                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat)/1024.0d3)
+                  deallocate (blocks%inters(nn)%dat)
+               endif
+               if (associated(blocks%inters(nn)%dat_loc))then
+                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
+                  deallocate (blocks%inters(nn)%dat_loc)
+               endif
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
                if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
@@ -1245,7 +1253,10 @@ contains
 
       ! deallocate global intersections
       do nn = 1, Ninter
-         if (associated(inters(nn)%dat)) deallocate (inters(nn)%dat)
+         if (associated(inters(nn)%dat))then
+            call LogMemory(stats, -SIZEOF(inters(nn)%dat)/1024.0d3)
+            deallocate (inters(nn)%dat)
+         endif
          ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
@@ -1474,6 +1485,7 @@ contains
                   endif
                enddo
                allocate (blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc))
+               call LogMemory(stats, SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
             enddo
 
             ! extract entries on an array of intersections for each block
@@ -1520,8 +1532,14 @@ contains
          type is (block_ptr)
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
-               if (associated(blocks%inters(nn)%dat)) deallocate (blocks%inters(nn)%dat)
-               if (associated(blocks%inters(nn)%dat_loc)) deallocate (blocks%inters(nn)%dat_loc)
+               if (associated(blocks%inters(nn)%dat)) then
+                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat)/1024.0d3)
+                  deallocate (blocks%inters(nn)%dat)
+               endif
+               if (associated(blocks%inters(nn)%dat_loc))then
+                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
+                  deallocate (blocks%inters(nn)%dat_loc)
+               endif
                if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
                if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
                if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
@@ -1540,7 +1558,10 @@ contains
 
       ! deallocate global intersections
       do nn = 1, Ninter
-         if (associated(inters(nn)%dat)) deallocate (inters(nn)%dat)
+         if (associated(inters(nn)%dat))then
+            call LogMemory(stats, -SIZEOF(inters(nn)%dat)/1024.0d3)
+            deallocate (inters(nn)%dat)
+         endif
          ! if (associated(inters(nn)%dat_loc)) deallocate (inters(nn)%dat_loc)
          if (allocated(inters(nn)%rows)) deallocate (inters(nn)%rows)
          if (allocated(inters(nn)%cols)) deallocate (inters(nn)%cols)
@@ -1915,6 +1936,7 @@ contains
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         call LogMemory(stats, SIZEOF(sendquant(pp)%dat)/1024.0d3)
       enddo
 
       do tt = 1, Nsendactive
@@ -1999,6 +2021,7 @@ contains
             recvquant(pp)%size=sendquant(pp)%size
             if(recvquant(pp)%size>0)then
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            call LogMemory(stats, SIZEOF(recvquant(pp)%dat)/1024.0d3)
             recvquant(pp)%dat = sendquant(pp)%dat
             endif
          else
@@ -2006,6 +2029,7 @@ contains
             pp = statusr(MPI_SOURCE, 1) + 1
             call MPI_Get_count(statusr(:,1), MPI_DT, recvquant(pp)%size,ierr)
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            call LogMemory(stats, SIZEOF(recvquant(pp)%dat)/1024.0d3)
             cnt = cnt + 1
             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)
          endif
@@ -2042,11 +2066,17 @@ contains
       ! deallocation
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+         if (allocated(sendquant(pp)%dat))then
+            call LogMemory(stats, -SIZEOF(sendquant(pp)%dat)/1024.0d3)
+            deallocate (sendquant(pp)%dat)
+         endif
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+         if (allocated(recvquant(pp)%dat))then
+            call LogMemory(stats, -SIZEOF(recvquant(pp)%dat)/1024.0d3)
+            deallocate (recvquant(pp)%dat)
+         endif
       enddo
 
       ! n2 = OMP_get_wtime()
@@ -2171,6 +2201,7 @@ contains
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         call LogMemory(stats, SIZEOF(sendquant(pp)%dat)/1024.0d3)
       enddo
 
       do tt = 1, Nsendactive
@@ -2258,6 +2289,7 @@ contains
             recvquant(pp)%size=sendquant(pp)%size
             if(recvquant(pp)%size>0)then
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            call LogMemory(stats, SIZEOF(recvquant(pp)%dat)/1024.0d3)
             recvquant(pp)%dat = sendquant(pp)%dat
             endif
          else
@@ -2265,6 +2297,7 @@ contains
             pp = statusr(MPI_SOURCE, 1) + 1
             call MPI_Get_count(statusr(:,1), MPI_DT, recvquant(pp)%size,ierr)
             allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+            call LogMemory(stats, SIZEOF(recvquant(pp)%dat)/1024.0d3)
             cnt = cnt + 1
             call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, R_req(cnt), ierr)
          endif
@@ -2321,11 +2354,17 @@ contains
       ! deallocation
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+         if (allocated(sendquant(pp)%dat))then
+            call LogMemory(stats, -SIZEOF(sendquant(pp)%dat)/1024.0d3)
+            deallocate (sendquant(pp)%dat)
+         endif
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+         if (allocated(recvquant(pp)%dat))then
+            call LogMemory(stats, -SIZEOF(recvquant(pp)%dat)/1024.0d3)
+            deallocate (recvquant(pp)%dat)
+         endif
       enddo
 
       deallocate (ridx)

@@ -910,7 +910,10 @@ contains
       t2 = OMP_get_wtime()
 
       !**** delete neighours in msh
-      if(allocated(msh%nns))deallocate(msh%nns)
+      if(allocated(msh%nns))then
+         call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
+         deallocate(msh%nns)
+      endif
 
       !**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
@@ -1674,7 +1677,7 @@ contains
       stats%rankmax_of_level(0) = blocks%rankmax
       stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
-      stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+      call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
       !**** return the C address of hodlr structures to C caller
@@ -1764,7 +1767,10 @@ contains
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
       !**** delete neighours in msh
-      if(allocated(msh%nns))deallocate(msh%nns)
+      if(allocated(msh%nns))then
+         call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
+         deallocate(msh%nns)
+      endif
 
       t2 = OMP_get_wtime()
 
@@ -1775,7 +1781,7 @@ contains
       stats%rankmax_of_level(0) = blocks%rankmax
       stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
-      stats%Mem_Peak = stats%Mem_Peak + stats%Mem_Fill
+      call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
       !**** return the C address of hodlr structures to C caller

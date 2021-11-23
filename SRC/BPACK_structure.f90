@@ -293,7 +293,7 @@ end function distance_geo
             ! blocks%prestyle=4
             ! blocks%data_type=1
             allocate (blocks%sons(2, 2))
-            stats%Mem_Peak = stats%Mem_Peak + SIZEOF(blocks%sons)/1024.0d3
+            call LogMemory(stats, SIZEOF(blocks%sons)/1024.0d3)
             do j = 1, 2
                do i = 1, 2
                   blocks%sons(i, j)%level = blocks%level + 1
@@ -349,7 +349,7 @@ end function distance_geo
 
       if (level < treelevel) then
          allocate (blocks%sons(2, 2))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(blocks%sons)/1024.0d3
+         call LogMemory(stats, SIZEOF(blocks%sons)/1024.0d3)
          do j = 1, 2
             do i = 1, 2
                blocks%sons(i, j)%level = blocks%level + 1
@@ -409,7 +409,7 @@ end function distance_geo
 
       !*************Initialize permutation vector ********
       allocate (msh%new2old(msh%Nunk))
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%new2old)/1024.0d3
+      call LogMemory(stats, SIZEOF(msh%new2old)/1024.0d3)
       do ii = 1, msh%Nunk
          msh%new2old(ii) = ii
       end do
@@ -489,7 +489,7 @@ end function distance_geo
       Maxgroup = 2**(Maxlevel + 1) - 1
       msh%Maxgroup = Maxgroup
       allocate (msh%basis_group(Maxgroup))
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%basis_group)/1024.0d3
+      call LogMemory(stats, SIZEOF(msh%basis_group)/1024.0d3)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks:', Maxlevel
@@ -883,7 +883,7 @@ end function distance_geo
 
       t1 = OMP_get_wtime()
       allocate (msh%nns(msh%Nunk, option%knn))
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(msh%nns)/1024.0d3
+      call LogMemory(stats, SIZEOF(msh%nns)/1024.0d3)
       msh%nns = 0
       call MPI_barrier(ptree%Comm, ierr)
       ! if(ptree%MyID==Main_ID)write(*,*)'nn0',tmp,'nns:',  SIZEOF(msh%nns)/1024.0d3, msh%Nunk*option%knn*4/1024.0d3
@@ -1209,15 +1209,14 @@ end function distance_geo
       end do
 
       call Bplus_copy(hss_bf1%BP, hss_bf1%BP_inverse)
+      call LogMemory(stats, SIZEOF(hss_bf1%BP)/1024.0d3 + SIZEOF(hss_bf1%BP_inverse)/1024.0d3)
 
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(hss_bf1%BP)/1024.0d3
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(hss_bf1%BP_inverse)/1024.0d3
 
       msh%idxs = hss_bf1%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
       msh%idxe = hss_bf1%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2)
 
       if (allocated(msh%xyz)) then
-         stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+         call LogMemory(stats, - SIZEOF(msh%xyz)/1024.0d3)
          ! deallocate (msh%xyz)
       endif
 
@@ -1271,7 +1270,8 @@ end function distance_geo
 
       ho_bf1%N = msh%Nunk
       allocate (ho_bf1%levels(ho_bf1%Maxlevel + 1))
-      stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels)/1024.0d3
+      call LogMemory(stats, SIZEOF(ho_bf1%levels)/1024.0d3)
+
 
       do level_c = 1, ho_bf1%Maxlevel + 1
          ho_bf1%levels(level_c)%level = level_c
@@ -1285,13 +1285,13 @@ end function distance_geo
          ho_bf1%levels(level_c)%Bidxe = -2**(ho_bf1%Maxlevel + 1)
 
          allocate (ho_bf1%levels(level_c)%BP(ho_bf1%levels(level_c)%N_block_forward))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP)/1024.0d3
+         call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP)/1024.0d3)
          allocate (ho_bf1%levels(level_c)%BP_inverse(ho_bf1%levels(level_c)%N_block_inverse))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse)/1024.0d3
+         call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP_inverse)/1024.0d3)
          allocate (ho_bf1%levels(level_c)%BP_inverse_update(ho_bf1%levels(level_c)%N_block_forward))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse_update)/1024.0d3
+         call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP_inverse_update)/1024.0d3)
          allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
-         stats%Mem_Peak = stats%Mem_Peak + SIZEOF(ho_bf1%levels(level_c)%BP_inverse_schur)/1024.0d3
+         call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP_inverse_schur)/1024.0d3)
       end do
 
       ho_bf1%levels(1)%BP_inverse(1)%level = 0
@@ -1776,7 +1776,7 @@ end function distance_geo
       msh%idxe = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2)
 
       if (allocated(msh%xyz)) then
-         stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+         call LogMemory(stats, - SIZEOF(msh%xyz)/1024.0d3)
          ! deallocate (msh%xyz)
       endif
 
@@ -1908,7 +1908,7 @@ end function distance_geo
       !***************************************************************************************
 
       if (allocated(msh%xyz)) then
-         stats%Mem_Peak = stats%Mem_Peak - SIZEOF(msh%xyz)/1024.0d3
+         call LogMemory(stats, - SIZEOF(msh%xyz)/1024.0d3)
          ! deallocate (msh%xyz)
       endif
 
