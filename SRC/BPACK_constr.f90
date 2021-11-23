@@ -1208,11 +1208,11 @@ contains
 
 
       ! redistribute from blocks' intersections to the global intersecions inters
-      ! if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
+      if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      ! else
-      !    call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      ! endif
+      else
+         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+      endif
 
       n4 = OMP_get_wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
@@ -1504,11 +1504,11 @@ contains
       call MPI_barrier(ptree%Comm, ierr)
       n3 = OMP_get_wtime()
       ! redistribute from blocks' intersections to the global intersecions inters
-      ! if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
+      if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      ! else
-      !    call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
-      ! endif
+      else
+         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+      endif
 
       n4 = OMP_get_wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
