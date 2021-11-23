@@ -14546,7 +14546,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-   subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats)
+   subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats,alldat_loc_in)
 
 
       implicit none
@@ -14564,7 +14564,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       procedure(C_Zelem_block), POINTER :: proc_c
       procedure(F_Zelem), POINTER :: proc1
       procedure(C_Zelem), POINTER :: proc1_c
-      DT, allocatable::alldat_loc(:)
+      DT,pointer::alldat_loc(:)
+      DT,target,optional::alldat_loc_in(:)
       type(intersect), allocatable::inters(:)
       integer myArows, myAcols, Npmap
       real(kind=8)::t1, t2, t3, t4
@@ -14585,6 +14586,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       new2old_sub=-1
       nr=0
       nc=0
+      idx_dat=0
       do nn=1,Nsub
 
          nrow = 0
@@ -14652,6 +14654,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                endif
             enddo
             submats1(Ninter_loc)%nc = ncol
+
+
+            if(present(alldat_loc_in))then
+               call Array1DtoPointer2D(alldat_loc_in(idx_dat+1:idx_dat + nrow*ncol), submats(nn)%dat, nrow, ncol)
+               idx_dat = idx_dat + nrow*ncol
+            endif
+
          endif
       enddo
 
@@ -14826,8 +14835,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   idx_dat = idx_dat + myArows*myAcols
                endif
             enddo
-            allocate (alldat_loc(idx_dat))
-            if (idx_dat > 0) alldat_loc = 0
+            if(present(alldat_loc_in))then
+               alldat_loc => alldat_loc_in
+            else
+               allocate (alldat_loc(idx_dat))
+            endif
+            if (idx_dat > 0) alldat_loc(1:idx_dat) = 0
 
             allocate (rowidx1(ptree%nproc))
             allocate (colidx1(ptree%nproc))
@@ -14896,15 +14909,18 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call proc(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%QuantApp)
             endif
 
-            idx = 0
-            do nn=1,Ninter_loc
-            do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
-            do ii = 1, submats1(nn)%nr
-               idx = idx + 1
-               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
-            enddo
-            enddo
-            enddo
+            if(.not. present(alldat_loc_in))then
+               idx = 0
+               do nn=1,Ninter_loc
+               do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
+               do ii = 1, submats1(nn)%nr
+                  idx = idx + 1
+                  submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
+               enddo
+               enddo
+               enddo
+               deallocate (alldat_loc)
+            endif
 
             deallocate (allrows)
             deallocate (allcols)
@@ -14913,7 +14929,6 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             deallocate (colidx1)
             deallocate (rowidx1)
             deallocate (disps)
-            deallocate (alldat_loc)
             deallocate (pgidx)
             deallocate (pmaps)
             deallocate (nsubs)
@@ -14981,8 +14996,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   idx_dat = idx_dat + myArows*myAcols
                endif
             enddo
-            allocate (alldat_loc(idx_dat))
-            if (idx_dat > 0) alldat_loc = 0
+            if(present(alldat_loc_in))then
+               alldat_loc => alldat_loc_in
+            else
+               allocate (alldat_loc(idx_dat))
+            endif
+            if (idx_dat > 0) alldat_loc(1:idx_dat) = 0
 
             if (option%cpp == 1) then
                call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
@@ -15007,21 +15026,23 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call proc(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%QuantApp)
             endif
 
-            idx = 0
-            do nn=1,Ninter_loc
-            do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
-            do ii = 1, submats1(nn)%nr
-               idx = idx + 1
-               submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
-            enddo
-            enddo
-            enddo
+            if(.not. present(alldat_loc_in))then
+               idx = 0
+               do nn=1,Ninter_loc
+               do jj = 1, submats1(nn)%nc ! note that alldat_loc has column major
+               do ii = 1, submats1(nn)%nr
+                  idx = idx + 1
+                  submats(new2old_sub(nn))%dat(submats1(nn)%mmap(ii), submats1(nn)%nmap(jj)) = alldat_loc(idx)*option%scale_factor
+               enddo
+               enddo
+               enddo
+               deallocate (alldat_loc)
+            endif
 
             deallocate (allrows)
             deallocate (allcols)
             deallocate (colidx)
             deallocate (rowidx)
-            deallocate (alldat_loc)
             deallocate (pgidx)
             deallocate (pmaps)
          endif

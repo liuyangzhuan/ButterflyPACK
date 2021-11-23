@@ -233,7 +233,7 @@ module BPACK_DEFS
         integer, allocatable::rows(:), cols(:) ! store indices in bmat or global list of intersections
         integer, allocatable::rows_loc(:) ! store indices in rows
         integer, allocatable::glo2loc(:) ! store index mapping from rows to rows_loc
-        DT, allocatable::dat(:, :)
+        DT, pointer::dat(:, :) => null()
         DT, pointer::dat_loc(:, :) => null()
     end type intersect
 

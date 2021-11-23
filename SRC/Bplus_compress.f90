@@ -44,6 +44,7 @@ contains
       integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, nnn1, ierr
       real(kind=8) Memory, flop,n2,n1
       DT ctemp
+      DT,target,allocatable:: alldat_loc_in(:)
       type(matrixblock)::blocks
       type(Hoption)::option
       type(Hstat)::stats
@@ -55,7 +56,7 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, idx_r, inc_r, nr, idx_c, inc_c, nc
-      integer passflag
+      integer passflag, nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
       type(intersect), allocatable :: submats(:)
@@ -154,17 +155,22 @@ contains
             enddo
             n1 = OMP_get_wtime()
 
+            nnz_loc=0
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, flops1)
+               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
             enddo
             n2 = OMP_get_wtime()
             ! time_tmp = time_tmp + n2 - n1
-
-            call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+            if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
+               allocate(alldat_loc_in(nnz_loc))
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+            else
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+            endif
 
             if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
@@ -181,12 +187,15 @@ contains
             if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
             do index_ij = 1, nr*nc
-               if(allocated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               if(Nboundall>0)then
+                  if(associated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               endif
                if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
                if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
                if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
             enddo
             deallocate(submats)
+            if(allocated(alldat_loc_in))deallocate(alldat_loc_in)
 
 
             passflag = 0
@@ -257,18 +266,23 @@ contains
                submats(index_ij)%nr=0
                submats(index_ij)%nc=0
             enddo
+            nnz_loc=0
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
                index_i_loc = mod(index_ij - 1, nr) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-
-               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final)
+               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
             enddo
             ! !$omp end parallel do
             n2 = OMP_get_wtime()
             ! time_tmp = time_tmp + n2 - n1
-            call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+            if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
+               allocate(alldat_loc_in(nnz_loc))
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+            else
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+            endif
 
             rank_new = 0
             flops = 0
@@ -288,12 +302,15 @@ contains
             !$omp end parallel do
             if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
-               if(allocated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               if(Nboundall>0)then
+                  if(associated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+               endif
                if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
                if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
                if(allocated(submats(index_ij)%masks))deallocate(submats(index_ij)%masks)
             enddo
             deallocate(submats)
+            if(allocated(alldat_loc_in))deallocate(alldat_loc_in)
 
 
             passflag = 0
@@ -347,12 +364,12 @@ contains
    end subroutine BF_compress_NlogN
 
 
-   subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, flops)
+   subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, nnz_loc, flops)
 
 
       implicit none
 
-      integer Nboundall
+      integer Nboundall,nnz_loc
       integer boundary_map(*)
       integer groupm_start
       type(intersect) :: submats(:)
@@ -465,8 +482,12 @@ contains
          header_m = msh%basis_group(group_m)%head
          header_n = msh%basis_group(group_n)%head
 
-         allocate (submats(index_ij)%dat(rankmax_r, nn))
-         submats(index_ij)%dat=0
+         if (Nboundall > 0) then
+            allocate (submats(index_ij)%dat(rankmax_r, nn))
+            submats(index_ij)%dat=0
+         endif
+         nnz_loc = nnz_loc + rankmax_r*nn
+
          allocate (submats(index_ij)%rows(rankmax_r))
          allocate (submats(index_ij)%cols(nn))
          submats(index_ij)%nr = rankmax_r
@@ -503,8 +524,11 @@ contains
          index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
 
          ! allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
-         allocate (submats(index_ij)%dat(mm, rank_new))
-         submats(index_ij)%dat=0
+         if (Nboundall > 0) then
+            allocate (submats(index_ij)%dat(mm, rank_new))
+            submats(index_ij)%dat=0
+         endif
+         nnz_loc = nnz_loc + mm*rank_new
 
          allocate (submats(index_ij)%rows(mm))
          allocate (submats(index_ij)%cols(rank_new))
@@ -543,9 +567,12 @@ contains
          header_n2 = msh%basis_group(2*group_n + 1)%head
          nnn1 = msh%basis_group(2*group_n)%tail - msh%basis_group(2*group_n)%head + 1
 
+         if (Nboundall > 0) then
+            allocate (submats(index_ij)%dat(rankmax_r, nn))
+            submats(index_ij)%dat=0
+         endif
+         nnz_loc = nnz_loc + rankmax_r*nn
 
-         allocate (submats(index_ij)%dat(rankmax_r, nn))
-         submats(index_ij)%dat=0
          allocate (submats(index_ij)%rows(rankmax_r))
          allocate (submats(index_ij)%cols(nn))
          submats(index_ij)%nr = rankmax_r
@@ -1258,13 +1285,13 @@ contains
 
    end subroutine BF_all2all_skel
 
-   subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final)
+   subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
 
 
       implicit none
 
       type(intersect) :: submats(:)
-      integer Nboundall
+      integer Nboundall,nnz_loc
       integer boundary_map(*)
       integer groupm_start
 
@@ -1386,8 +1413,11 @@ contains
             rank_new = size(blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array)
             index_i_loc_k = (index_i - blocks%ButterflyU%idx)/blocks%ButterflyU%inc + 1
             ! allocate (blocks%ButterflyU%blocks(index_i_loc_k)%matrix(mm, rank_new))
-            allocate (submats(index_ij)%dat(mm, rank_new))
-            submats(index_ij)%dat=0
+            if (Nboundall > 0) then
+               allocate (submats(index_ij)%dat(mm, rank_new))
+               submats(index_ij)%dat=0
+            endif
+            nnz_loc = nnz_loc + mm*rank_new
 
             allocate (submats(index_ij)%rows(mm))
             allocate (submats(index_ij)%cols(rank_new))
@@ -1419,8 +1449,12 @@ contains
             endif
 
          else
-            allocate (submats(index_ij)%dat(mm,rankmax_c))
-            submats(index_ij)%dat=0
+            if (Nboundall > 0) then
+               allocate (submats(index_ij)%dat(mm,rankmax_c))
+               submats(index_ij)%dat=0
+            endif
+            nnz_loc = nnz_loc + mm*rankmax_c
+
             allocate (submats(index_ij)%rows(mm))
             allocate (submats(index_ij)%cols(rankmax_c))
             submats(index_ij)%nr = mm
@@ -1460,8 +1494,11 @@ contains
 
          ! allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
          ! allocate (matrix_V_tmp(rank_new, nn))
-         allocate (submats(index_ij)%dat(rank_new, nn))
-         submats(index_ij)%dat=0
+         if (Nboundall > 0) then
+            allocate (submats(index_ij)%dat(rank_new, nn))
+            submats(index_ij)%dat=0
+         endif
+         nnz_loc = nnz_loc + rank_new*nn
 
          allocate (submats(index_ij)%rows(rank_new))
          allocate (submats(index_ij)%cols(nn))
@@ -1508,8 +1545,12 @@ contains
             index_j_loc_s1 = (index_j - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
 
             rank_new = size(blocks%ButterflySkel(level - 1)%inds(index_i_loc_s1, index_j_loc_s1)%array)
-            allocate (submats(index_ij)%dat(mm1 + mm2, rank_new))
-            submats(index_ij)%dat=0
+            if (Nboundall > 0) then
+               allocate (submats(index_ij)%dat(mm1 + mm2, rank_new))
+               submats(index_ij)%dat=0
+            endif
+            nnz_loc = nnz_loc + (mm1 + mm2)*rank_new
+
             allocate (submats(index_ij)%rows(mm1 + mm2))
             allocate (submats(index_ij)%cols(rank_new))
             submats(index_ij)%nr = mm1+mm2
@@ -1547,8 +1588,11 @@ contains
          else
             index_i_loc_s = (index_i - blocks%ButterflySkel(level)%idx_r)/blocks%ButterflySkel(level)%inc_r + 1
             index_j_loc_s = (index_j - blocks%ButterflySkel(level)%idx_c)/blocks%ButterflySkel(level)%inc_c + 1
-            allocate (submats(index_ij)%dat(mm,rankmax_c))
-            submats(index_ij)%dat=0
+            if (Nboundall > 0) then
+               allocate (submats(index_ij)%dat(mm,rankmax_c))
+               submats(index_ij)%dat=0
+            endif
+            nnz_loc = nnz_loc + mm*rankmax_c
             allocate (submats(index_ij)%rows(mm))
             allocate (submats(index_ij)%cols(rankmax_c))
             submats(index_ij)%nr = mm
@@ -2831,14 +2875,14 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   ! need to reset submats
                   submats(index_ij_loc*2-1)%nr=0
                   submats(index_ij_loc*2-1)%nc=0
-                  if(allocated(submats(index_ij_loc*2-1)%dat))then
+                  if(associated(submats(index_ij_loc*2-1)%dat))then
                      deallocate(submats(index_ij_loc*2-1)%dat)
                      deallocate(submats(index_ij_loc*2-1)%rows)
                      deallocate(submats(index_ij_loc*2-1)%cols)
                   endif
                   submats(index_ij_loc*2)%nr=0
                   submats(index_ij_loc*2)%nc=0
-                  if(allocated(submats(index_ij_loc*2)%dat))then
+                  if(associated(submats(index_ij_loc*2)%dat))then
                      deallocate(submats(index_ij_loc*2)%dat)
                      deallocate(submats(index_ij_loc*2)%rows)
                      deallocate(submats(index_ij_loc*2)%cols)
@@ -2896,14 +2940,14 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                   ! need to reset submats, the column data is not deleted since it's still needed, just set nr=nc=0
                   submats(index_ij_loc*2-1)%nr=0
                   submats(index_ij_loc*2-1)%nc=0
-                  ! if(allocated(submats(index_ij_loc*2-1)%dat))then
+                  ! if(associated(submats(index_ij_loc*2-1)%dat))then
                   !    deallocate(submats(index_ij_loc*2-1)%dat)
                   !    deallocate(submats(index_ij_loc*2-1)%rows)
                   !    deallocate(submats(index_ij_loc*2-1)%cols)
                   ! endif
                   submats(index_ij_loc*2)%nr=0
                   submats(index_ij_loc*2)%nc=0
-                  if(allocated(submats(index_ij_loc*2)%dat))then
+                  if(associated(submats(index_ij_loc*2)%dat))then
                      deallocate(submats(index_ij_loc*2)%dat)
                      deallocate(submats(index_ij_loc*2)%rows)
                      deallocate(submats(index_ij_loc*2)%cols)
@@ -2969,14 +3013,14 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                ! delete submats
                submats(index_ij_loc*2-1)%nr=0
                submats(index_ij_loc*2-1)%nc=0
-               if(allocated(submats(index_ij_loc*2-1)%dat))then
+               if(associated(submats(index_ij_loc*2-1)%dat))then
                   deallocate(submats(index_ij_loc*2-1)%dat)
                   deallocate(submats(index_ij_loc*2-1)%rows)
                   deallocate(submats(index_ij_loc*2-1)%cols)
                endif
                submats(index_ij_loc*2)%nr=0
                submats(index_ij_loc*2)%nc=0
-               if(allocated(submats(index_ij_loc*2)%dat))then
+               if(associated(submats(index_ij_loc*2)%dat))then
                   deallocate(submats(index_ij_loc*2)%dat)
                   deallocate(submats(index_ij_loc*2)%rows)
                   deallocate(submats(index_ij_loc*2)%cols)
@@ -2985,7 +3029,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                if(fullmatflag==1)then
                   submats_full(index_ij_loc)%nr=0
                   submats_full(index_ij_loc)%nc=0
-                  if(allocated(submats_full(index_ij_loc)%dat))then
+                  if(associated(submats_full(index_ij_loc)%dat))then
                      deallocate(submats_full(index_ij_loc)%dat)
                      deallocate(submats_full(index_ij_loc)%rows)
                      deallocate(submats_full(index_ij_loc)%cols)
