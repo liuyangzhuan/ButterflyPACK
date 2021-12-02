@@ -27,4 +27,4 @@ cmake .. \
 	-DTPL_BLAS_LIBRARIES="/opt/cray/pe/libsci/21.08.1.2/GNU/9.1/x86_64/lib/libsci_gnu_82_mpi_mp.so" \
 	-DTPL_LAPACK_LIBRARIES="/opt/cray/pe/libsci/21.08.1.2/GNU/9.1/x86_64/lib/libsci_gnu_82_mpi_mp.so" \
 	-DTPL_SCALAPACK_LIBRARIES="/opt/cray/pe/libsci/21.08.1.2/GNU/9.1/x86_64/lib/libsci_gnu_82_mpi_mp.so"
-    
+make ie2d    
