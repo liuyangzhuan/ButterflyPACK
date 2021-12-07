@@ -1,0 +1,5 @@
+- e4s_product: butterflypack
+  docs:  [README.md, license.txt]
+  Area: "Math libraries"
+  Description: "Parallel rank-structured dense direct solver package."
+  MemberProduct: True
