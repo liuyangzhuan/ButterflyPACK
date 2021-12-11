@@ -1468,10 +1468,11 @@ contains
              + dt(6)*60*1000 + dt(7)*1000 &
              + dt(8)
       end if
-
+#ifdef CRAY
+      pid = 0
+#else
       pid = getpid()
-      ! pid = 0
-
+#endif
       t = ieor(t, int(pid, kind(t)))
       do i = 1, n
          seed(i) = lcg(t)

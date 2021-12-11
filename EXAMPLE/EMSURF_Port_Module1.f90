@@ -2456,7 +2456,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports ...'
-	T0=secnds(0.0)
+	n1 = OMP_get_wtime()
 	edge=quant%Nunk_int
 	do pp=1,quant%Nport
 		if(quant%ports(pp)%type==0 .or. quant%ports(pp)%type==1)then
@@ -2554,6 +2554,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 		edge =edge+quant%ports(pp)%Nunk
 	enddo
+	n2 = OMP_get_wtime()
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',secnds(T0),'Seconds'
 	if(MyID==Main_ID)write (*,*) ''
 

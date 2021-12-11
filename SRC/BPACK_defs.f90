@@ -36,7 +36,7 @@ module BPACK_DEFS
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !**** common parameters
-#ifdef PGI
+#if defined(PGI) || defined(CRAY)
     integer, external :: iargc
 #endif
     real(kind=8), parameter :: BPACK_pi = 4d0*atan(1d0)
