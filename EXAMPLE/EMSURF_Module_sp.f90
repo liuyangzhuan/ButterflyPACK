@@ -1544,23 +1544,23 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         enddo
         !$omp end parallel do
 
-        T0=secnds(0.0)
-
+        n1 = OMP_get_wtime()
 		call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
-
+		n2 = OMP_get_wtime()
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 
-		T0=secnds(0.0)
+        n1 = OMP_get_wtime()
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
+		n2 = OMP_get_wtime()
 
 		! call current_node_patch_mapping('V',curr(:,1),msh)
 		! call current_node_patch_mapping('H',curr(:,2),msh)
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 		deallocate(Current)
 		deallocate(Voltage)

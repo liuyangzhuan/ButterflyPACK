@@ -275,7 +275,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
     real(kind=8) theta, phi, dphi, rcs_V, rcs_H,rate
-    real T0,T1
+    real(kind=8) T0,T1
     real(kind=8) n1,n2,rtemp
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
@@ -338,7 +338,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	!**** prediction on the test sets
 
 	ntest=quant%ntest
-	T1=secnds(0.0)
+	T0 = OMP_get_wtime()
 	open (92,file=quant%testfile_p)
 	allocate (xyz_test(Dimn,ntest))
 	do edge=1,ntest
@@ -358,7 +358,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	enddo
 
 	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_precision, MPI_SUM, Main_ID, ptree%Comm,ierr)
-
+	T1 = OMP_get_wtime()
 	if (ptree%MyID==Main_ID) then
 		do ii=1,ntest
 			if(dble(vout(ii,1))>0)then
@@ -386,7 +386,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 		rate = dble(ncorrect)/dble(ntest)
 
 		write (*,*) ''
-		write (*,*) 'Prediction time:',secnds(T1),'Seconds'
+		write (*,*) 'Prediction time:',T1-T0,'Seconds'
 		write (*,*) 'Success rate:',rate
 		write (*,*) ''
 
