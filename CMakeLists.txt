@@ -124,7 +124,7 @@ endif()
 endif()
 
 
-if (COMPILER_PGI)  # PGI taskloop seems buggy
+if (COMPILER_PGI OR COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")  # PGI and Cray taskloop seems buggy
 else()
 #Test OPENMP TASKLOOP
 check_fortran_source_compiles(

@@ -10,11 +10,13 @@
 
 module swap PrgEnv-intel PrgEnv-cray
 module swap cce cce/12.0.3
+module load stat 
+module load cray-cti
 # export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/global/common/software/m1759/cce/opt/cray/pe/cce/12.0.3/cce-clang/x86_64/lib
 export LD_LIBRARY_PATH=/global/common/software/m1759/cce/opt/cray/pe/cce/12.0.3/cce-clang/x86_64/lib/:$LD_LIBRARY_PATH
 
 
-NTH=1
+NTH=8
 CORES_PER_NODE=32
 THREADS_PER_RANK=`expr $NTH \* 2`								 
 
@@ -22,7 +24,10 @@ export EXEC=./EXAMPLE/ie2d
 export OMP_NUM_THREADS=$NTH
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
-  							 
+
+export ATP_ENABLED=1
+ulimit -c unlimited
+
 											
 # for nmpi in 16 18 32 50 64 98 128 200 256 512 1024
 #for nmpi in  512 

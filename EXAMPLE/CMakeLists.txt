@@ -24,6 +24,7 @@ target_link_libraries(ie3d_sp ${all_link_libs_c})
 set(FZEXM1 EMCURV_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2d ${FZEXM1})
 target_link_libraries(ie2d ${all_link_libs_z})
+install(TARGETS ie2d RUNTIME DESTINATION "${INSTALL_LIB_DIR}/EXAMPLE")
 
 set(FZEXM2 EMCURV_Eigen_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2deigen ${FZEXM2})
@@ -38,7 +39,7 @@ set(FZEXM4 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3deigen ${FZEXM4})
 target_link_libraries(ie3deigen ${all_link_libs_z})
 add_dependencies(ie3deigen ie3d)
-
+install(TARGETS ie3deigen RUNTIME DESTINATION "${INSTALL_LIB_DIR}/EXAMPLE")
 
 set(FZEXM5 SMAT_Driver.f90)
 add_executable(smat ${FZEXM5})
@@ -65,6 +66,7 @@ set(FZEXM9 EMSURF_Port_Eigen_Driver.f90 EMSURF_Port_Module.f90 DoCubicInterp2D.c
 add_executable(ie3dporteigen ${FZEXM9})
 target_link_libraries(ie3dporteigen ${all_link_libs_z})
 add_dependencies(ie3dporteigen ie3d)
+install(TARGETS ie3dporteigen RUNTIME DESTINATION "${INSTALL_LIB_DIR}/EXAMPLE")
 
 
 ########################################### double Fortran drivers
