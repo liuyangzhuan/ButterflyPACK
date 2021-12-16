@@ -1733,7 +1733,7 @@ contains
       integer times(8)
       real(kind=8) t1, t2, error, Memory
       integer ierr
-      integer, allocatable:: boundary_map(:)
+      integer:: boundary_map(1)
       integer groupm_start, Nboundall
 
       !**** allocate HODLR solver structures
