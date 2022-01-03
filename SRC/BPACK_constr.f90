@@ -546,10 +546,10 @@ contains
                   if (level == option%level_check) then
                      ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 
-                     rank0_inner = ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
-                     rankrate_inner = 1.2d0
+                     ! rank0_inner = ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
+                     ! rankrate_inner = 1.2d0
                      rank0_outter = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
-                     rankrate_outter = 1.2d0
+                     rankrate_outter = option%rankrate !1.2d0
                      level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
 
                      t1 = OMP_GET_WTIME()
