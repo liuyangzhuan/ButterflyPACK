@@ -878,7 +878,7 @@ contains
          ho_bf1%ind_lv = level_c
          ho_bf1%ind_bk = rowblock
          rank0 = max(block_off1%rankmax, block_off2%rankmax)
-         rate = 1.2d0
+         rate = option%rankrate !1.2d0
          call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_inverse_minusBC_dat, error, 'minusBC', option, stats, ptree, msh)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
          error_inout = max(error_inout, error)
@@ -967,7 +967,7 @@ contains
 
          rank0 = block_Xn%rankmax
 
-         rate = 1.2d0
+         rate = option%rankrate !1.2d0
          call BF_randomized(block_Xn%pgno, level_butterfly, rank0, rate, block_Xn, schulz_op, BF_block_MVP_schulz_dat, error, 'schulz iter'//TRIM(iternumber), option, stats, ptree, msh, operand1=ii)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 
@@ -1337,7 +1337,7 @@ contains
                ! n2 = OMP_get_wtime()
                ! time_tmp1 = time_tmp1 + n2-n1
             else
-               rate = 1.2d0
+               rate = option%rankrate !1.2d0
                ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,blocks_A%level_butterfly/2)
                call BF_randomized(blocks_A%pgno, level_butterfly, rank0, rate, blocks_A, partitioned_block, BF_block_MVP_inverse_A_minusBDinvC_dat, error, 'A-BD^-1C', option, stats, ptree, msh)
                ! if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,blocks_A%level_butterfly/2)
@@ -1366,7 +1366,7 @@ contains
             call BF_ReDistribute_Inplace(blocks_io, pgno1, stats, ptree, msh)
          else
             level_butterfly = level_butterfly_target
-            rate = 1.2d0
+            rate = option%rankrate !1.2d0
 
             !**** Check the estimated norm of the operator, if too small skip the randomized construction
             allocate(vecin(blocks_io%N_loc,1))
@@ -2515,7 +2515,7 @@ contains
          ho_bf1%ind_lv = level_c
          ho_bf1%ind_bk = rowblock
          rank0 = block_o%rankmax
-         rate = 1.2d0
+         rate = option%rankrate !1.2d0
          call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, ho_bf1, BF_block_MVP_Sblock_dat, error_inout, 'Sblock', option, stats, ptree, msh, operand1=msh)
          stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 
@@ -2563,14 +2563,14 @@ contains
                   n1=OMP_get_wtime()
                   call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
                   rank0 = agent_block%rankmax
-                  rate = 1.2d0
+                  rate = option%rankrate !1.2d0
                   n2=OMP_get_wtime()
                   ! time_tmp = time_tmp + n2-n1
 
                   ho_bf1%ind_lv = level
                   ho_bf1%ind_bk = ii
                   rank0 = agent_block%rankmax
-                  rate = 1.2d0
+                  rate = option%rankrate !1.2d0
                   call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, ho_bf1, BF_block_MVP_Sblock_Sml_dat, error, 'Sblock_sml', option, stats, ptree, msh, operand1=msh, vskip=.true.)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
@@ -2609,7 +2609,7 @@ contains
          rankrate_inner = 2.0d0
 
          rank0_outter = block_o%rankmax
-         rankrate_outter = 1.2d0
+         rankrate_outter = option%rankrate !1.2d0
          level_butterfly = block_o%level_butterfly
          call Bplus_randomized_constr(level_butterfly, Bplus, ho_bf1, rank0_inner, rankrate_inner, Bplus_block_MVP_Sblock_dat, rank0_outter, rankrate_outter, Bplus_block_MVP_Outter_Sblock_dat, error_inout, 'Sblock+', option, stats, ptree, msh)
 
@@ -2686,7 +2686,7 @@ contains
          rankrate_inner = 2.0d0
 
          rank0_outter = max(block_off1%rankmax, block_off2%rankmax)
-         rankrate_outter = 1.2d0
+         rankrate_outter = option%rankrate !1.2d0
 
          level_butterfly = block_o%level_butterfly
 
@@ -2705,7 +2705,7 @@ contains
                   !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
-                     rate = 1.2d0
+                     rate = option%rankrate !1.2d0
                      level_butterfly = block_o%level_butterfly
                      Bplus%ind_ll = llplus
                      Bplus%ind_bk = bb
@@ -2727,7 +2727,7 @@ contains
                   n1 = OMP_get_wtime()
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
-                     rate = 1.2d0
+                     rate = option%rankrate !1.2d0
                      level_butterfly = block_o%level_butterfly
                      Bplus%ind_ll = llplus
                      Bplus%ind_bk = bb
@@ -2843,7 +2843,7 @@ contains
                         if (IOwnPgrp(ptree, Bplus%LL(llplus+1)%matrices_block(ii)%pgno)) then
                         call BF_extract_partial(block_o, level_butterfly_loc, ij_loc,Bplus%LL(llplus+1)%matrices_block(ii)%headm,Bplus%LL(llplus+1)%matrices_block(ii)%row_group, 'L', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
                         rank0 = agent_block%rankmax
-                        rate = 1.2d0
+                        rate = option%rankrate !1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
                         if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
@@ -2863,7 +2863,7 @@ contains
                   endif
 #else
                   rank0 = block_o%rankmax
-                  rate = 1.2d0
+                  rate = option%rankrate !1.2d0
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
@@ -2942,7 +2942,7 @@ contains
                         call BF_extract_partial(block_o, level_butterfly_loc, ij_loc, Bplus%LL(llplus+1)%matrices_block(ii)%headm,Bplus%LL(llplus+1)%matrices_block(ii)%row_group, 'R', agent_block,Bplus%LL(llplus+1)%matrices_block(ii)%pgno,ptree)
 
                         rank0 = agent_block%rankmax
-                        rate = 1.2d0
+                        rate = option%rankrate !1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
                         if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
@@ -2960,7 +2960,7 @@ contains
                   endif
 #else
                   rank0 = block_o%rankmax
-                  rate = 1.2d0
+                  rate = option%rankrate !1.2d0
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb

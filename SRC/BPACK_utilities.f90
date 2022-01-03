@@ -610,7 +610,7 @@ contains
       option%ErrSol = 0
       option%LR_BLK_NUM = 1
       option%rank0 = 32
-      option%rankrate = 1.5d0
+      option%rankrate = 1.2d0
       option%itermax = 10
       option%powiter = 0
       option%ILU = 0
