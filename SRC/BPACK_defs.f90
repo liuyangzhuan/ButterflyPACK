@@ -31,10 +31,10 @@ module BPACK_DEFS
     implicit none
     INCLUDE 'mpif.h'
 #endif
-    
-    !**** the version numbers are automatically replaced with those defined in CMakeList.txt 
-    integer, parameter:: BPACK_MAJOR_VERSION = 0
-    integer, parameter:: BPACK_MINOR_VERSION = 0
+
+    !**** the version numbers are automatically replaced with those defined in CMakeList.txt
+    integer, parameter:: BPACK_MAJOR_VERSION = 2
+    integer, parameter:: BPACK_MINOR_VERSION = 1
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !**** common parameters
@@ -47,6 +47,7 @@ module BPACK_DEFS
     integer, parameter :: BPACK_BigINT = 2147483647
     real(kind=8), parameter:: BPACK_SafeUnderflow = 1D-30
     real(kind=8), parameter:: BPACK_SafeEps = 1D-14
+    real(kind=8), parameter:: BPACK_Jitter = 1D-6
     DT, parameter :: BPACK_cone = 1d0
     DT, parameter :: BPACK_czero = 0d0
     integer, parameter :: Main_ID = 0 ! Head MPI rank

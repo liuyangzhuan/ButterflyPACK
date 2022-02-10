@@ -68,12 +68,14 @@ contains
         integer rowblock, pgno1, pgno2, pgno, ierr, rowblock_inv
         type(matrixblock), pointer::block_o, block_off, block_off1, block_off2
         type(matrixblock)::block_tmp
-        real(kind=8) n1, n2, nn1, nn2, flop
+        real(kind=8) n1, n2, nn1, nn2, flop, norm
         type(Hoption)::option
         type(Hstat)::stats
         type(hobf)::ho_bf1
         type(proctree)::ptree
         type(mesh)::msh
+        DT,allocatable::matrixtemp(:,:),UU(:,:),VV(:,:)
+        DTR,allocatable::Singular(:)        
 
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
@@ -90,7 +92,23 @@ contains
 
          ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
             nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, 1)
+            
+            allocate(Singular(nn))
+            allocate(UU(nn,nn))
+            allocate(VV(nn,nn))
+            call gesvd_robust(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, Singular, UU, VV, nn, nn, nn)
+            if(Singular(nn)/Singular(1)<BPACK_Jitter)then
+                norm = Singular(1)
+                ! write(*,*)norm*BPACK_Jitter,norm
+                do iii=1,nn
+                    ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)=ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)+norm*BPACK_Jitter
+                enddo
+            endif
+            deallocate(UU)
+            deallocate(VV)
+            deallocate(Singular)
 
+            
 #if 1
             allocate (ipiv(nn))
             call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)
@@ -99,7 +117,10 @@ contains
             stats%Flop_Factor = stats%Flop_Factor + flop
             deallocate (ipiv)
 #else
-         call GeneralInverse(nn, nn, ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, BPACK_SafeEps, Flops=flop)
+            allocate(matrixtemp(n,n))
+            matrixtemp = ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat
+            call GeneralInverse(nn, nn, matrixtemp, ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, BPACK_SafeEps, Flops=flop)
+            deallocate(matrixtemp)
             stats%Flop_Factor = stats%Flop_Factor + flop
 #endif
 
