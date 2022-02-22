@@ -925,7 +925,8 @@ contains
       integer rank_new_max, rank0, num_vect
       real(kind=8):: rank_new_avr, error
       integer niter
-      real(kind=8):: error_inout, rate, err_avr
+      DTR:: error_inout
+      real(kind=8):: rate, err_avr
       integer itermax, ntry, converged
       real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr
       type(Hoption)::option
