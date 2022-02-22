@@ -926,6 +926,7 @@ contains
       real(kind=8):: rank_new_avr, error
       integer niter
       real(kind=8):: error_inout
+      DTR:: error_inout_tmp
       real(kind=8):: rate, err_avr
       integer itermax, ntry, converged
       real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr
@@ -1006,8 +1007,8 @@ contains
             converged = 1
             exit
          endif
-
-         if (myisnan(real(error_inout))) then
+         error_inout_tmp=error_inout
+         if (myisnan(error_inout_tmp)) then
             converged = 0
             exit
          endif
