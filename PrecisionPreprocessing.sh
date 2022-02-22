@@ -20,7 +20,7 @@ sed -i -e "s/BPACK_PATCH_VERSION.*/BPACK_PATCH_VERSION = $bug/" ./SRC/BPACK_defs
 
 
 ######## The following takes care of windows to linux conversion
-declare -a StringArray=("*.in" "*.sh" "*.inc" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
+declare -a StringArray=("*.in" "*.sh" "SRC/*.*" "EXAMPLE/*.*" "Makefile" "*/Makefile")
 for val in ${StringArray[@]}; do
    # echo $val
 #   sed -i "s/\r$/\r" $val
