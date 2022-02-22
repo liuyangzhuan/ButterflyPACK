@@ -1224,7 +1224,8 @@ contains
       integer, allocatable :: jpvt(:)
       real(kind=8), optional:: Flops
       real(kind=8), optional:: norm_tol
-      real(kind=8):: flop, matnorm
+      real(kind=8):: flop
+      DTR:: matnorm
       if (present(Flops)) Flops = 0d0
 
       mn = min(M, N)

@@ -1208,7 +1208,7 @@ contains
       integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m
       integer level, blocks, edge, patch, node, group, level_c
       integer::block_num, block_num_new, num_blocks, level_butterfly
-      real(kind=8):: temp
+      DTR:: temp
 
 #ifdef NDEBUG
       BF_checkNAN=.false.
