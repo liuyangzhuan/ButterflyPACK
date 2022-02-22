@@ -1226,7 +1226,7 @@ contains
                      mm = size(block_i%ButterflyV%blocks(index_j)%matrix, 1)
                      nn = size(block_i%ButterflyV%blocks(index_j)%matrix, 2)
                      temp = temp + fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn)
-                     if (ieee_is_nan(temp)) write (*, *) 'V', level_butterfly, index_j, fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn), mm, nn
+                     if (myisnan(temp)) write (*, *) 'V', level_butterfly, index_j, fnorm(block_i%ButterflyV%blocks(index_j)%matrix, mm, nn), mm, nn
                   endif
                enddo
                endif
@@ -1237,7 +1237,7 @@ contains
                      mm = size(block_i%ButterflyU%blocks(index_i)%matrix, 1)
                      nn = size(block_i%ButterflyU%blocks(index_i)%matrix, 2)
                      temp = temp + fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn)
-                     if (ieee_is_nan(temp)) write (*, *) 'U', level_butterfly, index_i, fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn), mm, nn
+                     if (myisnan(temp)) write (*, *) 'U', level_butterfly, index_i, fnorm(block_i%ButterflyU%blocks(index_i)%matrix, mm, nn), mm, nn
                   endif
                enddo
                endif
@@ -1250,7 +1250,7 @@ contains
                         mm = size(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, 1)
                         nn = size(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, 2)
                         temp = temp + fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn)
-                        if (ieee_is_nan(temp)) write (*, *) 'Ker', level_butterfly, level, index_i, index_j, fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn), mm, nn
+                        if (myisnan(temp)) write (*, *) 'Ker', level_butterfly, level, index_i, index_j, fnorm(block_i%ButterflyKerl(level)%blocks(index_i, index_j)%matrix, mm, nn), mm, nn
                      endif
                   enddo
                enddo
@@ -1269,7 +1269,7 @@ contains
          stop
       end if
 
-      BF_checkNAN = ieee_is_nan(temp)
+      BF_checkNAN = myisnan(temp)
 #endif
    end function BF_checkNAN
 
@@ -1815,7 +1815,7 @@ contains
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix, rank, block_i%ButterflyV%blocks(2*index_j - 1)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, 'N', 'T', rank, dimension_n, nn, BPACK_cone, BPACK_czero)
 
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 1'
                      end if
 #endif
@@ -1829,7 +1829,7 @@ contains
                      call gemmf90(block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix, rank, block_i%ButterflyV%blocks(2*index_j)%matrix, dimension_n, block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, 'N', 'T', rank, dimension_n, nn, BPACK_cone, BPACK_czero)
 
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, dimension_n))) then
                         write (*, *) 'NAN in L 2'
                      end if
 #endif
@@ -1840,7 +1840,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j - 1)%matrix
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, nn))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j - 1)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 3'
                      end if
 #endif
@@ -1849,7 +1849,7 @@ contains
                      allocate (block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix(rank, nn))
                      block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix = block_i%ButterflyKerl(level)%blocks(index_i, 2*index_j)%matrix
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, nn))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level_butterfly - level_butterfly_loc + level)%blocks(index_i + index_i_start, 2*index_j)%matrix, rank, nn))) then
                         write (*, *) 'NAN in L 4'
                      end if
 #endif
@@ -1867,7 +1867,7 @@ contains
                      block_o%ButterflyU%blocks(index_i + index_i_start)%matrix = block_i%ButterflyU%blocks(index_i)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix)/1024.0d3
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix, mm, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyU%blocks(index_i + index_i_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in L 5'
                      end if
 #endif
@@ -1898,7 +1898,7 @@ contains
 
 ! write(*,*)'good 1.1'
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 1'
                      end if
 #endif
@@ -1914,7 +1914,7 @@ contains
 
 ! write(*,*)'good 2'
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, dimension_m, rank))) then
                         write (*, *) 'NAN in R 2'
                      end if
 #endif
@@ -1927,7 +1927,7 @@ contains
                      block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i - 1, index_j)%matrix
 
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, mm, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i - 1, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 3'
                      end if
 #endif
@@ -1938,7 +1938,7 @@ contains
                      block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix = block_i%ButterflyKerl(level)%blocks(2*index_i, index_j)%matrix
                      ! write(*,*)'good 4'
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, mm, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyKerl(level)%blocks(2*index_i, index_j + index_j_start)%matrix, mm, rank))) then
                         write (*, *) 'NAN in R 4'
                      end if
 #endif
@@ -1956,7 +1956,7 @@ contains
                      block_o%ButterflyV%blocks(index_j + index_j_start)%matrix = block_i%ButterflyV%blocks(index_j)%matrix
                      if (present(memory)) memory = memory + SIZEOF(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix)/1024.0d3
 #ifndef NDEBUG
-                     if (ieee_is_nan(fnorm(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix, nn, rank))) then
+                     if (myisnan(fnorm(block_o%ButterflyV%blocks(index_j + index_j_start)%matrix, nn, rank))) then
                         write (*, *) 'NAN in R 5'
                      end if
 #endif
@@ -12998,12 +12998,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (UU(rank, mn_min))
                            allocate (VV(mn_min, num_vectors1 + num_vectors2))
                            allocate (Singular(mn_min))
-                           call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
+                           call assert(.not. myisnan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
 
                            ! call SVD_Truncate(matrixtemp, rank, num_vectors1 + num_vectors2, mn_min, UU, VV, Singular, tolerance, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min)
                            ranknew = mn_min
-                           call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
+                           call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
 
                            do ii = 1, ranknew
                               UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -13212,14 +13212,14 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (VV(mn_min,rank))
                            allocate (Singular(mn_min))
 
-                           call assert(.not. ieee_is_nan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
+                           call assert(.not. myisnan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
 
                            ! call SVD_Truncate(matrixtemp, num_vectors1 + num_vectors2, rank, mn_min, UU, VV, Singular, tolerance, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min)
                            ranknew=mn_min
 
 
-                           call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
+                           call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
 
                            do ii = 1, ranknew
                               VV(ii, :) = VV(ii, :)*Singular(ii)
@@ -13384,10 +13384,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                allocate (Singular(mn_min))
 
                call copymatT(blocks%ButterflyV%blocks(j)%matrix, matrixtemp, dimension_n, rank)
-               call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, dimension_n)), 'matrixtemp NAN at 3')
+               call assert(.not. myisnan(fnorm(matrixtemp, rank, dimension_n)), 'matrixtemp NAN at 3')
 
                call gesvd_robust(matrixtemp, Singular, UU, VV, rank, dimension_n, mn_min)
-               call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 3')
+               call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 3')
 
                do ii = 1, mn_min
                   UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -13447,9 +13447,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   matrixtemp(1:rank, 1:nn1) = blocks%ButterflyKerl(level)%blocks(i, j)%matrix
                   ! call copymatN(blocks%ButterflyKerl(level)%blocks(i,j+1)%matrix,matrixtemp(1:rank,1+nn1:nn2+nn1),rank,nn2)
                   matrixtemp(1:rank, 1 + nn1:nn2 + nn1) = blocks%ButterflyKerl(level)%blocks(i, j + 1)%matrix
-                  call assert(.not. ieee_is_nan(fnorm(matrixtemp, rank, nn1 + nn2)), 'matrixtemp NAN at 4')
+                  call assert(.not. myisnan(fnorm(matrixtemp, rank, nn1 + nn2)), 'matrixtemp NAN at 4')
                   call gesvd_robust(matrixtemp, Singular, UU, VV, rank, nn1 + nn2, mn_min)
-                  call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 4')
+                  call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
 
                   do ii = 1, mn_min
                      UU(:, ii) = UU(:, ii)*Singular(ii)
@@ -13554,10 +13554,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                ! call copymatN(blocks%ButterflyU%blocks(i)%matrix,matrixtemp,dimension_m,rank)
                matrixtemp = blocks%ButterflyU%blocks(i)%matrix
-               call assert(.not. ieee_is_nan(fnorm(matrixtemp, dimension_m, rank)), 'matrixtemp NAN at 1')
+               call assert(.not. myisnan(fnorm(matrixtemp, dimension_m, rank)), 'matrixtemp NAN at 1')
 
                call gesvd_robust(matrixtemp, Singular, UU, VV, dimension_m, rank, mn_min)
-               call assert(.not. ieee_is_nan(sum(Singular)), 'Singular NAN at 1')
+               call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 1')
 
                do ii = 1, mn_min
                   VV(ii, :) = VV(ii, :)*Singular(ii)
@@ -13619,15 +13619,15 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   matrixtemp(1:mm1, 1:rank) = blocks%ButterflyKerl(level)%blocks(i, j)%matrix
                   ! call copymatN(blocks%ButterflyKerl(level)%blocks(i+1,j)%matrix,matrixtemp(1+mm1:mm2+mm1,1:rank),mm2,rank)
                   matrixtemp(1 + mm1:mm2 + mm1, 1:rank) = blocks%ButterflyKerl(level)%blocks(i + 1, j)%matrix
-                  call assert(.not. ieee_is_nan(fnorm(matrixtemp, mm1 + mm2, rank)), 'matrixtemp NAN at 2')
+                  call assert(.not. myisnan(fnorm(matrixtemp, mm1 + mm2, rank)), 'matrixtemp NAN at 2')
 
                   call gesvd_robust(matrixtemp, Singular, UU, VV, mm1 + mm2, rank, mn_min)
-                  ! if(ieee_is_nan(sum(Singular)).and. mm1+mm2<rank)then
+                  ! if(myisnan(sum(Singular)).and. mm1+mm2<rank)then
                   ! write(*,*)mm1+mm2,rank,mm1+mm2>=rank,'rank too large?'
                   ! end if
 
-                  ! call assert(.not. ieee_is_nan(sum(Singular)),'Singular NAN at 2')
-                  if (ieee_is_nan(sum(Singular))) then
+                  ! call assert(.not. myisnan(sum(Singular)),'Singular NAN at 2')
+                  if (myisnan(sum(Singular))) then
                      write (*, *) 'Singular NAN at 2', mm1 + mm2, rank
                      do ii = 1, mm1 + mm2
                         do jj = 1, rank
