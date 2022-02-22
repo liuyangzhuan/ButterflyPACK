@@ -75,7 +75,7 @@ contains
         type(proctree)::ptree
         type(mesh)::msh
         DT,allocatable::matrixtemp(:,:),UU(:,:),VV(:,:)
-        DTR,allocatable::Singular(:)        
+        DTR,allocatable::Singular(:)
 
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
@@ -92,7 +92,7 @@ contains
 
          ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
             nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, 1)
-            
+
             allocate(Singular(nn))
             allocate(UU(nn,nn))
             allocate(VV(nn,nn))
@@ -108,7 +108,7 @@ contains
             deallocate(VV)
             deallocate(Singular)
 
-            
+
 #if 1
             allocate (ipiv(nn))
             call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)

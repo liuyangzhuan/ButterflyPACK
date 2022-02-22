@@ -21,12 +21,18 @@ module BPACK_DEFS
 #ifdef MPIMODULE
     use MPI
     use iso_c_binding
+#if __GNUC__ < 5
+#else
     use ieee_arithmetic
+#endif
     use BPACK_linkedlist
     implicit none
 #else
     use iso_c_binding
+#if __GNUC__ < 5
+#else
     use ieee_arithmetic
+#endif
     use BPACK_linkedlist
     implicit none
     INCLUDE 'mpif.h'

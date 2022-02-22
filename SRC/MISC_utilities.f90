@@ -143,6 +143,18 @@ contains
 
    end subroutine copymatT
 
+
+   function myisnan(a)
+      implicit none
+      DTR a
+      logical myisnan
+#if __GNUC__ < 5
+      myisnan=isnan(a)
+#else
+      myisnan=ieee_is_nan(a)
+#endif
+   end function myisnan
+
    function isnanMat(A, m, n)
       implicit none
       logical:: isnanMat
@@ -151,7 +163,7 @@ contains
       isnanMat = .false.
       do ii = 1, m
       do jj = 1, n
-         isnanMat = isnanMat .or. ieee_is_nan(abs(A(ii, jj)))
+         isnanMat = isnanMat .or. myisnan(abs(A(ii, jj)))
       end do
       end do
    end function isnanMat
@@ -612,7 +624,7 @@ contains
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
          ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'
-         ! if(ieee_is_nan(sqrt(norm_Z)))then
+         ! if(myisnan(sqrt(norm_Z)))then
          ! write(*,*)inner_UV,norm_U,norm_V,maxvalue
          ! stop
          ! endif
@@ -1006,7 +1018,7 @@ contains
       allocate (VV(mn, N))
       allocate (Singular(mn))
 
-      if (ieee_is_nan(fnorm(mat, M, N))) then
+      if (myisnan(fnorm(mat, M, N))) then
          write (*, *) 'input matrix NAN in GetRank'
          stop
       end if
@@ -1017,7 +1029,7 @@ contains
          rank = 1
          deallocate (UU, VV, Singular)
       else
-         if (ieee_is_nan(sum(Singular))) then
+         if (myisnan(sum(Singular))) then
             deallocate (UU, VV, Singular)
             write (*, *) 'gesvd_robust wrong in GetRank, switching to QR'
 
@@ -1036,7 +1048,7 @@ contains
             ! RRQR
             jpvt = 0
             call geqp3f90(Atmp, jpvt, tau, flop)
-            if (ieee_is_nan(fnorm(Atmp, mnl, mn))) then
+            if (myisnan(fnorm(Atmp, mnl, mn))) then
                write (*, *) 'Q or R has NAN in GetRank'
                stop
             end if
@@ -1181,7 +1193,7 @@ contains
                   deallocate (jpiv)
                   deallocate (JPERM)
 
-                  if (ieee_is_nan(fnorm(mat2D, max(1,myArows), max(1,myAcols)))) then
+                  if (myisnan(fnorm(mat2D, max(1,myArows), max(1,myAcols)))) then
                      write (*, *) 'Q or R has NAN in PComputeRange'
                      stop
                   end if
@@ -1217,7 +1229,7 @@ contains
 
       mn = min(M, N)
       matnorm=fnorm(mat, M, N)
-      if (ieee_is_nan(matnorm)) then
+      if (myisnan(matnorm)) then
          write (*, *) 'input matrix NAN in ComputeRange'
          stop
       end if
@@ -1255,7 +1267,7 @@ contains
          if (present(Flops)) Flops = Flops + flop
          rank = mn
       endif
-      if (ieee_is_nan(fnorm(mat, M, N))) then
+      if (myisnan(fnorm(mat, M, N))) then
          write (*, *) 'Q or R has NAN in ComputeRange'
          stop
       end if
@@ -2017,7 +2029,7 @@ contains
          if (present(Flops)) Flops = Flops + flop
 
 ! !!!!!!!  If SVD fails, uncomment the following If statement, but the code might become slow
-         ! if(ieee_is_nan(sum(Singular)))then
+         ! if(myisnan(sum(Singular)))then
 
          ! write(*,*)'gesvd wrong in LinearSolve, switching to QR'
 
@@ -2030,7 +2042,7 @@ contains
          ! ! RRQR
          ! jpvt = 0
          ! call geqp3f90(Atmp,jpvt,tau)
-         ! if(ieee_is_nan(fnorm(Atmp,m,n)))then
+         ! if(myisnan(fnorm(Atmp,m,n)))then
          ! write(*,*)'Q or R has NAN in LinearSolve'
          ! stop
          ! end if
@@ -2097,7 +2109,7 @@ contains
          ! x(jpvt(ii),1:k) = xtmp(ii,1:k)
          ! end do
 
-         ! if(ieee_is_nan(fnorm(x,n,k)))then
+         ! if(myisnan(fnorm(x,n,k)))then
          ! write(*,*)'trisolve has NAN in LinearSolve'
          ! stop
          ! end if
@@ -2144,7 +2156,7 @@ contains
          ! end if
 
          do ii = 1, k
-         if (ieee_is_nan(abs(sum(x(:, ii))))) then
+         if (myisnan(abs(sum(x(:, ii))))) then
             ! do jj =1,rank
             ! write(*,*)jj,'hh',A_tmp_rank(jj,:)
             ! end do

@@ -1006,7 +1006,7 @@ contains
             exit
          endif
 
-         if (ieee_is_nan(error_inout)) then
+         if (myisnan(error_inout)) then
             converged = 0
             exit
          endif
