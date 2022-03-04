@@ -1731,9 +1731,9 @@ contains
       type(proctree), pointer::ptree
       integer seed_myid(50)
       integer times(8)
-      real(kind=8) t1, t2, error, Memory
-      integer ierr
-      integer, allocatable:: boundary_map(:)
+      real(kind=8) t1, t2, error, Memory, tol_comp_tmp
+      integer ierr,pp,knn_tmp
+      integer:: boundary_map(1)
       integer groupm_start, Nboundall
 
       !**** allocate HODLR solver structures
@@ -1757,13 +1757,31 @@ contains
       groupm_start = 0
       Nboundall = 0
       if (option%forwardN15flag == 1) then
+         knn_tmp = option%knn
+         option%knn=0
          call BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         option%knn=knn_tmp
          call BF_sym2asym(blocks)
+      elseif (option%forwardN15flag == 2) then
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, -1, error)
+         if(error>50*option%tol_comp)then
+            pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+            if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: error ',error,',  with the N15 algorithm'
+            call BF_delete(blocks,0)
+            knn_tmp = option%knn
+            option%tol_comp=option%tol_comp*5
+            option%knn=0
+            call BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+            option%knn=knn_tmp
+            option%tol_comp=option%tol_comp/5
+            call BF_sym2asym(blocks)
+         endif
       else
          call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
       end if
 
-      if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree)
+      if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
       !**** delete neighours in msh

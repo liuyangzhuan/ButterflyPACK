@@ -1,0 +1,98 @@
+Version 2.1.0: Released Dec 16, 2021
+===================================
+ - Switch from Travis to github/gitlab CI
+ - Added support for single-precision real and complex 
+ - Added a single-precision driver ie3d_sp
+ - Fixed the scaling factor in the T operator in EMSURF*.f90
+ - Added support for arbitary-shaped port in EMSURF_Port_Eigen*.f90
+ - Rename a few constants to be XSDK-compatible
+ - Added more memory and CPU printings in the C++ interface
+ - Improved block extraction performance with reduced numbers of buffers
+ - Added Perlmutter test scripts
+ - Added support and scripts for the Cray Fortran compiler 
+ - Added e4s.yaml
+ 
+
+Version 2.0.0: Released Sep 01, 2021
+===================================
+ - Improved EM Eigen driver, added interface with GPTune
+ - Added inverse FIO example
+ - Added support for high order Newton Schultz iteration for butterfly woodbury
+ - Added absolute tolerance in RRQR in the peeling algorithm
+ - Added option%nogeo=4 to specify a list of geometry points together with predefined NNs
+ - Added option%elem_extract=2 to improve computation of a list of blocks of matrix entries, assuming no MPI communication is performed during the block computation
+ - Adaptive ACA block size when elem_extract=0
+ - Added support for advancing multiple ACA together to reduce the number of calls to entry evaluation
+ - Parallelized the N15 compression algorithm
+ - Added back deterministic LR arithmetics in the H solver
+ - Removed option%rmax in most of the compression functions
+ - Additional Fix for GNU SED issue on MAC OS
+ - Added an option to switch between "use MPI" and "INCLUDE 'mpif.h'"
+ - Fixed a NAN bug in newton schultz
+ - Fixed an accuracy bug in LR_BACA*
+ - Fixed an crash bug in BPACK_Randomized
+ - Added gesdd when gesvd fails.
+ - Added knn_near_para as an option to ensure better knn search quality
+
+
+Version 1.2.1: Released Oct 12, 2020
+===================================
+ - Minor fix for building with gnu10
+
+
+Version 1.2.0: Released Aug 14, 2020
+===================================
+ - Added the hss-bf format
+ - Added parallel SVD-based inverse 
+ - Improved interface of nogeo=3
+ - Added an option less_adapt for randomized schemes involving non-uniform rank distributions
+ - Fixed flop counts in a few places
+ - Added small pivot replacement in pgetrff90
+ - Added more example drivers
+ - Added a parameter sample_para_outer as the sample_para for the outermost butterfly levels
+ - Fix the intel compiling issue by changing C_LOC to LOC
+ - Improved butterfly matvec performance
+ - Added mkl batched gemm in butterfly matvec
+ - Improved update time in HOD-BF
+ - Added parallel singular value sweeps for the inner BF factors
+ - Use smaller tolerence for hss update operation; getting ready for parallel single value sweep
+ - Improved BF_all2all* and BPACK_all2all* 
+ - Improved threading performance in BF construction; removed sample_heuristic; added element_Zmn_blocklist_user
+ - Improved parallelism after BF_Split; fixed a few memory leaks
+
+
+Version 1.1.0: Released Nov 07, 2019
+===================================
+ - Added new interface (option%nogeo=3) for passing NNs
+ - Disabled intel VSL due to issues of linking both dbutterflypack and zbutterflypack
+ - Disabled pgeqrff90 for gcc>=9, as it causes segfault
+ - Improved creation of communicators and blacs grids
+ - Added deterministic A-BD^-1C in LR format
+ - Fixed a deadblock bug in BF_compress_NlogN with non power of 2 processs
+ - Added an option sample_heuristics to improve entry-evaluation-based compression accuracy
+
+
+Version 1.0.3: Released Sep 24, 2019
+===================================
+ - Improved C++ interface
+ - Improved knn search performance
+ - Fixed the different CMAKE openmp link flag issue for CXX and Fortran linkers
+
+
+Version 1.0.2: Released Sep 04, 2019
+===================================
+ - Tested functionality on osx
+
+
+Version 1.0.1: Released Aug 16, 2019
+===================================
+ - Added cmake test for detecting OMP task loop
+ - Added cmake test for detecting fortran finalizer
+ - Added the reference parallel ACA algorithm without merge 
+ - Fixed GNU sed issues in cmake 
+
+
+Version 1.0.0: Released Aug 09, 2019
+===================================
+ - The first XSDK-compatible release
+ 

@@ -21,22 +21,30 @@ module BPACK_DEFS
 #ifdef MPIMODULE
     use MPI
     use iso_c_binding
+#if __GNUC__ < 5
+#else
     use ieee_arithmetic
+#endif
     use BPACK_linkedlist
     implicit none
 #else
     use iso_c_binding
+#if __GNUC__ < 5
+#else
     use ieee_arithmetic
+#endif
     use BPACK_linkedlist
     implicit none
     INCLUDE 'mpif.h'
 #endif
+
+    !**** the version numbers are automatically replaced with those defined in CMakeList.txt
     integer, parameter:: BPACK_MAJOR_VERSION = 2
     integer, parameter:: BPACK_MINOR_VERSION = 1
-    integer, parameter:: BPACK_PATCH_VERSION = 0
+    integer, parameter:: BPACK_PATCH_VERSION = 1
 
     !**** common parameters
-#ifdef PGI
+#if defined(PGI) || defined(CRAY)
     integer, external :: iargc
 #endif
     real(kind=8), parameter :: BPACK_pi = 4d0*atan(1d0)
@@ -45,6 +53,7 @@ module BPACK_DEFS
     integer, parameter :: BPACK_BigINT = 2147483647
     real(kind=8), parameter:: BPACK_SafeUnderflow = 1D-30
     real(kind=8), parameter:: BPACK_SafeEps = 1D-14
+    real(kind=8), parameter:: BPACK_Jitter = 1D-5
     DT, parameter :: BPACK_cone = 1d0
     DT, parameter :: BPACK_czero = 0d0
     integer, parameter :: Main_ID = 0 ! Head MPI rank
@@ -409,7 +418,7 @@ module BPACK_DEFS
         integer:: pat_comp ! pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
 
         ! options for matrix construction
-        integer forwardN15flag ! 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm
+        integer forwardN15flag ! 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
         real(kind=8) tol_comp      ! matrix construction tolerance
         integer::Nmin_leaf ! leaf sizes of HODLR tree
         integer nogeo ! 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided

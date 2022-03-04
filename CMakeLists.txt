@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "2")
 set(VERSION_MINOR "1")
-set(VERSION_BugFix "0")
+set(VERSION_BugFix "1")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 ######################################################################
@@ -86,11 +86,11 @@ endif()
 #
 ######################################################################
 
-set(CMAKE_Fortran_FLAGS "-cpp ${CMAKE_Fortran_FLAGS}")
+# set(CMAKE_Fortran_FLAGS "-cpp ${CMAKE_Fortran_FLAGS}")
 include(CheckFortranCompilerFlag)
 check_fortran_compiler_flag("-ffree-line-length-none" COMPILER_GNU)
 if (COMPILER_GNU)
-set(CMAKE_Fortran_FLAGS "-fno-range-check -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-cpp -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
 check_fortran_compiler_flag("-fallow-argument-mismatch" GNU10)
 if (GNU10)
 set(CMAKE_Fortran_FLAGS "-fallow-argument-mismatch ${CMAKE_Fortran_FLAGS}")
@@ -101,21 +101,30 @@ endif()
 endif()
 check_fortran_compiler_flag("-no-prec-div" COMPILER_Intel)
 if (COMPILER_Intel)
-set(CMAKE_Fortran_FLAGS "-DIntel ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-cpp -DIntel ${CMAKE_Fortran_FLAGS}")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 set(CMAKE_Fortran_FLAGS "-traceback -debug full -check bounds ${CMAKE_Fortran_FLAGS}")
 endif()
 endif()
 
-check_fortran_compiler_flag("Msmartalloc" COMPILER_PGI)
+check_fortran_compiler_flag("-Mextend" COMPILER_PGI)
 if (COMPILER_PGI)
-set(CMAKE_Fortran_FLAGS "-Mextend -DPGI ${CMAKE_Fortran_FLAGS}")
+set(CMAKE_Fortran_FLAGS "-cpp -Mextend -DPGI ${CMAKE_Fortran_FLAGS}")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 set(CMAKE_Fortran_FLAGS "-O0 -g -Mbounds -Mdepchk -traceback ${CMAKE_Fortran_FLAGS}")
 endif()
 endif()
 
-if (COMPILER_PGI)  # PGI taskloop seems buggy
+check_fortran_compiler_flag("-N 1023" COMPILER_CRAY)
+if (COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")
+set(CMAKE_Fortran_FLAGS "-e Z -h omp -N 1023 -DCRAY ${CMAKE_Fortran_FLAGS}")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+set(CMAKE_Fortran_FLAGS "-O0 -g -e D ${CMAKE_Fortran_FLAGS}")
+endif()
+endif()
+
+
+if (COMPILER_PGI OR COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")  # PGI and Cray taskloop seems buggy
 else()
 #Test OPENMP TASKLOOP
 check_fortran_source_compiles(

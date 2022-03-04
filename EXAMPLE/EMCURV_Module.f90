@@ -453,6 +453,7 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         dx=quant%Delta_ll/2d0
         quant%xyz(1,0)=1d0/20d0 -1d0/2d0 ; quant%xyz(2,0)=1.0d0
         node=0
+		flag=0
         do while (flag==0)
             node=node+1
             quant%xyz(1,node)=quant%xyz(1,node-1)-dx
@@ -948,12 +949,13 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
 
-		T0=secnds(0.0)
+		n1 = OMP_get_wtime()
         call RCS_bistatic_CURV(Current,msh,quant,ptree)
+		n2 = OMP_get_wtime()
 
 		if(ptree%MyID==Main_ID)then
 			write (*,*) ''
-			write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+			write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
 			write (*,*) ''
 		endif
 

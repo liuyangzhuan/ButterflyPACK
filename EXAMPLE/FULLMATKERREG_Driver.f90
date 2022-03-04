@@ -291,7 +291,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
     real(kind=8) theta, phi, dphi, rcs_V, rcs_H,error
-    real T0,T1
+    real(kind=8) T0,T1
     real(kind=8) n1,n2,rtemp
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:),vout_test(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp(:,:)
@@ -370,7 +370,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 
 
-	T1=secnds(0.0)
+	T0 = OMP_get_wtime()
 
 	allocate (vout(ntest,1))
 	allocate (vout_tmp(ntest,1))
@@ -407,7 +407,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 		! vout=0
 		! call gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,BPACK_cone,BPACK_czero)
 
-
+	T1 = OMP_get_wtime()
 	if (ptree%MyID==Main_ID) then
 		vout_tmp = vout-vout_test
 		error=0
@@ -418,7 +418,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 		error = sqrt(error)
 
 		write (*,*) ''
-		write (*,*) 'Prediction time:',secnds(T1),'Seconds'
+		write (*,*) 'Prediction time:',T1-T0,'Seconds'
 		write (*,*) 'Prediction error:',error
 		write (*,*) ''
 
