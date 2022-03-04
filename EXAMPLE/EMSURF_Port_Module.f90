@@ -2148,7 +2148,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     integer node, patch, edge,edge1, flag
     integer node1, node2,found,npolar,off
     integer node_temp(2)
-    real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2,dx,betanm
+    real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2,dx,betanm,n1,n2
 	! type(mesh)::msh
 	type(quant_EMSURF)::quant
 	! type(proctree)::ptree
@@ -2458,7 +2458,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports ...'
-	T0=secnds(0.0)
+	n1 = OMP_get_wtime()
 	edge=quant%Nunk_int
 	do pp=1,quant%Nport
 		if(quant%ports(pp)%type==0 .or. quant%ports(pp)%type==1)then
@@ -2556,7 +2556,8 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 		edge =edge+quant%ports(pp)%Nunk
 	enddo
-	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',secnds(T0),'Seconds'
+	n2 = OMP_get_wtime()
+	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',n2-n1,'Seconds'
 	if(MyID==Main_ID)write (*,*) ''
 
     return
@@ -2611,23 +2612,23 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         enddo
         !$omp end parallel do
 
-        T0=secnds(0.0)
-
+        n1 = OMP_get_wtime()
 		call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
-
+		n2 = OMP_get_wtime()
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 
-		T0=secnds(0.0)
+		n1 = OMP_get_wtime()
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
+		n2 = OMP_get_wtime()
 
 		! call current_node_patch_mapping('V',curr(:,1),msh)
 		! call current_node_patch_mapping('H',curr(:,2),msh)
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',secnds(T0),'Seconds'
+        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 		deallocate(Current)
 		deallocate(Voltage)

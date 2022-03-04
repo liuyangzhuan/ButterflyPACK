@@ -537,7 +537,7 @@ contains
                   endif
 
                   ! if(mod(ii,2)==1)then
-                  call Bplus_compress_entry(ho_bf1%levels(level_c)%BP(ii), option, rtemp, stats, msh, ker, ptree)
+                  call BF_compress_entry(ho_bf1%levels(level_c)%BP(ii), option, rtemp, stats, msh, ker, ptree)
                   ! else
                   ! call BF_delete(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),1)
                   ! call BF_copy('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
@@ -546,10 +546,10 @@ contains
                   if (level == option%level_check) then
                      ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 
-                     rank0_inner = ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
-                     rankrate_inner = 1.2d0
+                     ! rank0_inner = ho_bf1%levels(level_c)%BP(ii)%LL(2)%rankmax
+                     ! rankrate_inner = 1.2d0
                      rank0_outter = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%rankmax
-                     rankrate_outter = 1.2d0
+                     rankrate_outter = option%rankrate !1.2d0
                      level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
 
                      t1 = OMP_GET_WTIME()
@@ -676,7 +676,7 @@ contains
       allocate (stats%rankmax_of_level_global(0:hss_bf1%Maxlevel))
       stats%rankmax_of_level_global = 0
 
-      call Bplus_compress_entry(hss_bf1%BP, option, rtemp, stats, msh, ker, ptree)
+      call BF_compress_entry(hss_bf1%BP, option, rtemp, stats, msh, ker, ptree)
       stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
 
       passflag = 0
@@ -734,7 +734,7 @@ contains
       type(mesh)::msh
       type(kernelquant)::ker
       type(proctree)::ptree
-      integer, allocatable:: boundary_map(:)
+      integer:: boundary_map(1)
       integer level_butterfly, levelm, groupm_start, Nboundall
 
       ! t1=OMP_GET_WTIME()
@@ -769,10 +769,11 @@ contains
    end subroutine Hmat_block_construction
 
 !!!!!!! check error of BF construction using parallel element extraction
-   subroutine BF_checkError(blocks, option, msh, ker, stats, ptree)
+   subroutine BF_checkError(blocks, option, msh, ker, stats, ptree, bpackflag, verbosity,error)
       use BPACK_DEFS
       implicit none
 
+      integer bpackflag ! whether blocks is treated as one offdiagonal block in a hierarhical matrix or one standalone block
       type(Hoption)::option
       type(Hstat)::stats
       ! type(Bmatrix)::bmat
@@ -781,7 +782,7 @@ contains
       type(proctree)::ptree
       type(intersect), allocatable::inters(:)
       real(kind=8)::n1, n2, n3, n4
-      integer Ntest, passflag
+      integer Ntest, passflag, verbosity
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, rank1, rank2, ierr, MyID
       integer:: cridx, info
       integer, allocatable::rows(:), cols(:)
@@ -791,6 +792,7 @@ contains
       integer edge_n, edge_m, rank
       real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
       real(kind=8):: a, v1, v2, v3
+      real(kind=8),optional:: error
       DT:: value1, value2, value3
       type(list)::lstr, lstc, lst, lstblk
       type(nod), pointer::cur, curr, curc, curri, curci
@@ -827,7 +829,7 @@ contains
       ! nprow = ptree%pgrp(pgno)%nprow
       ! npcol = ptree%pgrp(pgno)%npcol
 
-      nproc = ptree%nproc
+      nproc = ptree%pgrp(blocks%pgno)%nproc
       Npmap = min(Ninter, nproc)
       npavr = nproc/Npmap
       allocate (pmaps(Npmap, 3))
@@ -836,7 +838,7 @@ contains
          npcol = floor_safe(npavr/dble(nprow))
          pmaps(nn, 1) = 1   ! nprow   ! this makes sure the intersection is on 1 processor, this makes it easier for cpp user-defined extraction function
          pmaps(nn, 2) = 1   ! npcol
-         pmaps(nn, 3) = (nn - 1)*npavr
+         pmaps(nn, 3) = (nn - 1)*npavr + ptree%pgrp(blocks%pgno)%head
       enddo
 
       idx_row = 0
@@ -862,17 +864,24 @@ contains
 
          do ii = 1, nr
             call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-
-            allrows(idx_row + 1) = max(floor_safe(blocks%M*a), 1)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            if(bpackflag==1)then
+               allrows(idx_row + 1) = max(floor_safe(blocks%M*a), 1) + blocks%headm -1
+            else
+               allrows(idx_row + 1) = max(floor_safe(blocks%M*a), 1)
+            endif
             ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
             idx_row = idx_row + 1
          enddo
 
          do ii = 1, nc
             call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-            allcols(idx_col + 1) = max(floor_safe(blocks%N*a), 1) + blocks%M
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            if(bpackflag==1)then
+               allcols(idx_col + 1) = max(floor_safe(blocks%N*a), 1) + blocks%headn -1
+            else
+               allcols(idx_col + 1) = max(floor_safe(blocks%N*a), 1) + blocks%M
+            endif
             ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
             idx_col = idx_col + 1
          enddo
@@ -965,15 +974,111 @@ contains
       deallocate (alldat_loc)
       deallocate (pmaps)
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+      if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+      if(present(error)) error=sqrt(v3/v1)
 
       !stop
 
    end subroutine BF_checkError
+
+
+
+   subroutine BF_compress_entry(bplus, option, Memory, stats, msh, ker, ptree)
+
+      implicit none
+
+      type(blockplus)::bplus
+      integer:: ii, ll, bb, ierr, pp
+      real(kind=8) Memory, rtemp, error
+      integer:: level_butterfly, level_BP, levelm, groupm_start, Nboundall, statflag, knn_tmp
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(matrixblock), pointer::blocks
+
+      Memory = 0
+      do ll = 1, bplus%Lplus
+         bplus%LL(ll)%rankmax = 0
+         statflag = 0
+         if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
+         do bb = 1, bplus%LL(ll)%Nbound
+            if (IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(bb)%pgno)) then
+               if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
+                  call Full_construction(bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
+                  Memory = Memory + SIZEOF(bplus%LL(ll)%matrices_block(bb)%fullmat)/1024.0d3
+               else
+
+                  level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
+                  level_BP = bplus%level
+
+                  bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
+                  levelm = bplus%LL(ll)%matrices_block(bb)%level_half
+                  groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+                  Nboundall = 0
+                  if (allocated(bplus%LL(ll + 1)%boundary_map)) Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
+                  if (option%forwardN15flag == 1) then
+                     knn_tmp = option%knn
+                     option%knn=0
+                     call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                     option%knn=knn_tmp
+                     call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+
+                     ! Move singular values to leftmost factor
+                     if(bplus%LL(ll)%matrices_block(bb)%level_butterfly>0)then
+                        call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
+                        call BF_MoveSingular_Ker(bplus%LL(ll)%matrices_block(bb), 'N', 1, bplus%LL(ll)%matrices_block(bb)%level_butterfly, ptree, stats, option%tol_comp)
+                        call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 1, 3, stats, ptree)
+                     endif
+                  elseif (option%forwardN15flag == 2) then
+                        call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                        allocate(blocks)
+                        call BF_copy('N', bplus%LL(ll)%matrices_block(bb), blocks)
+                        call BF_checkError(blocks, option, msh, ker, stats, ptree, 1, -1, error)
+                        deallocate(blocks)
+                        if(error>5*option%tol_comp)then
+                           pp = ptree%myid - ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head + 1
+                           if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: BF',bplus%LL(ll)%matrices_block(bb)%row_group,bplus%LL(ll)%matrices_block(bb)%col_group,' error ',error,', redo the compression with the N15 algorithm'
+                           call BF_delete(bplus%LL(ll)%matrices_block(bb),0)
+                           knn_tmp = option%knn
+                           option%knn=0
+                           call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                           option%knn=knn_tmp
+                           call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
+                           ! Move singular values to leftmost factor
+                           if(bplus%LL(ll)%matrices_block(bb)%level_butterfly>0)then
+                              call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 3, 1, stats, ptree)
+                              call BF_MoveSingular_Ker(bplus%LL(ll)%matrices_block(bb), 'N', 1, bplus%LL(ll)%matrices_block(bb)%level_butterfly, ptree, stats, option%tol_comp)
+                              call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 1, 3, stats, ptree)
+                           endif
+                        endif
+                  else
+                     call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                  end if
+
+                  Memory = Memory + rtemp
+                  bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
+               endif
+            endif
+         end do
+      end do
+
+      ! !!!!!!! check error
+      if (option%ErrFillFull == 1) call Bplus_CheckError_Full(bplus, option, msh, ker, stats, ptree)
+      ! !!!!!!! check error
+
+      ! if(bplus%LL(1)%matrices_block(1)%level==1)write(*,*)bplus%LL(1)%rankmax,'dfdfdfdf'
+
+      return
+
+   end subroutine BF_compress_entry
+
+
 
 !!!!!!! extract a list of intersections from a block
    subroutine BF_ExtractElement(blocks_o, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
@@ -1205,15 +1310,15 @@ contains
       n3 = OMP_get_wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
-      call MPI_barrier(ptree%Comm, ierr)
+      call MPI_barrier(ptree%pgrp(blocks_o%pgno)%Comm, ierr)
       n3 = OMP_get_wtime()
 
 
       ! redistribute from blocks' intersections to the global intersecions inters
       if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
-         call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+         call BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, blocks_o%pgno, ptree%pgrp(blocks_o%pgno)%nproc, Npmap, pmaps)
       else
-         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+         call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, blocks_o%pgno, ptree%pgrp(blocks_o%pgno)%nproc, Npmap, pmaps)
       endif
 
       n4 = OMP_get_wtime()
@@ -1517,9 +1622,9 @@ contains
       n3 = OMP_get_wtime()
       ! redistribute from blocks' intersections to the global intersecions inters
       if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
-         call BPACK_all2all_inters(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+         call BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
       else
-         call BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, ptree%nproc, Npmap, pmaps)
+         call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
       endif
 
       n4 = OMP_get_wtime()
@@ -1801,7 +1906,7 @@ contains
    end subroutine BPACK_CheckError
 
 !*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
-   subroutine BPACK_all2all_inters(inters, lstblk, stats, ptree, nproc, Npmap, pmaps)
+   subroutine BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 
       use BPACK_DEFS
       implicit none
@@ -1819,7 +1924,8 @@ contains
       integer::sendIDactive(nproc), recvIDactive(nproc)
       integer Nsendactive, Nrecvactive
       integer::dist, pgno
-      type(intersect)::inters(:)
+      integer Ninter
+      type(intersect)::inters(Ninter)
       type(list)::lstblk
       type(nod), pointer::cur
       class(*), pointer::ptr
@@ -1858,7 +1964,7 @@ contains
       !$omp single
 #endif
       n1 = OMP_get_wtime()
-      pgno = 1
+      ! pgno = 1
       ! nproc = ptree%pgrp(pgno)%nproc
       tag = pgno
 
@@ -1887,7 +1993,7 @@ contains
 
                nprow = pmaps(inters(idx)%pg, 1)
                npcol = pmaps(inters(idx)%pg, 2)
-               idstart = pmaps(inters(idx)%pg, 3)
+               idstart = pmaps(inters(idx)%pg, 3) - ptree%pgrp(pgno)%head
                allocate(tmpidx(blocks%inters(nn)%nc,2))
                do jj=1,blocks%inters(nn)%nc
                   ci = blocks%inters(nn)%cols(jj)
@@ -1959,7 +2065,7 @@ contains
                idx = blocks%inters(nn)%idx
                nprow = pmaps(inters(idx)%pg, 1)
                npcol = pmaps(inters(idx)%pg, 2)
-               idstart = pmaps(inters(idx)%pg, 3)
+               idstart = pmaps(inters(idx)%pg, 3) - ptree%pgrp(pgno)%head
                ! allocate(tmpidx(blocks%inters(nn)%nc,2))
                ! do jj=1,blocks%inters(nn)%nc
                !    ci = blocks%inters(nn)%cols(jj)
@@ -2091,7 +2197,7 @@ contains
 
 !*********** all to all communication of element extraction results from local layout to each entire intersection (each process knows where to send, but doesn't know where to receive without communication)
 ! YL: This subroutine seems to be slower than BPACK_all2all_inters
-   subroutine BPACK_all2all_inters_optimized(inters, lstblk, stats, ptree, nproc, Npmap, pmaps)
+   subroutine BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 
       use BPACK_DEFS
       implicit none
@@ -2112,7 +2218,8 @@ contains
       integer::sdispls(nproc), sendcounts(nproc), rdispls(nproc), recvcounts(nproc)
       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist, pgno
-      type(intersect)::inters(:)
+      integer Ninter
+      type(intersect)::inters(Ninter)
       type(list)::lstblk
       type(nod), pointer::cur
       class(*), pointer::ptr
@@ -2140,7 +2247,7 @@ contains
       allocate (cidx(nc_max,num_threads))
 
       n1 = OMP_get_wtime()
-      pgno = 1
+      ! pgno = 1
       ! nproc = ptree%pgrp(pgno)%nproc
       tag = pgno
 
@@ -2166,7 +2273,7 @@ contains
             blocks => ptr%ptr
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
-               pp = pmaps(inters(idx)%pg, 3) + 1
+               pp = pmaps(inters(idx)%pg, 3) + 1 - ptree%pgrp(pgno)%head
                nr = blocks%inters(nn)%nr_loc
                nc = blocks%inters(nn)%nc
                if (sendquant(pp)%active == 0) then
@@ -2225,7 +2332,7 @@ contains
 #endif
             do nn = 1, size(blocks%inters, 1)
                idx = blocks%inters(nn)%idx
-               pp = pmaps(inters(idx)%pg, 3) + 1
+               pp = pmaps(inters(idx)%pg, 3) + 1 - ptree%pgrp(pgno)%head
                nr = blocks%inters(nn)%nr_loc
                nc = blocks%inters(nn)%nc
 #ifdef HAVE_TASKLOOP

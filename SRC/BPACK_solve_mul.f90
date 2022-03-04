@@ -384,7 +384,7 @@ contains
       type(Hoption)::option
 
 
-      if(ieee_is_nan(sum(abs(x))))then
+      if(myisnan(sum(abs(x))))then
          write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
          stop
       endif
@@ -413,7 +413,7 @@ contains
       w = r
       yo = r
       ! ! write(*,*)'2'
-      ! ! if(ieee_is_nan(sum(abs(yo)**2)))then
+      ! ! if(myisnan(sum(abs(yo)**2)))then
       ! ! write(*,*)'shitddd'
       ! ! stop
       ! ! end if

@@ -21,7 +21,7 @@ module MISC_DenseLA
 
 contains
 
-   real(kind=8) function fnorm(Matrix, M, N, norm)
+   DTR function fnorm(Matrix, M, N, norm)
       DT Matrix(:, :)
       integer M, N
       character, optional:: norm
