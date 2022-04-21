@@ -74,6 +74,7 @@ public:
   std::vector<int> _Hperm;
   std::vector<int> _iHperm;
   int _nloc = 0;
+  int _mloc = 0;
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
   F2Cptr* bf_a;  //BF returned by Fortran code
@@ -88,6 +89,10 @@ public:
   C_QuantApp(int m_rand, int n_rand, int ker)
     : _m_rand(m_rand), _n_rand(n_rand),_ker(ker){
 	}
+  C_QuantApp(int m_rand, int n_rand, int mloc, int nloc, int ker)
+    : _mloc(mloc),_nloc(nloc),_m_rand(m_rand), _n_rand(n_rand),_ker(ker){
+	}
+
 
   inline void Sample(int m, int n, _Complex double* val){
 
@@ -183,24 +188,24 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
 
   int cnt = (*nvec)*(*nout);
   _Complex double* xin1 = new _Complex double[cnt];
-  _Complex double* xbuf1 = new _Complex double[(*nvec)*(Q->_m_rand)];
+  _Complex double* xbuf1 = new _Complex double[(*nvec)*(Q->_mloc)];
 
 
 
   if(*trans=='N'){
-    z_c_bf_mult(trans, xin, xbuf1, nin, &(Q->_m_rand), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
-    for (int ii=0; ii<(*nvec)*(Q->_m_rand); ii++)
+    z_c_bf_mult(trans, xin, xbuf1, nin, &(Q->_mloc), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+    for (int ii=0; ii<(*nvec)*(Q->_mloc); ii++)
       xbuf1[ii]=conj(xbuf1[ii]);
-    z_c_bf_mult(&transT, xbuf1, xout, &(Q->_m_rand), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+    z_c_bf_mult(&transT, xbuf1, xout, &(Q->_mloc), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
     for (int ii=0; ii<cnt; ii++)
       xout[ii]=conj(xout[ii]);
   }else if(*trans=='T'){
     for (int ii=0; ii<cnt; ii++)
       xin1[ii]=conj(xin[ii]);
-    z_c_bf_mult(&transN, xin1, xbuf1, nin, &(Q->_m_rand), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
-    for (int ii=0; ii<(*nvec)*(Q->_m_rand); ii++)
+    z_c_bf_mult(&transN, xin1, xbuf1, nin, &(Q->_mloc), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+    for (int ii=0; ii<(*nvec)*(Q->_mloc); ii++)
       xbuf1[ii]=conj(xbuf1[ii]);
-    z_c_bf_mult(trans, xbuf1, xout, &(Q->_m_rand), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+    z_c_bf_mult(trans, xbuf1, xout, &(Q->_mloc), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
   }
 
   delete[] xbuf1;
@@ -530,7 +535,6 @@ if(myrank==master_rank){
 	int i_opt;
 	double d_opt;
 	int cpp=1; //1: use user-defined cpp/c functions for construction
-
 	//quantities for the first holdr
 	F2Cptr bmat_dummy;  //hierarchical matrix returned by Fortran code
 	F2Cptr option;     //option structure returned by Fortran code
@@ -577,6 +581,10 @@ if(myrank==master_rank){
   set_option_from_command_line(argc, argv, option);
 	z_c_bpack_printoption(&option,&ptree);
 
+  double tmp;
+  z_c_bpack_getoption(&option, "format", &tmp);
+  int format_temp=(int)tmp; // always set format =1 for the BF
+  z_c_bpack_set_I_option(&option, "format", 1);
 
     // construct the mesh data for the bf, this should be improved
 	int nlevel_m = 0; // 0: tree level, nonzero if a tree is provided
@@ -610,7 +618,7 @@ if(myrank==master_rank){
 	F2Cptr ptree1;      //process tree returned by Fortran code
 	C_QuantApp *quant_ptr1; //user-defined object
 
-	quant_ptr1=new C_QuantApp(M, N, ker);
+	quant_ptr1=new C_QuantApp(myseg_m,myseg_n,M, N, ker);
 	quant_ptr1->bf_a=&bf_a;
 	quant_ptr1->msh_a=&msh_a;
 	quant_ptr1->ptree_a=&ptree;
@@ -621,10 +629,16 @@ if(myrank==master_rank){
 	z_c_bpack_copyoption(&option,&option1);
 	z_c_bpack_createstats(&stats1);
 
-	z_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
-	z_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
-	z_c_bpack_set_I_option(&option1, "format", 1);// HODLR format
+	z_c_bpack_set_I_option(&option1, "nogeo", 0); // with geometrical information
+	z_c_bpack_set_I_option(&option1, "xyzsort", 1);// matrix ordering
+	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
+
+	// z_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
+	// z_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
+
+
+  z_c_bpack_printoption(&option1,&ptree);
 
 	int Npo1 = N;
 	int myseg1=0;     // local number of unknowns
@@ -633,12 +647,17 @@ if(myrank==master_rank){
 	int nlevel1 = 0; // 0: tree level, nonzero if a tree is provided
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
-	int Ndim1=0; //data dimension
-	double* dat_ptr1;
+	// int Ndim1=0; //data dimension
+	// double* dat_ptr1;
+
+	int Ndim1=1; //data dimension
+	double* dat_ptr1 = new double[Npo1];
+  for(int i=0; i<Npo1; i++){
+    dat_ptr1[i] = i/((double)Npo1);
+  }
 
 	z_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, nns_ptr_n,&nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr1);
 	z_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
-
 
 
 	// factor hodlr
@@ -678,7 +697,7 @@ if(myrank==master_rank){
 
   if(myrank==master_rank)std::cout<<"|x-xtrue|/|xtrue| for inverse FIO: "<< sqrt(norm2t)/sqrt(norm1t) <<std::endl;
 
-	if(myrank==master_rank)std::cout<<"Printing stats of the second HODLR: "<<std::endl;
+	if(myrank==master_rank)std::cout<<"Printing stats of the second Bmat: "<<std::endl;
 	z_c_bpack_printstats(&stats1,&ptree1);
 
 	z_c_bpack_deletestats(&stats1);

@@ -1839,7 +1839,7 @@ contains
                   matrixtemp2 = matrixtemp1(1:mm1, :)
                   mn = min(mm1, nn1 + nn2)
                   allocate (UU(mm1, mn), VV(mn, nn1 + nn2), Singular(mn))
-                  call SVD_Truncate(matrixtemp2, mm1, nn1 + nn2, mn, UU, VV, Singular, option%tol_comp, rank)
+                  call SVD_Truncate(matrixtemp2, mm1, nn1 + nn2, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
                   do ss = 1, rank
                      UU(:, ss) = UU(:, ss)*Singular(ss)
                   enddo
@@ -1857,7 +1857,7 @@ contains
                   matrixtemp2 = matrixtemp1(1 + mm1:mm, :)
                   mn = min(mm2, nn1 + nn2)
                   allocate (UU(mm2, mn), VV(mn, nn1 + nn2), Singular(mn))
-                  call SVD_Truncate(matrixtemp2, mm2, nn1 + nn2, mn, UU, VV, Singular, option%tol_comp, rank)
+                  call SVD_Truncate(matrixtemp2, mm2, nn1 + nn2, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
                   do ss = 1, rank
                      UU(:, ss) = UU(:, ss)*Singular(ss)
                   enddo
@@ -1947,7 +1947,7 @@ contains
                   matrixtemp2 = matrixtemp1(:, 1:nn1)
                   mn = min(mm1 + mm2, nn1)
                   allocate (UU(mm1 + mm2, mn), VV(mn, nn1), Singular(mn))
-                  call SVD_Truncate(matrixtemp2, mm1 + mm2, nn1, mn, UU, VV, Singular, option%tol_comp, rank)
+                  call SVD_Truncate(matrixtemp2, mm1 + mm2, nn1, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
                   do ss = 1, rank
                      VV(ss, :) = VV(ss, :)*Singular(ss)
                   enddo
@@ -1964,7 +1964,7 @@ contains
                   matrixtemp2 = matrixtemp1(:, 1 + nn1:nn1 + nn2)
                   mn = min(mm1 + mm2, nn2)
                   allocate (UU(mm1 + mm2, mn), VV(mn, nn2), Singular(mn))
-                  call SVD_Truncate(matrixtemp2, mm1 + mm2, nn2, mn, UU, VV, Singular, option%tol_comp, rank)
+                  call SVD_Truncate(matrixtemp2, mm1 + mm2, nn2, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
                   do ss = 1, rank
                      VV(ss, :) = VV(ss, :)*Singular(ss)
                   enddo

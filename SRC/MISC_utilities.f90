@@ -262,7 +262,7 @@ contains
       call gemmf90(RR1, rmax, RR2, rmax, mattemp, rmax, 'N', 'T', rmax, rmax, rmax, BPACK_cone, BPACK_czero, flop=flop)
       if (present(Flops)) Flops = Flops + flop
       allocate (UUsml(rmax, rmax), VVsml(rmax, rmax), Singularsml(rmax))
-      call SVD_Truncate(mattemp, rmax, rmax, rmax, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+      call SVD_Truncate(mattemp, rmax, rmax, rmax, UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, ranknew, flop=flop)
       if (present(Flops)) Flops = Flops + flop
       ! do i = 1, ranknew
       !    UUsml(1:rmax, i) = UUsml(1:rmax, i)*Singularsml(i)
@@ -392,7 +392,7 @@ contains
       mattemp = 0
       call gemmf90(RR1, min(M,rank), RR2, min(N,rank), mattemp, min(M,rank), 'N', 'T', min(M,rank), min(N,rank), rank, BPACK_cone, BPACK_czero, flop=flop)
       if (present(flops)) flops = flops + flop
-      call SVD_Truncate(mattemp, min(M,rank), min(N,rank), min(min(M,rank), min(N,rank)), UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+      call SVD_Truncate(mattemp, min(M,rank), min(N,rank), min(min(M,rank), min(N,rank)), UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, ranknew, flop=flop)
       if (present(flops)) flops = flops + flop
       call gemmf90(QQ1, M, UUsml, min(M,rank), matU, M, 'N', 'N', M, ranknew, min(M,rank), BPACK_cone, BPACK_czero, flop=flop)
       if (present(flops)) flops = flops + flop
@@ -715,7 +715,7 @@ contains
 !         ! call zgemm('N','T',rank,rank,rank, BPACK_cone, RR1, rank,RR2,rank,BPACK_czero,mattemp,rank)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
 !         allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
-!         call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+!         call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, ranknew, flop=flop)
 !         stats%Flop_Fill = stats%Flop_Fill + flop
 !         ! call zgemm('N','N',rankmax_r,ranknew,rank, BPACK_cone, QQ1, rankmax_r,UUsml,rank,BPACK_czero,matU,rankmax_r)
 !         call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, BPACK_cone, BPACK_czero, flop=flop)
@@ -2529,7 +2529,7 @@ contains
       UUsml = 0
       VVsml = 0
       Singularsml = 0
-      call SVD_Truncate(matM, rank1, rank2, rank12, UUsml, VVsml, Singularsml, SVD_tolerance, rank, flop=flop)
+      call SVD_Truncate(matM, rank1, rank2, rank12, UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, rank, flop=flop)
       if (present(Flops)) Flops = Flops + flop
 
       ! write(111,*)UUsml(1:rank1,1:rank)
@@ -2581,7 +2581,7 @@ contains
 
       ! rank12 = min(rankmax_r,rankmax_c)
       ! allocate(UUsml(rankmax_r,rank12),VVsml(rank12,rankmax_c),Singularsml(rank12))
-      ! call SVD_Truncate(matM,rankmax_r,rankmax_c,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,rank)
+      ! call SVD_Truncate(matM,rankmax_r,rankmax_c,rank12,UUsml,VVsml,Singularsml,SVD_tolerance,BPACK_SafeUnderflow, rank)
       ! matU(1:rankmax_r,1:rank) = UUsml(1:rankmax_r,1:rank)
       ! matV(1:rank,1:rankmax_c) = VVsml(1:rank,1:rankmax_c)
       ! Singular(1:rank) = Singularsml(1:rank)
@@ -3046,7 +3046,7 @@ contains
       call gemmf90(RR1, rank, RR2, rank, mattemp, rank, 'N', 'N', rank, rank, rank, BPACK_cone, BPACK_czero)
 
       allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
-      call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew)
+      call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, ranknew)
 
       ! call gemm_omp(QQ1,UUsml(1:rank,1:ranknew),matU(1:rankmax_r,1:ranknew),rankmax_r,ranknew,rank)
       call gemmf90(QQ1, rankmax_r, UUsml, rank, matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, BPACK_cone, BPACK_czero)
@@ -3132,12 +3132,12 @@ contains
 
    end subroutine RRQR_LQ
 
-   subroutine SVD_Truncate(mat, mm, nn, mn, UU, VV, Singular, tolerance, rank, flop)
+   subroutine SVD_Truncate(mat, mm, nn, mn, UU, VV, Singular, tolerance_rel, tolerance_abs, rank, flop)
 !
 !
       implicit none
       integer mm, nn, mn, rank, ii, jj
-      real(kind=8):: tolerance
+      real(kind=8):: tolerance_rel, tolerance_abs
       DT::mat(mm, nn), UU(mm, mn), VV(mn, nn)
       DT, allocatable::mat0(:, :)
       DTR:: Singular(mn)
@@ -3161,9 +3161,9 @@ contains
       else
          rank = mn
          do i = 1, mn
-            if (Singular(i)/Singular(1) <= tolerance) then
+            if (Singular(i) <= max(Singular(1)*tolerance_rel,tolerance_abs)) then
                rank = i
-               if (Singular(i) < Singular(1)*tolerance/10) rank = i - 1
+               if (Singular(i) < max(Singular(1)*tolerance_rel,tolerance_abs)/10) rank = i - 1
                exit
             end if
          end do
@@ -3192,7 +3192,7 @@ contains
          mns = min(rank1,nn)
          allocate(UUs(1:rank1,1:mns))
          allocate(VVs(1:mns,1:nn))
-         call SVD_Truncate(mats, rank1, nn, mns, UUs, VVs, Singular, tolerance, rank, flop=flop0)
+         call SVD_Truncate(mats, rank1, nn, mns, UUs, VVs, Singular, tolerance, BPACK_SafeUnderflow, rank, flop=flop0)
          if (present(flop)) flop = flop + flop0
 
          VV(1:rank,1:nn) = VVs(1:rank,1:nn)
@@ -5133,6 +5133,71 @@ contains
       stats%Mem_Current = stats%Mem_Current + mem
       if(mem>0)stats%Mem_Peak = max(stats%Mem_Peak,stats%Mem_Current)
    end subroutine LogMemory
+
+
+
+
+   subroutine get_graph_colors_JP(rows,ia,ja,colors)
+      use BPACK_DEFS
+      implicit none
+      integer ja(:)
+      integer rows,ia(rows+1),colors(rows),weights(rows),csp,remaining,i,c,largest,jp,neighbor
+      integer,allocatable::forbidden(:)
+
+      colors=0
+      call rperm(rows, weights)
+      csp = maxval(ia(2:rows+1) - ia(1:rows))
+      remaining = rows
+
+      do while(remaining > 0)
+          do i = 1,rows
+              ! Make sure the node isn't already colored
+              if(colors(i) == 0)then
+
+               ! Check if this node has the largest weight amongst its
+               ! uncolored neighbors
+               largest = 1;
+               do jp = ia(i),ia(i+1)-1
+                  neighbor = ja(jp)
+                  if(colors(neighbor) == 0 .and. weights(i) < weights(neighbor))then
+                     largest = 0
+                     exit
+                  endif
+               enddo
+
+               if(largest == 1)then
+                  ! Get the smallest color that hasn't been assigned to this
+                  ! node's neighbors
+                  allocate(forbidden(csp))
+                  forbidden=0
+                  do jp = ia(i),ia(i+1)-1
+                        neighbor = ja(jp)
+                        if(colors(neighbor) /= 0)then
+                           forbidden(colors(neighbor)) = 1
+                        endif
+                  enddo
+                  do c = 1,csp
+                        if (forbidden(c) == 0)then
+                           colors(i) = c
+                           remaining = remaining - 1
+                           exit
+                        endif
+                  enddo
+                  ! This node should have been assigned a color so if it hasn't
+                  ! then something went wrong
+                  if (colors(i) == 0)then
+                        write(*,*)'Error assigning color to node '
+                        stop
+                  endif
+                  deallocate(forbidden)
+               endif
+            endif
+          enddo
+      enddo
+
+   end subroutine get_graph_colors_JP
+
+
 
 
 end module MISC_Utilities

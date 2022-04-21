@@ -305,6 +305,7 @@ contains
             Singular = 0
             UU = 0
             VV = 0
+            if (present(flop))flop=0
          else
             ! write(*,*)'ga',fnorm(Matrix,mm,nn),shape(Matrix),shape(UU),shape(VV)
             Singular = 0
