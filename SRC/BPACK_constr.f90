@@ -394,20 +394,6 @@ contains
          write (*, *) 'element_Zmn is scaled by a factor of:', option%scale_factor
       endif
 
-      allocate (h_mat%lstblks(0:h_mat%Maxlevel))
-      do level = 0, h_mat%Maxlevel
-         h_mat%lstblks(level) = list()
-      enddo
-      do i = 1, Rows_per_processor
-         do j = 1, num_blocks
-            T3 = OMP_get_wtime()
-            blocks => h_mat%Local_blocks(j, i)
-            call Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
-         enddo
-      enddo
-      do level = 0, h_mat%Maxlevel
-         call MergeSort(h_mat%lstblks(level)%head, node_score_block_ptr_row)
-      enddo
 
       do level = 0, h_mat%Maxlevel
          ! write(*,*)h_mat%lstblks%num_nods,'niam'
@@ -2836,38 +2822,5 @@ contains
          endif
       endif
    end subroutine Hmat_MapIntersec2Block_Loc
-
-   recursive subroutine Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
-      use BPACK_DEFS
-      implicit none
-      type(Hoption)::option
-      type(Hstat)::stats
-      type(mesh)::msh
-      type(proctree)::ptree
-      integer nth, bidx, level_c
-      integer ii, jj, idx, row_group, col_group
-      type(Hmat)::h_mat
-      type(nod), pointer::cur
-      class(*), pointer::ptr
-      type(matrixblock), pointer::blocks, blocks_son
-      integer flag
-      type(block_ptr)::blk_ptr
-
-      row_group = blocks%row_group
-      col_group = blocks%col_group
-      if (IOwnPgrp(ptree, blocks%pgno)) then
-         if (blocks%style == 4) then ! divided blocks
-            do ii = 1, 2
-            do jj = 1, 2
-               blocks_son => blocks%sons(ii, jj)
-               call Hmat_GetBlkLst(blocks_son, option, stats, msh, ptree, h_mat)
-            enddo
-            enddo
-         else
-            blk_ptr%ptr => blocks
-            call append(h_mat%lstblks(blocks%level), blk_ptr)
-         endif
-      endif
-   end subroutine Hmat_GetBlkLst
 
 end module BPACK_constr

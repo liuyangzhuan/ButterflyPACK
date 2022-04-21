@@ -513,4 +513,51 @@ contains
       slow%next => null()
    end subroutine FrontBackSplit
 
+
+!===============================================================================
+!  MergeSortUnique:
+!
+!    merge sort and remove duplicated entries (assuming that the same score indicates duplication)
+!
+   subroutine MergeSortUnique(this, FuncScore)
+      implicit none
+      type(list)::this
+      type(nod), pointer::headRef, head, a, b, c, tmp
+      procedure(nod_score)::FuncScore
+      integer ii,flag
+      call MergeSort(this%head, FuncScore)
+      a=>this%head
+      ii=1
+      do while(ii<=this%num_nods)
+         b=>a%next
+         if(.not. associated(b))then
+            flag=1
+         else if(FuncScore(a)/=FuncScore(b))then
+            flag=1
+         else
+            flag=0
+         end if
+         do while(flag==0)
+            a%next=>b%next
+            call nod_finalizer(b)
+            deallocate (b)
+            this%num_nods=this%num_nods-1
+            b=>a%next
+            if(.not. associated(b))then
+               flag=1
+            else if(FuncScore(a)/=FuncScore(b))then
+               flag=1
+            else
+               flag=0
+            end if
+         enddo
+
+         if(ii==this%num_nods)then
+            this%tail =>a
+         endif
+         ii = ii+1
+         a => a%next
+      end do
+   end subroutine MergeSortUnique
+
 end module BPACK_linkedlist

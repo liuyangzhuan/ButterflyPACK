@@ -49,7 +49,8 @@ case "${TEST_NUMBER}" in
 15) mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/go2d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1" # test the taylor-expansion-based 2D approximate Green function 
     mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/go3d" "-quant" "--nunk" "5000" "--omega" "31.4" "-option" "--tol_comp" "1e-6" "--lrlevel" "100" "--xyzsort" "2" "--nmin_leaf" "100" "--format" "1";; # test the taylor-expansion-based 3D approximate Green function 
 16) mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cfio" "--tst" "2" "--M" "1500" "--N" "1000" "--K" "2000" "--L" "1800" "--lrlevel" "100" # test CPP interface for compressing product of three FIOs 
-    mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cifio";; # test CPP interface for approximate inverse of FIO    
+    mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cifio" "--M" "1000" "--N" "1000" "--ker" "1" "--errsol 1" "--format" "1" # test CPP interface for approximate inverse of a 1D FIO, using HODLR    
+    mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/cifio" "--M" "1000" "--N" "1000" "--ker" "1" "--errsol 1" "--format" "2" "--near_para" "4.0";; # test CPP interface for approximate inverse of a 1D FIO, using strong admissible H matrix     
 *) printf "${RED} ###YL: Unknown test\n" ;;
 esac
 

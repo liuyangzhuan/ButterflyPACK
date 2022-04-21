@@ -289,6 +289,7 @@ module BPACK_DEFS
         DT, allocatable :: Butterfly_data_MPI(:) ! value message
         type(list):: lstr, lstc ! a list of intersections
         type(intersect), allocatable::inters(:) ! an array of intersections
+        DT, allocatable:: MVP(:,:),MVPc(:,:) ! temporary results for non-transposed and conjugate transposed MVP results
     end type matrixblock
 
     !**** one layer in a Bplus
@@ -368,6 +369,9 @@ module BPACK_DEFS
       type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()
         type(matrixblock), pointer:: blocks_1 => null(), blocks_2 => null()
         type(list), allocatable::lstblks(:) ! lstblks(level) is the list of blocks at that level
+        type(list),allocatable::admissibles(:) ! a list of admissible and inadmissible groups per each group
+        type(iarray),allocatable::colorsets(:) ! the colorset (an integer array) of each level
+        DT,allocatable::fullmat(:,:) ! store the full matrix for debugging purpose
     end type Hmat
 
     !**** HSS structure

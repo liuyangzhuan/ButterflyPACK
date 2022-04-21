@@ -259,6 +259,40 @@ end function distance_geo
 
    end subroutine distance_gram_block
 
+
+   recursive subroutine Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
+      use BPACK_DEFS
+      implicit none
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(proctree)::ptree
+      integer nth, bidx, level_c
+      integer ii, jj, idx, row_group, col_group
+      type(Hmat)::h_mat
+      type(nod), pointer::cur
+      class(*), pointer::ptr
+      type(matrixblock), pointer::blocks, blocks_son
+      integer flag
+      type(block_ptr)::blk_ptr
+
+      row_group = blocks%row_group
+      col_group = blocks%col_group
+      if (IOwnPgrp(ptree, blocks%pgno)) then
+         if (blocks%style == 4) then ! divided blocks
+            do ii = 1, 2
+            do jj = 1, 2
+               blocks_son => blocks%sons(ii, jj)
+               call Hmat_GetBlkLst(blocks_son, option, stats, msh, ptree, h_mat)
+            enddo
+            enddo
+         else
+            blk_ptr%ptr => blocks
+            call append(h_mat%lstblks(blocks%level), blk_ptr)
+         endif
+      endif
+   end subroutine Hmat_GetBlkLst
+
    recursive subroutine Hmat_construct_local_tree(blocks, option, stats, msh, ker, ptree, Maxlevel)
 
       implicit none
@@ -1905,6 +1939,26 @@ end function distance_geo
          enddo
       endif
 
+      call Hmat_assign_admissible(h_mat, 1, 1, 0, option, stats, msh, ker, ptree)
+      call Hmat_compute_colorset(h_mat, option, stats, msh, ker, ptree)
+
+
+
+      allocate (h_mat%lstblks(0:h_mat%Maxlevel))
+      do level = 0, h_mat%Maxlevel
+         h_mat%lstblks(level) = list()
+      enddo
+      do i = 1, Rows_per_processor
+         do j = 1, num_blocks
+            blocks => h_mat%Local_blocks(j, i)
+            call Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
+         enddo
+      enddo
+      do level = 0, h_mat%Maxlevel
+         call MergeSort(h_mat%lstblks(level)%head, node_score_block_ptr_row)
+      enddo
+
+
       !***************************************************************************************
 
       if (allocated(msh%xyz)) then
@@ -1915,5 +1969,163 @@ end function distance_geo
       return
 
    end subroutine Hmat_structuring
+
+
+
+
+   recursive subroutine Hmat_assign_admissible(h_mat, group_m, group_n, level, option, stats, msh, ker, ptree)
+
+      implicit none
+
+      type(Hmat)::h_mat
+      integer group_m, group_n, group_m_c, group_n_c, i, j, k, level,ll, group_start
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(ipair)::p
+
+      if(level==0)then
+         allocate(h_mat%admissibles(msh%Maxgroup))
+         call LogMemory(stats, SIZEOF(h_mat%admissibles)/1024.0d3)
+      endif
+
+      if (level >= msh%Dist_level .and. near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 1) then
+         p%i=group_n
+         p%j=2
+         call append(h_mat%admissibles(group_m), p)
+         call LogMemory(stats, SIZEOF(p)/1024.0d3)
+      else
+         p%i=group_n
+         p%j=1
+         call append(h_mat%admissibles(group_m), p)
+         call LogMemory(stats, SIZEOF(p)/1024.0d3)
+         if (level == h_mat%Maxlevel) then
+         else
+            do j = 1, 2
+               do i = 1, 2
+                  group_m_c = group_m*2+i-1
+                  group_n_c = group_n*2+j-1
+                  call Hmat_assign_admissible(h_mat, group_m_c, group_n_c, level+1, option, stats, msh, ker, ptree)
+               enddo
+            enddo
+         endif
+      endif
+
+      if(level==0)then
+         do ll=0,h_mat%Maxlevel
+            group_start = 2**ll - 1
+            do i = 1, 2**ll
+               call MergeSort(h_mat%admissibles(group_start+i)%head, nod_score_ipair)
+               ! if(ptree%MyID==Main_ID)write(*,*)'admissibles: ',group_start+i,h_mat%admissibles(group_start+i)%num_nods
+            enddo
+
+         enddo
+
+      endif
+
+      return
+
+   end subroutine Hmat_assign_admissible
+
+
+
+   subroutine Hmat_compute_colorset(h_mat, option, stats, msh, ker, ptree)
+
+      implicit none
+
+      type(Hmat)::h_mat
+      integer group_m, group_n, group_m_c, group_n_c, i, j, k, ii, jj, level,ll, group_start,mm,nn,nnz,num_colors, max_admissibles, ierr
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(list),allocatable::graph_color(:)
+
+      type(nod), pointer::curr, curc
+      class(*), pointer::ptrr, ptrc
+      integer,allocatable::row_ptr(:),col_ind(:)
+      type(ipair)::p
+
+      allocate(h_mat%colorsets(0:h_mat%Maxlevel))
+      call LogMemory(stats, SIZEOF(h_mat%colorsets)/1024.0d3)
+      do level=0,h_mat%Maxlevel
+         allocate(graph_color(2**level))
+         group_start = 2**level - 1
+         h_mat%colorsets(level)%idx = 0
+         do i = 1, 2**level
+            group_m = group_start + i
+            curr => h_mat%admissibles(group_m)%head
+            do mm = 1, h_mat%admissibles(group_m)%num_nods
+               ptrr=>curr%item
+               select type (ptrr)
+               type is (ipair)
+                  ii = ptrr%i - group_start
+                  curc => h_mat%admissibles(group_m)%head
+                  do nn = 1, h_mat%admissibles(group_m)%num_nods
+                     ptrc=>curc%item
+                     select type (ptrc)
+                     type is (ipair)
+                        jj = ptrc%i - group_start
+                        call append(graph_color(ii),jj)
+                        h_mat%colorsets(level)%idx = max(h_mat%colorsets(level)%idx,ptrc%j) ! record the maximum admissible values at each level
+                     end select
+                     curc => curc%next
+                  enddo
+               end select
+               curr => curr%next
+            enddo
+         enddo
+
+         allocate(row_ptr(2**level+1))
+         row_ptr(1)=1
+         nnz=0
+         do i = 1, 2**level
+            call MergeSortUnique(graph_color(i), nod_score_integer)
+            nnz = nnz + graph_color(i)%num_nods
+            row_ptr(i+1) = row_ptr(i) + graph_color(i)%num_nods
+         enddo
+
+         allocate(col_ind(nnz))
+         nnz=0
+         do i = 1, 2**level
+            curc => graph_color(i)%head
+            do nn = 1, graph_color(i)%num_nods
+               ptrc=>curc%item
+               select type (ptrc)
+               type is (integer)
+                  nnz = nnz +1
+                  col_ind(nnz) = ptrc
+               end select
+               curc => curc%next
+            enddo
+         enddo
+
+         h_mat%colorsets(level)%num_nods= 2**level
+         allocate(h_mat%colorsets(level)%dat(2**level))
+         call LogMemory(stats, SIZEOF(h_mat%colorsets(level)%dat)/1024.0d3)
+         call get_graph_colors_JP(2**level,row_ptr,col_ind,h_mat%colorsets(level)%dat)
+         call MPI_Bcast(h_mat%colorsets(level)%dat, 2**level, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr) ! this broadcast is needed as the JP algorithm is randomized.
+
+         do i = 1, 2**level
+            call list_finalizer(graph_color(i))
+         enddo
+         deallocate(graph_color)
+         deallocate(row_ptr)
+         deallocate(col_ind)
+      enddo
+
+      do group_m=1,msh%Maxgroup
+         call list_finalizer(h_mat%admissibles(group_m))
+         call LogMemory(stats, -SIZEOF(p)*h_mat%admissibles(group_m)%num_nods/1024.0d3)
+      enddo
+      call LogMemory(stats, -SIZEOF(h_mat%admissibles)/1024.0d3)
+      deallocate(h_mat%admissibles)
+
+
+   end subroutine Hmat_compute_colorset
+
 
 end module BPACK_structure

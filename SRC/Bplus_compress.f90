@@ -2252,7 +2252,7 @@ contains
 
                ! mn=min(mm,nn)
                ! allocate (UU(mm,mn),VV(mn,nn),Singular(mn))
-               ! call SVD_Truncate(QQ,mm,nn,mn,UU,VV,Singular,option%tol_comp,rank)
+               ! call SVD_Truncate(QQ,mm,nn,mn,UU,VV,Singular,option%tol_comp,BPACK_SafeUnderflow,rank)
                ! ! rank = min(rank,37)
 
                ! ! rank = 7
@@ -4251,7 +4251,7 @@ time_tmp = time_tmp + n2 - n1
                ! end do
                ! end do
 
-               call SVD_Truncate(QQ1, blocks%M, blocks%N, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
+               call SVD_Truncate(QQ1, blocks%M, blocks%N, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank, flop=flop)
                stats%Flop_Fill = stats%Flop_Fill + flop
 
                ! rank=blocks%N
@@ -4922,7 +4922,7 @@ time_tmp = time_tmp + n2 - n1
       ! call zgemm('N','T',rank,rank,rank, BPACK_cone, RR1, rank,RR2,rank,BPACK_czero,mattemp,rank)
       stats%Flop_Fill = stats%Flop_Fill + flop
       allocate (UUsml(rank, rank), VVsml(rank, rank), Singularsml(rank))
-      call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, ranknew, flop=flop)
+      call SVD_Truncate(mattemp, rank, rank, rank, UUsml, VVsml, Singularsml, SVD_tolerance, BPACK_SafeUnderflow, ranknew, flop=flop)
       stats%Flop_Fill = stats%Flop_Fill + flop
       ! call zgemm('N','N',rankmax_r,ranknew,rank, BPACK_cone, QQ1, rankmax_r,UUsml,rank,BPACK_czero,SVD_Q%matU,rankmax_r)
       call gemmf90(QQ1, rankmax_r, UUsml, rank, SVD_Q%matU, rankmax_r, 'N', 'N', rankmax_r, ranknew, rank, BPACK_cone, BPACK_czero, flop=flop)
@@ -7090,7 +7090,7 @@ time_tmp = time_tmp + n2 - n1
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
 
 #if 1
-      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
+      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank, flop=flop)
       flops = flops + flop
 
       if(level==level_butterfly)then
@@ -7205,7 +7205,7 @@ time_tmp = time_tmp + n2 - n1
 
       mn = min(mm, nn)
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
-      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank)
+      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
       ! rank = min(rank,37)
 
       ! rank = 7
@@ -7338,7 +7338,7 @@ time_tmp = time_tmp + n2 - n1
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
 
 #if 1
-      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank, flop=flop)
+      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank, flop=flop)
       flops = flops + flop
 
       if(level==1)then
@@ -7445,7 +7445,7 @@ time_tmp = time_tmp + n2 - n1
 
       mn = min(mm, nn)
       allocate (UU(mm, mn), VV(mn, nn), Singular(mn))
-      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, rank)
+      call SVD_Truncate(QQ, mm, nn, mn, UU, VV, Singular, option%tol_comp, BPACK_SafeUnderflow, rank)
       ! rank = min(rank,37)
 
       ! rank = 7

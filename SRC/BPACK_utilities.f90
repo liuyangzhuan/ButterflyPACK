@@ -133,6 +133,16 @@ contains
          deallocate (h_mat%lstblks)
       endif
 
+      if(allocated(h_mat%colorsets))then
+         do level = 0, h_mat%Maxlevel
+            deallocate(h_mat%colorsets(level)%dat)
+         enddo
+         deallocate (h_mat%colorsets)
+      endif
+      if(allocated(h_mat%fullmat))then
+         deallocate(h_mat%fullmat)
+      endif
+
    end subroutine Hmat_delete
 
    subroutine HODLR_delete(ho_bf_o)

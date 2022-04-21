@@ -13000,7 +13000,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            allocate (Singular(mn_min))
                            call assert(.not. myisnan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
 
-                           ! call SVD_Truncate(matrixtemp, rank, num_vectors1 + num_vectors2, mn_min, UU, VV, Singular, tolerance, ranknew)
+                           ! call SVD_Truncate(matrixtemp, rank, num_vectors1 + num_vectors2, mn_min, UU, VV, Singular, tolerance, BPACK_SafeUnderflow, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min)
                            ranknew = mn_min
                            call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
@@ -13214,7 +13214,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                            call assert(.not. myisnan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
 
-                           ! call SVD_Truncate(matrixtemp, num_vectors1 + num_vectors2, rank, mn_min, UU, VV, Singular, tolerance, ranknew)
+                           ! call SVD_Truncate(matrixtemp, num_vectors1 + num_vectors2, rank, mn_min, UU, VV, Singular, tolerance, BPACK_SafeUnderflow, ranknew)
                            call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min)
                            ranknew=mn_min
 
@@ -14059,9 +14059,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    end subroutine Hmat_Usolve
 
-   recursive subroutine Hmat_block_MVP_dat(blocks, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
+   recursive subroutine Hmat_block_MVP_dat(blocks, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats,level_start,level_end)
 
       implicit none
+      integer,optional:: level_start, level_end
       integer idx_start_m, idx_start_n
       integer Nrnd
       integer mm, nn, idxs_m, idxs_n
@@ -14071,7 +14072,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(matrixblock), pointer::blocks_son
       integer:: style
       DT, allocatable::Vintmp(:, :), Vouttmp(:, :)
-      integer ldi, ldo
+      integer ldi, ldo, flag
       DT::Vin(ldi, *), Vout(ldo, *)
       type(proctree)::ptree
       type(Hstat)::stats
@@ -14084,14 +14085,27 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (style == 4) then
          blocks_son => blocks%sons(1, 1)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats,level_start,level_end)
          blocks_son => blocks%sons(1, 2)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats,level_start,level_end)
          blocks_son => blocks%sons(2, 1)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats,level_start,level_end)
          blocks_son => blocks%sons(2, 2)
-         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats)
+         call Hmat_block_MVP_dat(blocks_son, trans, idx_start_m, idx_start_n, Nrnd, Vin, ldi, Vout, ldo, a, ptree, stats,level_start,level_end)
       else
+         flag=1
+         if(present(level_start) .and. present(level_end))then
+         if(blocks%level>=level_start .and. blocks%level<=level_end)then
+            if(style==1 .and. blocks%level==level_end)then
+               flag=0    ! only multiply with dense blocks when level_end = h_mat%Maxlevel+1
+            else
+               flag=1
+            endif
+         else
+            flag=0
+         endif
+         endif
+         if(flag==1)then
          if (style == 1) then
             if (trans == 'N') then
                allocate (Vintmp(nn, Nrnd))
@@ -14118,6 +14132,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             else
                call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_m, 1), ldi, Vout(idxs_n, 1), ldo, a, BPACK_cone, ptree, stats)
             endif
+         endif
          endif
       endif
 
@@ -14291,6 +14306,22 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          stop
       end select
    end function node_score_block_ptr_row
+
+   function nod_score_ipair(this) result(score)
+      implicit none
+      type(nod)::this
+      real(kind=8)::score
+      class(*), pointer::ptr
+
+      select TYPE (ptr=>this%item)
+      type is (ipair)
+         score = dble(ptr%i)
+      class default
+         write (*, *) 'unexpected item type in nod_score_ipair'
+         stop
+      end select
+   end function nod_score_ipair
+
 
    subroutine element_Zmn_block_user(nrow, ncol, mrange, nrange, values, msh, option, ker, myflag, passflag, ptree, stats)
 
