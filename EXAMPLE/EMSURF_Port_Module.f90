@@ -2710,6 +2710,108 @@ end subroutine EM_solve_SURF
 
 
 
+subroutine EM_solve_port_SURF(bmat,option,msh,quant,ptree,stats,current,voltage)
+    use BPACK_DEFS
+	use BPACK_Solve_Mul
+
+
+    implicit none
+
+    integer i, j, ii, jj, iii, jjj,ierr
+    integer level, blocks, edge, patch, node, group
+    integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
+    real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+    real T0
+    real(kind=8) n1,n2,rtemp
+    complex(kind=8) value_Z
+    complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
+	real(kind=8):: rel_error
+	type(Hoption)::option
+	type(Bmatrix)::bmat
+	type(mesh)::msh
+	type(quant_EMSURF)::quant
+	type(proctree)::ptree
+	type(Hstat)::stats
+	complex(kind=8):: current(:,:)
+	complex(kind=8):: ctemp,ctemp1
+	complex(kind=8):: voltage(:,:)
+	integer cntm, edge_m,mm,nn,npolar,ppm,rr,off
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve with port feed......"
+
+	N_unk_loc = msh%idxe-msh%idxs+1
+
+	Current=0
+	voltage=0
+
+	!!$omp parallel do default(shared) private(edge,value_Z)
+	do edge=msh%idxs, msh%idxe
+		edge_m = msh%new2old(edge)
+		if(edge_m>quant%Nunk-quant%Nunk_port)then
+			edge_m = edge_m-quant%Nunk_port
+		! find which ports this edge is on
+			cntm = quant%Nunk_int
+			do ppm=1,quant%Nport
+				if(edge_m<=cntm+quant%ports(ppm)%Nunk)exit
+				cntm = cntm + quant%ports(ppm)%Nunk
+			enddo
+			if(quant%ports(ppm)%type==0 .or. quant%ports(ppm)%type==1)then
+				if(quant%ports(ppm)%type==0)then
+					npolar=1  ! disable polarization effect when generating the incident field
+					off=0
+				elseif(quant%ports(ppm)%type==1)then
+					npolar=1
+					off=1
+				endif
+				ctemp=0
+				do rr=1,npolar
+					do nn=0,quant%ports(ppm)%nmax
+						do mm=1-off,quant%ports(ppm)%mmax
+							if(mm>0 .or. nn>0)then
+							if(abs(quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off))<BPACK_Bigvalue/2)then
+								ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,1,rr)
+								ctemp = ctemp + BPACK_impedence0/quant%ports(ppm)%impedance_TE_nm(nn+1,mm+off)*ctemp1
+								goto 900  !! this makes sure only impose one incident mode
+							endif
+							endif
+						enddo
+					enddo
+
+					!!!!!!!!!!! disable TM modes in the incident field
+					! do nn=0,quant%ports(ppm)%nmax
+					! 	do mm=1-off,quant%ports(ppm)%mmax
+					! 		if(mm>0 .or. nn>0)then
+					! 		ctemp1=quant%ports(ppm)%nxe_dot_rwg(edge_m-cntm,nn+1,mm+off,2,rr)
+					! 		ctemp = ctemp + BPACK_impedence0/quant%ports(ppm)%impedance_TM_nm(nn+1,mm+off)*ctemp1
+					! 		endif
+					! 	enddo
+					! enddo
+				enddo
+900				voltage(edge-msh%idxs+1,ppm)=ctemp
+			elseif(quant%ports(ppm)%type==2)then
+				write(*,*)'port type 2 not implemented yet'
+				stop
+			endif
+		endif
+	enddo
+	!!$omp end parallel do
+	n1 = OMP_get_wtime()
+	call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,quant%Nport,option,ptree,stats)
+	n2 = OMP_get_wtime()
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
+    return
+
+end subroutine EM_solve_port_SURF
+
+
+
 
 subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,eigval,Enormal_GF,ith,model)
     use BPACK_DEFS
