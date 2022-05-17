@@ -2049,73 +2049,85 @@ end function distance_geo
       integer,allocatable::row_ptr(:),col_ind(:)
       type(ipair)::p
 
-      allocate(h_mat%colorsets(0:h_mat%Maxlevel))
-      call LogMemory(stats, SIZEOF(h_mat%colorsets)/1024.0d3)
-      do level=0,h_mat%Maxlevel
-         allocate(graph_color(2**level))
-         group_start = 2**level - 1
-         h_mat%colorsets(level)%idx = 0
-         do i = 1, 2**level
-            group_m = group_start + i
-            curr => h_mat%admissibles(group_m)%head
-            do mm = 1, h_mat%admissibles(group_m)%num_nods
-               ptrr=>curr%item
-               select type (ptrr)
-               type is (ipair)
-                  ii = ptrr%i - group_start
-                  curc => h_mat%admissibles(group_m)%head
-                  do nn = 1, h_mat%admissibles(group_m)%num_nods
-                     ptrc=>curc%item
-                     select type (ptrc)
-                     type is (ipair)
-                        jj = ptrc%i - group_start
-                        call append(graph_color(ii),jj)
-                        h_mat%colorsets(level)%idx = max(h_mat%colorsets(level)%idx,ptrc%j) ! record the maximum admissible values at each level
-                     end select
-                     curc => curc%next
-                  enddo
-               end select
-               curr => curr%next
+      if(ptree%MyID==Main_ID)then
+         allocate(h_mat%colorsets(0:h_mat%Maxlevel))
+         call LogMemory(stats, SIZEOF(h_mat%colorsets)/1024.0d3)
+         do level=0,h_mat%Maxlevel
+            allocate(graph_color(2**level))
+            group_start = 2**level - 1
+            h_mat%colorsets(level)%idx = 0
+            do i = 1, 2**level
+               group_m = group_start + i
+               curr => h_mat%admissibles(group_m)%head
+               do mm = 1, h_mat%admissibles(group_m)%num_nods
+                  ptrr=>curr%item
+                  select type (ptrr)
+                  type is (ipair)
+                     ii = ptrr%i - group_start
+                     curc => h_mat%admissibles(group_m)%head
+                     do nn = 1, h_mat%admissibles(group_m)%num_nods
+                        ptrc=>curc%item
+                        select type (ptrc)
+                        type is (ipair)
+                           jj = ptrc%i - group_start
+                           call append(graph_color(ii),jj)
+                           h_mat%colorsets(level)%idx = max(h_mat%colorsets(level)%idx,ptrc%j) ! record the maximum admissible values at each level
+                        end select
+                        curc => curc%next
+                     enddo
+                  end select
+                  curr => curr%next
+               enddo
             enddo
-         enddo
 
-         allocate(row_ptr(2**level+1))
-         row_ptr(1)=1
-         nnz=0
-         do i = 1, 2**level
-            call MergeSortUnique(graph_color(i), nod_score_integer)
-            nnz = nnz + graph_color(i)%num_nods
-            row_ptr(i+1) = row_ptr(i) + graph_color(i)%num_nods
-         enddo
-
-         allocate(col_ind(nnz))
-         nnz=0
-         do i = 1, 2**level
-            curc => graph_color(i)%head
-            do nn = 1, graph_color(i)%num_nods
-               ptrc=>curc%item
-               select type (ptrc)
-               type is (integer)
-                  nnz = nnz +1
-                  col_ind(nnz) = ptrc
-               end select
-               curc => curc%next
+            allocate(row_ptr(2**level+1))
+            row_ptr(1)=1
+            nnz=0
+            do i = 1, 2**level
+               call MergeSortUnique(graph_color(i), nod_score_integer)
+               nnz = nnz + graph_color(i)%num_nods
+               row_ptr(i+1) = row_ptr(i) + graph_color(i)%num_nods
             enddo
-         enddo
 
-         h_mat%colorsets(level)%num_nods= 2**level
-         allocate(h_mat%colorsets(level)%dat(2**level))
-         call LogMemory(stats, SIZEOF(h_mat%colorsets(level)%dat)/1024.0d3)
-         call get_graph_colors_JP(2**level,row_ptr,col_ind,h_mat%colorsets(level)%dat)
-         call MPI_Bcast(h_mat%colorsets(level)%dat, 2**level, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr) ! this broadcast is needed as the JP algorithm is randomized.
+            allocate(col_ind(nnz))
+            nnz=0
+            do i = 1, 2**level
+               curc => graph_color(i)%head
+               do nn = 1, graph_color(i)%num_nods
+                  ptrc=>curc%item
+                  select type (ptrc)
+                  type is (integer)
+                     nnz = nnz +1
+                     col_ind(nnz) = ptrc
+                  end select
+                  curc => curc%next
+               enddo
+            enddo
 
-         do i = 1, 2**level
-            call list_finalizer(graph_color(i))
+            h_mat%colorsets(level)%num_nods= 2**level
+            allocate(h_mat%colorsets(level)%dat(2**level))
+            call LogMemory(stats, SIZEOF(h_mat%colorsets(level)%dat)/1024.0d3)
+            call get_graph_colors_JP(2**level,row_ptr,col_ind,h_mat%colorsets(level)%dat)
+            call MPI_Bcast(h_mat%colorsets(level)%dat, 2**level, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr) ! this broadcast is needed as the JP algorithm is randomized.
+            call MPI_Bcast(h_mat%colorsets(level)%idx, 1, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr)
+
+            do i = 1, 2**level
+               call list_finalizer(graph_color(i))
+            enddo
+            deallocate(graph_color)
+            deallocate(row_ptr)
+            deallocate(col_ind)
          enddo
-         deallocate(graph_color)
-         deallocate(row_ptr)
-         deallocate(col_ind)
-      enddo
+      else
+         allocate(h_mat%colorsets(0:h_mat%Maxlevel))
+         call LogMemory(stats, SIZEOF(h_mat%colorsets)/1024.0d3)
+         do level=0,h_mat%Maxlevel
+            h_mat%colorsets(level)%num_nods= 2**level
+            allocate(h_mat%colorsets(level)%dat(2**level))
+            call MPI_Bcast(h_mat%colorsets(level)%dat, 2**level, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr) ! this broadcast is needed as the JP algorithm is randomized.
+            call MPI_Bcast(h_mat%colorsets(level)%idx, 1, MPI_INTEGER, Main_ID, ptree%pgrp(1)%Comm, ierr)
+         enddo
+      endif
 
       do group_m=1,msh%Maxgroup
          call list_finalizer(h_mat%admissibles(group_m))
