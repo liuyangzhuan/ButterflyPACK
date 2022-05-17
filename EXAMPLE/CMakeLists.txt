@@ -69,6 +69,13 @@ add_dependencies(ie3dporteigen ie3d)
 install(TARGETS ie3dporteigen RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
 
+set(FZEXM10 EMSURF_Port_Driver.f90 EMSURF_Port_Module.f90 DoCubicInterp2D.c)
+add_executable(ie3dport ${FZEXM10})
+target_link_libraries(ie3dport ${all_link_libs_z})
+add_dependencies(ie3dport ie3dporteigen)
+install(TARGETS ie3dport RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
+
 ########################################### double Fortran drivers
 
 set(FDEXM1 FULLMAT_Driver.f90)
@@ -127,6 +134,13 @@ target_link_libraries(cifio ${all_link_libs_z})
 add_dependencies(cifio cfio)
 endif()
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+set(CIFEXM2D InverseFIO2D_Driver.cpp)
+add_executable(cifio2d ${CIFEXM2D})
+target_link_libraries(cifio2d ${all_link_libs_d})
+target_link_libraries(cifio2d ${all_link_libs_z})
+add_dependencies(cifio2d cifio)
+endif()
 
 
 
