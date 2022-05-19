@@ -1010,14 +1010,12 @@ contains
 
    subroutine Hmat_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, h_mat, ptree, option, stats, use_blockcopy)
 
-
-
       implicit none
       integer level_start, level_end
       character trans, trans_tmp
       integer Ns
       integer level_c, rowblock
-      integer j, k, level, num_blocks, ii, jj, kk, test, num_vectors
+      integer i, j, k, level, num_blocks, ii, jj, kk, test, num_vectors
       integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
       character chara
       real(kind=8) vecnorm, n1, n2
@@ -1051,97 +1049,34 @@ contains
          call MPI_barrier(ptree%Comm, ierr)
 
          n1 = OMP_get_wtime()
-         if(use_blockcopy==1)then
-            blocks_i => h_mat%Local_blocks_copy(1, 1)
-         else
-            blocks_i => h_mat%Local_blocks(1, 1)
-         endif
-         num_blocks = 2**h_mat%Dist_level
-         call MPI_ALLREDUCE(blocks_i%M, Nmax, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
-         call MPI_ALLREDUCE(blocks_i%M, N_glo, 1, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
 
-         if(trans == 'N')then
-#if 1
-            Nmsg = num_blocks
-            allocate (srequest_all(Nmsg))
-            allocate (status_all(MPI_status_size, Nmsg))
-            srequest_all = MPI_request_null
-            do j = 1, Nmsg
-               call MPI_Isend(Vin, Ns*num_vectors, MPI_DT, j - 1, ptree%MyID, ptree%Comm, srequest_all(j), ierr)
-            enddo
+         N_glo = h_mat%N
+         allocate(Vin_glo(N_glo,num_vectors))
+         Vin_glo=0
+         Vin_glo(h_mat%idxs:h_mat%idxe,:) = Vin(1:Ns,:)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, Vin_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         allocate(Vout_glo(N_glo,num_vectors))
+         Vout_glo=0
+         Vout=0
 
-            vout = 0.0
-            do while (Nmsg > 0)
-
-               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-               pp = status(MPI_SOURCE)
-               j = status(MPI_TAG) + 1
-               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+         do i = 1, h_mat%myArows
+            do j = 1, h_mat%myAcols
                if(use_blockcopy==1)then
-                  blocks_i => h_mat%Local_blocks_copy(j, 1)
+                  blocks_i => h_mat%Local_blocks_copy(j, i)
                else
-                  blocks_i => h_mat%Local_blocks(j, 1)
+                  blocks_i => h_mat%Local_blocks(j, i)
                endif
-               allocate (vin_tmp(blocks_i%N, num_vectors))
-               call MPI_Recv(vin_tmp, m_size, MPI_DT, pp, j-1, ptree%Comm, status, ierr)
-
-               call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, blocks_i%N, Vout, Ns, BPACK_cone, ptree, stats,level_start, level_end)
-               deallocate (vin_tmp)
-
-               Nmsg = Nmsg - 1
+               call Hmat_block_MVP_dat(blocks_i, trans_tmp, 1, 1, num_vectors, Vin_glo, N_glo, Vout_glo, N_glo, BPACK_cone, ptree, stats,level_start, level_end)
             enddo
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, Vout_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         Vout(1:Ns,:) = Vout_glo(h_mat%idxs:h_mat%idxe,:)
+         deallocate(Vin_glo)
+         deallocate(Vout_glo)
 
-            call MPI_waitall(num_blocks, srequest_all, status_all, ierr)
-            deallocate (srequest_all)
-            deallocate (status_all)
-
-#else
-            allocate(Vin_glo(N_glo,num_vectors))
-            Vin_glo=0
-            Vin_glo(blocks_i%headm:blocks_i%headm+blocks_i%M-1,:) = Vin(1:blocks_i%M,:)
-            call MPI_ALLREDUCE(MPI_IN_PLACE, Vin_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-            Vout=0
-
-            do j=1,num_blocks
-               if(use_blockcopy==1)then
-                  blocks_i => h_mat%Local_blocks_copy(j, 1)
-               else
-                  blocks_i => h_mat%Local_blocks(j, 1)
-               endif
-               allocate (vin_tmp(blocks_i%N, num_vectors))
-               vin_tmp(1:blocks_i%N,:) = Vin_glo(blocks_i%headn:blocks_i%headn+blocks_i%N-1,:)
-               call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vin_tmp, blocks_i%N, Vout, Ns, BPACK_cone, ptree, stats,level_start, level_end)
-               deallocate(vin_tmp)
-            enddo
-            deallocate(Vin_glo)
-#endif
-         else
-
-            allocate (vec_buffer(Nmax, num_vectors))
-            vec_buffer=0
-            allocate(Vout_glo(N_glo,num_vectors))
-            Vout_glo=0
-
-            do j=1,num_blocks
-               vec_buffer=0
-               if(use_blockcopy==1)then
-                  blocks_i => h_mat%Local_blocks_copy(j, 1)
-               else
-                  blocks_i => h_mat%Local_blocks(j, 1)
-               endif
-               call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, Vin, Ns, vec_buffer, Nmax, BPACK_cone, ptree, stats,level_start, level_end)
-               Vout_glo(blocks_i%headn:blocks_i%headn+blocks_i%N-1,:) = vec_buffer(1:blocks_i%N,:)
-            enddo
-            call MPI_ALLREDUCE(MPI_IN_PLACE, Vout_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-            Vout(1:blocks_i%M,:) = Vout_glo(blocks_i%headm:blocks_i%headm+blocks_i%M-1,:)
-
-            deallocate(vec_buffer)
-            deallocate(Vout_glo)
-
-            if (trans == 'C') then
-               Vout = conjg(cmplx(Vout, kind=8))
-               Vin = conjg(cmplx(Vin, kind=8))
-            endif
+         if (trans == 'C') then
+            Vout = conjg(cmplx(Vout, kind=8))
+            Vin = conjg(cmplx(Vin, kind=8))
          endif
 
          Vout = Vout/option%scale_factor
@@ -1166,65 +1101,221 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
-      integer i, j, k, ii, jj, kk, iii, jjj, pp, num_blocks, mm, nn, groupm, groupn
-      integer vectors_start, vectors_x, vectors_y, id_l, nvec, nloc
+      integer i,i1, j, k, ii, jj, kk, iii, jjj, pp, num_blocks, mm, nn, groupm, groupn
+      integer vectors_start, vectors_x, vectors_y, id_l, nvec, nloc, tag
 
       type(matrixblock), pointer :: blocks_l
       integer Nreq, Nmod, Bufsize
       DT, allocatable::recv_buf(:), vin(:, :)
       DT::xloc(:, :)
+      DT,allocatable::xglo(:,:)
       integer :: status(MPI_Status_size)
       integer, allocatable::status_all(:, :), request_all(:)
       integer idx_start,m_size
-      integer ierr
+      integer ierr,num_vectors,selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo
+      integer,allocatable:: fmod(:), frecv(:),sendflagarray(:), receiverlists(:,:)
+      type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
 
       if (trans == 'N') then
+         Nreq=0
          num_blocks = 2**h_mat%Dist_level
-         vectors_start = num_blocks - 1
+         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         nrecvx=0
+         nrecvmod=0
+         N_glo = h_mat%N
+         allocate(xglo(N_glo,nvec))
+         xglo=0
+         xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
-         blocks_l => h_mat%Local_blocks(ptree%MyID + 1, 1)
-         groupm = blocks_l%row_group
+         allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
+         receiverlists=0
 
-         vectors_x = vectors_start + ptree%MyID + 1
+         allocate(sendbufx(max(h_mat%myAcols,1)))
+         allocate(sendbufmod(max(h_mat%myArows,1)))
 
-         Bufsize = nloc*nvec
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bufsize, 1, MPI_integer, MPI_MAX, ptree%Comm, ierr)
+         do j = 1, h_mat%myAcols
+            selflag=0
+            call l2g(j, mycol, num_blocks, npcol, 1, jj)
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  selflag=1
+                  allocate(sendbufx(j)%vector(blocks_l%N,nvec))
+                  sendbufx(j)%vector = xglo(blocks_l%headn:blocks_l%headn+blocks_l%N-1,:)
+                  do ii=1,num_blocks
+                     if(ii>jj)then
+                        call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+                        receiverlists(iproc+1,j)=1
+                     endif
+                  enddo
+                  do ii=1,nprow
+                     if(receiverlists(ii,j)==1)then
+                        Nreq = Nreq+1
+                     endif
+                  enddo
+               endif
+            enddo
 
-         Nmod = ptree%MyID
-         do while (Nmod > 0)
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            vectors_y = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            j = vectors_y - vectors_start
-            blocks_l => h_mat%Local_blocks(j, 1)
-            groupn = blocks_l%col_group
-            nn = blocks_l%N
-
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, vectors_y, ptree%Comm, status, ierr)
-            call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, xloc, size(xloc,1),-BPACK_cone, ptree, stats)
-            deallocate (vin)
-            Nmod = Nmod - 1
+            offflag=0
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group>blocks_l%col_group)then
+                  offflag=1
+                  exit
+               endif
+            enddo
+            if(offflag==1)then
+               nrecvx = nrecvx + 1
+            endif
          enddo
 
-         blocks_l => h_mat%Local_blocks(ptree%MyID + 1, 1)
-         idx_start = blocks_l%headm
-         call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, xloc, size(xloc,1), ptree, stats)
+         allocate(fmod(max(h_mat%myArows,1)))
+         fmod=0         
+         allocate(frecv(max(h_mat%myArows,1)))
+         frecv=0
+         allocate(sendflagarray(num_blocks))
+         sendflagarray=0
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group>blocks_l%col_group)then
+                  fmod(i) = fmod(i) + 1
+                  sendflagarray(ii)=1
+               endif
+            enddo
+            if(sendflagarray(ii)==1)then
+               Nreq = Nreq+1
+               blocks_l => h_mat%Local_blocks(1, i)
+               allocate(sendbufmod(i)%vector(blocks_l%M,nvec))
+               sendbufmod(i)%vector=0
+            endif
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  nrecvmod = nrecvmod + sendflagarray(ii)
+                  frecv(i) = frecv(i) + sendflagarray(ii)
+               endif
+            enddo
+         enddo
+         deallocate(sendflagarray)
 
-         Nreq = num_blocks - 1 - ptree%MyID
          if (Nreq > 0) then
             allocate (status_all(MPI_status_size, Nreq))
             allocate (request_all(Nreq))
          end if
-         do i = 1, Nreq
-            call MPI_Isend(xloc, nloc*nvec, MPI_DT, i + ptree%MyID, vectors_x, ptree%Comm, request_all(i), ierr)
+         Nreq=0
+
+         ii=1
+         jj=1
+         call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+         call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+
+         if(iproc==myrow .and. jproc==mycol)then
+            blocks_l => h_mat%Local_blocks(myj, myi)
+
+            idx_start = blocks_l%headn
+            call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, sendbufx(myj)%vector, blocks_l%N, ptree, stats)
+
+            do i=1,nprow
+               if(receiverlists(i,myj)==1)then
+                  receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i-1, jproc)
+                  Nreq = Nreq + 1
+                  call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+               endif
+            enddo
+         endif
+         do nrecv=1, nrecvx+nrecvmod
+            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+            pp = status(MPI_SOURCE)
+            tag = status(MPI_TAG)
+            call MPI_Get_count(status, MPI_DT, m_size,ierr)
+            nn = m_size/nvec
+            allocate (vin(nn, nvec))
+            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+
+            if(tag<=num_blocks)then
+               jj=tag
+               call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+               do i = 1, h_mat%myArows
+                  call l2g(i, myrow, num_blocks, nprow, 1, ii)
+                  if(ii>jj)then
+                     blocks_l => h_mat%Local_blocks(myj, i)
+                     nn = blocks_l%N
+
+                     call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, sendbufmod(i)%vector, blocks_l%M,-BPACK_cone, ptree, stats)
+                     fmod(i) = fmod(i)-1
+
+                     if(fmod(i)==0)then
+                        call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+
+                        ! offdiagonal block: send right to diagonal block
+                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, myrow, jproc1)
+                        Nreq = Nreq + 1
+                        call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+
+                     endif
+                  endif
+               enddo
+            else ! diagonal block: solve the diagonal block, send down to off-digonal blocks
+               ii=tag-num_blocks
+               call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+               call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+               sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               frecv(myi) = frecv(myi)-1
+               if(frecv(myi)==0 .and. fmod(myi)==0)then
+                  blocks_l => h_mat%Local_blocks(myj1, myi)
+                  idx_start = blocks_l%headn
+                  call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, sendbufx(myj1)%vector, blocks_l%N, ptree, stats)
+
+                  do i1=1,nprow
+                     if(receiverlists(i1,myj1)==1)then
+                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i1-1, jproc1)
+                        Nreq = Nreq + 1
+                        call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                     endif
+                  enddo
+               endif
+            endif
+            deallocate (vin)
          enddo
+
          if (Nreq > 0) then
             call MPI_waitall(Nreq, request_all, status_all, ierr)
             deallocate (status_all)
             deallocate (request_all)
          endif
+
+         xglo=0
+         do j = 1, h_mat%myAcols
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  xglo(blocks_l%headn:blocks_l%headn+blocks_l%N-1,:) = sendbufx(j)%vector
+               endif
+            enddo
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
+         deallocate(xglo)
+         deallocate(fmod)
+         deallocate(frecv)
+         deallocate(receiverlists)
+
+         do j=1,h_mat%myAcols
+            if(allocated(sendbufx(j)%vector))deallocate(sendbufx(j)%vector)
+         enddo
+         deallocate(sendbufx)
+
+         do i=1,h_mat%myArows
+            if(allocated(sendbufmod(i)%vector))deallocate(sendbufmod(i)%vector)
+         enddo
+         deallocate(sendbufmod)
       else
          write (*, *) 'XxL^-1 with MPI is not yet implemented'
          stop
@@ -1244,7 +1335,7 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
-      integer i, j, k, ii, jj, kk, pp, iii, jjj, num_blocks, mm, nn, idx_start, nvec, nloc
+      integer i,i1, j, k, ii, jj, kk, pp, iii, jjj, num_blocks, mm, nn, idx_start, nvec, nloc
       integer vectors_start, vectors_x, vectors_y, id_u, groupm, groupn, ierr
 
       type(matrixblock), pointer :: blocks_u
@@ -1252,50 +1343,183 @@ contains
       integer Nreq, Nmod, Bufsize, m_size
       DT, allocatable::recv_buf(:), vin(:, :)
       DT::xloc(:, :)
+      DT,allocatable::xglo(:,:)
       integer, allocatable::status_all(:, :), request_all(:)
+
+      integer selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo,tag
+      integer,allocatable:: bmod(:), brecv(:),sendflagarray(:), receiverlists(:,:)
+      type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
+
+
 
       if (trans == 'N') then
 
+         Nreq=0
          num_blocks = 2**h_mat%Dist_level
-         vectors_start = num_blocks - 1
+         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         nrecvx=0
+         nrecvmod=0
+         N_glo = h_mat%N
+         allocate(xglo(N_glo,nvec))
+         xglo=0
+         xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
-         Bufsize = nloc*nvec
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bufsize, 1, MPI_integer, MPI_MAX, ptree%Comm, ierr)
+         allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
+         receiverlists=0
 
-         vectors_x = vectors_start + ptree%MyID + 1
-         Nmod = num_blocks - 1 - ptree%MyID
+         allocate(sendbufx(max(h_mat%myAcols,1)))
+         allocate(sendbufmod(max(h_mat%myArows,1)))
 
-         blocks_u => h_mat%Local_blocks(ptree%MyID + 1, 1)
+         do j = 1, h_mat%myAcols
+            selflag=0
+            call l2g(j, mycol, num_blocks, npcol, 1, jj)
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  selflag=1
+                  allocate(sendbufx(j)%vector(blocks_u%N,nvec))
+                  sendbufx(j)%vector = xglo(blocks_u%headn:blocks_u%headn+blocks_u%N-1,:)
+                  do ii=1,num_blocks
+                     if(ii<jj)then
+                        call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+                        receiverlists(iproc+1,j)=1
+                     endif
+                  enddo
+                  do ii=1,nprow
+                     if(receiverlists(ii,j)==1)then
+                        Nreq = Nreq+1
+                     endif
+                  enddo
+               endif
+            enddo
 
-         do while (Nmod > 0)
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            vectors_y = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            j = vectors_y - vectors_start
-            blocks_u => h_mat%Local_blocks(j, 1)
-
-            nn = blocks_u%N
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, vectors_y, ptree%Comm, status, ierr)
-            call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, xloc, size(xloc,1), -BPACK_cone, ptree, stats)
-            deallocate (vin)
-
-            Nmod = Nmod - 1
+            offflag=0
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group<blocks_u%col_group)then
+                  offflag=1
+                  exit
+               endif
+            enddo
+            if(offflag==1)then
+               nrecvx = nrecvx + 1
+            endif
          enddo
 
-         blocks_u => h_mat%Local_blocks(ptree%MyID + 1, 1)
-         idx_start = blocks_u%headm
-         call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, xloc, size(xloc,1), ptree, stats)
+         allocate(bmod(max(h_mat%myArows,1)))
+         bmod=0
+         allocate(brecv(max(h_mat%myArows,1)))
+         brecv=0         
+         allocate(sendflagarray(num_blocks))
+         sendflagarray=0
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group<blocks_u%col_group)then
+                  bmod(i) = bmod(i) + 1
+                  sendflagarray(ii)=1
+               endif
+            enddo
+            if(sendflagarray(ii)==1)then
+               Nreq = Nreq+1
+               blocks_u => h_mat%Local_blocks(1, i)
+               allocate(sendbufmod(i)%vector(blocks_u%M,nvec))
+               sendbufmod(i)%vector=0
+            endif
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  nrecvmod = nrecvmod + sendflagarray(ii)
+                  brecv(i) = brecv(i) + sendflagarray(ii)
+               endif
+            enddo
+         enddo
+         deallocate(sendflagarray)
 
-         Nreq = ptree%MyID
          if (Nreq > 0) then
             allocate (status_all(MPI_status_size, Nreq))
             allocate (request_all(Nreq))
          end if
+         Nreq=0
 
-         do i = Nreq, 1, -1
-            call MPI_Isend(xloc, nloc*nvec, MPI_DT, i - 1, vectors_x, ptree%Comm, request_all(i), ierr)
+         ii=num_blocks
+         jj=num_blocks
+         call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+         call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+
+         if(iproc==myrow .and. jproc==mycol)then
+            blocks_u => h_mat%Local_blocks(myj, myi)
+
+            idx_start = blocks_u%headn
+            call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, sendbufx(myj)%vector, blocks_u%N, ptree, stats)
+
+            do i=1,nprow
+               if(receiverlists(i,myj)==1)then
+                  receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i-1, jproc)
+                  Nreq = Nreq + 1
+                  call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+               endif
+            enddo
+         endif
+
+         do nrecv=1, nrecvx+nrecvmod
+            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+            pp = status(MPI_SOURCE)
+            tag = status(MPI_TAG)
+            call MPI_Get_count(status, MPI_DT, m_size,ierr)
+            nn = m_size/nvec
+            allocate (vin(nn, nvec))
+            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+
+            if(tag<=num_blocks)then
+               jj=tag
+               call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+               do i = 1, h_mat%myArows
+                  call l2g(i, myrow, num_blocks, nprow, 1, ii)
+                  if(ii<jj)then
+                     blocks_u => h_mat%Local_blocks(myj, i)
+                     nn = blocks_u%N
+
+
+                     call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, sendbufmod(i)%vector, blocks_u%M,-BPACK_cone, ptree, stats)
+                     bmod(i) = bmod(i)-1
+
+                     if(bmod(i)==0)then
+                        call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+                        ! offdiagonal block: send left to diagonal block
+                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, myrow, jproc1)
+                        Nreq = Nreq + 1
+                        call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                     endif
+                  endif
+               enddo
+            else ! diagonal block: solve the diagonal block, send left to off-digonal blocks
+               ii=tag-num_blocks
+               call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+               call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+               sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               brecv(myi) = brecv(myi)-1
+               if(brecv(myi)==0 .and. bmod(myi)==0)then
+                  blocks_u => h_mat%Local_blocks(myj1, myi)
+                  idx_start = blocks_u%headn
+                  call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, sendbufx(myj1)%vector, blocks_u%N, ptree, stats)
+
+                  do i1=1,nprow
+                     if(receiverlists(i1,myj1)==1)then
+                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i1-1, jproc1)
+                        Nreq = Nreq + 1
+                        call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                     endif
+                  enddo
+               endif
+            endif
+            deallocate (vin)
          enddo
 
          if (Nreq > 0) then
@@ -1303,6 +1527,33 @@ contains
             deallocate (status_all)
             deallocate (request_all)
          endif
+
+
+         xglo=0
+         do j = 1, h_mat%myAcols
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  xglo(blocks_u%headn:blocks_u%headn+blocks_u%N-1,:) = sendbufx(j)%vector
+               endif
+            enddo
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
+         deallocate(xglo)
+         deallocate(bmod)
+         deallocate(brecv)
+         deallocate(receiverlists)
+
+         do j=1,h_mat%myAcols
+            if(allocated(sendbufx(j)%vector))deallocate(sendbufx(j)%vector)
+         enddo
+         deallocate(sendbufx)
+
+         do i=1,h_mat%myArows
+            if(allocated(sendbufmod(i)%vector))deallocate(sendbufmod(i)%vector)
+         enddo
+         deallocate(sendbufmod)
 
       else
          write (*, *) 'XxU^-1 with MPI is not yet implemented'

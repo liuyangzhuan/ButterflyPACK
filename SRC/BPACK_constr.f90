@@ -179,15 +179,6 @@ contains
       endif
 
       !**** return the permutation vector
-      select case (option%format)
-      case (HODLR)
-         msh%idxs = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
-         msh%idxe = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2)
-      case (HMAT)
-         msh%idxs = bmat%h_mat%Local_blocks(1, 1)%headm
-         msh%idxe = bmat%h_mat%Local_blocks(1, 1)%headm + bmat%h_mat%Local_blocks(1, 1)%M - 1
-      end select
-
       Nunk_loc = msh%idxe - msh%idxs + 1
       if (ptree%MyID == Main_ID) then
          do edge = 1, Nunk
@@ -334,6 +325,7 @@ contains
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(intersect)::submats(1)
+      integer nprow,npcol,myrow,mycol,myArows,myAcols
 
       call MPI_barrier(ptree%Comm, ierr)
 
@@ -344,40 +336,40 @@ contains
       allocate (stats%rankmax_of_level_global(0:h_mat%Maxlevel))
       stats%rankmax_of_level_global = 0
 
-      num_blocks = 2**msh%Dist_level
-      if (ptree%MyID == ptree%nproc - 1 .and. option%verbosity >= 0) then
-         write (*, *) "   "
-         write (*, *) num_blocks*Rows_per_processor, 'total blocks'
-      endif
-
       scale_factor = 0
       ! compute the largest diagonal entry as the scaling factor
-      do i = 1, Rows_per_processor
-         blocks => h_mat%Local_blocks(ptree%MyID + 1, i)
-         do ii = blocks%headm, blocks%headm + blocks%M - 1
-            mrange(1) = ii
-            nrange(1) = ii
+      level=h_mat%Maxlevel
+      cur => h_mat%lstblks(level)%head
+      do i = 1, h_mat%lstblks(level)%num_nods
+         select type (ptr=>cur%item)
+         type is (block_ptr)
+            if(ptr%ptr%row_group==ptr%ptr%col_group)then
+               do ii = ptr%ptr%headm, ptr%ptr%headm + ptr%ptr%M - 1
+                  mrange(1) = ii
+                  nrange(1) = ii
+
+                  submats(1)%nr = 1
+                  submats(1)%nc = 1
+                  allocate(submats(1)%rows(submats(1)%nr))
+                  submats(1)%rows = mrange(1:submats(1)%nr)
+                  allocate(submats(1)%cols(submats(1)%nc))
+                  submats(1)%cols = nrange(1:submats(1)%nc)
+                  allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+                  call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+                  mat = submats(1)%dat
+                  deallocate(submats(1)%rows)
+                  deallocate(submats(1)%cols)
+                  deallocate(submats(1)%dat)
 
 
-            submats(1)%nr = 1
-            submats(1)%nc = 1
-            allocate(submats(1)%rows(submats(1)%nr))
-            submats(1)%rows = mrange(1:submats(1)%nr)
-            allocate(submats(1)%cols(submats(1)%nc))
-            submats(1)%cols = nrange(1:submats(1)%nc)
-            allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
-            call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
-            mat = submats(1)%dat
-            deallocate(submats(1)%rows)
-            deallocate(submats(1)%cols)
-            deallocate(submats(1)%dat)
+                  ! call element_Zmn_block_user(1, 1, mrange, nrange, mat, msh, option, ker, 0, passflag, ptree, stats)
 
-
-            ! call element_Zmn_block_user(1, 1, mrange, nrange, mat, msh, option, ker, 0, passflag, ptree, stats)
-
-            scale_factor = max(scale_factor, abs(mat(1, 1)/option%scale_factor))
-            ! write(*,*)ii,abs(ctemp)
-         enddo
+                  scale_factor = max(scale_factor, abs(mat(1, 1)/option%scale_factor))
+                  ! write(*,*)ii,abs(ctemp)
+               enddo
+            endif
+         end select
+         cur => cur%next
       enddo
       if (scale_factor < BPACK_SafeUnderflow) scale_factor = 1d0
 
@@ -423,8 +415,8 @@ contains
          enddo
       enddo
 
-      do i = 1, Rows_per_processor
-         do j = 1, num_blocks
+      do i = 1, h_mat%myArows
+         do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
             blocks_copy => h_mat%Local_blocks_copy(j, i)
             call Hmat_block_copy('N', blocks_copy, blocks)
@@ -2692,55 +2684,76 @@ contains
       type(proctree)::ptree
       type(intersect)::inters(:)
       integer nth, num_blocks
-      integer ii, jj, idx, row_group, col_group
+      integer ii, jj, idx, row_group, col_group, i, j
       type(list)::lstblk
-      type(iarray)::lstr, lstc, clstr_g, clstc_g(num_blocks)
+      type(iarray)::lstr, lstc
+      type(iarray),allocatable:: clstr_g(:), clstc_g(:)
 
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(matrixblock), pointer::blocks
       type(block_ptr)::blk_ptr
 
-      clstr_g%idx = nth
-      clstr_g%num_nods = 0
-      do jj = 1, num_blocks
-         clstc_g(jj)%idx = nth
-         clstc_g(jj)%num_nods = 0
+      if(h_mat%myArows>0 .and. h_mat%myAcols>0)then
+
+      allocate(clstr_g(h_mat%myArows))
+      do i = 1, h_mat%myArows
+         clstr_g(i)%idx = nth
+         clstr_g(i)%num_nods = 0
+         allocate (clstr_g(i)%dat(lstr%num_nods))
       enddo
 
-      allocate (clstr_g%dat(lstr%num_nods))
-      clstr_g%num_nods = 0
+      allocate(clstc_g(h_mat%myAcols))
+      do j = 1, h_mat%myAcols
+         clstc_g(j)%idx = nth
+         clstc_g(j)%num_nods = 0
+         allocate (clstc_g(j)%dat(lstc%num_nods))
+      enddo
+
       do ii = 1, lstr%num_nods
-         row_group = h_mat%Local_blocks(1, 1)%row_group
-         if (inters(nth)%rows(lstr%dat(ii)) >= msh%basis_group(row_group)%head .and. inters(nth)%rows(lstr%dat(ii)) <= msh%basis_group(row_group)%tail) then
-            clstr_g%num_nods = clstr_g%num_nods + 1
-            clstr_g%dat(clstr_g%num_nods) = lstr%dat(ii)
+      do i = 1, h_mat%myArows
+         blocks => h_mat%Local_blocks(1, i)
+         if (inters(nth)%rows(lstr%dat(ii)) >= msh%basis_group(blocks%row_group)%head .and. inters(nth)%rows(lstr%dat(ii)) <= msh%basis_group(blocks%row_group)%tail) then
+            clstr_g(i)%num_nods = clstr_g(i)%num_nods + 1
+            clstr_g(i)%dat(clstr_g(i)%num_nods) = lstr%dat(ii)
          endif
       enddo
-
-      do jj = 1, num_blocks
-         allocate (clstc_g(jj)%dat(lstc%num_nods))
-         clstc_g(jj)%num_nods = 0
-      enddo
-      do ii = 1, lstc%num_nods
-         jj = findgroup(inters(nth)%cols(lstc%dat(ii)), msh, msh%Dist_level, 1) - 2**msh%Dist_level + 1
-         clstc_g(jj)%num_nods = clstc_g(jj)%num_nods + 1
-         clstc_g(jj)%dat(clstc_g(jj)%num_nods) = lstc%dat(ii)
       enddo
 
-      if (clstr_g%num_nods > 0) then
-      do jj = 1, num_blocks
-         if (clstc_g(jj)%num_nods > 0) then
-            blocks => h_mat%Local_blocks(jj, 1)
-            call Hmat_MapIntersec2Block_Loc(blocks, option, stats, msh, ptree, inters, nth, clstr_g, clstc_g(jj), lstblk)
+
+      do jj = 1, lstc%num_nods
+      do j = 1, h_mat%myAcols
+         blocks => h_mat%Local_blocks(j, 1)
+         if (inters(nth)%cols(lstc%dat(jj)) >= msh%basis_group(blocks%col_group)%head .and. inters(nth)%cols(lstc%dat(jj)) <= msh%basis_group(blocks%col_group)%tail) then
+            clstc_g(j)%num_nods = clstc_g(j)%num_nods + 1
+            clstc_g(j)%dat(clstc_g(j)%num_nods) = lstc%dat(jj)
+         endif
+      enddo
+      enddo
+
+      do i = 1, h_mat%myArows
+      if (clstr_g(i)%num_nods > 0) then
+      do j = 1, h_mat%myAcols
+         if (clstc_g(j)%num_nods > 0) then
+            blocks => h_mat%Local_blocks(j, i)
+            call Hmat_MapIntersec2Block_Loc(blocks, option, stats, msh, ptree, inters, nth, clstr_g(i), clstc_g(j), lstblk)
          endif
       enddo
       endif
-
-      deallocate (clstr_g%dat)
-      do jj = 1, num_blocks
-         deallocate (clstc_g(jj)%dat)
       enddo
+
+
+      do i = 1, h_mat%myArows
+         deallocate (clstr_g(i)%dat)
+      enddo
+      deallocate(clstr_g)
+      do j = 1, h_mat%myAcols
+         deallocate (clstc_g(j)%dat)
+      enddo
+      deallocate(clstc_g)
+
+      endif
+
    end subroutine Hmat_MapIntersec2Block
 
    recursive subroutine Hmat_MapIntersec2Block_Loc(blocks, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk)
