@@ -361,8 +361,10 @@ module BPACK_DEFS
 
     !**** Hmatrix structure
     type Hmat
-        integer Maxlevel, N ! HODLR levels and sizes
+        integer Maxlevel, N ! H matrix levels and sizes
         integer Dist_level ! used in Hmatrix solver, the level at which parallelization is performed
+        integer idxs, idxe ! same as msh%idxs and msh%idxe
+        integer myArows,myAcols ! local number of row and column blocks
         type(global_matricesblock), pointer :: blocks_root => null(), First_block_eachlevel(:) => null()
         type(matrixblock), pointer :: Local_blocks(:, :) => null()
         type(matrixblock), pointer :: Local_blocks_copy(:, :) => null() ! copy of the forward matrix

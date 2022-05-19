@@ -5100,6 +5100,13 @@ contains
       numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
    end function numroc_wp
 
+   integer function blacs_pnum_wp(ICONTXT, PROW, PCOL)
+      integer :: ICONTXT, PROW, PCOL
+      integer :: blacs_pnum ! blacs routine
+      blacs_pnum_wp = blacs_pnum(ICONTXT, PROW, PCOL)
+   end function blacs_pnum_wp
+
+
 ! get my row and column index in a 2D grid that is column major consisting of contiguous proc ids
    subroutine Gridinfo_2D(pmap, MyID, myrow, mycol)
       implicit none

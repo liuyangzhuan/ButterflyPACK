@@ -345,7 +345,7 @@ end function distance_geo
                   group_m = blocks%sons(i, j)%row_group
                   group_n = blocks%sons(i, j)%col_group
 
-                  blocks%sons(i, j)%pgno = msh%basis_group(group_m)%pgno
+                  blocks%sons(i, j)%pgno = blocks%pgno
                   blocks%sons(i, j)%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
                   blocks%sons(i, j)%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
                   blocks%sons(i, j)%headm = msh%basis_group(group_m)%head
@@ -1833,12 +1833,19 @@ end function distance_geo
       type(matrixblock), pointer :: blocks
       integer Maxgrp, ierr, row_group, col_group
       type(global_matricesblock), pointer::global_block
+      integer nprow,npcol,myrow,mycol,myArows,myAcols,mypgno
 
-      ii = Rows_per_processor*ptree%nproc
-      level = -1
-      do while (ii /= 0)
+      msh%idxs = 1000000000
+      msh%idxe = -1000000000
+      h_mat%myArows=0
+      h_mat%myAcols=0
+
+      nprow = ptree%pgrp(1)%nprow
+      npcol = ptree%pgrp(1)%npcol
+      ii = max(nprow,npcol)
+      level = 0
+      do while (2**level<ii)
          level = level + 1
-         ii = int(ii/2)
       enddo
       msh%Dist_level = level
       h_mat%Dist_level = level
@@ -1848,21 +1855,29 @@ end function distance_geo
       do level = 0, h_mat%Maxlevel
          do group = 2**level, 2**(level + 1) - 1
             if (level < h_mat%Maxlevel) then
-            if (msh%basis_group(group)%pgno*2 <= Maxgrp) then
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno*2
+               if (msh%basis_group(group)%pgno*2 <= Maxgrp) then
+                  msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno*2
+               else
+                  msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno
+               endif
+               if (msh%basis_group(group)%pgno*2 + 1 <= Maxgrp) then
+                  msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno*2 + 1
+               else
+                  msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno
+               endif
             else
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno
-            endif
-            if (msh%basis_group(group)%pgno*2 + 1 <= Maxgrp) then
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno*2 + 1
-            else
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno
-            endif
+               if(ptree%pgrp(msh%basis_group(group)%pgno)%head==ptree%MyID)then
+                  msh%idxs = min(msh%idxs,msh%basis_group(group)%head)
+                  msh%idxe = max(msh%idxe,msh%basis_group(group)%tail)
+                  mypgno = msh%basis_group(group)%pgno
+               endif
             endif
          enddo
       enddo
 
       h_mat%N = msh%Nunk
+      h_mat%idxs = msh%idxs
+      h_mat%idxe = msh%idxe
 
       allocate (h_mat%blocks_root)
       h_mat%blocks_root%level = 0
@@ -1896,42 +1911,49 @@ end function distance_geo
          h_mat%First_block_eachlevel(level)%father => global_block
       enddo
 
-      num_blocks = 2**msh%Dist_level
-      allocate (h_mat%Local_blocks(num_blocks, Rows_per_processor))
-      allocate (h_mat%Local_blocks_copy(num_blocks, Rows_per_processor))
-      do i = 1, Rows_per_processor
 
-         do j = 1, num_blocks
-            blocks => h_mat%Local_blocks(j, i)
+      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      if (nprow /= -1 .and. npcol /= -1) then
 
-            blocks%level = msh%Dist_level
-            blocks%row_group = num_blocks + ptree%MyID*Rows_per_processor + i - 1
-            blocks%col_group = num_blocks + j - 1
+         num_blocks = 2**msh%Dist_level
+         myArows = numroc_wp(num_blocks, 1, myrow, 0, nprow)
+         myAcols = numroc_wp(num_blocks, 1, mycol, 0, npcol)
+         h_mat%myArows = myArows
+         h_mat%myAcols = myAcols
 
-            if (blocks%level > option%LRlevel) then
-               blocks%level_butterfly = 0 ! low rank below LRlevel
-            else
-               blocks%level_butterfly = h_mat%Maxlevel - blocks%level   ! butterfly
-            endif
+         allocate (h_mat%Local_blocks(myAcols, myArows))
+         allocate (h_mat%Local_blocks_copy(myAcols, myArows))
+         do i = 1, myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, myAcols
+               call l2g(j, mycol, num_blocks, npcol, 1, jj)
+               blocks => h_mat%Local_blocks(j, i)
+               blocks%level = msh%Dist_level
+               blocks%row_group = num_blocks + ii - 1
+               blocks%col_group = num_blocks + jj - 1
 
-            nullify (blocks%father)
-            row_group = blocks%row_group
-            col_group = blocks%col_group
-            blocks%pgno = msh%basis_group(row_group)%pgno
-            blocks%M = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
-            blocks%N = msh%basis_group(col_group)%tail - msh%basis_group(col_group)%head + 1
-            blocks%headm = msh%basis_group(row_group)%head
-            blocks%headn = msh%basis_group(col_group)%head
-            call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
-            call Hmat_construct_local_tree(blocks, option, stats, msh, ker, ptree, h_mat%Maxlevel)
+               if (blocks%level > option%LRlevel) then
+                  blocks%level_butterfly = 0 ! low rank below LRlevel
+               else
+                  blocks%level_butterfly = h_mat%Maxlevel - blocks%level   ! butterfly
+               endif
+
+               nullify (blocks%father)
+               row_group = blocks%row_group
+               col_group = blocks%col_group
+               blocks%pgno = mypgno
+               blocks%M = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
+               blocks%N = msh%basis_group(col_group)%tail - msh%basis_group(col_group)%head + 1
+               blocks%headm = msh%basis_group(row_group)%head
+               blocks%headn = msh%basis_group(col_group)%head
+               call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
+               call Hmat_construct_local_tree(blocks, option, stats, msh, ker, ptree, h_mat%Maxlevel)
+            enddo
          enddo
-      enddo
+      endif
 
       call MPI_allreduce(MPI_IN_PLACE, stats%leafs_of_level(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_integer, MPI_sum, ptree%Comm, ierr)
 
-      blocks => h_mat%Local_blocks(1, 1)
-      msh%idxs = blocks%headm
-      msh%idxe = blocks%headm + blocks%M - 1
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          do level = 1, h_mat%Maxlevel
@@ -1948,12 +1970,14 @@ end function distance_geo
       do level = 0, h_mat%Maxlevel
          h_mat%lstblks(level) = list()
       enddo
-      do i = 1, Rows_per_processor
-         do j = 1, num_blocks
+
+      do i = 1, h_mat%myArows
+         do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
             call Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
          enddo
       enddo
+
       do level = 0, h_mat%Maxlevel
          call MergeSort(h_mat%lstblks(level)%head, node_score_block_ptr_row)
       enddo

@@ -353,12 +353,30 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         real*8 Memory, Memory_near
         type(matrixblock), pointer :: block
         integer mypgno
+        type(nod), pointer::cur
+        class(*), pointer::ptr
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
 
         nn1 = OMP_get_wtime()
-        call Hmat_LU_TopLevel(h_mat%blocks_root, h_mat, option, stats, ptree, msh)
+
+        if(option%ILU==1)then
+            level=h_mat%Maxlevel
+            cur => h_mat%lstblks(level)%head
+            do i = 1, h_mat%lstblks(level)%num_nods
+                select type (ptr=>cur%item)
+                type is (block_ptr)
+                    if(ptr%ptr%row_group==ptr%ptr%col_group)then
+                        call Full_LU(ptr%ptr, option, stats)
+                    endif
+                end select
+                cur => cur%next
+            enddo
+        else
+            call Hmat_LU_TopLevel(h_mat%blocks_root, h_mat, option, stats, ptree, msh)
+        endif
+
         nn2 = OMP_get_wtime()
         stats%Time_Factor = nn2 - nn1
 
@@ -414,17 +432,17 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             write (*, *) 'Unpacking all blocks...'
         endif
 
+        if (option%ILU == 0) then
         num_blocks = 2**msh%Dist_level
         do i = 1, Rows_per_processor
             do j = 1, num_blocks
                 block => h_mat%Local_blocks(j, i)
-                if (option%ILU == 0) then
-                    mypgno = msh%basis_group(block%row_group)%pgno
-                    call unpack_all_blocks_one_node(block, h_mat%Maxlevel, ptree, msh, mypgno)
-                endif
+                mypgno = msh%basis_group(block%row_group)%pgno
+                call unpack_all_blocks_one_node(block, h_mat%Maxlevel, ptree, msh, mypgno)
                 call Hmat_block_ComputeMemory(block, stats%Mem_Factor)
             enddo
         enddo
+        endif
 
         call LogMemory(stats, stats%Mem_Factor)
 
