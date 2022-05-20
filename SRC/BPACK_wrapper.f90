@@ -1104,15 +1104,6 @@ contains
       endif
 
       !**** return the permutation vector
-      select case (option%format)
-      case (HODLR)
-         msh%idxs = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
-         msh%idxe = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2)
-      case (HMAT)
-         msh%idxs = bmat%h_mat%Local_blocks(1, 1)%headm
-         msh%idxe = bmat%h_mat%Local_blocks(1, 1)%headm + bmat%h_mat%Local_blocks(1, 1)%M - 1
-      end select
-
       N_loc = msh%idxe - msh%idxs + 1
       ! if (ptree%MyID == Main_ID) then
          do edge = 1, N
@@ -1326,15 +1317,6 @@ contains
       endif
 
       !**** return the permutation vector
-      select case (option%format)
-      case (HODLR)
-         msh%idxs = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
-         msh%idxe = bmat%ho_bf%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2)
-      case (HMAT)
-         msh%idxs = bmat%h_mat%Local_blocks(1, 1)%headm
-         msh%idxe = bmat%h_mat%Local_blocks(1, 1)%headm + bmat%h_mat%Local_blocks(1, 1)%M - 1
-      end select
-
       N_loc = msh%idxe - msh%idxs + 1
       if (ptree%MyID == Main_ID) then
          do edge = 1, N
