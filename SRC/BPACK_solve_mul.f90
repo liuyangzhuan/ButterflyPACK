@@ -1171,7 +1171,7 @@ contains
          enddo
 
          allocate(fmod(max(h_mat%myArows,1)))
-         fmod=0         
+         fmod=0
          allocate(frecv(max(h_mat%myArows,1)))
          frecv=0
          allocate(sendflagarray(num_blocks))
@@ -1410,7 +1410,7 @@ contains
          allocate(bmod(max(h_mat%myArows,1)))
          bmod=0
          allocate(brecv(max(h_mat%myArows,1)))
-         brecv=0         
+         brecv=0
          allocate(sendflagarray(num_blocks))
          sendflagarray=0
          do i = 1, h_mat%myArows
