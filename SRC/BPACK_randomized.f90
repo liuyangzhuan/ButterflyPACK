@@ -320,7 +320,7 @@ contains
       type(Hstat)::stats
       type(mesh)::msh
       procedure(HMatVec)::blackbox_Hmat_MVP
-      integer head, tail, idx_start_loc, idx_end_loc, ierr
+      integer head, tail, idx_start_loc, idx_end_loc, ierr, idxs, idxe
       integer,allocatable:: source_groups(:)
       integer jGroup,ncolor,gg,group_start,group_n,group_m,N_source_group,mn1,mn2
       type(nod), pointer::curr
@@ -376,9 +376,11 @@ contains
          ! generate sparse random vectors for the current color set
          do gg=1,N_source_group
             group_m = source_groups(gg)
-            if(msh%basis_group(group_m)%head>=msh%idxs .and. msh%basis_group(group_m)%head<=msh%idxe)then
-               RandVectInR(msh%basis_group(group_m)%head-msh%idxs+1:msh%basis_group(group_m)%tail-msh%idxs+1,1:num_vect) = RandVectInR_glo(msh%basis_group(group_m)%head:msh%basis_group(group_m)%tail,1:num_vect)
-               RandVectInL(msh%basis_group(group_m)%head-msh%idxs+1:msh%basis_group(group_m)%tail-msh%idxs+1,1:num_vect) = RandVectInL_glo(msh%basis_group(group_m)%head:msh%basis_group(group_m)%tail,1:num_vect)
+            if((msh%basis_group(group_m)%head>=msh%idxs .and. msh%basis_group(group_m)%head<=msh%idxe) .or. (msh%basis_group(group_m)%tail>=msh%idxs .and. msh%basis_group(group_m)%tail<=msh%idxe))then
+               idxs = max(msh%basis_group(group_m)%head,msh%idxs)
+               idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
+               RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect) = RandVectInR_glo(idxs:idxe,1:num_vect)
+               RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect) = RandVectInL_glo(idxs:idxe,1:num_vect)
             endif
          enddo
 
