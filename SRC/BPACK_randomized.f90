@@ -284,9 +284,8 @@ contains
 
       ! may need to compute scale factor here
 
-      num_blocks = 2**msh%Dist_level
-      do i = 1, Rows_per_processor
-         do j = 1, num_blocks
+      do i = 1, h_mat%myArows
+         do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
             blocks_copy => h_mat%Local_blocks_copy(j, i)
             call Hmat_block_copy('N', blocks_copy, blocks)

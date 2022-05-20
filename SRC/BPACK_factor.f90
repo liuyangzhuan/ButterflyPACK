@@ -344,7 +344,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         type(proctree)::ptree
         type(mesh)::msh
 
-        integer blocks, level, flag, num_blocks, level_butterfly
+        integer level, flag, num_blocks, level_butterfly
         integer Primary_block, kk, i, j, k, intemp, ierr
         integer systime0(8), systime1(8)
         character(len=10) :: date1, time1, zone1
@@ -355,6 +355,8 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         integer mypgno
         type(nod), pointer::cur
         class(*), pointer::ptr
+        type(matrixblock), pointer :: blocks, blocks_r, blocks_s, blocks_mm, blocks_uu, blocks_ll
+        integer nprow, npcol, myrow, mycol, iproc, myi, jproc, myj, jproc1, myj1, iproc1, myi1, recv,send, send_ID
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
@@ -374,7 +376,188 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 cur => cur%next
             enddo
         else
-            call Hmat_LU_TopLevel(h_mat%blocks_root, h_mat, option, stats, ptree, msh)
+            ! pack all blocks at Dist_level
+            do j = 1, h_mat%myAcols
+            do i = 1, h_mat%myArows
+                blocks => h_mat%Local_blocks(j, i)
+                ! call pack_all_blocks_one_node(blocks, msh)
+                mypgno = blocks%pgno
+            enddo
+            enddo
+
+            allocate (h_mat%Computing_matricesblock_m(1, 1))
+            allocate (h_mat%Computing_matricesblock_l(max(1,h_mat%myAcols), max(1,h_mat%myArows)))
+            allocate (h_mat%Computing_matricesblock_u(max(1,h_mat%myAcols), max(1,h_mat%myArows)))
+
+
+            call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+            num_blocks = 2**h_mat%Dist_level
+            do kk=1,num_blocks
+                if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting panel ", kk
+                call MPI_verbose_barrier('--diagonal factorization', ptree,option)
+                call g2l(kk, num_blocks, nprow, 1, iproc, myi)
+                call g2l(kk, num_blocks, npcol, 1, jproc, myj)
+                if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc, jproc)
+                send=0
+                recv=0
+                if(iproc==myrow .and. jproc==mycol)then
+                    blocks => h_mat%Local_blocks(myj, myi)
+                    ! call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
+                    call Hmat_LU(blocks, h_mat, option, stats, ptree, msh)
+                    call pack_all_blocks_one_node(blocks, msh)
+                    send=1
+                endif
+
+                call MPI_verbose_barrier('--sending the digonal block', ptree, option)
+                do j=kk+1,num_blocks
+                    call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                    if(iproc==myrow .and. jproc1==mycol)then
+                    recv=1
+                    endif
+                enddo
+                do i=kk+1,num_blocks
+                    call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                    if(iproc1==myrow .and. jproc==mycol)then
+                    recv=1
+                    endif
+                enddo
+                if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, 1)
+                if (send == 1) blocks_s => h_mat%Local_blocks(myj, myi)
+                call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
+
+                call MPI_verbose_barrier('--L and U panel factorization', ptree, option)
+                if (recv == 1)then
+                    call unpack_all_blocks_one_node(blocks_r, h_mat%Maxlevel, ptree, msh, mypgno)
+                    Memory=0
+                    call Hmat_block_ComputeMemory(blocks_r, Memory)
+                    call LogMemory(stats, Memory)
+                endif
+                do j=kk+1,num_blocks
+                    call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                    if(iproc==myrow .and. jproc1==mycol)then
+                        blocks_uu => h_mat%Local_blocks(myj1, myi)
+                        blocks_mm => h_mat%Computing_matricesblock_m(1, 1)
+                        call Hmat_LXM(blocks_mm, blocks_uu, h_mat, option, stats, ptree, msh)
+                        call pack_all_blocks_one_node(blocks_uu, msh)
+                    endif
+                enddo
+                do i=kk+1,num_blocks
+                    call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                    if(iproc1==myrow .and. jproc==mycol)then
+                        blocks_ll => h_mat%Local_blocks(myj, myi1)
+                        blocks_mm => h_mat%Computing_matricesblock_m(1, 1)
+                        call Hmat_XUM(blocks_mm, blocks_ll, h_mat, option, stats, ptree, msh)
+                        call pack_all_blocks_one_node(blocks_ll, msh)
+                    endif
+                enddo
+                if (recv == 1)then
+                    Memory=0
+                    call Hmat_block_ComputeMemory(blocks_r, Memory)
+                    call LogMemory(stats, -Memory)
+                    call Hmat_block_delete(blocks_r)
+                endif
+                call MPI_verbose_barrier('--sending L and U panels', ptree, option)
+                do j=kk+1,num_blocks
+                    send=0
+                    recv=0
+                    call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc, jproc1)
+                    if(iproc==myrow .and. jproc1==mycol)then
+                        send=1
+                    endif
+                    do i=kk+1,num_blocks
+                        call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                        if(iproc1==myrow .and. jproc1==mycol)then
+                            recv=1
+                        endif
+                    enddo
+                    if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, 1)
+                    if (send == 1) blocks_s => h_mat%Local_blocks(myj1, myi)
+                    call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
+                    if (recv == 1)then
+                        do i=kk+1,num_blocks
+                            call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                            if(iproc1==myrow .and. jproc1==mycol)then
+                                blocks_uu => h_mat%Computing_matricesblock_u(myj1, myi1)
+                                call Hmat_block_copy_MPIdata(blocks_uu, blocks_r, msh)
+                                call unpack_all_blocks_one_node(blocks_uu, h_mat%Maxlevel, ptree, msh, mypgno)
+                                Memory=0
+                                call Hmat_block_ComputeMemory(blocks_uu, Memory)
+                                call LogMemory(stats, Memory)
+                            endif
+                        enddo
+                    endif
+                    if (recv == 1)call Hmat_block_delete(blocks_r)
+                enddo
+
+                do i=kk+1,num_blocks
+                    send=0
+                    recv=0
+                    call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc1, jproc)
+                    if(iproc1==myrow .and. jproc==mycol)then
+                        send=1
+                    endif
+                    do j=kk+1,num_blocks
+                        call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                        if(iproc1==myrow .and. jproc1==mycol)then
+                            recv=1
+                        endif
+                    enddo
+                    if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, 1)
+                    if (send == 1) blocks_s => h_mat%Local_blocks(myj, myi1)
+                    call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
+                    if (recv == 1)then
+                        do j=kk+1,num_blocks
+                            call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                            if(iproc1==myrow .and. jproc1==mycol)then
+                                blocks_ll => h_mat%Computing_matricesblock_l(myj1, myi1)
+                                call Hmat_block_copy_MPIdata(blocks_ll, blocks_r, msh)
+                                call unpack_all_blocks_one_node(blocks_ll, h_mat%Maxlevel, ptree, msh, mypgno)
+                                Memory=0
+                                call Hmat_block_ComputeMemory(blocks_ll, Memory)
+                                call LogMemory(stats, Memory)
+                            endif
+                        enddo
+                    endif
+                    if (recv == 1)call Hmat_block_delete(blocks_r)
+                enddo
+
+                call MPI_verbose_barrier('--Schur updates', ptree, option)
+                do i=kk+1,num_blocks
+                do j=kk+1,num_blocks
+                    call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                    call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                    if(iproc1==myrow .and. jproc1==mycol)then
+                        blocks_ll => h_mat%Computing_matricesblock_l(myj1, myi1)
+                        blocks_uu => h_mat%Computing_matricesblock_u(myj1, myi1)
+                        blocks_mm => h_mat%Local_blocks(myj1, myi1)
+                        call Hmat_add_multiply(blocks_mm, '-', blocks_ll, blocks_uu, h_mat, option, stats, ptree, msh)
+                        Memory=0
+                        call Hmat_block_ComputeMemory(blocks_ll, Memory)
+                        call LogMemory(stats, -Memory)
+                        Memory=0
+                        call Hmat_block_ComputeMemory(blocks_uu, -Memory)
+                        call LogMemory(stats, -Memory)
+                        call Hmat_block_delete(blocks_ll)
+                        call Hmat_block_delete(blocks_uu)
+                    endif
+                enddo
+                enddo
+            enddo
+
+            deallocate(h_mat%Computing_matricesblock_m)
+            deallocate(h_mat%Computing_matricesblock_l)
+            deallocate(h_mat%Computing_matricesblock_u)
+
+            ! unpack all blocks at Dist_level
+            do j = 1, h_mat%myAcols
+                do i = 1, h_mat%myArows
+                    blocks => h_mat%Local_blocks(j, i)
+                    call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
+                    call Hmat_block_ComputeMemory(blocks, stats%Mem_Factor)
+                enddo
+            enddo
         endif
 
         nn2 = OMP_get_wtime()
@@ -432,21 +615,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             write (*, *) 'Unpacking all blocks...'
         endif
 
-        if (option%ILU == 0) then
-        num_blocks = 2**msh%Dist_level
-        do i = 1, Rows_per_processor
-            do j = 1, num_blocks
-                block => h_mat%Local_blocks(j, i)
-                mypgno = msh%basis_group(block%row_group)%pgno
-                call unpack_all_blocks_one_node(block, h_mat%Maxlevel, ptree, msh, mypgno)
-                call Hmat_block_ComputeMemory(block, stats%Mem_Factor)
-            enddo
-        enddo
-        endif
-
         call LogMemory(stats, stats%Mem_Factor)
 
-        call MPI_verbose_barrier('after printing', ptree)
+        call MPI_verbose_barrier('after printing', ptree, option)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
             write (*, *) 'Unpacking finished'
             write (*, *) ''
@@ -456,1076 +627,6 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
     end subroutine Hmat_Factorization
 
-    recursive subroutine Hmat_LU_TopLevel(blocks, h_mat, option, stats, ptree, msh)
-
-        implicit none
-
-        type(Hoption)::option
-        type(Hstat)::stats
-        type(Hmat)::h_mat
-        type(proctree)::ptree
-        type(mesh)::msh
-
-        integer level, id
-        integer i, j, k, ii, jj, kk, flag
-        real*8 rtemp1, rtemp2
-        real*8 T0, T1, T2, T3
-        character(len=10) :: date, time, zone
-        integer systime0(8), systime1(8)
-        type(global_matricesblock), pointer :: blocks, block_son1, block_son2, block_son3
-
-        level = blocks%level
-        if (associated(blocks, h_mat%First_block_eachlevel(level)%father) .eqv. .true.) then
-            T0 = OMP_get_wtime()
-        endif
-
-        if (level /= msh%Dist_level) then
-            block_son1 => blocks%sons(1, 1)
-            call Hmat_LU_TopLevel(block_son1, h_mat, option, stats, ptree, msh)
-            if (option%ILU == 0) then
-                block_son1 => blocks%sons(1, 1)
-                block_son2 => blocks%sons(1, 2)
-                block_son3 => blocks%sons(2, 1)
-                call Hmat_LXM_XUM_TopLevel(block_son1, block_son2, block_son3, h_mat, option, stats, ptree, msh)
-                block_son1 => blocks%sons(2, 1)
-                block_son2 => blocks%sons(1, 2)
-                block_son3 => blocks%sons(2, 2)
-                call Hmat_add_multiply_TopLevel(block_son3, '-', block_son1, block_son2, h_mat, option, stats, ptree, msh)
-            endif
-            block_son1 => blocks%sons(2, 2)
-            call Hmat_LU_TopLevel(block_son1, h_mat, option, stats, ptree, msh)
-        else
-            call Hmat_LU_DistLevel(blocks, h_mat, option, stats, ptree, msh)
-        endif
-
-        if (associated(blocks, h_mat%First_block_eachlevel(level)%father) .eqv. .true.) then
-
-            T1 = OMP_get_wtime()
-
-            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-                write (*, *) 'level:', level, 'is completed', T1 - T0, 'secconds'
-            endif
-        endif
-
-        return
-
-    end subroutine Hmat_LU_TopLevel
-
-    subroutine Hmat_LU_DistLevel(global_block, h_mat, option, stats, ptree, msh)
-
-        implicit none
-
-        type(Hoption)::option
-        type(Hstat)::stats
-        type(Hmat)::h_mat
-        type(proctree)::ptree
-        type(mesh)::msh
-
-        integer level, id, mm, nn
-        integer i, j, k, ii, jj, kk, group_m, group_n, group_start
-        type(global_matricesblock), pointer :: global_block
-        type(matrixblock), pointer :: blocks
-        integer mypgno
-
-        group_start = 2**msh%Dist_level - 1
-        group_m = global_block%row_group
-        group_n = global_block%col_group
-        mm = group_m - group_start
-        nn = group_m - group_start
-        id = int((mm - 1)/Rows_per_processor)
-        i = mm - id*Rows_per_processor
-        j = nn
-        if (ptree%MyID == id) then
-            blocks => h_mat%Local_blocks(j, i)
-            if (associated(global_block, h_mat%First_block_eachlevel(msh%Dist_level)%father) .neqv. .true.) then
-                if (option%ILU == 0) then
-                    mypgno = msh%basis_group(blocks%row_group)%pgno
-                    call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
-                endif
-            endif
-            if (blocks%row_group /= blocks%col_group) then
-                write (*, *) 'Hmat_LU_DistLevel error1!'
-            endif
-            call Hmat_LU(blocks, h_mat, option, stats, ptree, msh)
-            if (option%ILU == 0) then
-                call pack_all_blocks_one_node(blocks, msh)
-            endif
-        endif
-        call MPI_verbose_barrier('before Hmat_LU_DistLevel returns', ptree)
-
-        return
-
-    end subroutine Hmat_LU_DistLevel
-
-    subroutine Hmat_add_multiply_TopLevel(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
-
-        implicit none
-
-        type(Hoption)::option
-        type(Hstat)::stats
-        type(Hmat)::h_mat
-        type(proctree)::ptree
-        type(mesh)::msh
-
-        integer level_butterfly, num_rows, num_blocks, counts, ierr
-        integer level, mm_group, nn_group, group_startm, group_startn
-        integer style(3), mark(3), flag, id_33, id_12, send_ID, recv_ID, indices, numcols_perprocessor, color, Local_send_ID
-        integer i, j, k, mm, nn, rank, level_blocks, ii, jj, kk, processor, num_processors
-        integer iter, iter_total, iter_start, iter_end, groupm, groupn, recv, send, recv_max
-        character chara
-
-        real*8 T0, T1, T3, T4
-        type(global_matricesblock), pointer :: block1, block2, block3
-        type(matrixblock), pointer :: blocks11, blocks22, blocks33, blocks_s, blocks_r
-
-        integer, allocatable :: array_statuses(:, :), cols_per_processor(:, :)
-        integer, allocatable :: processor_blocks_map(:, :), rows_processor_map(:, :), cols_processor_map(:, :)
-        integer Local_COMM, Local_Myid, Local_Np
-        integer send_count_ind, send_count_dat, S_request1, S_request2, success, recv_count_ind, recv_count_dat, send_count_tot, recv_count_tot
-        integer, allocatable::Localmyid2myid(:)
-        integer mypgno
-
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'in Hmat_add_multiply_TopLevel'
-
-        level = block3%level
-
-        if (level <= msh%Dist_level) then
-
-            num_rows = 2**(msh%Dist_level - level)
-            i = block3%row_group
-            group_startm = i*2**(msh%Dist_level - level) - 2**msh%Dist_level
-            group_startn = group_startm - num_rows
-
-            num_blocks = num_rows*num_rows
-            if (num_blocks <= ptree%nproc) then
-                num_processors = num_blocks
-                allocate (cols_per_processor(0:1, 0:num_processors - 1))
-                numcols_perprocessor = 1
-                ii = 0
-                do i = 1, num_rows
-                    do j = 1, num_rows
-                        ii = ii + 1
-                        cols_per_processor(0, ii - 1) = i
-                        cols_per_processor(1, ii - 1) = j
-                    enddo
-                enddo
-            else
-                if (mod(num_blocks, ptree%nproc) /= 0) then
-                    write (*, *) 'Hmat_add_multiply_TopLevel error1!'
-                endif
-                num_processors = ptree%nproc
-                numcols_perprocessor = num_blocks/ptree%nproc
-                allocate (cols_per_processor(0:numcols_perprocessor, 0:num_processors - 1))
-                ii = 0
-                do i = 1, num_rows
-                    do j = 1, num_rows
-                        ii = ii + 1
-                        cols_per_processor(0, int((ii - 1)/numcols_perprocessor)) = i
-                        jj = mod(ii, numcols_perprocessor)
-                        if (jj == 0) then
-                            jj = numcols_perprocessor
-                        endif
-                        cols_per_processor(jj, int((ii - 1)/numcols_perprocessor)) = j
-                    enddo
-                enddo
-            endif
-
-            jj = int(num_blocks/num_processors)
-
-            if (group_startn == 0) then
-                do i = 1, num_rows
-                    id_33 = int((group_startm + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (id_33 == ptree%MyID) then
-                        do j = 1, num_rows
-                            blocks33 => h_mat%Local_blocks(j + group_startm, ii)
-                            call pack_all_blocks_one_node(blocks33, msh)
-                        enddo
-                    endif
-                enddo
-            endif
-
-            if (ptree%MyID <= num_processors - 1) then
-                allocate (h_mat%Computing_matricesblock_m(1, 1))
-                allocate (h_mat%Computing_matricesblock_l(1, num_rows))
-                allocate (h_mat%Computing_matricesblock_u(num_rows, 1))
-            endif
-
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('after allocate Computing_matricesblock', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-            T0 = OMP_get_wtime()
-            do i = 1, num_rows
-                do j = 1, num_rows
-                    send_ID = int((group_startm + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-
-                    recv = 0
-                    send = 0
-                    if (ptree%MyID <= num_processors - 1) then
-                        if (i == cols_per_processor(0, ptree%MyID)) recv = 1
-                    end if
-                    if (send_ID == ptree%MyID) send = 1
-
-                    if (recv == 1) blocks_r => h_mat%Computing_matricesblock_l(1, j)
-                    if (send == 1) blocks_s => h_mat%Local_blocks(j + group_startn, ii)
-                    call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
-
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('bcast one blocks in L21', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                end do
-            end do
-
-            ! do recv_ID=0, num_processors-1
-            ! i=cols_per_processor(0,recv_ID)
-            ! send_ID=int((group_startm+i-1)/Rows_per_processor)
-            ! ii=mod(i+group_startm,Rows_per_processor)
-            ! if (ii==0) then
-            ! ii=Rows_per_processor
-            ! endif
-            ! do j=1, num_rows
-            ! if (send_ID==recv_ID) then
-            ! if (send_ID==ptree%MyID) then
-            ! blocks11=>h_mat%Local_blocks(j+group_startn,ii)
-            ! blocks22=>h_mat%Computing_matricesblock_l(1,j)
-            ! call Hmat_block_copy_MPIdata(blocks22,blocks11,msh)
-            ! endif
-            ! else
-            ! !indices=index_of_blocks_for_MPI(i,j)
-            ! if (send_ID==ptree%MyID) then
-            ! counts=0
-            ! indices=0
-            ! !request_global=MPI_request_null
-            ! blocks11=>h_mat%Local_blocks(j+group_startn,ii)
-            ! call blocks_send(blocks11,indices,recv_ID,counts,msh,ptree,option)
-            ! endif
-            ! if (recv_ID==ptree%MyID) then
-            ! counts=0
-            ! indices=0
-            ! blocks11=>h_mat%Computing_matricesblock_l(1,j)
-            ! call blocks_recv(blocks11,indices,send_ID,counts,msh,ptree,option)
-            ! endif
-            ! endif
-            ! T3=OMP_get_wtime()
-            ! call MPI_verbose_barrier('1')
-            ! T4=OMP_get_wtime()
-            ! stats%Time_idle=stats%Time_idle+T4-T3
-            ! enddo
-            ! enddo
-
-            if (ptree%MyID <= num_processors - 1) then
-                i = cols_per_processor(0, ptree%MyID)
-                do j = 1, num_rows
-                    blocks11 => h_mat%Local_blocks(1, 1)
-                    mypgno = msh%basis_group(blocks11%row_group)%pgno
-                    blocks11 => h_mat%Computing_matricesblock_l(1, j)
-                    call unpack_all_blocks_one_node(blocks11, h_mat%Maxlevel, ptree, msh, mypgno)
-                enddo
-            endif
-            T1 = OMP_get_wtime()
-            stats%Time_Comm = stats%Time_Comm + T1 - T0
-
-            do iter = 1, numcols_perprocessor
-
-                do recv_ID = 0, num_processors - 1
-                    i = cols_per_processor(0, recv_ID)
-                    j = cols_per_processor(iter, recv_ID)
-                    send_ID = int((group_startm + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks11 => h_mat%Local_blocks(j + group_startm, ii)
-                            blocks22 => h_mat%Computing_matricesblock_m(1, 1)
-                            call Hmat_block_copy_MPIdata(blocks22, blocks11, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks33 => h_mat%Local_blocks(j + group_startm, ii)
-                            call blocks_send(blocks33, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                            call blocks_recv(blocks33, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send 1 blocks in Z_22', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-
-                do recv_ID = 0, num_processors - 1
-                    i = cols_per_processor(0, recv_ID)
-                    j = cols_per_processor(iter, recv_ID)
-                    send_ID = int((group_startm + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (send_ID == ptree%MyID) then
-                        blocks33 => h_mat%Local_blocks(j + group_startm, ii)
-                        call Hmat_block_delete(blocks33)
-                    endif
-                    if (recv_ID == ptree%MyID) then
-                        blocks33 => h_mat%Local_blocks(1, 1)
-                        mypgno = msh%basis_group(blocks33%row_group)%pgno
-                        blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                        call unpack_all_blocks_one_node(blocks33, h_mat%Maxlevel, ptree, msh, mypgno)
-                    endif
-                enddo
-
-                do j = 1, num_rows
-                    recv = 0
-                    if (ptree%MyID <= num_processors - 1) then
-                        if (j == cols_per_processor(iter, ptree%MyID)) recv = 1
-                    end if
-                    call MPI_allreduce(recv, recv_max, 1, MPI_integer, MPI_max, ptree%Comm, ierr)
-                    if (recv_max == 1) then  ! don't communicate if in this iteration no receiver exists
-
-                        do i = 1, num_rows
-                            send_ID = int((group_startn + i - 1)/Rows_per_processor)
-                            ii = mod(i + group_startm, Rows_per_processor)
-                            if (ii == 0) then
-                                ii = Rows_per_processor
-                            endif
-                            send = 0
-                            recv = 0
-                            if (ptree%MyID <= num_processors - 1) then
-                                if (j == cols_per_processor(iter, ptree%MyID)) recv = 1
-                            end if
-                            if (send_ID == ptree%MyID) send = 1
-
-                            if (recv == 1) blocks_r => h_mat%Computing_matricesblock_u(i, 1)
-                            if (send == 1) blocks_s => h_mat%Local_blocks(j + group_startm, ii)
-                            call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
-                            T3 = OMP_get_wtime()
-                            call MPI_verbose_barrier('bcast one blocks in U12', ptree)
-                            T4 = OMP_get_wtime()
-                            stats%Time_idle = stats%Time_idle + T4 - T3
-
-                        end do
-                    end if
-                end do
-
-                ! do recv_ID=0, num_processors-1
-                ! j=cols_per_processor(iter,recv_ID)
-                ! do i=1, num_rows
-                ! send_ID=int((group_startn+i-1)/Rows_per_processor)
-                ! ii=mod(i+group_startm,Rows_per_processor)
-                ! if (ii==0) then
-                ! ii=Rows_per_processor
-                ! endif
-                ! if (send_ID==recv_ID) then
-                ! if (send_ID==ptree%MyID) then
-                ! blocks11=>h_mat%Local_blocks(j+group_startm,ii)
-                ! blocks22=>h_mat%Computing_matricesblock_u(i,1)
-                ! call Hmat_block_copy_MPIdata(blocks22,blocks11,msh)
-                ! endif
-                ! else
-                ! !indices=index_of_blocks_for_MPI(i,j)
-                ! if (send_ID==ptree%MyID) then
-                ! counts=0
-                ! !request_global=MPI_request_null
-                ! indices=0
-                ! blocks22=>h_mat%Local_blocks(j+group_startm,ii)
-                ! call blocks_send(blocks22,indices,recv_ID,counts,msh,ptree,option)
-                ! endif
-                ! if (recv_ID==ptree%MyID) then
-                ! counts=0
-                ! indices=0
-                ! blocks22=>h_mat%Computing_matricesblock_u(i,1)
-                ! call blocks_recv(blocks22,indices,send_ID,counts,msh,ptree,option)
-                ! endif
-                ! endif
-                ! T3=OMP_get_wtime()
-                ! call MPI_verbose_barrier('3')
-                ! T4=OMP_get_wtime()
-                ! stats%Time_idle=stats%Time_idle+T4-T3
-                ! enddo
-                ! enddo
-
-                if (ptree%MyID <= num_processors - 1) then
-                    j = cols_per_processor(iter, ptree%MyID)
-                    do i = 1, num_rows
-                        blocks22 => h_mat%Local_blocks(1, 1)
-                        mypgno = msh%basis_group(blocks22%row_group)%pgno
-
-                        blocks22 => h_mat%Computing_matricesblock_u(i, 1)
-
-                        call unpack_all_blocks_one_node(blocks22, h_mat%Maxlevel, ptree, msh, mypgno)
-                    enddo
-                endif
-
-                if (ptree%MyID <= num_processors - 1) then
-                    i = cols_per_processor(0, ptree%MyID)
-                    j = cols_per_processor(iter, ptree%MyID)
-                    blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                    do k = 1, num_rows
-                        blocks11 => h_mat%Computing_matricesblock_l(1, k)
-                        blocks22 => h_mat%Computing_matricesblock_u(k, 1)
-                        call Hmat_add_multiply(blocks33, '-', blocks11, blocks22, h_mat, option, stats, ptree, msh)
-                        call Hmat_block_delete(blocks22)
-                    enddo
-
-                endif
-
-                if (ptree%MyID <= num_processors - 1) then
-                    j = cols_per_processor(iter, ptree%MyID)
-                    i = cols_per_processor(0, ptree%MyID)
-                    blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                    call pack_all_blocks_one_node(blocks33, msh)
-                endif
-
-                T3 = OMP_get_wtime()
-                call MPI_verbose_barrier('before send back Z22', ptree)
-                T4 = OMP_get_wtime()
-                stats%Time_idle = stats%Time_idle + T4 - T3
-
-                do send_ID = 0, num_processors - 1
-                    i = cols_per_processor(0, send_ID)
-                    j = cols_per_processor(iter, send_ID)
-                    recv_ID = int((group_startm + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks11 => h_mat%Computing_matricesblock_m(1, 1)
-                            blocks22 => h_mat%Local_blocks(j + group_startm, ii)
-                            call Hmat_block_copy_MPIdata(blocks22, blocks11, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                            call blocks_send(blocks33, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks33 => h_mat%Local_blocks(j + group_startm, ii)
-                            call blocks_recv(blocks33, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send back 1 blocks in Z_22', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-
-                if (ptree%MyID <= num_processors - 1) then
-                    i = cols_per_processor(0, ptree%MyID)
-                    j = cols_per_processor(iter, ptree%MyID)
-                    blocks33 => h_mat%Computing_matricesblock_m(1, 1)
-                    call Hmat_block_delete(blocks33)
-                endif
-
-            enddo
-
-            if (ptree%MyID <= num_processors - 1) then
-                i = cols_per_processor(0, ptree%MyID)
-                ! ! parallel do default(shared) private(j,blocks11)
-                do j = 1, num_rows
-                    blocks11 => h_mat%Computing_matricesblock_l(1, j)
-                    call Hmat_block_delete(blocks11)
-                enddo
-                ! ! end parallel do
-            endif
-
-            if (ptree%MyID <= num_processors - 1) then
-                deallocate (h_mat%Computing_matricesblock_l)
-                deallocate (h_mat%Computing_matricesblock_u)
-                deallocate (h_mat%Computing_matricesblock_m)
-            endif
-
-            deallocate (cols_per_processor)
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('before Hmat_add_multiply_TopLevel finish', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-        else
-
-            !call Hmat_add_multiply(blocks3,chara,blocks1,blocks2)
-
-        endif
-
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'out Hmat_add_multiply_TopLevel'
-        return
-
-    end subroutine Hmat_add_multiply_TopLevel
-
-    subroutine Hmat_LXM_XUM_TopLevel(blocks_m, blocks_u, blocks_l, h_mat, option, stats, ptree, msh)
-
-        implicit none
-
-        type(Hoption)::option
-        type(Hstat)::stats
-        type(Hmat)::h_mat
-        type(proctree)::ptree
-        type(mesh)::msh
-
-        integer level, id_l, id_u, id_m, group_m, group_n, iteration_total, indices
-        integer mm_group, nn_group, num_rows, num_groups, iter, iter_begin, iter_end, groupm, groupn, send, recv
-        integer style(3), mark, style_m, group_startm, group_startn, mm, nn, num_processors
-        integer i, j, k, blockson_m(2, 2), send_ID, recv_ID, color, Local_send_ID
-        integer rank, count1, count2, ii, jj, kk, counts, rows_per_processor_LUM
-
-        real(kind=8) T0, T1, T3, T4
-        type(global_matricesblock), pointer :: blocks_l, blocks_u, blocks_m
-        type(matrixblock), pointer :: blocks_ll, blocks_uu, blocks_mm, blocks_kk, blocks_s, blocks_r
-        INTEGER, allocatable :: array_statuses(:, :)
-        integer Local_COMM, Local_Myid, Local_Np
-      integer send_count_ind, send_count_dat, S_request1, S_request2, success, recv_count_ind, recv_count_dat, send_count_tot, recv_count_tot
-        integer, allocatable::Localmyid2myid(:)
-        integer mypgno
-
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'in Hmat_LXM_XUM_TopLevel'
-
-        level = blocks_m%level
-
-        if (level <= msh%Dist_level) then
-
-            num_rows = 2**(msh%Dist_level - level)
-            i = blocks_l%row_group
-            group_startm = i*2**(msh%Dist_level - level) - 2**msh%Dist_level
-            j = blocks_l%col_group
-            group_startn = j*2**(msh%Dist_level - level) - 2**msh%Dist_level
-
-            if (num_rows <= ptree%nproc/2) then
-                num_processors = num_rows
-                rows_per_processor_LUM = 1
-            else
-                num_processors = ptree%nproc/2
-                rows_per_processor_LUM = 2*num_rows/ptree%nproc
-            endif
-
-            !********************************************************************************************************
-
-            if (group_startn == 0) then
-                do k = 1, num_rows
-                    id_l = int((group_startm + k - 1)/Rows_per_processor)
-                    id_u = int((group_startn + k - 1)/Rows_per_processor)
-                    ii = mod(k + group_startm, Rows_per_processor)
-                    jj = mod(k + group_startn, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (jj == 0) then
-                        jj = Rows_per_processor
-                    endif
-                    if (id_l == ptree%MyID) then
-                        do i = 1, num_rows
-                            blocks_ll => h_mat%Local_blocks(i + group_startn, ii)
-                            call pack_all_blocks_one_node(blocks_ll, msh)
-                        enddo
-                    endif
-                    if (id_u == ptree%MyID) then
-                        do j = 1, num_rows
-                            blocks_uu => h_mat%Local_blocks(j + group_startm, jj)
-                            call pack_all_blocks_one_node(blocks_uu, msh)
-                        enddo
-                    endif
-                enddo
-            endif
-
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('before allocate Computing_matricesblock', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-            if (ptree%MyID <= num_processors - 1) then
-                allocate (h_mat%Computing_matricesblock_m(num_rows, 1))
-                allocate (h_mat%Computing_matricesblock_l(1, num_rows))
-            endif
-            if (ptree%MyID >= ptree%nproc - num_processors) then
-                allocate (h_mat%Computing_matricesblock_m(1, num_rows))
-                allocate (h_mat%Computing_matricesblock_u(num_rows, 1))
-            endif
-
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('after allocate Computing_matricesblock', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-            T0 = OMP_get_wtime()
-
-            do i = 1, num_rows
-                send_ID = int((group_startm + i - 1)/Rows_per_processor)
-                ii = mod(i + group_startm, Rows_per_processor)
-                if (ii == 0) then
-                    ii = Rows_per_processor
-                endif
-                recv_ID = int((i - 1)/rows_per_processor_LUM)
-                do j = 1, num_rows
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks_ll => h_mat%Local_blocks(j + group_startn, ii)
-                            blocks_mm => h_mat%Computing_matricesblock_l(1, j)
-                            call Hmat_block_copy_MPIdata(blocks_mm, blocks_ll, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_ll => h_mat%Local_blocks(j + group_startn, ii)
-                            call blocks_send(blocks_ll, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                            call blocks_recv(blocks_ll, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send on 1 blocks in Z_21', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-            enddo
-
-            do j = 1, num_rows
-                recv_ID = int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors
-                do i = 1, num_rows
-                    send_ID = int((group_startn + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startn, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    indices = 0
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks_uu => h_mat%Local_blocks(j + group_startm, ii)
-                            blocks_mm => h_mat%Computing_matricesblock_u(i, 1)
-                            call Hmat_block_copy_MPIdata(blocks_mm, blocks_uu, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            !request_global=MPI_request_null
-                            indices = 0
-                            blocks_uu => h_mat%Local_blocks(j + group_startm, ii)
-                            call blocks_send(blocks_uu, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                            call blocks_recv(blocks_uu, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send on 1 blocks in Z_12', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-            enddo
-            T1 = OMP_get_wtime()
-            stats%Time_Comm = stats%Time_Comm + T1 - T0
-
-            do i = 1, num_rows
-                id_l = int((group_startm + i - 1)/Rows_per_processor)
-                id_u = int((group_startn + i - 1)/Rows_per_processor)
-                if (id_l == ptree%MyID) then
-                    ii = mod(i + group_startm, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    do j = 1, num_rows
-                        blocks_ll => h_mat%Local_blocks(j + group_startn, ii)
-                        call Hmat_block_delete(blocks_ll)
-                    enddo
-                endif
-                if (id_u == ptree%MyID) then
-                    ii = mod(i + group_startn, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    do j = 1, num_rows
-                        blocks_uu => h_mat%Local_blocks(j + group_startm, ii)
-                        call Hmat_block_delete(blocks_uu)
-                    enddo
-                endif
-            enddo
-
-            do i = 1, num_rows
-                id_l = int((i - 1)/rows_per_processor_LUM)
-                if (id_l == ptree%MyID) then
-                    do j = 1, num_rows
-                        blocks_ll => h_mat%Local_blocks(1, 1)
-                        mypgno = msh%basis_group(blocks_ll%row_group)%pgno
-                        blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-
-                        call unpack_all_blocks_one_node(blocks_ll, h_mat%Maxlevel, ptree, msh, mypgno)
-                    enddo
-                endif
-            enddo
-            do j = 1, num_rows
-                id_u = int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors
-                if (id_u == ptree%MyID) then
-                    do i = 1, num_rows
-                        blocks_uu => h_mat%Local_blocks(1, 1)
-                        mypgno = msh%basis_group(blocks_uu%row_group)%pgno
-                        blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-
-                        call unpack_all_blocks_one_node(blocks_uu, h_mat%Maxlevel, ptree, msh, mypgno)
-                    enddo
-                endif
-            enddo
-
-            iteration_total = int((num_rows - 1)/Rows_per_processor)
-
-            do iter = 0, iteration_total
-
-                iter_begin = iter*Rows_per_processor + 1
-                iter_end = min(iter_begin + Rows_per_processor - 1, num_rows)
-
-                T3 = OMP_get_wtime()
-                call MPI_verbose_barrier('before transfer one column/row in U11/L11', ptree)
-                T4 = OMP_get_wtime()
-                stats%Time_idle = stats%Time_idle + T4 - T3
-
-                T0 = OMP_get_wtime()
-
-                do i = iter_begin, iter_end
-                    send_ID = int((group_startn + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startn, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    do j = 1, i
-
-                        recv = 0
-                        send = 0
-                        if (ptree%MyID >= ptree%nproc - num_processors .and. ptree%MyID <= ptree%nproc - 1) recv = 1
-                        if (send_ID == ptree%MyID) send = 1
-
-                        if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, j)
-                        if (send == 1) blocks_s => h_mat%Local_blocks(j + group_startn, ii)
-                        call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
-
-                        T3 = OMP_get_wtime()
-                        call MPI_verbose_barrier('bcast one blocks in L11', ptree)
-                        T4 = OMP_get_wtime()
-                        stats%Time_idle = stats%Time_idle + T4 - T3
-                        ! T0=OMP_get_wtime()
-
-                        ! !indices=index_of_blocks_for_MPI(i,j)
-                        ! do k=ptree%nproc-num_processors, ptree%nproc-1
-                        ! if (send_ID==k) then
-                        ! if (send_ID==ptree%MyID) then
-                        ! blocks_kk=>h_mat%Local_blocks(j+group_startn,ii)
-                        ! blocks_mm=>h_mat%Computing_matricesblock_m(1,j)
-                        ! call Hmat_block_copy_MPIdata(blocks_mm,blocks_kk,msh)
-                        ! endif
-                        ! else
-                        ! if (send_ID==ptree%MyID) then
-                        ! counts=0
-                        ! !request_global=MPI_request_null
-                        ! indices=0
-                        ! blocks_mm=>h_mat%Local_blocks(j+group_startn,ii)
-                        ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree,option)
-                        ! endif
-                        ! if (k==ptree%MyID) then
-                        ! counts=0
-                        ! indices=0
-                        ! blocks_mm=>h_mat%Computing_matricesblock_m(1,j)
-                        ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree,option)
-                        ! endif
-                        ! endif
-                        ! T3=OMP_get_wtime()
-                        ! call MPI_verbose_barrier('4')
-                        ! T4=OMP_get_wtime()
-                        ! stats%Time_idle=stats%Time_idle+T4-T3
-                        ! enddo
-
-                    enddo
-                enddo
-                do j = iter_begin, iter_end
-                    do i = 1, j
-                        send_ID = int((group_startn + i - 1)/Rows_per_processor)
-                        ii = mod(i + group_startn, Rows_per_processor)
-                        if (ii == 0) then
-                            ii = Rows_per_processor
-                        endif
-
-                        recv = 0
-                        send = 0
-                        if (ptree%MyID <= num_processors - 1) recv = 1
-                        if (send_ID == ptree%MyID) send = 1
-
-                        if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(i, 1)
-                        if (send == 1) blocks_s => h_mat%Local_blocks(j + group_startn, ii)
-                        call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
-
-                        T3 = OMP_get_wtime()
-                        call MPI_verbose_barrier('bcast one blocks in U11', ptree)
-                        T4 = OMP_get_wtime()
-                        stats%Time_idle = stats%Time_idle + T4 - T3
-                        ! T0=OMP_get_wtime()
-
-                        ! ! do k=0, num_processors-1
-                        ! ! if (send_ID==k) then
-                        ! ! if (send_ID==ptree%MyID) then
-                        ! ! blocks_kk=>h_mat%Local_blocks(j+group_startn,ii)
-                        ! ! blocks_mm=>h_mat%Computing_matricesblock_m(i,1)
-                        ! ! call Hmat_block_copy_MPIdata(blocks_mm,blocks_kk,msh)
-                        ! ! endif
-                        ! ! else
-                        ! ! if (send_ID==ptree%MyID) then
-                        ! ! counts=0
-                        ! ! !request_global=MPI_request_null
-                        ! ! indices=0
-                        ! ! blocks_mm=>h_mat%Local_blocks(j+group_startn,ii)
-                        ! ! call blocks_send(blocks_mm,indices,k,counts,msh,ptree,option)
-                        ! ! endif
-                        ! ! if (k==ptree%MyID) then
-                        ! ! counts=0
-                        ! ! indices=0
-                        ! ! blocks_mm=>h_mat%Computing_matricesblock_m(i,1)
-                        ! ! call blocks_recv(blocks_mm,indices,send_ID,counts,msh,ptree,option)
-                        ! ! endif
-                        ! ! endif
-                        ! ! T3=OMP_get_wtime()
-                        ! ! call MPI_verbose_barrier('5')
-                        ! ! T4=OMP_get_wtime()
-                        ! ! stats%Time_idle=stats%Time_idle+T4-T3
-                        ! ! enddo
-                    enddo
-                enddo
-                T1 = OMP_get_wtime()
-                stats%Time_Comm = stats%Time_Comm + T1 - T0
-
-                if (ptree%MyID <= num_processors - 1) then
-                    do j = iter_begin, iter_end
-                        do i = 1, j
-                            blocks_mm => h_mat%Local_blocks(1, 1)
-                            mypgno = msh%basis_group(blocks_mm%row_group)%pgno
-                            blocks_mm => h_mat%Computing_matricesblock_m(i, 1)
-
-                            call unpack_all_blocks_one_node(blocks_mm, h_mat%Maxlevel, ptree, msh, mypgno)
-                        enddo
-                    enddo
-                endif
-                if (ptree%MyID >= ptree%nproc - num_processors) then
-                    do i = iter_begin, iter_end
-                        do j = 1, i
-                            blocks_mm => h_mat%Local_blocks(1, 1)
-                            mypgno = msh%basis_group(blocks_mm%row_group)%pgno
-                            blocks_mm => h_mat%Computing_matricesblock_m(1, j)
-
-                            call unpack_all_blocks_one_node(blocks_mm, h_mat%Maxlevel, ptree, msh, mypgno)
-                        enddo
-                    enddo
-                endif
-
-                if (ptree%MyID <= num_processors - 1) then
-                    do i = 1, num_rows
-                        if (int((i - 1)/rows_per_processor_LUM) == ptree%MyID) then
-                            do j = iter_begin, iter_end
-                                blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                                if (j > 1) then
-                                    do k = 1, j - 1
-                                        blocks_kk => h_mat%Computing_matricesblock_l(1, k)
-                                        blocks_mm => h_mat%Computing_matricesblock_m(k, 1)
-
-                                        call Hmat_add_multiply(blocks_ll, '-', blocks_kk, blocks_mm, h_mat, option, stats, ptree, msh)
-                                        call Hmat_block_delete(blocks_mm)
-
-                                    enddo
-                                endif
-                                blocks_mm => h_mat%Computing_matricesblock_m(j, 1)
-
-                                call Hmat_XUM(blocks_mm, blocks_ll, h_mat, option, stats, ptree, msh)
-                                call Hmat_block_delete(blocks_mm)
-
-                            enddo
-                        endif
-                    enddo
-                endif
-                if (ptree%MyID >= ptree%nproc - num_processors) then
-                    do j = 1, num_rows
-                        if (int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors == ptree%MyID) then
-                            do i = iter_begin, iter_end
-                                blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                                if (i > 1) then
-                                    do k = 1, i - 1
-                                        blocks_mm => h_mat%Computing_matricesblock_m(1, k)
-                                        blocks_kk => h_mat%Computing_matricesblock_u(k, 1)
-
-                                      call Hmat_add_multiply(blocks_uu, '-', blocks_mm, blocks_kk, h_mat, option, stats, ptree, msh)
-                                        call Hmat_block_delete(blocks_mm)
-
-                                    enddo
-                                endif
-                                blocks_mm => h_mat%Computing_matricesblock_m(1, i)
-                                call Hmat_LXM(blocks_mm, blocks_uu, h_mat, option, stats, ptree, msh)
-                                call Hmat_block_delete(blocks_mm)
-                            enddo
-                        endif
-                    enddo
-                endif
-            enddo
-
-            !**************************************write back******************************************************
-
-            do i = 1, num_rows
-                if (int((i - 1)/rows_per_processor_LUM) == ptree%MyID) then
-                    do j = 1, num_rows
-                        blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                        call pack_all_blocks_one_node(blocks_ll, msh)
-                    enddo
-                endif
-            enddo
-            do j = 1, num_rows
-                if (int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors == ptree%MyID) then
-                    do i = 1, num_rows
-                        blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                        call pack_all_blocks_one_node(blocks_uu, msh)
-                    enddo
-                endif
-            enddo
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('before send back Z_12/Z_21', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-            T0 = OMP_get_wtime()
-            do i = 1, num_rows
-                send_ID = int((i - 1)/rows_per_processor_LUM)
-                recv_ID = int((group_startm + i - 1)/Rows_per_processor)
-                ii = mod(i + group_startm, Rows_per_processor)
-                if (ii == 0) then
-                    ii = Rows_per_processor
-                endif
-                do j = 1, num_rows
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                            blocks_mm => h_mat%Local_blocks(j + group_startn, ii)
-                            call Hmat_block_copy_MPIdata(blocks_mm, blocks_ll, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                            call blocks_send(blocks_ll, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_ll => h_mat%Local_blocks(j + group_startn, ii)
-                            call blocks_recv(blocks_ll, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send back 1 blocks in Z_21', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-            enddo
-            do j = 1, num_rows
-                send_ID = int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors
-                do i = 1, num_rows
-                    recv_ID = int((group_startn + i - 1)/Rows_per_processor)
-                    ii = mod(i + group_startn, Rows_per_processor)
-                    if (ii == 0) then
-                        ii = Rows_per_processor
-                    endif
-                    if (send_ID == recv_ID) then
-                        if (send_ID == ptree%MyID) then
-                            blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                            blocks_mm => h_mat%Local_blocks(j + group_startm, ii)
-                            call Hmat_block_copy_MPIdata(blocks_mm, blocks_uu, msh)
-                        endif
-                    else
-                        if (send_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                            call blocks_send(blocks_uu, indices, recv_ID, counts, msh, ptree, option)
-                        endif
-                        if (recv_ID == ptree%MyID) then
-                            counts = 0
-                            indices = 0
-                            blocks_uu => h_mat%Local_blocks(j + group_startm, ii)
-                            call blocks_recv(blocks_uu, indices, send_ID, counts, msh, ptree, option)
-                        endif
-                    endif
-                    T3 = OMP_get_wtime()
-                    call MPI_verbose_barrier('p2p send back 1 blocks in Z_12', ptree)
-                    T4 = OMP_get_wtime()
-                    stats%Time_idle = stats%Time_idle + T4 - T3
-                enddo
-            enddo
-
-            T1 = OMP_get_wtime()
-            stats%Time_Comm = stats%Time_Comm + T1 - T0
-
-            do i = 1, num_rows
-                id_l = int((i - 1)/rows_per_processor_LUM)
-                if (id_l == ptree%MyID) then
-                    do j = 1, num_rows
-                        blocks_ll => h_mat%Computing_matricesblock_l(1, j)
-                        call Hmat_block_delete(blocks_ll)
-                    enddo
-                endif
-            enddo
-            do j = 1, num_rows
-                id_u = int((j - 1)/rows_per_processor_LUM) + ptree%nproc - num_processors
-                if (id_u == ptree%MyID) then
-                    do i = 1, num_rows
-                        blocks_uu => h_mat%Computing_matricesblock_u(i, 1)
-                        call Hmat_block_delete(blocks_uu)
-                    enddo
-                endif
-            enddo
-
-            if (ptree%MyID <= num_processors - 1) then
-                deallocate (h_mat%Computing_matricesblock_m)
-                deallocate (h_mat%Computing_matricesblock_l)
-            endif
-            if (ptree%MyID >= ptree%nproc - num_processors) then
-                deallocate (h_mat%Computing_matricesblock_m)
-                deallocate (h_mat%Computing_matricesblock_u)
-            endif
-
-            T3 = OMP_get_wtime()
-            call MPI_verbose_barrier('before Hmat_LXM_XUM_TopLevel finish', ptree)
-            T4 = OMP_get_wtime()
-            stats%Time_idle = stats%Time_idle + T4 - T3
-
-        else
-
-            !call H_Solve_XLM(blocks_l,blocks_m)
-
-        endif
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'out Hmat_LXM_XUM_TopLevel'
-
-        return
-
-    end subroutine Hmat_LXM_XUM_TopLevel
 
     recursive subroutine Hmat_LU(blocks, h_mat, option, stats, ptree, msh)
 

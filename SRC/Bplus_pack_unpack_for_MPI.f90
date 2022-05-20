@@ -21,13 +21,15 @@ module BPACK_block_sendrecv
    use MISC_Utilities
 contains
 
-   subroutine MPI_verbose_barrier(msg, ptree)
+   subroutine MPI_verbose_barrier(msg, ptree, option)
       implicit none
       type(proctree)::ptree
+      type(Hoption)::option
       character(*)::msg
       integer ierr
       ! write(ptree%MyID+10000,*)'waiting ',msg
       call MPI_barrier(ptree%Comm, ierr)
+      if(option%verbosity>=0 .and. ptree%MyID==Main_ID)write(*,*)msg
       ! write(ptree%MyID+10000,*)'waiting done ',msg
 
    end subroutine MPI_verbose_barrier
