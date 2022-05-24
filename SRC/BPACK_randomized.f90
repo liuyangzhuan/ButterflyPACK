@@ -588,19 +588,18 @@ contains
 
       implicit none
       real(kind=8):: n1, n2, Memory, error_inout, Memtmp, matnorm
-      integer num_blocks, N, rankref, level_c, rmaxloc, level_butterfly, bb, rank_new_max, rank, num_vect, group_start, group_n, group_m, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, gg, jGroup, N_source_group, ncolor, Nloc
+      integer i,num_blocks, N, rankref, level_c, rmaxloc, level_butterfly, bb, rank_new_max, rank, num_vect, group_start, group_n, group_m, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, gg, jGroup, N_source_group, ncolor, Nloc
       type(matrixblock), pointer::block_o, block_ref, blocks_i, blocks
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matrixtemp(:,:), matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :)
       DTR, allocatable:: Singular(:)
-      DT::ctemp1, ctemp2
       type(Hmat)::h_mat
       type(kernelquant)::ker
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
       type(mesh)::msh
-      integer ierr, tempi
+      integer ierr, tempi, level
       integer Bidxs, Bidxe, N_unk_loc
       procedure(HMatVec)::blackbox_Hmat_MVP
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
@@ -608,11 +607,23 @@ contains
       integer,allocatable:: source_groups(:)
       type(nod), pointer::curr
       class(*), pointer::ptrr
+      integer myM
 
       Memory=0
-      ctemp1 = 1.0d0; ctemp2 = 0.0d0
-      blocks_i => h_mat%Local_blocks(1, 1)
-      call MPI_ALLREDUCE(blocks_i%M, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+
+      num_vect=0
+      level=h_mat%Maxlevel
+      curr => h_mat%lstblks(level)%head
+      do i = 1, h_mat%lstblks(level)%num_nods
+            select type (ptrr=>curr%item)
+            type is (block_ptr)
+               num_vect = max(num_vect,ptrr%ptr%M)
+               num_vect = max(num_vect,ptrr%ptr%N)
+            end select
+            curr => curr%next
+      enddo
+      call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+
 
       allocate(RandVectInR_glo(msh%Nunk,num_vect))
       RandVectInR_glo=0

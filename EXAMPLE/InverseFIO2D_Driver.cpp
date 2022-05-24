@@ -140,7 +140,7 @@ public:
         double cx = (2+cos(2*M_PI*x1)*cos(2*M_PI*x2))/16.0;
         double kr = sqrt(pow(sx,2)*pow(k1,2) + pow(cx,2)*pow(k2,2));
         double tmp = (2*M_PI)* (xk + kr);
-        *val = cos(tmp)+Im*sin(tmp);      
+        *val = cos(tmp)+Im*sin(tmp);
     }
     else{
       cout<<"unsupported kernel"<<endl;
@@ -380,8 +380,8 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
       } break;
       case 19: {
         std::istringstream iss(optarg);
-        iss >> opt_i;
-        z_c_bpack_set_I_option(&option0, "rankrate", opt_i);
+        iss >> opt_d;
+        z_c_bpack_set_D_option(&option0, "rankrate", opt_d);
       } break;
       case 20: {
         std::istringstream iss(optarg);
