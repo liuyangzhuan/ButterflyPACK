@@ -607,7 +607,6 @@ contains
       integer,allocatable:: source_groups(:)
       type(nod), pointer::curr
       class(*), pointer::ptrr
-      integer myM
 
       Memory=0
 
