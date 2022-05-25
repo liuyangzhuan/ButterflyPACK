@@ -357,6 +357,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         class(*), pointer::ptr
         type(matrixblock), pointer :: blocks, blocks_r, blocks_s, blocks_mm, blocks_uu, blocks_ll
         integer nprow, npcol, myrow, mycol, iproc, myi, jproc, myj, jproc1, myj1, iproc1, myi1, recv,send, send_ID
+        real(kind=8) T0, T1, T3, T4
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
@@ -394,7 +395,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             num_blocks = 2**h_mat%Dist_level
             do kk=1,num_blocks
                 if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting panel ", kk
+
+                T3 = OMP_get_wtime()
                 call MPI_verbose_barrier('   --diagonal factorization', ptree,option)
+                T4 = OMP_get_wtime()
+                stats%Time_idle = stats%Time_idle + T4 - T3
+
                 call g2l(kk, num_blocks, nprow, 1, iproc, myi)
                 call g2l(kk, num_blocks, npcol, 1, jproc, myj)
                 if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc, jproc)
@@ -408,7 +414,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     send=1
                 endif
 
+                T3 = OMP_get_wtime()
                 call MPI_verbose_barrier('   --sending the digonal block', ptree, option)
+                T4 = OMP_get_wtime()
+                stats%Time_idle = stats%Time_idle + T4 - T3
+
+                T3 = OMP_get_wtime()
                 do j=kk+1,num_blocks
                     call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                     if(iproc==myrow .and. jproc1==mycol)then
@@ -424,8 +435,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, 1)
                 if (send == 1) blocks_s => h_mat%Local_blocks(myj, myi)
                 call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
+                T4 = OMP_get_wtime()
+                stats%Time_Comm = stats%Time_Comm + T4 - T3
 
+                T3 = OMP_get_wtime()
                 call MPI_verbose_barrier('   --L and U panel factorization', ptree, option)
+                T4 = OMP_get_wtime()
+                stats%Time_idle = stats%Time_idle + T4 - T3
+
                 if (recv == 1)then
                     call unpack_all_blocks_one_node(blocks_r, h_mat%Maxlevel, ptree, msh, mypgno)
                     Memory=0
@@ -456,7 +473,13 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     call LogMemory(stats, -Memory)
                     call Hmat_block_delete(blocks_r)
                 endif
+
+                T3 = OMP_get_wtime()
                 call MPI_verbose_barrier('   --sending L and U panels', ptree, option)
+                T4 = OMP_get_wtime()
+                stats%Time_idle = stats%Time_idle + T4 - T3
+
+                T3 = OMP_get_wtime()
                 do j=kk+1,num_blocks
                     send=0
                     recv=0
@@ -522,8 +545,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     endif
                     if (recv == 1)call Hmat_block_delete(blocks_r)
                 enddo
+                T4 = OMP_get_wtime()
+                stats%Time_Comm = stats%Time_Comm + T4 - T3
 
+                T3 = OMP_get_wtime()
                 call MPI_verbose_barrier('   --Schur updates', ptree, option)
+                T4 = OMP_get_wtime()
+                stats%Time_idle = stats%Time_idle + T4 - T3
+
                 do i=kk+1,num_blocks
                 do j=kk+1,num_blocks
                     call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
