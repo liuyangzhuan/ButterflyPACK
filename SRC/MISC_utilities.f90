@@ -5100,10 +5100,14 @@ contains
       numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
    end function numroc_wp
 
-   integer function blacs_pnum_wp(ICONTXT, PROW, PCOL)
-      integer :: ICONTXT, PROW, PCOL
-      integer :: blacs_pnum ! blacs routine
-      blacs_pnum_wp = blacs_pnum(ICONTXT, PROW, PCOL)
+   integer function blacs_pnum_wp(NPROW, NPCOL, PROW, PCOL)
+      integer :: ICONTXT, PROW, PCOL, NPROW, NPCOL
+      ! integer :: blacs_pnum ! blacs routine
+      ! blacs_pnum_wp = blacs_pnum(ICONTXT, PROW, PCOL)
+
+      ! 'row major here'
+      blacs_pnum_wp = NPCOL*PROW + PCOL
+
    end function blacs_pnum_wp
 
 

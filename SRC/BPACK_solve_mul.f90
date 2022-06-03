@@ -915,6 +915,517 @@ contains
 
    end subroutine HODLR_Mult
 
+
+
+   !***** redistribute the vector fed to Hmat from 1D to 2D layouts
+   subroutine Hmat_Redistribute1Dto2D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
+
+      implicit none
+      integer Ns, num_vectors, i,i1, j, j1, gg, iproc, jproc, myrow, mycol, nprow, npcol, myi, myj, offr, offs, num_blocks
+      integer ii, jj, ij, pp, tt
+      integer level
+      DT::Vin(Ns, num_vectors)
+      type(vectorsblock):: vector2D(:)
+      type(Hmat)::h_mat
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable::jpvt(:)
+      integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
+      integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
+      character::mode
+      real(kind=8)::n1, n2
+      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+      type(butterfly_kerl)::kerls
+      integer rr, cc
+      logical all2all
+      integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+      DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer::dist, kerflag
+      integer::idxs_i,idxe_i, idxs_o,idxe_o
+
+      n1 = OMP_get_wtime()
+
+      tag = 1
+
+      ! allocation of communication quantities
+      do ii = 1, nproc
+         sendquant(ii)%size = 0
+         sendquant(ii)%active = 0
+      enddo
+      do ii = 1, nproc
+         recvquant(ii)%size = 0
+         recvquant(ii)%active = 0
+      enddo
+
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      nprow = ptree%pgrp(1)%nprow
+      npcol = ptree%pgrp(1)%npcol
+      num_blocks = 2**h_mat%Dist_level
+      do ii = 1, nproc
+         idxs_i = h_mat%N_p(ii, 1)
+         idxe_i = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_o = h_mat%basis_group(gg)%head
+            idxe_o = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         sendquant(pp)%size = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+      enddo
+
+
+      ! pack the send buffer in the second pass
+      do ii = 1, nproc
+         idxs_i = h_mat%N_p(ii, 1)
+         idxe_i = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_o = h_mat%basis_group(gg)%head
+            idxe_o = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        Ncol = num_vectors
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = Vin(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        Ncol = num_vectors
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = Vin(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size)
+            i = i + 1
+            gg = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            offr = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+
+            if(mode=='C')then
+               call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     i = i + 1
+                     vector2D(myj)%vector(offr+rr,cc) = recvquant(pp)%dat(i, 1)
+                  enddo
+               enddo
+            else
+               call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     i = i + 1
+                     vector2D(myi)%vector(offr+rr,cc) = recvquant(pp)%dat(i, 1)
+                  enddo
+               enddo
+            endif
+         enddo
+      enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+      enddo
+
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+
+   end subroutine Hmat_Redistribute1Dto2D_Vector
+
+
+
+   !***** redistribute the vector fed to Hmat from 2D to 1D layouts
+   subroutine Hmat_Redistribute2Dto1D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
+
+      implicit none
+      integer Ns, num_vectors, i,i1, j, j1, gg, iproc, jproc, myrow, mycol, nprow, npcol, myi, myj, offr, offs, num_blocks
+      integer ii, jj, ij, pp, tt
+      integer level
+      DT::Vin(Ns, num_vectors)
+      type(vectorsblock):: vector2D(:)
+      type(Hmat)::h_mat
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable::jpvt(:)
+      integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
+      integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
+      character::mode
+      real(kind=8)::n1, n2
+      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+      type(butterfly_kerl)::kerls
+      integer rr, cc
+      logical all2all
+      integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+      DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer::dist, kerflag
+      integer::idxs_i,idxe_i, idxs_o,idxe_o
+
+      n1 = OMP_get_wtime()
+      Vin=0
+      tag = 1
+
+      ! allocation of communication quantities
+      do ii = 1, nproc
+         sendquant(ii)%size = 0
+         sendquant(ii)%active = 0
+      enddo
+      do ii = 1, nproc
+         recvquant(ii)%size = 0
+         recvquant(ii)%active = 0
+      enddo
+
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      nprow = ptree%pgrp(1)%nprow
+      npcol = ptree%pgrp(1)%npcol
+      num_blocks = 2**h_mat%Dist_level
+      do ii = 1, nproc
+         idxs_o = h_mat%N_p(ii, 1)
+         idxe_o = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_i = h_mat%basis_group(gg)%head
+            idxe_i = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         sendquant(pp)%size = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+      enddo
+
+
+      ! pack the send buffer in the second pass
+      do ii = 1, nproc
+         idxs_o = h_mat%N_p(ii, 1)
+         idxe_o = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_i = h_mat%basis_group(gg)%head
+            idxe_i = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        Ncol = num_vectors
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = vector2D(myj)%vector(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        Ncol = num_vectors
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = vector2D(myi)%vector(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size)
+            i = i + 1
+            gg = NINT(dble(recvquant(pp)%dat(i, 1)))  ! this information is not needed for 2D-to-1D
+            i = i + 1
+            offr = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  Vin(offr+rr,cc) = Vin(offr+rr,cc) + recvquant(pp)%dat(i, 1)
+               enddo
+            enddo
+         enddo
+      enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+      enddo
+
+      n2 = OMP_get_wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+
+   end subroutine Hmat_Redistribute2Dto1D_Vector
+
+
+
    subroutine HSS_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
 
       implicit none
@@ -1023,12 +1534,12 @@ contains
       ! type(matrixblock),pointer::block_o
       type(blockplus), pointer::bplus_o
       type(proctree)::ptree
-      ! type(vectorsblock), pointer :: random1, random2
       type(Hstat)::stats
       type(Hoption)::option
 
       integer use_blockcopy, idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc, Nmax, Nmsg,N_glo
       type(matrixblock), pointer :: blocks_i, blocks_j
+      type(matrixblock) :: blocks_dummy
       DT, allocatable::vec_old(:, :), vec_new(:, :), vin_tmp(:, :), vout_tmp(:, :), vec_buffer(:, :), Vout_glo(:, :), Vin_glo(:, :)
 
       ! DT::Vin(:,:),Vout(:,:)
@@ -1037,6 +1548,9 @@ contains
       integer ierr, m_size
       integer, allocatable::status_all(:, :), srequest_all(:)
       integer :: status(MPI_Status_size)
+      type(vectorsblock),allocatable:: vector2D_i(:),vector2D_o(:)
+      integer:: nprow, npcol, myrow, mycol
+      character mode_i,mode_o
 
       if (ptree%Comm /= MPI_COMM_NULL) then
 
@@ -1046,18 +1560,50 @@ contains
             Vin = conjg(cmplx(Vin, kind=8))
          endif
 
-         call MPI_barrier(ptree%Comm, ierr)
+         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         num_blocks = 2**h_mat%Dist_level
+         if (trans == 'N') then
+            mode_i='C'
+            mode_o='R'
+            allocate(vector2D_i(max(h_mat%myAcols,1)))
+            do j = 1, h_mat%myAcols
+               call l2g(j, mycol, num_blocks, npcol, 1, jj)
+               blocks_i => h_mat%Local_blocks(j, 1)
+               allocate(vector2D_i(j)%vector(blocks_i%N,num_vectors))
+               vector2D_i(j)%vector=0
+            enddo
+            allocate(vector2D_o(max(h_mat%myArows,1)))
+            do i = 1, h_mat%myArows
+               call l2g(i, myrow, num_blocks, nprow, 1, ii)
+               blocks_i => h_mat%Local_blocks(1, i)
+               allocate(vector2D_o(i)%vector(blocks_i%M,num_vectors))
+               vector2D_o(i)%vector=0
+            enddo
+         else
+            mode_i='R'
+            mode_o='C'
+            allocate(vector2D_i(max(h_mat%myArows,1)))
+            do i = 1, h_mat%myArows
+               call l2g(i, myrow, num_blocks, nprow, 1, ii)
+               blocks_i => h_mat%Local_blocks(1, i)
+               allocate(vector2D_i(i)%vector(blocks_i%M,num_vectors))
+               vector2D_i(i)%vector=0
+            enddo
+            allocate(vector2D_o(max(h_mat%myAcols,1)))
+            do j = 1, h_mat%myAcols
+               call l2g(j, mycol, num_blocks, npcol, 1, jj)
+               blocks_i => h_mat%Local_blocks(j, 1)
+               allocate(vector2D_o(j)%vector(blocks_i%N,num_vectors))
+               vector2D_o(j)%vector=0
+            enddo
+         endif
+
+
+         call Hmat_Redistribute1Dto2D_Vector(Vin, Ns, num_vectors, vector2D_i, h_mat, ptree, ptree%nproc, stats, mode_i)
+
+         ! call MPI_barrier(ptree%Comm, ierr)
 
          n1 = OMP_get_wtime()
-
-         N_glo = h_mat%N
-         allocate(Vin_glo(N_glo,num_vectors))
-         Vin_glo=0
-         Vin_glo(h_mat%idxs:h_mat%idxe,:) = Vin(1:Ns,:)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Vin_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-         allocate(Vout_glo(N_glo,num_vectors))
-         Vout_glo=0
-         Vout=0
 
          do i = 1, h_mat%myArows
             do j = 1, h_mat%myAcols
@@ -1066,13 +1612,36 @@ contains
                else
                   blocks_i => h_mat%Local_blocks(j, i)
                endif
-               call Hmat_block_MVP_dat(blocks_i, trans_tmp, 1, 1, num_vectors, Vin_glo, N_glo, Vout_glo, N_glo, BPACK_cone, ptree, stats,level_start, level_end)
+               if (trans == 'N') then
+                  call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vector2D_i(j)%vector, blocks_i%N, vector2D_o(i)%vector, blocks_i%M, BPACK_cone, ptree, stats,level_start, level_end)
+               else
+                  call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vector2D_i(i)%vector, blocks_i%M, vector2D_o(j)%vector, blocks_i%N, BPACK_cone, ptree, stats,level_start, level_end)
+               endif
             enddo
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Vout_glo, N_glo*num_vectors, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-         Vout(1:Ns,:) = Vout_glo(h_mat%idxs:h_mat%idxe,:)
-         deallocate(Vin_glo)
-         deallocate(Vout_glo)
+
+         call Hmat_Redistribute2Dto1D_Vector(Vout, Ns, num_vectors, vector2D_o, h_mat, ptree, ptree%nproc, stats, mode_o)
+
+         if (trans == 'N') then
+            do j = 1, h_mat%myAcols
+               deallocate(vector2D_i(j)%vector)
+            enddo
+            deallocate(vector2D_i)
+            do i = 1, h_mat%myArows
+               deallocate(vector2D_o(i)%vector)
+            enddo
+            deallocate(vector2D_o)
+         else
+            do i = 1, h_mat%myArows
+               deallocate(vector2D_i(i)%vector)
+            enddo
+            deallocate(vector2D_i)
+            do j = 1, h_mat%myAcols
+               deallocate(vector2D_o(j)%vector)
+            enddo
+            deallocate(vector2D_o)
+         endif
+
 
          if (trans == 'C') then
             Vout = conjg(cmplx(Vout, kind=8))
@@ -1084,8 +1653,8 @@ contains
          call MPI_barrier(ptree%Comm, ierr)
          n2 = OMP_get_wtime()
 
-         vecnorm = fnorm(Vout, Ns, num_vectors)**2d0
-         call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)
+         ! vecnorm = fnorm(Vout, Ns, num_vectors)**2d0
+         ! call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)
          ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",sqrt(vecnorm)
       endif
 
@@ -1224,7 +1793,7 @@ contains
 
             do i=1,nprow
                if(receiverlists(i,myj)==1)then
-                  receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i-1, jproc)
+                  receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
                   call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
                endif
@@ -1255,7 +1824,7 @@ contains
                         call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
 
                         ! offdiagonal block: send right to diagonal block
-                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, myrow, jproc1)
+                        receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
                         call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
 
@@ -1275,7 +1844,7 @@ contains
 
                   do i1=1,nprow
                      if(receiverlists(i1,myj1)==1)then
-                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i1-1, jproc1)
+                        receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
                         call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
                      endif
@@ -1461,7 +2030,7 @@ contains
 
             do i=1,nprow
                if(receiverlists(i,myj)==1)then
-                  receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i-1, jproc)
+                  receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
                   call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
                endif
@@ -1493,7 +2062,7 @@ contains
                      if(bmod(i)==0)then
                         call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
                         ! offdiagonal block: send left to diagonal block
-                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, myrow, jproc1)
+                        receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
                         call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
                      endif
@@ -1512,7 +2081,7 @@ contains
 
                   do i1=1,nprow
                      if(receiverlists(i1,myj1)==1)then
-                        receiver = blacs_pnum_wp(ptree%pgrp(1)%ctxt, i1-1, jproc1)
+                        receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
                         call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
                      endif

@@ -1829,8 +1829,9 @@ end function distance_geo
       type(Hstat)::stats
       integer i, j, ii, jj, iii, jjj, k, kk, kkk
       integer level, edge, node, patch, group, group_m, group_n
-      integer mm, nn, num_blocks
+      integer mm, nn, num_blocks,group_start,gg
       type(matrixblock), pointer :: blocks
+      type(matrixblock) :: blocks_dummy
       integer Maxgrp, ierr, row_group, col_group
       type(global_matricesblock), pointer::global_block
       integer nprow,npcol,myrow,mycol,myArows,myAcols,mypgno
@@ -1884,6 +1885,26 @@ end function distance_geo
       h_mat%blocks_root%row_group = 1
       h_mat%blocks_root%col_group = 1
       nullify (h_mat%blocks_root%father)
+
+      blocks_dummy%pgno=1
+      blocks_dummy%M=h_mat%N
+      blocks_dummy%N=h_mat%N
+      blocks_dummy%row_group=1
+      blocks_dummy%col_group=1
+      blocks_dummy%level=0
+      call ComputeParallelIndices(blocks_dummy, blocks_dummy%pgno, ptree, msh)
+      allocate(h_mat%N_p(size(blocks_dummy%N_p,1),size(blocks_dummy%N_p,2)))
+      h_mat%N_p = blocks_dummy%N_p
+      deallocate(blocks_dummy%N_p)
+      deallocate(blocks_dummy%M_p)
+
+      num_blocks = 2**msh%Dist_level
+      allocate (h_mat%basis_group(num_blocks))
+      group_start = num_blocks - 1
+      do gg=1,num_blocks
+         h_mat%basis_group(gg)%head = msh%basis_group(gg+group_start)%head
+         h_mat%basis_group(gg)%tail = msh%basis_group(gg+group_start)%tail
+      enddo
 
       allocate (stats%leafs_of_level(0:h_mat%Maxlevel))
       stats%leafs_of_level = 0

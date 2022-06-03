@@ -403,7 +403,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
                 call g2l(kk, num_blocks, nprow, 1, iproc, myi)
                 call g2l(kk, num_blocks, npcol, 1, jproc, myj)
-                if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc, jproc)
+                if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(nprow,npcol, iproc, jproc)
                 send=0
                 recv=0
                 if(iproc==myrow .and. jproc==mycol)then
@@ -484,7 +484,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     send=0
                     recv=0
                     call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
-                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc, jproc1)
+                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(nprow,npcol, iproc, jproc1)
                     if(iproc==myrow .and. jproc1==mycol)then
                         send=1
                     endif
@@ -517,7 +517,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     send=0
                     recv=0
                     call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
-                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(ptree%pgrp(1)%ctxt, iproc1, jproc)
+                    if(h_mat%myArows>0 .and. h_mat%myAcols>0)send_ID = blacs_pnum_wp(nprow,npcol, iproc1, jproc)
                     if(iproc1==myrow .and. jproc==mycol)then
                         send=1
                     endif
