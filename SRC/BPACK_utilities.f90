@@ -104,6 +104,8 @@ contains
       deallocate (h_mat%blocks_root)
 
       if (associated(h_mat%First_block_eachlevel)) deallocate (h_mat%First_block_eachlevel)
+      if (associated(h_mat%N_p)) deallocate (h_mat%N_p)
+      if (allocated(h_mat%basis_group)) deallocate (h_mat%basis_group)
       if (associated(h_mat%Local_blocks)) then
          bm = size(h_mat%Local_blocks, 1)
          bn = size(h_mat%Local_blocks, 2)
@@ -385,6 +387,7 @@ contains
       stats_o%Time_Sblock = stats_i%Time_Sblock
       stats_o%Time_Sol = stats_i%Time_Sol
       stats_o%Time_C_Mult = stats_i%Time_C_Mult
+      stats_o%Time_BLK_MVP = stats_i%Time_BLK_MVP
       stats_o%Time_C_Extract = stats_i%Time_C_Extract
       stats_o%Time_Inv = stats_i%Time_Inv
       stats_o%Time_RedistB = stats_i%Time_RedistB
@@ -474,6 +477,7 @@ contains
       stats%Time_Sblock = 0
       stats%Time_Sol = 0
       stats%Time_C_Mult = 0
+      stats%Time_BLK_MVP = 0
       stats%Time_C_Extract = 0
       stats%Time_Inv = 0
       stats%Time_RedistB = 0
@@ -575,6 +579,9 @@ contains
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Solve time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Solve flops:', rtemp
+
+      call MPI_ALLREDUCE(stats%Time_BLK_MVP, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'BLK_mult time:', rtemp, 'Seconds'
 
       call MPI_ALLREDUCE(stats%Time_C_Mult, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult time:', rtemp, 'Seconds'

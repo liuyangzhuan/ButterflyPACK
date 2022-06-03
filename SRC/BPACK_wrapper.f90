@@ -177,6 +177,10 @@ contains
          val_d = stats%Time_RedistV
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_BLK_MVP') then
+         val_d = stats%Time_BLK_MVP
+         valid_opt = 1
+      endif
       if (trim(str) == 'Time_C_Mult') then
          val_d = stats%Time_C_Mult
          valid_opt = 1
