@@ -1,0 +1,73 @@
+\hypertarget{structbpack__defs_1_1hmat}{}\doxysection{bpack\+\_\+defs\+::hmat Type Reference}
+\label{structbpack__defs_1_1hmat}\index{bpack\_defs::hmat@{bpack\_defs::hmat}}
+\doxysubsection*{Public Attributes}
+\begin{DoxyCompactItemize}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a125f272cfbd2356a24bf437ff22f0ad1}\label{structbpack__defs_1_1hmat_a125f272cfbd2356a24bf437ff22f0ad1}} 
+integer {\bfseries maxlevel}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_aacb56b1a644cb63734c2ce574fbb72ce}\label{structbpack__defs_1_1hmat_aacb56b1a644cb63734c2ce574fbb72ce}} 
+integer {\bfseries n}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_ab7876ec6e22b7439bc5826d9205a1d3a}\label{structbpack__defs_1_1hmat_ab7876ec6e22b7439bc5826d9205a1d3a}} 
+integer {\bfseries dist\+\_\+level}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a4db8e42cea732b749b63af904f23ecce}\label{structbpack__defs_1_1hmat_a4db8e42cea732b749b63af904f23ecce}} 
+integer {\bfseries idxs}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_ac89b6057ccd960f655894af4b9113729}\label{structbpack__defs_1_1hmat_ac89b6057ccd960f655894af4b9113729}} 
+integer {\bfseries idxe}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a11ed87b68c744d289e5eaa628999058a}\label{structbpack__defs_1_1hmat_a11ed87b68c744d289e5eaa628999058a}} 
+integer, dimension(\+:, \+:), pointer {\bfseries n\+\_\+p} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_aa808e14b07a997e140c6f69975228e6a}\label{structbpack__defs_1_1hmat_aa808e14b07a997e140c6f69975228e6a}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1basisgroup}{basisgroup}}), dimension(\+:), allocatable {\bfseries basis\+\_\+group}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a8469169697139e7f397835a7758dc092}\label{structbpack__defs_1_1hmat_a8469169697139e7f397835a7758dc092}} 
+integer {\bfseries myarows}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a7076eb6453ad99ff60ea49678cb0fd67}\label{structbpack__defs_1_1hmat_a7076eb6453ad99ff60ea49678cb0fd67}} 
+integer {\bfseries myacols}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a59e2ac57d22de09e3c5568a8cc98653d}\label{structbpack__defs_1_1hmat_a59e2ac57d22de09e3c5568a8cc98653d}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1global__matricesblock}{global\+\_\+matricesblock}}), pointer {\bfseries blocks\+\_\+root} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a64105bb6a164617004c790b7682c69e6}\label{structbpack__defs_1_1hmat_a64105bb6a164617004c790b7682c69e6}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1global__matricesblock}{global\+\_\+matricesblock}}), dimension(\+:), pointer {\bfseries first\+\_\+block\+\_\+eachlevel} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a274b044d782d0c0cb5d1fc57c5440b5d}\label{structbpack__defs_1_1hmat_a274b044d782d0c0cb5d1fc57c5440b5d}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), dimension(\+:, \+:), pointer {\bfseries local\+\_\+blocks} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_ad21f1d987984208afd4071d0864c403d}\label{structbpack__defs_1_1hmat_ad21f1d987984208afd4071d0864c403d}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), dimension(\+:, \+:), pointer {\bfseries local\+\_\+blocks\+\_\+copy} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a1783aa298647f0e44fe7451bae421ffd}\label{structbpack__defs_1_1hmat_a1783aa298647f0e44fe7451bae421ffd}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), dimension(\+:, \+:), pointer {\bfseries computing\+\_\+matricesblock\+\_\+m} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a9efe6bdc020bef5a570e91fdabb07743}\label{structbpack__defs_1_1hmat_a9efe6bdc020bef5a570e91fdabb07743}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), dimension(\+:, \+:), pointer {\bfseries computing\+\_\+matricesblock\+\_\+l} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a585060f1f6018c217faf0196d594bfc9}\label{structbpack__defs_1_1hmat_a585060f1f6018c217faf0196d594bfc9}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), dimension(\+:, \+:), pointer {\bfseries computing\+\_\+matricesblock\+\_\+u} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_ab3de25752ab5e7de7d4f5530c3e0f58e}\label{structbpack__defs_1_1hmat_ab3de25752ab5e7de7d4f5530c3e0f58e}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), pointer {\bfseries blocks\+\_\+1} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_accc22b40d5dd01e180c266ffc69d3e9e}\label{structbpack__defs_1_1hmat_accc22b40d5dd01e180c266ffc69d3e9e}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1matrixblock}{matrixblock}}), pointer {\bfseries blocks\+\_\+2} =$>$ null()
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_aea52e08e1de0ab4b27789a765fa3c3d8}\label{structbpack__defs_1_1hmat_aea52e08e1de0ab4b27789a765fa3c3d8}} 
+type(\mbox{\hyperlink{structbpack__linkedlist_1_1list}{list}}), dimension(\+:), allocatable {\bfseries lstblks}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a34e2d1627f266642811e81d58ce72086}\label{structbpack__defs_1_1hmat_a34e2d1627f266642811e81d58ce72086}} 
+type(\mbox{\hyperlink{structbpack__linkedlist_1_1list}{list}}), dimension(\+:), allocatable {\bfseries admissibles}
+\item 
+\mbox{\Hypertarget{structbpack__defs_1_1hmat_a8bb8590798f0bc172f27ac514e753094}\label{structbpack__defs_1_1hmat_a8bb8590798f0bc172f27ac514e753094}} 
+type(\mbox{\hyperlink{structbpack__defs_1_1iarray}{iarray}}), dimension(\+:), allocatable {\bfseries colorsets}
+\end{DoxyCompactItemize}
+
+
+The documentation for this type was generated from the following file\+:\begin{DoxyCompactItemize}
+\item 
+C\+:/\+Users/allen/\+Documents/\+Git\+Hub/lbldoxygen/\+Butterfly\+PACK/\+SRC/BPACK\+\_\+defs.\+f90\end{DoxyCompactItemize}
