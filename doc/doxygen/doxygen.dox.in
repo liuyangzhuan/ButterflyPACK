@@ -766,8 +766,37 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 	INPUT = \
-	../SRC \
-	../MATLAB \
+	../SRC/C_BPACK_wrapper.h \ 
+	../SRS/CMakeLists.txt \
+	../EXAMPLE/C_EMCURV_wrapper.h \
+	../EXAMPLE/DoCubicInterp2D.h \
+	../EXAMPLE/G2D \
+	../EXAMPLE/G3D \
+	../SRC/BPACK_defs.f90 \
+	../SRC/BPACK_factor.f90 \
+	../SRC/BPACK_randomized.f90 \
+	../SRC/BPACK_solve_mul.f90 \
+	../SRC/BPACK_structure.f90 \
+	../SRC/BPACK_utilities.f90 \
+	../SRC/BPACK_wrapper.f90 \
+	../SRC/Bplus_compress.f90 \
+	../SRC/Bplus_factor.f90 \
+	../SRC/Bplus_pack_unpack_for_MPI.f90 \
+	../SRC/Bplus_randomized.f90 \
+	../SRC/Bplus_utilities.f90 \
+	../SRC/MAGMA_offset.c \
+	../SRC/LAPACK_cgeqp3mod.f \
+	../SRC/LAPACK_sgeqp3mod.f \
+	../SRC/LAPACK_zgeqp3mod.f \
+	../SRC/LAPACK_dgeqp3mod.f \
+	../SRC/MAGMA_utilities.f90 \
+	../SRC/MISC_DenseLA.f90 \
+	../SRC/MISC_linkedlist.f90 \
+	../SRC/MISC_utilities.f90 \
+	../SRC/SCALAPACK_pcgeqpfmod.f \
+	../SRC/SCALAPACK_pdgeqpfmod.f \
+	../SRC/SCALAPACK_psgeqpfmod.f \
+	../SRC/SCALAPACK_pzgeqpfmod.f \
 	../cmake/butterflypack-config.cmake.in \
 	../doc/doxygen/pages/Overview.txt \
 	../doc/doxygen/pages/Installation.txt \
