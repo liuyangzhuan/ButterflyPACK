@@ -88,5 +88,8 @@ var annotated_dup =
       [ "MAGMA_setvector_internal", "interfacemagma__utilities_1_1MAGMA__setvector__internal.html", null ],
       [ "MAGMA_version", "interfacemagma__utilities_1_1MAGMA__version.html", null ],
       [ "MAGMA_wtime", "interfacemagma__utilities_1_1MAGMA__wtime.html", null ]
-    ] ]
+    ] ],
+    [ "creal32_T", "structcreal32__T.html", null ],
+    [ "creal64_T", "structcreal64__T.html", null ],
+    [ "creal_T", "structcreal__T.html", null ]
 ];

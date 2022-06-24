@@ -10,5 +10,8 @@ var searchData=
   ['cascadingfactors_7',['cascadingfactors',['../structbpack__defs_1_1cascadingfactors.html',1,'bpack_defs']]],
   ['commquant1d_8',['commquant1d',['../structbpack__defs_1_1commquant1d.html',1,'bpack_defs']]],
   ['contact_20the_20developers_9',['Contact the Developers',['../contact.html',1,'']]],
-  ['copyright_20notice_20and_20license_20agreement_10',['Copyright Notice and License Agreement',['../copyright.html',1,'']]]
+  ['copyright_20notice_20and_20license_20agreement_10',['Copyright Notice and License Agreement',['../copyright.html',1,'']]],
+  ['creal32_5ft_11',['creal32_T',['../structcreal32__T.html',1,'']]],
+  ['creal64_5ft_12',['creal64_T',['../structcreal64__T.html',1,'']]],
+  ['creal_5ft_13',['creal_T',['../structcreal__T.html',1,'']]]
 ];
