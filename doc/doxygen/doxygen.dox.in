@@ -256,7 +256,7 @@ OPTIMIZE_OUTPUT_JAVA   = NO
 # sources. Doxygen will then generate output that is tailored for Fortran.
 # The default value is: NO.
 
-OPTIMIZE_FOR_FORTRAN   = NO
+OPTIMIZE_FOR_FORTRAN   = YES
 
 # Set the OPTIMIZE_OUTPUT_VHDL tag to YES if your project consists of VHDL
 # sources. Doxygen will then generate output that is tailored for VHDL.
@@ -281,7 +281,7 @@ OPTIMIZE_OUTPUT_VHDL   = NO
 # Note that for custom extensions you also need to set FILE_PATTERNS otherwise
 # the files are not read by doxygen.
 
-EXTENSION_MAPPING      =
+EXTENSION_MAPPING = f=FortranFixed f90=FortranFree
 
 # If the MARKDOWN_SUPPORT tag is enabled then doxygen pre-processes all comments
 # according to the Markdown format, which allows for more readable
@@ -489,7 +489,7 @@ HIDE_FRIEND_COMPOUNDS  = NO
 # blocks will be appended to the function's detailed documentation block.
 # The default value is: NO.
 
-HIDE_IN_BODY_DOCS      = NO
+HIDE_IN_BODY_DOCS      = YES
 
 # The INTERNAL_DOCS tag determines if documentation that is typed after a
 # \internal command is included. If the tag is set to NO then the documentation
@@ -766,53 +766,51 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 	INPUT = \
-	../SRC/C_BPACK_wrapper.h \ 
-	../SRS/CMakeLists.txt \
-	../EXAMPLE/C_EMCURV_wrapper.h \
-	../EXAMPLE/DoCubicInterp2D.h \
-	../EXAMPLE/G2D \
-	../EXAMPLE/G3D \
-	../SRC/BPACK_defs.f90 \
-	../SRC/BPACK_factor.f90 \
-	../SRC/BPACK_randomized.f90 \
-	../SRC/BPACK_solve_mul.f90 \
-	../SRC/BPACK_structure.f90 \
-	../SRC/BPACK_utilities.f90 \
-	../SRC/BPACK_wrapper.f90 \
-	../SRC/Bplus_compress.f90 \
-	../SRC/Bplus_factor.f90 \
-	../SRC/Bplus_pack_unpack_for_MPI.f90 \
-	../SRC/Bplus_randomized.f90 \
-	../SRC/Bplus_utilities.f90 \
-	../SRC/MAGMA_offset.c \
-	../SRC/LAPACK_cgeqp3mod.f \
-	../SRC/LAPACK_sgeqp3mod.f \
-	../SRC/LAPACK_zgeqp3mod.f \
-	../SRC/LAPACK_dgeqp3mod.f \
-	../SRC/MAGMA_utilities.f90 \
-	../SRC/MISC_DenseLA.f90 \
-	../SRC/MISC_linkedlist.f90 \
-	../SRC/MISC_utilities.f90 \
-	../SRC/SCALAPACK_pcgeqpfmod.f \
-	../SRC/SCALAPACK_pdgeqpfmod.f \
-	../SRC/SCALAPACK_psgeqpfmod.f \
-	../SRC/SCALAPACK_pzgeqpfmod.f \
-	../cmake/butterflypack-config.cmake.in \
-	../doc/doxygen/pages/Overview.txt \
-	../doc/doxygen/pages/Installation.txt \
-	../doc/doxygen/pages/GPU_support.txt \
-	../doc/doxygen/pages/Algorithm.txt \
-	../doc/doxygen/pages/Preconditioning.txt \
-	../doc/doxygen/pages/Dense.txt \
-	../doc/doxygen/pages/Examples.txt \
-	../doc/doxygen/pages/Fortran.txt \
-	../doc/doxygen/pages/C_C++.txt \
-	../doc/doxygen/pages/FAQ.txt \
-	../doc/doxygen/pages/Contact.txt \
-	../doc/doxygen/pages/Acknowledgements.txt \
-	../doc/doxygen/pages/Copyright.txt \
-	../doc/doxygen/pages/Reference.txt \
-	../doc/doxygen/images
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/C_BPACK_wrapper.h \ 
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/CMakeLists.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_defs.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_factor.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_randomized.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_solve_mul.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_structure.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_utilities.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/BPACK_wrapper.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/Bplus_compress.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/Bplus_factor.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/Bplus_pack_unpack_for_MPI.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/Bplus_randomized.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/Bplus_utilities.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/MAGMA_offset.c \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/LAPACK_cgeqp3mod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/LAPACK_sgeqp3mod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/LAPACK_zgeqp3mod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/LAPACK_dgeqp3mod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/MAGMA_utilities.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/MISC_DenseLA.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/MISC_linkedlist.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/MISC_utilities.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/SCALAPACK_pcgeqpfmod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/SCALAPACK_pdgeqpfmod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/SCALAPACK_psgeqpfmod.f \
+	@CMAKE_CURRENT_SOURCE_DIR@/SRC/SCALAPACK_pzgeqpfmod.f \	
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/C_EMCURV_wrapper.h \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/DoCubicInterp2D.h \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/G2D \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/G3D \
+	@CMAKE_CURRENT_SOURCE_DIR@/cmake/butterflypack-config.cmake.in \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Overview.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Installation.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/GPU_support.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Algorithm.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Examples.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Fortran.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/C_C++.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/FAQ.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Contact.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Acknowledgements.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Copyright.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Reference.txt \
+	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/images
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
@@ -905,7 +903,7 @@ EXAMPLE_RECURSIVE      = NO
 # that contain images that are to be included in the documentation (see the
 # \image command).  \/Users/Desktop/LBL1/STRUMPACK/doc/doxygen/images
 
-IMAGE_PATH             = ../doc/doxygen/images/
+IMAGE_PATH             = @CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/images/
 
 # The INPUT_FILTER tag can be used to specify a program that doxygen should
 # invoke to filter for each input file. Doxygen will invoke the filter program

@@ -1,5 +1,6 @@
 
 make.inc
+./doc/doc
 ./build
 ./SRC/ButterflyPACK_config.fi
 ./SRC_DOUBLE

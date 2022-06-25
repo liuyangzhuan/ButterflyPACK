@@ -439,10 +439,18 @@ add_subdirectory(SRC_SINGLE)
 add_subdirectory(SRC_COMPLEX)
 add_subdirectory(EXAMPLE)
 
-if(enable_doc)
-  message(FATAL_ERROR "Documentation build requested but not implemented.")
-  #implement doxygen
+
+# documentation
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+  configure_file(${CMAKE_SOURCE_DIR}/doc/doxygen/doxygen.dox.in
+    ${CMAKE_BINARY_DIR}/doxygen.dox @ONLY)
+  add_custom_target(doc
+    ${DOXYGEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/doxygen.dox
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Generating API documentation with doxygen" VERBATIM)
 endif()
+
 
 configure_file(${ButterflyPACK_SOURCE_DIR}/make.inc.in ${ButterflyPACK_SOURCE_DIR}/make.inc)
 
