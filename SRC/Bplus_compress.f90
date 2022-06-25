@@ -14,6 +14,10 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file Bplus_compress.f90
+!> @brief Block-level subroutines for constructing a LR/Butterfly/Dense block from entry evaluations
+
+
 #include "ButterflyPACK_config.fi"
 module Bplus_compress
    use BPACK_DEFS
@@ -1060,7 +1064,7 @@ contains
 
    end subroutine BF_exchange_skel
 
-!*********** all to all communication of skeletons of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!>*********** all to all communication of skeletons of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_skel(blocks, skels, option, stats, msh, ptree, level, mode, mode_new)
 
 
@@ -2788,7 +2792,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                            acaquants(index_ij_loc)%rank = rank
                            acaquants(index_ij_loc)%rank0 = rank0
 
-                           !**** Find column pivots for the next iteration
+                           !>**** Find column pivots for the next iteration
                            jpvt = 0
                            row_Rtmp_knn = row_R_knn
                            if (rank > 0) row_Rtmp_knn(:, acaquants(index_ij_loc)%columns(1:rank)) = 0
@@ -3204,7 +3208,7 @@ time_tmp = time_tmp + n2 - n1
          call BF_all2all_vec_n_ker(blocks, ButterflyP_old1, stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
 
 
-         !*** needs to copy ButterflyP_old1 to ButterflyP_old2 with rows possibly doubled, before calling BF_exchange_matvec
+         !>*** needs to copy ButterflyP_old1 to ButterflyP_old2 with rows possibly doubled, before calling BF_exchange_matvec
          call GetLocalBlockRange(ptree, blocks%pgno, level_half+1, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
          ButterflyP_old2%idx_r = idx_r
          ButterflyP_old2%inc_r = inc_r
@@ -3239,7 +3243,7 @@ time_tmp = time_tmp + n2 - n1
          n1 = OMP_get_wtime()
          ! construct the the left half
          do level = level_half+1, level_butterfly
-            !*** Caution!! the left half is row-wise, the right half is column-wise
+            !>*** Caution!! the left half is row-wise, the right half is column-wise
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
             blocks%ButterflyKerl(level)%num_row = 2**level
             blocks%ButterflyKerl(level)%num_col = 2**(level_butterfly - level + 1)
@@ -3293,7 +3297,7 @@ time_tmp = time_tmp + n2 - n1
          ! time_tmp = time_tmp + n2 - n1
          call BF_delete_ker_onelevel(ButterflyMiddle)
 
-         !**** need converting ButterflyP_old to column-wise layout before copy into ButterflyU
+         !>**** need converting ButterflyP_old to column-wise layout before copy into ButterflyU
          call BF_all2all_vec_n_ker(blocks, ButterflyP_old, stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_butterfly+1, 'R', 'C', 0)
          blocks%ButterflyU%idx = ButterflyP_old%idx_r
          blocks%ButterflyU%inc = ButterflyP_old%inc_r
@@ -3311,7 +3315,7 @@ time_tmp = time_tmp + n2 - n1
          ! construct the the right half
          n1 = OMP_get_wtime()
          do level = level_half, 1, -1
-            !*** Caution!! the left half is row-wise, the right half is column-wise
+            !>*** Caution!! the left half is row-wise, the right half is column-wise
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
             blocks%ButterflyKerl(level)%num_row = 2**level
             blocks%ButterflyKerl(level)%num_col = 2**(level_butterfly - level + 1)
@@ -3364,7 +3368,7 @@ time_tmp = time_tmp + n2 - n1
          ! time_tmp = time_tmp + n2 - n1
 
 
-         !**** need converting ButterflyP_old2 to row-wise layout before copy into ButterflyV
+         !>**** need converting ButterflyP_old2 to row-wise layout before copy into ButterflyV
          call BF_all2all_vec_n_ker(blocks, ButterflyP_old2, stats, ptree, ptree%pgrp(blocks%pgno)%nproc, 0, 'C', 'R', 0)
          blocks%ButterflyV%idx = ButterflyP_old2%idx_c
          blocks%ButterflyV%inc = ButterflyP_old2%inc_c
@@ -5319,7 +5323,7 @@ time_tmp = time_tmp + n2 - n1
 
 ! ! ACA followed by SVD
 
-      !!!!**** generate 2D grid blacs quantities for matU
+      !!!!>**** generate 2D grid blacs quantities for matU
       ! ctxt = ptree%pgrp(pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
@@ -5334,10 +5338,10 @@ time_tmp = time_tmp + n2 - n1
          allocate (matU2D(1, 1))
          matU2D = 0
       endif
-      !!!!**** redistribution of input matrix
+      !!!!>**** redistribution of input matrix
       call Redistribute1Dto2D(matU, blocks%M_p, 0, pgno, matU2D, M, 0, pgno, rank, ptree)
 
-      !!!!**** generate 2D grid blacs quantities for matV transpose
+      !!!!>**** generate 2D grid blacs quantities for matV transpose
       ! ctxt = ptree%pgrp(pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
@@ -5351,7 +5355,7 @@ time_tmp = time_tmp + n2 - n1
          allocate (matV2D(1, 1))
          matV2D = 0
       endif
-      !!!!**** redistribution of input matrix
+      !!!!>**** redistribution of input matrix
       allocate (matV1(blocks%N_loc, rmax))
       call copymatT(matV, matV1, rmax, blocks%N_loc)
       call Redistribute1Dto2D(matV1, blocks%N_p, 0, pgno, matV2D, N, 0, pgno, rank, ptree)
@@ -5621,13 +5625,13 @@ time_tmp = time_tmp + n2 - n1
 
       do while (normUV >= tolerance*normA .and. itr < itrmax)
 
-         !**** create random column index for the first iteration
+         !>**** create random column index for the first iteration
          if (rank == 0) then
             call rperm(N, perms)
             select_column = perms(1:r_est)
          endif
 
-         !**** Compute columns column_R to find a new set of rows and columns
+         !>**** Compute columns column_R to find a new set of rows and columns
          do i = 1, M
             mrange(i) = header_m + i - 1
          enddo
@@ -5657,7 +5661,7 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Find row pivots from the columns column_R
+         !>**** Find row pivots from the columns column_R
          call copymatT(column_R, column_RT, M, r_est)
          jpvt = 0
          ! call geqp3modf90(column_RT,jpvt,tau,tolerance*1e-2,BPACK_SafeUnderflow,ranknew)
@@ -5665,7 +5669,7 @@ time_tmp = time_tmp + n2 - n1
          stats%Flop_Fill = stats%Flop_Fill + flop
          select_row(1:r_est) = jpvt(1:r_est)
 
-         !**** Compute rows row_R in CUR
+         !>**** Compute rows row_R in CUR
          do i = 1, r_est
             mrange(i) = header_m + select_row(i) - 1
          enddo
@@ -5706,7 +5710,7 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Find column pivots from the rows row_R
+         !>**** Find column pivots from the rows row_R
          jpvt = 0
          row_Rtmp = row_R
          ! call geqp3modf90(row_Rtmp,jpvt,tau,tolerance*1e-2,BPACK_SafeUnderflow,ranknew)
@@ -5714,7 +5718,7 @@ time_tmp = time_tmp + n2 - n1
          stats%Flop_Fill = stats%Flop_Fill + flop
          select_column(1:r_est) = jpvt(1:r_est)
 
-         !**** Compute columns column_R in CUR
+         !>**** Compute columns column_R in CUR
          do i = 1, M
             mrange(i) = header_m + i - 1
          enddo
@@ -5745,13 +5749,13 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Compute the skeleton matrix in CUR
+         !>**** Compute the skeleton matrix in CUR
          do i = 1, r_est
             core(i, :) = column_R(select_row(i), :)
          enddo
 
 #if 1
-         !**** generate column indices for the next iteration
+         !>**** generate column indices for the next iteration
          row_Rtmp = row_R
          do j = 1, r_est
             row_Rtmp(:, select_column(j)) = 0d0
@@ -5764,7 +5768,7 @@ time_tmp = time_tmp + n2 - n1
          select_column(1:r_est) = jpvt(1:r_est)
 #endif
 
-         !**** form the LR update by CUR
+         !>**** form the LR update by CUR
 
          jpvt = 0
          call geqp3modf90(core, jpvt, tau, tolerance, BPACK_SafeUnderflow, ranknew, flop=flop)
@@ -5812,7 +5816,7 @@ time_tmp = time_tmp + n2 - n1
             SVD_Q%matV(rank + 1:rank + rankup, :) = row_Rtmp(1:rankup, :)
             rank = rank + rankup
 
-            !**** update fnorm of UV and matUmatV
+            !>**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             ! if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
@@ -5944,7 +5948,7 @@ time_tmp = time_tmp + n2 - n1
       rank0 = 0
       error=1.0
 
-      !**** if nearest neighbour is available, select them first
+      !>**** if nearest neighbour is available, select them first
       if (option%knn > 0) then
          allocate (select_column_knn(M*option%knn))
          allocate (select_row_knn(N*option%knn))
@@ -6025,7 +6029,7 @@ time_tmp = time_tmp + n2 - n1
 
             ! call element_Zmn_block_user(r_est_knn_r, N, mrange, nrange, row_R_knn, msh, option, ker, 0, passflag, ptree, stats)
 
-            !**** Compute the skeleton matrix in CUR
+            !>**** Compute the skeleton matrix in CUR
             do i = 1, r_est_knn_r
                core_knn(i, :) = column_R_knn(select_row_knn(i), :)
             enddo
@@ -6082,10 +6086,10 @@ time_tmp = time_tmp + n2 - n1
                rank0 = rank
 
                ! if (rank == rmax)then
-               !    goto 10 !*** skip ACA iteration
+               !    goto 10 !>*** skip ACA iteration
                ! endif
 
-               ! !**** update fnorm of UV and matUmatV (this is commented out to leave normUV=normA=0 for aca iteration)
+               ! !>**** update fnorm of UV and matUmatV (this is commented out to leave normUV=normA=0 for aca iteration)
                ! call LR_Fnorm(column_R_knn, row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
                ! stats%Flop_Fill = stats%Flop_Fill + flop
                ! call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
@@ -6098,7 +6102,7 @@ time_tmp = time_tmp + n2 - n1
                !    error = 0
                ! endif
 
-               !**** Find column pivots for the next iteration
+               !>**** Find column pivots for the next iteration
                jpvt = 0
                row_Rtmp_knn = row_R_knn
                if (rank > 0) row_Rtmp_knn(:, columns(1:rank)) = 0
@@ -6108,14 +6112,14 @@ time_tmp = time_tmp + n2 - n1
                select_column(1:r_est) = jpvt(1:r_est)
             ! else
             !    error = 0
-               ! goto 20   !*** no effective rank found using KNN, go to ACA iteration
+               ! goto 20   !>*** no effective rank found using KNN, go to ACA iteration
             endif
          endif
       endif
 
       do while (normUV >= tolerance*normA .and. itr < itrmax)
 
-         !**** create random column index for the first iteration
+         !>**** create random column index for the first iteration
          if (rank == 0) then
             call rperm(N, perms)
             select_column = perms(1:r_est)
@@ -6126,7 +6130,7 @@ time_tmp = time_tmp + n2 - n1
 
          select_column1 = select_column
 
-         !**** Compute columns column_R to find a new set of rows and columns
+         !>**** Compute columns column_R to find a new set of rows and columns
          do i = 1, M
             mrange(i) = header_m + i - 1
          enddo
@@ -6157,7 +6161,7 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Find row pivots from the columns column_R
+         !>**** Find row pivots from the columns column_R
          call copymatT(column_R, column_RT, M, r_est)
          if (rank > 0) column_RT(:, rows(1:rank)) = 0
          jpvt = 0
@@ -6169,7 +6173,7 @@ time_tmp = time_tmp + n2 - n1
          ! write(*,*)itr, 'BACA ref col', select_column(1:r_est), 'row', select_row(1:r_est), normUV,normA, header_m, header_n, fnorm(column_R,M,r_est)
 
 
-         !**** Compute rows row_R in CUR
+         !>**** Compute rows row_R in CUR
          ! !$omp end parallel do
          do i = 1, r_est
             mrange(i) = header_m + select_row(i) - 1
@@ -6201,7 +6205,7 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Compute the skeleton matrix in CUR
+         !>**** Compute the skeleton matrix in CUR
          do i = 1, r_est
             core(i, :) = column_R(select_row(i), :)
          enddo
@@ -6258,7 +6262,7 @@ time_tmp = time_tmp + n2 - n1
 
             rank = rank + rankup
 
-            !**** update fnorm of UV and matUmatV
+            !>**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, rank0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
@@ -6272,7 +6276,7 @@ time_tmp = time_tmp + n2 - n1
                exit
             endif
 
-            !**** Find column pivots for the next iteration
+            !>**** Find column pivots for the next iteration
             jpvt = 0
             row_Rtmp = row_R
             if (rank > 0) row_Rtmp(:, columns(1:rank)) = 0
@@ -6417,7 +6421,7 @@ time_tmp = time_tmp + n2 - n1
             submatc%dat = column_R
          endif
 
-         !**** Find row pivots from the columns column_R
+         !>**** Find row pivots from the columns column_R
          call copymatT(column_R, column_RT, M, r_est)
          if (rank > 0) column_RT(:, acaquants%rows(1:rank)) = 0
          jpvt = 0
@@ -6439,7 +6443,7 @@ time_tmp = time_tmp + n2 - n1
             enddo
          endif
 
-         !**** Compute the skeleton matrix in CUR
+         !>**** Compute the skeleton matrix in CUR
          ! write(*,*)select_column(1:r_est),'jiba',header_m, header_n
          do j = 1, r_est
             core(:, j) = row_R(:, select_column(j))
@@ -6488,7 +6492,7 @@ time_tmp = time_tmp + n2 - n1
             acaquants%rank=rank
 
 
-            !**** update fnorm of UV and matUmatV
+            !>**** update fnorm of UV and matUmatV
             call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, acaquants%normUV, tolerance*1e-2, Flops=flop)
             flops = flops + flop
             call LR_FnormUp(acaquants%matU, acaquants%matV, M, N, acaquants%rank0, rank - rankup, rankup, rank, acaquants%normA, acaquants%normUV, tolerance*1e-2, Flops=flop)
@@ -6500,7 +6504,7 @@ time_tmp = time_tmp + n2 - n1
             if (acaquants%normA < BPACK_SafeUnderflow) then
                acaquants%finish = .true.
             else
-               !**** Find column pivots for the next iteration
+               !>**** Find column pivots for the next iteration
                jpvt = 0
                row_Rtmp = row_R
                if (rank > 0) row_Rtmp(:, acaquants%columns(1:rank)) = 0
