@@ -15,7 +15,7 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 !> @file BPACK_defs.f90
 !> @brief This file defines all data types, variables and constants used in ButterflyPACK
-!
+
 
 #include "ButterflyPACK_config.fi"
 
@@ -593,7 +593,7 @@ module BPACK_DEFS
         end subroutine Zelem_block
 
         !> interface of user-defined element evaluation routine in Fortran. m,n represents indices in natural order
-        subroutine F_Zelem(m, n, val, quant) 
+        subroutine F_Zelem(m, n, val, quant)
             import::mesh, kernelquant
             class(*), pointer :: quant
             integer, INTENT(IN):: m, n
@@ -601,7 +601,7 @@ module BPACK_DEFS
         end subroutine F_Zelem
 
         !> interface of user-defined distance computation routine in Fortran. m,n represents indices in natural order
-        subroutine F_Dist(m, n, val, quant) 
+        subroutine F_Dist(m, n, val, quant)
             import::mesh, kernelquant
             class(*), pointer :: quant
             integer, INTENT(IN):: m, n
@@ -609,7 +609,7 @@ module BPACK_DEFS
         end subroutine F_Dist
 
         !> interface of user-defined compressibility routine in Fortran. groupm,groupn represents groups in the permuted order
-        subroutine F_Compressibility(groupm, groupn, val, quant) 
+        subroutine F_Compressibility(groupm, groupn, val, quant)
             import::mesh, kernelquant
             class(*), pointer :: quant
             integer, INTENT(IN):: groupm, groupn
@@ -617,7 +617,7 @@ module BPACK_DEFS
         end subroutine F_Compressibility
 
         !> interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
-        subroutine F_Zelem_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) 
+        subroutine F_Zelem_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
             class(*), pointer :: quant
             integer:: Ninter
             integer:: allrows(:), allcols(:)
@@ -627,7 +627,7 @@ module BPACK_DEFS
         end subroutine F_Zelem_block
 
         !> interface of user-defined element evaluation routine in C. m,n represents indices in natural order
-        subroutine C_Zelem(m, n, val, quant) 
+        subroutine C_Zelem(m, n, val, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
             integer(kind=C_INT), INTENT(IN):: m, n
@@ -635,7 +635,7 @@ module BPACK_DEFS
         end subroutine C_Zelem
 
         !> interface of user-defined distance computation routine in C. m,n represents indices in natural order
-        subroutine C_Dist(m, n, val, quant) 
+        subroutine C_Dist(m, n, val, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
             integer(kind=C_INT), INTENT(IN):: m, n
@@ -643,7 +643,7 @@ module BPACK_DEFS
         end subroutine C_Dist
 
         !> interface of user-defined distance compressibility routine in C. groupm,groupn represents groups in the permuted order
-        subroutine C_Compressibility(groupm, groupn, val, quant) 
+        subroutine C_Compressibility(groupm, groupn, val, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
             integer(kind=C_INT), INTENT(IN):: groupm, groupn
@@ -651,7 +651,7 @@ module BPACK_DEFS
         end subroutine C_Compressibility
 
         !> interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
-        subroutine C_Zelem_block(Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) 
+        subroutine C_Zelem_block(Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
             integer(kind=C_INT):: Ninter, Nallrows, Nallcols, Nalldat_loc
@@ -671,7 +671,7 @@ module BPACK_DEFS
         end subroutine HMatVec
 
         !> interface of user-defined HODLR MatVec routine in Fortran.
-        subroutine F_HMatVec(trans, M, N, num_vect, Vin, Vout, quant) 
+        subroutine F_HMatVec(trans, M, N, num_vect, Vin, Vout, quant)
             import::mesh, proctree, Hstat
             class(*), pointer :: quant
             integer, INTENT(IN):: M, N, num_vect
@@ -680,7 +680,7 @@ module BPACK_DEFS
         end subroutine F_HMatVec
 
         !> interface of user-defined HODLR MatVec routine in C.
-        subroutine C_HMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant) 
+        subroutine C_HMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             import::mesh, proctree, Hstat
             type(c_ptr) :: quant
@@ -693,7 +693,7 @@ module BPACK_DEFS
         end subroutine C_HMatVec
 
         !> interface of user-defined Block MatVec routine in C.
-        subroutine C_BMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant, a, b) 
+        subroutine C_BMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant, a, b)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
             character(kind=c_char, len=1) :: trans(*)
@@ -708,7 +708,7 @@ module BPACK_DEFS
 
     ! integer,allocatable:: basis_group_pre(:,:)
 contains
-    
+
     !> deallocate all entries of an iarray
     subroutine iarray_finalizer(lst)
         implicit none

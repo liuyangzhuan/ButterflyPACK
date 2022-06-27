@@ -2230,6 +2230,7 @@ contains
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'C', 'T' or 'N'
    subroutine C_BPACK_Inv_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_inv_mult")
       implicit none
       real(kind=8) t1, t2
