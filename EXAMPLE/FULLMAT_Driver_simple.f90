@@ -1,5 +1,13 @@
+!> @file
+!> @brief This example generates a random LR product, or reads a full matrix from disk, and compress it using entry-valuation-based APIs
+!> @details Note that the use of the following \n
+!> #define DAT 0 \n
+!> #include "zButterflyPACK_config.fi" \n
+!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMPLEX with double-complex precision
+
+
 #define DAT 0
-#include "ButterflyPACK_config.fi"
+#include "zButterflyPACK_config.fi"
 
 module APPLICATION_MODULE_FULL_SIMPLE
 use BPACK_DEFS

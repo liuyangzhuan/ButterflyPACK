@@ -13,11 +13,18 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file EMCURV_Module.f90
+!> @brief This files contains functions and data types for the 2D EFIE examples
+!> @details Note that the use of the following \n
+!> #define DAT 0 \n
+!> #include "zButterflyPACK_config.fi" \n
+!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMLEX with double-complex precision
+
 
 ! This exmple works with double-complex precision data
 #define DAT 0
 
-#include "ButterflyPACK_config.fi"
+#include "zButterflyPACK_config.fi"
 
 
 module EMCURV_MODULE

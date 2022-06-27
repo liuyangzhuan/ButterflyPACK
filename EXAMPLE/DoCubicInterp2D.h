@@ -1,3 +1,7 @@
+/*! @file
+ * @brief Header contains declaration of C functions for 2D interpolation 
+*/
+
 #include "math.h"
 #include "stdlib.h"
 #include "stdio.h" 
