@@ -16,6 +16,11 @@ set(VERSION_MINOR "1")
 set(VERSION_BugFix "1")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
+
+# Set up options
+option(enable_doc       "Build doxygen documentation" OFF)
+
+
 ######################################################################
 #
 # IDEAS: xSDK standards module
@@ -412,13 +417,13 @@ if(APPLE)
         WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
     )
     execute_process (
-        COMMAND bash PrecisionPreprocessing_mac.sh
+        COMMAND bash PrecisionPreprocessing_mac.sh ${enable_doc}
         WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
     )
     set(PREPROC_EXPORT "PrecisionPreprocessing_mac.sh")
   else()
     execute_process (
-      COMMAND bash PrecisionPreprocessing.sh
+      COMMAND bash PrecisionPreprocessing.sh ${enable_doc}
       WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
     )
     set(PREPROC_EXPORT "PrecisionPreprocessing.sh")
@@ -441,6 +446,7 @@ add_subdirectory(EXAMPLE)
 
 
 # documentation
+if(enable_doc)
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
   configure_file(${CMAKE_SOURCE_DIR}/doc/doxygen/doxygen.dox.in
@@ -449,6 +455,7 @@ if(DOXYGEN_FOUND)
     ${DOXYGEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/doxygen.dox
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Generating API documentation with doxygen" VERBATIM)
+endif()
 endif()
 
 
