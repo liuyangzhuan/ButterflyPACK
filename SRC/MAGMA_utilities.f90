@@ -10,6 +10,9 @@ module magma_utilities
     use iso_c_binding
     implicit none
 
+!> @file MAGMA_utilities.f90
+!> @brief Low-level wrappers for calling MAGMA functions
+
 #ifdef HAVE_MAGMA
 
 

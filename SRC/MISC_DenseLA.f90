@@ -14,6 +14,10 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file MISC_DenseLA.f90
+!> @brief Low-level wrappers for calling BLAS/LAPACK/ScaLAPACK functions
+
+
 #include "ButterflyPACK_config.fi"
 module MISC_DenseLA
    use BPACK_DEFS

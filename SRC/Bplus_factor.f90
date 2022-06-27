@@ -13,6 +13,10 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file Bplus_factor.f90
+!> @brief Low-level subroutines for factorizing a BPACK (H/HODBF/HODLR/HSS-BF) matrix
+
+
 
 #include "ButterflyPACK_config.fi"
 module Bplus_factor
@@ -595,7 +599,7 @@ contains
 
 
 
-      !!!!**** generate 2D grid blacs quantities for matU
+      !!!!>**** generate 2D grid blacs quantities for matU
       pgno = blocks_A%pgno
       ctxt = ptree%pgrp(pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
@@ -611,10 +615,10 @@ contains
          allocate (matU2D(1, 1))
          matU2D = 0
       endif
-      !!!!**** redistribution of input matrix
+      !!!!>**** redistribution of input matrix
       call Redistribute1Dto2D(matU, blocks_A%M_p, 0, pgno, matU2D, blocks_A%M, 0, pgno, rank, ptree)
 
-      !!!!**** generate 2D grid blacs quantities for matV transpose
+      !!!!>**** generate 2D grid blacs quantities for matV transpose
       ! ctxt = ptree%pgrp(pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
@@ -628,7 +632,7 @@ contains
          allocate (matV2D(1, 1))
          matV2D = 0
       endif
-      !!!!**** redistribution of input matrix
+      !!!!>**** redistribution of input matrix
 
       call Redistribute1Dto2D(matV, blocks_A%N_p, 0, pgno, matV2D, blocks_A%N, 0, pgno, rank, ptree)
 
@@ -1078,7 +1082,7 @@ contains
          bdiags%bidxs = min(bdiags%bidxs,bidx)
          bdiags%bidxe = max(bdiags%bidxe,bidx)
       else
-         !*** split process groups row-wise
+         !>*** split process groups row-wise
          Maxgrp = 2**(ptree%nlevel) - 1
          pgnoA = pgno
          pgnoD = pgno
@@ -1370,7 +1374,7 @@ contains
             level_butterfly = level_butterfly_target
             rate = option%rankrate !1.2d0
 
-            !**** Check the estimated norm of the operator, if too small skip the randomized construction
+            !>**** Check the estimated norm of the operator, if too small skip the randomized construction
             allocate(vecin(blocks_io%N_loc,1))
             vecin=1/sqrt(dble(blocks_io%N))
             allocate(vecout(blocks_io%M_loc,1))
@@ -1418,7 +1422,7 @@ contains
       end if
    end subroutine BF_inverse_partitionedinverse_IplusButter
 
-!**** Merge four child LR into a bigger one
+!>**** Merge four child LR into a bigger one
    !partitioned_block: (input) partitioned_block%sons store the four smaller BF
    !ptree: (input) process tree
    !stats: (input) statistics
@@ -1458,7 +1462,7 @@ contains
       stats%Flop_Factor=stats%Flop_Factor+stats%Flop_tmp
    end subroutine LR_ABCDinverse
 
-!**** Use low-rank arithmetic to form the four child LRs in inverse_ABCD
+!>**** Use low-rank arithmetic to form the four child LRs in inverse_ABCD
    !partitioned_block: (input) partitioned_block%sons store the four smaller LR
    !ptree: (input) process tree
    !stats: (input) statistics
@@ -1582,7 +1586,7 @@ contains
          blocks%rankmax = rank
          call ComputeParallelIndices(blocks, pgno, ptree, msh)
 
-         !!!!**** generate 2D grid blacs quantities
+         !!!!>**** generate 2D grid blacs quantities
          ctxt = ptree%pgrp(pgno)%ctxt
          call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
          if (myrow /= -1 .and. mycol /= -1) then
@@ -1604,7 +1608,7 @@ contains
             allocate (blocks%ButterflyV%blocks(1)%matrix(1, 1))
          endif
 
-         !!!!**** redistribution of UV factors
+         !!!!>**** redistribution of UV factors
          call Redistribute1Dto2D(UU, blocks%M_p, 0, pgno, blocks%ButterflyU%blocks(1)%matrix, blocks%M, 0, pgno, rank, ptree)
          call Redistribute1Dto2D(VV, blocks%N_p, 0, pgno, blocks%ButterflyV%blocks(1)%matrix, blocks%N, 0, pgno, rank, ptree)
 
@@ -1649,7 +1653,7 @@ contains
 
    end subroutine LR_BuildABCD
 
-!**** Merge four child butterflies (of the same level) into a bigger one
+!>**** Merge four child butterflies (of the same level) into a bigger one
    !partitioned_block: (input) partitioned_block%sons store the four smaller BF
    !ptree: (input) process tree
    !stats: (input) statistics
@@ -1713,7 +1717,7 @@ contains
       blocks_o%level_half = floor_safe(dble(level_butterfly_o)/2d0) ! from outer to inner
 
       num_blocks = 2**level_butterfly_o
-      !****** row-wise ordering from right side
+      !>****** row-wise ordering from right side
       do level = 0, blocks_o%level_half
 
          call GetLocalBlockRange(ptree, blocks_o%pgno, level, level_butterfly_o, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
@@ -1739,7 +1743,7 @@ contains
          endif
       enddo
 
-      !****** column-wise ordering from left side
+      !>****** column-wise ordering from left side
       level_final = blocks_o%level_half + 1
       do level = level_butterfly_o + 1, level_final, -1
 
@@ -2084,14 +2088,14 @@ contains
       do jjj = 1, 2
 
          if(present(splitpg))then
-            !*** split process groups row-wise
+            !>*** split process groups row-wise
             Maxgrp = 2**(ptree%nlevel) - 1
             pgno = blocks_i_copy%pgno
             if (pgno*2 <= Maxgrp) then
                pgno = pgno*2 + iii-1
             endif
          else
-            !*** try to use the same process group as blocks_i
+            !>*** try to use the same process group as blocks_i
             pgno = blocks_i_copy%pgno
             do while (Maxlevel - blocks_i%level - 1 < ptree%nlevel - GetTreelevel(pgno))
                ! do while(level_butterfly<ptree%nlevel-GetTreelevel(pgno))
@@ -2204,7 +2208,7 @@ contains
             endif
          endif
 
-         !**** first redistribute blocks_i into blocks_dummy%sons of the same butterfly levels
+         !>**** first redistribute blocks_i into blocks_dummy%sons of the same butterfly levels
          blocks_dummy%level_butterfly = blocks_i_copy%level_butterfly
          blocks_dummy%level_half = blocks_i_copy%level_half
          allocate (blocks_dummy%sons(2, 2))
@@ -2225,7 +2229,7 @@ contains
                call BF_all2all_ker_split(blocks_i_copy, blocks_i_copy%pgno, level, blocks_dummy, pgnos, level, stats, ptree)
             endif
          enddo
-         !**** next convert blocks_dummy%sons into  blocks_o%sons
+         !>**** next convert blocks_dummy%sons into  blocks_o%sons
          call BF_convert_to_smallBF(blocks_dummy, blocks_o, stats, ptree)
 
          do iii = 1, 2
@@ -2460,7 +2464,7 @@ contains
       enddo
    end subroutine BF_get_rank_ABCD
 
-!**** Update one off-diagonal block in HODLR compressed as
+!>**** Update one off-diagonal block in HODLR compressed as
 ! Bplus/Butterfly/LR by multiplying on it left the inverse of diagonal block
 ! If LR, call LR_Sblock; if butterfly, call BF_randomized; if Bplus, call Bplus_randomized_constr
    !ho_bf1: working HODLR

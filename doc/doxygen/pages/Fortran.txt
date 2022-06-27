@@ -1,0 +1,89 @@
+/*! \page Fortran Fortran Example
+
+## Fortran Interface
+The following pseudo codes explain how to perform construction, factorization and solve of a linear system "Z" using the Fortran interface
+
+First, specify the data type of your application:
+```
+!**** DAT 1: double precision; DAT 0: double complex precision
+#define DAT 1
+#include "ButterflyPACK_config.fi"
+```
+
+ButterflyPACK provides two ways of constructing a hierarchical matrix.
+The first option requires a user-provided function to sample any individual element of the matrix that takes the following argument list
+```
+subroutine Element(m,n,val,quant)
+implicit none
+	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
+	integer:: m,n  ! m,n specify the row and column indices of the desired matrix element
+	DT::val ! val returns Z(m,n), (DT=real(kind=8) or complex(kind=8) depending on your application)
+
+	! write your matrix element evaluation function here
+
+end subroutine Element
+```
+
+The second option requires a user-provided function to multiply the matrix Z with an arbitrary matrix R that takes the following argument list
+```
+subroutine MatVec(trans,Mloc,Nloc,num_vect,R,S,quant)
+implicit none
+	character trans ! trans='N': S=ZR; trans='T': S^t=R^tZ; trans='C': S^c=R^cZ;
+	DT:: R(:,:),S(:,:) ! represent the input matrix R and output matrix S
+	integer::Mloc,Nloc ! local row and column dimensions of Z returned by the initialization subroutine BPACK_construction_Init
+	integer:: num_vect ! column dimension of R
+	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
+
+	! write your matrix multiplication function here
+
+end subroutine MatVec
+```
+
+Initialize ButterflyPACK metadata kernel register (ker), process tree (ptree), statistics (stats), user-options (option):
+```
+!*** create process tree, statistics and user-option
+call CreatePtree(nmpi,groupmembers,MPI_Comm,ptree) ! groupmembers is an integer array of size nmpi, holding MPI ranks from the communicator MPI_Comm that will be used for this matrix operation
+call InitStat(stats)
+call SetDefaultOptions(option) ! besides the default options, other options can be set after calling this, please refer to definition of option for details
+
+!**** register the user-defined function and derived-type in kernel register
+ker%QuantApp => quant
+ker%FuncZmn => Element
+ker%FuncHMatVec => MatVec  ! Note that at least one of ker%FuncZmn and ker%FuncHMatVec needs to set
+
+!**** initialization of the construction phase
+call BPACK_construction_Init(N,P,N_loc,bmat,option,stats,msh,ker,ptree,Coordinates,clustertree)
+	! N is matrix dimension
+	! P is the permutation vector returned
+	! N_loc is the local number of rows/columns
+	! bmat is the meta-data storing the compressed matrix
+	! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
+	! clustertree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
+	! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.
+	! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
+```
+
+Construction of the hierarchical matrix:
+```
+!**** computation of the construction phase, one the following two functions can be called depending on how ker is registered
+call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree) ! construct a hierarchical matrix with fast matrix entry evaluation
+call BPACK_construction_Matvec(bmat,matvec_user,memory,error,option,stats,ker,ptree,msh) ! construct a hierarchical matrix with fast matrix-vector multiplication
+```
+
+Factorization of the hierarchical matrix:
+```
+call BPACK_Factorization(bmat,option,stats,ptree,msh)
+```
+
+Solve of the hierarchical matrix:
+```
+call BPACK_Factorization(bmat,x,b,N_loc,nrhs,option,ptree,stats)
+	! bmat is the meta-data storing the compressed and factored matrix
+	! N_loc is the local number of rows/columns
+	! nrhs is the number of right-hand sides
+	! P is the permutation vector returned
+	! b of N_loc*nrhs is the local right-hand sides
+	! x of N_loc*nrhs is the local solution vector
+```
+
+*/

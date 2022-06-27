@@ -14,6 +14,10 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file BPACK_factor.f90
+!> @brief Top-level subroutines for inverting/factorizing H, HOD-LR, HOD-BF and HSS-BF matrices
+
+
 #include "ButterflyPACK_config.fi"
 module BPACK_factor
     use Bplus_factor
@@ -136,7 +140,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Computing block inverse at higher levels...'
         do level_c = ho_bf1%Maxlevel, 1, -1
 
-            !!!***** update the forward off-diagonal block by left multiplication of inverse of diagonal blocks in Z: Z_ij^l -> Z_ii^-1*Z_ij^l
+            !!!>***** update the forward off-diagonal block by left multiplication of inverse of diagonal blocks in Z: Z_ij^l -> Z_ii^-1*Z_ij^l
             call MPI_barrier(ptree%Comm, ierr)
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'update forward blocks at level:', level_c
 
@@ -161,7 +165,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             n2 = OMP_get_wtime()
             stats%Time_Sblock = stats%Time_Sblock + n2 - n1
 
-            !!!***** compute the inverse of each block 2x2 submatrices whose two off-diagonal blocks are butterflies
+            !!!>***** compute the inverse of each block 2x2 submatrices whose two off-diagonal blocks are butterflies
             call MPI_barrier(ptree%Comm, ierr)
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'compute block inverse at level:', level_c
             n1 = OMP_get_wtime()
