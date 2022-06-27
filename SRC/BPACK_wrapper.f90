@@ -139,6 +139,8 @@ contains
 
 !>**** C interface of getting one entry in stats
    !> @param stats_Cptr: the structure containing stats
+   !> @param nam: name of the stats
+   !> @param val_d: value of the stats
    subroutine C_BPACK_Getstats(stats_Cptr, nam, val_d) bind(c, name="c_bpack_getstats")
       implicit none
       real(kind=8)::val_d
@@ -397,7 +399,9 @@ contains
 
 
 !>**** C interface of getting one entry in option, always returning double
-   !> @param stats_Cptr: the structure containing stats
+   !> @param option_Cptr: the structure containing option
+   !> @param nam: name of the option
+   !> @param val_d: value of the option
    subroutine C_BPACK_Getoption(option_Cptr, nam, val_d) bind(c, name="c_bpack_getoption")
       implicit none
       real(kind=8)::val_d
@@ -611,6 +615,8 @@ contains
 
 !>**** C interface of set one entry in option
    !> @param option_Cptr: the structure containing option
+   !> @param nam: name of the option
+   !> @param val_Cptr: value of the option
    subroutine C_BPACK_Setoption(option_Cptr, nam, val_Cptr) bind(c, name="c_bpack_setoption")
       implicit none
       type(c_ptr) :: option_Cptr
@@ -1159,7 +1165,7 @@ contains
 
 !>**** C interface of converting from new,local index to old, global index, the indexs start from 1
    !> @param newidx_loc: new, local index, from 1 to Nloc
-   !> @param oldix: old, global index, from 1 to N (out)
+   !> @param oldidx: old, global index, from 1 to N (out)
    !> @param msh_Cptr: the structure containing points and ordering information
    subroutine C_BPACK_New2Old(msh_Cptr, newidx_loc, oldidx) bind(c, name="c_bpack_new2old")
       implicit none
@@ -1833,6 +1839,7 @@ contains
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information (in)
    subroutine C_BPACK_Factor(bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_factor")
       implicit none
 
@@ -1916,14 +1923,15 @@ contains
 
 !>**** C interface of butterfly-vector multiplication
    !> @param xin: input vector
-   !> @param Ninloc:size of local input vectors
+   !> @param Ninloc: size of local input vectors
    !> @param xout: output vector
-   !> @param Noutloc:size of local output vectors
+   !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
    !> @param bf_for_Cptr: the structure containing butterfly
    !> @param option_Cptr: the structure containing options
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'N', 'C' or 'T'
    subroutine C_BF_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bf_for_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bf_mult")
       implicit none
       real(kind=8) t1, t2
@@ -1994,6 +2002,9 @@ contains
    !> @param alldat_loc: 1D array containing the local entry values defined by pmaps (in column major) stacked together
    !> @param rowidx: 1D array containing sizes of rows of each intersection
    !> @param colidx: 1D array containing sizes of columns of each intersection
+   !> @param Nallrows: total number of rows
+   !> @param Nallcols: total number of columns
+   !> @param Nalldat_loc: total number of local entries
    subroutine C_BF_ExtractElement(block_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bf_extractelement")
       use BPACK_DEFS
       implicit none
@@ -2097,6 +2108,9 @@ contains
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
    !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param Nallrows: total number of rows
+   !> @param Nallcols: total number of columns
+   !> @param Nalldat_loc: total number of local entries
    subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement")
       use BPACK_DEFS
       implicit none
@@ -2156,14 +2170,15 @@ contains
 
 !>**** C interface of HODLR-vector multiplication
    !> @param xin: input vector
-   !> @param Ninloc:size of local input vectors
+   !> @param Ninloc: size of local input vectors
    !> @param xout: output vector
-   !> @param Noutloc:size of local output vectors
+   !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
    !> @param bmat_Cptr: the structure containing HODLR
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'N', 'C' or 'T'
    subroutine C_BPACK_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_mult")
       implicit none
       real(kind=8) t1, t2
@@ -2222,9 +2237,9 @@ contains
 
 !>**** C interface of HODLR(inverse)-vector multiplication
    !> @param xin: input vector
-   !> @param Ninloc:size of local input vectors
+   !> @param Ninloc: size of local input vectors
    !> @param xout: output vector
-   !> @param Noutloc:size of local output vectors
+   !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
    !> @param bmat_Cptr: the structure containing HODLR
    !> @param option_Cptr: the structure containing option
