@@ -14,6 +14,9 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file Bplus_utilities.f90
+!> @brief Block-level utility subroutines not included in other files
+
 #include "ButterflyPACK_config.fi"
 
 module Bplus_Utilities
@@ -472,7 +475,7 @@ contains
       else
          if (blocks%pgno /= pgno_new) then
 
-            !*** make sure every process has blocks%ButterflyKerl allocated
+            !>*** make sure every process has blocks%ButterflyKerl allocated
             if (.not. allocated(blocks%ButterflyKerl)) then
                allocate (blocks%ButterflyKerl(blocks%level_butterfly))
             endif
@@ -487,7 +490,7 @@ contains
                endif
             enddo
 
-            !*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
+            !>*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
             if (.not. IOwnPgrp(ptree, pgno_new)) then
                deallocate (blocks%ButterflyKerl)
             endif
@@ -523,7 +526,7 @@ contains
       if (blocks%level_butterfly > 0) then
          if (pat_i /= pat_o) then
 
-            !*** make sure every process has blocks%ButterflyKerl allocated
+            !>*** make sure every process has blocks%ButterflyKerl allocated
             if (.not. allocated(blocks%ButterflyKerl)) then
                allocate (blocks%ButterflyKerl(blocks%level_butterfly))
             endif
@@ -534,7 +537,7 @@ contains
             blocks%level_half=BF_Switchlevel(blocks%level_butterfly, pat_o)
 
 
-            !*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
+            !>*** delete dummy blocks%ButterflyKerl if I don't share the output butterfly
             if (.not. IOwnPgrp(ptree, blocks%pgno)) then
                deallocate (blocks%ButterflyKerl)
             endif
@@ -1608,7 +1611,7 @@ contains
       ! n1=OMP_Get_wtime()
 
 
-      !*********** compute M_p, N_p, ms, ns, M and N
+      !>*********** compute M_p, N_p, ms, ns, M and N
       allocate(agent_block%M_p(ptree%pgrp(agent_block%pgno)%nproc,2))
       allocate(agent_block%N_p(ptree%pgrp(agent_block%pgno)%nproc,2))
 
@@ -2740,7 +2743,7 @@ contains
 
 
 
-!*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!>*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_sizes(blocks, sizes, ptree, level, mode, mode_new)
 
 
@@ -2979,7 +2982,7 @@ contains
 
 
 
-! !*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+! !>*********** all to all communication of sizes of one butterfly level from row-wise ordering to column-wise ordering or the reverse
 !    subroutine BF_all2all_sizes(blocks, sizes, ptree, nproc, level, mode, mode_new)
 
 
@@ -3210,7 +3213,7 @@ contains
 
 
 
-!*********** all to all communication of extraction results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+!>*********** all to all communication of extraction results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
    subroutine BF_all2all_extraction(blocks, kerls, kerls1, stats, ptree, level, mode, mode_new)
 
 
@@ -3456,7 +3459,7 @@ contains
    end subroutine BF_all2all_extraction
 
 
-   !***** switching the matvecs/temporary buffer/kernels from row/col distributions to col/row distributions, kerflag=1: kernels, kerflag=0: matvecs and buffer
+   !>***** switching the matvecs/temporary buffer/kernels from row/col distributions to col/row distributions, kerflag=1: kernels, kerflag=0: matvecs and buffer
    subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new, kerflag)
 
 
@@ -3751,7 +3754,7 @@ contains
    end subroutine BF_all2all_vec_n_ker
 
 
-! !*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
+! !>*********** all to all communication of matvec results of one butterfly level from row-wise ordering to column-wise ordering or the reverse
 !    subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new)
 
 
@@ -3999,7 +4002,7 @@ contains
 
 !    end subroutine BF_all2all_vec_n_ker
 
-!*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
+!>*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_ker(block_i, pgno_i, kerls_i, level_i, offset_r, offset_c, block_o, pgno_o, kerls_o, level_o, stats, ptree)
 
@@ -4328,7 +4331,7 @@ contains
 
 
 
-!*********** all to all communication of one level of a butterfly from an old pattern pat_i to an new pattern pat_o
+!>*********** all to all communication of one level of a butterfly from an old pattern pat_i to an new pattern pat_o
    subroutine BF_all2all_ker_pattern(block_i, kerls_i, pat_i, block_o,kerls_o, pat_o, level, pgno,stats, ptree)
 
 
@@ -4630,7 +4633,7 @@ contains
 
 
 
-!*********** convert blocks in block_i%sons to block_o%sons, this is a local function without MPI communication, it is assumed block_i%sons has L levels, and block_o%sons will have max(L-2,0) levels
+!>*********** convert blocks in block_i%sons to block_o%sons, this is a local function without MPI communication, it is assumed block_i%sons has L levels, and block_o%sons will have max(L-2,0) levels
    subroutine BF_convert_to_smallBF(block_i, block_o, stats, ptree)
 
 
@@ -4792,7 +4795,7 @@ contains
       ! time_tmp = time_tmp + t2 - t1
    end subroutine BF_convert_to_smallBF
 
-!*********** all to all communication of one level of a butterfly into four children butterflies from an old process pgno_i to an new process group pgno_o
+!>*********** all to all communication of one level of a butterfly into four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_ker_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
@@ -5182,7 +5185,7 @@ contains
 
    end subroutine BF_all2all_ker_split
 
-!*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
+!>*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_UV(block_i, pgno_i, kerls_i, level_i, offset, block_o, pgno_o, kerls_o, level_o, stats, ptree)
 
@@ -5489,7 +5492,7 @@ contains
 
    end subroutine BF_all2all_UV
 
-!*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
+!>*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_U_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
@@ -5889,7 +5892,7 @@ contains
 
    end subroutine BF_all2all_U_split
 
-!*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
+!>*********** all to all communication of one level of a butterfly to four children butterflies from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
    subroutine BF_all2all_V_split(block_i, pgno_i, level_i, block_o, pgnos_o, level_o, stats, ptree)
 
@@ -10648,7 +10651,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
 
 
-!**** Matvec of partial levels of BF with vectors
+!>**** Matvec of partial levels of BF with vectors
 ! if chara=='N', out=BF(level_end:0)*vec, if chara=='T', out=vec*BF(level_butterfly+1:level_end).
    !blocks: working BF
    !chara: 'N' or 'T'
@@ -11140,7 +11143,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
    end subroutine LR_block_extraction
 
-!*********** all to all communication of columns in the V factor from the 1D block column layout to that needed by the 1D block row layout
+!>*********** all to all communication of columns in the V factor from the 1D block column layout to that needed by the 1D block row layout
    subroutine LR_all2all_extraction(blocks, inters, Vpartial, rank, ncol, stats, ptree, msh)
 
 
@@ -11452,7 +11455,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       ! write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,'inin'
 
-      !******* preallocate BFvec and BFvec1, #of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
+      !>******* preallocate BFvec and BFvec1, #of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
       allocate (BFvec%vec(0:level_half + 1))
       allocate (BFvec%vec(0)%blocks(1, blocks%ButterflyV%nblk_loc))
       BFvec%vec(0)%num_row = 1
@@ -11539,7 +11542,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          allocate (BFvec1%vec(level + 1)%blocks(BFvec1%vec(level + 1)%nr, BFvec1%vec(level + 1)%nc))
       enddo
 
-      !**** compute group_ms and group_ns which stores the leaf block number (from 1 to 2^L) of each index. group_ms1 and group_ns1 are used to track the block number in each butterfly level.
+      !>**** compute group_ms and group_ns which stores the leaf block number (from 1 to 2^L) of each index. group_ms1 and group_ns1 are used to track the block number in each butterfly level.
       nrow = 0
       ncol = 0
       do nn = 1, size(blocks%inters, 1)
@@ -11567,7 +11570,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       allocate (group_ns1(ncol))
       group_ns1 = group_ns
 
-      !**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+      !>**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
       allocate (g_idx_m(0:level_half + 1))
       allocate (g_idx_n(0:level_half + 1))
       do level = 0, level_half + 1
@@ -11595,7 +11598,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       allocate (num_nods_i(0:level_half + 1))
       allocate (num_nods_j(0:level_half + 1))
       do nn = 1, size(blocks%inters, 1)
-         !*** for each index in each intersection, traverse the row and column tree
+         !>*** for each index in each intersection, traverse the row and column tree
          num_nods_i = 0
          num_nods_j = 0
          do level = level_butterfly + 2, 0, -1
@@ -11639,7 +11642,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
          jidx = jidx + blocks%inters(nn)%nc
 
-         !**** construct BFvec%vec(level)%lst for active BF blocks and BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
+         !>**** construct BFvec%vec(level)%lst for active BF blocks and BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
          do level = 0, level_half + 1
             do ii = 1, num_nods_i(level)
                index_i_loc_s = g_idx_m(level)%index(ii, 1)
@@ -11669,7 +11672,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       deallocate (num_nods_i)
       deallocate (num_nods_j)
 
-      !**** copy *%lst to *%index
+      !>**** copy *%lst to *%index
       do level = 0, level_half + 1
          allocate (BFvec%vec(level)%index(BFvec%vec(level)%lst%num_nods, 2))
          cur => BFvec%vec(level)%lst%head
@@ -11705,7 +11708,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       allocate (group_ns1(ncol))
       group_ns1 = group_ns
 
-      !**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+      !>**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
       allocate (g_idx_m(level_half + 1:level_butterfly + 2))
       allocate (g_idx_n(level_half + 1:level_butterfly + 2))
       do level = level_half + 1, level_butterfly + 2
@@ -11728,7 +11731,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          allocate (g_idx_n(level)%index(jidx, 1))
       enddo
 
-      !**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
+      !>**** compute g_idx_m and g_idx_n which stores the local (with halo) blocks for the block rows and columns
       iidx = 0
       jidx = 0
       allocate (num_nods_i(level_half + 1:level_butterfly + 2))
@@ -11736,7 +11739,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       do nn = 1, size(blocks%inters, 1)
          num_nods_i = 0
          num_nods_j = 0
-         !*** for each index in each intersection, traverse the row and column tree
+         !>*** for each index in each intersection, traverse the row and column tree
          do level = level_butterfly + 2, 0, -1
             do ii = 1, blocks%inters(nn)%nr
 
@@ -11778,7 +11781,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
          jidx = jidx + blocks%inters(nn)%nc
 
-         !**** construct BFvec1%vec(level)%lst for active BF blocks and BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
+         !>**** construct BFvec1%vec(level)%lst for active BF blocks and BFvec1%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%lst for list of intersection#s
          do level = level_half + 1, level_butterfly + 2
             do ii = 1, num_nods_i(level)
                index_i_loc_s = g_idx_m(level)%index(ii, 1)
@@ -11805,7 +11808,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       deallocate (num_nods_i)
       deallocate (num_nods_j)
 
-      !**** copy *%lst to *%index
+      !>**** copy *%lst to *%index
       do level = level_half + 1, level_butterfly + 2
          allocate (BFvec1%vec(level)%index(BFvec1%vec(level)%lst%num_nods, 2))
          cur => BFvec1%vec(level)%lst%head
@@ -11840,10 +11843,10 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 
-      !**** create a list of row_loc indices for each block of BFvec1%vec(level_butterfly+2),note that BFvec1%vec(level)%blocks(index_i_loc_s,1)%lst and BFvec1%vec(level)%blocks(index_i_loc_s,1)%index are used at this level compared to other levels
+      !>**** create a list of row_loc indices for each block of BFvec1%vec(level_butterfly+2),note that BFvec1%vec(level)%blocks(index_i_loc_s,1)%lst and BFvec1%vec(level)%blocks(index_i_loc_s,1)%index are used at this level compared to other levels
       iidx = 0
       do nn = 1, size(blocks%inters, 1)
-         !*** for each index in each intersection, traverse the row and column tree
+         !>*** for each index in each intersection, traverse the row and column tree
          do ii = 1, blocks%inters(nn)%nr
             iidx = iidx + 1
             level = level_butterfly + 2
@@ -11858,7 +11861,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 
-      !**** copy *%lst to *%index
+      !>**** copy *%lst to *%index
       level = level_butterfly + 2
       do nn = 1, size(BFvec1%vec(level)%index, 1)
          index_i_loc_s = BFvec1%vec(level)%index(nn, 1)
@@ -11879,7 +11882,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       n2 = OMP_get_wtime()
 
-      !**** generate data in BFvec%vec(0)
+      !>**** generate data in BFvec%vec(0)
       do nn = 1, size(BFvec%vec(0)%index, 1)
          index_j_loc_s = BFvec%vec(0)%index(nn, 2)
          allocate (BFvec%vec(0)%blocks(1, index_j_loc_s)%matrix(3, BFvec%vec(0)%blocks(1, index_j_loc_s)%ndim))
@@ -11901,7 +11904,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 
-      !**** multiply BF with BFvec
+      !>**** multiply BF with BFvec
       do level = 0, level_half
 #ifdef HAVE_TASKLOOP
          !$omp taskloop default(shared) private(nn)
@@ -11933,7 +11936,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       n4 = OMP_get_wtime()
 
-      !**** multiply BF with BFvec1
+      !>**** multiply BF with BFvec1
       do level = level_half + 1, level_butterfly + 1
          if (level == 0) then
             write (*, *) 'should not come here as level_half>=0'
@@ -12112,7 +12115,7 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
 #endif
             endif
 
-            !**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
+            !>**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
             allocate (mat(mm + 2, nvec1 + nvec2))
             idx1 = 0
             idx2 = 0
@@ -12279,7 +12282,7 @@ subroutine BF_block_extraction_sort_oneblock(blocks, BFvec, level,nn,ptree)
       if (nvec2 > 0) mat2 = BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(:, 1 + nvec1:nvec1 + nvec2)
       deallocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)
 
-      !**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
+      !>**** filter out the columns of mat1 and mat2 that are not specified by BFvec%vec(level)%blocks(index_i_loc_s,index_j_loc_s)%index
       allocate (mat(mm, nvec1 + nvec2))
       idx1 = 0
       idx2 = 0
@@ -12440,7 +12443,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-!*** Find the group index of point idx at the (group%level+level) level
+!>*** Find the group index of point idx at the (group%level+level) level
    integer function findgroup(idx, msh, level, group)
 
       implicit none
@@ -12462,7 +12465,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
    end function findgroup
 
-!*** Find the process group index of point idx in a group
+!>*** Find the process group index of point idx in a group
    integer function findpggroup(idx, msh, ptree, group, pgno)
 
       implicit none
@@ -13740,7 +13743,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          allocate (block_rand%ButterflyKerl(level_butterfly))
       endif
 
-      !****** row-wise ordering from right side
+      !>****** row-wise ordering from right side
       do level = 0, level_half
          if (level_butterfly == 0) then
             if (level == 0) then
@@ -13779,7 +13782,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
       enddo
 
-      !****** column-wise ordering from left side
+      !>****** column-wise ordering from left side
       level_final = level_half + 1
       do level = level_butterfly + 1, level_final, -1
          if (level_butterfly == 0) then
@@ -14463,7 +14466,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             call MPI_Wait(reqm, statusm, ierr)
             call MPI_Wait(reqn, statusn, ierr)
 #endif
-            !***** Count number of active intersections Ninter
+            !>***** Count number of active intersections Ninter
             Ninter = 0
             do pp = 1, ptree%nproc
             if (flags(pp) == 0) then
@@ -14474,7 +14477,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             endif
             enddo
 
-            !***** count number of local data
+            !>***** count number of local data
             idx_dat = 0
             do nn = 1, Ninter
                nr = rowidx(nn)
@@ -14492,7 +14495,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             allocate (alldat_loc(idx_dat))
             if (idx_dat > 0) alldat_loc = 0
 
-            !***** Broadcast mrange and nrange for each intersection
+            !>***** Broadcast mrange and nrange for each intersection
             idx_row = sum(rowidx)
             allocate (allrows(idx_row))
             idx = 0
@@ -14523,7 +14526,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #endif
             if (option%cpp == 1) then
                call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo
@@ -14534,7 +14537,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call proc_C(Ninter, idx_row, idx_col, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
             else
                proc => ker%FuncZmnBlock
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo
@@ -14833,7 +14836,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             call MPI_ALLGATHERV(ncols_loc, Ninter_loc, MPI_INTEGER, colidx, nsubs, disps, MPI_INTEGER, ptree%comm,ierr)
 #endif
 
-            !***** Generate pmaps and pgidx for all intersections
+            !>***** Generate pmaps and pgidx for all intersections
             Npmap = ptree%nproc
             allocate (pmaps(Npmap, 3))
             do pp = 1, Npmap
@@ -14851,7 +14854,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                enddo
             enddo
 
-            !***** count number of local data
+            !>***** count number of local data
             idx_dat = 0
             do nn = 1, Ninter
                nrow = rowidx(nn)
@@ -14889,7 +14892,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             enddo
 
 
-            !***** Broadcast mrange and nrange for each intersection
+            !>***** Broadcast mrange and nrange for each intersection
             idx_row = sum(rowidx1)
             allocate (allrows(idx_row))
             idx = 0
@@ -14920,7 +14923,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #endif
             if (option%cpp == 1) then
                call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo
@@ -14931,7 +14934,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call proc_C(Ninter, idx_row, idx_col, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
             else
                proc => ker%FuncZmnBlock
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo
@@ -15000,7 +15003,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                colidx(nn) = submats1(nn)%nc
             enddo
 
-            !***** Generate pmaps and pgidx for all intersections
+            !>***** Generate pmaps and pgidx for all intersections
             Npmap = 1
             Ninter = Ninter_loc
             allocate (pmaps(Npmap, 3))
@@ -15013,7 +15016,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             allocate (pgidx(Ninter))
             pgidx=1
 
-            !***** count number of local data
+            !>***** count number of local data
             idx_dat = 0
             do nn = 1, Ninter
                nrow = rowidx(nn)
@@ -15038,7 +15041,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
             if (option%cpp == 1) then
                call c_f_procpointer(ker%C_FuncZmnBlock, proc_C)
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo
@@ -15049,7 +15052,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call proc_C(Ninter, idx_row, idx_col, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
             else
                proc => ker%FuncZmnBlock
-               ! !***** parallel extraction of the data
+               ! !>***** parallel extraction of the data
                do ii = 1, idx_row
                   allrows(ii) = abs(msh%new2old(allrows(ii)))
                enddo

@@ -1,0 +1,11 @@
+digraph "doxygen/pages"
+{
+ // LATEX_PDF_SIZE
+  edge [fontname="Roboto",fontsize="10",labelfontname="Roboto",labelfontsize="10"];
+  node [fontname="Roboto",fontsize="10",shape=record];
+  compound=true
+  subgraph clusterdir_04f2ecc425faf0d475a3caf484e551f3 {
+    graph [ bgcolor="#f0f7fd", pencolor="grey25", style="filled,dashed,", label="doxygen", fontname="Roboto", fontsize="10", URL="dir_04f2ecc425faf0d475a3caf484e551f3.html"]
+  dir_f72165a8ef14c681a7fa212fcb0344d5 [shape=box, label="pages", style="filled,bold,", fillcolor="#f0f7fd", color="grey25", URL="dir_f72165a8ef14c681a7fa212fcb0344d5.html"];
+  }
+}

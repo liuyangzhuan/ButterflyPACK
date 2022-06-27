@@ -1,0 +1,10 @@
+/*! \page examples Examples
+
+A number of examples are available in the examples/ folder.
+
+See the examples/sparse/ and examples/dense/ subfolders.
+
+All examples can be build by running \code{.bash} make examples \endcode
+in the build folder.
+
+*/

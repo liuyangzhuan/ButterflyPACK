@@ -1,0 +1,81 @@
+\hypertarget{C__BPACK__wrapper_8h_source}{}\doxysection{C\+\_\+\+BPACK\+\_\+wrapper.\+h}
+\label{C__BPACK__wrapper_8h_source}\index{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/SRC/C\_BPACK\_wrapper.h@{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/SRC/C\_BPACK\_wrapper.h}}
+
+\begin{DoxyCode}{0}
+\DoxyCodeLine{1 \textcolor{comment}{/*“ButterflyPACK”Copyright(c) 2018, The Regents of the University of California, through}}
+\DoxyCodeLine{2 \textcolor{comment}{Lawrence Berkeley National Laboratory(subject to receipt of any required approvals from the}}
+\DoxyCodeLine{3 \textcolor{comment}{U.S.Dept.of Energy) .All rights reserved.}}
+\DoxyCodeLine{4 \textcolor{comment}{}}
+\DoxyCodeLine{5 \textcolor{comment}{If you have questions about your rights to use or distribute this software, please contact}}
+\DoxyCodeLine{6 \textcolor{comment}{Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.}}
+\DoxyCodeLine{7 \textcolor{comment}{}}
+\DoxyCodeLine{8 \textcolor{comment}{NOTICE.This Software was developed under funding from the U.S.Department of Energy and the}}
+\DoxyCodeLine{9 \textcolor{comment}{U.S.Government consequently retains certain rights.As such, the U.S.Government has been}}
+\DoxyCodeLine{10 \textcolor{comment}{granted for itself and others acting on its behalf a paid -\/ up, nonexclusive, irrevocable}}
+\DoxyCodeLine{11 \textcolor{comment}{worldwide license in the Software to reproduce, distribute copies to the public, prepare}}
+\DoxyCodeLine{12 \textcolor{comment}{derivative works, and perform publicly and display publicly, and to permit other to do so.}}
+\DoxyCodeLine{13 \textcolor{comment}{}}
+\DoxyCodeLine{14 \textcolor{comment}{Developers:Yang Liu}}
+\DoxyCodeLine{15 \textcolor{comment}{(Lawrence Berkeley National Lab, Computational Research Division) .}}
+\DoxyCodeLine{16 \textcolor{comment}{*/}}
+\DoxyCodeLine{17 }
+\DoxyCodeLine{18 \textcolor{preprocessor}{\#ifndef BPACK\_WRAP }\textcolor{comment}{/* allow multiple inclusions */}\textcolor{preprocessor}{}}
+\DoxyCodeLine{19 \textcolor{preprocessor}{\#define BPACK\_WRAP}}
+\DoxyCodeLine{20 }
+\DoxyCodeLine{21 \textcolor{comment}{// \#include "{}ButterflyPACK\_config.fi"{}}}
+\DoxyCodeLine{22 }
+\DoxyCodeLine{23 \textcolor{comment}{//typedef struct\{double r, i; \}doublecomplex;}}
+\DoxyCodeLine{24 \textcolor{keyword}{typedef} \textcolor{keywordtype}{void}*F2Cptr; \textcolor{comment}{//pointer passing fortran derived types to c}}
+\DoxyCodeLine{25 \textcolor{keyword}{typedef} \textcolor{keywordtype}{void}*C2Fptr; \textcolor{comment}{//pointer passing c objects to fortran}}
+\DoxyCodeLine{26 }
+\DoxyCodeLine{27 \textcolor{comment}{//-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/}}
+\DoxyCodeLine{28 \textcolor{comment}{//Declartion of FORTRAN subroutines to HODLR code}}
+\DoxyCodeLine{29 \textcolor{keyword}{extern} \textcolor{stringliteral}{"{}C"{}}\{}
+\DoxyCodeLine{30 }
+\DoxyCodeLine{31     \textcolor{keywordtype}{void} c\_bpack\_construct\_element\_compute(F2Cptr* ho\_bf\_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncZmn)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*,C2Fptr),\textcolor{keywordtype}{void} (*C\_FuncZmnBlock)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C2Fptr), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{32     \textcolor{keywordtype}{void} c\_bpack\_construct\_init(\textcolor{keywordtype}{int}* Npo, \textcolor{keywordtype}{int}* Ndim, \textcolor{keywordtype}{double}* Locations, \textcolor{keywordtype}{int}* nns, \textcolor{keywordtype}{int}* nlevel, \textcolor{keywordtype}{int}* tree, \textcolor{keywordtype}{int}* perms, \textcolor{keywordtype}{int}* Npo\_loc, F2Cptr* ho\_bf\_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncDistmn)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{double}*,C2Fptr), \textcolor{keywordtype}{void} (*C\_FuncNearFar)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*,C2Fptr), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{33     \textcolor{keywordtype}{void} c\_bpack\_construct\_init\_gram(\textcolor{keywordtype}{int}* Npo, \textcolor{keywordtype}{int}* Ndim, \textcolor{keywordtype}{double}* Locations, \textcolor{keywordtype}{int}* nns, \textcolor{keywordtype}{int}* nlevel, \textcolor{keywordtype}{int}* tree, \textcolor{keywordtype}{int}* perms, \textcolor{keywordtype}{int}* Npo\_loc, F2Cptr* ho\_bf\_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncZmn)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*,C2Fptr),\textcolor{keywordtype}{void} (*C\_FuncZmnBlock)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C2Fptr),  C2Fptr C\_QuantApp);}
+\DoxyCodeLine{34     \textcolor{keywordtype}{void} c\_bpack\_construct\_matvec\_compute(F2Cptr* ho\_bf\_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncHMatVec)(\textcolor{keywordtype}{char} \textcolor{keyword}{const} *, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT \textcolor{keyword}{const}*,C\_DT*,C2Fptr), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{35 \textcolor{keywordtype}{void} c\_bpack\_factor(F2Cptr*ho\_bf\_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh);}
+\DoxyCodeLine{36 \textcolor{keywordtype}{void} c\_bpack\_solve(C\_DT*x, C\_DT*b, \textcolor{keywordtype}{int}*Nloc, \textcolor{keywordtype}{int}*Nrhs, F2Cptr*ho\_bf\_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);}
+\DoxyCodeLine{37         \textcolor{keywordtype}{void} c\_bpack\_mult(\textcolor{keywordtype}{char} \textcolor{keyword}{const} * trans, C\_DT \textcolor{keyword}{const} * xin, C\_DT* xout, \textcolor{keywordtype}{int}* Ninloc, \textcolor{keywordtype}{int}* Noutloc, \textcolor{keywordtype}{int}* Ncol, F2Cptr* ho\_bf\_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);}
+\DoxyCodeLine{38         \textcolor{keywordtype}{void} c\_bpack\_extractelement(F2Cptr* ho\_bf\_for,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, \textcolor{keywordtype}{int}* Ninter, \textcolor{keywordtype}{int}* Nallrows, \textcolor{keywordtype}{int}* Nallcols, \textcolor{keywordtype}{int}* Nalldat\_loc, \textcolor{keywordtype}{int}* allrows,\textcolor{keywordtype}{int}* allcols, C\_DT* alldat\_loc, \textcolor{keywordtype}{int}* rowidx, \textcolor{keywordtype}{int}* colidx, \textcolor{keywordtype}{int}* pgidx, \textcolor{keywordtype}{int}* Npmap, \textcolor{keywordtype}{int}* pmaps);}
+\DoxyCodeLine{39         \textcolor{keywordtype}{void} c\_bpack\_inv\_mult(\textcolor{keywordtype}{char} \textcolor{keyword}{const} * trans, C\_DT \textcolor{keyword}{const} * xin, C\_DT* xout, \textcolor{keywordtype}{int}* Ninloc, \textcolor{keywordtype}{int}* Noutloc, \textcolor{keywordtype}{int}* Ncol, F2Cptr* ho\_bf\_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);}
+\DoxyCodeLine{40 \textcolor{keywordtype}{void} c\_bpack\_createptree(\textcolor{keywordtype}{int}*nmpi, \textcolor{keywordtype}{int}*groupmembers, MPI\_Fint*MPIcomm, F2Cptr*ptree);}
+\DoxyCodeLine{41 \textcolor{keywordtype}{void} c\_bpack\_createstats(F2Cptr*stats);}
+\DoxyCodeLine{42 \textcolor{keywordtype}{void} c\_bpack\_new2old(F2Cptr* msh, \textcolor{keywordtype}{int}* newidx\_loc, \textcolor{keywordtype}{int}* oldidx);}
+\DoxyCodeLine{43 \textcolor{keywordtype}{void} c\_bpack\_printstats(F2Cptr*stats, F2Cptr*ptree);}
+\DoxyCodeLine{44 \textcolor{keywordtype}{void} c\_bpack\_getstats(F2Cptr*stats, \textcolor{keywordtype}{char} \textcolor{keyword}{const}*nam, \textcolor{keywordtype}{double}*val\_d);}
+\DoxyCodeLine{45 \textcolor{keywordtype}{void} c\_bpack\_createoption(F2Cptr*option);}
+\DoxyCodeLine{46 \textcolor{keywordtype}{void} c\_bpack\_setoption(F2Cptr*option, \textcolor{keywordtype}{char} \textcolor{keyword}{const}*nam, C2Fptr val);}
+\DoxyCodeLine{47 \textcolor{keywordtype}{void} c\_bpack\_getoption(F2Cptr*option, \textcolor{keywordtype}{char} \textcolor{keyword}{const}*nam, \textcolor{keywordtype}{double}*val\_d);}
+\DoxyCodeLine{48 \textcolor{keywordtype}{void} c\_bpack\_readoption(F2Cptr*option, F2Cptr*ptree, \textcolor{keywordtype}{int}*ii);}
+\DoxyCodeLine{49 \textcolor{keywordtype}{void} c\_bpack\_copyoption(F2Cptr*option, F2Cptr*option1);}
+\DoxyCodeLine{50 \textcolor{keywordtype}{void} c\_bpack\_printoption(F2Cptr*option, F2Cptr*ptree);}
+\DoxyCodeLine{51 \textcolor{keywordtype}{void} c\_bpack\_getversionnumber(\textcolor{keywordtype}{int}*v\_major, \textcolor{keywordtype}{int}*v\_minor, \textcolor{keywordtype}{int}*v\_bugfix);}
+\DoxyCodeLine{52 \textcolor{keywordtype}{void} c\_bpack\_treeindex\_merged2child(\textcolor{keywordtype}{int}*idx\_merge, \textcolor{keywordtype}{int}*idx\_child);}
+\DoxyCodeLine{53 \textcolor{keywordtype}{void} c\_bpack\_deletestats(F2Cptr*stats);}
+\DoxyCodeLine{54 \textcolor{keywordtype}{void} c\_bpack\_deleteproctree(F2Cptr*ptree);}
+\DoxyCodeLine{55 \textcolor{keywordtype}{void} c\_bpack\_deletemesh(F2Cptr*msh);}
+\DoxyCodeLine{56 \textcolor{keywordtype}{void} c\_bpack\_deletekernelquant(F2Cptr*ker);}
+\DoxyCodeLine{57 \textcolor{keywordtype}{void} c\_bpack\_delete(F2Cptr*ho\_bf);}
+\DoxyCodeLine{58 \textcolor{keywordtype}{void} c\_bpack\_deleteoption(F2Cptr*option);}
+\DoxyCodeLine{59 \textcolor{keyword}{inline} \textcolor{keywordtype}{void} c\_bpack\_set\_I\_option(F2Cptr*option, \textcolor{keywordtype}{char} \textcolor{keyword}{const}*nam, \textcolor{keywordtype}{int} val) \{}
+\DoxyCodeLine{60 c\_bpack\_setoption(option, nam, (C2Fptr) \&val);}
+\DoxyCodeLine{61 \}}
+\DoxyCodeLine{62 \textcolor{keyword}{inline} \textcolor{keywordtype}{void} c\_bpack\_set\_D\_option(F2Cptr*option, \textcolor{keywordtype}{char} \textcolor{keyword}{const}*nam, \textcolor{keywordtype}{double} val) \{}
+\DoxyCodeLine{63 c\_bpack\_setoption(option, nam, (C2Fptr) \&val);}
+\DoxyCodeLine{64 \}}
+\DoxyCodeLine{65 }
+\DoxyCodeLine{66         \textcolor{keywordtype}{void} c\_bf\_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, \textcolor{keywordtype}{int}* Ninter, \textcolor{keywordtype}{int}* Nallrows, \textcolor{keywordtype}{int}* Nallcols, \textcolor{keywordtype}{int}* Nalldat\_loc, \textcolor{keywordtype}{int}* allrows,\textcolor{keywordtype}{int}* allcols, C\_DT* alldat\_loc, \textcolor{keywordtype}{int}* rowidx, \textcolor{keywordtype}{int}* colidx, \textcolor{keywordtype}{int}* pgidx, \textcolor{keywordtype}{int}* Npmap, \textcolor{keywordtype}{int}* pmaps);}
+\DoxyCodeLine{67         \textcolor{keywordtype}{void} c\_bf\_construct\_init(\textcolor{keywordtype}{int}* M, \textcolor{keywordtype}{int}* N,\textcolor{keywordtype}{int}* M\_loc,\textcolor{keywordtype}{int}* N\_loc, \textcolor{keywordtype}{int}* nnsr, \textcolor{keywordtype}{int}* nnsc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncDistmn)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{double}*,C2Fptr), \textcolor{keywordtype}{void} (*C\_FuncNearFar)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*,C2Fptr), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{68         \textcolor{keywordtype}{void} c\_bf\_construct\_element\_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, \textcolor{keywordtype}{void} (*C\_FuncZmn)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*,C2Fptr), \textcolor{keywordtype}{void} (*C\_FuncZmnBlock)(\textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C2Fptr), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{69         \textcolor{keywordtype}{void} c\_bf\_construct\_matvec\_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,\textcolor{keywordtype}{void} (*C\_FuncBMatVec)(\textcolor{keywordtype}{char} \textcolor{keyword}{const} *, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, \textcolor{keywordtype}{int}*, C\_DT \textcolor{keyword}{const}*,C\_DT*,C2Fptr,C\_DT*, C\_DT*), C2Fptr C\_QuantApp);}
+\DoxyCodeLine{70 \textcolor{keywordtype}{void} c\_bf\_deletebf(F2Cptr*bf);}
+\DoxyCodeLine{71         \textcolor{keywordtype}{void} c\_bf\_mult(\textcolor{keywordtype}{char} \textcolor{keyword}{const} * trans, C\_DT \textcolor{keyword}{const} * xin, C\_DT* xout, \textcolor{keywordtype}{int}* Ninloc, \textcolor{keywordtype}{int}* Noutloc, \textcolor{keywordtype}{int}* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);}
+\DoxyCodeLine{72 \}}
+\DoxyCodeLine{73 \textcolor{comment}{//-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/}}
+\DoxyCodeLine{74 }
+\DoxyCodeLine{75 \textcolor{preprocessor}{\#endif}}
+
+\end{DoxyCode}

@@ -1,0 +1,98 @@
+\hypertarget{Fortran_autotoc_md3}{}\doxysubsection{Fortran Interface}\label{Fortran_autotoc_md3}
+The following pseudo codes explain how to perform construction, factorization and solve of a linear system \char`\"{}\+Z\char`\"{} using the Fortran interface
+
+First, specify the data type of your application\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!**** DAT 1: \textcolor{keywordtype}{double} precision; DAT 0: \textcolor{keywordtype}{double} complex precision}
+\DoxyCodeLine{\textcolor{preprocessor}{\#define DAT 1}}
+\DoxyCodeLine{\textcolor{preprocessor}{\#include "{}ButterflyPACK\_config.fi"{}}}
+
+\end{DoxyCode}
+
+
+Butterfly\+PACK provides two ways of constructing a hierarchical matrix. The first option requires a user-\/provided function to sample any individual element of the matrix that takes the following argument list 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{subroutine Element(m,n,val,quant)}
+\DoxyCodeLine{implicit none}
+\DoxyCodeLine{    \textcolor{keyword}{class}(*),pointer :: quant ! quant is a user-\/defined derived type consisting all data and metadata needed \textcolor{keywordflow}{for} \textcolor{keyword}{this} user-\/defined function}
+\DoxyCodeLine{    integer:: m,n  ! m,n specify the row and column indices of the desired matrix element}
+\DoxyCodeLine{    DT::val ! val returns Z(m,n), (DT=real(kind=8) or complex(kind=8) depending on your application)}
+\DoxyCodeLine{}
+\DoxyCodeLine{    ! write your matrix element evaluation function here}
+\DoxyCodeLine{}
+\DoxyCodeLine{end subroutine Element}
+
+\end{DoxyCode}
+
+
+The second option requires a user-\/provided function to multiply the matrix Z with an arbitrary matrix R that takes the following argument list 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{subroutine MatVec(trans,Mloc,Nloc,num\_vect,R,S,quant)}
+\DoxyCodeLine{implicit none}
+\DoxyCodeLine{    character trans ! trans=\textcolor{charliteral}{'N'}: S=ZR; trans=\textcolor{charliteral}{'T'}: S\string^t=R\string^tZ; trans=\textcolor{charliteral}{'C'}: S\string^c=R\string^cZ;}
+\DoxyCodeLine{    DT:: R(:,:),S(:,:) ! represent the input matrix R and output matrix S}
+\DoxyCodeLine{    integer::Mloc,Nloc ! local row and column dimensions of Z returned by the initialization subroutine BPACK\_construction\_Init}
+\DoxyCodeLine{    integer:: num\_vect ! column dimension of R}
+\DoxyCodeLine{    \textcolor{keyword}{class}(*),pointer :: quant ! quant is a user-\/defined derived type consisting all data and metadata needed \textcolor{keywordflow}{for} \textcolor{keyword}{this} user-\/defined function}
+\DoxyCodeLine{}
+\DoxyCodeLine{    ! write your matrix multiplication function here}
+\DoxyCodeLine{}
+\DoxyCodeLine{end subroutine MatVec}
+
+\end{DoxyCode}
+
+
+Initialize Butterfly\+PACK metadata kernel register (ker), process tree (ptree), statistics (stats), user-\/options (option)\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!*** create process tree, statistics and user-\/option}
+\DoxyCodeLine{call CreatePtree(nmpi,groupmembers,MPI\_Comm,ptree) ! groupmembers is an integer array of size nmpi, holding MPI ranks from the communicator MPI\_Comm that will be used \textcolor{keywordflow}{for} \textcolor{keyword}{this} matrix operation}
+\DoxyCodeLine{call InitStat(stats)}
+\DoxyCodeLine{call SetDefaultOptions(option) ! besides the \textcolor{keywordflow}{default} options, other options can be set after calling \textcolor{keyword}{this}, please refer to definition of option \textcolor{keywordflow}{for} details}
+\DoxyCodeLine{}
+\DoxyCodeLine{!**** \textcolor{keyword}{register} the user-\/defined function and derived-\/type in kernel \textcolor{keyword}{register}}
+\DoxyCodeLine{ker\%QuantApp => quant}
+\DoxyCodeLine{ker\%FuncZmn => Element}
+\DoxyCodeLine{ker\%FuncHMatVec => MatVec  ! Note that at least one of ker\%FuncZmn and ker\%FuncHMatVec needs to set}
+\DoxyCodeLine{}
+\DoxyCodeLine{!**** initialization of the construction phase}
+\DoxyCodeLine{call BPACK\_construction\_Init(N,P,N\_loc,bmat,option,stats,msh,ker,ptree,Coordinates,clustertree)}
+\DoxyCodeLine{    ! N is matrix dimension}
+\DoxyCodeLine{    ! P is the permutation vector returned}
+\DoxyCodeLine{    ! N\_loc is the local number of rows/columns}
+\DoxyCodeLine{    ! bmat is the meta-\/data storing the compressed matrix}
+\DoxyCodeLine{    ! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column}
+\DoxyCodeLine{    ! clustertree(optional) is an array of leafsizes in a user-\/provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.}
+\DoxyCodeLine{    ! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and \textcolor{keywordflow}{return} a modified clustertree.}
+\DoxyCodeLine{    ! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option\%xyzsort, option\%nogeo, and option\%Nmin\_leaf}
+
+\end{DoxyCode}
+
+
+Construction of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!**** computation of the construction phase, one the following two functions can be called depending on how ker is registered}
+\DoxyCodeLine{call BPACK\_construction\_Element(bmat,option,stats,msh,ker,element\_Zmn\_user,ptree) ! construct a hierarchical matrix with fast matrix entry evaluation}
+\DoxyCodeLine{call BPACK\_construction\_Matvec(bmat,matvec\_user,memory,error,option,stats,ker,ptree,msh) ! construct a hierarchical matrix with fast matrix-\/vector multiplication}
+
+\end{DoxyCode}
+
+
+Factorization of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{call BPACK\_Factorization(bmat,option,stats,ptree,msh)}
+
+\end{DoxyCode}
+
+
+Solve of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{call BPACK\_Factorization(bmat,x,b,N\_loc,nrhs,option,ptree,stats)}
+\DoxyCodeLine{    ! bmat is the meta-\/data storing the compressed and factored matrix}
+\DoxyCodeLine{    ! N\_loc is the local number of rows/columns}
+\DoxyCodeLine{    ! nrhs is the number of right-\/hand sides}
+\DoxyCodeLine{    ! P is the permutation vector returned}
+\DoxyCodeLine{    ! b of N\_loc*nrhs is the local right-\/hand sides}
+\DoxyCodeLine{    ! x of N\_loc*nrhs is the local solution vector}
+
+\end{DoxyCode}
+ 

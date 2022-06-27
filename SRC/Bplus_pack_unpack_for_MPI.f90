@@ -13,6 +13,9 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file Bplus_pack_unpack_for_MPI.f90
+!> @brief Low-level routines for packing, unpacking and communicating butterfly blocks. Only used in the H matrix solver.
+!
 
 #include "ButterflyPACK_config.fi"
 module BPACK_block_sendrecv

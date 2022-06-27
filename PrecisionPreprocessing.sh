@@ -113,8 +113,35 @@ cp $MACRO_FILE $ROOTDIR/EXAMPLE/.
 # note that module names and *.h headers need to be renamed without macros
 echo "-- copy and modify SRC dir ..."
 grep -h "end module" --include='*.f90' --include='*.f' $SRCDIR/* |sed "s/[[:blank:]]*$//" | sed "s/.* \([^ ][^ ]*\) */\1/" > $TMP_FILE
+
+
+###########################################################
+echo "-- processing SRC_DOUBLECOMPLEX ..."
 rm -rf $ZSRCDIR
 cp -r $SRCDIR $ZSRCDIR
+cd $ZSRCDIR
+{ echo "#define DAT 0 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
+mv ButterflyPACK_config.fi{.new,}
+for file in *; do
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	then
+		eval sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
+		eval sed -i -e "s/$lb$file$rb/z$file/g" $ZSRCDIR/$file
+		objfile=${file%.*}.o
+		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
+		mv "$file" "z${file}"
+		if [ $1 == "ON" ];
+		then
+			cpp -w "z${file}" "z${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+		fi
+	fi
+done
+sed -i -e "s/butterflypack/zbutterflypack/g" $ZSRCDIR/CMakeLists.txt
+sed -i -e "s/ButterflyPACKLIB/ZButterflyPACKLIB/g" $ZSRCDIR/Makefile
+sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/CMakeLists.txt
+sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/Makefile
+
+cd ..
 while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f90
     sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.f
@@ -130,8 +157,34 @@ sed -i -e "s/c_magma_offset_1d/z_c_magma_offset_1d/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_2d/z_c_magma_offset_2d/g" $ZSRCDIR/*.f90
 sed -i -e "s/magmablas_gemm_vbatched/magmablas_zgemm_vbatched/g" $ZSRCDIR/*.f90
 
+
+###########################################################
+echo "-- processing SRC_DOUBLE ..."
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
+cd $DSRCDIR
+{ echo "#define DAT 1 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
+mv ButterflyPACK_config.fi{.new,}
+for file in *; do
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	then
+		eval sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
+		eval sed -i -e "s/$lb$file$rb/d$file/g" $DSRCDIR/$file
+		objfile=${file%.*}.o
+		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
+		mv "$file" "d${file}"
+		if [ $1 == "ON" ];
+		then
+			cpp -w "d${file}" "d${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+		fi
+	fi
+done
+sed -i -e "s/butterflypack/dbutterflypack/g" $DSRCDIR/CMakeLists.txt
+sed -i -e "s/ButterflyPACKLIB/DButterflyPACKLIB/g" $DSRCDIR/Makefile
+sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/CMakeLists.txt
+sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/Makefile
+
+cd ..
 while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f90
 	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.f
@@ -147,8 +200,33 @@ sed -i -e "s/c_magma_offset_1d/d_c_magma_offset_1d/g" $DSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_2d/d_c_magma_offset_2d/g" $DSRCDIR/*.f90
 sed -i -e "s/magmablas_gemm_vbatched/magmablas_dgemm_vbatched/g" $DSRCDIR/*.f90
 
+
+###########################################################
+echo "-- processing SRC_COMPLEX ..."
 rm -rf $CSRCDIR
 cp -r $SRCDIR $CSRCDIR
+cd $CSRCDIR
+{ echo "#define DAT 2 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
+mv ButterflyPACK_config.fi{.new,}
+for file in *; do
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	then
+		eval sed -i -e "s/$file/c$file/g" $CSRCDIR/CMakeLists.txt
+		eval sed -i -e "s/$lb$file$rb/c$file/g" $CSRCDIR/$file
+		objfile=${file%.*}.o
+		eval sed -i -e "s/$objfile/c$objfile/g" $CSRCDIR/Makefile
+		mv "$file" "c${file}"
+		if [ $1 == "ON" ];
+		then
+			cpp -w "c${file}" "c${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+		fi
+	fi
+done
+sed -i -e "s/butterflypack/cbutterflypack/g" $CSRCDIR/CMakeLists.txt
+sed -i -e "s/ButterflyPACKLIB/CButterflyPACKLIB/g" $CSRCDIR/Makefile
+sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/CMakeLists.txt
+sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/Makefile
+cd ..
 while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/c_$line/g" $CSRCDIR/*.f90
     sed -i -e "s/$lb$line$rb/c_$line/g" $CSRCDIR/*.f
@@ -164,8 +242,33 @@ sed -i -e "s/c_magma_offset_1d/c_c_magma_offset_1d/g" $CSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_2d/c_c_magma_offset_2d/g" $CSRCDIR/*.f90
 sed -i -e "s/magmablas_gemm_vbatched/magmablas_cgemm_vbatched/g" $CSRCDIR/*.f90
 
+
+###########################################################
+echo "-- processing SRC_SINGLE ..."
 rm -rf $SSRCDIR
 cp -r $SRCDIR $SSRCDIR
+cd $SSRCDIR
+{ echo "#define DAT 3 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
+mv ButterflyPACK_config.fi{.new,}
+for file in *; do
+	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	then
+		eval sed -i -e "s/$file/s$file/g" $SSRCDIR/CMakeLists.txt
+		eval sed -i -e "s/$lb$file$rb/s$file/g" $SSRCDIR/$file
+		objfile=${file%.*}.o
+		eval sed -i -e "s/$objfile/s$objfile/g" $SSRCDIR/Makefile
+		mv "$file" "s${file}"
+		if [ $1 == "ON" ];
+		then
+			cpp -w "s${file}" "s${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+		fi
+	fi
+done
+sed -i -e "s/butterflypack/sbutterflypack/g" $SSRCDIR/CMakeLists.txt
+sed -i -e "s/ButterflyPACKLIB/SButterflyPACKLIB/g" $SSRCDIR/Makefile
+sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/CMakeLists.txt
+sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/Makefile
+cd ..
 while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.f90
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.f
@@ -183,68 +286,6 @@ sed -i -e "s/magmablas_gemm_vbatched/magmablas_sgemm_vbatched/g" $SSRCDIR/*.f90
 
 
 
-###########################################################
-echo "-- copy and modify CMakeLists.txt ..."
-cd $ZSRCDIR
-for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
-	then
-		eval sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
-		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
-		mv "$file" "z${file}"
-	fi
-done
-sed -i -e "s/butterflypack/zbutterflypack/g" $ZSRCDIR/CMakeLists.txt
-sed -i -e "s/ButterflyPACKLIB/ZButterflyPACKLIB/g" $ZSRCDIR/Makefile
-sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/CMakeLists.txt
-sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/Makefile
-
-
-cd $DSRCDIR
-for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
-	then
-		mv "$file" "d${file}"
-		eval sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
-		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
-	fi
-done
-sed -i -e "s/butterflypack/dbutterflypack/g" $DSRCDIR/CMakeLists.txt
-sed -i -e "s/ButterflyPACKLIB/DButterflyPACKLIB/g" $DSRCDIR/Makefile
-sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/CMakeLists.txt
-sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/Makefile
-
-cd $CSRCDIR
-for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
-	then
-		eval sed -i -e "s/$file/c$file/g" $CSRCDIR/CMakeLists.txt
-		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/c$objfile/g" $CSRCDIR/Makefile
-		mv "$file" "c${file}"
-	fi
-done
-sed -i -e "s/butterflypack/cbutterflypack/g" $CSRCDIR/CMakeLists.txt
-sed -i -e "s/ButterflyPACKLIB/CButterflyPACKLIB/g" $CSRCDIR/Makefile
-sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/CMakeLists.txt
-sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/Makefile
-
-cd $SSRCDIR
-for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
-	then
-		eval sed -i -e "s/$file/s$file/g" $SSRCDIR/CMakeLists.txt
-		objfile=${file%.*}.o
-		eval sed -i -e "s/$objfile/s$objfile/g" $SSRCDIR/Makefile
-		mv "$file" "s${file}"
-	fi
-done
-sed -i -e "s/butterflypack/sbutterflypack/g" $SSRCDIR/CMakeLists.txt
-sed -i -e "s/ButterflyPACKLIB/SButterflyPACKLIB/g" $SSRCDIR/Makefile
-sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/CMakeLists.txt
-sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/Makefile
 
 cd $ROOTDIR
 rm -rf $TMP_FILE

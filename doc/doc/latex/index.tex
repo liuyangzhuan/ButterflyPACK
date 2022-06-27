@@ -1,0 +1,34 @@
+Butterfly\+PACK is a mathematical software for rapidly solving large-\/scale dense linear systems that exhibit off-\/diagonal rank-\/deficiency. These systems arise frequently from boundary element methods, or factorization phases in finite-\/difference/finite-\/element methods. Butterfly\+PACK relies on low-\/rank or butterfly formats under Hierarchical matrix, HODLR or other hierarchically nested frameworks to compress, factor and solve the linear system in quasi-\/linear time. The computationally most intensive phase, factorization, is accelerated via randomized linear algebras. The butterfly format, originally inspired by the butterfly data flow in fast Fourier Transform, is a linear algebra tool well-\/suited for compressing matrices arising from high-\/frequency wave equations or highly oscillatory integral operators. Butterfly\+PACK also provides preconditioned TFQMR iterative solvers.
+
+Butterfly\+PACK is written in Fortran 2003, it also has C++ interfaces. Butterfly\+PACK supports hybrid MPI/\+Open\+MP programming models. In addition, Butterfly\+PACK can be readily invoked from the software STRUMPACK for solving dense and sparse linear systems.\hypertarget{index_autotoc_md0}{}\doxysection{Table of Contents}\label{index_autotoc_md0}
+
+\begin{DoxyItemize}
+\item \mbox{\hyperlink{installation}{Installation and Requirements }}
+\item \mbox{\hyperlink{GPU_Support}{GPU Support }}
+\begin{DoxyItemize}
+\item \mbox{\hyperlink{algorithm}{Algorithm Overview }}
+\end{DoxyItemize}
+\item \mbox{\hyperlink{examples}{Examples }}
+\begin{DoxyItemize}
+\item \mbox{\hyperlink{Fortran}{Fortran }}
+\item \mbox{\hyperlink{C_C_09_09}{C/\+C++ }}
+\end{DoxyItemize}
+\item \mbox{\hyperlink{FAQ}{FAQ }}
+\item \mbox{\hyperlink{contact}{Contact Authors }}
+\item \mbox{\hyperlink{acknowledgements}{Acknowledgements }}
+\item \mbox{\hyperlink{copyright}{Copyright Notice and License Agreement }}
+\item \mbox{\hyperlink{References}{References}}
+\end{DoxyItemize}\hypertarget{index_autotoc_md1}{}\doxysection{Current developers}\label{index_autotoc_md1}
+
+\begin{DoxyItemize}
+\item Yang Liu -\/ \href{mailto:liuyangzhuan@lbl.gov}{\texttt{ liuyangzhuan@lbl.\+gov}} (Lawrence Berkeley National Laboratory)
+\end{DoxyItemize}\hypertarget{index_autotoc_md2}{}\doxysection{Other contributors}\label{index_autotoc_md2}
+
+\begin{DoxyItemize}
+\item Wissam Sid-\/\+Lakhdar -\/ \href{mailto:wissam@lbl.gov}{\texttt{ wissam@lbl.\+gov}} (Lawrence Berkeley National Laboratory)
+\item Pieter Ghysels -\/ \href{mailto:pghysels@lbl.gov}{\texttt{ pghysels@lbl.\+gov}} (Lawrence Berkeley National Laboratory)
+\item Xiaoye S. Li -\/ \href{mailto:xsli@lbl.gov}{\texttt{ xsli@lbl.\+gov}} (Lawrence Berkeley National Laboratory)
+\item Han Guo -\/ \href{mailto:hanguo@umich.edu}{\texttt{ hanguo@umich.\+edu}} (University of Michigan)
+\item Eric Michielssen -\/ \href{mailto:emichiel@umich.edu}{\texttt{ emichiel@umich.\+edu}} (University of Michigan)
+\item Haizhao Yang -\/ \href{mailto:matyh@nus.edu.sg}{\texttt{ matyh@nus.\+edu.\+sg}} (National University of Singapore) 
+\end{DoxyItemize}

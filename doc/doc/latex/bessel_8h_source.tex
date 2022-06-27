@@ -1,0 +1,66 @@
+\hypertarget{bessel_8h_source}{}\doxysection{bessel.\+h}
+\label{bessel_8h_source}\index{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/G2D/bessel.h@{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/G2D/bessel.h}}
+
+\begin{DoxyCode}{0}
+\DoxyCodeLine{1 \textcolor{comment}{/* bessel.c}}
+\DoxyCodeLine{2 \textcolor{comment}{                      Copyright (c) 1998}}
+\DoxyCodeLine{3 \textcolor{comment}{                  Kapteyn Institute Groningen}}
+\DoxyCodeLine{4 \textcolor{comment}{                     All Rights Reserved.}}
+\DoxyCodeLine{5 \textcolor{comment}{*/}}
+\DoxyCodeLine{6 }
+\DoxyCodeLine{7 \textcolor{comment}{/*}}
+\DoxyCodeLine{8 \textcolor{comment}{\#>            bessel.dc2}}
+\DoxyCodeLine{9 \textcolor{comment}{Function:     BESSEL}}
+\DoxyCodeLine{10 \textcolor{comment}{Purpose:      Evaluate Bessel function J, Y, I, K of integer order.}}
+\DoxyCodeLine{11 \textcolor{comment}{Category:     MATH}}
+\DoxyCodeLine{12 \textcolor{comment}{File:         bessel.c}}
+\DoxyCodeLine{13 \textcolor{comment}{Author:       M.G.R. Vogelaar}}
+\DoxyCodeLine{14 \textcolor{comment}{Use:          See bessj.dc2, bessy.dc2, bessi.dc2 or bessk.dc2}}
+\DoxyCodeLine{15 \textcolor{comment}{Description:  The differential equation}}
+\DoxyCodeLine{16 \textcolor{comment}{                       2}}
+\DoxyCodeLine{17 \textcolor{comment}{                   2  d w       dw      2   2}}
+\DoxyCodeLine{18 \textcolor{comment}{                  x . -\/-\/-\/ + x . -\/-\/-\/ + (x -\/ v ).w = 0}}
+\DoxyCodeLine{19 \textcolor{comment}{                        2       dx}}
+\DoxyCodeLine{20 \textcolor{comment}{                      dx}}
+\DoxyCodeLine{21 \textcolor{comment}{              has two solutions called Bessel functions of the first kind}}
+\DoxyCodeLine{22 \textcolor{comment}{              Jv(x) and Bessel functions of the second kind Yv(x).}}
+\DoxyCodeLine{23 \textcolor{comment}{              The routines bessj and bessy return the J and Y for}}
+\DoxyCodeLine{24 \textcolor{comment}{              integer v and therefore are called Bessel functions}}
+\DoxyCodeLine{25 \textcolor{comment}{              of integer order.}}
+\DoxyCodeLine{26 \textcolor{comment}{              The differential equation}}
+\DoxyCodeLine{27 \textcolor{comment}{                       2}}
+\DoxyCodeLine{28 \textcolor{comment}{                   2  d w       dw      2   2}}
+\DoxyCodeLine{29 \textcolor{comment}{                  x . -\/-\/-\/ + x . -\/-\/-\/ -\/ (x + v ).w = 0}}
+\DoxyCodeLine{30 \textcolor{comment}{                        2       dx}}
+\DoxyCodeLine{31 \textcolor{comment}{                      dx}}
+\DoxyCodeLine{32 \textcolor{comment}{              has two solutions called modified Bessel functions}}
+\DoxyCodeLine{33 \textcolor{comment}{              Iv(x) and Kv(x).}}
+\DoxyCodeLine{34 \textcolor{comment}{              The routines bessi and bessk return the I and K for}}
+\DoxyCodeLine{35 \textcolor{comment}{              integer v and therefore are called Modified Bessel}}
+\DoxyCodeLine{36 \textcolor{comment}{              functions of integer order.}}
+\DoxyCodeLine{37 \textcolor{comment}{              (Abramowitz \& Stegun, Handbook of mathematical}}
+\DoxyCodeLine{38 \textcolor{comment}{              functions, ch. 9, pages 358,-\/ and 374,-\/ )}}
+\DoxyCodeLine{39 \textcolor{comment}{              The implementation is based on the ideas from}}
+\DoxyCodeLine{40 \textcolor{comment}{              Numerical Recipes, Press et. al.}}
+\DoxyCodeLine{41 \textcolor{comment}{              This routine is NOT callable in FORTRAN.}}
+\DoxyCodeLine{42 \textcolor{comment}{Updates:      Jun 29, 1998: VOG, Document created.}}
+\DoxyCodeLine{43 \textcolor{comment}{\#<}}
+\DoxyCodeLine{44 \textcolor{comment}{*/}}
+\DoxyCodeLine{45 }
+\DoxyCodeLine{46 }
+\DoxyCodeLine{47 \textcolor{comment}{//\#> bessel.h}}
+\DoxyCodeLine{48 \textcolor{preprocessor}{\#if !defined(\_bessel\_h\_)}}
+\DoxyCodeLine{49 \textcolor{preprocessor}{\#define \_bessel\_h\_}}
+\DoxyCodeLine{50 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessj( \textcolor{keywordtype}{int}, \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{51 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessy( \textcolor{keywordtype}{int}, \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{52 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessi( \textcolor{keywordtype}{int}, \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{53 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessk( \textcolor{keywordtype}{int}, \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{54 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessj0( \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{55 \textcolor{keyword}{extern} \textcolor{keywordtype}{double} bessy0( \textcolor{keywordtype}{double} );}
+\DoxyCodeLine{56 \textcolor{comment}{//double bessj( int, double );}}
+\DoxyCodeLine{57 \textcolor{comment}{//double bessy( int, double );}}
+\DoxyCodeLine{58 \textcolor{comment}{//double bessi( int, double );}}
+\DoxyCodeLine{59 \textcolor{comment}{//double bessk( int, double );}}
+\DoxyCodeLine{60 \textcolor{preprocessor}{\#endif}}
+
+\end{DoxyCode}

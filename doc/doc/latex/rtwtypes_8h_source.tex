@@ -1,0 +1,49 @@
+\hypertarget{rtwtypes_8h_source}{}\doxysection{rtwtypes.\+h}
+\label{rtwtypes_8h_source}\index{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/G2D/rtwtypes.h@{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/G2D/rtwtypes.h}}
+
+\begin{DoxyCode}{0}
+\DoxyCodeLine{1 \textcolor{comment}{/*}}
+\DoxyCodeLine{2 \textcolor{comment}{ * File: rtwtypes.h}}
+\DoxyCodeLine{3 \textcolor{comment}{ *}}
+\DoxyCodeLine{4 \textcolor{comment}{ * MATLAB Coder version            : 4.0}}
+\DoxyCodeLine{5 \textcolor{comment}{ * C/C++ source code generated on  : 20-\/Nov-\/2019 14:31:15}}
+\DoxyCodeLine{6 \textcolor{comment}{ */}}
+\DoxyCodeLine{7 }
+\DoxyCodeLine{8 \textcolor{preprocessor}{\#ifndef RTWTYPES\_H}}
+\DoxyCodeLine{9 \textcolor{preprocessor}{\#define RTWTYPES\_H}}
+\DoxyCodeLine{10 }
+\DoxyCodeLine{11 \textcolor{comment}{/*=======================================================================*}}
+\DoxyCodeLine{12 \textcolor{comment}{ * Fixed width word size data types:                                     *}}
+\DoxyCodeLine{13 \textcolor{comment}{ *   int64\_T                      -\/ signed 64 bit integers               *}}
+\DoxyCodeLine{14 \textcolor{comment}{ *   uint64\_T                     -\/ unsigned 64 bit integers             *}}
+\DoxyCodeLine{15 \textcolor{comment}{ *=======================================================================*/}}
+\DoxyCodeLine{16 \textcolor{preprocessor}{\#if defined(\_\_APPLE\_\_)}}
+\DoxyCodeLine{17 \textcolor{preprocessor}{\# ifndef INT64\_T}}
+\DoxyCodeLine{18 \textcolor{preprocessor}{\#  define INT64\_T                      long}}
+\DoxyCodeLine{19 \textcolor{preprocessor}{\#  define FMT64                        "{}l"{}}}
+\DoxyCodeLine{20 \textcolor{preprocessor}{\#  if defined(\_\_LP64\_\_) \&\& !defined(INT\_TYPE\_64\_IS\_LONG)}}
+\DoxyCodeLine{21 \textcolor{preprocessor}{\#    define INT\_TYPE\_64\_IS\_LONG}}
+\DoxyCodeLine{22 \textcolor{preprocessor}{\#  endif}}
+\DoxyCodeLine{23 \textcolor{preprocessor}{\# endif}}
+\DoxyCodeLine{24 \textcolor{preprocessor}{\#endif}}
+\DoxyCodeLine{25 }
+\DoxyCodeLine{26 \textcolor{preprocessor}{\#if defined(\_\_APPLE\_\_)}}
+\DoxyCodeLine{27 \textcolor{preprocessor}{\# ifndef UINT64\_T}}
+\DoxyCodeLine{28 \textcolor{preprocessor}{\#  define UINT64\_T                     unsigned long}}
+\DoxyCodeLine{29 \textcolor{preprocessor}{\#  define FMT64                        "{}l"{}}}
+\DoxyCodeLine{30 \textcolor{preprocessor}{\#  if defined(\_\_LP64\_\_) \&\& !defined(INT\_TYPE\_64\_IS\_LONG)}}
+\DoxyCodeLine{31 \textcolor{preprocessor}{\#    define INT\_TYPE\_64\_IS\_LONG}}
+\DoxyCodeLine{32 \textcolor{preprocessor}{\#  endif}}
+\DoxyCodeLine{33 \textcolor{preprocessor}{\# endif}}
+\DoxyCodeLine{34 \textcolor{preprocessor}{\#endif}}
+\DoxyCodeLine{35 }
+\DoxyCodeLine{36 \textcolor{preprocessor}{\#include "{}tmwtypes.h"{}}}
+\DoxyCodeLine{37 \textcolor{preprocessor}{\#endif}}
+\DoxyCodeLine{38 }
+\DoxyCodeLine{39 \textcolor{comment}{/*}}
+\DoxyCodeLine{40 \textcolor{comment}{ * File trailer for rtwtypes.h}}
+\DoxyCodeLine{41 \textcolor{comment}{ *}}
+\DoxyCodeLine{42 \textcolor{comment}{ * [EOF]}}
+\DoxyCodeLine{43 \textcolor{comment}{ */}}
+
+\end{DoxyCode}

@@ -1,0 +1,39 @@
+\hypertarget{C__EMCURV__wrapper_8h_source}{}\doxysection{C\+\_\+\+EMCURV\+\_\+wrapper.\+h}
+\label{C__EMCURV__wrapper_8h_source}\index{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/C\_EMCURV\_wrapper.h@{C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/C\_EMCURV\_wrapper.h}}
+
+\begin{DoxyCode}{0}
+\DoxyCodeLine{1 \textcolor{comment}{/* “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through}}
+\DoxyCodeLine{2 \textcolor{comment}{  Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the}}
+\DoxyCodeLine{3 \textcolor{comment}{  U.S. Dept. of Energy). All rights reserved.}}
+\DoxyCodeLine{4 \textcolor{comment}{}}
+\DoxyCodeLine{5 \textcolor{comment}{  If you have questions about your rights to use or distribute this software, please contact}}
+\DoxyCodeLine{6 \textcolor{comment}{  Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.}}
+\DoxyCodeLine{7 \textcolor{comment}{}}
+\DoxyCodeLine{8 \textcolor{comment}{  NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the}}
+\DoxyCodeLine{9 \textcolor{comment}{  U.S. Government consequently retains certain rights. As such, the U.S. Government has been}}
+\DoxyCodeLine{10 \textcolor{comment}{  granted for itself and others acting on its behalf a paid-\/up, nonexclusive, irrevocable}}
+\DoxyCodeLine{11 \textcolor{comment}{  worldwide license in the Software to reproduce, distribute copies to the public, prepare}}
+\DoxyCodeLine{12 \textcolor{comment}{  derivative works, and perform publicly and display publicly, and to permit other to do so.}}
+\DoxyCodeLine{13 \textcolor{comment}{}}
+\DoxyCodeLine{14 \textcolor{comment}{  Developers: Yang Liu}}
+\DoxyCodeLine{15 \textcolor{comment}{             (Lawrence Berkeley National Lab, Computational Research Division).}}
+\DoxyCodeLine{16 \textcolor{comment}{*/}}
+\DoxyCodeLine{17 }
+\DoxyCodeLine{18 }
+\DoxyCodeLine{19 \textcolor{preprocessor}{\#ifndef EMCURV\_WRAP }\textcolor{comment}{/* allow multiple inclusions */}\textcolor{preprocessor}{}}
+\DoxyCodeLine{20 \textcolor{preprocessor}{\#define EMCURV\_WRAP}}
+\DoxyCodeLine{21 }
+\DoxyCodeLine{22 \textcolor{keyword}{typedef} \textcolor{keywordtype}{void}* F2Cptr;  \textcolor{comment}{// pointer passing fortran derived types to c}}
+\DoxyCodeLine{23 \textcolor{keyword}{typedef} \textcolor{keywordtype}{void}* C2Fptr;  \textcolor{comment}{// pointer passing c objects to fortran}}
+\DoxyCodeLine{24 }
+\DoxyCodeLine{25 \textcolor{comment}{//-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/}}
+\DoxyCodeLine{26 \textcolor{comment}{// Declartion of FORTRAN subroutines to C code}}
+\DoxyCodeLine{27 \textcolor{keyword}{extern} \textcolor{stringliteral}{"{}C"{}} \{}
+\DoxyCodeLine{28 \textcolor{keywordtype}{void} c\_emcurv\_init(\textcolor{keywordtype}{int}* Npo,\textcolor{keywordtype}{double}* Locations,F2Cptr* quant\_emcurv, \textcolor{keywordtype}{int}* model2d, \textcolor{keywordtype}{double}* wavelength, MPI\_Fint* MPIcomm);}
+\DoxyCodeLine{29 \textcolor{keywordtype}{void} c\_emcurv\_sample(\textcolor{keywordtype}{int}* m,\textcolor{keywordtype}{int}* n,\_Complex \textcolor{keywordtype}{double} *value, F2Cptr quant\_emcurv);}
+\DoxyCodeLine{30 \}}
+\DoxyCodeLine{31 \textcolor{comment}{// -\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/-\/}}
+\DoxyCodeLine{32 }
+\DoxyCodeLine{33 \textcolor{preprocessor}{\#endif}}
+
+\end{DoxyCode}

@@ -14,6 +14,9 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file BPACK_solve_mul.f90
+!> @brief Top-level subroutines for multiplying a BPACK (H/HODBF/HODLR/HSS-BF) matrix (or its inverse or triangular factors) with vectors and associated communication routines
+
 #include "ButterflyPACK_config.fi"
 module BPACK_Solve_Mul
    use BPACK_DEFS
@@ -21,7 +24,7 @@ module BPACK_Solve_Mul
 
 contains
 
-!**** eigen solver using ARPACK
+!>**** eigen solver using ARPACK
    !bmat_shift,option_sh,ptree_sh,stats_sh: matrix, option, process tree and statistics for A-sigmaI or A-sigma*B and its inverse, not referenced if SI=0
    !bmat_A,option_A,ptree_A,stats_A: matrix, option, process tree and statistics for A
    !bmat_B,option_B,ptree_B,stats_B: matrix, option, process tree and statistics for B, not referenced if CMmode=0
@@ -917,7 +920,7 @@ contains
 
 
 
-   !***** redistribute the vector fed to Hmat from 1D to 2D layouts
+   !>***** redistribute the vector fed to Hmat from 1D to 2D layouts
    subroutine Hmat_Redistribute1Dto2D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
 
       implicit none
@@ -1178,7 +1181,7 @@ contains
 
 
 
-   !***** redistribute the vector fed to Hmat from 2D to 1D layouts
+   !>***** redistribute the vector fed to Hmat from 2D to 1D layouts
    subroutine Hmat_Redistribute2Dto1D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
 
       implicit none

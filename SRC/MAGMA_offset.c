@@ -1,3 +1,6 @@
+/*! @file MAGMA_offset.c
+ * \brief Utilities to offset C data
+ */
 #ifdef HAVE_MAGMA
 #include "magma.h"
 

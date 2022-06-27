@@ -1,0 +1,11 @@
+digraph "C:/Users/allen/Documents/GitHub/lbldoxygen/ButterflyPACK/EXAMPLE/G2D"
+{
+ // LATEX_PDF_SIZE
+  edge [fontname="Roboto",fontsize="10",labelfontname="Roboto",labelfontsize="10"];
+  node [fontname="Roboto",fontsize="10",shape=record];
+  compound=true
+  subgraph clusterdir_2ed5cd83c419d7f3788213bde77ef248 {
+    graph [ bgcolor="#f0f7fd", pencolor="grey25", style="filled,dashed,", label="EXAMPLE", fontname="Roboto", fontsize="10", URL="dir_2ed5cd83c419d7f3788213bde77ef248.html"]
+  dir_8da7bf06deb30cf6f33b84092bf9cbab [shape=box, label="G2D", style="filled,bold,", fillcolor="#f0f7fd", color="grey25", URL="dir_8da7bf06deb30cf6f33b84092bf9cbab.html"];
+  }
+}

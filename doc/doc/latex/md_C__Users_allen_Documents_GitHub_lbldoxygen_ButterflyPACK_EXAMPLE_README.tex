@@ -1,0 +1,254 @@
+This directory contains sample programs to illustrate how to call functions in Butterfly\+PACK from your application code. Butterfly\+PACK provides both double and double-\/complex data types. It provides both Fortran and C/\+C++ interfaces.\hypertarget{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md0}{}\doxysubsection{Fortran Interface}\label{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md0}
+The following pseudo codes explain how to perform construction, factorization and solve of a linear system \char`\"{}\+Z\char`\"{} using the Fortran interface
+
+First, specify the data type of your application\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!**** DAT 1: double precision; DAT 0: double complex precision}
+\DoxyCodeLine{\#define DAT 1}
+\DoxyCodeLine{\#include "{}ButterflyPACK\_config.fi"{}}
+
+\end{DoxyCode}
+
+
+Butterfly\+PACK provides two ways of constructing a hierarchical matrix. The first option requires a user-\/provided function to sample any individual element of the matrix that takes the following argument list 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{subroutine Element(m,n,val,quant)}
+\DoxyCodeLine{implicit none}
+\DoxyCodeLine{    class(*),pointer :: quant ! quant is a user-\/defined derived type consisting all data and metadata needed for this user-\/defined function}
+\DoxyCodeLine{    integer:: m,n  ! m,n specify the row and column indices of the desired matrix element}
+\DoxyCodeLine{    DT::val ! val returns Z(m,n), (DT=real(kind=8) or complex(kind=8) depending on your application)}
+\DoxyCodeLine{}
+\DoxyCodeLine{    ! write your matrix element evaluation function here}
+\DoxyCodeLine{}
+\DoxyCodeLine{end subroutine Element}
+
+\end{DoxyCode}
+
+
+The second option requires a user-\/provided function to multiply the matrix Z with an arbitrary matrix R that takes the following argument list 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{subroutine MatVec(trans,Mloc,Nloc,num\_vect,R,S,quant)}
+\DoxyCodeLine{implicit none}
+\DoxyCodeLine{    character trans ! trans='N': S=ZR; trans='T': S\string^t=R\string^tZ; trans='C': S\string^c=R\string^cZ;}
+\DoxyCodeLine{    DT:: R(:,:),S(:,:) ! represent the input matrix R and output matrix S}
+\DoxyCodeLine{    integer::Mloc,Nloc ! local row and column dimensions of Z returned by the initialization subroutine BPACK\_construction\_Init}
+\DoxyCodeLine{    integer:: num\_vect ! column dimension of R}
+\DoxyCodeLine{    class(*),pointer :: quant ! quant is a user-\/defined derived type consisting all data and metadata needed for this user-\/defined function}
+\DoxyCodeLine{}
+\DoxyCodeLine{    ! write your matrix multiplication function here}
+\DoxyCodeLine{}
+\DoxyCodeLine{end subroutine MatVec}
+
+\end{DoxyCode}
+
+
+Initialize Butterfly\+PACK metadata kernel register (ker), process tree (ptree), statistics (stats), user-\/options (option)\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!*** create process tree, statistics and user-\/option}
+\DoxyCodeLine{call CreatePtree(nmpi,groupmembers,MPI\_Comm,ptree) ! groupmembers is an integer array of size nmpi, holding MPI ranks from the communicator MPI\_Comm that will be used for this matrix operation}
+\DoxyCodeLine{call InitStat(stats)}
+\DoxyCodeLine{call SetDefaultOptions(option) ! besides the default options, other options can be set after calling this, please refer to definition of option for details}
+\DoxyCodeLine{}
+\DoxyCodeLine{!**** register the user-\/defined function and derived-\/type in kernel register}
+\DoxyCodeLine{ker\%QuantApp => quant}
+\DoxyCodeLine{ker\%FuncZmn => Element}
+\DoxyCodeLine{ker\%FuncHMatVec => MatVec  ! Note that at least one of ker\%FuncZmn and ker\%FuncHMatVec needs to set}
+\DoxyCodeLine{}
+\DoxyCodeLine{!**** initialization of the construction phase}
+\DoxyCodeLine{call BPACK\_construction\_Init(N,P,N\_loc,bmat,option,stats,msh,ker,ptree,Coordinates,clustertree)}
+\DoxyCodeLine{    ! N is matrix dimension}
+\DoxyCodeLine{    ! P is the permutation vector returned}
+\DoxyCodeLine{    ! N\_loc is the local number of rows/columns}
+\DoxyCodeLine{    ! bmat is the meta-\/data storing the compressed matrix}
+\DoxyCodeLine{    ! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column}
+\DoxyCodeLine{    ! clustertree(optional) is an array of leafsizes in a user-\/provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.}
+\DoxyCodeLine{    ! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.}
+\DoxyCodeLine{    ! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option\%xyzsort, option\%nogeo, and option\%Nmin\_leaf}
+
+\end{DoxyCode}
+
+
+Construction of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{!**** computation of the construction phase, one the following two functions can be called depending on how ker is registered}
+\DoxyCodeLine{call BPACK\_construction\_Element(bmat,option,stats,msh,ker,element\_Zmn\_user,ptree) ! construct a hierarchical matrix with fast matrix entry evaluation}
+\DoxyCodeLine{call BPACK\_construction\_Matvec(bmat,matvec\_user,memory,error,option,stats,ker,ptree,msh) ! construct a hierarchical matrix with fast matrix-\/vector multiplication}
+
+\end{DoxyCode}
+
+
+Factorization of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{call BPACK\_Factorization(bmat,option,stats,ptree,msh)}
+
+\end{DoxyCode}
+
+
+Solve of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{call BPACK\_Factorization(bmat,x,b,N\_loc,nrhs,option,ptree,stats)}
+\DoxyCodeLine{    ! bmat is the meta-\/data storing the compressed and factored matrix}
+\DoxyCodeLine{    ! N\_loc is the local number of rows/columns}
+\DoxyCodeLine{    ! nrhs is the number of right-\/hand sides}
+\DoxyCodeLine{    ! P is the permutation vector returned}
+\DoxyCodeLine{    ! b of N\_loc*nrhs is the local right-\/hand sides}
+\DoxyCodeLine{    ! x of N\_loc*nrhs is the local solution vector}
+
+\end{DoxyCode}
+\hypertarget{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md1}{}\doxysubsection{Fortran Example}\label{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md1}
+You can run several examples in this directory as follows. You can modify options in the driver or from command line.
+
+KERREG\+\_\+\+Driver.\+f90\+: An example for kernel ridge regression (KRR) with RBF kernel. This example constructs (with entry evaluation), factor a RBF-\/kernel matrix and uses it for binary classifications with UCI machine learning datasets. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/krr}
+
+\end{DoxyCode}
+
+
+EMCURV\+\_\+\+Driver.\+f90 and EMCURV\+\_\+\+Module.\+f90\+: A 2D EFIE example with several built-\/in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and solve it with plane-\/wave excitations. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/ie2d}
+
+\end{DoxyCode}
+
+
+EMCURV\+\_\+\+Eigen\+\_\+\+Driver.\+f90 and EMCURV\+\_\+\+Module.\+f90\+: A 2D EFIE example with several built-\/in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and compute its eigen values with ARPACK. When quantCMmode=0, the example performs eigen analysis; when quantCMmode=1, the example performs characteristic mode analysis. When quantSI=0, regular mode in arpack is invoked; when quantSI=1, shift-\/and-\/invert mode in arpack is invoked. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/ie2deigen}
+
+\end{DoxyCode}
+
+
+EMSURF\+\_\+\+Driver.\+f90 and EMSURF\+\_\+\+Module.\+f90\+: A 3D EFIE/\+CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/\+CFIE matrix and solve it with plane-\/wave excitations. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{sh ./EM3D\_DATA/preprocessor\_3dmesh/run\_gmsh.sh ! this preprocessor generates a few 3D example meshes using Gmsh (http://gmsh.info/)}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/ie3d}
+
+\end{DoxyCode}
+
+
+SMAT\+\_\+\+Driver.\+f90\+: An example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-\/vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-\/vector multiplication to construct the second hierarchical matrix. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{sh ./FULLMAT\_DATA/file\_merge.sh ./FULLMAT\_DATA/Smatrix.mat ! this extract a full matrix stored as Smatrix.mat}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/smat}
+
+\end{DoxyCode}
+
+
+Frontal\+\_\+\+Driver.\+f90\+: An example for compressing a frontal matrix from 3D poisson equations. The frontal matrix is stored in file. This example first read in the full matrix, then used it as entry evaluation (if explicitflag=1) or matrix-\/vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-\/vector multiplication to construct the second hierarchical matrix. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/frontal}
+
+\end{DoxyCode}
+
+
+Frontal\+Dist\+\_\+\+Driver.\+f90\+: An example for compressing a frontal matrix from 3D elastic Helmholtz equations. The frontal matrix is stored in parallel files with a 2x2 process grid. This example first read in the 2D-\/block cyclic matrix, then used it as matrix-\/vector multiplication to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-\/vector multiplication to construct the second hierarchical matrix. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{sh ./FULLMAT\_DATA/file\_merge.sh ./FULLMAT\_DATA/Frontal\_elastic ! this extract 4 files storing the full matrix}
+\DoxyCodeLine{mpirun -\/n 4 ./EXAMPLE/frontaldist}
+
+\end{DoxyCode}
+
+
+FULLMAT\+\_\+\+Driver.\+f90\+: An example for compressing a randomly generated low-\/rank matrix (if tst=1) or a full RBF kernel matrix stored in file (if tst=2). The example first constructs a hierarchical matrix with entry evaluation, then uses the first hierarchical matrix as matrix-\/vector multiplication to construct a second hierarchical matrix. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{sh ./FULLMAT\_DATA/file\_merge.sh K05N4096.csv ! this extract a full matrix stored as K05N4096.csv}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/full}
+
+\end{DoxyCode}
+\hypertarget{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md2}{}\doxysubsection{C/\+C++ Interface}\label{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md2}
+Note that Butterfly\+PACK supports double and double-\/complex data types as two independent libraries. As such, all Butterfly\+PACK C++ interfaces are named with the prefix \char`\"{}x\+\_\+\char`\"{}. x=d for double precision and x=z for double complex precision. Take double precision for example, the caller needs to first define a class/object that can perform either matrix entry evaluation or matrix vector multiplication\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{\#include "{}dC\_BPACK\_wrapper.h"{}}
+\DoxyCodeLine{//provide a user-\/defined class consisting all data and metadata needed for this matrix entry evaluation and/or matvec}
+\DoxyCodeLine{class C\_QuantApp \{}
+\DoxyCodeLine{//define your data here}
+\DoxyCodeLine{\};}
+\DoxyCodeLine{// The entry evaluation function wrapper required by the Fortran code, val returns Z(m,n), F2Cptr is an alias of void*}
+\DoxyCodeLine{inline void C\_FuncZmn(int *m, int *n, double *val, F2Cptr quant) \{}
+\DoxyCodeLine{  C\_QuantApp* Q = (C\_QuantApp*) quant;}
+\DoxyCodeLine{  //call your entry evaluation function defined in C\_QuantApp using Q}
+\DoxyCodeLine{\}}
+\DoxyCodeLine{// The matvec function wrapper required by the Fortran code, see "{}subroutine MatVec"{} above for the argument list}
+\DoxyCodeLine{inline void C\_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) \{}
+\DoxyCodeLine{  C\_QuantApp* Q = (C\_QuantApp*) quant;}
+\DoxyCodeLine{  //call your matvec function defined in C\_QuantApp using Q}
+\DoxyCodeLine{\}}
+
+\end{DoxyCode}
+
+
+Initialize Butterfly\+PACK metadata\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{F2Cptr bmat;  //hierarchical matrix returned by Fortran code}
+\DoxyCodeLine{F2Cptr option;     //option structure returned by Fortran code}
+\DoxyCodeLine{F2Cptr stats;      //statistics structure returned by Fortran code}
+\DoxyCodeLine{F2Cptr msh;        //mesh structure returned by Fortran code}
+\DoxyCodeLine{F2Cptr kerregister;   //kernel register quantities structure returned by Fortran code}
+\DoxyCodeLine{F2Cptr ptree;      //process tree returned by Fortran code}
+\DoxyCodeLine{MPI\_Fint Fcomm;  // the Fortran MPI communicator}
+\DoxyCodeLine{Fcomm = MPI\_Comm\_c2f(Comm); //Comm is the C MPI communicator provided by the user}
+\DoxyCodeLine{}
+\DoxyCodeLine{// initialize ButterflyPACK metadata}
+\DoxyCodeLine{d\_c\_bpack\_createptree(\&nmpi, groups, \&Fcomm, \&ptree); //groups is a int array of size nmpi holding MPI ranks out of communicator Fcomm used for ButterflyPACK}
+\DoxyCodeLine{d\_c\_bpack\_createoption(\&option);}
+\DoxyCodeLine{d\_c\_bpack\_createstats(\&stats);}
+\DoxyCodeLine{}
+\DoxyCodeLine{// set ButterflyPACK options other than the default ones, the double and integer options are set with different functions:}
+\DoxyCodeLine{d\_c\_bpack\_set\_D\_option(\&option, "{}name"{}, val); //double-\/valued option}
+\DoxyCodeLine{d\_c\_bpack\_set\_I\_option(\&option, "{}name"{}, val); //int-\/valued option}
+
+\end{DoxyCode}
+
+
+Construction of the hierarchical matrix with entry evaluation\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{d\_c\_bpack\_construct\_element(\&N, \&Ndim, coordinates, \&nlevel, clustertree, P, \&N\_loc, \&bmat, \&option, \&stats, \&msh, \&kerregister, \&ptree, \&C\_FuncZmn, quant, \&Fcomm);}
+\DoxyCodeLine{   //N is matrix dimension}
+\DoxyCodeLine{   //coordinates is a double array of size N*Ndim representing Cartesian coordinates x1(1),...,x1(Ndim),x2(1),...,x2(Ndim)....}
+\DoxyCodeLine{   //if Ndim=0, coordinates is not referenced}
+\DoxyCodeLine{   //clustertree is an integer array of size 2\string^nlevel containing leafsizes in a user-\/provided cluster tree}
+\DoxyCodeLine{   //if nlevel=0, input requires tree(1)=N}
+\DoxyCodeLine{   //P is an integer array of size N, representing permutation vector returned by the ButterflyPACK clustering}
+\DoxyCodeLine{   //N\_loc is the local matrix dimension}
+
+\end{DoxyCode}
+
+
+Construction of the hierarchical matrix with matrix-\/vector multiplication\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{d\_c\_bpack\_construct\_matvec\_init(\&N, \&nlevel, clustertree, P, \&N\_loc, \&bmat, \&option, \&stats, \&msh, \&kerregister, \&ptree);}
+\DoxyCodeLine{//returning clustertree, P and N\_loc can be used to define your matvec if needed}
+\DoxyCodeLine{d\_c\_bpack\_construct\_matvec\_compute(\&bmat, \&option, \&stats, \&msh, \&kerregister, \&ptree, \&C\_FuncHMatVec, quant);}
+
+\end{DoxyCode}
+
+
+Factorization of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{d\_c\_bpack\_factor(\&bmat,\&option,\&stats,\&ptree,\&msh);}
+
+\end{DoxyCode}
+
+
+Solve of the hierarchical matrix\+: 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{d\_c\_bpack\_solve(x,b,\&N\_loc,\&nrhs,\&bmat,\&option,\&stats,\&ptree);}
+\DoxyCodeLine{    // bmat is the meta-\/data storing the compressed and factored matrix}
+\DoxyCodeLine{    // N\_loc is the local number of rows/columns}
+\DoxyCodeLine{    // nrhs is the number of right-\/hand sides}
+\DoxyCodeLine{    // b of N\_loc*nrhs is the local right-\/hand sides (concatenation of nrhs vectors of length N\_loc)}
+\DoxyCodeLine{    // x of N\_loc*nrhs is the local solution vector (concatenation of nrhs vectors of length N\_loc)}
+
+\end{DoxyCode}
+
+
+In addition, Butterfly\+PACK can be invoked from STRUMPACK with more compact C++ interfaces than the above. See \href{http://portal.nersc.gov/project/sparse/strumpack/}{\texttt{ http\+://portal.\+nersc.\+gov/project/sparse/strumpack/}} for details.\hypertarget{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md3}{}\doxysubsection{C/\+C++ Example}\label{md_C__Users_allen_Documents_GitHub_lbldoxygen_ButterflyPACK_EXAMPLE_README_autotoc_md3}
+There is one C++ example in this directory as follows. You can modify options in the driver or from command line.
+
+Interface\+Test.\+cpp\+: An example using a collection of simple kernels. The kernels are selected by the parameter \char`\"{}ker\char`\"{}. ker=1\+: RBF, 2\+: R$^\wedge$4, 3\+: sqrt(R$^\wedge$2+h), 4\+: 1/sqrt(R$^\wedge$2+h), 5\+: (X$^\wedge$t\+Y+h)$^\wedge$2, 6\+: product of two random matrices. The coordinates are generated as follows\+: tst=1 read from a UCI machine learning dataset, tst=2 generates a random collection of coordinates, tst=3 no coordinates are generated. This example first constructs (with entry evaluation), factor a hierarchical matrix and then uses it as matrix-\/vector multiplication to construct a second hierarchical matrix. 
+\begin{DoxyCode}{0}
+\DoxyCodeLine{mpirun -\/n nmpi ./EXAMPLE/ctest}
+
+\end{DoxyCode}
+ 
