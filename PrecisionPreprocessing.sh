@@ -122,6 +122,7 @@ cp -r $SRCDIR $ZSRCDIR
 cd $ZSRCDIR
 { echo "#define DAT 0 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/zButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -165,6 +166,7 @@ cp -r $SRCDIR $DSRCDIR
 cd $DSRCDIR
 { echo "#define DAT 1 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/dButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -208,6 +210,7 @@ cp -r $SRCDIR $CSRCDIR
 cd $CSRCDIR
 { echo "#define DAT 2 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/cButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -250,6 +253,7 @@ cp -r $SRCDIR $SSRCDIR
 cd $SSRCDIR
 { echo "#define DAT 3 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/sButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then

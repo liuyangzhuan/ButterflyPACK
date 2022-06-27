@@ -13,12 +13,18 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file
+!> @brief This is an example that solves a 3D EFIE/MFIE/CFIE system for electromagnetics scattering.
+!> @details Note that the use of the following \n
+!> #define DAT 2 \n
+!> #include "cButterflyPACK_config.fi" \n
+!> will macro replace subroutine, function, type names with those defined in SRC_COMLEX with single-complex precision
 
 
-! This exmple works with double-complex precision data
+! This exmple works with single-complex precision data
 #define DAT 2
 
-#include "ButterflyPACK_config.fi"
+#include "cButterflyPACK_config.fi"
 
 PROGRAM ButterflyPACK_IE_3D
     use BPACK_DEFS

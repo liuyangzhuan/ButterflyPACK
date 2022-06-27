@@ -13,12 +13,18 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file
+!> @brief This example reads a frontal matrix from distributed files from disk, and compress it using entry-valuation or matvec-based APIs
+!> @details Note that the use of the following \n
+!> #define DAT 0 \n
+!> #include "zButterflyPACK_config.fi" \n
+!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMPLEX with double-complex precision
 
 
-! This exmple works with double precision data
+! This exmple works with double-complex precision data
 #define DAT 0
 
-#include "ButterflyPACK_config.fi"
+#include "zButterflyPACK_config.fi"
 
 
 module APPLICATION_MODULE

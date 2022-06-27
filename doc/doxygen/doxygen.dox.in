@@ -281,7 +281,7 @@ OPTIMIZE_OUTPUT_VHDL   = NO
 # Note that for custom extensions you also need to set FILE_PATTERNS otherwise
 # the files are not read by doxygen.
 
-EXTENSION_MAPPING = f=FortranFixed f90=FortranFree
+EXTENSION_MAPPING = f=FortranFixed f90=FortranFree fi=C
 
 # If the MARKDOWN_SUPPORT tag is enabled then doxygen pre-processes all comments
 # according to the Markdown format, which allows for more readable
@@ -875,10 +875,30 @@ WARN_LOGFILE           =
 	@CMAKE_CURRENT_SOURCE_DIR@/SRC_COMPLEX/cSCALAPACK_psgeqpfmod.f \
 	@CMAKE_CURRENT_SOURCE_DIR@/SRC_COMPLEX/cSCALAPACK_pzgeqpfmod.f \
 	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/C_EMCURV_wrapper.h \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/DoCubicInterp2D.c \
 	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/DoCubicInterp2D.h \
-	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/G2D \
-	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/G3D \
-	@CMAKE_CURRENT_SOURCE_DIR@/cmake/butterflypack-config.cmake.in \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMCURV_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMCURV_Module.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMCURV_Eigen_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/SMAT_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/KERREG_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/FULLMATKERREG_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/FULLMAT_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/FULLMAT_Driver_simple.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/FrontalDist_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/Frontal_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Port_Module.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Port_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Port_Eigen_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Module_sp.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Module.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Eigen_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Driver.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/EMSURF_Driver_sp.f90 \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/zButterflyPACK_config.fi \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/cButterflyPACK_config.fi \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/dButterflyPACK_config.fi \
+	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/sButterflyPACK_config.fi \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Overview.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Installation.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/GPU_support.txt \
@@ -2365,7 +2385,7 @@ INCLUDED_BY_GRAPH      = YES
 # The default value is: NO.
 # This tag requires that the tag HAVE_DOT is set to YES.
 
-CALL_GRAPH             = NO
+CALL_GRAPH             = YES
 
 # If the CALLER_GRAPH tag is set to YES then doxygen will generate a caller
 # dependency graph for every global function or class method.
@@ -2482,7 +2502,7 @@ DOT_GRAPH_MAX_NODES    = 500
 # Minimum value: 0, maximum value: 1000, default value: 0.
 # This tag requires that the tag HAVE_DOT is set to YES.
 
-MAX_DOT_GRAPH_DEPTH    = 0
+MAX_DOT_GRAPH_DEPTH    = 4
 
 # Set the DOT_TRANSPARENT tag to YES to generate images with a transparent
 # background. This is disabled by default, because dot on Windows does not seem

@@ -14,11 +14,17 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file
+!> @brief This example generates a RBF kernel using training and testing data from disk, compress it using entry-valuation-based APIs, and evaluate the prediction error.
+!> @details Note that the use of the following \n
+!> #define DAT 1 \n
+!> #include "dButterflyPACK_config.fi" \n
+!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLE with double precision
 
 ! This exmple works with double precision data
 #define DAT 1
 
-#include "ButterflyPACK_config.fi"
+#include "dButterflyPACK_config.fi"
 
 module APPLICATION_MODULE
 use BPACK_DEFS
