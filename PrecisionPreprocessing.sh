@@ -131,7 +131,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
 		mv "$file" "z${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "z${file}" "z${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -175,7 +175,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
 		mv "$file" "d${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "d${file}" "d${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -219,7 +219,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/c$objfile/g" $CSRCDIR/Makefile
 		mv "$file" "c${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "c${file}" "c${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -262,7 +262,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/s$objfile/g" $SSRCDIR/Makefile
 		mv "$file" "s${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "s${file}" "s${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
