@@ -14,14 +14,18 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file
+!> @brief This example reads a full matrix of kernel ridge system from disk, and compress it using entry-valuation-based APIs, and evaluate the prediction error.
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "d_", one can also use the following \n
+!> #define DAT 1 \n
+!> #include "dButterflyPACK_config.fi" \n
+!> which will macro replace precision-independent subroutine/module/type names "X" with "d_X" defined in SRC_DOUBLE with double precision
+
 
 ! This exmple works with double precision data
-#define DAT 1
-
-#include "ButterflyPACK_config.fi"
 
 module APPLICATION_MODULE
-use BPACK_DEFS
+use d_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here
@@ -42,7 +46,7 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use BPACK_DEFS
+		use d_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
@@ -73,14 +77,15 @@ end module APPLICATION_MODULE
 
 
 PROGRAM ButterflyPACK_FullKRR
-    use BPACK_DEFS
+    use d_BPACK_DEFS
     use APPLICATION_MODULE
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
+	use d_BPACK_structure
+	use d_BPACK_factor
+	use d_BPACK_constr
 	use omp_lib
-	use MISC_Utilities
+	use d_MISC_Utilities
+	use d_BPACK_utilities
 
     implicit none
 
@@ -100,15 +105,15 @@ PROGRAM ButterflyPACK_FullKRR
 	integer :: edge_m,edge_n,flag,nargs
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
+	type(d_Hoption)::option
+	type(d_Hstat)::stats
+	type(d_mesh)::msh
+	type(d_kernelquant)::ker
 	type(quant_app),target::quant
-	type(Bmatrix)::bmat
+	type(d_Bmatrix)::bmat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	CHARACTER (LEN=1000) DATA_DIR
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
@@ -124,7 +129,7 @@ PROGRAM ButterflyPACK_FullKRR
 	enddo
 
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
 
@@ -138,7 +143,7 @@ PROGRAM ButterflyPACK_FullKRR
    if(ptree%MyID==Main_ID)then
    write (*,*) ''
    write (*,*) 'FULLKER computing'
-   call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+   call d_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
    write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
    write (*,*) ''
    endif
@@ -147,8 +152,8 @@ PROGRAM ButterflyPACK_FullKRR
 
 
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_InitStat(stats)
+	call d_SetDefaultOptions(option)
 
 	!**** set solver parameters
 	option%xyzsort=NATURAL
@@ -203,7 +208,7 @@ PROGRAM ButterflyPACK_FullKRR
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option,ptree,ii)
+			call d_ReadOption(option,ptree,ii)
 		else
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
@@ -212,7 +217,7 @@ PROGRAM ButterflyPACK_FullKRR
 
 	quant%Nunk = quant%ntrain
 
-	call PrintOptions(option,ptree)
+	call d_PrintOptions(option,ptree)
 
 
 	t1 = OMP_get_wtime()
@@ -221,7 +226,7 @@ PROGRAM ButterflyPACK_FullKRR
 	do ii=1,quant%ntrain+quant%ntest
 		quant%perms(ii)=ii
 	enddo
-	! call rperm(quant%ntrain+quant%ntest,quant%perms)
+	! call d_rperm(quant%ntrain+quant%ntest,quant%perms)
 
 	allocate(tmpline(quant%ntrain))
 	open (90,file=quant%trainfile_p)
@@ -244,16 +249,16 @@ PROGRAM ButterflyPACK_FullKRR
 
 	!**** initialization of the construction phase
 	allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
+	call d_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+    call d_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 
 	!**** factorization phase
-    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    call d_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
 	!**** solve phase
@@ -262,11 +267,11 @@ PROGRAM ButterflyPACK_FullKRR
 
 
 	!**** deletion of quantities
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_BPACK_delete(bmat)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
@@ -279,11 +284,11 @@ end PROGRAM ButterflyPACK_FullKRR
 
 subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
-    use BPACK_DEFS
+    use d_BPACK_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use BPACK_Solve_Mul
-	use MISC_Utilities
+	use d_BPACK_Solve_Mul
+	use d_MISC_Utilities
 
     implicit none
 
@@ -296,12 +301,12 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:),vout_test(:,:),matrixtemp1(:,:),matrixtemp2(:,:),matrixtemp(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(mesh)::msh
+	type(d_Hoption)::option
+	type(d_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
-	type(Bmatrix)::bmat
-	type(Hstat)::stats
+	type(d_proctree)::ptree
+	type(d_Bmatrix)::bmat
+	type(d_Hstat)::stats
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	integer, allocatable :: ipiv(:)
@@ -316,7 +321,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	ntest=quant%ntest
 
 	if(option%ErrSol==1)then
-		call BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
+		call d_BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	endif
 
 
@@ -343,7 +348,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 	n1 = OMP_get_wtime()
 
-	call BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
+	call d_BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -387,14 +392,14 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 		! allocate(matrixtemp2(N_unk,N_unk))
 		! allocate(matrixtemp1(N_unk,N_unk))
 		! matrixtemp2=quant%matZ_glo(msh%new2old,msh%new2old)
-		! call GeneralInverse(N_unk,N_unk,matrixtemp2,matrixtemp1,1d-10)
+		! call d_GeneralInverse(N_unk,N_unk,matrixtemp2,matrixtemp1,1d-10)
 
 		! allocate(ipiv(N_unk))
 		! allocate(matrixtemp1(N_unk,N_unk))
 		! matrixtemp1=quant%matZ_glo(msh%new2old,msh%new2old)
 		! ipiv=0
-		! call getrff90(matrixtemp1,ipiv)
-		! call getrif90(matrixtemp1,ipiv)
+		! call d_getrff90(matrixtemp1,ipiv)
+		! call d_getrif90(matrixtemp1,ipiv)
 		! deallocate(ipiv)
 
 
@@ -402,10 +407,10 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 		! allocate(matrixtemp(ntest,N_unk))
 		! matrixtemp=quant%matZ_glo(quant%ntrain+1:quant%ntrain+quant%ntest,msh%new2old)
-		! call gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,BPACK_cone,BPACK_czero)
+		! call d_gemmf90(matrixtemp1,N_unk,b,N_unk,x,N_unk,'N','N',N_unk,1,N_unk,BPACK_cone,BPACK_czero)
 		! allocate (vout(ntest,1))
 		! vout=0
-		! call gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,BPACK_cone,BPACK_czero)
+		! call d_gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,BPACK_cone,BPACK_czero)
 
 	T1 = OMP_get_wtime()
 	if (ptree%MyID==Main_ID) then
@@ -442,4 +447,5 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
     return
 
 end subroutine FULLKER_solve
+
 

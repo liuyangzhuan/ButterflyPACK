@@ -253,7 +253,7 @@ module BPACK_DEFS
     !>**** butterfly or LR structure
     type matrixblock
         integer pgno !< process group
-        integer pgno_db !< process group when #MPI is doubled
+        integer pgno_db !< process group when MPI count is doubled
         integer level !< level in HODLR
         integer col_group !< column group number
         integer row_group !< row group number
@@ -441,7 +441,7 @@ module BPACK_DEFS
         integer::rmax !< maximum rank truncation
         integer:: elem_extract !< 1: use user-defined element extraction 0: use user-defined formula
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
-        integer:: knn !< #of nearest neighbour points for each point
+        integer:: knn !< number of nearest neighbour points for each point
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
@@ -469,7 +469,7 @@ module BPACK_DEFS
         integer::ErrFillFull !< check compression quality by computing all block elements
         integer::ErrSol !< check solution quality by using artificially generated true solution vector
         integer::BACA_Batch !< batch size in batch ACA
-        integer::LR_BLK_NUM !< sqrt of #of bottom-level subblocks in blocked LR
+        integer::LR_BLK_NUM !< sqrt of number of bottom-level subblocks in blocked LR
 
     end type Hoption
 

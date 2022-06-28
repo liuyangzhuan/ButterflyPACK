@@ -13,26 +13,25 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
-
+!> @file
+!> @brief This is an example that uses PARPACK and ButterflyPACk to find the smallest eigen value or do characteristic mode analysis for a 2D EFIE system in electromagnetics.
+!> @details Note that the use of the following \n
+!> #define DAT 0 \n
+!> #include "zButterflyPACK_config.fi" \n
+!> which will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMLEX with double-complex precision
 
 ! This exmple works with double-complex precision data
-#define DAT 0
-
-#include "ButterflyPACK_config.fi"
-
-
-
 PROGRAM ButterflyPACK_IE_2D
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     use EMCURV_MODULE
 
-	use BPACK_structure
-	use BPACK_Solve_Mul
-	use BPACK_factor
-	use BPACK_constr
-	use BPACK_Utilities
+	use z_BPACK_structure
+	use z_BPACK_Solve_Mul
+	use z_BPACK_factor
+	use z_BPACK_constr
+	use z_BPACK_Utilities
 	use omp_lib
-	use MISC_Utilities
+	use z_MISC_Utilities
     implicit none
 
 	! include "mkl_vml.fi"
@@ -53,14 +52,14 @@ PROGRAM ButterflyPACK_IE_2D
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option_sh,option_A,option_B
-	type(Hstat)::stats_sh,stats_A,stats_B
-	type(mesh)::msh_sh,msh_A,msh_B
-	type(kernelquant)::ker_sh,ker_A,ker_B
-	type(Bmatrix)::bmat_sh,bmat_A,bmat_B
+	type(z_Hoption)::option_sh,option_A,option_B
+	type(z_Hstat)::stats_sh,stats_A,stats_B
+	type(z_mesh)::msh_sh,msh_A,msh_B
+	type(z_kernelquant)::ker_sh,ker_A,ker_B
+	type(z_Bmatrix)::bmat_sh,bmat_A,bmat_B
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree_sh,ptree_A,ptree_B
+	type(z_proctree)::ptree_sh,ptree_A,ptree_B
 	type(quant_EMCURV),target::quant
 	CHARACTER (LEN=1000) DATA_DIR
 	integer:: randsize=50
@@ -93,21 +92,21 @@ PROGRAM ButterflyPACK_IE_2D
 	enddo
 
 	! generate the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_A)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_A)
 	deallocate(groupmembers)
 
 
 	if(ptree_A%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_2D"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call z_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats_A)
-	call SetDefaultOptions(option_A)
+	call z_InitStat(stats_A)
+	call z_SetDefaultOptions(option_A)
 
 	!**** intialize the user-defined derived type quant
 	quant%RCS_static=1
@@ -183,14 +182,14 @@ PROGRAM ButterflyPACK_IE_2D
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option_A,ptree_A,ii)
+			call z_ReadOption(option_A,ptree_A,ii)
 		else
 			if(ptree_A%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
 	enddo
 
-	call PrintOptions(option_A,ptree_A)
+	call z_PrintOptions(option_A,ptree_A)
 
     quant%wavenum=2*BPACK_pi/quant%wavelength
 
@@ -220,47 +219,47 @@ PROGRAM ButterflyPACK_IE_2D
 		xyz(:,edge) = quant%xyz(:,edge*2-1)
 	enddo
 	allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
+	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation)
 	deallocate(xyz)
-	call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
+	call z_BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
-	call PrintStat(stats_A,ptree_A)
+	call z_PrintStat(stats_A,ptree_A)
 
-	! call FULLMAT_Element(option_A,stats_A,msh_A,ker_A,ptree_sh)
+	! call z_FULLMAT_Element(option_A,stats_A,msh_A,ker_A,ptree_sh)
 	!***********************************************************************
 
 
     !***********************************************************************
 	!**** construct compressed A - sigma I or  A - sigma real(A)
 	if(quant%SI==1)then
-		call CopyOptions(option_A,option_sh)
+		call z_CopyOptions(option_A,option_sh)
 		!**** register the user-defined function and type in ker_sh
 		ker_sh%QuantApp => quant
 		ker_sh%FuncZmn => Zelem_EMCURV_Shifted
 		!**** initialize stats and option
-		call InitStat(stats_sh)
+		call z_InitStat(stats_sh)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
 		do ii=1,nmpi
 			groupmembers(ii)=(ii-1)
 		enddo
-		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
+		call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
 		deallocate(groupmembers)
 		allocate(xyz(2,quant%Nunk))
 		do edge=1, quant%Nunk
 			xyz(:,edge) = quant%xyz(:,edge*2-1)
 		enddo
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
+		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
 		!**** computation of the construction phase
-		call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
+		call z_BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
 		!**** factorization phase
-		call BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
+		call z_BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
 		!**** print statistics
-		call PrintStat(stats_sh,ptree_sh)
+		call z_PrintStat(stats_sh,ptree_sh)
 	endif
 
 
@@ -268,33 +267,33 @@ PROGRAM ButterflyPACK_IE_2D
     !***********************************************************************
 	!**** construct compressed real(A)
 	if(quant%CMmode==1)then ! solve the characteristic mode
-		call CopyOptions(option_A,option_B)
+		call z_CopyOptions(option_A,option_B)
 		ker_B%QuantApp => quant
 		ker_B%FuncZmn => Zelem_EMCURV_Real
 		!**** initialize stats and option
-		call InitStat(stats_B)
+		call z_InitStat(stats_B)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
 		do ii=1,nmpi
 			groupmembers(ii)=(ii-1)
 		enddo
-		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_B)
+		call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_B)
 		deallocate(groupmembers)
 		allocate(xyz(2,quant%Nunk))
 		do edge=1, quant%Nunk
 			xyz(:,edge) = quant%xyz(:,edge*2-1)
 		enddo
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
+		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
 		deallocate(Permutation)
 		deallocate(xyz)
-		call BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B)
+		call z_BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B)
 		!**** factorization phase
 		if(quant%SI==0)then
-			call BPACK_Factorization(bmat_B,option_B,stats_B,ptree_B,msh_B)
+			call z_BPACK_Factorization(bmat_B,option_B,stats_B,ptree_B,msh_B)
 		endif
 		!**** print statistics
-		call PrintStat(stats_B,ptree_B)
+		call z_PrintStat(stats_B,ptree_B)
 	endif
 	!***********************************************************************
 
@@ -303,7 +302,7 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** eigen solver
 	allocate(eigval(quant%nev))
 	allocate(eigvec(Nunk_loc,quant%nev))
-	call BPACK_Eigen(bmat_A,option_A,ptree_A, stats_A,bmat_B,option_B,ptree_B, stats_B, bmat_sh,option_sh,ptree_sh,stats_sh, quant%Nunk,Nunk_loc, quant%nev,quant%tol_eig,quant%CMmode,quant%SI,quant%shift,quant%which,nconv,eigval,eigvec)
+	call z_BPACK_Eigen(bmat_A,option_A,ptree_A, stats_A,bmat_B,option_B,ptree_B, stats_B, bmat_sh,option_sh,ptree_sh,stats_sh, quant%Nunk,Nunk_loc, quant%nev,quant%tol_eig,quant%CMmode,quant%SI,quant%shift,quant%which,nconv,eigval,eigvec)
 	deallocate(eigval)
 	deallocate(eigvec)
 
@@ -311,25 +310,25 @@ PROGRAM ButterflyPACK_IE_2D
     if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
 	if(quant%SI==1)then
-		call delete_proctree(ptree_sh)
-		call delete_Hstat(stats_sh)
-		call delete_mesh(msh_sh)
-		call delete_kernelquant(ker_sh)
-		call BPACK_delete(bmat_sh)
+		call z_delete_proctree(ptree_sh)
+		call z_delete_Hstat(stats_sh)
+		call z_delete_mesh(msh_sh)
+		call z_delete_kernelquant(ker_sh)
+		call z_BPACK_delete(bmat_sh)
 	endif
 
-	call delete_proctree(ptree_A)
-	call delete_Hstat(stats_A)
-	call delete_mesh(msh_A)
-	call delete_kernelquant(ker_A)
-	call BPACK_delete(bmat_A)
+	call z_delete_proctree(ptree_A)
+	call z_delete_Hstat(stats_A)
+	call z_delete_mesh(msh_A)
+	call z_delete_kernelquant(ker_A)
+	call z_BPACK_delete(bmat_A)
 
 	if(quant%CMmode==1)then ! solve the characteristic mode
-		call delete_proctree(ptree_B)
-		call delete_Hstat(stats_B)
-		call delete_mesh(msh_B)
-		call delete_kernelquant(ker_B)
-		call BPACK_delete(bmat_B)
+		call z_delete_proctree(ptree_B)
+		call z_delete_Hstat(stats_B)
+		call z_delete_mesh(msh_B)
+		call z_delete_kernelquant(ker_B)
+		call z_BPACK_delete(bmat_B)
 	endif
 
 
@@ -340,6 +339,7 @@ PROGRAM ButterflyPACK_IE_2D
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_IE_2D
+
 
 
 

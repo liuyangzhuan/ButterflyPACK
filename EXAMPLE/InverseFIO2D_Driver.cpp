@@ -14,7 +14,9 @@
   Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
-
+/*! @file
+ * @brief This c++ example compresses a 2D Fourier integral operators (FIO) as a butterfly using entry-evaluation-based APIs, then constructs a preconditioner for the inverse FIO using matvec-based APIs. The example works on the double-complex data type.
+*/
 //------------------------------------------------------------------------------
 #include <iostream>
 #include <math.h>

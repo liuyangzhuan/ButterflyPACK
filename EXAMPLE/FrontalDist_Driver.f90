@@ -13,28 +13,29 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file
+!> @brief This example reads a frontal matrix from distributed files from disk, and compress it using entry-valuation or matvec-based APIs
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "z_", one can also use the following \n
+!> #define DAT 0 \n
+!> #include "zButterflyPACK_config.fi" \n
+!> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
 
-! This exmple works with double precision data
-#define DAT 0
-
-#include "ButterflyPACK_config.fi"
-
-
+! This exmple works with double-complex precision data
 module APPLICATION_MODULE
-use BPACK_DEFS
+use z_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here
 	type quant_app
 		integer::Nunk ! matrix size
-		DT, allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc grid
+		complex(kind=8), allocatable :: matZ_loc(:,:) ! Local Matrix: Loccal matrix in a npx1 blasc z_grid
 		integer,pointer :: N_p(:,:)=>null() ! column sizes of all processes sharing this hodlr
-		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
-		type(mesh),pointer::msh   ! Use this metadata in matvec
-		type(proctree),pointer::ptree ! Use this metadata in matvec
-		type(Hstat),pointer::stats ! Use this metadata in matvec
-		type(Hoption),pointer::option ! Use this metadata in matvec
+		type(z_Bmatrix),pointer::bmat ! Use this metadata in matvec
+		type(z_mesh),pointer::msh   ! Use this metadata in matvec
+		type(z_proctree),pointer::ptree ! Use this metadata in matvec
+		type(z_Hstat),pointer::stats ! Use this metadata in matvec
+		type(z_Hoption),pointer::option ! Use this metadata in matvec
 		CHARACTER (LEN=1000) DATA_DIR
 		integer:: explicitflag
 	end type quant_app
@@ -45,15 +46,15 @@ contains
 
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use BPACK_DEFS
-		use MISC_DenseLA
-		use MISC_Utilities
-		use BPACK_Solve_Mul
+		use z_BPACK_DEFS
+		use z_MISC_DenseLA
+		use z_MISC_Utilities
+		use z_BPACK_Solve_Mul
 		implicit none
 		character trans
-		DT Vin(:,:),Vout(:,:)
-		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
-		DT ctemp,a,b
+		complex(kind=8) Vin(:,:),Vout(:,:)
+		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
+		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
@@ -61,15 +62,15 @@ contains
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
-		type(Bmatrix),pointer::bmat
+		type(z_Bmatrix),pointer::bmat
 
 		select TYPE(quant)
-		type is (quant_bmat)
+		type is (z_quant_bmat)
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 
 			bmat=>quant%bmat
-			call BPACK_Mult(trans,Nloc,num_vect,Vin,Vout,bmat,quant%ptree,quant%option,quant%stats)
+			call z_BPACK_Mult(trans,Nloc,num_vect,Vin,Vout,bmat,quant%ptree,quant%option,quant%stats)
 		class default
 			write(*,*)"unexpected quant type in HODLR_MVP_OneHODLR"
 			stop
@@ -78,14 +79,14 @@ contains
 	end subroutine HODLR_MVP_OneHODLR
 
 	subroutine HODLR_MVP_Fullmat(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use BPACK_DEFS
-		use MISC_DenseLA
-		use MISC_Utilities
+		use z_BPACK_DEFS
+		use z_MISC_DenseLA
+		use z_MISC_Utilities
 		implicit none
 		character trans
-		DT Vin(:,:),Vout(:,:)
-		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
-		DT ctemp,a,b
+		complex(kind=8) Vin(:,:),Vout(:,:)
+		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
+		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2,tmp(2)
@@ -102,16 +103,16 @@ contains
 		N = quant%N_p(nproc,2)
 
 
-		!!!!**** generate 2D grid blacs quantities
+		!!!!**** generate 2D z_grid blacs quantities
 		ctxt = quant%ptree%pgrp(pgno)%ctxt
 		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
-			myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
+			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
+			myAcols = z_numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
 			call descinit( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			call descinit( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
-			myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
-			myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
+			myAcols = z_numroc_wp(N, nbslpk, mycol, 0, npcol)
 			call descinit( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			allocate(Vin_tmp_2D(myArows,myAcols))
 			allocate(Vout_tmp_2D(myArows,myAcols))
@@ -124,17 +125,17 @@ contains
 
 
 		!!!!**** redistribution of input vectors
-		call Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,quant%ptree)
+		call z_Redistribute1Dto2D(Vin,quant%N_p,0,pgno,Vin_tmp_2D,N,0,pgno,num_vect,quant%ptree)
 
 
-		!!!!**** perform gemm on 2d grid
+		!!!!**** perform gemm on 2d z_grid
 		if(myrow/=-1 .and. mycol/=-1)then
-			call pgemmf90(trans,'N',N,num_vect,N,BPACK_cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,BPACK_czero,Vout_tmp_2D,1,1,descsVout2D)
+			call z_pgemmf90(trans,'N',N,num_vect,N,BPACK_cone, quant%matZ_loc,1,1,descsMat2D,Vin_tmp_2D,1,1,descsVin2D,BPACK_czero,Vout_tmp_2D,1,1,descsVout2D)
 		endif
 
 
 		!!!!**** redistribution of output vectors
-		call Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,quant%ptree)
+		call z_Redistribute2Dto1D(Vout_tmp_2D,N,0,pgno,Vout,quant%N_p,0,pgno,num_vect,quant%ptree)
 
 
 		!!!!**** deallocation buffers
@@ -150,19 +151,19 @@ contains
 
 
 	subroutine CreateDistDenseMat(N,msh,ptree,quant,option,DATA_DIR)
-		use BPACK_DEFS
-		use MISC_DenseLA
-		use MISC_Utilities
+		use z_BPACK_DEFS
+		use z_MISC_DenseLA
+		use z_MISC_Utilities
 		implicit none
-		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
-		DT ctemp,a,b
+		complex(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:)
+		complex(kind=8) ctemp,a,b
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::N
 		real(kind=8) n1,n2,t1,t2
 		real(kind=8),allocatable::tmp(:)
-		type(mesh)::msh
-		type(proctree)::ptree
-		type(Hoption)::option
+		type(z_mesh)::msh
+		type(z_proctree)::ptree
+		type(z_Hoption)::option
 		type(quant_app) :: quant
 		integer nproc,ctxt,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol
 		CHARACTER (*) DATA_DIR
@@ -173,7 +174,7 @@ contains
 		nproc = ptree%pgrp(pgno)%nproc
 
 		!!!!****** allocate index array for 1D HODLR layout
-		level_p = ptree%nlevel-GetTreelevel(pgno)
+		level_p = ptree%nlevel-z_GetTreelevel(pgno)
 		num_blocks = 2**level_p
 		allocate(quant%N_p(nproc,2))
 		quant%N_p(:,1) = N+1
@@ -194,8 +195,8 @@ contains
 
 
 		if(myrow/=-1 .and. mycol/=-1)then
-		myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
-		myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+		myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
+		myAcols = z_numroc_wp(N, nbslpk, mycol, 0, npcol)
 		allocate(quant%matZ_loc(myArows,myAcols))
 
 
@@ -236,14 +237,15 @@ end module APPLICATION_MODULE
 
 PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
 	use omp_lib
-	use Bplus_compress
-	use BPACK_randomMVP
+	use z_Bplus_compress
+	use z_BPACK_randomMVP
+	use z_BPACK_utilities
 	use APPLICATION_MODULE
 
     implicit none
@@ -256,23 +258,23 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	integer times(8)
 	real(kind=8) t1,t2,t3,t4,x,y,z,r,theta,phi,Memory
 	real(kind=8),allocatable::tmp(:)
-	DT,allocatable:: InputVec(:)
-	DT:: ctemp
+	complex(kind=8),allocatable:: InputVec(:)
+	complex(kind=8):: ctemp
 	integer kk,black_step,rank0
-	DT,allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
+	complex(kind=8),allocatable::Vout1(:,:),Vout2(:,:),Vin(:,:)
 	character(len=1024)  :: strings,strings1
-	type(Hoption),target:: option,option1
-	type(Hstat),target::stats,stats1
-	type(mesh),target::msh,msh1
-	type(kernelquant),target::ker,ker1
-	type(Bmatrix),target::bmat,bmat1
+	type(z_Hoption),target:: option,option1
+	type(z_Hstat),target::stats,stats1
+	type(z_mesh),target::msh,msh1
+	type(z_kernelquant),target::ker,ker1
+	type(z_Bmatrix),target::bmat,bmat1
 	integer Nin1,Nout1,Nin2,Nout2
-	type(proctree),target::ptree,ptree1
+	type(z_proctree),target::ptree,ptree1
 	integer,allocatable:: groupmembers(:)
 	integer :: ierr
 	integer :: nmpi
 	type(quant_app),target::quant
-	type(quant_bmat),target::quant1
+	type(z_quant_bmat),target::quant1
 	integer N_unk_loc,Maxlevel
 	integer,allocatable::tree(:),Permutation(:)
 	real(kind=8),allocatable::xyz(:,:)
@@ -291,18 +293,18 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	enddo
 
 	! generate the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------Program Start----------------------------------"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "ButterflyPACK_FrontalMatrix_Matvec"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call z_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	if(ptree%MyID==Main_ID)write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "   "
 
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call z_InitStat(stats)
+	call z_SetDefaultOptions(option)
 
 	!**** intialize the user-defined derived type quant
 	quant%ptree=>ptree
@@ -353,7 +355,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option,ptree,ii)
+			call z_ReadOption(option,ptree,ii)
 		else
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
@@ -368,9 +370,9 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	open(unit=888,file=trim(quant%DATA_DIR)//'_pr'//trim(adjustl(smyrow))//'_pc'//trim(adjustl(smycol))//'.dat',status='old')
 	read(888,*) ! skip the first line
 	read(888,*)M1,N1,Mloc1,Nloc1,Mbslpk1,Nbslpk1,nprow1,npcol1,myrow1,mycol1
-	call assert(M1==N1 .and. quant%Nunk == M1, 'input matrix dims not matching')
-	call assert(Mbslpk1==Nbslpk1 .and. Mbslpk1==nbslpk, 'block sizes not matching')
-	call assert(nprow1==nprow .and. npcol1==npcol, 'process grid dims not matching')
+	call z_assert(M1==N1 .and. quant%Nunk == M1, 'input matrix dims not matching')
+	call z_assert(Mbslpk1==Nbslpk1 .and. Mbslpk1==nbslpk, 'block sizes not matching')
+	call z_assert(nprow1==nprow .and. npcol1==npcol, 'process grid dims not matching')
 	close(888)
 
 
@@ -394,16 +396,16 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	!**** initialization of the construction phase
 	allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,tree=tree)
+	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,tree=tree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 
-	!**** define other quantities in quant using information returned by BPACK_construction_Init
+	!**** define other quantities in quant using information returned by z_BPACK_construction_Init
 	call CreateDistDenseMat(quant%Nunk,msh,ptree,quant,option,quant%DATA_DIR)
 
 
 	!**** computation of the construction phase
 	option%less_adapt=0
-	call BPACK_construction_Matvec(bmat,matvec_user,Memory,error,option,stats,ker,ptree,msh)
+	call z_BPACK_construction_Matvec(bmat,z_matvec_user,Memory,error,option,stats,ker,ptree,msh)
 
 
 
@@ -411,13 +413,13 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	deallocate(tree)
 
 
-	! call BPACK_Factorization(bmat,option,stats,ptree,msh)
+	! call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
-	call PrintStat(stats,ptree)
+	call z_PrintStat(stats,ptree)
 
 	!*********** Construct the second HODLR by using the first HODLR as a matvec or entry extraction
 
-	call CopyOptions(option,option1)
+	call z_CopyOptions(option,option1)
 	option1%nogeo=1   ! this indicates the second HOLDR construction requires no geometry information
 	option1%xyzsort=NATURAL ! this indicates the second HOLDR construction requires no reordering
 	option1%elem_extract=1 ! this indicates the second HOLDR construction uses user-defined parallel element extraction
@@ -427,7 +429,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	! ker1%FuncZmn=>Zelem_FULL
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
 	ker1%QuantApp=>quant1
-	ker1%FuncZmnBlock=>Zelem_block_Extraction
+	ker1%FuncZmnBlock=>z_Zelem_block_Extraction
 
 	quant1%bmat=>bmat
 	quant1%msh=>msh
@@ -439,7 +441,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 	msh1%Nunk = msh%Nunk
-	call InitStat(stats1)
+	call z_InitStat(stats1)
 
 
 	!**** generate the process tree for the second HODLR, can use larger number of MPIs if you want to
@@ -447,7 +449,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
 
 
@@ -466,8 +468,8 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	!**** initialization of the construction phase
 	allocate(Permutation(msh1%Nunk))
-	call PrintOptions(option1,ptree1)
-	call BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
+	call z_PrintOptions(option1,ptree1)
+	call z_BPACK_construction_Init(msh1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(tree)
 
@@ -475,31 +477,31 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 	if(quant%explicitflag ==1)then
 		!**** computation of the construction phase
-		call BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree1)
+		call z_BPACK_construction_Element(bmat1,option1,stats1,msh1,ker1,ptree1)
 	else if(quant%explicitflag ==0)then
 		!**** computation of the construction phase
 		option1%less_adapt=0
-		call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
+		call z_BPACK_construction_Matvec(bmat1,z_matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 	endif
 
 
-	call PrintStat(stats1,ptree)
+	call z_PrintStat(stats1,ptree)
 
 	!**** deletion of quantities
 	if(allocated(quant%matZ_loc))deallocate(quant%matZ_loc)
 	if(associated(quant%N_p))deallocate(quant%N_p)
 
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call z_delete_proctree(ptree)
+	call z_delete_Hstat(stats)
+	call z_delete_mesh(msh)
+	call z_delete_kernelquant(ker)
+	call z_BPACK_delete(bmat)
 
-	call delete_proctree(ptree1)
-	call delete_Hstat(stats1)
-	call delete_mesh(msh1)
-	call delete_kernelquant(ker1)
-	call BPACK_delete(bmat1)
+	call z_delete_proctree(ptree1)
+	call z_delete_Hstat(stats1)
+	call z_delete_mesh(msh1)
+	call z_delete_kernelquant(ker1)
+	call z_BPACK_delete(bmat1)
 
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
@@ -509,6 +511,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 end PROGRAM ButterflyPACK_FrontalMatrix_Matvec
+
 
 
 
