@@ -17,26 +17,23 @@
 
 !> @file
 !> @brief This is an example that solves a 3D IE system for a cavity with ports in electromagnetics.
-!> @details Note that the use of the following \n
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "z_", one can also use the following \n
 !> #define DAT 0 \n
 !> #include "zButterflyPACK_config.fi" \n
-!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMLEX with double-complex precision
+!> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
 ! This exmple works with double-complex precision data
-#define DAT 0
-
-#include "zButterflyPACK_config.fi"
-
 PROGRAM ButterflyPACK_IE_3D
-    use BPACK_DEFS
+    use z_BPACK_DEFS
 	use EMSURF_PORT_MODULE
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
-	use BPACK_Solve_Mul
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
+	use z_BPACK_Solve_Mul
 	use omp_lib
-	use MISC_Utilities
+	use z_MISC_Utilities
+	use z_BPACK_utilities
     implicit none
 
 	! include "mkl_vml.fi"
@@ -56,13 +53,13 @@ PROGRAM ButterflyPACK_IE_3D
 	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option_post,option_sh,option_A,option_B
-	type(Hstat)::stats_post,stats_sh,stats_A,stats_B
-	type(mesh)::msh_post,msh_sh,msh_A,msh_B
-	type(Bmatrix)::bmat_post, bmat_sh,bmat_A,bmat_B
-	type(kernelquant)::ker_post, ker_sh,ker_A,ker_B
+	type(z_Hoption)::option_post,option_sh,option_A,option_B
+	type(z_Hstat)::stats_post,stats_sh,stats_A,stats_B
+	type(z_mesh)::msh_post,msh_sh,msh_A,msh_B
+	type(z_Bmatrix)::bmat_post, bmat_sh,bmat_A,bmat_B
+	type(z_kernelquant)::ker_post, ker_sh,ker_A,ker_B
 	type(quant_EMSURF),target::quant
-	type(proctree)::ptree_post, ptree_sh,ptree_A,ptree_B
+	type(z_proctree)::ptree_post, ptree_sh,ptree_A,ptree_B
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	real(kind=8),allocatable::xyz(:,:)
@@ -98,30 +95,8 @@ PROGRAM ButterflyPACK_IE_3D
 	integer,parameter::Nx0=101,Ny0=101
 	real(kind=8):: x0(Nx0),y0(Ny0),u(Nx0*Ny0),xx1(1000),yy1(1000), dx, v1(1000),vref(1000)
 
-#if 0
 
-	dx=0.01
-	do ii = 1, Nx0
-		x0(ii)= dx*(ii-1)
-	enddo
-	do jj = 1, Ny0
-		y0(jj)= dx*(jj-1)
-	enddo
-	do ii=1,Nx0
-	do jj=1,Ny0
-		u(ii+(jj-1)*Nx0) = sin(x0(ii)*BPACK_pi)
-	enddo
-	enddo
-
-	do ii=1,1000
-		xx1(ii) = ii*dx/10
-		yy1(ii) = 0.5d0
-		vref(ii) = sin(xx1(ii)*BPACK_pi)
-	enddo
-
-	call CubicInterp2D_F(x0,y0,u,Nx0,Ny0,xx1,yy1,v1,1000)
-	write(*,*)'testing cubic interpolation:', maxval(abs(v1-vref))
-#endif
+# 125 "EMSURF_Port_Driver.f90"
 
 
 
@@ -139,21 +114,21 @@ PROGRAM ButterflyPACK_IE_3D
 		groupmembers(ii)=(ii-1)
 	enddo
 
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_A)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_A)
 	deallocate(groupmembers)
 
 
 	if(ptree_A%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_3D"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call z_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats_sh)
-	call SetDefaultOptions(option_A)
+	call z_InitStat(stats_sh)
+	call z_SetDefaultOptions(option_A)
 
 
 	!**** intialize the user-defined derived type quant
@@ -247,14 +222,14 @@ PROGRAM ButterflyPACK_IE_3D
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option_A,ptree_A,ii)
+			call z_ReadOption(option_A,ptree_A,ii)
 		else
 			if(ptree_A%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
 	enddo
 
-	call PrintOptions(option_A,ptree_A)
+	call z_PrintOptions(option_A,ptree_A)
 
 
     quant%wavenum=2*BPACK_pi/quant%wavelength
@@ -449,7 +424,7 @@ PROGRAM ButterflyPACK_IE_3D
 		quant%ports(pp)%nmax=1
 
 		if(quant%ports(pp)%type==0)then
-			call curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			quant%ports(pp)%mmax=1
 			quant%ports(pp)%nmax=1
 
@@ -541,38 +516,38 @@ PROGRAM ButterflyPACK_IE_3D
 	enddo
 
     allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
+	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
 	t2 = OMP_get_wtime()
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
+    call z_BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
 
 	if(.not. (quant%SI==1 .and. abs(quant%shift)<1e-14))then
-		call PrintStat(stats_A,ptree_A)
+		call z_PrintStat(stats_A,ptree_A)
 	endif
 
 
 	!***********************************************************************
 	!**** construct compressed A - sigma I or  A - sigma real(A)
 	if(quant%SI==1)then
-		call CopyOptions(option_A,option_sh)
+		call z_CopyOptions(option_A,option_sh)
 		!**** create the process tree, can use larger number of mpis if needed
 		allocate(groupmembers(nmpi))
 		do ii=1,nmpi
 			groupmembers(ii)=(ii-1)
 		enddo
-		call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
+		call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
 		deallocate(groupmembers)
 
 		if(abs(quant%shift)<1e-14)then  ! if zero shift, no need to compress the shifted matrix
-			call CopyMesh(msh_A,msh_sh)
-			call CopyStat(stats_A,stats_sh)
-			call BPACK_copy(bmat_A,bmat_sh)
+			call z_CopyMesh(msh_A,msh_sh)
+			call z_CopyStat(stats_A,stats_sh)
+			call z_BPACK_copy(bmat_A,bmat_sh)
 		else
 			!**** initialize stats_sh and option
-			call InitStat(stats_sh)
+			call z_InitStat(stats_sh)
 			!**** register the user-defined function and type in ker
 			ker_sh%QuantApp => quant
 			ker_sh%FuncZmn => Zelem_EMSURF_Shifted
@@ -586,21 +561,21 @@ PROGRAM ButterflyPACK_IE_3D
 				xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
 			enddo
 			allocate(Permutation(quant%Nunk))
-			call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
+			call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
 			deallocate(Permutation) ! caller can use this permutation vector if needed
 			deallocate(xyz)
 			t2 = OMP_get_wtime()
 			!**** computation of the construction phase
-			call BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
+			call z_BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
 		endif
 
 
 		!**** factorization phase
-		call BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
+		call z_BPACK_Factorization(bmat_sh,option_sh,stats_sh,ptree_sh,msh_sh)
 		! !**** solve phase
 		! call EM_solve_SURF(bmat_sh,option_sh,msh_sh,quant,ptree_sh,stats_sh)
 		!**** print statistics
-		call PrintStat(stats_sh,ptree_sh)
+		call z_PrintStat(stats_sh,ptree_sh)
 	endif
 
 	!***********************************************************************
@@ -625,18 +600,18 @@ PROGRAM ButterflyPACK_IE_3D
 	deallocate(xloc)
 
 	if(quant%SI==1)then
-		call delete_proctree(ptree_sh)
-		call delete_Hstat(stats_sh)
-		call delete_mesh(msh_sh)
-		call delete_kernelquant(ker_sh)
-		call BPACK_delete(bmat_sh)
+		call z_delete_proctree(ptree_sh)
+		call z_delete_Hstat(stats_sh)
+		call z_delete_mesh(msh_sh)
+		call z_delete_kernelquant(ker_sh)
+		call z_BPACK_delete(bmat_sh)
 	endif
 
-	call delete_proctree(ptree_A)
-	call delete_Hstat(stats_A)
-	call delete_mesh(msh_A)
-	call delete_kernelquant(ker_A)
-	call BPACK_delete(bmat_A)
+	call z_delete_proctree(ptree_A)
+	call z_delete_Hstat(stats_A)
+	call z_delete_mesh(msh_A)
+	call z_delete_kernelquant(ker_A)
+	call z_BPACK_delete(bmat_A)
 
 	!**** deletion of quantities
 	call delete_quant_EMSURF(quant)
@@ -648,6 +623,7 @@ PROGRAM ButterflyPACK_IE_3D
     ! ! ! ! pause
 
 end PROGRAM ButterflyPACK_IE_3D
+
 
 
 

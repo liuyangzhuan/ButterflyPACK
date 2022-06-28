@@ -15,20 +15,16 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 !> @file
 !> @brief This file contains functions and data types for a 3D IE system for a cavity with ports in electromagnetics.
-!> @details Note that the use of the following \n
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "z_", one can also use the following \n
 !> #define DAT 0 \n
 !> #include "zButterflyPACK_config.fi" \n
-!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMLEX with double-complex precision
+!> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
 ! This exmple works with double-complex precision data
-#define DAT 0
-
-#include "zButterflyPACK_config.fi"
-
 
 module EMSURF_PORT_MODULE
-use BPACK_DEFS
-use MISC_Utilities
+use z_BPACK_DEFS
+use z_MISC_Utilities
 implicit none
 
 	!**** define your application-related variables here
@@ -96,8 +92,8 @@ implicit none
 		integer:: TETM_arbi(nmodemax) ! TE (1) or TM (2) modes for arbitary shaped ports
 		real(kind=8):: kc_arbi(nmodemax) ! cutoff wavenumbers for arbitary shaped ports
 		integer::Nx_arbi,Ny_arbi ! discretization of the tabulated modes for arbitary shaped ports
-		! real(kind=8),allocatable:: Ex_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ex of each mode tabulated on a regular grid for arbitary shaped ports
-		! real(kind=8),allocatable:: Ey_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ey of each mode tabulated on a regular grid for arbitary shaped ports
+		! real(kind=8),allocatable:: Ex_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ex of each mode tabulated on a regular z_grid for arbitary shaped ports
+		! real(kind=8),allocatable:: Ey_arbi(:,:,:) ! Nx*Ny*nmode_arbi Ey of each mode tabulated on a regular z_grid for arbitary shaped ports
 		complex(kind=8),allocatable::nxe_dot_rwg_arbi(:,:)  ! int_nxe_dot_rwg for arbitary shaped ports
 		complex(kind=8),allocatable::e_dot_rwg_arbi(:,:)  ! int_e_dot_rwg for arbitary shaped ports
 
@@ -123,7 +119,7 @@ implicit none
 		integer Nunk_port ! port unknowns
 		real(kind=8),allocatable:: xyz(:,:)   ! coordinates of the points
 		integer,allocatable:: info_unk(:,:)
-		! for 3D mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
+		! for 3D z_mesh: 0 point to coordinates of each edge center (unknown x), 1-2 point to coordinates of each edge vertice, 3-4 point to two patches that share the same edge, 5-6 point to coordinates of last vertice of the two patches
 
 		integer:: Nport=0 ! number of ports
 		integer:: noport=0 ! whether to treat the cavity as closed cavity
@@ -134,14 +130,14 @@ implicit none
 		real(kind=8), allocatable:: obs_points(:,:) ! xyz coordinates, dimensions 3xNobs
 		complex(kind=8), allocatable:: obs_Efields(:,:) ! E fields, dimensions 3xNobs
 
-		! 3D mesh
-		integer maxnode ! # of vertices in a mesh
-		integer maxedge ! # of edges in a mesh
+		! 3D z_mesh
+		integer maxnode ! # of vertices in a z_mesh
+		integer maxedge ! # of edges in a z_mesh
 		real(kind=8) maxedgelength,minedgelength ! maximum and minimum edge length for 2D and 3D meshes
 		integer integral_points ! #of Gauss quadrature points on a triangular
 		integer maxpatch ! # of triangular patches
 		integer mesh_normal	 ! flags to flip the unit normal vectors of a triangular patch
-		real(kind=8) scaling  ! scaling factor of the coordinates of vertices of a 3D mesh
+		real(kind=8) scaling  ! scaling factor of the coordinates of vertices of a 3D z_mesh
 		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
 		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
@@ -184,7 +180,7 @@ end subroutine delete_quant_EMSURF
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF_T(m,n,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,n
@@ -281,7 +277,7 @@ subroutine Zelem_EMSURF_T(m,n,value,quant)
 							bb(1)=bb(1)+(-1)**(jj+1)*imp
 						endif
 					enddo
-					call cscalar(aa,am,ctemp)
+					call z_cscalar(aa,am,ctemp)
 					ctemp1=ctemp1+(-1)**(ii+1)*ctemp*wm(i)
 					ctemp2=ctemp2+4.*(-1)**(ii+1)*bb(1)*wm(i)
 				enddo
@@ -298,7 +294,7 @@ end subroutine Zelem_EMSURF_T
 
 subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,n,sign
@@ -353,8 +349,8 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						call curl(nr_n,an,nxan)
-						call scalar(am,nxan,temp)
+						call z_curl(nr_n,an,nxan)
+						call z_scalar(am,nxan,temp)
 						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)  ! note that wm contains the factor of 2
 					else
 						do j=1,quant%integral_points
@@ -365,8 +361,8 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-							 call ccurl(an,dg,dg2)
-							 call cscalar(dg2,am,ctemp)
+							 call z_ccurl(an,dg,dg2)
+							 call z_cscalar(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
 						enddo
 					endif
@@ -388,7 +384,7 @@ end subroutine Zelem_EMSURF_K
 
 subroutine Zelem_EMSURF_K_Self(m,n,value,quant,sign)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,n,sign
@@ -443,10 +439,10 @@ subroutine Zelem_EMSURF_K_Self(m,n,value,quant,sign)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						! call curl(nr_n,an,nxan)
-						! call scalar(am,nxan,temp)
+						! call z_curl(nr_n,an,nxan)
+						! call z_scalar(am,nxan,temp)
 
-						call scalar(am,an,temp)
+						call z_scalar(am,an,temp)
 						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
 					else
 
@@ -468,7 +464,7 @@ end subroutine Zelem_EMSURF_K_Self
 
 subroutine Port_e_nxe_dot_rwg_arbi(m,pp,nn,value_e,value_nxe,quant,Exs,Eys,xs,ys,Nx,Ny)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,pp,nn,Nx,Ny
@@ -500,9 +496,9 @@ subroutine Port_e_nxe_dot_rwg_arbi(m,pp,nn,value_e,value_nxe,quant,Exs,Eys,xs,ys
 				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
 
 				call Port_e_nxe_arbi(xm(i),ym(i),zm(i),e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
-				call scalar(am,nxe,temp)
+				call z_scalar(am,nxe,temp)
 				value_m_nxe=value_m_nxe+(-1)**(ii+1)*temp*wm(i)
-				call scalar(am,e,temp)
+				call z_scalar(am,e,temp)
 				value_m_e=value_m_e+(-1)**(ii+1)*temp*wm(i)
 
 			enddo
@@ -523,7 +519,7 @@ end subroutine Port_e_nxe_dot_rwg_arbi
 
 subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,pp,mm,nn,TETM,rr
@@ -553,7 +549,7 @@ subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
 
 				call Port_nxe(xm(i),ym(i),zm(i),nxe,quant,pp,mm,nn,TETM,rr)
-				call scalar(am,nxe,temp)
+				call z_scalar(am,nxe,temp)
 				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
 			enddo
 		enddo
@@ -570,7 +566,7 @@ end subroutine Port_nxe_dot_rwg
 
 subroutine Port_e_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,pp,mm,nn,TETM,rr
@@ -600,7 +596,7 @@ subroutine Port_e_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 				am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
 
 				call Port_e(xm(i),ym(i),zm(i),e,quant,pp,mm,nn,TETM,rr)
-				call scalar(am,e,temp)
+				call z_scalar(am,e,temp)
 				value_m=value_m+(-1)**(ii+1)*temp*wm(i)
 			enddo
 		enddo
@@ -627,14 +623,14 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 		Erho=0
 		Ephi=0
 
-		call Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
+		call z_Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
 
 		nhat = quant%ports(pp)%z
 		rhat = 0
 		phihat = 0
 		if(r>0)then
 			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
-			call curl(nhat,rhat,phihat)
+			call z_curl(nhat,rhat,phihat)
 		endif
 
 		if(TETM==1)then !TE_nm
@@ -674,7 +670,7 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
 		endif
-		call curl(nhat,e,nxe)
+		call z_curl(nhat,e,nxe)
 	elseif(quant%ports(pp)%type==1)then
 		Ex=0
 		Ey=0
@@ -698,7 +694,7 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			Ey = mm/b*sin(nn*BPACK_pi*x/a)*cos(mm*BPACK_pi*y/b)
 			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
 		endif
-		call curl(quant%ports(pp)%z,e,nxe)
+		call z_curl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -718,14 +714,14 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 		Erho=0
 		Ephi=0
 
-		call Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
+		call z_Cart2Sph_Loc(xm, ym, zm, quant%ports(pp)%origin, quant%ports(pp)%x, quant%ports(pp)%y, quant%ports(pp)%z, r, theta, phi)
 
 		nhat = quant%ports(pp)%z
 		rhat = 0
 		phihat = 0
 		if(r>0)then
 			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
-			call curl(nhat,rhat,phihat)
+			call z_curl(nhat,rhat,phihat)
 		endif
 
 		if(TETM==1)then !TE_nm
@@ -765,7 +761,7 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
 		endif
-		! call curl(nhat,e,nxe)
+		! call z_curl(nhat,e,nxe)
 	elseif(quant%ports(pp)%type==1)then
 		Ex=0
 		Ey=0
@@ -789,7 +785,7 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 			Ey = mm/b*sin(nn*BPACK_pi*x/a)*cos(mm*BPACK_pi*y/b)
 			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
 		endif
-		! call curl(quant%ports(pp)%z,e,nxe)
+		! call z_curl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -823,7 +819,7 @@ subroutine Port_e_nxe_arbi(xm,ym,zm,e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
 		call CubicInterp2D_F(xs,ys,Eys,Nx,Ny,x1,y1,Ey,1)
 		e = (Ex(1)*quant%ports(pp)%x+Ey(1)*quant%ports(pp)%y)*quant%ports(pp)%A_n_arbi(nn)
 
-		call curl(quant%ports(pp)%z,e,nxe)
+		call z_curl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -837,7 +833,7 @@ end subroutine Port_e_nxe_arbi
 !**** user-defined subroutine to sample Z_mn
 subroutine Zelem_EMSURF(m,n,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,n
@@ -967,7 +963,7 @@ end subroutine Zelem_EMSURF
 !**** user-defined subroutine to sample Z_mn for calculating the normal E fields
 subroutine Zelem_EMSURF_Post(m,n,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: m,n
@@ -1036,7 +1032,7 @@ end subroutine Zelem_EMSURF_Post
 ! !**** user-defined subroutine to sample Z_mn
 ! subroutine Zelem_EMSURF(m,n,value,quant)
 
-!     use BPACK_DEFS
+!     use z_BPACK_DEFS
 !     implicit none
 
 !     integer, INTENT(IN):: m,n
@@ -1150,7 +1146,7 @@ end subroutine Zelem_EMSURF_Post
 
 	!**** user-defined subroutine to sample real(Z_mn)
 	subroutine Zelem_EMSURF_Real(m,n,value_e,quant)
-		use BPACK_DEFS
+		use z_BPACK_DEFS
 		implicit none
 		integer, INTENT(IN):: m,n
 		complex(kind=8) value_e
@@ -1164,7 +1160,7 @@ end subroutine Zelem_EMSURF_Post
 	!**** user-defined subroutine to sample Z_mn-sigma*Delta_mn or Z_mn-sigma*real(Z_mn)
 	subroutine Zelem_EMSURF_Shifted(m,n,value_e,quant)
 
-		use BPACK_DEFS
+		use z_BPACK_DEFS
 		implicit none
 
 		integer edge_m, edge_n, i, j, flag
@@ -1201,7 +1197,7 @@ end subroutine Zelem_EMSURF_Post
 !***********************************
   subroutine gau_grobal(nn,j,x,y,z,w,quant)
 
-  use BPACK_DEFS
+  use z_BPACK_DEFS
   implicit none
   type(quant_EMSURF)::quant
   integer nn ,flag
@@ -1250,7 +1246,7 @@ end subroutine Zelem_EMSURF_Post
 
   subroutine gauss_points(quant)
 
-      use BPACK_DEFS
+      use z_BPACK_DEFS
       implicit none
 
       real(kind=8) v1,v2,v3,v4,v5
@@ -1383,7 +1379,7 @@ end subroutine Zelem_EMSURF_Post
 !**********************************
 function ianalytic(mm,jj,xi,yi,zi,quant)
 
-use     BPACK_DEFS
+use     z_BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) xi,yi,zi
 real(kind=8)    temp,ianalytic
@@ -1404,7 +1400,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
- call curl(a,b,w)
+ call z_curl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -1418,16 +1414,16 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call curl(w,u,v)
- call scalar(u,b,u3)
+ call z_curl(w,u,v)
+ call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
 b(1)=xi-quant%xyz(1,node1)
 b(2)=yi-quant%xyz(2,node1)
 b(3)=zi-quant%xyz(3,node1)
- call scalar(u,b,u0)
- call scalar(v,b,v0)
- call scalar(w,b,w0)
+ call z_scalar(u,b,u0)
+ call z_scalar(v,b,v0)
+ call z_scalar(w,b,w0)
 
 s(1,1)=-((l(3)-u0)*(l(3)-u3)+v0*v3)/l(1)
 s(2,1)=((u3-u0)*(u3-l(3))+v3*(v3-v0))/l(1)
@@ -1483,7 +1479,7 @@ end function ianalytic
 !**********************************
 function ianalytic2(mm,jj,xi,yi,zi,iii,quant)
 
-use BPACK_DEFS
+use z_BPACK_DEFS
 integer mm,jj,j,i
 real(kind=8) ianalytic2
 integer ii,node1,node2,node3,iii
@@ -1509,7 +1505,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
-call curl(a,b,w)
+call z_curl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -1523,16 +1519,16 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call curl(w,u,v)
- call scalar(u,b,u3)
+ call z_curl(w,u,v)
+ call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
 b(1)=xi-quant%xyz(1,node1)
 b(2)=yi-quant%xyz(2,node1)
 b(3)=zi-quant%xyz(3,node1)
- call scalar(u,b,u0)
- call scalar(v,b,v0)
- call scalar(w,b,w0)
+ call z_scalar(u,b,u0)
+ call z_scalar(v,b,v0)
+ call z_scalar(w,b,w0)
 
 
 s(1,1)=-((l(3)-u0)*(l(3)-u3)+v0*v3)/l(1)
@@ -1583,22 +1579,22 @@ do i=1,3
    s2(i)=(quant%xyz(i,node1)-quant%xyz(i,node3))/l(2)
    s3(i)=(quant%xyz(i,node2)-quant%xyz(i,node1))/l(3)
 enddo
-call curl(s1,w,m1)
-call curl(s2,w,m2)
-call curl(s3,w,m3)
-call scalar(u,m1,temp1)
+call z_curl(s1,w,m1)
+call z_curl(s2,w,m2)
+call z_curl(s3,w,m3)
+call z_scalar(u,m1,temp1)
 temp1=temp1*f3(1)/2
-call scalar(u,m2,temp2)
+call z_scalar(u,m2,temp2)
 temp2=temp2*f3(2)/2
-call scalar(u,m3,temp3)
+call z_scalar(u,m3,temp3)
 temp3=temp3*f3(3)/2
 iua=temp1+temp2+temp3
 
-call scalar(v,m1,temp1)
+call z_scalar(v,m1,temp1)
 temp1=temp1*f3(1)/2
-call scalar(v,m2,temp2)
+call z_scalar(v,m2,temp2)
 temp2=temp2*f3(2)/2
-call scalar(v,m3,temp3)
+call z_scalar(v,m3,temp3)
 temp3=temp3*f3(3)/2
 iva=temp1+temp2+temp3
 
@@ -1624,7 +1620,7 @@ end function ianalytic2
 
 subroutine current_node_patch_mapping(JMflag,string,curr,msh,quant,ptree)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer JMflag,patch, edge,edge1, node_patch(3), node_edge, node, info_idx
@@ -1633,8 +1629,8 @@ subroutine current_node_patch_mapping(JMflag,string,curr,msh,quant,ptree)
 	character(*)::string
     complex(kind=8)::curr(:)
 	type(quant_EMSURF)::quant
-	type(mesh)::msh
-	type(proctree)::ptree
+	type(z_mesh)::msh
+	type(z_proctree)::ptree
 
     real(kind=8),allocatable :: current_at_patch(:),vec_current_at_patch(:,:), current_at_node(:)
 	integer ierr
@@ -1723,7 +1719,7 @@ end subroutine current_node_patch_mapping
 
 real(kind=8) function triangle_area(patch,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer patch,i
@@ -1735,7 +1731,7 @@ real(kind=8) function triangle_area(patch,quant)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
     enddo
 
-    call curl(a,b,c)
+    call z_curl(a,b,c)
     triangle_area=0.5*sqrt(c(1)**2+c(2)**2+c(3)**2)
 
     return
@@ -1744,7 +1740,7 @@ end function triangle_area
 
 logical function in_triangle(point,patch,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer patch,i
@@ -1755,21 +1751,21 @@ logical function in_triangle(point,patch,quant)
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
     enddo
-    call curl(a,b,c)
+    call z_curl(a,b,c)
 	area=0.5*sqrt(sum(c**2d0))
 
     do i=1,3
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
     enddo
-    call curl(a,b,c)
+    call z_curl(a,b,c)
     alpha1=0.5*sqrt(sum(c**2d0))/area
 
     do i=1,3
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
     enddo
-    call curl(a,b,c)
+    call z_curl(a,b,c)
 	beta1=0.5*sqrt(sum(c**2d0))/area
 
 
@@ -1777,7 +1773,7 @@ logical function in_triangle(point,patch,quant)
         a(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
     enddo
-    call curl(a,b,c)
+    call z_curl(a,b,c)
 	gamma1=0.5*sqrt(sum(c**2d0))/area
 
 	in_triangle = alpha1>=0 .and. alpha1<=1 .and. beta1>=0 .and. beta1<=1 .and. gamma1>=0 .and. gamma1<=1 .and. abs(alpha1+beta1+gamma1-1)<=1d-13
@@ -1788,7 +1784,7 @@ end function in_triangle
 
 subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer edge
@@ -1827,13 +1823,13 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call ccurl(-k,ee,hh1)
-          call ccurl(nr,hh1,hh)
+          call z_ccurl(-k,ee,hh1)
+          call z_ccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
-	      call cscalar(hh,a,ctemp_h)
-	      call cscalar(ee,a,ctemp_e)
+	      call z_cscalar(hh,a,ctemp_h)
+	      call z_cscalar(ee,a,ctemp_e)
 	      value_h=value_h+(-1)**(jj+1)*ctemp_h*w(ii)
 	      value_e=value_e+(-1)**(jj+1)*ctemp_e*w(ii)
 	   enddo
@@ -1849,7 +1845,7 @@ end subroutine element_Vinc_VV_SURF
 
 subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     type(quant_EMSURF)::quant
@@ -1887,13 +1883,13 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call ccurl(-k,ee,hh1)
-          call ccurl(nr,hh1,hh)
+          call z_ccurl(-k,ee,hh1)
+          call z_ccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
-	      call cscalar(hh,a,ctemp_h)
-	      call cscalar(ee,a,ctemp_e)
+	      call z_cscalar(hh,a,ctemp_h)
+	      call z_cscalar(ee,a,ctemp_e)
 	      value_h=value_h+(-1)**(jj+1)*ctemp_h*w(ii)
 	      value_e=value_e+(-1)**(jj+1)*ctemp_e*w(ii)
 	   enddo
@@ -1909,7 +1905,7 @@ end subroutine element_Vinc_HH_SURF
 
 subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     !integer flag
-	use BPACK_DEFS
+	use z_BPACK_DEFS
     implicit none
 
     real(kind=8) rcs
@@ -1921,9 +1917,9 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
     real(kind=8) a(3)
     real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
     complex(kind=8):: curr(:,:)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 
     integer edge,edge_m,edge_n,ierr
 
@@ -1981,7 +1977,7 @@ end subroutine RCS_bistatic_SURF
 
 subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -1992,7 +1988,7 @@ subroutine VV_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
     real(kind=8) a(3)
     complex(kind=8)::curr
     integer edge,edge_m,edge_n
-    ! type(mesh)::quant
+    ! type(z_mesh)::quant
 	real(kind=8),allocatable:: x(:),y(:),z(:),w(:)
 
 	allocate(x(quant%integral_points))
@@ -2028,7 +2024,7 @@ end subroutine VV_polar_SURF
 
 subroutine HH_polar_SURF(theta,phi,edge,ctemp_1,curr,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     complex(kind=8) ctemp_rcs(3),ctemp,phase,ctemp_1
@@ -2077,16 +2073,16 @@ end subroutine HH_polar_SURF
 
 subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
     complex(kind=8)::curr(:)
     real(kind=8) rcs
     complex(kind=8) ctemp_rcs(3),ctemp,ctemp_loc,phase,ctemp_1,ctemp_2
     real(kind=8) dsita,dphi
     integer edge,edge_m,edge_n,ierr
-	type(mesh)::msh
+	type(z_mesh)::msh
     type(quant_EMSURF)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 
     ctemp_loc=(0.,0.)
         rcs=0
@@ -2109,7 +2105,7 @@ end subroutine RCS_monostatic_VV_SURF
 
 subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     real(kind=8) rcs
@@ -2117,9 +2113,9 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
     real(kind=8) dsita,dphi
     integer edge,edge_m,edge_n,ierr
     complex(kind=8)::curr(:)
-	type(mesh)::msh
+	type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	type(proctree)::ptree
+	type(z_proctree)::ptree
 
     ctemp_loc=(0.,0.)
         rcs=0
@@ -2144,8 +2140,8 @@ end subroutine RCS_monostatic_HH_SURF
 
 
 subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
-    use BPACK_DEFS
-	use MISC_Utilities
+    use z_BPACK_DEFS
+	use z_MISC_Utilities
     implicit none
 
 	real T0
@@ -2155,9 +2151,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     integer node1, node2,found,npolar,off
     integer node_temp(2)
     real(kind=8) a(3),b(3),c(3),r0,x1,x2,y1,y2,z1,z2,dx,betanm,n1,n2
-	! type(mesh)::msh
+	! type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	! type(proctree)::ptree
+	! type(z_proctree)::ptree
 	integer MPIcomm,MyID,ierr
 	CHARACTER (*) DATA_DIR
 	character(len=1024)  :: string1,string2,string3,filename
@@ -2223,7 +2219,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
             a(i)=(quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
             b(i)=(quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
         enddo
-        call curl(a,b,c)
+        call z_curl(a,b,c)
         r0=sqrt(c(1)**2+c(2)**2+c(3)**2)
         c(1)=c(1)/r0
         c(2)=c(2)/r0
@@ -2572,8 +2568,8 @@ end subroutine geo_modeling_SURF
 
 
 subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
-    use BPACK_DEFS
-	use BPACK_Solve_Mul
+    use z_BPACK_DEFS
+	use z_BPACK_Solve_Mul
 
 
     implicit none
@@ -2587,12 +2583,12 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(Bmatrix)::bmat
-	type(mesh)::msh
+	type(z_Hoption)::option
+	type(z_Bmatrix)::bmat
+	type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	type(proctree)::ptree
-	type(Hstat)::stats
+	type(z_proctree)::ptree
+	type(z_Hstat)::stats
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
@@ -2619,7 +2615,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         !$omp end parallel do
 
         n1 = OMP_get_wtime()
-		call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
+		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
 		n2 = OMP_get_wtime()
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
@@ -2666,7 +2662,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 			!$omp end parallel do
         enddo
 
-		call BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
+		call z_BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)
 
 		do j=0, num_sample
 			phi=j*dphi
@@ -2717,8 +2713,8 @@ end subroutine EM_solve_SURF
 
 
 subroutine EM_solve_port_SURF(bmat,option,msh,quant,ptree,stats,current,voltage)
-    use BPACK_DEFS
-	use BPACK_Solve_Mul
+    use z_BPACK_DEFS
+	use z_BPACK_Solve_Mul
 
 
     implicit none
@@ -2732,12 +2728,12 @@ subroutine EM_solve_port_SURF(bmat,option,msh,quant,ptree,stats,current,voltage)
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(Bmatrix)::bmat
-	type(mesh)::msh
+	type(z_Hoption)::option
+	type(z_Bmatrix)::bmat
+	type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	type(proctree)::ptree
-	type(Hstat)::stats
+	type(z_proctree)::ptree
+	type(z_Hstat)::stats
 	complex(kind=8):: current(:,:)
 	complex(kind=8):: ctemp,ctemp1
 	complex(kind=8):: voltage(:,:)
@@ -2802,7 +2798,7 @@ subroutine EM_solve_port_SURF(bmat,option,msh,quant,ptree,stats,current,voltage)
 	enddo
 	!!$omp end parallel do
 	n1 = OMP_get_wtime()
-	call BPACK_Solution(bmat,Current,Voltage,N_unk_loc,quant%Nport,option,ptree,stats)
+	call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,quant%Nport,option,ptree,stats)
 	n2 = OMP_get_wtime()
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
@@ -2820,8 +2816,8 @@ end subroutine EM_solve_port_SURF
 
 
 subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,eigval,Enormal_GF,ith,model)
-    use BPACK_DEFS
-	use BPACK_Solve_Mul
+    use z_BPACK_DEFS
+	use z_BPACK_Solve_Mul
 
 
     implicit none
@@ -2836,11 +2832,11 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
     complex(kind=8) eigvec(:),Enormal_GF(:)
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error,Rs, max_Enormal_GF
-	type(Hoption)::option
-	type(mesh)::msh
+	type(z_Hoption)::option
+	type(z_mesh)::msh
 	type(quant_EMSURF)::quant
-	type(proctree)::ptree
-	type(Hstat)::stats
+	type(z_proctree)::ptree
+	type(z_Hstat)::stats
 	integer,allocatable:: port_of_patch(:),cnt_patch(:)
 	complex(kind=8),allocatable:: current(:,:),voltage(:,:),Enormal_at_patch(:),Enormal_at_node(:),Ht_at_patch(:,:),Et_at_patch(:,:)
 	complex(kind=8):: field(3),cpoint(3), volt_acc
@@ -3186,7 +3182,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 				patch = int((ii-1)/quant%integral_points)+1
 				port = port_of_patch(patch)
 				if(port>0)then
-					call cccurl(Et_at_patch(:,ii),conjg(Ht_at_patch(:,ii)),cpoint)
+					call z_cccurl(Et_at_patch(:,ii),conjg(Ht_at_patch(:,ii)),cpoint)
 					cpoint = cpoint*weight_at_patch(ii)
 					point = dble(cpoint)/2d0
 					ExH_at_ports(:,port) = ExH_at_ports(:,port) + point
@@ -3229,7 +3225,7 @@ end subroutine EM_cavity_postprocess
 !**** Compute the fields at a given point due to the K operator on a rwg basis
 subroutine Field_EMSURF_K(point,field,n,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: n
@@ -3270,7 +3266,7 @@ subroutine Field_EMSURF_K(point,field,n,quant)
 				dg(1)=(point(1)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 				dg(2)=(point(2)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 				dg(3)=(point(3)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-				call ccurl(an,dg,dg2)
+				call z_ccurl(an,dg,dg2)
 				field = field - (-1)**(jj+1)*dg2*wn(j)*ln
 			enddo
 		enddo
@@ -3285,7 +3281,7 @@ end subroutine Field_EMSURF_K
 !**** Compute the fields at a given point due to the T operator on a rwg basis
 subroutine Field_EMSURF_T(point,field,n,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
     integer, INTENT(IN):: n
@@ -3362,7 +3358,7 @@ end subroutine Field_EMSURF_T
 !**** Compute the fields at a given point due to the T or K operator on a rwg basis
 subroutine Field_EMSURF(point,field,n,quant)
 
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     implicit none
 
 	integer, INTENT(IN):: n
