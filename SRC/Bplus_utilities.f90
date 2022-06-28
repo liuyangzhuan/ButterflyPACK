@@ -11455,7 +11455,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       ! write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,'inin'
 
-      !>******* preallocate BFvec and BFvec1, #of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
+      !>******* preallocate BFvec and BFvec1, number of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
       allocate (BFvec%vec(0:level_half + 1))
       allocate (BFvec%vec(0)%blocks(1, blocks%ButterflyV%nblk_loc))
       BFvec%vec(0)%num_row = 1

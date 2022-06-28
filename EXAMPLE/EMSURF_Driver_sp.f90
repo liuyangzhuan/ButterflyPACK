@@ -13,23 +13,26 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file
+!> @brief This is an example that solves a 3D EFIE/MFIE/CFIE system for electromagnetics scattering.
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "c_", one can also use the following \n
+!> #define DAT 2 \n
+!> #include "cButterflyPACK_config.fi" \n
+!> which will macro replace precision-independent subroutine/module/type names "X" with "c_X" defined in SRC_COMLEX with single-complex precision
 
 
-! This exmple works with double-complex precision data
-#define DAT 2
-
-#include "ButterflyPACK_config.fi"
-
+! This exmple works with single-complex precision data
 PROGRAM ButterflyPACK_IE_3D
-    use BPACK_DEFS
+    use c_BPACK_DEFS
 	use EMSURF_MODULE_SP
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
-	use BPACK_Solve_Mul
+	use c_BPACK_structure
+	use c_BPACK_factor
+	use c_BPACK_constr
+	use c_BPACK_Solve_Mul
 	use omp_lib
-	use MISC_Utilities
+	use c_MISC_Utilities
+	use c_BPACK_utilities
     implicit none
 
 	! include "mkl_vml.fi"
@@ -46,13 +49,13 @@ PROGRAM ButterflyPACK_IE_3D
 	integer :: length,edge
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(Bmatrix)::bmat
-	type(kernelquant)::ker
+	type(c_Hoption)::option
+	type(c_Hstat)::stats
+	type(c_mesh)::msh
+	type(c_Bmatrix)::bmat
+	type(c_kernelquant)::ker
 	type(quant_EMSURF),target::quant
-	type(proctree)::ptree
+	type(c_proctree)::ptree
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	real(kind=8),allocatable::xyz(:,:)
@@ -69,21 +72,21 @@ PROGRAM ButterflyPACK_IE_3D
 		groupmembers(ii)=(ii-1)
 	enddo
 
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call c_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_IE_3D"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call c_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call c_InitStat(stats)
+	call c_SetDefaultOptions(option)
 
 
 	!**** intialize the user-defined derived type quant
@@ -146,7 +149,7 @@ PROGRAM ButterflyPACK_IE_3D
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option,ptree,ii)
+			call c_ReadOption(option,ptree,ii)
 		else
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
@@ -183,8 +186,8 @@ PROGRAM ButterflyPACK_IE_3D
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 	enddo
     allocate(Permutation(quant%Nunk))
-	call PrintOptions(option,ptree)
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
+	call c_PrintOptions(option,ptree)
+	call c_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
 	t2 = OMP_get_wtime()
@@ -192,12 +195,12 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+    call c_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 
 
 	!**** factorization phase
-	call BPACK_Factorization(bmat,option,stats,ptree,msh)
+	call c_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
 	!**** solve phase
@@ -205,16 +208,16 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	!**** print statistics
-	call PrintStat(stats,ptree)
+	call c_PrintStat(stats,ptree)
 
 
 	!**** deletion of quantities
 	call delete_quant_EMSURF(quant)
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call c_delete_proctree(ptree)
+	call c_delete_Hstat(stats)
+	call c_delete_mesh(msh)
+	call c_delete_kernelquant(ker)
+	call c_BPACK_delete(bmat)
 
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
@@ -225,6 +228,7 @@ PROGRAM ButterflyPACK_IE_3D
     ! ! ! ! pause
 
 end PROGRAM ButterflyPACK_IE_3D
+
 
 
 

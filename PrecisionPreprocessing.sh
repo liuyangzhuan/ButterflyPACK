@@ -122,6 +122,7 @@ cp -r $SRCDIR $ZSRCDIR
 cd $ZSRCDIR
 { echo "#define DAT 0 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/zButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -130,7 +131,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
 		mv "$file" "z${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "z${file}" "z${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -165,6 +166,7 @@ cp -r $SRCDIR $DSRCDIR
 cd $DSRCDIR
 { echo "#define DAT 1 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/dButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -173,7 +175,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
 		mv "$file" "d${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "d${file}" "d${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -208,6 +210,7 @@ cp -r $SRCDIR $CSRCDIR
 cd $CSRCDIR
 { echo "#define DAT 2 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/cButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -216,7 +219,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/c$objfile/g" $CSRCDIR/Makefile
 		mv "$file" "c${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "c${file}" "c${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi
@@ -250,6 +253,7 @@ cp -r $SRCDIR $SSRCDIR
 cd $SSRCDIR
 { echo "#define DAT 3 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
 mv ButterflyPACK_config.fi{.new,}
+cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/sButterflyPACK_config.fi
 for file in *; do
 	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
 	then
@@ -258,7 +262,7 @@ for file in *; do
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/s$objfile/g" $SSRCDIR/Makefile
 		mv "$file" "s${file}"
-		if [ $1 == "ON" ];
+		if [ "$1" = "ON" ];
 		then
 			cpp -w "s${file}" "s${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
 		fi

@@ -82,7 +82,7 @@ contains
       maxnev = nev
       maxncv = nev*2
       if(maxncv>Nunk_loc)then
-         if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce #MPI or nev'
+         if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce MPI count or nev'
          stop
       endif
 
