@@ -121,9 +121,6 @@ contains
    end subroutine C_BPACK_Createptree
 
 !>**** C interface of initializing statistics
-   !> @param nmpi: number of MPIs for one hodlr
-   !> @param MPIcomm: MPI communicator from C caller
-   !> @param groupmembers: MPI ranks in MPIcomm for one hodlr
    !> @param stats_Cptr: the structure containing statistics
    subroutine C_BPACK_Createstats(stats_Cptr) bind(c, name="c_bpack_createstats")
       implicit none
@@ -1995,7 +1992,7 @@ contains
    !> @param msh_Cptr: the structure containing points and ordering information
    !> @param pgidx: 1D array containing the process group number of each intersection, the number starts from 0
    !> @param Npmap: number of process groups
-   !> @param pmaps: 2D array (Npmapx3) containing #of process rows, #of process columns, and starting process ID in each intersection
+   !> @param pmaps: 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each intersection
    !> @param Ninter: number of intersections
    !> @param allrows: 1D array containing the global row indices (in original order starting from 1 to M) stacked together
    !> @param allcols: 1D array containing the global column indices (in original order starting from 1 to N) stacked together
@@ -2102,7 +2099,7 @@ contains
    !> @param colidx: 1D array containing sizes of columns of each intersection
    !> @param pgidx: 1D array containing the process group number of each intersection, the number starts from 0
    !> @param Npmap: number of process groups
-   !> @param pmaps: 2D array (Npmapx3) containing #of process rows, #of process columns, and starting process ID in each intersection
+   !> @param pmaps: 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each intersection
    !> @param bmat_Cptr: the structure containing HODLR
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics

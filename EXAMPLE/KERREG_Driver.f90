@@ -16,18 +16,14 @@
 
 !> @file
 !> @brief This example generates a RBF kernel using training and testing data from disk, compress it using entry-valuation-based APIs, and evaluate the prediction error.
-!> @details Note that the use of the following \n
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "d_", one can also use the following \n
 !> #define DAT 1 \n
 !> #include "dButterflyPACK_config.fi" \n
-!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLE with double precision
+!> which will macro replace precision-independent subroutine/module/type names "X" with "d_X" defined in SRC_DOUBLE with double precision
 
 ! This exmple works with double precision data
-#define DAT 1
-
-#include "dButterflyPACK_config.fi"
-
 module APPLICATION_MODULE
-use BPACK_DEFS
+use d_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here
@@ -47,7 +43,7 @@ contains
 
 	!**** cutoff distance for gaussian kernel
 	real(kind=8) function arg_thresh_Zmn(quant)
-		use BPACK_DEFS
+		use d_BPACK_DEFS
 		implicit none
 
 		type(quant_app)::quant
@@ -58,7 +54,7 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn
 	subroutine Zelem_RBF(m,n,value_e,quant)
-		use BPACK_DEFS
+		use d_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
@@ -90,14 +86,15 @@ end module APPLICATION_MODULE
 
 
 PROGRAM ButterflyPACK_KRR
-    use BPACK_DEFS
+    use d_BPACK_DEFS
     use APPLICATION_MODULE
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
+	use d_BPACK_structure
+	use d_BPACK_factor
+	use d_BPACK_constr
 	use omp_lib
-	use MISC_Utilities
+	use d_MISC_Utilities
+	use d_BPACK_utilities
 
     implicit none
 
@@ -116,15 +113,15 @@ PROGRAM ButterflyPACK_KRR
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption)::option
-	type(Hstat)::stats
-	type(mesh)::msh
-	type(kernelquant)::ker
+	type(d_Hoption)::option
+	type(d_Hstat)::stats
+	type(d_mesh)::msh
+	type(d_kernelquant)::ker
 	type(quant_app),target::quant
-	type(Bmatrix)::bmat
+	type(d_Bmatrix)::bmat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
-	type(proctree)::ptree
+	type(d_proctree)::ptree
 	integer MPI_thread
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
@@ -139,20 +136,20 @@ PROGRAM ButterflyPACK_KRR
 	enddo
 
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_KRR"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call d_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_InitStat(stats)
+	call d_SetDefaultOptions(option)
 
 
 	!**** intialize the user-defined derived type quant
@@ -200,14 +197,14 @@ PROGRAM ButterflyPACK_KRR
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option,ptree,ii)
+			call d_ReadOption(option,ptree,ii)
 		else
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
 	enddo
 
-	call PrintOptions(option,ptree)
+	call d_PrintOptions(option,ptree)
 
 
 	quant%trainfile_p=trim(quant%DATA_DIR)//'_train.csv'
@@ -236,15 +233,15 @@ PROGRAM ButterflyPACK_KRR
 
     !**** initialization of the construction phase
     allocate(Permutation(quant%Nunk))
-	call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%xyz)
+	call d_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+    call d_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 	!**** factorization phase
-    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    call d_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
 	!**** solve phase
@@ -253,11 +250,11 @@ PROGRAM ButterflyPACK_KRR
 
 	!**** deletion of quantities
 	if(allocated(quant%xyz))deallocate(quant%xyz)
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_BPACK_delete(bmat)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
@@ -270,10 +267,10 @@ end PROGRAM ButterflyPACK_KRR
 
 subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
-    use BPACK_DEFS
+    use d_BPACK_DEFS
 	use APPLICATION_MODULE
 	use omp_lib
-	use BPACK_Solve_Mul
+	use d_BPACK_Solve_Mul
 
     implicit none
 
@@ -286,12 +283,12 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
     real(kind=8) value_Z
     real(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:),vout(:,:),vout_tmp(:,:)
 	real(kind=8):: rel_error
-	type(Hoption)::option
-	type(mesh)::msh
+	type(d_Hoption)::option
+	type(d_mesh)::msh
 	type(quant_app)::quant
-	type(proctree)::ptree
-	type(Bmatrix)::bmat
-	type(Hstat)::stats
+	type(d_proctree)::ptree
+	type(d_Bmatrix)::bmat
+	type(d_Hstat)::stats
 	real(kind=8),allocatable:: current(:),voltage(:)
 	real(kind=8), allocatable:: labels(:)
 	real(kind=8),allocatable:: xyz_test(:,:)
@@ -306,7 +303,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
 
 	if(option%ErrSol==1)then
-		call BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
+		call d_BPACK_Test_Solve_error(bmat,N_unk_loc,option,ptree,stats)
 	endif
 
 
@@ -332,7 +329,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
 	n1 = OMP_get_wtime()
 
-	call BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
+	call d_BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 
 	n2 = OMP_get_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
@@ -413,4 +410,5 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
     return
 
 end subroutine RBF_solve
+
 

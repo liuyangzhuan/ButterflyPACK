@@ -15,35 +15,30 @@
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 !> @file
 !> @brief This example generates a random LR product, or reads a full matrix from disk, and compress it using entry-valuation-based APIs
-!> @details Note that the use of the following \n
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "d_", one can also use the following \n
 !> #define DAT 1 \n
 !> #include "dButterflyPACK_config.fi" \n
-!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLE with double precision
-
+!> which will macro replace precision-independent subroutine/module/type names "X" with "d_X" defined in SRC_DOUBLE with double precision
 
 ! This exmple works with double precision data
-#define DAT 1
-
-#include "dButterflyPACK_config.fi"
-
 module APPLICATION_MODULE
-use BPACK_DEFS
+use d_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here
 	type quant_app
-		DT, allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
-		DT, allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
+		real(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
+		real(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
 		real(kind=8), allocatable :: locations(:,:) ! geometrical points
 		integer:: rank
 		integer:: Nunk
 		integer:: Ndim
 		real(kind=8):: lambda
-		type(Bmatrix),pointer::bmat ! Use this metadata in matvec
-		type(mesh),pointer::msh   ! Use this metadata in matvec
-		type(proctree),pointer::ptree ! Use this metadata in matvec
-		type(Hstat),pointer::stats ! Use this metadata in matvec
-		type(Hoption),pointer::option ! Use this metadata in matvec
+		type(d_Bmatrix),pointer::bmat ! Use this metadata in matvec
+		type(d_mesh),pointer::msh   ! Use this metadata in matvec
+		type(d_proctree),pointer::ptree ! Use this metadata in matvec
+		type(d_Hstat),pointer::stats ! Use this metadata in matvec
+		type(d_Hoption),pointer::option ! Use this metadata in matvec
 		CHARACTER (LEN=1000) DATA_DIR
 		CHARACTER (LEN=1000) PERM_DIR
 		CHARACTER (LEN=1000) LEAFS_DIR
@@ -55,12 +50,12 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as two LR products
 	subroutine Zelem_LR(m,n,value_e,quant)
-		use BPACK_DEFS
+		use d_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		DT::value_e
+		real(kind=8)::value_e
 		integer ii
 
 		integer dimn
@@ -85,12 +80,12 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value_e,quant)
-		use BPACK_DEFS
+		use d_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
 		integer, INTENT(IN):: m,n
-		DT::value_e
+		real(kind=8)::value_e
 		integer ii
 
 		integer dimn
@@ -105,32 +100,32 @@ contains
 	end subroutine Zelem_FULL
 
 	subroutine HODLR_MVP_OneHODLR(trans,Mloc,Nloc,num_vect,Vin,Vout,quant)
-		use BPACK_DEFS
-		use MISC_DenseLA
-		use MISC_Utilities
-		use BPACK_Solve_Mul
+		use d_BPACK_DEFS
+		use d_MISC_DenseLA
+		use d_MISC_Utilities
+		use d_BPACK_Solve_Mul
 		implicit none
 		character trans
-		DT Vin(:,:),Vout(:,:)
-		DT,allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
+		real(kind=8) Vin(:,:),Vout(:,:)
+		real(kind=8),allocatable:: Vin_tmp(:,:),Vout_tmp(:,:),Vin_tmp_2D(:,:),Vout_tmp_2D(:,:)
 		integer ii,jj,nn,fl_transpose,kk,black_step
 		integer, INTENT(in)::Mloc,Nloc,num_vect
 		real(kind=8) n1,n2
-		! type(mesh)::msh
-		! type(proctree)::ptree
+		! type(d_mesh)::msh
+		! type(d_proctree)::ptree
 		integer idxs_o,idxe_o,N
 		integer nproc,ctxt,info,nb1Dc, nb1Dr, level_p,pgno,num_blocks,ii_new,gg,proc,myi,myj,myAcols,myArows,nprow,npcol,myrow,mycol,Nrow,Ncol
 		integer::descsVin(9),descsVout(9),descsMat2D(9),descsVin2D(9),descsVout2D(9)
 		class(*),pointer :: quant
-		type(Bmatrix),pointer::bmat
-		! type(Hstat)::stats
+		type(d_Bmatrix),pointer::bmat
+		! type(d_Hstat)::stats
 
 		select TYPE(quant)
 		type is (quant_app)
 			pgno=1
 			nproc = quant%ptree%pgrp(pgno)%nproc
 			bmat=>quant%bmat
-			call HODLR_Mult(trans,Nloc,num_vect,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,quant%ptree,quant%option,quant%stats)
+			call d_HODLR_Mult(trans,Nloc,num_vect,1,bmat%ho_bf%Maxlevel+1,Vin,Vout,bmat%ho_bf,quant%ptree,quant%option,quant%stats)
 		end select
 
 	end subroutine HODLR_MVP_OneHODLR
@@ -142,17 +137,18 @@ end module APPLICATION_MODULE
 
 
 PROGRAM ButterflyPACK_FULL
-    use BPACK_DEFS
+    use d_BPACK_DEFS
     use APPLICATION_MODULE
-	use BPACK_Solve_Mul
+	use d_BPACK_Solve_Mul
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
+	use d_BPACK_structure
+	use d_BPACK_factor
+	use d_BPACK_constr
 	use omp_lib
-	use MISC_Utilities
-	use BPACK_constr
-	use BPACK_randomMVP
+	use d_MISC_Utilities
+	use d_BPACK_constr
+	use d_BPACK_randomMVP
+	use d_BPACK_utilities
     implicit none
 
     real(kind=8) tolerance
@@ -161,7 +157,7 @@ PROGRAM ButterflyPACK_FULL
 	integer seemyid(50)
 	integer times(8)
 	real(kind=8) t1,t2,x,y,z,r,theta,phi,error,memory,rtemp1,rtemp2
-	DT,allocatable:: datain(:)
+	real(kind=8),allocatable:: datain(:)
 
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings,strings1
@@ -169,23 +165,23 @@ PROGRAM ButterflyPACK_FULL
 	integer :: length
 	integer :: ierr
 	integer*8 oldmode,newmode
-	type(Hoption),target::option,option1
-	type(Hstat),target::stats,stats1
-	type(mesh),target::msh,msh1
-	type(kernelquant),target::ker,ker1
+	type(d_Hoption),target::option,option1
+	type(d_Hstat),target::stats,stats1
+	type(d_mesh),target::msh,msh1
+	type(d_kernelquant),target::ker,ker1
 	type(quant_app),target::quant,quant1
-	type(Bmatrix),target::bmat,bmat1
+	type(d_Bmatrix),target::bmat,bmat1
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	integer level,Maxlevel
-	type(proctree),target::ptree,ptree1
+	type(d_proctree),target::ptree,ptree1
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer,allocatable::tree1(:),tree(:)
 	integer nargs,flag
 	integer v_major,v_minor,v_bugfix,nleaf
 	integer*8 blength
-	DT,allocatable::matZ_glo_tmp(:,:)
+	real(kind=8),allocatable::matZ_glo_tmp(:,:)
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -196,21 +192,21 @@ PROGRAM ButterflyPACK_FULL
 	enddo
 
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call d_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 
 
 	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
     write(*,*) "ButterflyPACK_FULL"
-	call BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
+	call d_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
 	endif
 
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call d_InitStat(stats)
+	call d_SetDefaultOptions(option)
 
 	!**** set solver parameters
 	option%nogeo=1  ! no geometry points available
@@ -263,14 +259,14 @@ PROGRAM ButterflyPACK_FULL
 				endif
 			enddo
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
-			call ReadOption(option,ptree,ii)
+			call d_ReadOption(option,ptree,ii)
 		else
 			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
 	enddo
 
-	call PrintOptions(option,ptree)
+	call d_PrintOptions(option,ptree)
 
 !******************************************************************************!
 ! generate a LR matrix as two matrix product
@@ -280,12 +276,12 @@ PROGRAM ButterflyPACK_FULL
 		!**** Get matrix size and rank and create the matrix
 		quant%lambda = 1d5
 		allocate(quant%matU_glo(quant%Nunk,quant%rank))
-		call RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
-		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call d_RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
+		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 
 		allocate(quant%matV_glo(quant%rank,quant%Nunk))
-		call RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
-		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call d_RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
+		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
@@ -301,7 +297,7 @@ PROGRAM ButterflyPACK_FULL
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
+		call d_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 	endif
 
@@ -316,77 +312,30 @@ PROGRAM ButterflyPACK_FULL
 		!**** Get matrix size and rank and create the matrix
 		allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 
-#if DAT==1
+
 		!***** assuming reading one row every time
 		allocate(datain(quant%Nunk))
 		if(ptree%MyID==Main_ID)then
 
-#if 0
-		!***** read in the matrix from a flat non-Fortran binary file. Use with Caution when reading cpp binary file
 
-		! inquire(file=quant%DATA_DIR,RECL=blength)
-		blength=int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)*8
-		write(*,*)'binary file record length:',blength
-		open(10, file=quant%DATA_DIR, form='unformatted', access='direct', recl=blength)
-		read(10,rec=1)quant%matZ_glo
-
-		! allocate(Permutation(quant%Nunk))
-		! open(11, file=quant%PERM_DIR)
-		! read(11,*) Permutation(:)
-		! close(11)
-		! if(minval(Permutation)==0)Permutation=Permutation+1
-		! allocate(matZ_glo_tmp(quant%Nunk,quant%Nunk))
-		! matZ_glo_tmp = quant%matZ_glo
-		! do ii=1,quant%Nunk
-		! do jj=1,quant%Nunk
-		! 	quant%matZ_glo(ii,jj) = matZ_glo_tmp(Permutation(ii),Permutation(jj))
-		! 	! quant%matZ_glo(Permutation(ii),Permutation(jj)) = matZ_glo_tmp(ii,jj)
-		! enddo
-		! enddo
-		! deallocate(Permutation)
-		! deallocate(matZ_glo_tmp)
-
-
-		! open(12, file=quant%LEAFS_DIR)
-		! read(12,*) nleaf
-		! deallocate(tree)
-		! allocate(tree(nleaf))
-		! read(12,*) tree
-		! close(12)
-
-#else
+# 358 "FULLMAT_Driver.f90"
 		open(10, file=quant%DATA_DIR)
 		do ii=1,quant%Nunk
 			read(10,*) datain(:)
 			quant%matZ_glo(ii,:)=datain(:)
 		enddo
-#endif
+
 		close(10)
 		endif
 		deallocate(datain)
-#else
-		!***** assuming reading one row every time
-		allocate(datain(quant%Nunk))
-		if(ptree%MyID==Main_ID)then
-		open(10, file=quant%DATA_DIR)
-		do ii=1,quant%Nunk
-			read(10,*) datain
-			quant%matZ_glo(ii,:)=datain(:)
-		enddo
-		do ii=1,quant%Nunk
-			read(10,*) datain
-			quant%matZ_glo(ii,:)=quant%matZ_glo(ii,:)+datain(:)*BPACK_junit
-		enddo
-		close(10)
-		endif
-		deallocate(datain)
-#endif
 
-		call assert(int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)< int(2d0**31d0,kind=8),'message size overflow in MPI!')
+# 384 "FULLMAT_Driver.f90"
 
-		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call d_assert(int(quant%Nunk,kind=8)*int(quant%Nunk,kind=8)< int(2d0**31d0,kind=8),'message size overflow in MPI!')
+
+		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		! do ii=1,10
-		! call MPI_Bcast(quant%matZ_glo(1,(ii-1)*quant%Nunk/10+1),quant%Nunk*quant%Nunk/10,MPI_DT,Main_ID,ptree%Comm,ierr)
+		! call MPI_Bcast(quant%matZ_glo(1,(ii-1)*quant%Nunk/10+1),quant%Nunk*quant%Nunk/10,MPI_DOUBLE_PRECISION,Main_ID,ptree%Comm,ierr)
 		! enddo
 		! write(*,*)quant%matZ_glo(quant%Nunk,quant%Nunk)
 
@@ -419,7 +368,7 @@ PROGRAM ButterflyPACK_FULL
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
+		call d_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(tree)
 	endif
@@ -428,29 +377,29 @@ PROGRAM ButterflyPACK_FULL
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+    call d_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 	if(quant%tst==2)deallocate(quant%matZ_glo)
 
 
 	!**** factorization phase
-    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    call d_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
 	!**** solve phase
 	if(option%ErrSol==1)then
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve ......"
-		call BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
+		call d_BPACK_Test_Solve_error(bmat,msh%idxe-msh%idxs+1,option,ptree,stats)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Test Solve finished"
 	endif
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
 	!**** print statistics
-	call PrintStat(stats,ptree)
+	call d_PrintStat(stats,ptree)
 
 
 	!**** construct the second HODLR using the first HODLR as matvec
-	call CopyOptions(option,option1)
+	call d_CopyOptions(option,option1)
 	option1%nogeo=1
 	option1%xyzsort=NATURAL
 	ker1%FuncHMatVec=>HODLR_MVP_OneHODLR
@@ -466,14 +415,14 @@ PROGRAM ButterflyPACK_FULL
 
 
 	!**** initialize stats and option
-	call InitStat(stats1)
+	call d_InitStat(stats1)
 
 	!**** create the process tree, can use larger number of mpis if needed
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
 		groupmembers(ii)=(ii-1)
 	enddo
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
+	call d_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree1)
 	deallocate(groupmembers)
 
 
@@ -493,35 +442,35 @@ PROGRAM ButterflyPACK_FULL
 
 	!**** initialization of the construction phase
 	allocate(Permutation(quant1%Nunk))
-	call BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree1)
+	call d_BPACK_construction_Init(quant1%Nunk,Permutation,Nunk_loc,bmat1,option1,stats1,msh1,ker1,ptree1,tree=tree1)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(tree1)
 
 
 	!**** computation of the construction phase
 	option%less_adapt=0
-	call BPACK_construction_Matvec(bmat1,matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
+	call d_BPACK_construction_Matvec(bmat1,d_matvec_user,Memory,error,option1,stats1,ker1,ptree1,msh1)
 
 	!**** print statistics
-	call PrintStat(stats1,ptree1)
+	call d_PrintStat(stats1,ptree1)
 
 
 	!**** deletion of quantities
-	call delete_proctree(ptree1)
-	call delete_Hstat(stats1)
-	call delete_mesh(msh1)
-	call delete_kernelquant(ker1)
-	call BPACK_delete(bmat1)
+	call d_delete_proctree(ptree1)
+	call d_delete_Hstat(stats1)
+	call d_delete_mesh(msh1)
+	call d_delete_kernelquant(ker1)
+	call d_BPACK_delete(bmat1)
 
 	if(allocated(quant%matU_glo))deallocate(quant%matU_glo)
 	if(allocated(quant%matV_glo))deallocate(quant%matV_glo)
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
 
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call d_delete_proctree(ptree)
+	call d_delete_Hstat(stats)
+	call d_delete_mesh(msh)
+	call d_delete_kernelquant(ker)
+	call d_BPACK_delete(bmat)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
@@ -529,5 +478,6 @@ PROGRAM ButterflyPACK_FULL
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_FULL
+
 
 

@@ -1,16 +1,12 @@
 !> @file
 !> @brief This example generates a random LR product, or reads a full matrix from disk, and compress it using entry-valuation-based APIs
-!> @details Note that the use of the following \n
+!> @details Note that instead of the use of precision dependent subroutine/module/type names "z_", one can also use the following \n
 !> #define DAT 0 \n
 !> #include "zButterflyPACK_config.fi" \n
-!> will macro replace subroutine, function, type names with those defined in SRC_DOUBLECOMPLEX with double-complex precision
-
-
-#define DAT 0
-#include "zButterflyPACK_config.fi"
+!> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
 module APPLICATION_MODULE_FULL_SIMPLE
-use BPACK_DEFS
+use z_BPACK_DEFS
 implicit none
 
 	!**** define your application-related variables here
@@ -31,7 +27,7 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as two LR products
 	subroutine Zelem_LR(m,n,value_e,quant)
-		use BPACK_DEFS
+		use z_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
@@ -61,7 +57,7 @@ contains
 
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value,quant)
-		use BPACK_DEFS
+		use z_BPACK_DEFS
 		implicit none
 
 		class(*),pointer :: quant
@@ -83,32 +79,33 @@ end module APPLICATION_MODULE_FULL_SIMPLE
 
 
 PROGRAM ButterflyPACK_TEMPLATE
-    use BPACK_DEFS
+    use z_BPACK_DEFS
     use APPLICATION_MODULE_FULL_SIMPLE
-	use BPACK_Solve_Mul
+	use z_BPACK_Solve_Mul
 
-	use BPACK_structure
-	use BPACK_factor
-	use BPACK_constr
+	use z_BPACK_structure
+	use z_BPACK_factor
+	use z_BPACK_constr
 	use omp_lib
-	use MISC_Utilities
-	use BPACK_constr
+	use z_MISC_Utilities
+	use z_BPACK_constr
+	use z_BPACK_utilities
     implicit none
 
     integer rank,ii
 	real(kind=8),allocatable:: datain(:)
 
 	integer :: ierr
-	type(Hoption),target::option
-	type(Hstat),target::stats
-	type(mesh),target::msh
-	type(kernelquant),target::ker
+	type(z_Hoption),target::option
+	type(z_Hstat),target::stats
+	type(z_mesh),target::msh
+	type(z_kernelquant),target::ker
 	type(quant_app),target::quant
-	type(Bmatrix),target::bmat
+	type(z_Bmatrix),target::bmat
 	integer,allocatable:: groupmembers(:)
 	integer nmpi
 	integer level,Maxlevel
-	type(proctree),target::ptree
+	type(z_proctree),target::ptree
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer,allocatable::tree(:)
@@ -125,11 +122,11 @@ PROGRAM ButterflyPACK_TEMPLATE
 	enddo
 
 	!**** create the process tree
-	call CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
+	call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
 	deallocate(groupmembers)
 	!**** initialize stats and option
-	call InitStat(stats)
-	call SetDefaultOptions(option)
+	call z_InitStat(stats)
+	call z_SetDefaultOptions(option)
 
 
 	!**** set solver parameters
@@ -159,7 +156,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 	endif
 
 
-	call PrintOptions(option,ptree)
+	call z_PrintOptions(option,ptree)
 
 !******************************************************************************!
 ! generate a LR matrix as two matrix product
@@ -169,12 +166,12 @@ PROGRAM ButterflyPACK_TEMPLATE
 		!**** Get matrix size and rank and create the matrix
 		quant%lambda = 1d5
 		allocate(quant%matU_glo(quant%Nunk,quant%rank))
-		call RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
-		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call z_RandomMat(quant%Nunk,quant%rank,quant%rank,quant%matU_glo,0)
+		call MPI_Bcast(quant%matU_glo,quant%Nunk*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
 
 		allocate(quant%matV_glo(quant%rank,quant%Nunk))
-		call RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
-		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call z_RandomMat(quant%rank,quant%Nunk,quant%rank,quant%matV_glo,0)
+		call MPI_Bcast(quant%matV_glo,quant%Nunk*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
 	   !***********************************************************************
 	   if(ptree%MyID==Main_ID)then
 	   write (*,*) ''
@@ -190,7 +187,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
+		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		call MPI_Bcast(Permutation,quant%Nunk,MPI_integer,0,ptree%comm,ierr)
 	endif
 
@@ -215,7 +212,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 		endif
 		deallocate(datain)
 
-		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DT,Main_ID,ptree%Comm,ierr)
+		call MPI_Bcast(quant%matZ_glo,quant%Nunk*quant%Nunk,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
 
 		if(option%nogeo==0)then
 			!***** assuming reading one dimension each time, the geometry is used to partition the matrix
@@ -246,7 +243,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 		!**** initialization of the construction phase
 		allocate(Permutation(quant%Nunk))
-		call BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
+		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
 		call MPI_Bcast(Permutation,quant%Nunk,MPI_integer,0,ptree%comm,ierr)
 		deallocate(tree)
 	endif
@@ -255,13 +252,13 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 
 	!**** computation of the construction phase
-    call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+    call z_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
 
 	if(quant%tst==2)deallocate(quant%matZ_glo)
 
 
 	!**** factorization phase
-    call BPACK_Factorization(bmat,option,stats,ptree,msh)
+    call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 
 	!**** generate testing RHSs stored globally on each rank
@@ -281,7 +278,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 	end do
 
 	!**** call the solve routine
-	call BPACK_Solution(bmat,x_loc,rhs_loc,msh%idxe-msh%idxs+1,1,option,ptree,stats)
+	call z_BPACK_Solution(bmat,x_loc,rhs_loc,msh%idxe-msh%idxs+1,1,option,ptree,stats)
 
 	!**** convert local solutions to global solutions
 	x_glo=0
@@ -292,17 +289,17 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 
 	!**** print statistics
-	call PrintStat(stats,ptree)
+	call z_PrintStat(stats,ptree)
 
 	if(allocated(quant%matU_glo))deallocate(quant%matU_glo)
 	if(allocated(quant%matV_glo))deallocate(quant%matV_glo)
 	if(allocated(quant%matZ_glo))deallocate(quant%matZ_glo)
 
-	call delete_proctree(ptree)
-	call delete_Hstat(stats)
-	call delete_mesh(msh)
-	call delete_kernelquant(ker)
-	call BPACK_delete(bmat)
+	call z_delete_proctree(ptree)
+	call z_delete_Hstat(stats)
+	call z_delete_mesh(msh)
+	call z_delete_kernelquant(ker)
+	call z_BPACK_delete(bmat)
 
 	deallocate(Permutation)
 
@@ -312,5 +309,6 @@ PROGRAM ButterflyPACK_TEMPLATE
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_TEMPLATE
+
 
 
