@@ -430,7 +430,7 @@ if(APPLE)
   endif()  
 elseif(UNIX)
   execute_process (
-      COMMAND bash PrecisionPreprocessing.sh
+      COMMAND bash PrecisionPreprocessing.sh ${enable_doc}
       WORKING_DIRECTORY ${ButterflyPACK_SOURCE_DIR}
   )
   set(PREPROC_EXPORT "PrecisionPreprocessing.sh")
