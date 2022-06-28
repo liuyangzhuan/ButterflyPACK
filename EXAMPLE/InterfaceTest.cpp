@@ -14,7 +14,9 @@
   Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
-
+/*! @file
+ * @brief This c++ driver provides a few examples to illustrate the c++ interface to ButterflyPACK's Fortran subroutines, particularly the entry-evaluation and matvec-based APIs. This file works on the double data type.
+*/
 //------------------------------------------------------------------------------
 #include <iostream>
 #include <math.h>
@@ -641,7 +643,7 @@ if(myrank==master_rank){
 
 
 	/*****************************************************************/
-	/* Test Kernels for Liza's data sets */
+	/* @brief Test Kernels for Liza's data sets */
 if(tst==1){
     vector<double> data_train = write_from_file<double>(trainfile + "_train.csv");
 	assert(Npo == data_train.size() / Ndim);
@@ -653,7 +655,7 @@ if(tst==1){
 }
 
 	/*****************************************************************/
-	/* Test Kernels for Random point clouds */
+	/* @brief Test Kernels for Random point clouds */
 if(tst==2){
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
@@ -668,7 +670,7 @@ if(tst==2){
 }
 
 	/*****************************************************************/
-	/* Test Product of two Random matrices*/
+	/* @brief Test Product of two Random matrices*/
 if(tst==3){
 	if(ker !=6){
 		if(myrank==master_rank)std::cout<<"Forcing ker to 6 for tst=3."<<std::endl;
@@ -690,7 +692,7 @@ if(tst==3){
 }
 
 	/*****************************************************************/
-	/* Test Full matrices*/
+	/* @brief Test Full matrices*/
 if(tst==4){
 	if(ker !=7){
 		if(myrank==master_rank)std::cout<<"Forcing ker to 7 for tst=4."<<std::endl;

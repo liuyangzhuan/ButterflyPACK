@@ -14,7 +14,9 @@
   Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
-
+/*! @file
+ * @brief This c++ example compresses a matrix representing discretized Green's function ansatz for Helmholtz equations in 2D inhomogenous media, using entry-evaluation-based APIs. The entry evaluation function is generated from running matlab coder. The example works on the double-complex data type.
+*/
 //------------------------------------------------------------------------------
 #include <iostream>
 #include <math.h>
