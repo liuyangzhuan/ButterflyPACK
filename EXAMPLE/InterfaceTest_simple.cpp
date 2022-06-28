@@ -14,7 +14,9 @@
   Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
-
+/*! @file
+ * @brief This c++ driver illustrates the c++ interface to ButterflyPACK's Fortran subroutines for compression a kernel ridge regression (KRR) matrix, with the entry-evaluation-based APIs. This file works on the double data type. This file is a simplified version of InterfaceTest.cpp which provides more examples.
+*/
 //------------------------------------------------------------------------------
 #include <iostream>
 #include <math.h>
@@ -576,7 +578,7 @@ if(myrank==master_rank){
 
 
 	/*****************************************************************/
-	/* Test Kernels using UCI data sets */
+	/* @brief Test Kernels using UCI data sets */
 if(tst==1){
     vector<double> data_train = write_from_file<double>(trainfile + "_train.csv");
 	assert(Npo == data_train.size() / Ndim);

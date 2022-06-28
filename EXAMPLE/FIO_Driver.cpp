@@ -14,7 +14,9 @@
   Developers: Yang Liu
              (Lawrence Berkeley National Lab, Computational Research Division).
 */
-
+/*! @file
+ * @brief This c++ example compresses 1D Fourier integral operators (FIO) using entry-evaluation-based APIs, then compresses composition of 1D FIOs using matvec-based APIs. The example works on the double-complex data type.
+*/
 //------------------------------------------------------------------------------
 #include <iostream>
 #include <math.h>
