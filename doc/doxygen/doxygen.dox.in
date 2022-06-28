@@ -1002,7 +1002,7 @@ EXAMPLE_RECURSIVE      = NO
 
 # The IMAGE_PATH tag can be used to specify one or more files or directories
 # that contain images that are to be included in the documentation (see the
-# \image command).  \/Users/Desktop/LBL1/STRUMPACK/doc/doxygen/images
+# \image command).  
 
 IMAGE_PATH             = @CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/images/
 
@@ -2150,10 +2150,7 @@ INCLUDE_FILE_PATTERNS  =
 # recursively expanded use the := operator instead of the = operator.
 # This tag requires that the tag ENABLE_PREPROCESSING is set to YES.
 
-PREDEFINED             = protected=private \
-                       DOXYGEN_SHOULD_SKIP_THIS \
-                       STRUMPACK_USE_BPACK \
-                       STRUMPACK_USE_MPI
+PREDEFINED             = 
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then this
 # tag can be used to specify a list of macro names that should be expanded. The
