@@ -16,6 +16,7 @@ cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
+	-Denable_doc=OFF \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so;/home/administrator/Desktop/Software/id_dist/libid_lib.so" \
 	-DCMAKE_Fortran_COMPILER=$MPIF90 \

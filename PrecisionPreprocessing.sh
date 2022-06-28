@@ -5,8 +5,8 @@ DSRCDIR=$ROOTDIR/SRC_DOUBLE
 ZSRCDIR=$ROOTDIR/SRC_DOUBLECOMPLEX
 SSRCDIR=$ROOTDIR/SRC_SINGLE
 CSRCDIR=$ROOTDIR/SRC_COMPLEX
-
-MACRO_FILE=$SRCDIR/ButterflyPACK_config.fi
+CONFIG_FILE=ButterflyPACK_config
+MACRO_FILE=$SRCDIR/$CONFIG_FILE.fi
 TMP_FILE=$PWD/tmp.txt
 lb="\b"
 rb="\b"
@@ -107,7 +107,7 @@ done < "$TMP_FILE"
 echo "#endif" >> $MACRO_FILE
 echo "#endif" >> $MACRO_FILE
 rm -rf $TMP_FILE
-cp $MACRO_FILE $ROOTDIR/EXAMPLE/.
+cp $MACRO_FILE $ROOTDIR/EXAMPLE/.   # keep a precision-independent ButterflyPACK_config.fi under the example folder
 
 ###########################################################
 # note that module names and *.h headers need to be renamed without macros
@@ -120,12 +120,12 @@ echo "-- processing SRC_DOUBLECOMPLEX ..."
 rm -rf $ZSRCDIR
 cp -r $SRCDIR $ZSRCDIR
 cd $ZSRCDIR
-{ echo "#define DAT 0 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
-mv ButterflyPACK_config.fi{.new,}
-cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/zButterflyPACK_config.fi
+{ echo "#define DAT 0 "; cat $CONFIG_FILE.fi; } >z$CONFIG_FILE.fi
+cp z$CONFIG_FILE.fi $ROOTDIR/EXAMPLE/.
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	if [ $file != CMakeLists.txt ] && [ $file != $CONFIG_FILE.fi ] && [ $file != z$CONFIG_FILE.fi ] && [ $file != Makefile ];
 	then
+		eval sed -i -e "s/$CONFIG_FILE.fi/z$CONFIG_FILE.fi/g" $ZSRCDIR/$file
 		eval sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
 		eval sed -i -e "s/$lb$file$rb/z$file/g" $ZSRCDIR/$file
 		objfile=${file%.*}.o
@@ -133,10 +133,12 @@ for file in *; do
 		mv "$file" "z${file}"
 		if [ "$1" = "ON" ];
 		then
-			cpp -w "z${file}" "z${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			cpp -w "z${file}" "z${file}_tmp" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			mv "z${file}_tmp" "z${file}"
 		fi
 	fi
 done
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\nz$CONFIG_FILE.fi/g" $ZSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/zbutterflypack/g" $ZSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/ZButterflyPACKLIB/g" $ZSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/CMakeLists.txt
@@ -164,12 +166,12 @@ echo "-- processing SRC_DOUBLE ..."
 rm -rf $DSRCDIR
 cp -r $SRCDIR $DSRCDIR
 cd $DSRCDIR
-{ echo "#define DAT 1 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
-mv ButterflyPACK_config.fi{.new,}
-cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/dButterflyPACK_config.fi
+{ echo "#define DAT 1 "; cat $CONFIG_FILE.fi; } >d$CONFIG_FILE.fi
+cp d$CONFIG_FILE.fi $ROOTDIR/EXAMPLE/.
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	if [ $file != CMakeLists.txt ] && [ $file != $CONFIG_FILE.fi ] && [ $file != d$CONFIG_FILE.fi ] && [ $file != Makefile ];
 	then
+		eval sed -i -e "s/$CONFIG_FILE/d$CONFIG_FILE/g" $DSRCDIR/$file
 		eval sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
 		eval sed -i -e "s/$lb$file$rb/d$file/g" $DSRCDIR/$file
 		objfile=${file%.*}.o
@@ -177,10 +179,12 @@ for file in *; do
 		mv "$file" "d${file}"
 		if [ "$1" = "ON" ];
 		then
-			cpp -w "d${file}" "d${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			cpp -w "d${file}" "d${file}_tmp" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			mv "d${file}_tmp" "d${file}"
 		fi
 	fi
 done
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\nd$CONFIG_FILE.fi/g" $DSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/dbutterflypack/g" $DSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/DButterflyPACKLIB/g" $DSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/CMakeLists.txt
@@ -208,12 +212,12 @@ echo "-- processing SRC_COMPLEX ..."
 rm -rf $CSRCDIR
 cp -r $SRCDIR $CSRCDIR
 cd $CSRCDIR
-{ echo "#define DAT 2 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
-mv ButterflyPACK_config.fi{.new,}
-cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/cButterflyPACK_config.fi
+{ echo "#define DAT 2 "; cat $CONFIG_FILE.fi; } >c$CONFIG_FILE.fi
+cp c$CONFIG_FILE.fi $ROOTDIR/EXAMPLE/.
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	if [ $file != CMakeLists.txt ] && [ $file != $CONFIG_FILE.fi ] && [ $file != c$CONFIG_FILE.fi ] && [ $file != Makefile ];
 	then
+		eval sed -i -e "s/$CONFIG_FILE/c$CONFIG_FILE/g" $CSRCDIR/$file
 		eval sed -i -e "s/$file/c$file/g" $CSRCDIR/CMakeLists.txt
 		eval sed -i -e "s/$lb$file$rb/c$file/g" $CSRCDIR/$file
 		objfile=${file%.*}.o
@@ -221,10 +225,12 @@ for file in *; do
 		mv "$file" "c${file}"
 		if [ "$1" = "ON" ];
 		then
-			cpp -w "c${file}" "c${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			cpp -w "c${file}" "c${file}_tmp" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			mv "c${file}_tmp" "c${file}"
 		fi
 	fi
 done
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\nc$CONFIG_FILE.fi/g" $CSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/cbutterflypack/g" $CSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/CButterflyPACKLIB/g" $CSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/CMakeLists.txt
@@ -251,12 +257,12 @@ echo "-- processing SRC_SINGLE ..."
 rm -rf $SSRCDIR
 cp -r $SRCDIR $SSRCDIR
 cd $SSRCDIR
-{ echo "#define DAT 3 "; cat ButterflyPACK_config.fi; } >ButterflyPACK_config.fi.new
-mv ButterflyPACK_config.fi{.new,}
-cp ButterflyPACK_config.fi $ROOTDIR/EXAMPLE/sButterflyPACK_config.fi
+{ echo "#define DAT 3 "; cat $CONFIG_FILE.fi; } >s$CONFIG_FILE.fi
+cp s$CONFIG_FILE.fi $ROOTDIR/EXAMPLE/.
 for file in *; do
-	if [ $file != CMakeLists.txt ] && [ $file != ButterflyPACK_config.fi ] && [ $file != Makefile ];
+	if [ $file != CMakeLists.txt ] && [ $file != $CONFIG_FILE.fi ] && [ $file != s$CONFIG_FILE.fi ] && [ $file != Makefile ];
 	then
+		eval sed -i -e "s/$CONFIG_FILE/s$CONFIG_FILE/g" $SSRCDIR/$file
 		eval sed -i -e "s/$file/s$file/g" $SSRCDIR/CMakeLists.txt
 		eval sed -i -e "s/$lb$file$rb/s$file/g" $SSRCDIR/$file
 		objfile=${file%.*}.o
@@ -264,10 +270,12 @@ for file in *; do
 		mv "$file" "s${file}"
 		if [ "$1" = "ON" ];
 		then
-			cpp -w "s${file}" "s${file}" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			cpp -w "s${file}" "s${file}_tmp" # run the cpp preprocessor directly as doxygen can get confused with fortran macros
+			mv "s${file}_tmp" "s${file}"
 		fi
 	fi
 done
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\ns$CONFIG_FILE.fi/g" $SSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/sbutterflypack/g" $SSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/SButterflyPACKLIB/g" $SSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/CMakeLists.txt
