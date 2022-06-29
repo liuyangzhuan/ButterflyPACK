@@ -489,7 +489,7 @@ HIDE_FRIEND_COMPOUNDS  = NO
 # blocks will be appended to the function's detailed documentation block.
 # The default value is: NO.
 
-HIDE_IN_BODY_DOCS      = YES
+HIDE_IN_BODY_DOCS      = NO
 
 # The INTERNAL_DOCS tag determines if documentation that is typed after a
 # \internal command is included. If the tag is set to NO then the documentation
@@ -910,7 +910,6 @@ WARN_LOGFILE           =
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Installation.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/GPU_support.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Algorithm.txt \
-	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Examples.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Fortran.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/C_C++.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/FAQ.txt \

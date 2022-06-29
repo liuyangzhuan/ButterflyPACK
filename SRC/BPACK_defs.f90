@@ -670,7 +670,7 @@ module BPACK_DEFS
             character trans
         end subroutine HMatVec
 
-        !> interface of user-defined HODLR MatVec routine in Fortran.
+        !> interface of user-defined HODLR/H MatVec routine in Fortran.
         subroutine F_HMatVec(trans, M, N, num_vect, Vin, Vout, quant)
             import::mesh, proctree, Hstat
             class(*), pointer :: quant
@@ -679,7 +679,7 @@ module BPACK_DEFS
             character trans
         end subroutine F_HMatVec
 
-        !> interface of user-defined HODLR MatVec routine in C.
+        !> interface of user-defined HODLR/H MatVec routine in C.
         subroutine C_HMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             import::mesh, proctree, Hstat

@@ -2,26 +2,24 @@
 
 
 ## Current developers - Lawrence Berkeley National Laboratory
-Yang Liu - liuyangzhuan@lbl.gov (Lawrence Berkeley National Laboratory)
+- Yang Liu - liuyangzhuan@lbl.gov (Lawrence Berkeley National Laboratory)
 
 ## Other contributors
-Wissam Sid-Lakhdar - wissam@lbl.gov (Lawrence Berkeley National Laboratory)
-Pieter Ghysels - pghysels@lbl.gov (Lawrence Berkeley National Laboratory)
-Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory)
-Han Guo - hanguo@umich.edu (University of Michigan)
-Eric Michielssen - emichiel@umich.edu (University of Michigan)
-Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
+- Wissam Sid-Lakhdar - wissam@lbl.gov (Lawrence Berkeley National Laboratory)
+- Pieter Ghysels - pghysels@lbl.gov (Lawrence Berkeley National Laboratory) 
+- Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory) 
+- Han Guo - hanguo@umich.edu (University of Michigan) 
+- Eric Michielssen - emichiel@umich.edu (University of Michigan) 
+- Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
 
 Check the ButterflyPACK github page for the latest development version of
 the code, and the website for more information:
 - https://github.com/liuyangzhuan/ButterflyPACK
 
 For comments, feature requests or bug reports, open an issue on github:
-- https://github.com/pghysels/STRUMPACK/issues
+- https://github.com/liuyangzhuan/ButterflyPACK/issues
 
-
-Butterfly functionality in STRUMPACK is implemented
-through interfaces to the ButterflyPACK package:
+Questions and instructions for solving sparse linear systems (as opposed to dense ones) with ButterflyPACK can be found at:
 - https://github.com/pghysels/STRUMPACK
 
 */

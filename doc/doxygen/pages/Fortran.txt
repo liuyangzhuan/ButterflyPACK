@@ -1,27 +1,58 @@
-/*! \page Fortran Fortran Example
+/*! \page Fortran Fortran Interface and Example
 
-## Fortran Interface
+# Interface to construct, factor and solve a hierarchical matrix
 The following pseudo codes explain how to perform construction, factorization and solve of a linear system "Z" using the Fortran interface
 
 First, specify the data type of your application:
 ```
-!**** DAT 1: double precision; DAT 0: double complex precision
+!**** double-complex precision
+#define DAT 0
+#include "zButterflyPACK_config.fi"
+!**** double-real precision
 #define DAT 1
-#include "ButterflyPACK_config.fi"
+#include "dButterflyPACK_config.fi"
+!**** single-complex precision
+#define DAT 2
+#include "cButterflyPACK_config.fi"
+!**** single-real precision
+#define DAT 3
+#include "sButterflyPACK_config.fi"
 ```
+Note that if the above header file is not included, one can still use ButterflyPACK via adding a "x_" to all derived types, functions, subroutines, and modules. x='z' for double-complex, 'd' for double-real, 'c' for single-complex, and 's' for single-complex. 
 
 ButterflyPACK provides two ways of constructing a hierarchical matrix.
 The first option requires a user-provided function to sample any individual element of the matrix that takes the following argument list
 ```
-subroutine Element(m,n,val,quant)
+subroutine Element(m,n,val,quant) ! only referenced when option%elem_extract=0
 implicit none
 	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
 	integer:: m,n  ! m,n specify the row and column indices of the desired matrix element
-	DT::val ! val returns Z(m,n), (DT=real(kind=8) or complex(kind=8) depending on your application)
+	DT::val ! val returns Z(m,n), (DT=real(kind=8), complex(kind=8), real(kind=4), complex(kind=4) depending on your application)
 
 	! write your matrix element evaluation function here
 
 end subroutine Element
+```
+
+Sometimes it's more efficient to compute a list of matrix blocks in one shot, then the user can provide a function with the following argument list 
+```
+subroutine Element_ListofBlocks(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) ! only referenced when option%elem_extract>=1
+implicit none
+
+	class(*), pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
+	integer:: Ninter ! number of blocks
+	integer:: allrows(:) ! 1D array containing the global row indices (in original order starting from 1 to N) stacked together
+	integer:: allcols(:) ! 1D array containing the global column indices (in original order starting from 1 to N) stacked together
+	DT,target:: alldat_loc(:) ! 1D array containing the local entry values defined by pmaps (in column major) stacked together
+	integer:: colidx(Ninter) ! 1D array containing sizes of columns of each block
+	integer:: rowidx(Ninter) ! 1D array containing sizes of rows of each block
+	integer:: pgidx(Ninter)  ! 1D array containing the process group number of each block, the number starts from 1
+	integer:: Npmap			 ! number of process groups
+	integer:: pmaps(Npmap, 3) ! 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each block
+
+	! write your matrix element evaluation function here
+
+end subroutine Element_ListofBlocks
 ```
 
 The second option requires a user-provided function to multiply the matrix Z with an arbitrary matrix R that takes the following argument list
@@ -34,7 +65,7 @@ implicit none
 	integer:: num_vect ! column dimension of R
 	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
 
-	! write your matrix multiplication function here
+	! write your matrix multiplication function here. Note that you may need the permutation vector returned by BPACK_construction_Init to convert indices to the original order. 
 
 end subroutine MatVec
 ```
@@ -48,8 +79,9 @@ call SetDefaultOptions(option) ! besides the default options, other options can 
 
 !**** register the user-defined function and derived-type in kernel register
 ker%QuantApp => quant
-ker%FuncZmn => Element
-ker%FuncHMatVec => MatVec  ! Note that at least one of ker%FuncZmn and ker%FuncHMatVec needs to set
+ker%FuncZmn => Element 
+ker%FuncZmnBlock => Element_ListofBlocks
+ker%FuncHMatVec => MatVec  ! Note that at least one of ker%FuncZmn, Element_ListofBlocks and ker%FuncHMatVec needs to set
 
 !**** initialization of the construction phase
 call BPACK_construction_Init(N,P,N_loc,bmat,option,stats,msh,ker,ptree,Coordinates,clustertree)
@@ -66,8 +98,10 @@ call BPACK_construction_Init(N,P,N_loc,bmat,option,stats,msh,ker,ptree,Coordinat
 Construction of the hierarchical matrix:
 ```
 !**** computation of the construction phase, one the following two functions can be called depending on how ker is registered
-call BPACK_construction_Element(bmat,option,stats,msh,ker,element_Zmn_user,ptree) ! construct a hierarchical matrix with fast matrix entry evaluation
+call BPACK_construction_Element(bmat,option,stats,msh,ker,ptree) ! construct a hierarchical matrix with fast matrix entry evaluation
 call BPACK_construction_Matvec(bmat,matvec_user,memory,error,option,stats,ker,ptree,msh) ! construct a hierarchical matrix with fast matrix-vector multiplication
+	! matvec_user should be exactly one of z_matvec_user, d_matvec_user, c_matvec_user, s_matvec_user
+	! error is the estimated error of the resulting compression
 ```
 
 Factorization of the hierarchical matrix:
@@ -77,7 +111,7 @@ call BPACK_Factorization(bmat,option,stats,ptree,msh)
 
 Solve of the hierarchical matrix:
 ```
-call BPACK_Factorization(bmat,x,b,N_loc,nrhs,option,ptree,stats)
+call BPACK_Solution(bmat,x,b,N_loc,nrhs,option,ptree,stats)
 	! bmat is the meta-data storing the compressed and factored matrix
 	! N_loc is the local number of rows/columns
 	! nrhs is the number of right-hand sides
@@ -85,5 +119,70 @@ call BPACK_Factorization(bmat,x,b,N_loc,nrhs,option,ptree,stats)
 	! b of N_loc*nrhs is the local right-hand sides
 	! x of N_loc*nrhs is the local solution vector
 ```
+
+# Example
+A number of examples are available in the build/EXAMPLE folder.
+You can run several examples in this directory as follows. You can modify options in the driver or from command line using "-option --name1 val1 --name2 val2". See available command-line options from "ReadOption()". 
+
+KERREG_Driver.f90:
+(double-real) An example for kernel ridge regression (KRR) with RBF kernel. This example constructs (with entry evaluation), factor a RBF-kernel matrix and uses it for binary classifications with UCI machine learning datasets.
+```
+mpirun -n nmpi ./EXAMPLE/krr
+```
+
+EMCURV_Driver.f90 and EMCURV_Module.f90:
+(double-complex) A 2D EFIE example with several built-in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and solve it with plane-wave excitations.
+```
+mpirun -n nmpi ./EXAMPLE/ie2d
+```
+
+EMCURV_Eigen_Driver.f90 and EMCURV_Module.f90:
+A 2D EFIE example with several built-in geometries. This example constructs (with entry evaluation), factor the EFIE matrix and compute its eigen values with ARPACK. When quant%CMmode=0, the example performs eigen analysis; when quant%CMmode=1, the example performs characteristic mode analysis. When quant%SI=0, regular mode in arpack is invoked; when quant%SI=1, shift-and-invert mode in arpack is invoked.
+```
+mpirun -n nmpi ./EXAMPLE/ie2deigen
+```
+
+EMSURF_Driver.f90 and EMSURF_Module.f90:
+(double-complex) A 3D EFIE/CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/CFIE matrix and solve it with plane-wave excitations.
+```
+sh ./EM3D_DATA/preprocessor_3dmesh/run_gmsh.sh ! this preprocessor generates a few 3D example meshes using Gmsh (http://gmsh.info/)
+mpirun -n nmpi ./EXAMPLE/ie3d
+```
+
+EMSURF_Driver_sp.f90 and EMSURF_Module_sp.f90:
+(single-complex) A 3D EFIE/CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/CFIE matrix and solve it with plane-wave excitations.
+```
+sh ./EM3D_DATA/preprocessor_3dmesh/run_gmsh.sh ! this preprocessor generates a few 3D example meshes using Gmsh (http://gmsh.info/)
+mpirun -n nmpi ./EXAMPLE/ie3d_sp
+```
+
+SMAT_Driver.f90:
+(double-complex) An example for compressing a scattering matrix between two 3D dielectric surfaces. The scattering matrix and the coordinates of each row/column is stored in file. This example first read in the full scattering matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
+```
+sh ./FULLMAT_DATA/file_merge.sh ./FULLMAT_DATA/Smatrix.mat ! this extract a full matrix stored as Smatrix.mat
+mpirun -n nmpi ./EXAMPLE/smat
+```
+
+Frontal_Driver.f90:
+(double-real) An example for compressing a frontal matrix from 3D poisson equations. The frontal matrix is stored in file. This example first read in the full matrix, then used it as entry evaluation (if explicitflag=1) or matrix-vector multiplication (if explicitflag=0) to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
+```
+mpirun -n nmpi ./EXAMPLE/frontal
+```
+
+FrontalDist_Driver.f90:
+(double-complex) An example for compressing a frontal matrix from 3D elastic Helmholtz equations. The frontal matrix is stored in parallel files with a 2x2 process grid. This example first read in the 2D-block cyclic matrix, then used it as matrix-vector multiplication to construct the first hierarchical matrix. Then it uses the first hierarchical matrix as matrix-vector multiplication to construct the second hierarchical matrix.
+```
+sh ./FULLMAT_DATA/file_merge.sh ./FULLMAT_DATA/Frontal_elastic ! this extract 4 files storing the full matrix
+mpirun -n 4 ./EXAMPLE/frontaldist
+```
+
+FULLMAT_Driver.f90:
+(double-real) An example for compressing a randomly generated low-rank matrix (if tst=1) or a full RBF kernel matrix stored in file (if tst=2). The example first constructs a hierarchical matrix with entry evaluation, then uses the first hierarchical matrix as matrix-vector multiplication to construct a second hierarchical matrix.
+```
+sh ./FULLMAT_DATA/file_merge.sh K05N4096.csv ! this extract a full matrix stored as K05N4096.csv
+mpirun -n nmpi ./EXAMPLE/full
+```
+
+
 
 */

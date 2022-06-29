@@ -56,7 +56,7 @@ extern "C" {
       void Cblacs_exit(int);
 }
 
-// 2-norm distance
+/**  2-norm distance */
 inline double dist2(double *x, double *y, int d) {
   double k = 0.;
   for (int i = 0; i < d; i++)
@@ -64,7 +64,7 @@ inline double dist2(double *x, double *y, int d) {
   return k;
 }
 
-// dot product of two real vectors
+/**  dot product of two real vectors */
 inline double dot_product(double* v, double* u, int d)
 {
     double result = 0.0;
@@ -74,7 +74,7 @@ inline double dot_product(double* v, double* u, int d)
 }
 
 
-// Gauss Kernel
+/**  Gauss Kernel */
 inline double Gauss_kernel(double *x, double *y, int d, double h) {
   double dists;
   dists = dist2(x, y, d);
@@ -85,28 +85,28 @@ inline double Gauss_kernel(double *x, double *y, int d, double h) {
   }
 }
 
-//R^4 kernel
+/** R^4 kernel */
 inline double K07_kernel(double *x, double *y, int d) {
   double dists;
   dists = dist2(x, y, d);
   return pow(dists,4);
 }
 
-// sqrt(R^2+h) kernel
+/**  sqrt(R^2+h) kernel */
 inline double K08_kernel(double *x, double *y, int d, double h) {
   double dists;
   dists = dist2(x, y, d);
   return sqrt(pow(dists,2)+h);
 }
 
-// 1/sqrt(R^2+h) kernel
+/**  1/sqrt(R^2+h) kernel */
 inline double K09_kernel(double *x, double *y, int d, double h) {
   double dists;
   dists = dist2(x, y, d);
   return 1.0/sqrt(pow(dists,2)+h);
 }
 
-// Polynomial kernel (X^tY+h)^2
+/**  Polynomial kernel (X^tY+h)^2 */
 inline double K10_kernel(double *x, double *y, int d, double h) {
   double dotp;
   dotp = dot_product(x, y, d);
@@ -122,7 +122,7 @@ inline double K10_kernel(double *x, double *y, int d, double h) {
 
 
 
-// The object handling kernel parameters and sampling function
+/**  The object handling kernel parameters and sampling function */
 class C_QuantApp {
 public:
   vector<double> _data;
@@ -170,8 +170,6 @@ public:
     assert(size_t(_n * _n) == _MatFull.size());
 	}
 
-
-
   inline void Sample(int m, int n, double* val){
 	switch(_ker){
 	case 1: //Gaussian kernel
@@ -205,15 +203,14 @@ public:
   }
 };
 
-
-// The sampling function wrapper required by the Fortran HODLR code
+/** The sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncZmn(int *m, int *n, double *val, C2Fptr quant) {
 
   C_QuantApp* Q = (C_QuantApp*) quant;
   Q->Sample(*m-1,*n-1,val);
 }
 
-// The sampling function wrapper required by the Fortran HODLR code
+/** The sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncBZmn(int *m, int *n, double *val, C2Fptr quant) {
 
   C_QuantApp* Q = (C_QuantApp*) quant;
@@ -230,25 +227,25 @@ inline void C_FuncBZmn(int *m, int *n, double *val, C2Fptr quant) {
 }
 
 
-// The distance function wrapper required by the Fortran HODLR code
+/**  The distance function wrapper required by the Fortran HODLR code */
 inline void C_FuncDistmn(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 
 }
 
-// The compressibility function wrapper required by the Fortran HODLR code
+/**  The compressibility function wrapper required by the Fortran HODLR code */
 inline void C_FuncNearFar(int *m, int *n, int *val, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 
 }
 
-// The extraction sampling function wrapper required by the Fortran HODLR code
+/**  The extraction sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
   d_c_bpack_extractelement(Q->bmat,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
 }
 
-// The extraction sampling function wrapper required by the Fortran HODLR code
+/**  The extraction sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 
@@ -259,14 +256,14 @@ inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nall
 }
 
 
-// The matvec sampling function wrapper required by the Fortran HODLR code
+/**  The matvec sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
   d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);
 }
 
 
-// The matvec sampling function wrapper required by the Fortran HODLR code
+/**  The matvec sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant, double *a, double *b) {
   C_QuantApp* Q = (C_QuantApp*) quant;
   int cnt = (*nvec)*(*nout);
@@ -281,7 +278,7 @@ inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
 }
 
 
-// Read a data file into a vector
+/**  Read a data file into a vector */
 template<typename T>
 vector<T> write_from_file(string filename) {
   vector<T> data;
@@ -297,7 +294,7 @@ vector<T> write_from_file(string filename) {
 }
 
 
-// The command line parser for the example related parameters
+/**  The command line parser for the example related parameters */
 void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
     double opt_d;
     int opt_i;
@@ -506,7 +503,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
   }
 
 ////////////////////////////////////////////////////////////////////////////////
-// --------------------------- Main Code Starts Here ------------------------ //
+/**  --------------------------- Main Code Starts Here ------------------------ */
 
 int main(int argc, char* argv[])
 {
@@ -643,7 +640,8 @@ if(myrank==master_rank){
 
 
 	/*****************************************************************/
-	/* @brief Test Kernels for Liza's data sets */
+
+  /** tst=1: Test Kernels for Liza's data sets */
 if(tst==1){
     vector<double> data_train = write_from_file<double>(trainfile + "_train.csv");
 	assert(Npo == data_train.size() / Ndim);
@@ -655,7 +653,7 @@ if(tst==1){
 }
 
 	/*****************************************************************/
-	/* @brief Test Kernels for Random point clouds */
+	/** tst=2: Test Kernels for Random point clouds */
 if(tst==2){
 	vector<double> data_train(Npo*Ndim);
       for (int i=0; i<Npo*Ndim; i++)
@@ -670,7 +668,7 @@ if(tst==2){
 }
 
 	/*****************************************************************/
-	/* @brief Test Product of two Random matrices*/
+	/** tst=3: Test Product of two Random matrices*/
 if(tst==3){
 	if(ker !=6){
 		if(myrank==master_rank)std::cout<<"Forcing ker to 6 for tst=3."<<std::endl;
@@ -692,7 +690,7 @@ if(tst==3){
 }
 
 	/*****************************************************************/
-	/* @brief Test Full matrices*/
+	/** tst=4: Test Full matrices*/
 if(tst==4){
 	if(ker !=7){
 		if(myrank==master_rank)std::cout<<"Forcing ker to 7 for tst=4."<<std::endl;

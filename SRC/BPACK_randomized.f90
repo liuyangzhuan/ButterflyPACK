@@ -27,7 +27,7 @@ module BPACK_randomMVP
    use Bplus_compress
 
 contains
-
+!>**** Computation of the construction phase with matrix-vector multiplication
    subroutine matvec_user(trans, M, N, num_vect, Vin, Vout, ker)
 
       class(*), pointer :: quant

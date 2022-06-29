@@ -91,7 +91,7 @@ contains
       call init_random_seed()
 
       call assert(associated(ker%QuantApp), 'ker%QuantApp is not assigned')
-      call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')
+      if(option%cpp==0)call assert(associated(ker%FuncZmnBlock) .or. associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'one of the following should be assigned: ker%FuncZmn, ker%FuncZmnBlock, ker%FuncHMatVec')
 
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
