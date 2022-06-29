@@ -1,6 +1,0 @@
-/*! \page GPU_Support GPU Support
-
-
-
-
-*/

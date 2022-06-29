@@ -908,7 +908,6 @@ WARN_LOGFILE           =
 	@CMAKE_CURRENT_SOURCE_DIR@/EXAMPLE/sButterflyPACK_config.fi \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Overview.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Installation.txt \
-	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/GPU_support.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Algorithm.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/Fortran.txt \
 	@CMAKE_CURRENT_SOURCE_DIR@/doc/doxygen/pages/C_C++.txt \
