@@ -294,9 +294,9 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
       case 2: {
         std::istringstream iss(optarg);
         iss >> opt_d;
-        z_c_bpack_set_D_option(&option0, "tol_comp", opt_d);
+        z_c_bpack_set_D_option(&option0, "tol_comp", opt_d*0.1);
         z_c_bpack_set_D_option(&option0, "tol_rand", opt_d);
-        z_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d*0.1);
+        z_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d*3e-1);
       } break;
       case 3: {
         std::istringstream iss(optarg);
@@ -670,6 +670,10 @@ if(myrank==master_rank){
 
 	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
+  // tol=1e-4;
+	// z_c_bpack_set_D_option(&option1, "tol_comp", tol);
+	// z_c_bpack_set_D_option(&option1, "tol_rand", tol);           // bf_mv uses this tolerance
+	// z_c_bpack_set_D_option(&option1, "tol_Rdetect", tol*3e-1);   // bf_mv uses this tolerance
 
 	// z_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
 	// z_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
