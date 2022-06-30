@@ -23,6 +23,7 @@
 module BPACK_structure
    use BPACK_Utilities
    use BPACK_DEFS
+   use MISC_Utilities
 contains
 
 ! far is returning 1, near if returning 0
@@ -100,7 +101,6 @@ contains
 
    real(kind=8) function distance_user(edgem, edgen, ker, msh, option, ptree, stats)
 
-      use BPACK_DEFS
       implicit none
 
       integer edgem, edgen
@@ -143,7 +143,6 @@ contains
 
    real(kind=8) function distance_geo(edgem, edgen, ker, msh, option, ptree, stats)
 
-   use BPACK_DEFS
    implicit none
 
    integer edgem, edgen
@@ -179,7 +178,6 @@ end function distance_geo
 !     Use with caution !!!
    real(kind=8) function distance_gram(edgem, edgen, ker, msh, option, ptree, stats)
 
-      use BPACK_DEFS
       implicit none
 
       integer edgem, edgen, passflag, rows(1), cols(1)
@@ -220,7 +218,6 @@ end function distance_geo
 !     Use with caution !!!
    subroutine distance_gram_block(nrow, ncol, rows, cols, dists, ker, msh, option, ptree, stats)
 
-      use BPACK_DEFS
       implicit none
 
       integer nrow, ncol, ii, jj
@@ -266,7 +263,6 @@ end function distance_geo
 
 
    recursive subroutine Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
-      use BPACK_DEFS
       implicit none
       type(Hoption)::option
       type(Hstat)::stats
@@ -413,8 +409,7 @@ end function distance_geo
 
    subroutine Cluster_partition(bmat, option, msh, ker, stats, ptree)
 
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       integer Cflag
@@ -1939,7 +1934,7 @@ end function distance_geo
 
 
       call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-      if (nprow /= -1 .and. npcol /= -1) then
+      if (myrow /= -1 .and. mycol /= -1) then
 
          num_blocks = 2**msh%Dist_level
          myArows = numroc_wp(num_blocks, 1, myrow, 0, nprow)
