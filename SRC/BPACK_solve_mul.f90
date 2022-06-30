@@ -1566,36 +1566,40 @@ contains
             mode_i='C'
             mode_o='R'
             allocate(vector2D_i(max(h_mat%myAcols,1)))
+            allocate(vector2D_o(max(h_mat%myArows,1)))
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
             do j = 1, h_mat%myAcols
                call l2g(j, mycol, num_blocks, npcol, 1, jj)
                blocks_i => h_mat%Local_blocks(j, 1)
                allocate(vector2D_i(j)%vector(blocks_i%N,num_vectors))
                vector2D_i(j)%vector=0
             enddo
-            allocate(vector2D_o(max(h_mat%myArows,1)))
             do i = 1, h_mat%myArows
                call l2g(i, myrow, num_blocks, nprow, 1, ii)
                blocks_i => h_mat%Local_blocks(1, i)
                allocate(vector2D_o(i)%vector(blocks_i%M,num_vectors))
                vector2D_o(i)%vector=0
             enddo
+            endif
          else
             mode_i='R'
             mode_o='C'
             allocate(vector2D_i(max(h_mat%myArows,1)))
+            allocate(vector2D_o(max(h_mat%myAcols,1)))
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
             do i = 1, h_mat%myArows
                call l2g(i, myrow, num_blocks, nprow, 1, ii)
                blocks_i => h_mat%Local_blocks(1, i)
                allocate(vector2D_i(i)%vector(blocks_i%M,num_vectors))
                vector2D_i(i)%vector=0
             enddo
-            allocate(vector2D_o(max(h_mat%myAcols,1)))
             do j = 1, h_mat%myAcols
                call l2g(j, mycol, num_blocks, npcol, 1, jj)
                blocks_i => h_mat%Local_blocks(j, 1)
                allocate(vector2D_o(j)%vector(blocks_i%N,num_vectors))
                vector2D_o(j)%vector=0
             enddo
+            endif
          endif
 
 
@@ -1623,22 +1627,26 @@ contains
          call Hmat_Redistribute2Dto1D_Vector(Vout, Ns, num_vectors, vector2D_o, h_mat, ptree, ptree%nproc, stats, mode_o)
 
          if (trans == 'N') then
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
             do j = 1, h_mat%myAcols
                deallocate(vector2D_i(j)%vector)
             enddo
-            deallocate(vector2D_i)
             do i = 1, h_mat%myArows
                deallocate(vector2D_o(i)%vector)
             enddo
+            endif
+            deallocate(vector2D_i)
             deallocate(vector2D_o)
          else
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
             do i = 1, h_mat%myArows
                deallocate(vector2D_i(i)%vector)
             enddo
-            deallocate(vector2D_i)
             do j = 1, h_mat%myAcols
                deallocate(vector2D_o(j)%vector)
             enddo
+            endif
+            deallocate(vector2D_i)
             deallocate(vector2D_o)
          endif
 

@@ -97,29 +97,29 @@ module BPACK_DEFS
 
     !**** hierarchical process grid associated with one process node in the process tree (used for parallel recursive LR compression)
     type grid
-        integer :: nsprow, nspcol ! number of process rows/columns as square as possible, it's designed that nspcol>=nsprow
-        integer :: hprow, hpcol ! head process in the row/column process tree
-        integer :: ctxt ! blacs context
+        integer :: nsprow=0, nspcol=0 ! number of process rows/columns as square as possible, it's designed that nspcol>=nsprow
+        integer :: hprow=-1, hpcol=-1 ! head process in the row/column process tree
+        integer :: ctxt=-1 ! blacs context
         integer :: Comm = MPI_COMM_NULL ! MPI communicator for this grid
-        integer :: gprow, gpcol ! the group number in the row and column dimension, no longer needed once constructed
+        integer :: gprow=-1, gpcol=-1 ! the group number in the row and column dimension, no longer needed once constructed
         type(grid), pointer::gdc(:) => null() ! pointer to its two children
     end type grid
 
     !**** process groups/nodes in the process tree
     type procgroup
-        integer :: nprow, npcol, nproc ! number of processors and 2D grids
-        integer :: head, tail ! start and end process in the Comm of proctree
-        integer :: ctxt ! blacs context
-        integer :: ctxt1D ! blacs context 1D Row noncyclic (used to distribute from 2D grids to customized noncyclic 1D grid)
-        integer :: ctxt1Dcol ! blacs context 1D Col noncyclic (used to pass into pgemr2df90, otherwise pgemr2d will create an internal 1D col grid, see http://www.netlib.org/scalapack/explore-html/dd/dcd/pdgemr_8c_source.html)
-        integer :: ctxt_head ! blacs context only involving the head process (used to gather and broadcast)
+        integer :: nprow=0, npcol=0, nproc=0 ! number of processors and 2D grids
+        integer :: head=-1, tail=-1 ! start and end process in the Comm of proctree
+        integer :: ctxt=-1 ! blacs context
+        integer :: ctxt1D=-1 ! blacs context 1D Row noncyclic (used to distribute from 2D grids to customized noncyclic 1D grid)
+        integer :: ctxt1Dcol=-1 ! blacs context 1D Col noncyclic (used to pass into pgemr2df90, otherwise pgemr2d will create an internal 1D col grid, see http://www.netlib.org/scalapack/explore-html/dd/dcd/pdgemr_8c_source.html)
+        integer :: ctxt_head=-1 ! blacs context only involving the head process (used to gather and broadcast)
         integer :: Comm = MPI_COMM_NULL  ! MPI communicator for all processes in this node
         ! type(grid),pointer::gd=>null() ! the hierarchical process grid structure associated with each process group
     end type procgroup
 
     !**** binary process tree
     type proctree
-        integer nlevel ! number of tree levels
+        integer:: nlevel=-1 ! number of tree levels
         integer :: Comm = MPI_COMM_NULL ! MPI communicator for all processes in this tree
         integer :: nproc = 0 ! # of processes in this tree
         integer :: MyID = 0 ! MPI Rank in Comm
@@ -135,10 +135,10 @@ module BPACK_DEFS
 
     !**** communication buffer for all to all communication
     type commquant1D
-        integer offset ! offset in my local array
-        integer size ! size of the message along first dimension
-        integer size_i ! size of the message along first dimension
-        integer active ! whether this communication pair is active
+        integer:: offset=-1 ! offset in my local array
+        integer:: size=0 ! size of the message along first dimension
+        integer:: size_i=0 ! size of the message along first dimension
+        integer:: active=0 ! whether this communication pair is active
         DT, allocatable::dat(:, :) ! communication buffer
         integer, allocatable::dat_i(:, :) ! communication buffer
         type(dat_pack), allocatable::dat_pk(:, :) ! communication buffer
@@ -146,9 +146,9 @@ module BPACK_DEFS
 
     !**** cluster of points/indices
     type basisgroup
-        integer pgno ! process group number of this cluster
-        integer head ! head index
-        integer tail ! tail index
+        integer:: pgno=-1 ! process group number of this cluster
+        integer:: head=-1 ! head index
+        integer:: tail=-1 ! tail index
         ! integer level ! level of this cluster group
         real(kind=8):: radius = 0 ! geomerical radius of this group
         real(kind=8):: boundary(2) = 0 ! seperators used to split this group into children group
@@ -366,7 +366,7 @@ module BPACK_DEFS
         integer idxs, idxe ! same as msh%idxs and msh%idxe
         integer, pointer:: N_p(:, :) => null() ! row sizes of all processes sharing this Hmat
         type(basisgroup), allocatable:: basis_group(:) ! basis_group at the Dist_level level, this is needed as msh is not currently passed to matvec interface
-        integer myArows,myAcols ! local number of row and column blocks
+        integer:: myArows=0,myAcols=0 ! local number of row and column blocks
         type(global_matricesblock), pointer :: blocks_root => null(), First_block_eachlevel(:) => null()
         type(matrixblock), pointer :: Local_blocks(:, :) => null()
         type(matrixblock), pointer :: Local_blocks_copy(:, :) => null() ! copy of the forward matrix
