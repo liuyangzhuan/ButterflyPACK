@@ -126,7 +126,8 @@ target_link_libraries(cfio ${all_link_libs_d})
 target_link_libraries(cfio ${all_link_libs_z})
 add_dependencies(cfio ctest)
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+# exclude Clang as Clang<13 doesn't support cabs,conj  
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CIFEXM InverseFIO_Driver.cpp)
 add_executable(cifio ${CIFEXM})
 target_link_libraries(cifio ${all_link_libs_d})
@@ -134,7 +135,7 @@ target_link_libraries(cifio ${all_link_libs_z})
 add_dependencies(cifio cfio)
 endif()
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CIFEXM2D InverseFIO2D_Driver.cpp)
 add_executable(cifio2d ${CIFEXM2D})
 target_link_libraries(cifio2d ${all_link_libs_d})
