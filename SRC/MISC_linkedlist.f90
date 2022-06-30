@@ -14,10 +14,13 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file MISC_linkedlist.f90
+!> @brief Low-level subroutines for the linked-list data structure
+
 #include "ButterflyPACK_config.fi"
 module BPACK_linkedlist
 
-!**** declarations for list type with unlimited polymorphism
+!>**** declarations for list type with unlimited polymorphism
    type :: nod
       type(nod), pointer :: next => null()
       class(*), allocatable :: item

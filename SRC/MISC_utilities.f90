@@ -14,6 +14,9 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file MISC_utilities.f90
+!> @brief Low-level miscellaneous subroutines and functions
+
 #include "ButterflyPACK_config.fi"
 
 ! ! ! ! ! ! ! the following can be commented out to avoid multiple definition for intel compilers, which means for now I'm not using VSL at all.
@@ -1148,7 +1151,7 @@ contains
                rank = 1
                mat(:, 1) = 0d0
             else
-               !!!!**** generate 2D grid blacs quantities
+               !!!!>**** generate 2D grid blacs quantities
                ctxt = ptree%pgrp(pgno)%ctxt
                call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
                if (myrow /= -1 .and. mycol /= -1) then
@@ -1163,7 +1166,7 @@ contains
                   mat2D = 0
                endif
 
-               !!!!**** redistribution of input matrix
+               !!!!>**** redistribution of input matrix
                call Redistribute1Dto2D(mat, M_p, 0, pgno, mat2D, M, 0, pgno, N, ptree)
 
                ! Compute RRQR
@@ -1201,7 +1204,7 @@ contains
 
                call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
-               !!!!**** redistribution of output matrix
+               !!!!>**** redistribution of output matrix
                call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)
 
                deallocate (mat2D)
@@ -1576,7 +1579,7 @@ contains
 
    complex(kind=8) function c8_normal_01(seed)
 
-!*****************************************************************************80
+!>*****************************************************************************80
 !
 !! C8_NORMAL_01 returns a unit pseudonormal C8.
 !
@@ -1624,7 +1627,7 @@ contains
    end function c8_normal_01
 
    real(kind=8) function r8_normal_01(seed)
-!*****************************************************************************80
+!>*****************************************************************************80
 !
 !! R8_NORMAL_01 returns a unit pseudonormal R8.
 !
@@ -1674,7 +1677,7 @@ contains
 
    real(kind=8) function r8_uniform_01(seed)
 
-!*****************************************************************************80
+!>*****************************************************************************80
 !
 !! R8_UNIFORM_01 returns a unit pseudorandom R8.
 !
@@ -1769,8 +1772,8 @@ contains
    end function r8_uniform_01
 
 ! ****************************************************************************************** !
-! ***************                          assert function                               !*********** !
-! ***************                                                                                                      !*********** !
+! ***************                          assert function                               !>*********** !
+! ***************                                                                                                      !>*********** !
 ! ****************************************************************************************** !
 ! output an error message is the first argument is false
    subroutine assert(statement, msg)
@@ -3288,7 +3291,7 @@ contains
       return
    end subroutine PIKSRT_INT_Multi
 
-!*** remove the duplicates in an integer array
+!>*** remove the duplicates in an integer array
    subroutine remove_dup_int(array, nin, nout)
       implicit none
       integer array(nin)
@@ -3431,7 +3434,7 @@ contains
 
    END subroutine quick_sort
 
-   !******* convert from a gloal Cartesian coordinate to a local Cartesian coordinate (origin, xunit, yunit, zunit) and then convert to the local spherial coordinate
+   !>******* convert from a gloal Cartesian coordinate to a local Cartesian coordinate (origin, xunit, yunit, zunit) and then convert to the local spherial coordinate
    subroutine Cart2Sph_Loc(xin, yin, zin, origin, xunit, yunit, zunit, r, theta, phi)
       implicit none
       real(kind=8), intent(in)::xin, yin, zin, origin(3),xunit(3),yunit(3),zunit(3)
@@ -3832,7 +3835,7 @@ contains
 
 
 
-!**** create a array treeleaf holding size of each leaf box of a tree with nlevel levels (0<=level<=nlevel)
+!>**** create a array treeleaf holding size of each leaf box of a tree with nlevel levels (0<=level<=nlevel)
    recursive subroutine CreateLeaf_Natural(nlevel, level, group, idxs, idxe, treeleaf)
       implicit none
       integer nlevel, level, group, idxs, idxe
@@ -3876,7 +3879,7 @@ contains
       end do
    end subroutine NumberingPtree
 
-!**** computation of the local butterfly block ranges owned by this MPI rank
+!>**** computation of the local butterfly block ranges owned by this MPI rank
    !ptree: process tree
    !pgno: the process group number that shares this butterfly
    !level_butterfly: number of butterfly levels
@@ -3973,7 +3976,7 @@ contains
       endif
    end subroutine GetLocalBlockRange
 
-!**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
+!>**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
    !ptree: process tree
    !pgno: the process group number that shares this butterfly
    !level_butterfly: number of butterfly levels
@@ -4003,7 +4006,7 @@ contains
       endif
    end subroutine GetPgno_Sub
 
-!**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
+!>**** computation of the process group number "pgno_sub" that shares the (index_i,index_j,level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
    !ptree: process tree
    !pgno: the process group number that shares this butterfly
    !level_butterfly: number of butterfly levels
@@ -4231,7 +4234,7 @@ contains
       ! stop
    end subroutine CreatePtree
 
-! !******** Create a new square grid gd.
+! !>******** Create a new square grid gd.
 ! ! Note: Ideally, MPI_Comm_parent should involve smaller process counts with increasing recursion level, but I haven't figured out the local numbering in groupmembers_sml and pmap
 ! recursive subroutine CreateNewGrid(gd,cridx,ptree,ptreerow,ptreecol,nspcol_parent,MPI_Group_parent,MPI_Comm_parent)
    ! implicit none

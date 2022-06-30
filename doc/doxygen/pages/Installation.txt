@@ -1,0 +1,63 @@
+/*! \page installation Installation and Requirements
+\tableofcontents
+
+# CMake Based Build
+The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
+
+For an installation with GNU compiliers, do:
+
+\code {.bash}
+> export BLAS_LIB=<Lib of the BLAS installation>
+> export LAPACK_LIB=<Lib of the LAPACK installation>
+> export SCALAPACK_LIB=<Lib of the SCALAPACK installation>
+> export ARPACK_LIB=<Lib of the ARPACK installation> # this is optional
+> mkdir build ; cd build;
+> cmake .. \
+ 	-DCMAKE_Fortran_FLAGS="" \
+ 	-DCMAKE_CXX_FLAGS="" \
+ 	-Denable_doc=OFF \
+ 	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
+ 	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
+ 	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}" \
+ 	-DTPL_ARPACK_LIBRARIES="${ARPACK_LIB}" \
+ 	-DBUILD_SHARED_LIBS=ON \
+ 	-DCMAKE_Fortran_COMPILER=mpif90 \
+ 	-DCMAKE_CXX_COMPILER=mpicxx \
+ 	-DCMAKE_C_COMPILER=mpicc \
+ 	-DCMAKE_INSTALL_PREFIX=. \ # installation path
+	-DCMAKE_INSTALL_LIBDIR=./lib \ # some system installs the libraries to lib64 by default
+ 	-DCMAKE_BUILD_TYPE=Release
+\endcode
+
+Then you can install the libraries (four precisions: libzbutterflypack, libdbutterflypack, libsbutterflypack, libcbutterflypack), 
+the examples (C++: ctest, ctest_simple, cfio, cifio, cfio2d, go2d, go3d. Fortran: ie2d, ie2deigen, ie3d, ie3deigen, ie3dport, ie3dporteigen, ie3d_sp, smat, frontal, frontaldist, krr, fullkrr, full, full_simple), and the documentation (needs -Denable_doc=ON) with:  
+\code {.bash}
+> make <example name>
+> make install
+> make doc  # the latest document will be generated at build/doc
+\endcode
+
+( see example cmake scripts in example_scripts: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
+
+
+# SPACK, xSDK \& E4S
+
+ButterflyPACK can also be installed through Spack (https://spack.io), which 
+makes installing scientific software easy. With Spack, you can build a
+package with multiple versions, configurations, platforms, and
+compilers, and all of these builds can coexist on the same machine:
+\code {.bash}
+git clone https://github.com/spack/spack.git
+. spack/share/spack/setup-env.sh
+spack install butterflypack
+\endcode
+This can take a while, since by default Spack will build all
+dependencies.
+
+
+Furthermore, ButterflyPACK is also part of the ECP __xSDK__
+(https://xsdk.info) and __E4S__ (https://e4s-project.github.io)
+software development kits. By installing the full xSDK, you get
+ButterflyPACK, all of it's dependecies and several other scientific software libraries.
+
+*/

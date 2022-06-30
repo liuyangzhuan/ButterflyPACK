@@ -14,6 +14,10 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file BPACK_randomized.f90
+!> @brief Subroutines for constructing H, HOD-LR or HOD-BF matrices from black-box matvec (sketching)
+
+
 #include "ButterflyPACK_config.fi"
 module BPACK_randomMVP
    use BPACK_DEFS
@@ -23,7 +27,7 @@ module BPACK_randomMVP
    use Bplus_compress
 
 contains
-
+!>**** Computation of the construction phase with matrix-vector multiplication
    subroutine matvec_user(trans, M, N, num_vect, Vin, Vout, ker)
 
       class(*), pointer :: quant
@@ -43,7 +47,7 @@ contains
 
    end subroutine matvec_user
 
-!**** Computation of the construction phase with matrix-vector multiplication
+!>**** Computation of the construction phase with matrix-vector multiplication
    subroutine BPACK_construction_Matvec(bmat, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
       implicit none
 
@@ -222,7 +226,7 @@ contains
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' #sample:', rank_pre_max
 
-               !!!!*** terminate if 1. rank smaller than num_vec
+               !!!!>*** terminate if 1. rank smaller than num_vec
                if (rank_new_max == rank_pre_max) then
                   curr => h_mat%lstblks(level_c)%head
                   do mm = 1, h_mat%lstblks(level_c)%num_nods
@@ -1104,13 +1108,13 @@ contains
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A7,Es14.7,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max
 
-               ! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing
+               ! !!!!>*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing
                ! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. ((rank_new_max>rank_max_lastiter .and. tt>1).or.tt==1))then
 
-               ! !!!!*** terminate if 1. error small enough or 2. error not decreasing or 3. rank smaller than num_vec
+               ! !!!!>*** terminate if 1. error small enough or 2. error not decreasing or 3. rank smaller than num_vec
                ! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. rank_new_max==rank_pre_max)then
 
-               !!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec
+               !!!!>*** terminate if 1. error small enough or 2. rank smaller than num_vec
                if (error_inout > option%tol_rand .and. rank_new_max == rank_pre_max) then
                   do bb = Bidxs, Bidxe
                      call BF_delete(block_rand(bb - Bidxs + 1), 1)
@@ -2051,7 +2055,7 @@ contains
       offout(1) = 0
       offout(2) = block_off1%M
 
-      !!!*** redistribute AR from process layout of hodlr to the process layout of block_off1 and block_off2
+      !!!>*** redistribute AR from process layout of hodlr to the process layout of block_off1 and block_off2
       call MPI_ALLREDUCE(MPI_IN_PLACE, ranks(ii*2 - 1 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
 
@@ -2074,7 +2078,7 @@ contains
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
       enddo
 
-      !!!*** compute range of AR from QR for block_off1 and block_off2
+      !!!>*** compute range of AR from QR for block_off1 and block_off2
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(ii*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2093,7 +2097,7 @@ contains
       call MPI_ALLREDUCE(MPI_IN_PLACE, ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
       ! write(*,*)'wonima',ii*2-1-Bidxs+1,ranks(ii*2-1-Bidxs+1),ii*2-Bidxs+1,ranks(ii*2-Bidxs+1),ptree%MyID,mm(1)
 
-      !!!*** redistribute AR from process layout of block_off1 and block_off2  to the process layout of hodlr
+      !!!>*** redistribute AR from process layout of block_off1 and block_off2  to the process layout of hodlr
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(ii*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2109,7 +2113,7 @@ contains
 
    end subroutine PComputeRange_twoforward
 
-!!!!!***** this subroutine is part of the randomized SVD.
+!!!!!>***** this subroutine is part of the randomized SVD.
 ! Given B^T = (Q^cA)^T (N_loc x ranks(bb)) and Q (M_loc x ranks(bb)) in the process layout of hodlr, it computes SVD B=USV and output A = (QU)*(SV)
    subroutine PQxSVDTruncate_twoforward(ho_bf1, level, Bidxs, bb_inv, ranks, Q, QcA_trans, block_rand, option, ptree, stats,tolerance_abs)
 
@@ -2146,7 +2150,7 @@ contains
       offN(1) = block_off1%M
       offN(2) = 0
 
-      !!!*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
+      !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
       n1 = OMP_get_wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
@@ -2179,7 +2183,7 @@ contains
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
-      !!!*** compute B^T=V^TS^TU^T and A = (QU)*(SV)
+      !!!>*** compute B^T=V^TS^TU^T and A = (QU)*(SV)
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2200,7 +2204,7 @@ contains
 
    end subroutine PQxSVDTruncate_twoforward
 
-!!!!!***** this subroutine is part of the randomized HODLR_BF.
+!!!!!>***** this subroutine is part of the randomized HODLR_BF.
 ! The difference between this subroutine and BF_Resolving_Butterfly_LL_dat is that this subroutine requires redistribution of RandVectIn and RandVectOut to match the data layout of block_rand(bb_inv*2-1-Bidxs+1) and block_rand(bb_inv*2-Bidxs+1). Therefore this subroutine reconstructs two neighbouring butterflies together.
    subroutine BF_Resolving_Butterfly_LL_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn, RandVectOut, option, ptree, msh, stats)
 
@@ -2238,7 +2242,7 @@ contains
       offN(1) = block_off1%M
       offN(2) = 0
 
-      !!!*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
+      !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
       n1 = OMP_get_wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
@@ -2271,7 +2275,7 @@ contains
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
-      !!!*** call BF_Resolving_Butterfly_LL_dat
+      !!!>*** call BF_Resolving_Butterfly_LL_dat
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2292,7 +2296,7 @@ contains
 
    end subroutine BF_Resolving_Butterfly_LL_dat_twoforward
 
-!!!!!***** this subroutine is part of the randomized HODLR_BF.
+!!!!!>***** this subroutine is part of the randomized HODLR_BF.
 ! The difference between this subroutine and BF_Resolving_Butterfly_RR_dat is that this subroutine requires redistribution of RandVectIn and RandVectOut to match the data layout of block_rand(bb_inv*2-1-Bidxs+1) and block_rand(bb_inv*2-Bidxs+1). Therefore this subroutine reconstructs two neighbouring butterflies together.
    subroutine BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn, RandVectOut, option, ptree, msh, stats)
 
@@ -2330,7 +2334,7 @@ contains
       offN(1) = block_off1%M
       offN(2) = 0
 
-      !!!*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
+      !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
       n1 = OMP_get_wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
@@ -2363,7 +2367,7 @@ contains
       n2 = OMP_get_wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
-      !!!*** call BF_Resolving_Butterfly_RR_dat
+      !!!>*** call BF_Resolving_Butterfly_RR_dat
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p

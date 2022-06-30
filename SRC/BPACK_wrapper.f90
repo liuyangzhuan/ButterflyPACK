@@ -13,6 +13,8 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file BPACK_wrapper.f90
+!> @brief C++ interfaces for the high-level Fortran subroutines using iso_c_binding
 
 #include "ButterflyPACK_config.fi"
 module BPACK_wrapper
@@ -28,6 +30,15 @@ module BPACK_wrapper
 
 contains
 
+!>****** Fortran interface for the matvec function required by BPACK_construction_Matvec, inside which a c++ function pointer ker%C_FuncHMatVec is called \n
+   !>******! It is assumed the ker%C_FuncHMatVec interfaces with local input and output vectors, which assume an already ordered hierarchical matrix
+   !> @param ker: the structure containing kernel quantities
+   !> @param Vin: input vector
+   !> @param Vout: output vector
+   !> @param M: (local) row dimension of the matrix
+   !> @param N: (local) column dimension of the matrix
+   !> @param trans: 'N', 'C' or 'T'
+   !> @param num_vect: number of vectors
    subroutine matvec_user_C(trans, M, N, num_vect, Vin, Vout, ker)
 
       integer, INTENT(IN):: M, N, num_vect
@@ -47,7 +58,26 @@ contains
 
    end subroutine matvec_user_C
 
-   !******! It is assumed the C_BMatVec does not need ldi and ldo!
+
+
+!>****** Fortran interface for the matvec function required by BF_randomized, inside which a c++ function pointer ker%C_FuncBMatVec is called \n
+   !>******! It is assumed the ker%C_FuncBMatVec does not need ldi and ldo! \n
+   !>******! It is assumed the ker%C_FuncBMatVec interfaces with local input and output vectors, which assume already ordered rows/columns
+   !> @param ker: the structure containing kernel quantities
+   !> @param block_o: not referenced
+   !> @param trans: 'N', 'C' or 'T'
+   !> @param M: (local) row dimension of the block
+   !> @param N: (local) column dimension of the block
+   !> @param num_vect: number of vectors
+   !> @param Vin: input vector
+   !> @param ldi: leading dimension of Vin, needs to be M or N depending on trans
+   !> @param Vout: output vector
+   !> @param ldo: leading dimension of Vout, needs to be M or N depending on trans
+   !> @param a: Vout = a*A*Vin + b*Vout
+   !> @param b: Vout = a*A*Vin + b*Vout
+   !> @param ptree: the structure containing process tree
+   !> @param stats: the structure containing statistics
+   !> @param operand1: not referenced
    subroutine Bmatvec_user_C(ker, block_o, trans, M, N, num_vect, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
       implicit none
       class(*)::ker
@@ -72,11 +102,11 @@ contains
       end select
    end subroutine Bmatvec_user_C
 
-!**** C interface of process tree construction
-   !nmpi: number of MPIs for one hodlr
-   !MPIcomm: MPI communicator from C caller
-   !groupmembers: MPI ranks in MPIcomm for one hodlr
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of process tree construction
+   !> @param nmpi: number of MPIs for one hodlr
+   !> @param MPIcomm: MPI communicator from C caller
+   !> @param groupmembers: MPI ranks in MPIcomm for one hodlr
+   !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Createptree(nmpi, groupmembers, MPIcomm, ptree_Cptr) bind(c, name="c_bpack_createptree")
       implicit none
       integer nmpi
@@ -90,25 +120,24 @@ contains
       ptree_Cptr = c_loc(ptree)
    end subroutine C_BPACK_Createptree
 
-!**** C interface of initializing statistics
-   !nmpi: number of MPIs for one hodlr
-   !MPIcomm: MPI communicator from C caller
-   !groupmembers: MPI ranks in MPIcomm for one hodlr
-   !stats_Cptr: the structure containing statistics
+!>**** C interface of initializing statistics
+   !> @param stats_Cptr: the structure containing statistics
    subroutine C_BPACK_Createstats(stats_Cptr) bind(c, name="c_bpack_createstats")
       implicit none
       type(c_ptr), intent(out) :: stats_Cptr
       type(Hstat), pointer::stats
 
       allocate (stats)
-      !**** initialize statistics variables
+      !>**** initialize statistics variables
       call InitStat(stats)
       stats_Cptr = c_loc(stats)
 
    end subroutine C_BPACK_Createstats
 
-!**** C interface of getting one entry in stats
-   !stats_Cptr: the structure containing stats
+!>**** C interface of getting one entry in stats
+   !> @param stats_Cptr: the structure containing stats
+   !> @param nam: name of the stats
+   !> @param val_d: value of the stats
    subroutine C_BPACK_Getstats(stats_Cptr, nam, val_d) bind(c, name="c_bpack_getstats")
       implicit none
       real(kind=8)::val_d
@@ -299,9 +328,9 @@ contains
 
    end subroutine C_BPACK_Getstats
 
-!**** C interface of printing statistics
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of printing statistics
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Printstats(stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_printstats")
       implicit none
       type(c_ptr) :: stats_Cptr
@@ -311,29 +340,29 @@ contains
 
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
-      !**** print statistics variables
+      !>**** print statistics variables
       call PrintStat(stats, ptree)
 
    end subroutine C_BPACK_Printstats
 
-!**** C interface of initializing option
-   !option_Cptr: the structure containing option
+!>**** C interface of initializing option
+   !> @param option_Cptr: the structure containing option
    subroutine C_BPACK_Createoption(option_Cptr) bind(c, name="c_bpack_createoption")
       implicit none
       type(c_ptr) :: option_Cptr
       type(Hoption), pointer::option
 
       allocate (option)
-      !**** set default hodlr options
+      !>**** set default hodlr options
       call SetDefaultOptions(option)
 
       option_Cptr = c_loc(option)
 
    end subroutine C_BPACK_Createoption
 
-!**** C interface of copy option
-   !option_Cptr: the structure containing option
-   !option_Cptr1: the structure containing option
+!>**** C interface of copy option
+   !> @param option_Cptr: the structure containing option
+   !> @param option_Cptr1: the structure containing option
    subroutine C_BPACK_Copyoption(option_Cptr, option_Cptr1) bind(c, name="c_bpack_copyoption")
       implicit none
       type(c_ptr) :: option_Cptr, option_Cptr1
@@ -341,7 +370,7 @@ contains
 
       call c_f_pointer(option_Cptr, option)
 
-      !****copy hodlr options
+      !>****copy hodlr options
       allocate (option1)
       call CopyOptions(option, option1)
 
@@ -349,9 +378,9 @@ contains
 
    end subroutine C_BPACK_Copyoption
 
-!**** C interface of printing option
-   !option_Cptr: the structure containing option
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of printing option
+   !> @param option_Cptr: the structure containing option
+   !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Printoption(option_Cptr, ptree_Cptr) bind(c, name="c_bpack_printoption")
       implicit none
       type(c_ptr) :: option_Cptr
@@ -366,8 +395,10 @@ contains
    end subroutine C_BPACK_Printoption
 
 
-!**** C interface of getting one entry in option, always returning double
-   !stats_Cptr: the structure containing stats
+!>**** C interface of getting one entry in option, always returning double
+   !> @param option_Cptr: the structure containing option
+   !> @param nam: name of the option
+   !> @param val_d: value of the option
    subroutine C_BPACK_Getoption(option_Cptr, nam, val_d) bind(c, name="c_bpack_getoption")
       implicit none
       real(kind=8)::val_d
@@ -579,8 +610,10 @@ contains
    end subroutine C_BPACK_Getoption
 
 
-!**** C interface of set one entry in option
-   !option_Cptr: the structure containing option
+!>**** C interface of set one entry in option
+   !> @param option_Cptr: the structure containing option
+   !> @param nam: name of the option
+   !> @param val_Cptr: value of the option
    subroutine C_BPACK_Setoption(option_Cptr, nam, val_Cptr) bind(c, name="c_bpack_setoption")
       implicit none
       type(c_ptr) :: option_Cptr
@@ -605,7 +638,7 @@ contains
 
       call c_f_pointer(option_Cptr, option)
 
-!**** integer parameters
+!>**** integer parameters
       if (trim(str) == 'n_iter') then
          call c_f_pointer(val_Cptr, val_i)
          option%n_iter = val_i
@@ -777,7 +810,7 @@ contains
       !    valid_opt = 1
       ! endif
 
-!**** double parameters
+!>**** double parameters
       if (trim(str) == 'tol_comp') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_comp = val_d
@@ -854,16 +887,16 @@ contains
 
 
 
-!**** C interface of matrix construction
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !msh_Cptr: the structure containing points and ordering information
-   !ker_Cptr: the structure containing kernel quantities
-   !ptree_Cptr: the structure containing process tree
-   !C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
-   !C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of matrix construction
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param ker_Cptr: the structure containing kernel quantities
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
+   !> @param C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bpack_construct_element_compute")
       implicit none
 
@@ -894,7 +927,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       character(len=1024)  :: strings
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
@@ -902,24 +935,24 @@ contains
       call c_f_pointer(msh_Cptr, msh)
       call c_f_pointer(ker_Cptr, ker)
 
-      !**** register the user-defined function and type in ker
+      !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmn => C_FuncZmn
       ker%C_FuncZmnBlock => C_FuncZmnBlock
 
       t1 = OMP_get_wtime()
-      !**** computation of the construction phase
+      !>**** computation of the construction phase
       call BPACK_construction_Element(bmat, option, stats, msh, ker, ptree)
       ! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
       t2 = OMP_get_wtime()
 
-      !**** delete neighours in msh
+      !>**** delete neighours in msh
       if(allocated(msh%nns))then
          call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
          deallocate(msh%nns)
       endif
 
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -929,24 +962,24 @@ contains
 
    end subroutine C_BPACK_Construct_Element_Compute
 
-!**** C interface of matrix construction via entry evaluation
-   !N: matrix size (in)
-   !Ndim: data set dimensionality (not used if nogeo=1)
-   !Locations: coordinates used for clustering (not used if nogeo=1)
-   !nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
-   !nlevel: the number of top levels that have been ordered (in)
-   !tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
-   !Permutation: return the permutation vector new2old (indexed from 1) (out)
-   !N_loc: number of local row/column indices (out)
-   !bmat_Cptr: the structure containing HODLR (out)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information (out)
-   !ker_Cptr: the structure containing kernel quantities (out)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
-   !C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of matrix construction via entry evaluation
+   !> @param N: matrix size (in)
+   !> @param Ndim: data set dimensionality (not used if nogeo=1)
+   !> @param Locations: coordinates used for clustering (not used if nogeo=1)
+   !> @param nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
+   !> @param nlevel: the number of top levels that have been ordered (in)
+   !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
+   !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
+   !> @param N_loc: number of local row/column indices (out)
+   !> @param bmat_Cptr: the structure containing HODLR (out)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information (out)
+   !> @param ker_Cptr: the structure containing kernel quantities (out)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
+   !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BPACK_Construct_Init(N, Ndim, Locations, nns, nlevel, tree, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bpack_construct_init")
       implicit none
       integer N, Ndim
@@ -992,7 +1025,7 @@ contains
 
       call assert(option%xyzsort /= TM_GRAM, 'gram distance based clustering is not supported in this interface')
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
       allocate (bmat)
       ! allocate(option)
       ! allocate(stats)
@@ -1017,7 +1050,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
       call OMP_set_num_threads(threads_num)
 
-      !**** create a random seed
+      !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
       ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
@@ -1029,7 +1062,7 @@ contains
          write (*, *) "   "
       endif
 
-      !**** register the user-defined function and type in ker
+      !>**** register the user-defined function and type in ker
       if (option%nogeo == 2) then
          ker%C_QuantApp => C_QuantApp
          ker%C_FuncDistmn => C_FuncDistmn
@@ -1046,7 +1079,7 @@ contains
 
       msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
 
-      !**** make 0-element node a 1-element node
+      !>**** make 0-element node a 1-element node
 
       ! write(*,*)'before adjustment:',msh%pretree
       need = 0
@@ -1069,7 +1102,7 @@ contains
       ! write(*,*)'after adjustment:',msh%pretree
       tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 
-      !**** the geometry points are provided by user
+      !>**** the geometry points are provided by user
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
@@ -1107,7 +1140,7 @@ contains
          enddo
       endif
 
-      !**** return the permutation vector
+      !>**** return the permutation vector
       N_loc = msh%idxe - msh%idxs + 1
       ! if (ptree%MyID == Main_ID) then
          do edge = 1, N
@@ -1115,7 +1148,7 @@ contains
          enddo
       ! endif
 
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1127,10 +1160,10 @@ contains
 
 
 
-!**** C interface of converting from new,local index to old, global index, the indexs start from 1
-   !newidx_loc: new, local index
-   !oldix: old, global index
-   !msh_Cptr: the structure containing points and ordering information (out)
+!>**** C interface of converting from new,local index to old, global index, the indexs start from 1
+   !> @param newidx_loc: new, local index, from 1 to Nloc
+   !> @param oldidx: old, global index, from 1 to N (out)
+   !> @param msh_Cptr: the structure containing points and ordering information
    subroutine C_BPACK_New2Old(msh_Cptr, newidx_loc, oldidx) bind(c, name="c_bpack_new2old")
       implicit none
       integer newidx_loc,oldidx
@@ -1143,24 +1176,24 @@ contains
    end subroutine C_BPACK_New2Old
 
 
-!**** C interface of matrix construction via entry evaluation and using it for gram distance
-   !N: matrix size (in)
-   !Ndim: data set dimensionality (not used if nogeo=1)
-   !Locations: coordinates used for clustering (not used if nogeo=1)
-   !nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
-   !nlevel: the number of top levels that have been ordered (in)
-   !tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
-   !Permutation: return the permutation vector new2old (indexed from 1) (out)
-   !N_loc: number of local row/column indices (out)
-   !bmat_Cptr: the structure containing HODLR (out)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information (out)
-   !ker_Cptr: the structure containing kernel quantities (out)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
-   !C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of matrix construction via entry evaluation and using it for gram distance
+   !> @param N: matrix size (in)
+   !> @param Ndim: data set dimensionality (not used if nogeo=1)
+   !> @param Locations: coordinates used for clustering (not used if nogeo=1)
+   !> @param nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
+   !> @param nlevel: the number of top levels that have been ordered (in)
+   !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
+   !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
+   !> @param N_loc: number of local row/column indices (out)
+   !> @param bmat_Cptr: the structure containing HODLR (out)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information (out)
+   !> @param ker_Cptr: the structure containing kernel quantities (out)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
+   !> @param C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BPACK_Construct_Init_Gram(N, Ndim, Locations, nns, nlevel, tree, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bpack_construct_init_gram")
       implicit none
       integer N, Ndim
@@ -1206,7 +1239,7 @@ contains
 
       call assert(option%xyzsort == TM_GRAM, 'only gram distance based clustering is supported in this interface')
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
       allocate (bmat)
       ! allocate(option)
       ! allocate(stats)
@@ -1231,7 +1264,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
       call OMP_set_num_threads(threads_num)
 
-      !**** create a random seed
+      !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
       ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
@@ -1243,7 +1276,7 @@ contains
          write (*, *) "   "
       endif
 
-      !**** register the user-defined function and type in ker
+      !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmn => C_FuncZmn
       ker%C_FuncZmnBlock => C_FuncZmnBlock
@@ -1258,7 +1291,7 @@ contains
 
       msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
 
-      !**** make 0-element node a 1-element node
+      !>**** make 0-element node a 1-element node
 
       ! write(*,*)'before adjustment:',msh%pretree
       need = 0
@@ -1281,7 +1314,7 @@ contains
       ! write(*,*)'after adjustment:',msh%pretree
       tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
 
-      !**** the geometry points are provided by user
+      !>**** the geometry points are provided by user
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
@@ -1320,7 +1353,7 @@ contains
          enddo
       endif
 
-      !**** return the permutation vector
+      !>**** return the permutation vector
       N_loc = msh%idxe - msh%idxs + 1
       if (ptree%MyID == Main_ID) then
          do edge = 1, N
@@ -1328,7 +1361,7 @@ contains
          enddo
       endif
 
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1338,15 +1371,15 @@ contains
 
    end subroutine C_BPACK_Construct_Init_Gram
 
-!**** C interface of matrix construction via blackbox matvec
-   !bmat_Cptr: the structure containing HODLR (inout)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information (in)
-   !ker_Cptr: the structure containing kernel quantities (inout)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of matrix construction via blackbox matvec
+   !> @param bmat_Cptr: the structure containing HODLR (inout)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information (in)
+   !> @param ker_Cptr: the structure containing kernel quantities (inout)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BPACK_Construct_Matvec_Compute(bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncHMatVec, C_QuantApp) bind(c, name="c_bpack_construct_matvec_compute")
       implicit none
 
@@ -1387,15 +1420,15 @@ contains
       call c_f_pointer(msh_Cptr, msh)
       call c_f_pointer(ker_Cptr, ker)
 
-      !**** register the user-defined function and type in ker
+      !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncHMatVec => C_FuncHMatVec
 
-      !**** computation of the construction phase
+      !>**** computation of the construction phase
       option%less_adapt=0
       call BPACK_construction_Matvec(bmat, matvec_user_C, Memory, error, option, stats, ker, ptree, msh)
       option%less_adapt=1
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1405,22 +1438,22 @@ contains
 
    end subroutine C_BPACK_Construct_Matvec_Compute
 
-!**** C interface of BF construction via blackbox matvec or entry extraction
-   !M,N: matrix size (in)
-   !M_loc,N_loc: number of local row/column indices (out)
-   !nnsr: (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
-   !nnsc: (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
-   !bf_Cptr: the structure containing the block (out)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information combined from mshr_Cptr and mshc_Cptr (out)
-   !mshr_Cptr: the structure containing points and ordering information for the row dimension (in)
-   !mshc_Cptr: the structure containing points and ordering information for the column dimension (in)
-   !ker_Cptr: the structure containing kernel quantities (out)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
-   !C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of BF construction via blackbox matvec or entry extraction
+   !> @param M,N: matrix size (in)
+   !> @param M_loc,N_loc: number of local row/column indices (out)
+   !> @param nnsr: (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nnsc: (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   !> @param bf_Cptr: the structure containing the block (out)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information combined from mshr_Cptr and mshc_Cptr (out)
+   !> @param mshr_Cptr: the structure containing points and ordering information for the row dimension (in)
+   !> @param mshc_Cptr: the structure containing points and ordering information for the column dimension (in)
+   !> @param ker_Cptr: the structure containing kernel quantities (out)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
+   !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BF_Construct_Init(M, N, M_loc, N_loc, nnsr, nnsc, mshr_Cptr, mshc_Cptr, bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bf_construct_init")
       implicit none
       integer M, N
@@ -1455,7 +1488,7 @@ contains
       type(c_funptr), intent(in), value, target :: C_FuncDistmn
       type(c_funptr), intent(in), value, target :: C_FuncNearFar
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
       allocate (blocks)
       allocate (msh)
       allocate (ker)
@@ -1477,7 +1510,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
       call OMP_set_num_threads(threads_num)
 
-      !**** create a random seed
+      !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
       ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
       ! seed_myid(1) = myid*1000
@@ -1489,7 +1522,7 @@ contains
       ! write(*,*) "   "
       ! endif
 
-      !**** register the user-defined function and type in ker
+      !>**** register the user-defined function and type in ker
       if (option%nogeo == 2) then
          ker%C_QuantApp => C_QuantApp
          ker%C_FuncDistmn => C_FuncDistmn
@@ -1517,7 +1550,7 @@ contains
       do ii = 1 + M, N + M
          msh%new2old(ii) = -(ii - M)
       enddo
-      !**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
+      !>**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
       if (option%nogeo ==0 .or. option%nogeo ==4) then
          Dimn = size(mshr%xyz,1)
          allocate(msh%xyz(1:Dimn,-N:M))
@@ -1530,7 +1563,7 @@ contains
          enddo
       endif
 
-      !**** construct a list of k-nearest neighbours for each point
+      !>**** construct a list of k-nearest neighbours for each point
       if (option%nogeo /= 3 .and. option%nogeo /= 4 .and. option%knn > 0) then
          call FindKNNs(option, msh, ker, stats, ptree, 2, 3)
       endif
@@ -1580,7 +1613,7 @@ contains
       M_loc = blocks%M_loc
       N_loc = blocks%N_loc
 
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1590,15 +1623,15 @@ contains
 
    end subroutine C_BF_Construct_Init
 
-!**** C interface of BF construction via blackbox matvec
-   !bf_Cptr: the structure containing the block (inout)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information (in)
-   !ker_Cptr: the structure containing kernel quantities (inout)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncBMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of BF construction via blackbox matvec
+   !> @param bf_Cptr: the structure containing the block (inout)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information (in)
+   !> @param ker_Cptr: the structure containing kernel quantities (inout)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncBMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BF_Construct_Matvec_Compute(bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncBMatVec, C_QuantApp) bind(c, name="c_bf_construct_matvec_compute")
       implicit none
 
@@ -1626,7 +1659,7 @@ contains
       real(kind=8) t1, t2, error
       integer ierr
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1641,7 +1674,7 @@ contains
       if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
       stats%rankmax_of_level_global(0) = 0
 
-      ! !**** register the user-defined function and type in ker
+      ! !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncBMatVec => C_FuncBMatVec
 
@@ -1666,7 +1699,7 @@ contains
       call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1682,16 +1715,16 @@ contains
 
    end subroutine C_BF_Construct_Matvec_Compute
 
-!**** C interface of BF construction via entry extraction
-   !bf_Cptr: the structure containing the block (inout)
-   !option_Cptr: the structure containing option (in)
-   !stats_Cptr: the structure containing statistics (inout)
-   !msh_Cptr: the structure containing points and ordering information (in)
-   !ker_Cptr: the structure containing kernel quantities (inout)
-   !ptree_Cptr: the structure containing process tree (in)
-   !C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of a block (in)
-   !C_FuncZmnBlock: the C_pointer to user-provided function to extract a list of intersections from a block (in)
-   !C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** C interface of BF construction via entry extraction
+   !> @param bf_Cptr: the structure containing the block (inout)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information (in)
+   !> @param ker_Cptr: the structure containing kernel quantities (inout)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of a block (in)
+   !> @param C_FuncZmnBlock: the C_pointer to user-provided function to extract a list of intersections from a block (in)
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    subroutine C_BF_Construct_Element_Compute(bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bf_construct_element_compute")
       implicit none
 
@@ -1722,7 +1755,7 @@ contains
       integer:: boundary_map(1)
       integer groupm_start, Nboundall
 
-      !**** allocate HODLR solver structures
+      !>**** allocate HODLR solver structures
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1731,7 +1764,7 @@ contains
       call c_f_pointer(bf_Cptr, blocks)
       call c_f_pointer(ker_Cptr, ker)
       if (allocated(msh%xyz)) deallocate (msh%xyz)
-      ! !**** register the user-defined function and type in ker
+      ! !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmnBlock => C_FuncZmnBlock
       ker%C_FuncZmn => C_FuncZmn
@@ -1770,7 +1803,7 @@ contains
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
-      !**** delete neighours in msh
+      !>**** delete neighours in msh
       if(allocated(msh%nns))then
          call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
          deallocate(msh%nns)
@@ -1788,7 +1821,7 @@ contains
       call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
-      !**** return the C address of hodlr structures to C caller
+      !>**** return the C address of hodlr structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1798,11 +1831,12 @@ contains
 
    end subroutine C_BF_Construct_Element_Compute
 
-!**** C interface of HODLR factorization
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of HODLR factorization
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information (in)
    subroutine C_BPACK_Factor(bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_factor")
       implicit none
 
@@ -1836,15 +1870,15 @@ contains
 
    end subroutine C_BPACK_Factor
 
-!**** C interface of HODLR solve
-   !x: local solution vector
-   !b: local RHS
-   !Nloc: size of local RHS
-   !Nrhs: number of RHSs
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of HODLR solve
+   !> @param x: local solution vector
+   !> @param b: local RHS
+   !> @param Nloc: size of local RHS
+   !> @param Nrhs: number of RHSs
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Solve(x, b, Nloc, Nrhs, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_solve")
       implicit none
 
@@ -1884,16 +1918,17 @@ contains
 
    end subroutine C_BPACK_Solve
 
-!**** C interface of butterfly-vector multiplication
-   !xin: input vector
-   !Ninloc:size of local input vectors
-   !xout: output vector
-   !Noutloc:size of local output vectors
-   !Ncol: number of vectors
-   !bf_for_Cptr: the structure containing butterfly
-   !option_Cptr: the structure containing options
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of butterfly-vector multiplication
+   !> @param xin: input vector
+   !> @param Ninloc: size of local input vectors
+   !> @param xout: output vector
+   !> @param Noutloc: size of local output vectors
+   !> @param Ncol: number of vectors
+   !> @param bf_for_Cptr: the structure containing butterfly
+   !> @param option_Cptr: the structure containing options
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'N', 'C' or 'T'
    subroutine C_BF_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bf_for_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bf_mult")
       implicit none
       real(kind=8) t1, t2
@@ -1949,7 +1984,24 @@ contains
       deallocate (str)
    end subroutine C_BF_Mult
 
-!!!!!!! extract a list of intersections from a block
+!>**** C interface of parallel extraction of a list of intersections from a block
+   !> @param block_Cptr: the structure containing the block
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param pgidx: 1D array containing the process group number of each intersection, the number starts from 0
+   !> @param Npmap: number of process groups
+   !> @param pmaps: 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each intersection
+   !> @param Ninter: number of intersections
+   !> @param allrows: 1D array containing the global row indices (in original order starting from 1 to M) stacked together
+   !> @param allcols: 1D array containing the global column indices (in original order starting from 1 to N) stacked together
+   !> @param alldat_loc: 1D array containing the local entry values defined by pmaps (in column major) stacked together
+   !> @param rowidx: 1D array containing sizes of rows of each intersection
+   !> @param colidx: 1D array containing sizes of columns of each intersection
+   !> @param Nallrows: total number of rows
+   !> @param Nallcols: total number of columns
+   !> @param Nalldat_loc: total number of local entries
    subroutine C_BF_ExtractElement(block_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bf_extractelement")
       use BPACK_DEFS
       implicit none
@@ -2038,21 +2090,24 @@ contains
 
    end subroutine C_BF_ExtractElement
 
-!**** C interface of parallel extraction of a list of intersections from a Bmat matrix
-   !Ninter: number of intersections
-   !allrows: 1D array containing the global row indices (in original order starting from 0) stacked together
-   !allcols: 1D array containing the global column indices (in original order starting from 0) stacked together
-   !alldat_loc: 1D array containing the local entry values defined by pmaps (in column major) stacked together
-   !rowidx: 1D array containing sizes of rows of each intersection
-   !colidx: 1D array containing sizes of columns of each intersection
-   !pgidx: 1D array containing the process group number of each intersection
-   !Npmap: number of process groups
-   !pmaps: 2D array (Npmapx3) containing #of process rows, #of process columns, and starting process ID in each intersection
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
-   !msh_Cptr: the structure containing points and ordering information
+!>**** C interface of parallel extraction of a list of intersections from a Bmat matrix
+   !> @param Ninter: number of intersections
+   !> @param allrows: 1D array containing the global row indices (in original order starting from 0) stacked together
+   !> @param allcols: 1D array containing the global column indices (in original order starting from 0) stacked together
+   !> @param alldat_loc: 1D array containing the local entry values defined by pmaps (in column major) stacked together
+   !> @param rowidx: 1D array containing sizes of rows of each intersection
+   !> @param colidx: 1D array containing sizes of columns of each intersection
+   !> @param pgidx: 1D array containing the process group number of each intersection, the number starts from 0
+   !> @param Npmap: number of process groups
+   !> @param pmaps: 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each intersection
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param Nallrows: total number of rows
+   !> @param Nallcols: total number of columns
+   !> @param Nalldat_loc: total number of local entries
    subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement")
       use BPACK_DEFS
       implicit none
@@ -2110,16 +2165,17 @@ contains
 
    end subroutine C_BPACK_ExtractElement
 
-!**** C interface of HODLR-vector multiplication
-   !xin: input vector
-   !Ninloc:size of local input vectors
-   !xout: output vector
-   !Noutloc:size of local output vectors
-   !Ncol: number of vectors
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of HODLR-vector multiplication
+   !> @param xin: input vector
+   !> @param Ninloc: size of local input vectors
+   !> @param xout: output vector
+   !> @param Noutloc: size of local output vectors
+   !> @param Ncol: number of vectors
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'N', 'C' or 'T'
    subroutine C_BPACK_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_mult")
       implicit none
       real(kind=8) t1, t2
@@ -2176,16 +2232,17 @@ contains
       deallocate (str)
    end subroutine C_BPACK_Mult
 
-!**** C interface of HODLR(inverse)-vector multiplication
-   !xin: input vector
-   !Ninloc:size of local input vectors
-   !xout: output vector
-   !Noutloc:size of local output vectors
-   !Ncol: number of vectors
-   !bmat_Cptr: the structure containing HODLR
-   !option_Cptr: the structure containing option
-   !stats_Cptr: the structure containing statistics
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of HODLR(inverse)-vector multiplication
+   !> @param xin: input vector
+   !> @param Ninloc: size of local input vectors
+   !> @param xout: output vector
+   !> @param Noutloc: size of local output vectors
+   !> @param Ncol: number of vectors
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param trans: 'C', 'T' or 'N'
    subroutine C_BPACK_Inv_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_inv_mult")
       implicit none
       real(kind=8) t1, t2
@@ -2243,8 +2300,8 @@ contains
       deallocate (str)
    end subroutine C_BPACK_Inv_Mult
 
-!**** C interface of deleting statistics
-   !stats_Cptr: the structure containing statistics
+!>**** C interface of deleting statistics
+   !> @param stats_Cptr: the structure containing statistics
    subroutine C_BPACK_Deletestats(stats_Cptr) bind(c, name="c_bpack_deletestats")
       implicit none
       type(c_ptr), intent(inout) :: stats_Cptr
@@ -2257,8 +2314,8 @@ contains
 
    end subroutine C_BPACK_Deletestats
 
-!**** C interface of deleting process tree
-   !ptree_Cptr: the structure containing process tree
+!>**** C interface of deleting process tree
+   !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Deleteproctree(ptree_Cptr) bind(c, name="c_bpack_deleteproctree")
       implicit none
       type(c_ptr), intent(inout) :: ptree_Cptr
@@ -2271,8 +2328,8 @@ contains
 
    end subroutine C_BPACK_Deleteproctree
 
-!**** C interface of deleting mesh
-   !msh_Cptr: the structure containing mesh
+!>**** C interface of deleting mesh
+   !> @param msh_Cptr: the structure containing mesh
    subroutine C_BPACK_Deletemesh(msh_Cptr) bind(c, name="c_bpack_deletemesh")
       implicit none
       type(c_ptr), intent(inout) :: msh_Cptr
@@ -2285,8 +2342,8 @@ contains
 
    end subroutine C_BPACK_Deletemesh
 
-!**** C interface of deleting kernelquant
-   !ker_Cptr: the structure containing kernelquant
+!>**** C interface of deleting kernelquant
+   !> @param ker_Cptr: the structure containing kernelquant
    subroutine C_BPACK_Deletekernelquant(ker_Cptr) bind(c, name="c_bpack_deletekernelquant")
       implicit none
       type(c_ptr), intent(inout) :: ker_Cptr
@@ -2299,8 +2356,8 @@ contains
 
    end subroutine C_BPACK_Deletekernelquant
 
-!**** C interface of deleting HOBF
-   !bmat_Cptr: the structure containing HOBF
+!>**** C interface of deleting HOBF
+   !> @param bmat_Cptr: the structure containing HOBF
    subroutine C_BPACK_Delete(bmat_Cptr) bind(c, name="c_bpack_delete")
       implicit none
       type(c_ptr), intent(inout) :: bmat_Cptr
@@ -2313,8 +2370,8 @@ contains
 
    end subroutine C_BPACK_Delete
 
-!**** C interface of deleting a BF
-   !bf_Cptr: the structure containing BF
+!>**** C interface of deleting a BF
+   !> @param bf_Cptr: the structure containing BF
    subroutine C_BF_DeleteBF(bf_Cptr) bind(c, name="c_bf_deletebf")
       implicit none
       type(c_ptr), intent(inout) :: bf_Cptr
@@ -2326,8 +2383,8 @@ contains
       bf_Cptr = c_null_ptr
    end subroutine C_BF_DeleteBF
 
-!**** C interface of deleting Hoption
-   !option_Cptr: the structure containing Hoption
+!>**** C interface of deleting Hoption
+   !> @param option_Cptr: the structure containing Hoption
    subroutine C_BPACK_Deleteoption(option_Cptr) bind(c, name="c_bpack_deleteoption")
       implicit none
       type(c_ptr), intent(inout) :: option_Cptr
@@ -2339,7 +2396,10 @@ contains
 
    end subroutine C_BPACK_Deleteoption
 
-!**** C interface of getting the version number of ButterflyPACK
+!>**** C interface of getting the version number of ButterflyPACK
+!> @param v_major: major version number
+!> @param v_minor: minor version number
+!> @param v_bugfix: bugfix version number
    subroutine C_BPACK_GetVersionNumber(v_major, v_minor, v_bugfix) bind(c, name="c_bpack_getversionnumber")
       implicit none
       integer::v_major, v_minor, v_bugfix
@@ -2348,7 +2408,9 @@ contains
 
    end subroutine C_BPACK_GetVersionNumber
 
-!**** C interface of converting the tree index to the index in one of its two child trees
+!>**** C interface of converting the tree index to the index in one of its two child trees
+!> @param idx_merge: node number in the parent tree
+!> @param idx_child: node number in one of the two child trees
    subroutine C_BPACK_TreeIndex_Merged2Child(idx_merge, idx_child) bind(c, name="c_bpack_treeindex_merged2child")
       implicit none
       integer idx_merge, idx_child ! node index in the merged and child tree

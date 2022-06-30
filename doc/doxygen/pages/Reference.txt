@@ -1,0 +1,33 @@
+/*! \page References References
+
+[1] E. Michielssen and A. Boag, "A multilevel matrix decomposition algorithm for analyzing scattering from large structures," IEEE Trans. Antennas Propag., vol. 44, pp. 1086-1093, 1996.
+
+[2] S. Borm, L. Grasedyck, W. Hackbusch, "Hierarchical matrices," Lecture note, 2003.
+
+[3] S. Ambikasaran and E. Darve, "An O(NlogN) fast direct solver for partial hierarchically semi-separable matrices," SIAM J. Sci. Comput., 2013. 
+
+[4] H. Guo, J. Hu, and E. Michielssen, "On MLMDA/butterfly compressibility of inverse integral operators," IEEE Antenn. Wireless Propag. Lett., vol. 12, pp. 31-34, 2013.
+
+[5] Y. Li, and H. Yang, "Interpolative butterfly factorization," SIAM Journal on Scientific Computing, vol. 39, pp. 503-531, 2016.
+
+[6] H. Guo, Y. Liu, J. Hu, and E. Michielssen, "A butterfly-based direct integral equation solver using hierarchical LU factorization for analyzing scattering from electrically large conducting objects", IEEE Trans. Antennas Propag., 2017.
+
+[7] Y. Liu, H. Guo, and E. Michielssen, "A HSS matrix-inspired butterfly-based direct solver for analyzing scattering from two-dimensional objects", IEEE AntennasWireless Propag. Lett., 2017.
+
+[8] H. Guo, Y. Liu, J. Hu, E. Michielssen, "A butterfly-based direct solver using hierarchical LU factorization for Poggio-Miller-Chang-Harrington-Wu-Tsai equations", Microwave and Optical Technology Letters, 2018, 60:1381-1387.
+
+[9] Y. Liu, W. Sid-Lakhdar, E. Rebrova, P. Ghysels, X. Sherry Li, "A parallel hierarchical blocked adaptive cross approximation algorithm", Int. Journal of High Performance Computing Applications, 2019.
+
+[10] Y. Liu, H. Yang, "A hierarchical butterfly LU preconditioner for two-dimensional electromagnetic scattering problems involving open surfaces", J. Comput. Phys., 2019.
+
+[11] Y. Liu, X. Xing, H. Guo, E. Michielssen, P. Ghysels, and X. Sherry Li, "Butterfly factorization via randomized matrix-vector multiplications," SIAM J. Sci. Comput., 2021. 
+
+[12] Y. Liu, P. Ghysels, L. Claus, and X. Sherry Li "Sparse approximate multifrontal factorization with butterfly compression for high frequency wave equations," SIAM J. Sci. Comput., 2021. 
+
+[13] S. B. Sayed, Y. Liu, L. J. Gomez, and A. C. Yucel, "A butterfly-accelerated volume integral equation solver for broad permittivity and large-scale electromagnetic analysis," IEEE Trans. Antennas Propag., 2021. 
+
+[14] Y. Liu, "A comparative study of butterfly-enhanced direct integral and differential equation solvers for high-frequency electromagnetic analysis involving inhomogeneous dielectrics," 3rd URSI Atlantic Radio Science Meeting (AT-AP-RASC), 2022. 
+
+[15] Y. Liu, J. Song, R. Burridge, and J. Qian, "A fast butterfly-compressed Hadamard-Babich integrator for high-frequency inhomogenous Helmholtz equations in variable media," SIAM J. Multiscale Model. Simul., 2022. 
+
+*/

@@ -14,6 +14,11 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file BPACK_structure.f90
+!> @brief High-level subroutines involving the hierarchical structures of BPACK (H/HODBF/HODLR/HSS-BF) matrices
+
+
+
 #include "ButterflyPACK_config.fi"
 module BPACK_structure
    use BPACK_Utilities
@@ -164,10 +169,10 @@ contains
 
 end function distance_geo
 
-!**** l2 gram distance^2 between element edgem and edgen is
+!>**** l2 gram distance^2 between element edgem and edgen is
 !     defined as: Re{Z_ii+Z_jj-Z_ij-Z_ji} for SPD, HPD, general symmetric real, and hermitian matrices
 !     undefined otherwise
-!**** angular gram distance^2 is
+!>**** angular gram distance^2 is
 !     defined as 1-Z_ij^2/(Z_iiZ_jj)
 !     undefined otherwise
 !     Use with caution !!!
@@ -204,10 +209,10 @@ end function distance_geo
 
    end function distance_gram
 
-!**** l2 gram distance^2 between element edgem and edgen is
+!>**** l2 gram distance^2 between element edgem and edgen is
 !     defined as: Re{Z_ii+Z_jj-Z_ij-Z_ji} for SPD, HPD, general symmetric real, and hermitian matrices
 !     undefined otherwise
-!**** angular gram distance^2 is
+!>**** angular gram distance^2 is
 !     defined as 1-Z_ij^2/(Z_iiZ_jj)
 !     undefined otherwise
 !     Use with caution !!!
@@ -436,14 +441,14 @@ end function distance_geo
       integer, allocatable:: perms(:), rows_gram(:), cols_gram(:)
       integer Navr, Bidxs, Bidxe, ierr
 
-      !*************Initialize permutation vector ********
+      !>*************Initialize permutation vector ********
       allocate (msh%new2old(msh%Nunk))
       call LogMemory(stats, SIZEOF(msh%new2old)/1024.0d3)
       do ii = 1, msh%Nunk
          msh%new2old(ii) = ii
       end do
 
-      !************Compute Maxlevel of hodlr tree*******************
+      !>************Compute Maxlevel of hodlr tree*******************
       nlevel_pre = 0
       if (allocated(msh%pretree)) then
          nlevel_pre = ceiling_safe(log(dble(size(msh%pretree, 1)))/log(2d0))
@@ -485,7 +490,7 @@ end function distance_geo
          bmat%hss_bf%Maxlevel = Maxlevel
       end select
 
-      !************** check whether the sorting option is valid
+      !>************** check whether the sorting option is valid
       if (Maxlevel > nlevel_pre) then
          if (.not. allocated(msh%xyz)) then
             if (option%xyzsort == CKD .or. option%xyzsort == TM) then
@@ -513,7 +518,7 @@ end function distance_geo
          endif
       endif
 
-      !***************************************************
+      !>***************************************************
 
       Maxgroup = 2**(Maxlevel + 1) - 1
       msh%Maxgroup = Maxgroup
@@ -536,7 +541,7 @@ end function distance_geo
          allocate (groupcenter(dimn))
       endif
 
-      !**** construct the top few levels whose ordering is provided by the user
+      !>**** construct the top few levels whose ordering is provided by the user
       msh%basis_group(1)%head = 1; msh%basis_group(1)%tail = msh%Nunk; msh%basis_group(1)%pgno = 1
       do level = nlevel_pre, 0, -1
          idxstart = 1
@@ -558,7 +563,7 @@ end function distance_geo
                msh%basis_group(group)%tail = msh%basis_group(2*group + 1)%tail
             endif
 
-            !***** the following is needed for the near_or_far function in H matrix, this needs to be improved
+            !>***** the following is needed for the near_or_far function in H matrix, this needs to be improved
             if (allocated(msh%xyz)) then
                Dimn = size(msh%xyz, 1)
                groupcenter(1:dimn) = 0.0d0
@@ -594,7 +599,7 @@ end function distance_geo
 
       if (ptree%MyID == Main_ID) then
 
-         !**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
+         !>**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
          do level = nlevel_pre, Maxlevel
             do group = 2**level, 2**(level + 1) - 1
                ! msh%basis_group(group)%level=level
@@ -772,7 +777,7 @@ end function distance_geo
 
       call MPI_Bcast(msh%new2old, msh%Nunk, MPI_integer, Main_ID, ptree%Comm, ierr)
 
-      !**** generate tree structures on other processes
+      !>**** generate tree structures on other processes
       do level = nlevel_pre, Maxlevel
          do group = 2**level, 2**(level + 1) - 1
             ! msh%basis_group(group)%level=level
@@ -852,7 +857,7 @@ end function distance_geo
       ! write(110,*)msh%old2new(ii)
       ! enddo
 
-      !**********Dump the ordering into a file********************************
+      !>**********Dump the ordering into a file********************************
 
 #if        0
       write (strings, *) Dimn
@@ -870,7 +875,7 @@ end function distance_geo
          option%knn = 0
       endif
 
-!**** construct a list of k-nearest neighbours for each point
+!>**** construct a list of k-nearest neighbours for each point
       if (option%knn > 0 .and. option%nogeo /= 3 .and. option%nogeo /= 4) then
          call FindKNNs(option, msh, ker, stats, ptree, 1, 1)
       endif
@@ -1999,7 +2004,7 @@ end function distance_geo
       enddo
 
 
-      !***************************************************************************************
+      !>***************************************************************************************
 
       if (allocated(msh%xyz)) then
          call LogMemory(stats, - SIZEOF(msh%xyz)/1024.0d3)

@@ -14,6 +14,10 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 
+!> @file BPACK_constr.f90
+!> @brief Top-level subroutines for constructing a BPACK (H/HODBF/HODLR/HSS-BF) matrix or Butterfly block
+
+
 #include "ButterflyPACK_config.fi"
 module BPACK_constr
 
@@ -23,7 +27,7 @@ module BPACK_constr
 
 contains
 
-!**** user-defined subroutine to sample a list of intersections from the bmat of Z
+!>**** user-defined subroutine to sample a list of intersections from the bmat of Z
    subroutine Zelem_block_Extraction(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
       use BPACK_DEFS
       implicit none
@@ -47,7 +51,7 @@ contains
 
    end subroutine Zelem_block_Extraction
 
-!**** Initialization of the construction phase
+!>**** Initialization of the construction phase
    ! N is matrix dimension
    ! P is the permutation vector returned
    ! N_loc is the local number of rows/columns
@@ -87,7 +91,7 @@ contains
       call init_random_seed()
 
       call assert(associated(ker%QuantApp), 'ker%QuantApp is not assigned')
-      call assert(associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'neither ker%FuncZmn nor ker%FuncHMatVec is assigned')
+      if(option%cpp==0)call assert(associated(ker%FuncZmnBlock) .or. associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'one of the following should be assigned: ker%FuncZmn, ker%FuncZmnBlock, ker%FuncHMatVec')
 
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
@@ -96,7 +100,7 @@ contains
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
 
-      !**** set thread number here
+      !>**** set thread number here
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
@@ -117,7 +121,7 @@ contains
          allocate (msh%pretree(2**Maxlevel))
          msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
 
-         !**** make 0-element node a 1-element node
+         !>**** make 0-element node a 1-element node
 
          ! write(*,*)'before adjustment:',msh%pretree
          need = 0
@@ -141,7 +145,7 @@ contains
          tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
       endif
 
-      !**** copy geometry points if present
+      !>**** copy geometry points if present
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder"
          call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0 or 4')
@@ -178,7 +182,7 @@ contains
          enddo
       endif
 
-      !**** return the permutation vector
+      !>**** return the permutation vector
       Nunk_loc = msh%idxe - msh%idxs + 1
       if (ptree%MyID == Main_ID) then
          do edge = 1, Nunk
@@ -188,7 +192,7 @@ contains
 
    end subroutine BPACK_construction_Init
 
-!**** Computation of the full matrix with matrix entry evaluation
+!>**** Computation of the full matrix with matrix entry evaluation
    subroutine FULLMAT_Element(option, stats, msh, ker, ptree)
 
       implicit none
@@ -260,7 +264,7 @@ contains
 
    end subroutine FULLMAT_Element
 
-!**** Computation of the construction phase with matrix entry evaluation
+!>**** Computation of the construction phase with matrix entry evaluation
    subroutine BPACK_construction_Element(bmat, option, stats, msh, ker, ptree)
 
       implicit none
@@ -1883,7 +1887,7 @@ contains
 
    end subroutine BPACK_CheckError
 
-!*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
+!>*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
    subroutine BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 
       use BPACK_DEFS
@@ -2173,7 +2177,7 @@ contains
 
    end subroutine BPACK_all2all_inters
 
-!*********** all to all communication of element extraction results from local layout to each entire intersection (each process knows where to send, but doesn't know where to receive without communication)
+!>*********** all to all communication of element extraction results from local layout to each entire intersection (each process knows where to send, but doesn't know where to receive without communication)
 ! YL: This subroutine seems to be slower than BPACK_all2all_inters
    subroutine BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 

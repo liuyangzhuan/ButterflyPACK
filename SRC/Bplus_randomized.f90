@@ -13,6 +13,8 @@
 
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
+!> @file Bplus_randomized.f90
+!> @brief Low-level subroutines for constructing a Butterfly or LR block from randomized matvec (sketching)
 
 #include "ButterflyPACK_config.fi"
 module Bplus_randomizedop
@@ -215,7 +217,7 @@ contains
 
 
 
-      !****** ms and ns can be computed using msh if they are not precomputed
+      !>****** ms and ns can be computed using msh if they are not precomputed
       if (associated(block%ms))then
          allocate (block_rand%ms(size(block%ms, 1)))
          block_rand%ms = block%ms
@@ -255,7 +257,7 @@ contains
             allocate (block_rand%ButterflyKerl(level_butterfly))
          endif
 
-         !****** row-wise ordering from right side
+         !>****** row-wise ordering from right side
          do level = 0, level_half
             if (level_butterfly == 0) then
                if (level == 0) then
@@ -294,7 +296,7 @@ contains
             endif
          enddo
 
-         !****** column-wise ordering from left side
+         !>****** column-wise ordering from left side
          level_final = level_half + 1
          do level = level_butterfly + 1, level_final, -1
             if (level_butterfly == 0) then
@@ -336,7 +338,7 @@ contains
          enddo
 
          if (nodataflag == 0) then
-            !****** row-wise ordering from right side
+            !>****** row-wise ordering from right side
             do level = 0, level_half
                if (level == 0) then
                   allocate (block_rand%ButterflyV%blocks(block_rand%ButterflyV%nblk_loc))
@@ -347,7 +349,7 @@ contains
                endif
             enddo
 
-            !****** column-wise ordering from left side
+            !>****** column-wise ordering from left side
             level_final = level_half + 1
             do level = level_butterfly + 1, level_final, -1
                if (level == 0) then
@@ -434,7 +436,7 @@ contains
             allocate (block_rand%ButterflyKerl(level_butterfly))
          endif
 
-         !****** row-wise ordering from right side
+         !>****** row-wise ordering from right side
          do level = 0, level_half
             if (level_butterfly == 0) then
                if (level == 0) then
@@ -473,7 +475,7 @@ contains
             endif
          enddo
 
-         !****** column-wise ordering from left side
+         !>****** column-wise ordering from left side
          level_final = level_half + 1
          do level = level_butterfly + 1, level_final, -1
             if (level_butterfly == 0) then
@@ -515,7 +517,7 @@ contains
          enddo
 
 
-         !****** row-wise ordering from right side
+         !>****** row-wise ordering from right side
          do level = 0, level_half
             if (level == 0) then
                allocate (block_rand%ButterflyV%blocks(block_rand%ButterflyV%nblk_loc))
@@ -545,7 +547,7 @@ contains
             endif
          enddo
 
-         !****** column-wise ordering from left side
+         !>****** column-wise ordering from left side
          level_final = level_half + 1
          do level = level_butterfly + 1, level_final, -1
             if (level == 0) then
@@ -628,7 +630,7 @@ contains
       call GetPgno_Sub(ptree, blocks%pgno, level_butterfly, pgno_sub_mine)
 
       n1 = OMP_get_wtime()
-      !********* multiply BF^C with vectors
+      !>********* multiply BF^C with vectors
       RandVectOut = conjg(cmplx(RandVectOut, kind=8))
       call BF_block_MVP_partial(blocks, 'N', num_vect_sub, RandVectOut, BFvec, level - 1, ptree, stats)
       if (allocated(BFvec%vec(level)%blocks)) then
@@ -641,7 +643,7 @@ contains
       n2 = OMP_get_wtime()
       ! time_tmp = time_tmp + n2 - n1
 
-      !********* compute row spaces and reconstruct blocks at level level
+      !>********* compute row spaces and reconstruct blocks at level level
       do nth = nth_s, nth_e
          if (level == 0) then
             index_i = 1
@@ -689,7 +691,7 @@ contains
          endif
       enddo
 
-      !********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+      !>********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
       if (allocated(BFvec%vec(level)%blocks)) then
       do j = 1, BFvec%vec(level)%nc
          do i = 1, BFvec%vec(level)%nr
@@ -737,7 +739,7 @@ contains
 
          level_butterfly = blocks%level_butterfly
 
-         !********* multiply BF^C with vectors to get the local block dimensions, this can be improved
+         !>********* multiply BF^C with vectors to get the local block dimensions, this can be improved
          allocate (RandVectTmp(blocks%N_loc, 1))
          RandVectTmp = 0
          call BF_block_MVP_partial(blocks, 'N', 1, RandVectTmp, BFvec, level - 1, ptree, stats)
@@ -748,7 +750,7 @@ contains
          num_vect = 0
 
          if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-            !********* get the rank upper bound
+            !>********* get the rank upper bound
             do nth = nth_s, nth_e
                num_col = blocks%ButterflyKerl(level)%num_col
                index_i = ceiling_safe(nth*Ng*2d0/num_col)
@@ -772,7 +774,7 @@ contains
 
          call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
-         !********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+         !>********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level)%blocks)) then
          do j = 1, BFvec%vec(level)%nc
             do i = 1, BFvec%vec(level)%nr
@@ -909,7 +911,7 @@ contains
          ! time_halfbuttermul = time_halfbuttermul + n2-n1
       endif
 
-      !********* multiply BF^C with vectors
+      !>********* multiply BF^C with vectors
       RandVectOut = conjg(cmplx(RandVectOut, kind=8))
       call BF_block_MVP_partial(blocks, 'T', num_vect_sub, RandVectOut, BFvec, level + 1, ptree, stats)
       if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
@@ -923,7 +925,7 @@ contains
       ! time_tmp = time_tmp + n2 - n1
 
 
-      !********* compute column spaces and reconstruct blocks at level level
+      !>********* compute column spaces and reconstruct blocks at level level
       do nth = nth_s, nth_e
          if (level == level_butterfly + 1) then
             index_j = 1
@@ -971,7 +973,7 @@ contains
          endif
       enddo
 
-      !********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
+      !>********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
       if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
       do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
          do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
@@ -982,7 +984,7 @@ contains
       endif
       deallocate (BFvec%vec)
 
-      !********* delete BFvec1%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
+      !>********* delete BFvec1%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
       if (level_left_start > 0 .and. level_left_start == level) then
       if (allocated(BFvec1%vec(level)%blocks)) then
       do j = 1, BFvec1%vec(level)%nc
@@ -1032,7 +1034,7 @@ contains
       else
 
 
-         !********* multiply BF with vectors to get the local block dimensions, this can be improved
+         !>********* multiply BF with vectors to get the local block dimensions, this can be improved
          if (blocks%level_half + 1 == level) then
             allocate (RandVectTmp(blocks%N_loc, 1))
             RandVectTmp = 0
@@ -1043,7 +1045,7 @@ contains
          endif
 
 
-         !********* multiply BF^C with vectors to get the local block dimensions, this can be improved
+         !>********* multiply BF^C with vectors to get the local block dimensions, this can be improved
          allocate (RandVectTmp(blocks%M_loc, 1))
          RandVectTmp = 0
          call BF_block_MVP_partial(blocks, 'T', 1, RandVectTmp, BFvec, level + 1, ptree, stats)
@@ -1054,7 +1056,7 @@ contains
          num_vect = 0
 
          if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
-            !********* get the rank upper bound
+            !>********* get the rank upper bound
             do nth = nth_s, nth_e
 
                num_row = blocks%ButterflyKerl(level)%num_row
@@ -1084,7 +1086,7 @@ contains
 
          call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
-         !********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
+         !>********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
          do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
             do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
@@ -1320,7 +1322,7 @@ contains
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc
 
-         !!!!*** terminate if 1. error small enough or 2. rank smaller than num_vec
+         !!!!>*** terminate if 1. error small enough or 2. rank smaller than num_vec
          if (error_inout > option%tol_rand .and. block_rand(1)%rankmax >= rank_pre_max) then
             call BF_get_rank(block_rand(1), ptree)
             rank_new_max = block_rand(1)%rankmax
@@ -1576,7 +1578,7 @@ contains
 
       if (IOwnPgrp(ptree, block_rand%pgno)) then
 
-         !!!!**** generate 2D grid blacs quantities
+         !!!!>**** generate 2D grid blacs quantities
          ctxt = ptree%pgrp(block_rand%pgno)%ctxt
          call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
          if (myrow /= -1 .and. mycol /= -1) then
@@ -1632,11 +1634,11 @@ contains
             VV = 0
          endif
 
-!!!!**** redistribution into 2D grid
+!!!!>**** redistribution into 2D grid
          call Redistribute1Dto2D(matQ, block_rand%M_p, 0, block_rand%pgno, matQ2D, block_rand%M, 0, block_rand%pgno, rmax, ptree)
          call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
 
-!!!!**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
+!!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
          rank = 0
          if (myrow /= -1 .and. mycol /= -1) then
             call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
@@ -1678,7 +1680,7 @@ contains
          allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
          allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
 
-         !!!!**** redistribution into 1D grid conformal to leaf sizes
+         !!!!>**** redistribution into 1D grid conformal to leaf sizes
          call Redistribute2Dto1D(matQUt2D, block_rand%M, 0, block_rand%pgno, block_rand%ButterflyU%blocks(1)%matrix, block_rand%M_p, 0, block_rand%pgno, rank, ptree)
          call Redistribute2Dto1D(UU, block_rand%N, 0, block_rand%pgno, block_rand%ButterflyV%blocks(1)%matrix, block_rand%N_p, 0, block_rand%pgno, rank, ptree)
 
@@ -1722,7 +1724,7 @@ contains
       if (present(flops)) flops = 0
       Singular = 0
 
-      !!!!**** generate 2D grid blacs quantities
+      !!!!>**** generate 2D grid blacs quantities
       ctxt = ptree%pgrp(block_rand%pgno)%ctxt
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
@@ -1764,10 +1766,10 @@ contains
          VV = 0
       endif
 
-!!!!**** redistribution into 2D grid
+!!!!>**** redistribution into 2D grid
       call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
 
-!!!!**** compute singular values
+!!!!>**** compute singular values
       rank = 0
       if (myrow /= -1 .and. mycol /= -1) then
          call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, BPACK_SafeUnderflow, flop=flop)
