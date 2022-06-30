@@ -14,10 +14,9 @@ In addition, ButterflyPACK can be readily invoked from the software STRUMPACK fo
 
 + \link installation Installation and Requirements \endlink
 + \link GPU_Support GPU Support \endlink
-    - \link algorithm Algorithm Overview \endlink
-+ \link examples Examples \endlink
-    - \link Fortran Fortran \endlink
-    - \link C_C++ C/C++ \endlink
++ \link algorithm Algorithm Overview \endlink
++ \link Fortran Fortran Interface and Examples  \endlink
++ \link C_C++ C/C++ Interface and Examples \endlink
 + \link FAQ FAQ \endlink
 + \link contact Contact Authors \endlink
 + \link acknowledgements Acknowledgements \endlink

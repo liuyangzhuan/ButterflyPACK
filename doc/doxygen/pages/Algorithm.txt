@@ -1,4 +1,52 @@
 /*! \page algorithm Algorithm
+ButterflyPACK provides a collection of fast algebraic tools for compressing and manipulating dense matrices arising from integral equations for PDEs, kernel matrices in machine learning, and various integral transforms. ButterflyPACK represents the operators as low-rank or butterfly-compressed hierarchical matrices including H, H-BF, HODLR, HODBF and HSSBF formats, assuming only a user-supplied function to either evaluate any entry of the matrix, or to apply the matrix and its adjoint to any input matrix (matvec). Depending on the compression tolerance and application need, the hierarchical matrices can be used as fast matvec in iterative solvers, fast preconditioners, or fast direct solvers. ButterflyPACK also provides a TFQMR iterative solver. The supported matrix formats are briefly described:
 
+## H matrix 
+The H matrix assumes that the matrix is first split into four smaller blocks. When any block representing interactions that are either too close or non-compressible, the block is further split into four small blocks. The recursive splitting leads to a partioned matrix of log(N) levels. Each compressible block is represented as a low-rank product. ButterflyPACK currently supports parallel construction and block LU factorization of H matrices, assuming any block is handled by one MPI. The relevant options are: 
+\code{fortran} 
+option%format=2  ! format 2 is H or H-BF
+option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
+option%LRlevel=0 ! use LR representation from level 0 (i.e., all levels are compressed with LR). 
+option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+\endcode
+
+## H-BF matrix
+The H-BF matrix follows the same partitioning as the H matrix, the only difference is that each compressible block is represented as a butterfly instead of a low-rank product. Compared with the H matrix, H-BF is more suitable for highly-oscillatory applications. Again, ButterflyPACK assumes that each block is handled by one MPI. The options are:
+\code{fortran} 
+option%format=2  ! format 2 is H or H-BF
+option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
+option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+\endcode
+
+## HODLR matrix
+The HODLR (hierarchically off-diagonal low-rank) matrix assumes that the matrix is first split into four smaller blocks. Any block representing self interactions (i.e., the diagonal block) is further split into four small blocks. The recursive splitting leads to a partitioned matrix of log(N) levels. Each offdiagonal block is represented as a low-rank product. Compared with the strong-admissible H matrix, the weak-admissible HODLR is more aggressive and parallelizable, leading to much smaller prefactors. But HODLR typically exhibits much larger ranks and worse scalings for high-dimensional problems. ButterflyPACK currently supports parallel construction and inversion of HODLR matrices. Unlike the H matrix, here each block is handled by multiple MPIs. The relevant options are: 
+\code{fortran} 
+option%format=1  ! format 1 is HODLR or HODBF
+option%LRlevel=0 ! use LR representation from level 0 (i.e., all levels are compressed with LR). 
+option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+\endcode
+
+## HODBF matrix
+The HODBF (hierarchically off-diagonal butterfly) matrix follows the same matrix partitioning as HODLR. But each offdiagonal block is represented as a butterfly instead of a low-rank product. HODBF gives much better performance than HODLR for highly-oscillatory and/or high-dimensional problems, and has much smaller prefactors and higher parallel efficiency compared to H or H-BF. As such, HODBF is the most well-developed algorithm in ButterflyPACK. ButterflyPACK currently supports parallel construction and inversion of HODBF matrices. Unlike the H matrix, here each block (butterfly) is handled by multiple MPIs. The relevant options are: 
+\code{fortran} 
+option%format=1  ! format 1 is HODLR or HODBF
+option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+\endcode
+
+## HSSBF matrix
+The HSSBF (hierarchically semi-separable butterfly) format is an extension of HODBF. Unlike HODBF that leads to an O(logN) level partitioning, HSSBF uses an O(loglogN) level partitioning. For low-dimensional problems, this leads to much smaller prefactors compared to HODBF. The relevant options are: 
+\code{fortran} 
+option%format=3  ! format 3 is HSSBF
+option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+\endcode
 
 */

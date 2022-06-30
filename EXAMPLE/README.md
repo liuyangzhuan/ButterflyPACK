@@ -18,7 +18,7 @@ First, specify the data type of your application:
 #define DAT 3
 #include "sButterflyPACK_config.fi"
 ```
-Note that if the above header file is not included, one can still use ButterflyPACK via adding a "x_" to all derived types, functions, subroutines, and modules. x='z' for double-complex, 'd' for double-real, 'c' for single-complex, and 's' for single-complex. 
+Note that if the above header file is not included, one can still use ButterflyPACK via adding a "x_" to all derived types, functions, subroutines, and modules. x='z' for double-complex, 'd' for double-real, 'c' for single-complex, and 's' for single-complex.
 
 ButterflyPACK provides two ways of constructing a hierarchical matrix.
 The first option requires a user-provided function to sample any individual element of the matrix that takes the following argument list
@@ -34,7 +34,7 @@ implicit none
 end subroutine Element
 ```
 
-Sometimes it's more efficient to compute a list of matrix blocks in one shot, then the user can provide a function with the following argument list 
+Sometimes it's more efficient to compute a list of matrix blocks in one shot, then the user can provide a function with the following argument list
 ```
 subroutine Element_ListofBlocks(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) ! only referenced when option%elem_extract>=1
 implicit none
@@ -65,7 +65,7 @@ implicit none
 	integer:: num_vect ! column dimension of R
 	class(*),pointer :: quant ! quant is a user-defined derived type consisting all data and metadata needed for this user-defined function
 
-	! write your matrix multiplication function here. Note that you may need the permutation vector returned by BPACK_construction_Init to convert indices to the original order. 
+	! write your matrix multiplication function here. Note that you may need the permutation vector returned by BPACK_construction_Init to convert indices to the original order.
 
 end subroutine MatVec
 ```
@@ -79,7 +79,7 @@ call SetDefaultOptions(option) ! besides the default options, other options can 
 
 !**** register the user-defined function and derived-type in kernel register
 ker%QuantApp => quant
-ker%FuncZmn => Element 
+ker%FuncZmn => Element
 ker%FuncZmnBlock => Element_ListofBlocks
 ker%FuncHMatVec => MatVec  ! Note that at least one of ker%FuncZmn, Element_ListofBlocks and ker%FuncHMatVec needs to set
 
@@ -122,7 +122,7 @@ call BPACK_Solution(bmat,x,b,N_loc,nrhs,option,ptree,stats)
 
 ## Fortran Example
 A number of examples are available in the build/EXAMPLE folder.
-You can run several examples in this directory as follows. You can modify options in the driver or from command line using "-option --name1 val1 --name2 val2". See available command-line options from "ReadOption()". 
+You can run several examples in this directory as follows. You can modify options in the driver or from command line using "-option --name1 val1 --name2 val2". See available command-line options from "ReadOption()".
 
 KERREG_Driver.f90:
 (double-real) An example for kernel ridge regression (KRR) with RBF kernel. This example constructs (with entry evaluation), factor a RBF-kernel matrix and uses it for binary classifications with UCI machine learning datasets.
@@ -247,13 +247,13 @@ d_c_bpack_construct_init(&N, &Ndim, coordinates, nns_ptr, &nlevel, clustertree, 
    //N is matrix dimension
    //coordinates is a double array of size N*Ndim representing Cartesian coordinates x1(1),...,x1(Ndim),x2(1),...,x2(Ndim)....
    //if Ndim=0, coordinates is not referenced
-   //nns_ptr is a int array of size N*option%knn representing the knn nearest neighouring points of each of the N points. If option%knn=0, nns_ptr is not referenced.   
+   //nns_ptr is a int array of size N*option%knn representing the knn nearest neighouring points of each of the N points. If option%knn=0, nns_ptr is not referenced.
    //clustertree is an integer array of size 2^nlevel containing leafsizes in a user-provided cluster tree
    //if nlevel=0, input requires tree(1)=N
    //P is an integer array of size N, representing permutation vector returned by the ButterflyPACK clustering
    //N_loc is the local matrix dimension, P and N_loc can be used to define your matvec if needed
-   //C_FuncDistmn: pointer to user-provided function to compute distance between any row and column of the matrix. Not referenced if option%nogeo is not 2. 
-   //C_FuncNearFar: pointer to user-provided function to determine whether a block (in permuted order) is compressible or not. Not referenced if option%nogeo is not 2. 
+   //C_FuncDistmn: pointer to user-provided function to compute distance between any row and column of the matrix. Not referenced if option%nogeo is not 2.
+   //C_FuncNearFar: pointer to user-provided function to determine whether a block (in permuted order) is compressible or not. Not referenced if option%nogeo is not 2.
 ```
 
 
@@ -291,7 +291,7 @@ ButterflyPACK also provides an interface for constructing a single MxN low-rank/
 class C_QuantApp {
 //define your data or metadata here
 };
-// The entry evaluation function wrapper required by the Fortran code, val returns Z(m,n), F2Cptr is an alias of void*. If n<0 (column index) and m>0 (row index), then 1<=m<=M, -N<=n<=-1; if m<0 (column index) and n>0 (row index), then 1<=n<=M, -N<=m<=-1. 
+// The entry evaluation function wrapper required by the Fortran code, val returns Z(m,n), F2Cptr is an alias of void*. If n<0 (column index) and m>0 (row index), then 1<=m<=M, -N<=n<=-1; if m<0 (column index) and n>0 (row index), then 1<=n<=M, -N<=m<=-1.
 inline void C_FuncBZmn(int *m, int *n, double *val, F2Cptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
   //call your entry evaluation function defined in C_QuantApp using Q
@@ -340,9 +340,9 @@ d_c_bpack_set_D_option(&option_b, "name", val); //double-valued option
 d_c_bpack_set_I_option(&option_b, "name", val); //int-valued option
 ```
 
-Initialization of the construction phase. In this interface, ButterflyPACK treats the single block as the 1-2 off-diagonal block of a larger hierarchical matrix. 
+Initialization of the construction phase. In this interface, ButterflyPACK treats the single block as the 1-2 off-diagonal block of a larger hierarchical matrix.
 ```
-// one needs to first a mesh metadata for the row and column dimension, by calling d_c_bpack_construct_init. The *_dummy argument is not referenced. 
+// one needs to first a mesh metadata for the row and column dimension, by calling d_c_bpack_construct_init. The *_dummy argument is not referenced.
 d_c_bpack_construct_init(&M, &Ndim, dat_ptr_m, nns_ptr_m,&nlevel_m, tree_m, perms_m, &myseg_m, &bmat_dummy, &option_b, &stats_dummy, &msh0_m, &kerquant_dummy, &ptree_b, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
 d_c_bpack_construct_init(&N, &Ndim, dat_ptr_n, nns_ptr_n,&nlevel_n, tree_n, perms_n, &myseg_n, &bmat_dummy, &option_b, &stats_dummy, &msh0_n, &kerquant_dummy, &ptree_b, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
 // the construction initialization can be done by:
@@ -351,7 +351,7 @@ d_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m,
 
 Construction of the block with entry evaluation:
 ```
-d_c_bf_construct_element_compute(&bf_b, &option_b, &stats_b, &msh_b, &kerregister_b, &ptree_b, &C_FuncBZmn, &C_FuncBZmnBlock, quant); 
+d_c_bf_construct_element_compute(&bf_b, &option_b, &stats_b, &msh_b, &kerregister_b, &ptree_b, &C_FuncBZmn, &C_FuncBZmnBlock, quant);
 //C_FuncBZmn: pointer to user-provided function to sample mn^th entry of the matrix. Used when option%elem_extract=0.
 //C_FuncBZmnBlock: pointer to user-provided function to sample a list of intersections of entries of the matrix. Used when option%elem_extract>=1.
 ```
@@ -386,19 +386,19 @@ mpirun -n nmpi ./EXAMPLE/ctest
 ```
 
 Taylor2D.cpp:
-An example that solves a 2D EFIE assuming inhomogeneous media. A approximate Green's function is used to evaluate any entry of the matrix. 
+An example that solves a 2D EFIE assuming inhomogeneous media. A approximate Green's function is used to evaluate any entry of the matrix.
 ```
 mpirun -n nmpi ./EXAMPLE/go2d
 ```
 
 FIO_Driver.cpp:
-An example that constructs two 1D Fourier integral operators (FIOs) as two butterfly-compressed blocks using entry-evaluation-based APIs, then construct their product as another butterfly-compressed block using matvec-based APIs. 
+An example that constructs two 1D Fourier integral operators (FIOs) as two butterfly-compressed blocks using entry-evaluation-based APIs, then construct their product as another butterfly-compressed block using matvec-based APIs.
 ```
 mpirun -n nmpi ./EXAMPLE/cfio
 ```
 
 InverseFIO_Driver.cpp:
-An example that constructs a 1D FIO as a butterlfy block A, computes a rhs by b=A*x_ref, then generates an approximate solution using (A^*A)^-1A^*b. Then matrix A^*A is compressed as an HODLR matrix using matvec-based APIs. 
+An example that constructs a 1D FIO as a butterlfy block A, computes a rhs by b=A*x_ref, then generates an approximate solution using (A^*A)^-1A^*b. Then matrix A^*A is compressed as an HODLR matrix using matvec-based APIs.
 ```
 mpirun -n nmpi ./EXAMPLE/cifio
 ```
