@@ -954,7 +954,7 @@ contains
       integer::idxs_i,idxe_i, idxs_o,idxe_o
 
       n1 = OMP_get_wtime()
-
+      Ncol = num_vectors
       tag = 1
 
       ! allocation of communication quantities
@@ -1059,7 +1059,6 @@ contains
                         pp = pid+1
 
                         Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
-                        Ncol = num_vectors
                         offs = max(idxs_i, idxs_o) - idxs_i
                         sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
                         sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
@@ -1081,7 +1080,6 @@ contains
                         pp = pid+1
 
                         Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
-                        Ncol = num_vectors
                         offs = max(idxs_i, idxs_o) - idxs_i
                         sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
                         sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
@@ -1217,6 +1215,7 @@ contains
       n1 = OMP_get_wtime()
       Vin=0
       tag = 1
+      Ncol = num_vectors
 
       ! allocation of communication quantities
       do ii = 1, nproc
@@ -1319,7 +1318,6 @@ contains
                         pp=ii
 
                         Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
-                        Ncol = num_vectors
                         offs = max(idxs_i, idxs_o) - idxs_i
                         sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
                         sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
@@ -1340,7 +1338,6 @@ contains
                         pp=ii
 
                         Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
-                        Ncol = num_vectors
                         offs = max(idxs_i, idxs_o) - idxs_i
                         sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
                         sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
