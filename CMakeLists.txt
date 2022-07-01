@@ -18,7 +18,7 @@ set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 
 # Set up options
-option(enable_doc       "Build doxygen documentation" OFF)
+option(enable_doc       "Build doxygen documentation" ON)
 
 
 ######################################################################

@@ -34,5 +34,6 @@ In addition, ButterflyPACK can be readily invoked from the software STRUMPACK fo
  - Han Guo - hanguo@umich.edu (University of Michigan)
  - Eric Michielssen - emichiel@umich.edu (University of Michigan)
  - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
+ - Allen Qiang - allenqiang1@gmail.com
 
 */

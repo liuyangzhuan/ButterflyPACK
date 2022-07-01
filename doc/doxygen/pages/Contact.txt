@@ -11,6 +11,7 @@
 - Han Guo - hanguo@umich.edu (University of Michigan) 
 - Eric Michielssen - emichiel@umich.edu (University of Michigan) 
 - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
+- Allen Qiang - allenqiang1@gmail.com
 
 Check the ButterflyPACK github page for the latest development version of
 the code, and the website for more information:

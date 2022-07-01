@@ -52,6 +52,7 @@ make
  - Han Guo - hanguo@umich.edu (University of Michigan)
  - Eric Michielssen - emichiel@umich.edu (University of Michigan)
  - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
+ - Allen Qiang - allenqiang1@gmail.com
 
 ## Reference
 
