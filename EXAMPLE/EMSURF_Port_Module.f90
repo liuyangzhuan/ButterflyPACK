@@ -2460,7 +2460,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports ...'
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	edge=quant%Nunk_int
 	do pp=1,quant%Nport
 		if(quant%ports(pp)%type==0 .or. quant%ports(pp)%type==1)then
@@ -2558,7 +2558,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 
 		edge =edge+quant%ports(pp)%Nunk
 	enddo
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	if(MyID==Main_ID)write (*,*) 'Pre-computing the nxe_dot_rwg vectors at the ports:',n2-n1,'Seconds'
 	if(MyID==Main_ID)write (*,*) ''
 
@@ -2614,17 +2614,17 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         enddo
         !$omp end parallel do
 
-        n1 = OMP_get_wtime()
+        n1 = MPI_Wtime()
 		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 
-		n1 = OMP_get_wtime()
+		n1 = MPI_Wtime()
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 
 		! call current_node_patch_mapping('V',curr(:,1),msh)
 		! call current_node_patch_mapping('H',curr(:,2),msh)
@@ -2650,7 +2650,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
         if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
 
-        n1=OMP_get_wtime()
+        n1=MPI_Wtime()
 
         do j=0, num_sample
             phi=j*dphi
@@ -2683,7 +2683,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
         enddo
 
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
 		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 
@@ -2797,9 +2797,9 @@ subroutine EM_solve_port_SURF(bmat,option,msh,quant,ptree,stats,current,voltage)
 		endif
 	enddo
 	!!$omp end parallel do
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,quant%Nport,option,ptree,stats)
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
@@ -2849,7 +2849,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	write(substring1 , *) quant%freq
 
 
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	quant%obs_Efields=0
 
 	do n=msh%idxs, msh%idxe
@@ -2895,14 +2895,14 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 	write(*,*)'   normalize_factor: ', quant%normalize_factor
 
 	endif
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
 
 
 
 
 	!!!!! Compute the maximum normal electric fields, this is not very accurate due to definition of RWG
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	allocate(Enormal_at_patch(quant%maxpatch))
 	Enormal_at_patch=0
 
@@ -2967,7 +2967,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 
 	!!!!! Compute the maximum normal electric fields using GF, but there is a delta offset at each patch to avoid singularity
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 
 	Enormal_GF = Enormal_GF/quant%normalize_factor
 	Enormal_at_patch=0
@@ -3044,13 +3044,13 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 
 	if(ptree%MyID==Main_ID)write(*,*)'   max normal E (GF):',max_Enormal_GF
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
 
 
 
 	!!!!! Compute the surface integral of |Ht|^2
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	allocate(Ht_at_patch(3,quant%maxpatch*quant%integral_points))
 	allocate(weight_at_patch(quant%maxpatch*quant%integral_points))
 	Ht_at_patch=0
@@ -3103,14 +3103,14 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		write(*,*)'   int Rs|H_t|^2/2 and Rs:',Ht2int,Rs
 	endif
 
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
 
 
 
 	!!!!! Compute power at ports
 	if(quant%Nport>0)then
-		n1 = OMP_get_wtime()
+		n1 = MPI_Wtime()
 		allocate(Et_at_patch(3,quant%maxpatch*quant%integral_points))
 		Et_at_patch=0
 		allocate(ExH_at_ports(3,quant%Nport))
@@ -3198,7 +3198,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		deallocate(Et_at_patch)
 		deallocate(port_of_patch)
 		deallocate(ExH_at_ports)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 		! if(ptree%MyID==Main_ID)write(*,*)n2-n1,' seconds'
 
 	endif

@@ -157,7 +157,7 @@ contains
                submats(index_ij)%nr=0
                submats(index_ij)%nc=0
             enddo
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
 
             nnz_loc=0
             do index_ij = 1, nr*nc
@@ -167,7 +167,7 @@ contains
                index_j = (index_j_loc - 1)*inc_c + idx_c
                call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
             enddo
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2 - n1
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
@@ -271,7 +271,7 @@ contains
                allocate (blocks%ButterflySkel(level)%inds(blocks%ButterflySkel(level)%nr, blocks%ButterflySkel(level)%nc))
             endif
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             allocate(submats(nr*nc))
             do index_ij = 1, nr*nc
                submats(index_ij)%nr=0
@@ -286,7 +286,7 @@ contains
                call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
             enddo
             ! !$omp end parallel do
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2 - n1
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
@@ -848,7 +848,7 @@ contains
 
       real(kind=8)::n1, n2
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       if (mode == 'R') modetrans = 'C'
       if (mode == 'C') modetrans = 'R'
@@ -1059,7 +1059,7 @@ contains
       deallocate (recvquant)
       deallocate (sendIDactive)
       deallocate (recvIDactive)
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_exchange_skel
@@ -1104,7 +1104,7 @@ contains
       integer, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -1303,7 +1303,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_skel
@@ -2029,7 +2029,7 @@ contains
 
             end do
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
 
             do level_loc = 1, level_butterflyL
                level = level_loc + levelm
@@ -2106,7 +2106,7 @@ contains
                end if
 
             end do
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2 - n1
 
          enddo
@@ -2182,7 +2182,7 @@ contains
                deallocate (SVD_Q%matU, SVD_Q%matV, SVD_Q%Singular, mat_tmp)
             end do
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             do level_loc = 1, level_butterflyR
                level = levelm + 1 - level_loc
 
@@ -2358,7 +2358,7 @@ contains
 
             end do
 
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2 - n1
          enddo
 
@@ -2594,7 +2594,7 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
          endif
 
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
 
          nrc=nr*nc
          allocate(submats(max(1,nrc*2)))  ! odd for columns, even for rows
@@ -3198,7 +3198,7 @@ endif
 
 
 
-n2 = OMP_get_wtime()
+n2 = MPI_Wtime()
 time_tmp = time_tmp + n2 - n1
 
 
@@ -3240,7 +3240,7 @@ time_tmp = time_tmp + n2 - n1
          call BF_delete_ker_onelevel(ButterflyP_old1)
 
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          ! construct the the left half
          do level = level_half+1, level_butterfly
             !>*** Caution!! the left half is row-wise, the right half is column-wise
@@ -3293,7 +3293,7 @@ time_tmp = time_tmp + n2 - n1
             call BF_all2all_vec_n_ker(blocks, blocks%ButterflyKerl(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level, 'R', 'C', 1)
 
          enddo
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          ! time_tmp = time_tmp + n2 - n1
          call BF_delete_ker_onelevel(ButterflyMiddle)
 
@@ -3313,7 +3313,7 @@ time_tmp = time_tmp + n2 - n1
          deallocate (ButterflyP_old%blocks)
 
          ! construct the the right half
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          do level = level_half, 1, -1
             !>*** Caution!! the left half is row-wise, the right half is column-wise
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
@@ -3364,7 +3364,7 @@ time_tmp = time_tmp + n2 - n1
             call BF_all2all_vec_n_ker(blocks, blocks%ButterflyKerl(level), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level, 'C', 'R', 1)
          end do
 
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          ! time_tmp = time_tmp + n2 - n1
 
 
@@ -4475,7 +4475,7 @@ time_tmp = time_tmp + n2 - n1
       allocate (norm_UVavrbynorm_Z(Navr))
       norm_UVavrbynorm_Z = 0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       allocate (select_column(rankmax_c))
       allocate (select_row(rankmax_r))
@@ -4876,7 +4876,7 @@ time_tmp = time_tmp + n2 - n1
       deallocate (norm_row_R, norm_column_R)
       deallocate (norm_UVavrbynorm_Z)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
 ! ACA followed by SVD
@@ -5005,7 +5005,7 @@ time_tmp = time_tmp + n2 - n1
       allocate (norm_UVavrbynorm_Z(Navr))
       norm_UVavrbynorm_Z = 0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       allocate (value_UV(max(N, M)))
       value_UV = 0
@@ -5318,7 +5318,7 @@ time_tmp = time_tmp + n2 - n1
 
       deallocate (norm_UVavrbynorm_Z)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
 ! ! ACA followed by SVD
@@ -5587,7 +5587,7 @@ time_tmp = time_tmp + n2 - n1
       type(intersect)::submats(1)
       type(SVD_quant)::SVD_Q
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       rmax = size(SVD_Q%MatU,2)
       rankmax_min = min(M, N)
@@ -5867,7 +5867,7 @@ time_tmp = time_tmp + n2 - n1
       ! deallocate(core_inv)
       deallocate (perms)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
       return
@@ -5904,7 +5904,7 @@ time_tmp = time_tmp + n2 - n1
       integer::passflag = 0
       type(SVD_quant)::SVD_Q
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       rmax = size(SVD_Q%MatU,2)
       rankmax_min = min(M, N)
@@ -6329,7 +6329,7 @@ time_tmp = time_tmp + n2 - n1
       deallocate (columns)
       deallocate (rows)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
       return
@@ -6367,7 +6367,7 @@ time_tmp = time_tmp + n2 - n1
       type(Hoption)::option
       integer rcflag ! rows or columns passed in
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
 
       flops=0
@@ -6553,7 +6553,7 @@ time_tmp = time_tmp + n2 - n1
       deallocate (perms)
 
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
       return

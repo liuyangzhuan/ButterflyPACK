@@ -83,7 +83,9 @@ PROGRAM ButterflyPACK_FullKRR
 	use d_BPACK_structure
 	use d_BPACK_factor
 	use d_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_MISC_Utilities
 	use d_BPACK_utilities
 
@@ -220,7 +222,7 @@ PROGRAM ButterflyPACK_FullKRR
 	call d_PrintOptions(option,ptree)
 
 
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix......"
 	allocate(quant%perms(quant%ntrain+quant%ntest))
 	do ii=1,quant%ntrain+quant%ntest
@@ -241,7 +243,7 @@ PROGRAM ButterflyPACK_FullKRR
 	deallocate(tmpline)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "reading fullmatrix finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
@@ -286,7 +288,9 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
     use d_BPACK_DEFS
 	use APPLICATION_MODULE
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_BPACK_Solve_Mul
 	use d_MISC_Utilities
 
@@ -346,11 +350,11 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 	deallocate(labels)
 
 
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 
 	call d_BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
 	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',rtemp,'Seconds'
@@ -375,7 +379,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 
 
 
-	T0 = OMP_get_wtime()
+	T0 = MPI_Wtime()
 
 	allocate (vout(ntest,1))
 	allocate (vout_tmp(ntest,1))
@@ -412,7 +416,7 @@ subroutine FULLKER_solve(bmat,option,msh,quant,ptree,stats)
 		! vout=0
 		! call d_gemmf90(matrixtemp,ntest,x,N_unk,vout,ntest,'N','N',ntest,1,N_unk,BPACK_cone,BPACK_czero)
 
-	T1 = OMP_get_wtime()
+	T1 = MPI_Wtime()
 	if (ptree%MyID==Main_ID) then
 		vout_tmp = vout-vout_test
 		error=0

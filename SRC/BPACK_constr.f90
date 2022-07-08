@@ -109,11 +109,13 @@ contains
          read (strings, *) threads_num
       endif
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
       call OMP_set_num_threads(threads_num)
+#endif
 
       msh%Nunk = Nunk
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       nlevel = 0
       if (present(tree)) then
          nlevel = ceiling_safe(log(dble(size(tree, 1)))/log(2d0))
@@ -157,15 +159,15 @@ contains
       endif
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
       call Cluster_partition(bmat, option, msh, ker, stats, ptree)
       call BPACK_structuring(bmat, option, msh, ker, ptree, stats)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3 or 4')
@@ -333,7 +335,7 @@ contains
 
       call MPI_barrier(ptree%Comm, ierr)
 
-      T0 = OMP_get_wtime()
+      T0 = MPI_Wtime()
 
       allocate (stats%rankmax_of_level(0:h_mat%Maxlevel))
       stats%rankmax_of_level = 0
@@ -393,7 +395,7 @@ contains
 
       do level = 0, h_mat%Maxlevel
          ! write(*,*)h_mat%lstblks%num_nods,'niam'
-         T3 = OMP_get_wtime()
+         T3 = MPI_Wtime()
          cur => h_mat%lstblks(level)%head
          rtemp1 = 0.; rtemp2 = 0.
          do ii = 1, h_mat%lstblks(level)%num_nods
@@ -407,7 +409,7 @@ contains
          stats%Mem_Direct_for = stats%Mem_Direct_for + rtemp2
          call LogMemory(stats, rtemp1 + rtemp2 + rtemp1 + rtemp2)
 
-         T4 = OMP_get_wtime()
+         T4 = MPI_Wtime()
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
             write (*, '(A10,I6,A10,Es14.7,A8,Es14.7,A8,Es14.7)') 'Level:', level, 'finished', T4 - T3, 'secnds', rtemp1 + rtemp2, 'Mbytes'
          endif
@@ -427,7 +429,7 @@ contains
          enddo
       enddo
 
-      T1 = OMP_get_wtime()
+      T1 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + T1 - T0
 
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:h_mat%Maxlevel), stats%rankmax_of_level_global(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
@@ -490,7 +492,7 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing Leaf-blocks......"
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       level = 0
       flag = 0
       ! ForwardSymmetricFlag = 0
@@ -508,7 +510,7 @@ contains
             Bidxs = ho_bf1%levels(level_c)%Bidxs
             Bidxe = ho_bf1%levels(level_c)%Bidxe
          endif
-         n3 = OMP_get_wtime()
+         n3 = MPI_Wtime()
          do ii = Bidxs, Bidxe
             ! do ii =Bidxs,Bidxs
             if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) then
@@ -534,12 +536,12 @@ contains
                      rankrate_outter = option%rankrate !1.2d0
                      level_butterfly = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level_butterfly
 
-                     t1 = OMP_GET_WTIME()
+                     t1 = MPI_Wtime()
                      call BF_randomized(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%pgno, level_butterfly, rank0_outter, rankrate_outter, ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), ho_bf1%levels(level_c)%BP(ii), Bplus_block_MVP_Exact_dat, error, 'Exact', option, stats, ptree, msh)
 
                      call BF_ComputeMemory(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), rtemp)
 
-                     t2 = OMP_GET_WTIME()
+                     t2 = MPI_Wtime()
                      tim_tmp = tim_tmp + t2 - t1
 
                      ! call Bplus_randomized_constr(level_butterfly,ho_bf1%levels(level_c)%BP(ii),ho_bf1%levels(level_c)%BP(ii),rank0_inner,rankrate_inner,Bplus_block_MVP_Exact_dat,rank0_outter,rankrate_outter,Bplus_block_MVP_Outter_Exact_dat,error,'Exact',option,stats,ptree,msh)
@@ -579,13 +581,13 @@ contains
             call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
          enddo
 
-         n4 = OMP_get_wtime()
+         n4 = MPI_Wtime()
          n5 = n4 - n3
 
          call MPI_ALLREDUCE(MPI_IN_PLACE, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level
       end do
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
@@ -651,7 +653,7 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing HSS-BF......"
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       allocate (stats%rankmax_of_level(0:hss_bf1%Maxlevel))
       stats%rankmax_of_level = 0
@@ -672,7 +674,7 @@ contains
       enddo
 
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
@@ -719,7 +721,7 @@ contains
       integer:: boundary_map(1)
       integer level_butterfly, levelm, groupm_start, Nboundall
 
-      ! t1=OMP_GET_WTIME()
+      ! t1=MPI_Wtime()
       if (blocks%style == 2) then
 
          groupm_start = 0
@@ -744,7 +746,7 @@ contains
          enddo
          enddo
       endif
-! t2=OMP_GET_WTIME()
+! t2=MPI_Wtime()
 ! if(blocks%level==1)write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,t2-t1
       return
 
@@ -872,9 +874,9 @@ contains
       allocate (alldat_loc(idx_dat))
       if (idx_dat > 0) alldat_loc = 0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       call BF_ExtractElement(blocks, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       ! compare extracted values with element_Zmn
       v1 = 0
@@ -1102,7 +1104,7 @@ contains
 
       stats%Flop_Tmp = 0d0
 
-      n0 = OMP_get_wtime()
+      n0 = MPI_Wtime()
       flag2D = 0
       allocate (inters(Ninter))
       lstr = list()
@@ -1158,7 +1160,7 @@ contains
       enddo
       if(ntot_loc>0)alldat_loc(1:ntot_loc)=0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       curr => lstr%head
       curc => lstc%head
@@ -1178,7 +1180,7 @@ contains
 
       call MergeSort(lstblk%head, node_score_block_ptr_row)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
 
 #if 0
@@ -1289,11 +1291,11 @@ contains
       !$omp end single
       !$omp end parallel
 #endif
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
       call MPI_barrier(ptree%pgrp(blocks_o%pgno)%Comm, ierr)
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
 
       ! redistribute from blocks' intersections to the global intersecions inters
@@ -1303,7 +1305,7 @@ contains
          call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, blocks_o%pgno, ptree%pgrp(blocks_o%pgno)%nproc, Npmap, pmaps)
       endif
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
 
 
@@ -1354,7 +1356,7 @@ contains
       call list_finalizer(lstr)
       call list_finalizer(lstc)
 
-      n5 = OMP_get_wtime()
+      n5 = MPI_Wtime()
 
       ! if(ptree%MyID==Main_ID)then
       ! write(*,*)n1-n0,n2-n1,n3-n2,n4-n3,n5-n4
@@ -1401,7 +1403,7 @@ contains
 
       stats%Flop_Tmp = 0d0
 
-      n0 = OMP_get_wtime()
+      n0 = MPI_Wtime()
       flag2D = 0
       allocate (inters(Ninter))
       lstr = list()
@@ -1458,7 +1460,7 @@ contains
 
       if(ntot_loc>0)alldat_loc(1:ntot_loc)=0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       curr => lstr%head
       curc => lstc%head
@@ -1486,7 +1488,7 @@ contains
 
       call MergeSort(lstblk%head, node_score_block_ptr_row)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
 
 #if 0
@@ -1597,11 +1599,11 @@ contains
       !$omp end single
       !$omp end parallel
 #endif
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
       stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
       call MPI_barrier(ptree%Comm, ierr)
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
       ! redistribute from blocks' intersections to the global intersecions inters
       if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
          call BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
@@ -1609,7 +1611,7 @@ contains
          call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
       endif
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
 
       ! deallocate intersections at each block
@@ -1656,7 +1658,7 @@ contains
       enddo
       deallocate (inters)
 
-      n5 = OMP_get_wtime()
+      n5 = MPI_Wtime()
 
       call list_finalizer(lstr)
       call list_finalizer(lstc)
@@ -1796,9 +1798,9 @@ contains
       allocate (alldat_loc(idx_dat))
       if (idx_dat > 0) alldat_loc = 0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       call BPACK_ExtractElement(bmat, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       ! compare extracted values with element_Zmn
       v1 = 0
@@ -1945,7 +1947,7 @@ contains
       !$omp parallel
       !$omp single
 #endif
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       ! pgno = 1
       ! nproc = ptree%pgrp(pgno)%nproc
       tag = pgno
@@ -2032,7 +2034,7 @@ contains
          sendquant(pp)%size = 0
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       ! pack the send buffer in the second pass
       cur => lstblk%head
@@ -2084,22 +2086,22 @@ contains
       enddo
 
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
       Nreqs = 0
       do tt = 1, Nsendactive
-         ! n6 = OMP_get_wtime()
+         ! n6 = MPI_Wtime()
          pp = sendIDactive(tt)
          recvid = pp - 1 + ptree%pgrp(pgno)%head
          if (recvid /= ptree%MyID) then
             Nreqs = Nreqs + 1
             call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(pgno)%Comm, S_req(Nreqs), ierr)
          endif
-         ! n7 = OMP_get_wtime()
+         ! n7 = MPI_Wtime()
          ! write(*,*)ptree%MyID,'to',pp-1,n7-n6,sendquant(pp)%size
       enddo
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
 
       ! copy data from buffer to target
       cnt = 0
@@ -2147,7 +2149,7 @@ contains
 
 
 
-      n5 = OMP_get_wtime()
+      n5 = MPI_Wtime()
       if (Nreqs > 0) then
          call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
@@ -2167,7 +2169,7 @@ contains
          endif
       enddo
 
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 #ifdef HAVE_TASKLOOP
       !$omp end single
@@ -2217,7 +2219,11 @@ contains
       !$omp parallel
       !$omp single
 #endif
+#ifdef HAVE_OPENMP
       num_threads = omp_get_num_threads()
+#else
+      num_threads = 1
+#endif
 
       nr_max = 0
       nc_max = 0
@@ -2228,7 +2234,7 @@ contains
       allocate (ridx(nr_max,num_threads))
       allocate (cidx(nc_max,num_threads))
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       ! pgno = 1
       ! nproc = ptree%pgrp(pgno)%nproc
       tag = pgno
@@ -2301,7 +2307,7 @@ contains
          pp = recvIDactive(tt)
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       ! pack the send buffer in the second pass
       cur => lstblk%head
@@ -2349,7 +2355,7 @@ contains
          cur => cur%next
       enddo
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
       Nreqs = 0
       do tt = 1, Nsendactive
@@ -2399,7 +2405,11 @@ contains
       !$omp taskloop default(shared) private(tt,pp,i,myi,myj,idx,nr,nc,ii,jj,cnt)
 #endif
       do tt = 1, Nrecvactive
+#ifdef HAVE_OPENMP
          my_tid = omp_get_thread_num()
+#else
+         my_tid = 0
+#endif
          pp = recvIDactive(tt)
          i = 0
          do while (i < recvquant(pp)%size)
@@ -2436,7 +2446,7 @@ contains
       !$omp end taskloop
 #endif
 
-      n5 = OMP_get_wtime()
+      n5 = MPI_Wtime()
       if (Nreqs > 0) then
          call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
@@ -2463,7 +2473,7 @@ contains
       !$omp end single
       !$omp end parallel
 #endif
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
       ! write(*,*)n2-n1,n3-n2,n4-n3,n5-n4,'wori',ptree%MyID
@@ -2504,7 +2514,7 @@ contains
             allocate (clstr(2)%dat(lstr%num_nods))
             clstr(1)%num_nods = 0
             clstr(2)%num_nods = 0
-            ! n0 = OMP_get_wtime()
+            ! n0 = MPI_Wtime()
 
             num_nods = msh%basis_group(row_group*2)%tail - msh%basis_group(row_group*2)%head + 1
             ! if(lstr%num_nods==msh%basis_group(row_group)%tail-msh%basis_group(row_group)%head+1)then
@@ -2520,7 +2530,7 @@ contains
                clstr(ll)%dat(clstr(ll)%num_nods) = lstr%dat(ii)
             enddo
             ! endif
-            ! n1 = OMP_get_wtime()
+            ! n1 = MPI_Wtime()
             ! time_tmp = time_tmp + n1 - n0
 
             clstc(1)%idx = nth
@@ -2529,7 +2539,7 @@ contains
             allocate (clstc(2)%dat(lstc%num_nods))
             clstc(1)%num_nods = 0
             clstc(2)%num_nods = 0
-            ! n0 = OMP_get_wtime()
+            ! n0 = MPI_Wtime()
 
             num_nods = msh%basis_group(col_group*2)%tail - msh%basis_group(col_group*2)%head + 1
             ! if(lstc%num_nods==msh%basis_group(col_group)%tail-msh%basis_group(col_group)%head+1)then
@@ -2546,7 +2556,7 @@ contains
             enddo
             ! endif
 
-            ! n1 = OMP_get_wtime()
+            ! n1 = MPI_Wtime()
             ! time_tmp = time_tmp + n1 - n0
 
             if (clstr(1)%num_nods > 0 .and. clstc(2)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(1), clstc(2), lstblk, level_c, 2*bidx - 1, 1)

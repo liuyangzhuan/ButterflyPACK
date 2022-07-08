@@ -23,7 +23,9 @@ module BPACK_factor
     use Bplus_factor
     use BPACK_DEFS
     use MISC_Utilities
+#ifdef HAVE_OPENMP
     use omp_lib
+#endif
     use BPACK_block_sendrecv
     use BPACK_Utilities
     use Bplus_randomizedop
@@ -85,7 +87,7 @@ contains
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
 
-        nn1 = OMP_get_wtime()
+        nn1 = MPI_Wtime()
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
 
@@ -144,7 +146,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             call MPI_barrier(ptree%Comm, ierr)
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'update forward blocks at level:', level_c
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             do rowblock_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
             do rowblock = rowblock_inv*2 - 1, rowblock_inv*2
 
@@ -162,13 +164,13 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 end if
             end do
             end do
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_Sblock = stats%Time_Sblock + n2 - n1
 
             !!!>***** compute the inverse of each block 2x2 submatrices whose two off-diagonal blocks are butterflies
             call MPI_barrier(ptree%Comm, ierr)
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'compute block inverse at level:', level_c
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             do rowblock = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
 
                 pgno = ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno
@@ -183,11 +185,11 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
                 endif
             end do
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_Inv = stats%Time_Inv + n2 - n1
         end do
 
-        nn2 = OMP_get_wtime()
+        nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
         call MPI_ALLREDUCE(stats%Time_Sblock, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -272,7 +274,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if(.not. allocated(stats%rankmax_of_level_global_factor))allocate (stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
 
-        nn1 = OMP_get_wtime()
+        nn1 = MPI_Wtime()
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
 
@@ -285,7 +287,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         stats%rankmax_of_level_global_factor(0)=rank
         stats%Mem_Factor = rtemp
 
-        nn2 = OMP_get_wtime()
+        nn2 = MPI_Wtime()
         stats%Time_Inv = nn2 - nn1
         stats%Time_Factor = stats%Time_Inv
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel), hss_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
@@ -366,7 +368,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
 
-        nn1 = OMP_get_wtime()
+        nn1 = MPI_Wtime()
 
         if(option%ILU==1)then
             level=h_mat%Maxlevel
@@ -400,9 +402,9 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             do kk=1,num_blocks
                 if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting panel ", kk
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 call MPI_verbose_barrier('   --diagonal factorization', ptree,option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
                 call g2l(kk, num_blocks, nprow, 1, iproc, myi)
@@ -418,12 +420,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     send=1
                 endif
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 call MPI_verbose_barrier('   --sending the digonal block', ptree, option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 do j=kk+1,num_blocks
                     call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                     if(iproc==myrow .and. jproc1==mycol)then
@@ -439,12 +441,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 if (recv == 1) blocks_r => h_mat%Computing_matricesblock_m(1, 1)
                 if (send == 1) blocks_s => h_mat%Local_blocks(myj, myi)
                 call blocks_partial_bcast(blocks_s, blocks_r, send, recv, send_ID, msh, ptree, option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_Comm = stats%Time_Comm + T4 - T3
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 call MPI_verbose_barrier('   --L and U panel factorization', ptree, option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
                 if (recv == 1)then
@@ -478,12 +480,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     call Hmat_block_delete(blocks_r)
                 endif
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 call MPI_verbose_barrier('   --sending L and U panels', ptree, option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 do j=kk+1,num_blocks
                     send=0
                     recv=0
@@ -549,12 +551,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     endif
                     if (recv == 1)call Hmat_block_delete(blocks_r)
                 enddo
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_Comm = stats%Time_Comm + T4 - T3
 
-                T3 = OMP_get_wtime()
+                T3 = MPI_Wtime()
                 call MPI_verbose_barrier('   --Schur updates', ptree, option)
-                T4 = OMP_get_wtime()
+                T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
                 do i=kk+1,num_blocks
@@ -593,7 +595,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             enddo
         endif
 
-        nn2 = OMP_get_wtime()
+        nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
 
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
@@ -735,11 +737,11 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         level_blocks = block3%level
 
         if ((style(1) ==2 .or. style(2) ==2)) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             call Hmat_add_multiply_Hblock3(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
         else if (style(3) == 4) then   !!! modified by Yang Liu, hybrid butterfly-LR treatment
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (style(1) /= 4) then
                 allocate (block1%sons(2, 2))
                 call BF_split(block1, block1, ptree, stats, msh, option)
@@ -752,7 +754,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 allocate (block3%sons(2, 2))
                 call BF_split(block3, block3, ptree, stats, msh, option)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_split = stats%Time_split + T1 - T0
 
             block1_son => block1%sons(1, 1)
@@ -790,13 +792,13 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         elseif (style(3) == 1) then
             call Full_add_multiply(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
         elseif (style(3) == 2) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
 
             h_mat%blocks_1 => block1
             h_mat%blocks_2 => block2
             rank0 = block3%rankmax
             call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, operand1=chara)
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(block3%level)=max(stats%rankmax_of_level_global_factor(block3%level),block3%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
@@ -855,12 +857,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         integer rank0
 
         if (blocks_m%style == 4) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (blocks_l%style /= 4) then
                 allocate (blocks_l%sons(2, 2))
                 call BF_split(blocks_l, blocks_l, ptree, stats, msh, option)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_Split = stats%Time_Split + T1 - T0
 
             blocks1 => blocks_l%sons(1, 1)
@@ -886,7 +888,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             blocks2 => blocks_m%sons(2, 2)
             call Hmat_LXM(blocks1, blocks2, h_mat, option, stats, ptree, msh)
         else if (blocks_m%style == 2) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if(blocks_m%level_butterfly==0)then
                 rank = size(blocks_m%butterflyU%blocks(1)%matrix,2)
                 call Hmat_Lsolve(blocks_l, 'N', blocks_l%headm, rank, blocks_m%butterflyU%blocks(1)%matrix, blocks_l%M, ptree, stats)
@@ -894,14 +896,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 rank0 = blocks_m%rankmax
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
             stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0
             stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
         else
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
@@ -938,7 +940,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 enddo
                 call trsmf90(blocks_l%fullmat, blocks_m%ButterflyU%blocks(1)%matrix, 'L', 'L', 'N', 'U', mm, rank)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
 
         endif
@@ -967,12 +969,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         integer rank0
 
         if (blocks_m%style == 4) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (blocks_u%style /= 4) then
                 allocate (blocks_u%sons(2, 2))
                 call BF_split(blocks_u, blocks_u, ptree, stats, msh, option)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_Split = stats%Time_Split + T1 - T0
 
             blocks1 => blocks_u%sons(1, 1)
@@ -996,7 +998,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             blocks2 => blocks_m%sons(2, 2)
             call Hmat_XUM(blocks1, blocks2, h_mat, option, stats, ptree, msh)
         else if (blocks_m%style == 2) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if(blocks_m%level_butterfly==0)then
                 rank = size(blocks_m%butterflyV%blocks(1)%matrix,2)
                 call Hmat_Usolve(blocks_u, 'T', blocks_u%headm, rank, blocks_m%butterflyV%blocks(1)%matrix, blocks_m%N, ptree, stats)
@@ -1004,14 +1006,14 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 rank0 = blocks_m%rankmax
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
             stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0
             stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
         else
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
@@ -1023,7 +1025,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 rank = size(blocks_m%ButterflyV%blocks(1)%matrix, 2)
                 call trsmf90(blocks_u%fullmat, blocks_m%ButterflyV%blocks(1)%matrix, 'L', 'U', 'T', 'N', mm, rank)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
         endif
 
@@ -1066,7 +1068,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         h_mat%blocks_1 => block1
         h_mat%blocks_2 => block2
 
-        T0 = OMP_get_wtime()
+        T0 = MPI_Wtime()
         if(level_butterfly==0)then ! use faster, deterministic schemes
             allocate(block_agent%butterflyU%blocks(1))
             allocate(block_agent%butterflyV%blocks(1))
@@ -1091,7 +1093,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         else
             call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
         endif
-        T1 = OMP_get_wtime()
+        T1 = MPI_Wtime()
 
         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
         stats%Time_Multiply = stats%Time_Multiply + T1 - T0
@@ -1126,12 +1128,12 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         DT,allocatable::matUnew(:,:),matVnew(:,:)
 
         if (blocks_o%style == 4) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             if (blocks_1%style /= 4) then
                 allocate (blocks_1%sons(2, 2))
                 call BF_split(blocks_1, blocks_1, ptree, stats, msh, option)
             endif
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             stats%Time_Split = stats%Time_Split + T1 - T0
 
             blocks_o_son => blocks_o%sons(1, 1)
@@ -1155,7 +1157,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 deallocate (blocks_1%sons)
             endif
         else if (blocks_o%style == 2) then
-            T0 = OMP_get_wtime()
+            T0 = MPI_Wtime()
             h_mat%blocks_1 => blocks_1
             rank0 = blocks_o%rankmax
 
@@ -1204,7 +1206,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
 
 
 
-            T1 = OMP_get_wtime()
+            T1 = MPI_Wtime()
             ! time_tmp = time_tmp + T1-T0
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0

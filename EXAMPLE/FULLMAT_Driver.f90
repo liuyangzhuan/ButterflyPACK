@@ -144,7 +144,9 @@ PROGRAM ButterflyPACK_FULL
 	use d_BPACK_structure
 	use d_BPACK_factor
 	use d_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_MISC_Utilities
 	use d_BPACK_constr
 	use d_BPACK_randomMVP

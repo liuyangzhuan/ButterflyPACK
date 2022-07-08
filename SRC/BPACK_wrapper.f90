@@ -23,7 +23,9 @@ module BPACK_wrapper
    use BPACK_factor
    use BPACK_constr
    use BPACK_randomMVP
+#ifdef HAVE_OPENMP
    use omp_lib
+#endif
    use MISC_Utilities
    use BPACK_Solve_Mul
    use iso_c_binding
@@ -940,11 +942,11 @@ contains
       ker%C_FuncZmn => C_FuncZmn
       ker%C_FuncZmnBlock => C_FuncZmnBlock
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       !>**** computation of the construction phase
       call BPACK_construction_Element(bmat, option, stats, msh, ker, ptree)
       ! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       !>**** delete neighours in msh
       if(allocated(msh%nns))then
@@ -1048,7 +1050,9 @@ contains
          read (strings, *) threads_num
       endif
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
       call OMP_set_num_threads(threads_num)
+#endif
 
       !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
@@ -1071,7 +1075,7 @@ contains
 
       msh%Nunk = N
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
       Maxlevel = nlevel
@@ -1115,15 +1119,15 @@ contains
       endif
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
       call Cluster_partition(bmat, option, msh, ker, stats, ptree)
       call BPACK_structuring(bmat, option, msh, ker, ptree, stats)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
@@ -1262,7 +1266,9 @@ contains
          read (strings, *) threads_num
       endif
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
       call OMP_set_num_threads(threads_num)
+#endif
 
       !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
@@ -1283,7 +1289,7 @@ contains
 
       msh%Nunk = N
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
       Maxlevel = nlevel
@@ -1327,15 +1333,15 @@ contains
       endif
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
       call Cluster_partition(bmat, option, msh, ker, stats, ptree)
       call BPACK_structuring(bmat, option, msh, ker, ptree, stats)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
@@ -1508,7 +1514,9 @@ contains
          read (strings, *) threads_num
       endif
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
       call OMP_set_num_threads(threads_num)
+#endif
 
       !>**** create a random seed
       ! call DATE_AND_TIME(values=times)     ! Get the current time
@@ -1678,7 +1686,7 @@ contains
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncBMatVec => C_FuncBMatVec
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction......"
 
@@ -1686,7 +1694,7 @@ contains
 
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction finished in", t2-t1, 'Seconds with', stats%Mem_Comp_for,'MB Memory'
 
@@ -1769,7 +1777,7 @@ contains
       ker%C_FuncZmnBlock => C_FuncZmnBlock
       ker%C_FuncZmn => C_FuncZmn
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction......"
 
@@ -1809,7 +1817,7 @@ contains
          deallocate(msh%nns)
       endif
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
 
@@ -1949,7 +1957,7 @@ contains
 
       type(proctree), pointer::ptree
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       strlen = 1
       ! do while(trans(strlen) /= c_null_char)
@@ -1973,7 +1981,7 @@ contains
          call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       endif
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       xout = xout/option%scale_factor
 
@@ -2049,7 +2057,7 @@ contains
       type(mesh), pointer::msh
       real(kind=8) t1, t2
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       call c_f_pointer(block_Cptr, blocks_o)
       call c_f_pointer(option_Cptr, option)
@@ -2083,7 +2091,7 @@ contains
       deallocate (allcols1)
       deallocate (pgidx1)
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       stats%Time_C_Extract = stats%Time_C_Extract + t2 - t1
       stats%Flop_C_Extract = stats%Flop_C_Extract + stats%Flop_Tmp
@@ -2132,7 +2140,7 @@ contains
       integer::Npmap, pmaps(Npmap, 3)
       real(kind=8) t1, t2
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       call c_f_pointer(bmat_Cptr, bmat)
       call c_f_pointer(option_Cptr, option)
@@ -2158,7 +2166,7 @@ contains
       deallocate (allcols1)
       deallocate (pgidx1)
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       stats%Time_C_Extract = stats%Time_C_Extract + t2 - t1
       stats%Flop_C_Extract = stats%Flop_C_Extract + stats%Flop_Tmp
@@ -2195,7 +2203,7 @@ contains
       type(Bmatrix), pointer::bmat
       type(proctree), pointer::ptree
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       strlen = 1
       ! do while(trans(strlen) /= c_null_char)
@@ -2223,7 +2231,7 @@ contains
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply finished"
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
@@ -2263,7 +2271,7 @@ contains
 
       type(proctree), pointer::ptree
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       strlen = 1
       ! do while(trans(strlen) /= c_null_char)
@@ -2291,7 +2299,7 @@ contains
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply finished"
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
 
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp

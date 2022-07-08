@@ -30,7 +30,9 @@ PROGRAM ButterflyPACK_IE_3D
 	use z_BPACK_factor
 	use z_BPACK_constr
 	use z_BPACK_Solve_Mul
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use z_MISC_Utilities
 	use z_BPACK_utilities
     implicit none
@@ -224,7 +226,7 @@ PROGRAM ButterflyPACK_IE_3D
 	ker_A%QuantApp => quant
 	ker_A%FuncZmn => Zelem_EMSURF
 	!**** initialization of the construction phase
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
 	allocate(xyz(3,quant%Nunk))
 	do ii=1, quant%Nunk
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
@@ -233,7 +235,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 	!**** computation of the construction phase
     call z_BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
@@ -257,7 +259,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_sh)
 		deallocate(groupmembers)
 		!**** initialization of the construction phase
-		t1 = OMP_get_wtime()
+		t1 = MPI_Wtime()
 		allocate(xyz(3,quant%Nunk))
 		do ii=1, quant%Nunk
 			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
@@ -266,7 +268,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
-		t2 = OMP_get_wtime()
+		t2 = MPI_Wtime()
 		!**** computation of the construction phase
 		call z_BPACK_construction_Element(bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh)
 		!**** factorization phase
@@ -295,7 +297,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call z_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree_B)
 		deallocate(groupmembers)
 		!**** initialization of the construction phase
-		t1 = OMP_get_wtime()
+		t1 = MPI_Wtime()
 		allocate(xyz(3,quant%Nunk))
 		do ii=1, quant%Nunk
 			xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
@@ -304,7 +306,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B,Coordinates=xyz)
 		deallocate(Permutation) ! caller can use this permutation vector if needed
 		deallocate(xyz)
-		t2 = OMP_get_wtime()
+		t2 = MPI_Wtime()
 		!**** computation of the construction phase
 		call z_BPACK_construction_Element(bmat_B,option_B,stats_B,msh_B,ker_B,ptree_B)
 		!**** factorization phase

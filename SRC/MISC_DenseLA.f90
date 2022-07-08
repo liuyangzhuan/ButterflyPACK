@@ -21,7 +21,9 @@
 #include "ButterflyPACK_config.fi"
 module MISC_DenseLA
    use BPACK_DEFS
+#ifdef HAVE_OPENMP
    use omp_lib
+#endif
 
 contains
 

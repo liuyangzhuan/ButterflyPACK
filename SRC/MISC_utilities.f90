@@ -35,7 +35,9 @@ module MISC_Utilities
 #ifdef Intel
    USE IFPORT
 #endif
+#ifdef HAVE_OPENMP
    use omp_lib
+#endif
 
 
    integer, parameter :: int64 = selected_int_kind(18)
@@ -78,7 +80,7 @@ contains
       integer ii, jj, ijind
       character trans
 
-      ! n1 = OMP_get_wtime()
+      ! n1 = MPI_Wtime()
       if (trans == 'N') then
          do ii = 1, m
          do jj = 1, n
@@ -92,7 +94,7 @@ contains
          end do
          end do
       endif
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
       ! time_memcopy = time_memcopy + n2-n1
 
    end subroutine copysubmat_assumeshape
@@ -105,7 +107,7 @@ contains
       integer ii, jj, ijind
       character trans
 
-      ! n1 = OMP_get_wtime()
+      ! n1 = MPI_Wtime()
       if (trans == 'N') then
          do ii = 1, m
          do jj = 1, n
@@ -119,7 +121,7 @@ contains
          end do
          end do
       endif
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
       ! time_memcopy = time_memcopy + n2-n1
 
    end subroutine copysubmat
@@ -131,7 +133,7 @@ contains
       real(kind=8)::n1, n2
       integer ii, jj, ijind
 
-      ! n1 = OMP_get_wtime()
+      ! n1 = MPI_Wtime()
 
       ! !$omp parallel do default(shared) private(ii,jj)
       do ii = 1, m
@@ -141,7 +143,7 @@ contains
       end do
       ! !$omp end parallel do
 
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
       ! time_memcopy = time_memcopy + n2-n1
 
    end subroutine copymatT
@@ -448,7 +450,7 @@ contains
       allocate (norm_UVavrbynorm_Z(Navr))
       norm_UVavrbynorm_Z = 0
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       allocate (select_column(rankmax_c))
       allocate (select_row(rankmax_r))
@@ -666,7 +668,7 @@ contains
       deallocate (norm_row_R, norm_column_R)
       deallocate (norm_UVavrbynorm_Z)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
 
