@@ -76,7 +76,7 @@ contains
 
 #if DAT==0
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       maxn = Nunk
       ldv = Nunk_loc
       maxnev = nev
@@ -285,7 +285,7 @@ contains
          end if
 
       endif
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       if (ptree_A%MyID == Main_ID .and. option_A%verbosity >= 0) write (*, *) 'Eigen Solve time: ', t2 - t1
 
       deallocate (select)
@@ -330,7 +330,7 @@ contains
       DT, allocatable::r0_initial(:)
       real(kind=8) n1, n2, rtemp
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       if (option%precon /= DIRECT) then
          allocate (r0_initial(1:Ns_loc))
@@ -350,7 +350,7 @@ contains
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
       end if
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_Sol = stats%Time_Sol + n2 - n1
 
       return
@@ -953,7 +953,7 @@ contains
       integer::dist, kerflag
       integer::idxs_i,idxe_i, idxs_o,idxe_o
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       Ncol = num_vectors
       tag = 1
 
@@ -1171,7 +1171,7 @@ contains
          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
 
@@ -1212,7 +1212,7 @@ contains
       integer::dist, kerflag
       integer::idxs_i,idxe_i, idxs_o,idxe_o
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       Vin=0
       tag = 1
       Ncol = num_vectors
@@ -1418,7 +1418,7 @@ contains
          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
 
@@ -1607,7 +1607,7 @@ contains
 
          ! call MPI_barrier(ptree%Comm, ierr)
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
 
          do i = 1, h_mat%myArows
             do j = 1, h_mat%myAcols
@@ -1659,7 +1659,7 @@ contains
          Vout = Vout/option%scale_factor
 
          call MPI_barrier(ptree%Comm, ierr)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
 
          ! vecnorm = fnorm(Vout, Ns, num_vectors)**2d0
          ! call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)

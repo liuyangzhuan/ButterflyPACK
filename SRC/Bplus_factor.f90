@@ -41,7 +41,7 @@ contains
       type(matrixblock) :: blocks
       real(kind=8) flop
 
-      T0 = OMP_get_wtime()
+      T0 = MPI_Wtime()
       size_m = size(blocks%fullmat, 1)
       if (option%ILU == 0) then
          ! do ii=1,size_m
@@ -61,7 +61,7 @@ contains
             blocks%ipiv(ii) = ii
          enddo
       endif
-      T1 = OMP_get_wtime()
+      T1 = MPI_Wtime()
       stats%Time_Direct_LU = stats%Time_Direct_LU + T1 - T0
 
       return
@@ -88,7 +88,7 @@ contains
 
       stats%Flop_Tmp = 0
 
-      T0 = OMP_get_wtime()
+      T0 = MPI_Wtime()
       style(3) = block3%style
       level_blocks = block3%level
 
@@ -119,7 +119,7 @@ contains
       deallocate (Vin)
       deallocate (Vin1)
 
-      T1 = OMP_get_wtime()
+      T1 = MPI_Wtime()
       stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
 
@@ -148,7 +148,7 @@ contains
       style(1) = block1%style
       level_blocks = block3%level
 
-      T0 = OMP_get_wtime()
+      T0 = MPI_Wtime()
       call assert(style(1) /= 1, 'block1 not supposed to be full')
       call assert(style(3) == 1, 'block3 supposed to be full')
 
@@ -175,7 +175,7 @@ contains
       deallocate (fullmatrix)
       deallocate (Vin)
 
-      T1 = OMP_get_wtime()
+      T1 = MPI_Wtime()
       stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
       return
@@ -495,7 +495,7 @@ contains
          idx_end_diag = min(rowblock*N_diag, ho_bf1%levels(level)%Bidxe)
          vec_new = 0
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          do ii = idx_start_diag, idx_end_diag
 
             if (associated(ho_bf1%levels(level)%BP_inverse(ii)%LL)) then
@@ -517,7 +517,7 @@ contains
                endif
             endif
          end do
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          ! time_tmp = time_tmp + n2 - n1
 
          vec_old = vec_new
@@ -842,7 +842,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -890,7 +892,7 @@ contains
 
       pgno = block_o%pgno
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       ! if(block_o%level==3)then
       call BF_get_rank(block_o, ptree)
       if (level_butterfly >= option%schulzlevel) then
@@ -901,7 +903,7 @@ contains
 
       error_inout = max(error_inout, error)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_SMW = stats%Time_SMW + n2 - n1
       ! write(*,*)'I+B Inversion Time:',n2-n1
 
@@ -916,7 +918,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -966,7 +970,7 @@ contains
 
       itermax = 100
       converged = 0
-      ! n1 = OMP_get_wtime()
+      ! n1 = MPI_Wtime()
       do ii = 1, itermax
 
          write (iternumber, "(I4)") ii
@@ -1018,7 +1022,7 @@ contains
          endif
 
       enddo
-      ! n2 = OMP_get_wtime()
+      ! n2 = MPI_Wtime()
 
       if (converged == 0) then
          write (*, *) 'Schulz Iteration does not converge, consider:'
@@ -1052,7 +1056,9 @@ contains
 
 
    recursive subroutine BF_bdiag_approximation_precompute(recurlevel, bidx,bdiags, option, stats, ptree, msh, pgno)
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -1105,7 +1111,9 @@ contains
 
 
    recursive subroutine BF_bdiag_approximation(recurlevel, bidx, blocks_io,bdiags, option, stats, ptree, msh, pgno)
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -1147,9 +1155,9 @@ contains
          blocks_D => partitioned_block%sons(2, 2)
 
          ! split into four smaller butterflies
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          call BF_split(blocks_io, partitioned_block, ptree, stats, msh, option,1)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_split = stats%Time_split + n2 - n1
 
          if (IOwnPgrp(ptree, blocks_A%pgno)) then
@@ -1176,7 +1184,9 @@ contains
 
 
    subroutine BF_compute_schulz_init(schulz_op, option, ptree, stats, msh)
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -1275,7 +1285,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
 
@@ -1317,9 +1329,9 @@ contains
          blocks_D => partitioned_block%sons(2, 2)
 
          ! split into four smaller butterflies
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          call BF_split(blocks_io, partitioned_block, ptree, stats, msh, option)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_split = stats%Time_split + n2 - n1
 
          if (IOwnPgrp(ptree, blocks_D%pgno)) then
@@ -1338,9 +1350,9 @@ contains
             ! write(*,*)'A-BDC',level_butterfly,level
             call BF_get_rank_ABCD(partitioned_block, rank0)
             if (level_butterfly == 0) then
-               ! n1 = OMP_get_wtime()
+               ! n1 = MPI_Wtime()
                call LR_A_minusBDinvC(partitioned_block, ptree, option, stats)
-               ! n2 = OMP_get_wtime()
+               ! n2 = MPI_Wtime()
                ! time_tmp1 = time_tmp1 + n2-n1
             else
                rate = option%rankrate !1.2d0
@@ -2046,7 +2058,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
       implicit none
       integer level_p, ADflag, iii, jjj
@@ -2142,10 +2156,10 @@ contains
                blocks%ButterflyV%inc = 1
                blocks%ButterflyV%idx = 1
             endif
-            n3 = OMP_get_wtime()
+            n3 = MPI_Wtime()
             call Redistribute1Dto1D(blocks_i_copy%ButterflyU%blocks(1)%matrix, blocks_i_copy%M_loc, blocks_i_copy%M_p, blocks_i_copy%headm, blocks_i_copy%pgno, blocks%ButterflyU%blocks(1)%matrix, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, kk, ptree)
             call Redistribute1Dto1D(blocks_i_copy%ButterflyV%blocks(1)%matrix, blocks_i_copy%N_loc, blocks_i_copy%N_p, blocks_i_copy%headn, blocks_i_copy%pgno, blocks%ButterflyV%blocks(1)%matrix, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, kk, ptree)
-            n4 = OMP_get_wtime()
+            n4 = MPI_Wtime()
             stats%Time_RedistB = stats%Time_RedistB + n4-n3
          enddo
          enddo
@@ -2167,9 +2181,9 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyU%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyU%blocks(1)%matrix)
                allocate (matrixtemp2(M_p_sub1(1, 2), rank))
-               n3 = OMP_get_wtime()
+               n3 = MPI_Wtime()
                call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%M_loc, M_p_sub, 0, pgno_sub_mine, matrixtemp2, M_p_sub1(1, 2), M_p_sub1, 0, pgno_sub_mine, rank, ptree)
-               n4 = OMP_get_wtime()
+               n4 = MPI_Wtime()
                stats%Time_RedistB = stats%Time_RedistB + n4-n3
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyU%blocks(1)%matrix(M_p_sub1(1, 2), rank))
@@ -2192,9 +2206,9 @@ contains
                matrixtemp1 = blocks_i_copy%ButterflyV%blocks(1)%matrix
                deallocate (blocks_i_copy%ButterflyV%blocks(1)%matrix)
                allocate (matrixtemp2(N_p_sub1(1, 2), rank))
-               n3 = OMP_get_wtime()
+               n3 = MPI_Wtime()
                call Redistribute1Dto1D(matrixtemp1, blocks_i_copy%N_loc, N_p_sub, 0, pgno_sub_mine, matrixtemp2, N_p_sub1(1, 2), N_p_sub1, 0, pgno_sub_mine, rank, ptree)
-               n4 = OMP_get_wtime()
+               n4 = MPI_Wtime()
                stats%Time_RedistB = stats%Time_RedistB + n4-n3
                if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
                   allocate (blocks_i_copy%ButterflyV%blocks(1)%matrix(N_p_sub1(1, 2), rank))
@@ -2280,9 +2294,9 @@ contains
                               allocate (block_c_o%ButterflyV%blocks(1))
                            endif
                            allocate (block_c_o%ButterflyV%blocks(1)%matrix(block_c_o%N_loc, rank))
-                           n3 = OMP_get_wtime()
+                           n3 = MPI_Wtime()
                            call Redistribute1Dto1D(matrixtemp1, ld, N_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyV%blocks(1)%matrix, block_c_o%N_loc, N_p_sub, 0, pgno_sub_mine, rank, ptree)
-                           n4 = OMP_get_wtime()
+                           n4 = MPI_Wtime()
                            stats%Time_RedistB = stats%Time_RedistB + n4-n3
                            deallocate (N_p_sub)
                            deallocate (N_p_sub1)
@@ -2318,9 +2332,9 @@ contains
                               allocate (block_c_o%ButterflyU%blocks(1))
                            endif
                            allocate (block_c_o%ButterflyU%blocks(1)%matrix(block_c_o%M_loc, rank))
-                           n3 = OMP_get_wtime()
+                           n3 = MPI_Wtime()
                            call Redistribute1Dto1D(matrixtemp1, ld, M_p_sub1, 0, pgno_sub_mine, block_c_o%ButterflyU%blocks(1)%matrix, block_c_o%M_loc, M_p_sub, 0, pgno_sub_mine, rank, ptree)
-                           n4 = OMP_get_wtime()
+                           n4 = MPI_Wtime()
                            stats%Time_RedistB = stats%Time_RedistB + n4-n3
                            deallocate (M_p_sub)
                            deallocate (M_p_sub1)
@@ -2405,12 +2419,12 @@ contains
          allocate (Vo2(max(1, blocks_C%M_loc), num_vect_sub))
          Vo2 = 0
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V1, blocks_A%N_p, 0, blocks_A%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(vin, blocks_i%N_p, 0, blocks_i%pgno, V2, blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
 
          call Redistribute1Dto1D_OnetoTwo(vin, blocks_i%N_loc, blocks_i%N_p, 0, blocks_i%pgno, V1, max(1, blocks_A%N_loc),blocks_A%N_p, 0, blocks_A%pgno,V2, max(1, blocks_B%N_loc), blocks_B%N_p, blocks_A%N, blocks_B%pgno, num_vect_sub, ptree)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
 
@@ -2423,12 +2437,12 @@ contains
             call BF_block_MVP_dat(blocks_D, 'N', blocks_D%M_loc, blocks_D%N_loc, num_vect_sub, V2, max(1, blocks_B%N_loc), Vo2, max(1, blocks_C%M_loc), BPACK_cone, BPACK_cone, ptree, stats)
          endif
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          ! call Redistribute1Dto1D(Vo1, blocks_A%M_p, 0, blocks_A%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
          ! call Redistribute1Dto1D(Vo2, blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
 
          call Redistribute1Dto1D_TwotoOne(Vo1, max(1, blocks_A%M_loc), blocks_A%M_p, 0, blocks_A%pgno,Vo2, max(1, blocks_C%M_loc), blocks_C%M_p, blocks_A%M, blocks_C%pgno, vout2, blocks_i%M_loc, blocks_i%M_p, 0, blocks_i%pgno, num_vect_sub, ptree)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
          if(fnorm(vout1, blocks_i%M_loc, 1)<BPACK_SafeUnderflow .and. fnorm(vout2, blocks_i%M_loc, 1)<BPACK_SafeUnderflow)then
@@ -2476,7 +2490,9 @@ contains
    subroutine Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
       implicit none
 
       integer level_c, rowblock
@@ -2566,11 +2582,11 @@ contains
 
                   blocks => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
                   call assert(IOwnPgrp(ptree, blocks%pgno),'I do not own this pgno')
-                  n1=OMP_get_wtime()
+                  n1=MPI_Wtime()
                   call BF_extract_partial(block_o, level_butterfly_loc, ii_loc,blocks%headm,blocks%row_group, 'L', agent_block,blocks%pgno,ptree)
                   rank0 = agent_block%rankmax
                   rate = option%rankrate !1.2d0
-                  n2=OMP_get_wtime()
+                  n2=MPI_Wtime()
                   ! time_tmp = time_tmp + n2-n1
 
                   ho_bf1%ind_lv = level
@@ -2583,9 +2599,9 @@ contains
 
                   call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
 
-                  n1=OMP_get_wtime()
+                  n1=MPI_Wtime()
                   call BF_copyback_partial(block_o, level_butterfly_loc, ii_loc, 'L', agent_block,blocks%pgno,ptree)
-                  n2=OMP_get_wtime()
+                  n2=MPI_Wtime()
                   ! time_tmp = time_tmp + n2-n1
 
                   call BF_delete(agent_block,1)
@@ -2634,7 +2650,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
 
       implicit none
@@ -2707,7 +2725,7 @@ contains
             do bb = 1, Bplus%LL(llplus)%Nbound
                block_o => Bplus%LL(llplus)%matrices_block(bb)
                if (IOwnPgrp(ptree, block_o%pgno)) then
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
@@ -2719,18 +2737,18 @@ contains
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
 
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   !!!!! invert I+B1 to be I+B2
                   level_butterfly = block_o%level_butterfly
                   call BF_inverse_partitionedinverse_IplusButter(block_o, level_butterfly, 0, option, error, stats, ptree, msh, block_o%pgno)
                   error_inout = max(error_inout, error)
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   stats%Time_SMW = stats%Time_SMW + n2 - n1
 
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   if (llplus /= Lplus) then
                      rank0 = block_o%rankmax
                      rate = option%rankrate !1.2d0
@@ -2741,7 +2759,7 @@ contains
                      stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                      error_inout = max(error_inout, error)
                   endif
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
                endif
             end do
@@ -2774,7 +2792,9 @@ contains
 
 
 
-      use omp_lib
+#ifdef HAVE_OPENMP
+     use omp_lib
+#endif
 
 
       implicit none
@@ -2820,7 +2840,7 @@ contains
             block_o => Bplus%LL(llplus)%matrices_block(bb)
             if (IOwnPgrp(ptree, block_o%pgno)) then
 
-               n1 = OMP_get_wtime()
+               n1 = MPI_Wtime()
                !!!!! partial update butterflies at level llplus from left B1 = D^-1xB
                if (llplus /= Lplus) then
 
@@ -2880,11 +2900,11 @@ contains
                   error_inout = max(error_inout, error)
 #endif
                endif
-               n2 = OMP_get_wtime()
+               n2 = MPI_Wtime()
                stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
 
 
-               n1 = OMP_get_wtime()
+               n1 = MPI_Wtime()
                if (block_o%style == 1) then
 #if 0
                   allocate (ipiv(block_o%M))
@@ -2914,10 +2934,10 @@ contains
                   endif
                   error_inout = max(error_inout, error)
                endif
-               n2 = OMP_get_wtime()
+               n2 = MPI_Wtime()
                stats%Time_SMW = stats%Time_SMW + n2 - n1
 
-               n1 = OMP_get_wtime()
+               n1 = MPI_Wtime()
                if (llplus /= Lplus) then
                   level_butterfly = block_o%level_butterfly
                   levelm = ceiling_safe(dble(level_butterfly)/2d0)
@@ -2977,7 +2997,7 @@ contains
                   error_inout = max(error_inout, error)
 #endif
                endif
-               n2 = OMP_get_wtime()
+               n2 = MPI_Wtime()
                stats%Time_PartialUpdate = stats%Time_PartialUpdate + n2 - n1
             endif
          end do

@@ -92,7 +92,9 @@ PROGRAM ButterflyPACK_KRR
 	use d_BPACK_structure
 	use d_BPACK_factor
 	use d_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_MISC_Utilities
 	use d_BPACK_utilities
 
@@ -214,7 +216,7 @@ PROGRAM ButterflyPACK_KRR
 	quant%Nunk = quant%ntrain
 	if(ptree%MyID==Main_ID)write(*,*)'training set: ',trim(quant%trainfile_p)
 
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
 	open (90,file=quant%trainfile_p)
 	allocate (quant%xyz(quant%dimn,1:quant%Nunk))
@@ -224,7 +226,7 @@ PROGRAM ButterflyPACK_KRR
     close(90)
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 
 
 	!**** register the user-defined function and type in ker
@@ -269,7 +271,9 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 
     use d_BPACK_DEFS
 	use APPLICATION_MODULE
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_BPACK_Solve_Mul
 
     implicit none
@@ -327,11 +331,11 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	deallocate(labels)
 	close(91)
 
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 
 	call d_BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
 	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',rtemp,'Seconds'
@@ -341,7 +345,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	!**** prediction on the test sets
 
 	ntest=quant%ntest
-	T0 = OMP_get_wtime()
+	T0 = MPI_Wtime()
 	open (92,file=quant%testfile_p)
 	allocate (xyz_test(Dimn,ntest))
 	do edge=1,ntest
@@ -361,7 +365,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	enddo
 
 	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_precision, MPI_SUM, Main_ID, ptree%Comm,ierr)
-	T1 = OMP_get_wtime()
+	T1 = MPI_Wtime()
 	if (ptree%MyID==Main_ID) then
 		do ii=1,ntest
 			if(dble(vout(ii,1))>0)then

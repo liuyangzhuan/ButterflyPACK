@@ -62,7 +62,7 @@ contains
 
       if (allocated(msh%xyz)) deallocate (msh%xyz)
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction......"
       select case (option%format)
       case (HODLR)
@@ -70,7 +70,7 @@ contains
       case (HMAT)
          call Hmat_randomized(bmat%h_mat, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
       end select
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction finished", t2 - t1, 'secnds. Error: ', error
 
    end subroutine BPACK_construction_Matvec
@@ -126,7 +126,7 @@ contains
 
       call assert(option%less_adapt == 0, 'Hmat_randomized does not support less_adapt=1 currently')
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
 
       !!!!!!!!!!!!!!!!!!  get the 2-norm of the Hmat and compute an absolute tolerance
@@ -256,7 +256,7 @@ contains
          end if
       end do
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n4 - n3
 
       stats%Mem_Comp_for = stats%Mem_Comp_for + Memory
@@ -616,7 +616,7 @@ contains
          enddo
       enddo
 
-      ! n3 = OMP_get_wtime()
+      ! n3 = MPI_Wtime()
 
       ! perform the nontransposed MVP
       call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect*ncolor, ker, ptree, stats, msh, option)
@@ -626,7 +626,7 @@ contains
       call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'T', RandVectInL, RandVectOutL, Nloc, level_c, num_vect*ncolor, ker, ptree, stats, msh, option)
       RandVectOutL = conjg(cmplx(RandVectOutL, kind=8))
 
-      ! n4 = OMP_get_wtime()
+      ! n4 = MPI_Wtime()
       ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
 
       ! store the nontransposed multiply results for each admissible block
@@ -815,10 +815,10 @@ contains
 
       VectOut = 0
       allocate (RandVectTmp(Nloc, num_vect))
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
       call blackbox_Hmat_MVP(trans, Nloc, Nloc, num_vect, VectIn, RandVectTmp, ker)
       call Hmat_Mult(trans, Nloc, num_vect, 1, level_c - 1, VectIn, VectOut, h_mat, ptree, option, stats,0)
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
       VectOut = RandVectTmp - VectOut
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
@@ -913,12 +913,12 @@ contains
 
 
          ! perform the MVP
-         ! n3 = OMP_get_wtime()
+         ! n3 = MPI_Wtime()
          call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'N', RandVectInR, RandVectOutR, Nloc, h_mat%Maxlevel, num_vect, ker, ptree, stats, msh, option)
          RandVectOutR_glo=0
          RandVectOutR_glo(msh%idxs:msh%idxe,:) = RandVectOutR
          call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutR_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-         ! n4 = OMP_get_wtime()
+         ! n4 = MPI_Wtime()
          ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
 
 
@@ -992,7 +992,7 @@ contains
 
       call assert(option%less_adapt == 0, 'HODLR_randomized does not support less_adapt=1 currently')
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
 
       !!!!!!!!!!!!!!!!!!  get the 2-norm of the HODLR and compute an absolute tolerance
@@ -1057,7 +1057,7 @@ contains
                rank_pre_max = ceiling_safe(rank_max_lastlevel*option%rankrate**(tt - 1)) + 1
 
                if (level_butterfly == 0) then
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   allocate (block_rand(Bidxe - Bidxs + 1))
                   do bb = Bidxs, Bidxe
                      ! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
@@ -1066,13 +1066,13 @@ contains
                      call BF_Init_randomized(level_butterfly, rank_pre_max, groupm, groupn, ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1), block_rand(bb - Bidxs + 1), msh, ptree, option, 1)
                      ! endif
                   enddo
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   stats%Time_random(1) = stats%Time_random(1) + n2 - n1
 
                   call HODLR_randomized_OneL_Lowrank(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, rank_pre_max, option, ker, ptree, stats, msh, tolerance_abs)
                else
 
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   allocate (block_rand(Bidxe - Bidxs + 1))
                   do bb = Bidxs, Bidxe
                      ! if(IOwnPgrp(ptree,ho_bf1%levels(level_c)%BP(bb)%pgno))then
@@ -1081,17 +1081,17 @@ contains
                      call BF_Init_randomized(level_butterfly, rank_pre_max, groupm, groupn, ho_bf1%levels(level_c)%BP(bb)%LL(1)%matrices_block(1), block_rand(bb - Bidxs + 1), msh, ptree, option, 0)
                      ! endif
                   enddo
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   stats%Time_random(1) = stats%Time_random(1) + n2 - n1
 
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   call HODLR_Reconstruction_LL(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, vecCNT, option, stats, ker, ptree, msh)
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'reconstructLL: ', n2 - n1, 'vecCNT', vecCNT
 
-                  n1 = OMP_get_wtime()
+                  n1 = MPI_Wtime()
                   call HODLR_Reconstruction_RR(ho_bf1, block_rand, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, vecCNT, option, stats, ker, ptree, msh)
-                  n2 = OMP_get_wtime()
+                  n2 = MPI_Wtime()
                   if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'reconstructRR: ', n2 - n1, 'vecCNT', vecCNT
                end if
 
@@ -1149,7 +1149,7 @@ contains
          end if
       end do
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n4 - n3
 
       stats%Mem_Comp_for = stats%Mem_Comp_for + Memory
@@ -1687,15 +1687,15 @@ contains
             nth_s = (ii - 1)*Nbind + 1
             nth_e = ii*Nbind
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             call HODLR_Randomized_Vectors('L', ho_bf1, block_rand, RandVectIn, RandVectOut, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, nth_s, nth_e, num_vect_sub, level, ker, ptree, stats, msh, option)
             vecCNT = vecCNT + num_vect_sub*2
 
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_getvec = time_getvec + n2-n1
             stats%Time_Random(2) = stats%Time_Random(2) + n2 - n1
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
 
             do bb_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
                pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
@@ -1707,7 +1707,7 @@ contains
                call BF_Resolving_Butterfly_LL_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn(idx_start_loc:idx_end_loc, 1:num_vect_sub), RandVectOut(idx_start_loc:idx_end_loc, 1:num_vect_sub), option, ptree, msh, stats)
 
             enddo
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_Random(3) = stats%Time_Random(3) + n2 - n1
          end do
 
@@ -1787,15 +1787,15 @@ contains
             nth_s = (ii - 1)*Nbind + 1
             nth_e = ii*Nbind
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             call HODLR_Randomized_Vectors('R', ho_bf1, block_rand, RandVectIn, RandVectOut, blackbox_HODLR_MVP, Nloc, level_c, level_butterfly, nth_s, nth_e, num_vect_sub, level, ker, ptree, stats, msh, option)
             vecCNT = vecCNT + num_vect_sub*2
 
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             ! time_getvec = time_getvec + n2-n1
             stats%Time_Random(2) = stats%Time_Random(2) + n2 - n1
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
 
             do bb_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
                pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level_c)%BP_inverse(bb_inv)%pgno)%head + 1
@@ -1807,7 +1807,7 @@ contains
                call BF_Resolving_Butterfly_RR_dat_twoforward(ho_bf1, level_c, num_vect_sub, nth_s, nth_e, Ng, level, Bidxs, bb_inv, block_rand, RandVectIn(idx_start_loc:idx_end_loc, 1:num_vect_sub), RandVectOut(idx_start_loc:idx_end_loc, 1:num_vect_sub), option, ptree, msh, stats)
 
             enddo
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_Random(3) = stats%Time_Random(3) + n2 - n1
          end do
 
@@ -2072,9 +2072,9 @@ contains
                matrixtemp => matrixtemp2
             endif
          ! endif
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          call Redistribute1Dto1D(AR, size(AR,1), block_inv%M_p, 0, block_inv%pgno, matrixtemp, max(1,mm(bb)), M_p, offout(bb), block_off%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
       enddo
 
@@ -2104,9 +2104,9 @@ contains
          if (bb == 1) matrixtemp => matrixtemp1
          if (bb == 2) matrixtemp => matrixtemp2
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
          call Redistribute1Dto1D(matrixtemp, mm(bb), M_p, offout(bb), block_off%pgno, AR, size(AR,1),block_inv%M_p, 0, block_inv%pgno, ranks(ii*2 - 1 + bb - 1 - Bidxs + 1), ptree)
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          stats%Time_RedistV = stats%Time_RedistV + n2 - n1
          deallocate (matrixtemp)
       enddo
@@ -2151,7 +2151,7 @@ contains
       offN(2) = 0
 
       !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2180,7 +2180,7 @@ contains
          ! endif
          call Redistribute1Dto1D(QcA_trans, size(QcA_trans,1), block_inv%N_p, 0, block_inv%pgno, matQcA_trans, max(1,nn(bb)), N_p, offN(bb), block_off%pgno, ranks(bb_inv*2 - 1 + bb - 1 - Bidxs + 1), ptree)
       enddo
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
       !!!>*** compute B^T=V^TS^TU^T and A = (QU)*(SV)
@@ -2243,7 +2243,7 @@ contains
       offN(2) = 0
 
       !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2272,7 +2272,7 @@ contains
          ! endif
          call Redistribute1Dto1D(RandVectIn, block_inv%M_loc, block_inv%M_p, 0, block_inv%pgno, matIn, max(1,mm(bb)),M_p, offM(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
       !!!>*** call BF_Resolving_Butterfly_LL_dat
@@ -2335,7 +2335,7 @@ contains
       offN(2) = 0
 
       !!!>*** redistribute Q and B^T from process layout of hodlr to the process layout of block_off1 and block_off2
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       do bb = 1, 2
          block_off => ho_bf1%levels(level_c)%BP(bb_inv*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
          M_p => block_off%M_p
@@ -2364,7 +2364,7 @@ contains
          ! endif
          call Redistribute1Dto1D(RandVectIn, block_inv%N_loc, block_inv%N_p, 0, block_inv%pgno, matIn, max(1,nn(bb)),N_p, offN(bb), block_off%pgno, num_vect_sub, ptree)
       enddo
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2 - n1
 
       !!!>*** call BF_Resolving_Butterfly_RR_dat

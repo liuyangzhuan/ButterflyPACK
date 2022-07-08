@@ -236,7 +236,9 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	use d_BPACK_structure
 	use d_BPACK_factor
 	use d_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use d_Bplus_compress
 	use d_BPACK_randomMVP
 	use d_BPACK_utilities
@@ -359,7 +361,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 	!**** generate the full matrix used for entry evaluation function Zelem_FULL
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 	allocate(quant%matZ_glo(quant%Nunk,quant%Nunk))
 	quant%matZ_glo = 0
@@ -374,7 +376,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	close(unit=888)
 	deallocate(tmp)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
 	! allocate(tree(32))

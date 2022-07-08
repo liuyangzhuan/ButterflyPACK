@@ -303,7 +303,7 @@ contains
          do bb = 1, bplus%LL(ll)%Nbound
             blocks => bplus%LL(ll)%matrices_block(bb)
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             if (chara == 'N') then
                if (blocks%M_loc > 0) allocate (Vout_loc(blocks%M_loc, Nrnd))
                if (blocks%N_loc > 0) allocate (Vin_loc(blocks%N_loc, Nrnd))
@@ -315,7 +315,7 @@ contains
                call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
                call Redistribute1Dto1D(Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
             endif
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
             if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
@@ -323,7 +323,7 @@ contains
                &Vin_loc, size(Vin_loc,1), Vout_loc, size(Vout_loc,1), ctemp1, ctemp2, ptree, stats)
             endif
 
-            n1 = OMP_get_wtime()
+            n1 = MPI_Wtime()
             if (chara == 'N') then
                call Redistribute1Dto1D(Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree)
                if (blocks%M_loc > 0) deallocate (Vout_loc)
@@ -333,7 +333,7 @@ contains
                if (blocks%N_loc > 0) deallocate (Vout_loc)
                if (blocks%M_loc > 0) deallocate (Vin_loc)
             endif
-            n2 = OMP_get_wtime()
+            n2 = MPI_Wtime()
             stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
          end do
@@ -396,7 +396,7 @@ contains
       dat_old => null()
 
       ! call MPI_barrier(ptree%pgrp(pgno_new)%Comm,ierr)
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       if (blocks%level_butterfly == 0) then
 
@@ -502,7 +502,7 @@ contains
          endif
       endif
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_RedistB = stats%Time_RedistB + n2 - n1
 
    end subroutine BF_ReDistribute_Inplace
@@ -521,7 +521,7 @@ contains
       type(Hstat)::stats
 
       ! call MPI_barrier(ptree%pgrp(pgno_new)%Comm,ierr)
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       if (blocks%level_butterfly > 0) then
          if (pat_i /= pat_o) then
@@ -545,7 +545,7 @@ contains
          endif
       endif
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       stats%Time_RedistB = stats%Time_RedistB + n2 - n1
 
    end subroutine BF_ChangePattern
@@ -1369,7 +1369,7 @@ contains
       integer statusm(MPI_status_size), statusn(MPI_status_size)
       ! call MPI_Barrier(ptree%pgrp(pgno)%Comm, ierr)
       ! allocate(agent_block)
-      n1=OMP_Get_wtime()
+      n1=MPI_Wtime()
       call assert(level_butterfly_loc >= 1, 'level_butterfly_loc cannot be zero')
 
       agent_block%style = block_o%style
@@ -1604,11 +1604,11 @@ contains
          enddo
       end if
 
-      ! n2=OMP_Get_wtime()
+      ! n2=MPI_Wtime()
       ! time_tmp = time_tmp+n2-n1
 
 
-      ! n1=OMP_Get_wtime()
+      ! n1=MPI_Wtime()
 
 
       !>*********** compute M_p, N_p, ms, ns, M and N
@@ -1661,7 +1661,7 @@ contains
       enddo
 
       call BF_get_rank(agent_block, ptree)
-      n2=OMP_Get_wtime()
+      n2=MPI_Wtime()
       ! time_tmp = time_tmp+n2-n1
    end subroutine BF_extract_partial
 
@@ -2228,7 +2228,7 @@ contains
 
       real(kind=8)::n1, n2
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       mode = 'R'
       modetrans = 'C'
@@ -2473,7 +2473,7 @@ contains
       deallocate (recvquant)
       deallocate (sendIDactive)
       deallocate (recvIDactive)
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_exchange_extraction
@@ -2513,7 +2513,7 @@ contains
 
       real(kind=8)::n1, n2
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       if (mode == 'R') modetrans = 'C'
       if (mode == 'C') modetrans = 'R'
@@ -2736,7 +2736,7 @@ contains
       deallocate (recvquant)
       deallocate (sendIDactive)
       deallocate (recvIDactive)
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_exchange_matvec
@@ -2780,7 +2780,7 @@ contains
       integer, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -2975,7 +2975,7 @@ contains
       endif
 
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_sizes
@@ -3080,7 +3080,7 @@ contains
 !       enddo
 
 
-!       n1 = OMP_get_wtime()
+!       n1 = MPI_Wtime()
 
 !       ! communicate receive buffer sizes
 !       do tt = 1, Nsendactive
@@ -3095,7 +3095,7 @@ contains
 !       if (Nrecvactive > 0) then
 !          call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
 !       endif
-!       n2 = OMP_get_wtime()
+!       n2 = MPI_Wtime()
 !       ! time_tmp = time_tmp + n2 - n1
 
 !       do tt = 1, Nsendactive
@@ -3107,7 +3107,7 @@ contains
 !          allocate (recvquant(pp)%dat_i(recvquant(pp)%size, 1))
 !       enddo
 
-!       n1 = OMP_Get_wtime()
+!       n1 = MPI_Wtime()
 
 !       ! pack the send buffer in the second pass
 !       do ii = 1, sizes%nr
@@ -3173,7 +3173,7 @@ contains
 !             call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
 !             pp = statusr(MPI_SOURCE, 1) + 1
 !          endif
-!          ! n1 = OMP_get_wtime()
+!          ! n1 = MPI_Wtime()
 !          i = 0
 !          do while (i < recvquant(pp)%size)
 !             i = i + 1
@@ -3186,7 +3186,7 @@ contains
 !             Nskel = NINT(dble(recvquant(pp)%dat_i(i, 1)))
 !             sizes%inds(ii, jj)%size = Nskel
 !          enddo
-!          ! n2 = OMP_get_wtime()
+!          ! n2 = MPI_Wtime()
 !          ! time_tmp = time_tmp + n2 - n1
 !       enddo
 !       if (Nreqs > 0) then
@@ -3204,7 +3204,7 @@ contains
 !       enddo
 !       endif
 
-!       n2 = OMP_get_wtime()
+!       n2 = MPI_Wtime()
 !       ! time_tmp = time_tmp + n2 - n1
 
 
@@ -3252,7 +3252,7 @@ contains
       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -3453,7 +3453,7 @@ contains
       deallocate (recvIDactive)
 
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_extraction
@@ -3499,7 +3499,7 @@ contains
       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist, kerflag
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -3748,7 +3748,7 @@ contains
          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_vec_n_ker
@@ -3795,7 +3795,7 @@ contains
 !       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
 !       integer::dist
 
-!       n1 = OMP_get_wtime()
+!       n1 = MPI_Wtime()
 
 !       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -3858,7 +3858,7 @@ contains
 !          enddo
 !          enddo
 !       endif
-!       n2 = OMP_get_wtime()
+!       n2 = MPI_Wtime()
 !       time_tmp = time_tmp + n2 - n1
 
 !       do tt = 1, Nsendactive
@@ -3879,7 +3879,7 @@ contains
 !          endif
 !       enddo
 
-!       n1 = OMP_get_wtime()
+!       n1 = MPI_Wtime()
 !       ! pack the send buffer in the second pass
 !       if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
 !       do ii = 1, kerls%nr
@@ -3918,7 +3918,7 @@ contains
 
 !       allocate (kerls%blocks(kerls%nr, kerls%nc))
 !       endif
-!       n2 = OMP_get_wtime()
+!       n2 = MPI_Wtime()
 !       time_tmp = time_tmp + n2 - n1
 
 !       Nreqs = 0
@@ -3957,7 +3957,7 @@ contains
 !       ! copy data from buffer to target
 !       do tt = 1, Nrecvactive
 !          pp = recvIDactive(tt)
-!          n1 = OMP_get_wtime()
+!          n1 = MPI_Wtime()
 !          i = 0
 !          do while (i < recvquant(pp)%size)
 !             i = i + 1
@@ -3979,7 +3979,7 @@ contains
 !                enddo
 !             enddo
 !          enddo
-!          n2 = OMP_get_wtime()
+!          n2 = MPI_Wtime()
 !          time_tmp = time_tmp + n2 - n1
 !       enddo
 
@@ -3997,7 +3997,7 @@ contains
 !          if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
 !       enddo
 
-!       ! n2 = OMP_get_wtime()
+!       ! n2 = MPI_Wtime()
 !       ! time_tmp = time_tmp + n2 - n1
 
 !    end subroutine BF_all2all_vec_n_ker
@@ -4040,7 +4040,7 @@ contains
       character::mode
       integer offset_r, offset_c
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
@@ -4318,7 +4318,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_ker
@@ -4378,7 +4378,7 @@ contains
 
       if(mode_i/=mode_o)then
 
-         n1 = OMP_get_wtime()
+         n1 = MPI_Wtime()
 
          nproc = ptree%pgrp(pgno)%nproc
          tag = pgno+level*10
@@ -4625,7 +4625,7 @@ contains
          deallocate (sendIDactive)
          deallocate (recvIDactive)
 
-         n2 = OMP_get_wtime()
+         n2 = MPI_Wtime()
          ! time_tmp = time_tmp + n2 - n1
       endif
    end subroutine BF_all2all_ker_pattern
@@ -4659,7 +4659,7 @@ contains
       real(kind=8)::t1, t2
       DT, allocatable::matrixtemp1(:, :), matrixtemp2(:, :)
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       do iii = 1, 2
          do jjj = 1, 2
@@ -4791,7 +4791,7 @@ contains
          endif
          enddo
       enddo
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       ! time_tmp = time_tmp + t2 - t1
    end subroutine BF_convert_to_smallBF
 
@@ -4833,7 +4833,7 @@ contains
       integer::dist
       character::mode
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       nproc = ptree%pgrp(pgno_i)%nproc
       pgno = pgno_i
@@ -5180,7 +5180,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_ker_split
@@ -5223,7 +5223,7 @@ contains
       integer::dist
       character::mode
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       nproc = max(ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc)
       pgno = min(pgno_i, pgno_o)
@@ -5487,7 +5487,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_UV
@@ -5530,7 +5530,7 @@ contains
       integer::dist
       character::mode
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
       nproc = ptree%pgrp(pgno_i)%nproc
       pgno = pgno_i
       do iii=1,2
@@ -5887,7 +5887,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_U_split
@@ -5930,7 +5930,7 @@ contains
       integer::dist
       character::mode
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       nproc = ptree%pgrp(pgno_i)%nproc
       pgno = pgno_i
@@ -6279,7 +6279,7 @@ contains
       deallocate (sendIDactive)
       deallocate (recvIDactive)
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_V_split
@@ -6338,7 +6338,7 @@ contains
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -6417,7 +6417,7 @@ contains
          end if
 
          if (chara == 'N') then
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
@@ -6440,7 +6440,7 @@ contains
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
             do level = 0, level_half
-               ! n1 = OMP_get_wtime()
+               ! n1 = MPI_Wtime()
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
 
                BFvec%vec(level + 1)%idx_r = idx_r
@@ -6468,7 +6468,7 @@ contains
 
                   if (level == 0) then
                      flops = 0
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
 #endif
@@ -6493,7 +6493,7 @@ contains
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -6507,7 +6507,7 @@ contains
                      write(*,*)'should not arrive here'
 
                   else
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      flops = 0
 #ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
@@ -6556,7 +6556,7 @@ contains
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -6566,14 +6566,14 @@ contains
                   enddo
                enddo
 
-               ! n2 = OMP_get_wtime()
+               ! n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level) then
                   call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
                endif
             enddo
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
@@ -6582,7 +6582,7 @@ contains
                call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
             endif
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_half + 1, level_butterfly + 1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
 
@@ -6649,7 +6649,7 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop)
 #endif
@@ -6674,18 +6674,18 @@ contains
 #ifdef HAVE_TASKLOOP
                         !$omp end taskloop
 #endif
-                        n4 = OMP_get_wtime()
+                        n4 = MPI_Wtime()
                         ! time_tmp = time_tmp + n4-n3
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   else
 
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      flops = 0
 
                      if (nc0 > 1 .and. inc_c0 == 1) then  ! this special treatment makes sure two threads do not write to the same address simultaneously
-                        ! n1 = OMP_get_wtime()
+                        ! n1 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
 #endif
@@ -6744,7 +6744,7 @@ contains
                         !$omp end taskloop
 #endif
 
-   ! n2 = OMP_get_wtime()
+   ! n2 = MPI_Wtime()
    ! time_tmp = time_tmp + n2-n1
 
                      else
@@ -6806,7 +6806,7 @@ contains
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -6827,7 +6827,7 @@ contains
                stop
             end if
             !deallocate (BFvec%vec)
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
          elseif (chara == 'T') then
@@ -6851,7 +6851,7 @@ contains
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -6881,7 +6881,7 @@ contains
 
                   if (level == level_butterfly + 1) then
                      flops = 0
-                     n3 = OMP_Get_wtime()
+                     n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
 #endif
@@ -6907,7 +6907,7 @@ contains
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
@@ -6922,7 +6922,7 @@ contains
                   elseif (level == 0) then
                      write(*,*)'should not arrive here'
                   else
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      flops = 0
 #ifdef HAVE_TASKLOOP
                      !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
@@ -6971,7 +6971,7 @@ contains
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -6985,7 +6985,7 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
                endif
             enddo
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
@@ -6994,7 +6994,7 @@ contains
                call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
             endif
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_half, 0, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
 
@@ -7046,7 +7046,7 @@ contains
                      flops = 0
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
                         nn = size(blocks%ButterflyV%blocks(1)%matrix, 1)
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
@@ -7090,12 +7090,12 @@ contains
 #endif
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   else
 
                      flops = 0
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
 #ifdef HAVE_TASKLOOP
                         !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop)
@@ -7213,7 +7213,7 @@ contains
                      endif
 
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -7233,7 +7233,7 @@ contains
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
          endif
 
@@ -7256,7 +7256,7 @@ contains
 
       endif
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2-n1
       time_tmp2 = time_tmp2 + n2-n1
       return
@@ -7303,7 +7303,7 @@ contains
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -7403,9 +7403,9 @@ contains
             BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
             BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = 0, level_half
-               ! n1 = OMP_get_wtime()
+               ! n1 = MPI_Wtime()
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
 
                BFvec%vec(level + 1)%idx_r = idx_r
@@ -7434,7 +7434,7 @@ contains
                   if (level == 0) then
                      flops = 0
 
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      group_count=blocks%ButterflyV%nblk_loc
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
@@ -7466,7 +7466,7 @@ contains
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -7481,7 +7481,7 @@ contains
                      write(*,*)'should not arrive here'
                   else
 
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      group_count=nr*nc
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='N'
@@ -7530,7 +7530,7 @@ contains
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
                      enddo
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -7540,7 +7540,7 @@ contains
                   enddo
                enddo
 
-               ! n2 = OMP_get_wtime()
+               ! n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level) then
@@ -7548,7 +7548,7 @@ contains
                endif
             enddo
 
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half + 1 /= 0) then
@@ -7557,7 +7557,7 @@ contains
                call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
             endif
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_half + 1, level_butterfly + 1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
 
@@ -7624,7 +7624,7 @@ contains
                      else
 
 
-                        n3 = OMP_get_wtime()
+                        n3 = MPI_Wtime()
                         group_count=nr0
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='N'
@@ -7658,13 +7658,13 @@ contains
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
 
                         deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
-                        n4 = OMP_get_wtime()
+                        n4 = MPI_Wtime()
                         ! time_tmp = time_tmp + n4-n3
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   else
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      if (nc0 > 1 .and. inc_c0 == 1) then
                         group_count=nr0*nc0
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
@@ -7806,7 +7806,7 @@ contains
                         deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
 
                      endif
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -7828,7 +7828,7 @@ contains
             end if
             !deallocate (BFvec%vec)
 
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
 
@@ -7854,7 +7854,7 @@ contains
             BFvec%vec(0)%inc_c = 1
             BFvec%vec(0)%nc = 1
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_butterfly + 1, level_half + 1, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -7883,7 +7883,7 @@ contains
                   allocate (BFvec%vec(level_butterfly - level + 2)%blocks(BFvec%vec(level_butterfly - level + 2)%nr, BFvec%vec(level_butterfly - level + 2)%nc))
 
                   if (level == level_butterfly + 1) then
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      group_count=blocks%ButterflyU%nblk_loc
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
@@ -7914,7 +7914,7 @@ contains
                      enddo
                      call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
@@ -7928,7 +7928,7 @@ contains
                   elseif (level == 0) then
                      write(*,*)'should not arrive here'
                   else
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      group_count=nr*nc
                      allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                      transa_array='T'
@@ -7977,7 +7977,7 @@ contains
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
                      enddo
                      deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -7991,7 +7991,7 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
                endif
             enddo
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
             if (level_half /= level_butterfly + 1) then
@@ -8000,7 +8000,7 @@ contains
                call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
             endif
 
-            n5 = OMP_get_wtime()
+            n5 = MPI_Wtime()
             do level = level_half, 0, -1
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
 
@@ -8068,7 +8068,7 @@ contains
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-                        n3=OMP_get_wtime()
+                        n3=MPI_Wtime()
                         group_count=blocks%ButterflyV%nblk_loc
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                         transa_array='N'
@@ -8098,12 +8098,12 @@ contains
                         enddo
                         call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
                         deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
-                        n4 = OMP_get_wtime()
+                        n4 = MPI_Wtime()
                         ! time_tmp = time_tmp + n4-n3
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   else
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
                         group_count=nr0*nc0
                         allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
@@ -8238,7 +8238,7 @@ contains
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
                         deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      endif
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
@@ -8253,7 +8253,7 @@ contains
                   call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
                endif
             enddo
-            n6 = OMP_get_wtime()
+            n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
             if (isnanMat(random2(1:N,1:1),N,1)) then
@@ -8278,7 +8278,7 @@ contains
 
       endif
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2-n1
       time_tmp2 = time_tmp2 + n2-n1
       return
@@ -8338,7 +8338,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
    integer(c_int):: transa_magma,transb_magma
    DT:: alpha_magma,beta_magma
 
-   n1 = OMP_get_wtime()
+   n1 = MPI_Wtime()
 
    call MAGMA_init()
    dev = 0
@@ -8441,9 +8441,9 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
          BFvec%vec(0)%inc_c = blocks%ButterflyV%inc
          BFvec%vec(0)%nc = blocks%ButterflyV%nblk_loc
 
-         n5 = OMP_get_wtime()
+         n5 = MPI_Wtime()
          do level = 0, level_half
-            ! n1 = OMP_get_wtime()
+            ! n1 = MPI_Wtime()
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
 
             BFvec%vec(level + 1)%idx_r = idx_r
@@ -8473,7 +8473,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   flops = 0
                   call magmaf_wtime(n7)
 
-                  n3 = OMP_get_wtime()
+                  n3 = MPI_Wtime()
                   group_count=blocks%ButterflyV%nblk_loc
                   allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
                   transa_magma=MagmaTrans
@@ -8603,7 +8603,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   info = MAGMA_free( dldb_array )
                   info = MAGMA_free( dldc_array )
 
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
 
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -8618,7 +8618,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   write(*,*)'should not arrive here'
                else
 
-                  n3 = OMP_get_wtime()
+                  n3 = MPI_Wtime()
                   do j=1,2
                      group_count=nr*nc
 
@@ -8806,7 +8806,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldc_array )
 
                   enddo
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
                endif
             endif
@@ -8816,7 +8816,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                enddo
             enddo
 
-            ! n2 = OMP_get_wtime()
+            ! n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2-n1
 
             if (level_half /= level) then
@@ -8824,7 +8824,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
             endif
          enddo
 
-         n6 = OMP_get_wtime()
+         n6 = MPI_Wtime()
          time_tmp1 = time_tmp1 + n6-n5
 
          if (level_half + 1 /= 0) then
@@ -8833,7 +8833,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
             call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
          endif
 
-         n5 = OMP_get_wtime()
+         n5 = MPI_Wtime()
          do level = level_half + 1, level_butterfly + 1
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
 
@@ -8903,7 +8903,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   else
 
                      call magmaf_wtime(n7)
-                     n3 = OMP_get_wtime()
+                     n3 = MPI_Wtime()
                      group_count=nr0
 
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
@@ -9046,13 +9046,13 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldb_array )
                      info = MAGMA_free( dldc_array )
 
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
 
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
-                  n3=OMP_get_wtime()
+                  n3=MPI_Wtime()
                   if (nc0 > 1 .and. inc_c0 == 1) then
                      group_count=nr0*nc0
 
@@ -9532,7 +9532,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldc_array )
 
                   endif
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
                endif
             endif
@@ -9554,7 +9554,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
          end if
          !deallocate (BFvec%vec)
 
-         n6 = OMP_get_wtime()
+         n6 = MPI_Wtime()
          time_tmp1 = time_tmp1 + n6-n5
 
 
@@ -9581,7 +9581,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
          BFvec%vec(0)%inc_c = 1
          BFvec%vec(0)%nc = 1
 
-         n5 = OMP_get_wtime()
+         n5 = MPI_Wtime()
          do level = level_butterfly + 1, level_half + 1, -1
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
 
@@ -9610,7 +9610,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                allocate (BFvec%vec(level_butterfly - level + 2)%blocks(BFvec%vec(level_butterfly - level + 2)%nr, BFvec%vec(level_butterfly - level + 2)%nc))
 
                if (level == level_butterfly + 1) then
-                  n3=OMP_get_wtime()
+                  n3=MPI_Wtime()
                   group_count=blocks%ButterflyU%nblk_loc
 
                   call magmaf_wtime(n7)
@@ -9753,7 +9753,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                   info = MAGMA_free( dldc_array )
 
 
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
                   if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -9766,7 +9766,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                elseif (level == 0) then
                   write(*,*)'should not arrive here'
                else
-                  n3=OMP_get_wtime()
+                  n3=MPI_Wtime()
                   group_count=nr*nc
                   do i=1,2
                      call magmaf_wtime(n7)
@@ -9942,7 +9942,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldb_array )
                      info = MAGMA_free( dldc_array )
                   enddo
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
                endif
             endif
@@ -9956,7 +9956,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
             endif
          enddo
-         n6 = OMP_get_wtime()
+         n6 = MPI_Wtime()
          time_tmp1 = time_tmp1 + n6-n5
 
          if (level_half /= level_butterfly + 1) then
@@ -9965,7 +9965,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
             call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
          endif
 
-         n5 = OMP_get_wtime()
+         n5 = MPI_Wtime()
          do level = level_half, 0, -1
             call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
 
@@ -10034,7 +10034,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
-                     n3=OMP_get_wtime()
+                     n3=MPI_Wtime()
                      group_count=blocks%ButterflyV%nblk_loc
                      call magmaf_wtime(n7)
                      allocate(m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
@@ -10162,12 +10162,12 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dlda_array )
                      info = MAGMA_free( dldb_array )
                      info = MAGMA_free( dldc_array )
-                     n4 = OMP_get_wtime()
+                     n4 = MPI_Wtime()
                      ! time_tmp = time_tmp + n4-n3
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
-                  n3=OMP_get_wtime()
+                  n3=MPI_Wtime()
                   if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
                      group_count=nr0*nc0
                      do ii = 1, 2
@@ -10596,7 +10596,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      info = MAGMA_free( dldb_array )
                      info = MAGMA_free( dldc_array )
                   endif
-                  n4 = OMP_get_wtime()
+                  n4 = MPI_Wtime()
                   ! time_tmp = time_tmp + n4-n3
                endif
             endif
@@ -10611,7 +10611,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
             endif
          enddo
-         n6 = OMP_get_wtime()
+         n6 = MPI_Wtime()
          time_tmp1 = time_tmp1 + n6-n5
 
          if (isnanMat(random2(1:N,1:1),N,1)) then
@@ -10636,7 +10636,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
 
    endif
 
-   n2 = OMP_get_wtime()
+   n2 = MPI_Wtime()
    ! time_tmp = time_tmp + n2-n1
    time_tmp2 = time_tmp2 + n2-n1
 
@@ -11102,16 +11102,16 @@ end subroutine BF_block_MVP_dat_batch_magma
       head = blocks%N_p(pp, 1)
       tail = blocks%N_p(pp, 2)
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
       ncol = 0
       do nn = 1, size(blocks%inters, 1)
          ncol = ncol + blocks%inters(nn)%nc
       enddo
       allocate (Vpartial(rank, ncol))
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       call LR_all2all_extraction(blocks, inters, Vpartial, rank, ncol, stats, ptree, msh)
-      t3 = OMP_get_wtime()
+      t3 = MPI_Wtime()
 
       nr_loc = 0
       do nn = 1, size(blocks%inters, 1)
@@ -11138,7 +11138,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       deallocate (Vpartial)
       deallocate (matU)
 
-      t4 = OMP_get_wtime()
+      t4 = MPI_Wtime()
       ! time_tmp = time_tmp + t3 - t2
 
    end subroutine LR_block_extraction
@@ -11186,7 +11186,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer::dist, pgno, ncol_loc, iidx
       integer::headm, headn, nc_loc, ncmax, nrmax, head1, tail1
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       nproc = ptree%pgrp(blocks%pgno)%nproc
       tag = blocks%pgno
@@ -11299,7 +11299,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          endif
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
@@ -11340,7 +11340,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       deallocate (col_idx_loc)
       deallocate (activeproc)
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
       Nreqs = 0
       do tt = 1, Nsendactive
@@ -11381,7 +11381,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
       if (Nreqs > 0) then
          call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
@@ -11438,7 +11438,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       real(kind=8)::n1, n2, n3, n4, n5
 
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       headm = blocks%headm
       headn = blocks%headn
@@ -11880,7 +11880,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          call list_finalizer(BFvec1%vec(level)%blocks(index_i_loc_s, index_j_loc_s)%lst)
       enddo
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
 
       !>**** generate data in BFvec%vec(0)
       do nn = 1, size(BFvec%vec(0)%index, 1)
@@ -11927,14 +11927,14 @@ end subroutine BF_block_MVP_dat_batch_magma
          endif
       enddo
 
-      n3 = OMP_get_wtime()
+      n3 = MPI_Wtime()
 
       ! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'before all2all'
       ! all2all communication from BFvec%vec(level_half+1) to BFvec1%vec(level_half+1)
       call BF_all2all_extraction(blocks, BFvec%vec(level_half + 1), BFvec1%vec(level_half + 1), stats, ptree, level_half, 'R', 'C')
       ! write(*,*)blocks%row_group,blocks%col_group,'myid',ptree%MyID,'level',level,'after all2all'
 
-      n4 = OMP_get_wtime()
+      n4 = MPI_Wtime()
 
       !>**** multiply BF with BFvec1
       do level = level_half + 1, level_butterfly + 1
@@ -12012,7 +12012,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       enddo
       deallocate (BFvec%vec)
 
-      n5 = OMP_get_wtime()
+      n5 = MPI_Wtime()
       ! time_tmp = time_tmp + n5 - n1
       ! stats%Time_Entry_BF = stats%Time_Entry_BF + n5-n2
 
@@ -12883,7 +12883,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(butterfly_vec) :: BFvec
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
 
-      n1 = OMP_get_wtime()
+      n1 = MPI_Wtime()
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -12916,7 +12916,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             allocate (BFvec%vec(level_start+1:level_end))
 
             do level = level_start, min(level_half,level_end)
-               ! n1 = OMP_get_wtime()
+               ! n1 = MPI_Wtime()
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
 
                if(level/=level_end)then
@@ -13037,7 +13037,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                enddo
                endif
 
-               ! n2 = OMP_get_wtime()
+               ! n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level .and. level/=level_end) then
@@ -13334,7 +13334,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       !$omp end parallel
 #endif
 
-      n2 = OMP_get_wtime()
+      n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2-n1
 
       return
@@ -14355,7 +14355,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (option%elem_extract == 0) then
 
-         t1 = OMP_get_wtime()
+         t1 = MPI_Wtime()
 
          if (option%cpp == 1) then
             call c_f_procpointer(ker%C_FuncZmn, proc1_C)
@@ -14410,7 +14410,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             endif
          endif
 
-         t2 = OMP_get_wtime()
+         t2 = MPI_Wtime()
          stats%Time_Entry = stats%Time_Entry + t2 - t1
 
          passflag = 2
@@ -14427,7 +14427,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
          passflag = minval(flags)
 
-         t1 = OMP_get_wtime()
+         t1 = MPI_Wtime()
 
          if (passflag == 0) then
 
@@ -14567,7 +14567,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             deallocate (pmaps)
 
          endif
-         t2 = OMP_get_wtime()
+         t2 = MPI_Wtime()
          stats%Time_Entry = stats%Time_Entry + t2 - t1
          deallocate (flags)
       endif
@@ -14613,7 +14613,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       allocate(submats1(Nsub))
       allocate(new2old_sub(Nsub))
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
 
       !!! copy submats into submats1 as submats can have zero elements in the masks
       Ninter_loc=0
@@ -14698,7 +14698,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
       enddo
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       stats%Time_Entry = stats%Time_Entry + t2 - t1
 
       myflag1 = myflag
@@ -14706,7 +14706,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (option%elem_extract == 0) then
 
-         t1 = OMP_get_wtime()
+         t1 = MPI_Wtime()
 
          do nn=1,Ninter_loc
             if (option%cpp == 1) then
@@ -14762,7 +14762,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                endif
             endif
          enddo
-         t2 = OMP_get_wtime()
+         t2 = MPI_Wtime()
          stats%Time_Entry = stats%Time_Entry + t2 - t1
 
          passflag = 2
@@ -14781,7 +14781,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
          passflag = minval(flags)
 
-         t1 = OMP_get_wtime()
+         t1 = MPI_Wtime()
 
          if (passflag == 0) then
 
@@ -14973,7 +14973,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             deallocate (nrange)
 
          endif
-         t2 = OMP_get_wtime()
+         t2 = MPI_Wtime()
          stats%Time_Entry = stats%Time_Entry + t2 - t1
          deallocate (flags)
          ! write(*,*)ptree%MyID,'out'
@@ -15083,7 +15083,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             deallocate (pmaps)
          endif
          passflag=2
-         t2 = OMP_get_wtime()
+         t2 = MPI_Wtime()
          stats%Time_Entry = stats%Time_Entry + t2 - t1
       endif
 

@@ -1496,17 +1496,17 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         enddo
         !$omp end parallel do
 
-        n1 = OMP_get_wtime()
+        n1 = MPI_Wtime()
 		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
 
-		n1 = OMP_get_wtime()
+		n1 = MPI_Wtime()
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 
 		! call current_node_patch_mapping('V',curr(:,1),msh)
 		! call current_node_patch_mapping('H',curr(:,2),msh)
@@ -1532,7 +1532,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
         if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
 
-        n1=OMP_get_wtime()
+        n1=MPI_Wtime()
 
         do j=0, num_sample
             phi=j*dphi
@@ -1565,7 +1565,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
         enddo
 
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
 		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 

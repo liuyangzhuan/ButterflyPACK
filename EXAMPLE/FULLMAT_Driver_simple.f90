@@ -86,7 +86,9 @@ PROGRAM ButterflyPACK_TEMPLATE
 	use z_BPACK_structure
 	use z_BPACK_factor
 	use z_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use z_MISC_Utilities
 	use z_BPACK_constr
 	use z_BPACK_utilities

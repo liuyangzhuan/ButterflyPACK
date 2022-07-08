@@ -201,7 +201,7 @@ contains
 
 
 
-		t1 = OMP_get_wtime()
+		t1 = MPI_Wtime()
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat ......"
 		write(smyrow , *) myrow
 		write(smycol , *) mycol
@@ -221,7 +221,7 @@ contains
 
 
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Generating fullmat finished"
-		t2 = OMP_get_wtime()
+		t2 = MPI_Wtime()
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)t2-t1, 'secnds'
 
 
@@ -242,7 +242,9 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 	use z_BPACK_structure
 	use z_BPACK_factor
 	use z_BPACK_constr
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use z_Bplus_compress
 	use z_BPACK_randomMVP
 	use z_BPACK_utilities

@@ -936,11 +936,11 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
         enddo
         !$omp end parallel do
 
-        n1 = OMP_get_wtime()
+        n1 = MPI_Wtime()
 
 		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,1,option,ptree,stats)
 
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
 		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 		if(ptree%MyID==Main_ID)then
@@ -951,9 +951,9 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
 
-		n1 = OMP_get_wtime()
+		n1 = MPI_Wtime()
         call RCS_bistatic_CURV(Current,msh,quant,ptree)
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 
 		if(ptree%MyID==Main_ID)then
 			write (*,*) ''
@@ -976,7 +976,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
         if(ptree%MyID==Main_ID)open (100, file='RCS_monostatic.txt')
 
-        n1=OMP_get_wtime()
+        n1=MPI_Wtime()
         do j=0, num_sample
             phi=j*dphi
 			!$omp parallel do default(shared) private(edge,value_Z)
@@ -1007,7 +1007,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 
         enddo
 
-		n2 = OMP_get_wtime()
+		n2 = MPI_Wtime()
 		stats%Time_Sol = stats%Time_Sol + n2-n1
 		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 
@@ -1098,7 +1098,7 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
    endif
    !***********************************************************************
 
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
     if(MyID==Main_ID)write(*,*) "geometry modeling......"
     call geo_modeling_CURV(quant,MPIcomm)
 
@@ -1109,7 +1109,7 @@ subroutine C_EMCURV_Init(Npo,Locations,quant_emcurv_Cptr, model2d, wavelength, M
 
 	if(MyID==Main_ID)write(*,*) "modeling finished"
     if(MyID==Main_ID)write(*,*) "    "
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 	! write(*,*)t2-t1
 
 	!**** return the C address of hodlr structures to C caller

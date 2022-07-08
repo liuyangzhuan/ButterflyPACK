@@ -30,7 +30,9 @@ PROGRAM ButterflyPACK_IE_2D
 	use z_BPACK_factor
 	use z_BPACK_constr
 	use z_BPACK_Utilities
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use z_MISC_Utilities
     implicit none
 

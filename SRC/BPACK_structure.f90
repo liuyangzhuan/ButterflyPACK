@@ -905,17 +905,22 @@ end function distance_geo
 
 !$omp threadprivate(my_tid)
 
+#ifdef HAVE_OPENMP
 !$omp parallel default(shared)
 !$omp master
       num_threads = omp_get_num_threads()
 !$omp end master
       my_tid = omp_get_thread_num()
 !$omp end parallel
+#else
+      num_threads = 1
+      my_tid = 0
+#endif
 
 
       tmp=0
 
-      t1 = OMP_get_wtime()
+      t1 = MPI_Wtime()
       allocate (msh%nns(msh%Nunk, option%knn))
       call LogMemory(stats, SIZEOF(msh%nns)/1024.0d3)
       msh%nns = 0
@@ -1042,7 +1047,7 @@ end function distance_geo
       deallocate (order)
       deallocate (edge_temp)
 
-      t2 = OMP_get_wtime()
+      t2 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Finding neighbours time: ", t2 - t1
 
    end subroutine FindKNNs

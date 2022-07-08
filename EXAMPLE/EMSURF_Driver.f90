@@ -31,7 +31,9 @@ PROGRAM ButterflyPACK_IE_3D
 	use z_BPACK_factor
 	use z_BPACK_constr
 	use z_BPACK_Solve_Mul
+#ifdef HAVE_OPENMP
 	use omp_lib
+#endif
 	use z_MISC_Utilities
     implicit none
 
@@ -183,7 +185,7 @@ PROGRAM ButterflyPACK_IE_3D
 	ker%FuncZmn => Zelem_EMSURF
 
 	!**** initialization of the construction phase
-	t1 = OMP_get_wtime()
+	t1 = MPI_Wtime()
 	allocate(xyz(3,quant%Nunk))
 	do ii=1, quant%Nunk
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
@@ -193,7 +195,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
-	t2 = OMP_get_wtime()
+	t2 = MPI_Wtime()
 
 
 
