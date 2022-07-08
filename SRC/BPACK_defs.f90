@@ -293,7 +293,7 @@ module BPACK_DEFS
         DT, allocatable :: Butterfly_data_MPI(:) !< value message
         type(list):: lstr, lstc !< a list of intersections
         type(intersect), allocatable::inters(:) !< an array of intersections
-        DT, allocatable:: MVP(:,:),MVPc(:,:) !< temporary results for non-transposed and conjugate transposed MVP results
+        DT, allocatable:: R(:,:), Rc(:,:), MVP(:,:),MVPc(:,:) !< temporary results for non-transposed and conjugate transposed MVP results and input
     end type matrixblock
 
     !>**** one layer in a Bplus
