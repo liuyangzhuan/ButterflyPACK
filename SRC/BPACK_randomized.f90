@@ -306,7 +306,7 @@ contains
 
       implicit none
       real(kind=8):: n1, n2, n3, n4, Memory, error_inout, Memtmp, tolerance_abs, flop, matnorm
-      integer mn, rankref, level_c, rmax, rmaxloc, level_butterfly, bb, bb1, bb_inv, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, rank1, rank2
+      integer i, j, mn, rankref, level_c, rmax, rmaxloc, level_butterfly, bb, bb1, bb_inv, rank_new_max, rank, num_vect, groupn, groupm, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, rank1, rank2
       type(matrixblock), pointer::block_o, block_ref, block_inv, blocks
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :), matrixtemp(:, :), matrixtemp1(:, :), matrixtempQ(:, :), matrixtempin(:, :), matrixtempout(:, :)
@@ -333,6 +333,11 @@ contains
       DT, allocatable :: UU1(:, :), VV1(:, :), UU2(:, :), VV2(:, :), R1(:,:), R2(:,:), R2cU1(:,:), R2cU1inv(:,:), U2cR1(:,:), U2cR1inv(:,:), R2cMVP(:,:),R2cU1invR2cMVP(:,:),core(:,:)
       DTR, allocatable :: Singular1(:), Singular2(:)
 
+      type(vectorsblock),allocatable:: vector2D_i_R(:),vector2D_o_R(:),vector2D_i_L(:),vector2D_o_L(:)
+      integer:: nprow, npcol, myrow, mycol, num_blocks
+      character mode_i_R,mode_o_R,mode_i_L,mode_o_L
+      type(matrixblock), pointer :: blocks_i, blocks_j
+
 
       level_butterfly = 0
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
@@ -340,20 +345,54 @@ contains
       rank_new_max = 0
       num_vect = rmax
 
+      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      num_blocks = 2**h_mat%Dist_level
 
 
-#if 0
-      allocate(RandVectInR_glo(msh%Nunk,num_vect))
-      call RandomMat(msh%Nunk, num_vect, min(msh%Nunk, num_vect), RandVectInR_glo, 1)
-      call MPI_Bcast(RandVectInR_glo, msh%Nunk*num_vect, MPI_DT, Main_ID, ptree%Comm, ierr)
-      allocate(RandVectOutR_glo(msh%Nunk,num_vect))
-      RandVectOutR_glo=0
+! not merge matvecs of different colors
+#if 1   
+      mode_i_R='C'
+      mode_o_R='R'
+      allocate(vector2D_i_R(max(h_mat%myAcols,1)))
+      allocate(vector2D_o_R(max(h_mat%myArows,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call l2g(j, mycol, num_blocks, npcol, 1, jj)
+         blocks_i => h_mat%Local_blocks(j, 1)
+         allocate(vector2D_i_R(j)%vector(blocks_i%N,num_vect))
+         vector2D_i_R(j)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_i_R(j)%vector)/1024.0d3)
+      enddo
+      do i = 1, h_mat%myArows
+         call l2g(i, myrow, num_blocks, nprow, 1, ii)
+         blocks_i => h_mat%Local_blocks(1, i)
+         allocate(vector2D_o_R(i)%vector(blocks_i%M,num_vect))
+         vector2D_o_R(i)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_o_R(i)%vector)/1024.0d3)
+      enddo
+      endif
 
-      allocate(RandVectInL_glo(msh%Nunk,num_vect))
-      call RandomMat(msh%Nunk, num_vect, min(msh%Nunk, num_vect), RandVectInL_glo, 1)
-      call MPI_Bcast(RandVectInL_glo, msh%Nunk*num_vect, MPI_DT, Main_ID, ptree%Comm, ierr)
-      allocate(RandVectOutL_glo(msh%Nunk,num_vect))
-      RandVectOutL_glo=0
+      mode_i_L='R'
+      mode_o_L='C'
+      allocate(vector2D_i_L(max(h_mat%myArows,1)))
+      allocate(vector2D_o_L(max(h_mat%myAcols,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do i = 1, h_mat%myArows
+         call l2g(i, myrow, num_blocks, nprow, 1, ii)
+         blocks_i => h_mat%Local_blocks(1, i)
+         allocate(vector2D_i_L(i)%vector(blocks_i%M,num_vect))
+         vector2D_i_L(i)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_i_L(i)%vector)/1024.0d3)
+      enddo
+      do j = 1, h_mat%myAcols
+         call l2g(j, mycol, num_blocks, npcol, 1, jj)
+         blocks_i => h_mat%Local_blocks(j, 1)
+         allocate(vector2D_o_L(j)%vector(blocks_i%N,num_vect))
+         vector2D_o_L(j)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_o_L(j)%vector)/1024.0d3)
+      enddo
+      endif
+
 
       allocate (RandVectInR(Nloc, num_vect))
       RandVectInR = 0
@@ -363,6 +402,12 @@ contains
       RandVectInL = 0
       allocate (RandVectOutL(Nloc, num_vect))
       RandVectOutL = 0
+
+      call LogMemory(stats, SIZEOF(RandVectInR)/1024.0d3)
+      call LogMemory(stats, SIZEOF(RandVectOutR)/1024.0d3)
+      call LogMemory(stats, SIZEOF(RandVectInL)/1024.0d3)
+      call LogMemory(stats, SIZEOF(RandVectOutL)/1024.0d3)
+
 
       ! generate and store MVP results
       group_start = 2**level_c - 1
@@ -383,30 +428,32 @@ contains
          ! generate sparse random vectors for the current color set
          do gg=1,N_source_group
             group_m = source_groups(gg)
-            if((msh%basis_group(group_m)%head>=msh%idxs .and. msh%basis_group(group_m)%head<=msh%idxe) .or. (msh%basis_group(group_m)%tail>=msh%idxs .and. msh%basis_group(group_m)%tail<=msh%idxe))then
-               idxs = max(msh%basis_group(group_m)%head,msh%idxs)
-               idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
-               RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect) = RandVectInR_glo(idxs:idxe,1:num_vect)
-               RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect) = RandVectInL_glo(idxs:idxe,1:num_vect)
+            idxs = max(msh%basis_group(group_m)%head,msh%idxs)
+            idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
+            if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect), 1)
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect), 1)   
             endif
          enddo
 
+         call Hmat_Redistribute1Dto2D_Vector(RandVectInR, msh%idxe-msh%idxs+1, num_vect, vector2D_i_R, h_mat, ptree, ptree%nproc, stats, mode_i_R)
+         call Hmat_Redistribute1Dto2D_Vector(RandVectInL, msh%idxe-msh%idxs+1, num_vect, vector2D_i_L, h_mat, ptree, ptree%nproc, stats, mode_i_L)
+
+
          ! perform the MVP
          call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
-         RandVectOutR_glo=0
-         RandVectOutR_glo(msh%idxs:msh%idxe,:) = RandVectOutR
-         call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutR_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
          ! write(*,*)fnorm(RandVectOutR_glo1-RandVectOutR_glo,msh%Nunk,num_vect)/fnorm(RandVectOutR_glo,msh%Nunk,num_vect),'ddddddaffs'
 
          RandVectInL = conjg(cmplx(RandVectInL, kind=8))
          call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'T', RandVectInL, RandVectOutL, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
          RandVectOutL = conjg(cmplx(RandVectOutL, kind=8))
-         RandVectOutL_glo=0
-         RandVectOutL_glo(msh%idxs:msh%idxe,:) = RandVectOutL
-         call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutL_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
-         ! store the nontransposed multiply results for each admissible block
+         call Hmat_Redistribute1Dto2D_Vector(RandVectOutR, msh%idxe-msh%idxs+1, num_vect, vector2D_o_R, h_mat, ptree, ptree%nproc, stats, mode_o_R)         
+         call Hmat_Redistribute1Dto2D_Vector(RandVectOutL, msh%idxe-msh%idxs+1, num_vect, vector2D_o_L, h_mat, ptree, ptree%nproc, stats, mode_o_L)
+
+
+         ! store the nontransposed multiply results and input for each admissible block
          do gg=1,N_source_group
             group_n = source_groups(gg)
             curr => h_mat%lstblks(level_c)%head
@@ -417,18 +464,27 @@ contains
                   blocks => ptrr%ptr
                   if(blocks%style==2 .and. blocks%col_group==group_n)then
                      allocate(blocks%MVP(blocks%M,num_vect))
-                     blocks%MVP = RandVectOutR_glo(msh%basis_group(blocks%row_group)%head:msh%basis_group(blocks%row_group)%tail,:)
+                     do i = 1, h_mat%myArows
+                        blocks_i => h_mat%Local_blocks(1, i)
+                        if(blocks%headm>=blocks_i%headm .and. blocks%headm+blocks%M-1<=blocks_i%headm+blocks_i%M-1)then
+                           blocks%MVP = vector2D_o_R(i)%vector(blocks%headm-blocks_i%headm+1:blocks%headm-blocks_i%headm+blocks%M,1:num_vect)
+                        endif
+                     enddo
 
-                     ! blocks%MVP=0
-                     ! call gemmf77('N', 'N', blocks%M,num_vect, blocks%N, BPACK_cone, h_mat%fullmat(msh%basis_group(blocks%row_group)%head,msh%basis_group(blocks%col_group)%head), msh%Nunk, RandVectInR_glo(msh%basis_group(blocks%col_group)%head,1), msh%Nunk, BPACK_czero, blocks%MVP, blocks%M)
-
+                     allocate(blocks%R(blocks%N,num_vect))
+                     do j = 1, h_mat%myAcols
+                        blocks_i => h_mat%Local_blocks(j, 1)
+                        if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
+                           blocks%R = vector2D_i_R(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1:num_vect)
+                        endif
+                     enddo    
                   endif
                end select
                curr => curr%next
             enddo
          enddo
 
-         ! store the transposed multiply results for each admissible block
+         ! store the transposed multiply results and inputs for each admissible block
          do gg=1,N_source_group
             group_m = source_groups(gg)
             curr => h_mat%lstblks(level_c)%head
@@ -439,10 +495,20 @@ contains
                   blocks => ptrr%ptr
                   if(blocks%style==2 .and. blocks%row_group==group_m)then
                      allocate(blocks%MVPc(blocks%N,num_vect))
-                     blocks%MVPc = RandVectOutL_glo(msh%basis_group(blocks%col_group)%head:msh%basis_group(blocks%col_group)%tail,:)
+                     do j = 1, h_mat%myAcols
+                        blocks_i => h_mat%Local_blocks(j, 1)
+                        if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
+                           blocks%MVPc = vector2D_o_L(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1:num_vect)
+                        endif
+                     enddo
 
-                     ! blocks%MVPc=0
-                     ! call gemmf77('C', 'N', blocks%N,num_vect, blocks%M, BPACK_cone, h_mat%fullmat(msh%basis_group(blocks%row_group)%head,msh%basis_group(blocks%col_group)%head), msh%Nunk, RandVectInL_glo(msh%basis_group(blocks%row_group)%head,1), msh%Nunk, BPACK_czero, blocks%MVPc, blocks%N)
+                     allocate(blocks%Rc(blocks%M,num_vect))
+                     do i = 1, h_mat%myArows
+                        blocks_i => h_mat%Local_blocks(1, i)
+                        if(blocks%headm>=blocks_i%headm .and. blocks%headm+blocks%M-1<=blocks_i%headm+blocks_i%M-1)then
+                           blocks%Rc = vector2D_i_L(i)%vector(blocks%headm-blocks_i%headm+1:blocks%headm-blocks_i%headm+blocks%M,1:num_vect)
+                        endif
+                     enddo
 
                   endif
                end select
@@ -482,14 +548,10 @@ contains
                rank_new_max = max(rank_new_max,rank)
                blocks%rankmax=rank
 
-               allocate(R1(blocks%N,num_vect))
-               R1 = RandVectInR_glo(msh%basis_group(blocks%col_group)%head:msh%basis_group(blocks%col_group)%tail,1:num_vect)
-               allocate(R2(blocks%M,num_vect))
-               R2 = RandVectInL_glo(msh%basis_group(blocks%row_group)%head:msh%basis_group(blocks%row_group)%tail,1:num_vect)
 
                allocate(U2cR1(rank,num_vect))
                U2cR1=0
-               call gemmf77('C', 'N', rank, num_vect, blocks%N, BPACK_cone, UU2, blocks%N, R1, blocks%N, BPACK_czero, U2cR1, rank)
+               call gemmf77('C', 'N', rank, num_vect, blocks%N, BPACK_cone, UU2, blocks%N, blocks%R, blocks%N, BPACK_czero, U2cR1, rank)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(rank, num_vect, blocks%N)
                allocate(U2cR1inv(num_vect,rank))
                call GeneralInverse(rank,num_vect, U2cR1, U2cR1inv, option%tol_comp*0.1, Flops=flop)
@@ -498,7 +560,7 @@ contains
 
                allocate(R2cU1(num_vect,rank))
                R2cU1=0
-               call gemmf77('C', 'N', num_vect, rank, blocks%M, BPACK_cone, R2, blocks%M, UU1, blocks%M, BPACK_czero, R2cU1, num_vect)
+               call gemmf77('C', 'N', num_vect, rank, blocks%M, BPACK_cone, blocks%Rc, blocks%M, UU1, blocks%M, BPACK_czero, R2cU1, num_vect)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(num_vect, rank, blocks%M)
                allocate(R2cU1inv(rank,num_vect))
                call GeneralInverse(num_vect, rank, R2cU1, R2cU1inv, option%tol_comp*0.1, Flops=flop)
@@ -507,7 +569,7 @@ contains
 
                allocate(R2cMVP(num_vect,num_vect))
                R2cMVP=0
-               call gemmf77('C', 'N', num_vect, num_vect, blocks%M, BPACK_cone, R2, blocks%M, blocks%MVP, blocks%M, BPACK_czero, R2cMVP, num_vect)
+               call gemmf77('C', 'N', num_vect, num_vect, blocks%M, BPACK_cone, blocks%Rc, blocks%M, blocks%MVP, blocks%M, BPACK_czero, R2cMVP, num_vect)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(num_vect, num_vect, blocks%M)
 
                allocate(R2cU1invR2cMVP(rank,num_vect))
@@ -546,43 +608,55 @@ contains
 
                deallocate(UU1,VV1,Singular1)
                deallocate(UU2,VV2,Singular2)
-               deallocate(R1,R2,U2cR1,U2cR1inv,R2cU1,R2cU1inv,R2cMVP,R2cU1invR2cMVP,core)
+               deallocate(blocks%R,blocks%Rc,U2cR1,U2cR1inv,R2cU1,R2cU1inv,R2cMVP,R2cU1invR2cMVP,core)
                deallocate(blocks%MVPc,blocks%MVP)
 
             endif
          end select
          curr => curr%next
       enddo
+
+      call LogMemory(stats, -SIZEOF(RandVectInR)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(RandVectOutR)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(RandVectInL)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(RandVectOutL)/1024.0d3)
+
       deallocate (RandVectOutR, RandVectInR)
       deallocate (RandVectOutL, RandVectInL)
-      deallocate (RandVectInR_glo, RandVectOutR_glo)
-      deallocate (RandVectInL_glo, RandVectOutL_glo)
-#else
-      allocate(RandVectInR_glo(msh%Nunk,num_vect))
-      call RandomMat(msh%Nunk, num_vect, min(msh%Nunk, num_vect), RandVectInR_glo, 1)
-      call MPI_Bcast(RandVectInR_glo, msh%Nunk*num_vect, MPI_DT, Main_ID, ptree%Comm, ierr)
-      allocate(RandVectOutR_glo(msh%Nunk,num_vect))
-      RandVectOutR_glo=0
 
-      allocate(RandVectInL_glo(msh%Nunk,num_vect))
-      call RandomMat(msh%Nunk, num_vect, min(msh%Nunk, num_vect), RandVectInL_glo, 1)
-      call MPI_Bcast(RandVectInL_glo, msh%Nunk*num_vect, MPI_DT, Main_ID, ptree%Comm, ierr)
-      allocate(RandVectOutL_glo(msh%Nunk,num_vect))
-      RandVectOutL_glo=0
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call LogMemory(stats, -SIZEOF(vector2D_i_R(j)%vector)/1024.0d3)
+         deallocate(vector2D_i_R(j)%vector)
+      enddo
+      do i = 1, h_mat%myArows
+         call LogMemory(stats, -SIZEOF(vector2D_o_R(i)%vector)/1024.0d3)
+         deallocate(vector2D_o_R(i)%vector)
+      enddo
+      endif
+      deallocate(vector2D_i_R)
+      deallocate(vector2D_o_R)
 
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call LogMemory(stats, -SIZEOF(vector2D_o_L(j)%vector)/1024.0d3)
+         deallocate(vector2D_o_L(j)%vector)
+      enddo
+      do i = 1, h_mat%myArows
+         call LogMemory(stats, -SIZEOF(vector2D_i_L(i)%vector)/1024.0d3)
+         deallocate(vector2D_i_L(i)%vector)
+      enddo
+      endif
+      deallocate(vector2D_i_L)
+      deallocate(vector2D_o_L)
+
+
+
+! merge matvecs of different colors
+#else 
       ! generate and store MVP results
       group_start = 2**level_c - 1
       ncolor = maxval(h_mat%colorsets(level_c)%dat)
-
-      allocate (RandVectInR(Nloc, num_vect*ncolor))
-      RandVectInR = 0
-      allocate (RandVectOutR(Nloc, num_vect*ncolor))
-      RandVectOutR = 0
-      allocate (RandVectInL(Nloc, num_vect*ncolor))
-      RandVectInL = 0
-      allocate (RandVectOutL(Nloc, num_vect*ncolor))
-      RandVectOutL = 0
-
       allocate(idxs_source_group(ncolor))
       idxs_source_group=0
       allocate(Ns_source_group(ncolor))
@@ -590,7 +664,6 @@ contains
       allocate(source_groups(2**level_c))
       source_groups=0
 
-      ! generate sparse random vectors for the current color set
       do jGroup = 1,ncolor
          N_source_group=0
          do gg=1,2**level_c
@@ -604,36 +677,68 @@ contains
          idxs_source_group(jGroup+1) = idxs_source_group(jGroup) + N_source_group
          endif
          Ns_source_group(jGroup)=N_source_group
+      enddo
 
-         do gg=1,N_source_group
+
+
+      ! n3 = OMP_get_wtime()
+
+      ! perform and store nontransposed MVP 
+      allocate (RandVectInR(Nloc, num_vect*ncolor))
+      RandVectInR = 0
+      allocate (RandVectOutR(Nloc, num_vect*ncolor))
+      RandVectOutR = 0
+      call LogMemory(stats, SIZEOF(RandVectInR)/1024.0d3)
+      call LogMemory(stats, SIZEOF(RandVectOutR)/1024.0d3)
+
+      ! generate sparse random vectors for the current color set
+      do jGroup = 1,ncolor
+         do gg=1,Ns_source_group(jGroup)
             group_m = source_groups(gg+idxs_source_group(jGroup))
-            if((msh%basis_group(group_m)%head>=msh%idxs .and. msh%basis_group(group_m)%head<=msh%idxe) .or. (msh%basis_group(group_m)%tail>=msh%idxs .and. msh%basis_group(group_m)%tail<=msh%idxe))then
-               idxs = max(msh%basis_group(group_m)%head,msh%idxs)
-               idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
-               RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect) = RandVectInR_glo(idxs:idxe,1:num_vect)
-               RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect) = RandVectInL_glo(idxs:idxe,1:num_vect)
+            idxs = max(msh%basis_group(group_m)%head,msh%idxs)
+            idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
+            if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)              
             endif
          enddo
       enddo
 
-      ! n3 = OMP_get_wtime()
-
-      ! perform the nontransposed MVP
       call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'N', RandVectInR, RandVectOutR, Nloc, level_c, num_vect*ncolor, ker, ptree, stats, msh, option)
 
-      ! perform the transposed MVP
-      RandVectInL = conjg(cmplx(RandVectInL, kind=8))
-      call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'T', RandVectInL, RandVectOutL, Nloc, level_c, num_vect*ncolor, ker, ptree, stats, msh, option)
-      RandVectOutL = conjg(cmplx(RandVectOutL, kind=8))
+      mode_i_R='C'
+      allocate(vector2D_i_R(max(h_mat%myAcols,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call l2g(j, mycol, num_blocks, npcol, 1, jj)
+         blocks_i => h_mat%Local_blocks(j, 1)
+         allocate(vector2D_i_R(j)%vector(blocks_i%N,num_vect*ncolor))
+         vector2D_i_R(j)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_i_R(j)%vector)/1024.0d3)
+      enddo
+      endif
+      call Hmat_Redistribute1Dto2D_Vector(RandVectInR, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_i_R, h_mat, ptree, ptree%nproc, stats, mode_i_R)
+      call LogMemory(stats, -SIZEOF(RandVectInR)/1024.0d3)
+      deallocate (RandVectInR)
 
-      ! n4 = OMP_get_wtime()
-      ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
+
+      mode_o_R='R'
+      allocate(vector2D_o_R(max(h_mat%myArows,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do i = 1, h_mat%myArows
+         call l2g(i, myrow, num_blocks, nprow, 1, ii)
+         blocks_i => h_mat%Local_blocks(1, i)
+         allocate(vector2D_o_R(i)%vector(blocks_i%M,num_vect*ncolor))
+         vector2D_o_R(i)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_o_R(i)%vector)/1024.0d3)
+      enddo
+      endif
+      call Hmat_Redistribute1Dto2D_Vector(RandVectOutR, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_o_R, h_mat, ptree, ptree%nproc, stats, mode_o_R)
+      call LogMemory(stats, -SIZEOF(RandVectOutR)/1024.0d3)  
+      deallocate (RandVectOutR)
+
 
       ! store the nontransposed multiply results for each admissible block
       do jGroup = 1,ncolor
-         RandVectOutR_glo=0
-         RandVectOutR_glo(msh%idxs:msh%idxe,:) = RandVectOutR(:,1+(jGroup-1)*num_vect:jGroup*num_vect)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutR_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
          do gg=1,Ns_source_group(jGroup)
             group_n = source_groups(gg+idxs_source_group(jGroup))
             curr => h_mat%lstblks(level_c)%head
@@ -644,23 +749,101 @@ contains
                   blocks => ptrr%ptr
                   if(blocks%style==2 .and. blocks%col_group==group_n)then
                      allocate(blocks%MVP(blocks%M,num_vect))
-                     blocks%MVP = RandVectOutR_glo(msh%basis_group(blocks%row_group)%head:msh%basis_group(blocks%row_group)%tail,:)
+                     do i = 1, h_mat%myArows
+                        blocks_i => h_mat%Local_blocks(1, i)
+                        if(blocks%headm>=blocks_i%headm .and. blocks%headm+blocks%M-1<=blocks_i%headm+blocks_i%M-1)then
+                           blocks%MVP = vector2D_o_R(i)%vector(blocks%headm-blocks_i%headm+1:blocks%headm-blocks_i%headm+blocks%M,1+(jGroup-1)*num_vect:jGroup*num_vect)
+                        endif
+                     enddo
+
+                     allocate(blocks%R(blocks%N,num_vect))
+                     do j = 1, h_mat%myAcols
+                        blocks_i => h_mat%Local_blocks(j, 1)
+                        if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
+                           blocks%R = vector2D_i_R(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1+(jGroup-1)*num_vect:jGroup*num_vect)
+                        endif
+                     enddo                   
                   endif
                end select
                curr => curr%next
             enddo
          enddo
       enddo
-      deallocate (RandVectOutR, RandVectInR)
-      deallocate (RandVectOutR_glo)
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call LogMemory(stats, -SIZEOF(vector2D_i_R(j)%vector)/1024.0d3)
+         deallocate(vector2D_i_R(j)%vector)
+      enddo
+      do i = 1, h_mat%myArows
+         call LogMemory(stats, -SIZEOF(vector2D_o_R(i)%vector)/1024.0d3)
+         deallocate(vector2D_o_R(i)%vector)
+      enddo
+      endif
+      deallocate(vector2D_i_R)
+      deallocate(vector2D_o_R)
 
+
+
+
+
+     ! perform and store transposed MVP 
+      allocate (RandVectInL(Nloc, num_vect*ncolor))
+      RandVectInL = 0
+      allocate (RandVectOutL(Nloc, num_vect*ncolor))
+      RandVectOutL = 0
+      call LogMemory(stats, SIZEOF(RandVectInL)/1024.0d3)
+      call LogMemory(stats, SIZEOF(RandVectOutL)/1024.0d3)
+
+      ! generate sparse random vectors for the current color set
+      do jGroup = 1,ncolor
+         do gg=1,Ns_source_group(jGroup)
+            group_m = source_groups(gg+idxs_source_group(jGroup))
+            idxs = max(msh%basis_group(group_m)%head,msh%idxs)
+            idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
+            if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)               
+            endif
+         enddo
+      enddo
+
+      RandVectInL = conjg(cmplx(RandVectInL, kind=8))
+      call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'T', RandVectInL, RandVectOutL, Nloc, level_c, num_vect*ncolor, ker, ptree, stats, msh, option)
+      RandVectOutL = conjg(cmplx(RandVectOutL, kind=8))
+      RandVectInL = conjg(cmplx(RandVectInL, kind=8))
+
+
+      mode_i_L='R'
+      allocate(vector2D_i_L(max(h_mat%myArows,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do i = 1, h_mat%myArows
+         call l2g(i, myrow, num_blocks, nprow, 1, ii)
+         blocks_i => h_mat%Local_blocks(1, i)
+         allocate(vector2D_i_L(i)%vector(blocks_i%M,num_vect*ncolor))
+         vector2D_i_L(i)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_i_L(i)%vector)/1024.0d3)
+      enddo
+      endif
+      call Hmat_Redistribute1Dto2D_Vector(RandVectInL, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_i_L, h_mat, ptree, ptree%nproc, stats, mode_i_L)
+      call LogMemory(stats, -SIZEOF(RandVectInL)/1024.0d3)
+      deallocate (RandVectInL)
+
+      mode_o_L='C'
+      allocate(vector2D_o_L(max(h_mat%myAcols,1)))
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call l2g(j, mycol, num_blocks, npcol, 1, jj)
+         blocks_i => h_mat%Local_blocks(j, 1)
+         allocate(vector2D_o_L(j)%vector(blocks_i%N,num_vect*ncolor))
+         vector2D_o_L(j)%vector=0
+         call LogMemory(stats, SIZEOF(vector2D_o_L(j)%vector)/1024.0d3)
+      enddo
+      endif
+      call Hmat_Redistribute1Dto2D_Vector(RandVectOutL, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_o_L, h_mat, ptree, ptree%nproc, stats, mode_o_L)
+      call LogMemory(stats, -SIZEOF(RandVectOutL)/1024.0d3)          
+      deallocate (RandVectOutL)
 
       ! store the transposed multiply results for each admissible block
       do jGroup = 1,ncolor
-         RandVectOutL_glo=0
-         RandVectOutL_glo(msh%idxs:msh%idxe,:) = RandVectOutL(:,1+(jGroup-1)*num_vect:jGroup*num_vect)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutL_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
-
          do gg=1,Ns_source_group(jGroup)
             group_m = source_groups(gg+idxs_source_group(jGroup))
             curr => h_mat%lstblks(level_c)%head
@@ -671,15 +854,43 @@ contains
                   blocks => ptrr%ptr
                   if(blocks%style==2 .and. blocks%row_group==group_m)then
                      allocate(blocks%MVPc(blocks%N,num_vect))
-                     blocks%MVPc = RandVectOutL_glo(msh%basis_group(blocks%col_group)%head:msh%basis_group(blocks%col_group)%tail,:)
+                     do j = 1, h_mat%myAcols
+                        blocks_i => h_mat%Local_blocks(j, 1)
+                        if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
+                           blocks%MVPc = vector2D_o_L(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1+(jGroup-1)*num_vect:jGroup*num_vect)
+                        endif
+                     enddo
+
+                     allocate(blocks%Rc(blocks%M,num_vect))
+                     do i = 1, h_mat%myArows
+                        blocks_i => h_mat%Local_blocks(1, i)
+                        if(blocks%headm>=blocks_i%headm .and. blocks%headm+blocks%M-1<=blocks_i%headm+blocks_i%M-1)then
+                           blocks%Rc = vector2D_i_L(i)%vector(blocks%headm-blocks_i%headm+1:blocks%headm-blocks_i%headm+blocks%M,1+(jGroup-1)*num_vect:jGroup*num_vect)
+                        endif
+                     enddo
                   endif
                end select
                curr => curr%next
             enddo
          enddo
       enddo
-      deallocate (RandVectOutL, RandVectInL)
-      deallocate (RandVectOutL_glo)
+      if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+      do j = 1, h_mat%myAcols
+         call LogMemory(stats, -SIZEOF(vector2D_o_L(j)%vector)/1024.0d3)
+         deallocate(vector2D_o_L(j)%vector)
+      enddo
+      do i = 1, h_mat%myArows
+         call LogMemory(stats, -SIZEOF(vector2D_i_L(i)%vector)/1024.0d3)
+         deallocate(vector2D_i_L(i)%vector)
+      enddo
+      endif
+      deallocate(vector2D_i_L)
+      deallocate(vector2D_o_L)
+
+      ! n4 = OMP_get_wtime()
+      ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
+
+
 
       deallocate(source_groups)
       deallocate(Ns_source_group)
@@ -716,14 +927,9 @@ contains
                rank_new_max = max(rank_new_max,rank)
                blocks%rankmax=rank
 
-               allocate(R1(blocks%N,num_vect))
-               R1 = RandVectInR_glo(msh%basis_group(blocks%col_group)%head:msh%basis_group(blocks%col_group)%tail,1:num_vect)
-               allocate(R2(blocks%M,num_vect))
-               R2 = RandVectInL_glo(msh%basis_group(blocks%row_group)%head:msh%basis_group(blocks%row_group)%tail,1:num_vect)
-
                allocate(U2cR1(rank,num_vect))
                U2cR1=0
-               call gemmf77('C', 'N', rank, num_vect, blocks%N, BPACK_cone, UU2, blocks%N, R1, blocks%N, BPACK_czero, U2cR1, rank)
+               call gemmf77('C', 'N', rank, num_vect, blocks%N, BPACK_cone, UU2, blocks%N, blocks%R, blocks%N, BPACK_czero, U2cR1, rank)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(rank, num_vect, blocks%N)
                allocate(U2cR1inv(num_vect,rank))
                call GeneralInverse(rank,num_vect, U2cR1, U2cR1inv, option%tol_comp*0.1, Flops=flop)
@@ -732,7 +938,7 @@ contains
 
                allocate(R2cU1(num_vect,rank))
                R2cU1=0
-               call gemmf77('C', 'N', num_vect, rank, blocks%M, BPACK_cone, R2, blocks%M, UU1, blocks%M, BPACK_czero, R2cU1, num_vect)
+               call gemmf77('C', 'N', num_vect, rank, blocks%M, BPACK_cone, blocks%Rc, blocks%M, UU1, blocks%M, BPACK_czero, R2cU1, num_vect)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(num_vect, rank, blocks%M)
                allocate(R2cU1inv(rank,num_vect))
                call GeneralInverse(num_vect, rank, R2cU1, R2cU1inv, option%tol_comp*0.1, Flops=flop)
@@ -741,7 +947,7 @@ contains
 
                allocate(R2cMVP(num_vect,num_vect))
                R2cMVP=0
-               call gemmf77('C', 'N', num_vect, num_vect, blocks%M, BPACK_cone, R2, blocks%M, blocks%MVP, blocks%M, BPACK_czero, R2cMVP, num_vect)
+               call gemmf77('C', 'N', num_vect, num_vect, blocks%M, BPACK_cone, blocks%Rc, blocks%M, blocks%MVP, blocks%M, BPACK_czero, R2cMVP, num_vect)
                stats%Flop_Fill = stats%Flop_Fill + flops_gemm(num_vect, num_vect, blocks%M)
 
                allocate(R2cU1invR2cMVP(rank,num_vect))
@@ -780,7 +986,7 @@ contains
 
                deallocate(UU1,VV1,Singular1)
                deallocate(UU2,VV2,Singular2)
-               deallocate(R1,R2,U2cR1,U2cR1inv,R2cU1,R2cU1inv,R2cMVP,R2cU1invR2cMVP,core)
+               deallocate(blocks%R,blocks%Rc,U2cR1,U2cR1inv,R2cU1,R2cU1inv,R2cMVP,R2cU1invR2cMVP,core)
                deallocate(blocks%MVPc,blocks%MVP)
 
             endif
@@ -788,8 +994,6 @@ contains
          curr => curr%next
       enddo
 
-      deallocate (RandVectInR_glo)
-      deallocate (RandVectInL_glo)
 #endif
 
    end subroutine Hmat_randomized_OneL_Lowrank
