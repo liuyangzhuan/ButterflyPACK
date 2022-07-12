@@ -624,6 +624,8 @@ contains
       option%BACA_Batch = 64
       option%RecLR_leaf = BACA
       option%nogeo = 0
+      option%per_geo = 0
+      option%periods = 0
       option%ErrSol = 0
       option%LR_BLK_NUM = 1
       option%rank0 = 32
@@ -710,6 +712,14 @@ contains
                   read (strings1, *) option%RecLR_leaf
                else if (trim(strings) == '--nogeo') then
                   read (strings1, *) option%nogeo
+               else if (trim(strings) == '--per_geo') then
+                  read (strings1, *) option%per_geo
+               else if (trim(strings) == '--period1') then
+                  read (strings1, *) option%periods(1)
+               else if (trim(strings) == '--period2') then
+                  read (strings1, *) option%periods(2)
+               else if (trim(strings) == '--period3') then
+                  read (strings1, *) option%periods(3)
                else if (trim(strings) == '--less_adapt') then
                   read (strings1, *) option%less_adapt
                else if (trim(strings) == '--errsol') then
@@ -798,6 +808,8 @@ contains
       option1%BACA_Batch = option%BACA_Batch
       option1%RecLR_leaf = option%RecLR_leaf
       option1%nogeo = option%nogeo
+      option1%per_geo = option%per_geo
+      option1%periods = option%periods
       option1%ErrSol = option%ErrSol
       option1%LR_BLK_NUM = option%LR_BLK_NUM
       option1%rank0 = option%rank0
@@ -849,6 +861,10 @@ contains
          write (*, '(A18,I8)') 'BACA_Batch', option%BACA_Batch
          write (*, '(A18,I8)') 'RecLR_leaf', option%RecLR_leaf
          write (*, '(A18,I8)') 'nogeo', option%nogeo
+         write (*, '(A18,I8)') 'per_geo', option%per_geo
+         write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+         write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+         write (*, '(A18,Es14.7)') 'period3', option%periods(3)
          write (*, '(A18,I8)') 'LR_BLK_NUM', option%LR_BLK_NUM
          write (*, '(A18,I8)') 'rank0', option%rank0
          write (*, '(A18,I8)') 'itermax', option%itermax

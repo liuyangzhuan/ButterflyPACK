@@ -635,6 +635,8 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option1, "xyzsort", 1);// matrix ordering
 	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
+	z_c_bpack_set_I_option(&option1, "per_geo", 1);// periodic geometry points
+	z_c_bpack_set_D_option(&option1, "period1", 1e0);// period in the first dimension
 
 	// z_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
 	// z_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering

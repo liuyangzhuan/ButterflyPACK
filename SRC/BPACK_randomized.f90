@@ -350,7 +350,7 @@ contains
 
 
 ! not merge matvecs of different colors
-#if 1   
+#if 1
       mode_i_R='C'
       mode_o_R='R'
       allocate(vector2D_i_R(max(h_mat%myAcols,1)))
@@ -432,7 +432,7 @@ contains
             idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
             if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
                call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect), 1)
-               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect), 1)   
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1:num_vect), 1)
             endif
          enddo
 
@@ -449,7 +449,7 @@ contains
          call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'T', RandVectInL, RandVectOutL, Nloc, level_c, num_vect, ker, ptree, stats, msh, option)
          RandVectOutL = conjg(cmplx(RandVectOutL, kind=8))
 
-         call Hmat_Redistribute1Dto2D_Vector(RandVectOutR, msh%idxe-msh%idxs+1, num_vect, vector2D_o_R, h_mat, ptree, ptree%nproc, stats, mode_o_R)         
+         call Hmat_Redistribute1Dto2D_Vector(RandVectOutR, msh%idxe-msh%idxs+1, num_vect, vector2D_o_R, h_mat, ptree, ptree%nproc, stats, mode_o_R)
          call Hmat_Redistribute1Dto2D_Vector(RandVectOutL, msh%idxe-msh%idxs+1, num_vect, vector2D_o_L, h_mat, ptree, ptree%nproc, stats, mode_o_L)
 
 
@@ -477,7 +477,7 @@ contains
                         if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
                            blocks%R = vector2D_i_R(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1:num_vect)
                         endif
-                     enddo    
+                     enddo
                   endif
                end select
                curr => curr%next
@@ -653,7 +653,7 @@ contains
 
 
 ! merge matvecs of different colors
-#else 
+#else
       ! generate and store MVP results
       group_start = 2**level_c - 1
       ncolor = maxval(h_mat%colorsets(level_c)%dat)
@@ -683,7 +683,7 @@ contains
 
       ! n3 = OMP_get_wtime()
 
-      ! perform and store nontransposed MVP 
+      ! perform and store nontransposed MVP
       allocate (RandVectInR(Nloc, num_vect*ncolor))
       RandVectInR = 0
       allocate (RandVectOutR(Nloc, num_vect*ncolor))
@@ -698,7 +698,7 @@ contains
             idxs = max(msh%basis_group(group_m)%head,msh%idxs)
             idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
             if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
-               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)              
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInR(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)
             endif
          enddo
       enddo
@@ -736,7 +736,7 @@ contains
       enddo
       endif
       call Hmat_Redistribute1Dto2D_Vector(RandVectOutR, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_o_R, h_mat, ptree, ptree%nproc, stats, mode_o_R)
-      call LogMemory(stats, -SIZEOF(RandVectOutR)/1024.0d3)  
+      call LogMemory(stats, -SIZEOF(RandVectOutR)/1024.0d3)
       deallocate (RandVectOutR)
 
       ! n4 = MPI_Wtime()
@@ -767,7 +767,7 @@ contains
                         if(blocks%headn>=blocks_i%headn .and. blocks%headn+blocks%N-1<=blocks_i%headn+blocks_i%N-1)then
                            blocks%R = vector2D_i_R(j)%vector(blocks%headn-blocks_i%headn+1:blocks%headn-blocks_i%headn+blocks%N,1+(jGroup-1)*num_vect:jGroup*num_vect)
                         endif
-                     enddo                   
+                     enddo
                   endif
                end select
                curr => curr%next
@@ -791,7 +791,7 @@ contains
 
 
 
-     ! perform and store transposed MVP 
+     ! perform and store transposed MVP
       allocate (RandVectInL(Nloc, num_vect*ncolor))
       RandVectInL = 0
       allocate (RandVectOutL(Nloc, num_vect*ncolor))
@@ -806,7 +806,7 @@ contains
             idxs = max(msh%basis_group(group_m)%head,msh%idxs)
             idxe = min(msh%basis_group(group_m)%tail,msh%idxe)
             if((idxs>=msh%idxs .and. idxe<=msh%idxe .and. idxs<=idxe))then
-               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)               
+               call RandomMat(idxe-idxs+1, num_vect, min(idxe-idxs+1, num_vect), RandVectInL(idxs-msh%idxs+1:idxe-msh%idxs+1,1+(jGroup-1)*num_vect:jGroup*num_vect), 1)
             endif
          enddo
       enddo
@@ -844,7 +844,7 @@ contains
       enddo
       endif
       call Hmat_Redistribute1Dto2D_Vector(RandVectOutL, msh%idxe-msh%idxs+1, num_vect*ncolor, vector2D_o_L, h_mat, ptree, ptree%nproc, stats, mode_o_L)
-      call LogMemory(stats, -SIZEOF(RandVectOutL)/1024.0d3)          
+      call LogMemory(stats, -SIZEOF(RandVectOutL)/1024.0d3)
       deallocate (RandVectOutL)
 
       ! store the transposed multiply results for each admissible block

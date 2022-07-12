@@ -65,9 +65,9 @@ contains
       type(Hoption)::option
       type(kernelquant)::ker
       integer group_m, group_n, farblock, level
-      integer i, j, ii, jj
-      real*8 dis, rad1, rad2, para
-      real*8, allocatable:: a(:), b(:)
+      integer i, j, ii, jj, kk
+      real*8 dis, rad1, rad2, para, dis0
+      real*8, allocatable:: a(:), b(:), a_ext(:)
       integer Dimn
 
       Dimn = size(msh%basis_group(group_m)%center, 1)
@@ -81,11 +81,60 @@ contains
       rad1 = msh%basis_group(group_m)%radius
       rad2 = msh%basis_group(group_n)%radius
 
-      dis = 0d0
-      do i = 1, Dimn
-         dis = dis + (a(i) - b(i))**2
-      enddo
-      dis = sqrt(dis)
+
+      if(option%per_geo==0)then
+         dis = 0d0
+         do i = 1, Dimn
+            dis = dis + (a(i) - b(i))**2
+         enddo
+         dis = sqrt(dis)
+      else
+         call assert(Dimn<=3,'periodic domains not yet supported for Dimn>3')
+         allocate (a_ext(Dimn))
+         a_ext = a
+         dis = BPACK_Bigvalue
+         if(Dimn==1)then
+            do ii=-1,1
+               a_ext(1) = a(1) + ii*option%periods(1)
+               dis0 = 0d0
+               do i = 1, Dimn
+                  dis0 = dis0 + (a_ext(i) - b(i))**2
+               enddo
+               dis0 = sqrt(dis0)
+               dis = min(dis,dis0)
+            enddo
+         elseif(Dimn==2)then
+            do ii=-1,1
+            do jj=-1,1
+               a_ext(1) = a(1) + ii*option%periods(1)
+               a_ext(2) = a(2) + jj*option%periods(2)
+               dis0 = 0d0
+               do i = 1, Dimn
+                  dis0 = dis0 + (a_ext(i) - b(i))**2
+               enddo
+               dis0 = sqrt(dis0)
+               dis = min(dis,dis0)
+            enddo
+            enddo
+         elseif(Dimn==3)then
+            do ii=-1,1
+            do jj=-1,1
+            do kk=-1,1
+               a_ext(1) = a(1) + ii*option%periods(1)
+               a_ext(2) = a(2) + jj*option%periods(2)
+               a_ext(3) = a(3) + kk*option%periods(3)
+               dis0 = 0d0
+               do i = 1, Dimn
+                  dis0 = dis0 + (a_ext(i) - b(i))**2
+               enddo
+               dis0 = sqrt(dis0)
+               dis = min(dis,dis0)
+            enddo
+            enddo
+            enddo
+         endif
+         deallocate(a_ext)
+      endif
 
       ! write(*,*)dis/((rad1+rad2)/2)
 

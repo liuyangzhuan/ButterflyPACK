@@ -493,6 +493,10 @@ contains
          val_d = option%nogeo
          valid_opt = 1
       endif
+      if (trim(str) == 'per_geo') then
+         val_d = option%per_geo
+         valid_opt = 1
+      endif
       if (trim(str) == 'less_adapt') then
          val_d = option%less_adapt
          valid_opt = 1
@@ -511,6 +515,18 @@ contains
       endif
       if (trim(str) == 'rank0') then
          val_d = option%rank0
+         valid_opt = 1
+      endif
+      if (trim(str) == 'period1') then
+         val_d = option%periods(1)
+         valid_opt = 1
+      endif
+      if (trim(str) == 'period2') then
+         val_d = option%periods(2)
+         valid_opt = 1
+      endif
+      if (trim(str) == 'period3') then
+         val_d = option%periods(3)
          valid_opt = 1
       endif
       if (trim(str) == 'itermax') then
@@ -716,6 +732,11 @@ contains
          option%nogeo = val_i
          valid_opt = 1
       endif
+      if (trim(str) == 'per_geo') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%per_geo = val_i
+         valid_opt = 1
+      endif
       if (trim(str) == 'less_adapt') then
          call c_f_pointer(val_Cptr, val_i)
          option%less_adapt = val_i
@@ -870,6 +891,24 @@ contains
          option%sample_para_outer = val_d
          valid_opt = 1
       endif
+
+      if (trim(str) == 'period1') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%periods(1) = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'period2') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%periods(2) = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'period3') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%periods(3) = val_d
+         valid_opt = 1
+      endif
+
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
 
