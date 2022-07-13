@@ -81,7 +81,7 @@ PROGRAM ButterflyPACK_IE_3D
     real(kind=8) dtheta,theta,phi,rcs
     real(kind=8) freq0,val0,valmin
     real(kind=8):: norm_thresh=1000d0
-    real(kind=8):: dotproduct_thresh=0.4d0
+    real(kind=8):: dotproduct_thresh=0.8d0
 	complex(kind=8) ctemp_loc,ctemp_1,ctemp
 	logical rvec
 	real(kind=8),external :: pdznorm2, dlapy2
