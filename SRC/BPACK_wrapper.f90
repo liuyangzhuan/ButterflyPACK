@@ -1125,6 +1125,7 @@ contains
       !>**** make 0-element node a 1-element node
 
       ! write(*,*)'before adjustment:',msh%pretree
+      call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
       need = 0
       do ii = 1, 2**Maxlevel
          if (msh%pretree(ii) == 0) need = need + 1
@@ -1339,6 +1340,7 @@ contains
       !>**** make 0-element node a 1-element node
 
       ! write(*,*)'before adjustment:',msh%pretree
+      call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
       need = 0
       do ii = 1, 2**Maxlevel
          if (msh%pretree(ii) == 0) need = need + 1
