@@ -100,7 +100,7 @@ if(COMPILER_GNU)
   endif()
 endif()
 
-check_fortran_compiler_flag("-no-prec-div" COMPILER_Intel)
+check_fortran_compiler_flag("-qopenmp" COMPILER_Intel)
 if(COMPILER_Intel)
   set(CMAKE_Fortran_FLAGS "-cpp -DIntel ${CMAKE_Fortran_FLAGS}")
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
