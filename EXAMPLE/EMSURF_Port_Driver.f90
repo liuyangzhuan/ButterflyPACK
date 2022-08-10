@@ -96,7 +96,7 @@ PROGRAM ButterflyPACK_IE_3D
 	logical :: exist, f_exist
 	integer,parameter::Nx0=101,Ny0=101
 	real(kind=8):: x0(Nx0),y0(Ny0),u(Nx0*Ny0),xx1(1000),yy1(1000), dx, v1(1000),vref(1000)
-
+	character(len=1024)  :: string1,string2,string3,filename
 
 # 125 "EMSURF_Port_Driver.f90"
 
@@ -421,21 +421,91 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 	if(ptree_A%MyID==Main_ID .and. quant%Nport>0)write(*,*)'Port No.  TypeTETM  n  m  kc  k  eta_nm'
+	quant%Nunk_waveguidemode=0
 	do pp=1,quant%Nport
-		quant%ports(pp)%mmax=1
-		quant%ports(pp)%nmax=1
-
 		if(quant%ports(pp)%type==0)then
 			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
-			quant%ports(pp)%mmax=1
-			quant%ports(pp)%nmax=1
+			quant%ports(pp)%mmax=2
+			quant%ports(pp)%nmax=2
 
+			do nn=0,quant%ports(pp)%nmax
+			do mm=1,quant%ports(pp)%mmax
+				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
+				if(quant%wavenum > kc)then
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+2 ! 2 accounts for two polarizations for circular waveguides
+				endif
+				kc = r_TM_nm(nn+1,mm)/quant%ports(pp)%R
+				if(quant%wavenum > kc)then
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+2 ! 2 accounts for two polarizations for circular waveguides
+				endif
+			enddo
+			enddo
+		else if(quant%ports(pp)%type==1)then
+			quant%ports(pp)%mmax=2
+			quant%ports(pp)%nmax=2
+
+			do nn=0,quant%ports(pp)%nmax
+				do mm=0,quant%ports(pp)%mmax
+					if(nn>0 .or. mm>0)then ! the lowest TE mode is 01 or 10
+						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
+						if(quant%wavenum > kc)then
+							quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+						endif
+					endif
+				enddo
+			enddo
+			do nn=0,quant%ports(pp)%nmax
+				do mm=0,quant%ports(pp)%mmax
+					if(nn>0 .and. mm>0)then ! the lowest TM mode is 11
+						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
+						if(quant%wavenum > kc)then
+							quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+						endif
+					endif
+				enddo
+			enddo
+		else if(quant%ports(pp)%type==2)then
+			do nn=1,quant%ports(pp)%nmode_arbi
+				write(string1 , *) quant%ports(pp)%Nx_arbi
+				write(string2 , *) quant%ports(pp)%Ny_arbi
+				write(string3 , *) nn
+				open(22, file=trim(adjustl(quant%ports(pp)%string_arbi))//"_Nx_"//trim(adjustl(string1))//"_Ny_"//trim(adjustl(string2))//"_mode_"//trim(adjustl(string3))//".txt", status="old", action="read")
+				read(22,*)quant%ports(pp)%kc_arbi(nn),dx,quant%ports(pp)%TETM_arbi(nn),quant%ports(pp)%A_n_arbi(nn)
+				if(quant%wavenum > quant%ports(pp)%kc_arbi(nn))then
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+				endif
+				close(22)
+			enddo
+		endif	
+	enddo
+	
+	if(quant%Nunk_waveguidemode>0)then	
+		allocate(quant%waveguidemodes(quant%Nunk_waveguidemode,5))
+		quant%waveguidemodes=0
+	endif
+
+	quant%Nunk_waveguidemode=0
+	do pp=1,quant%Nport
+		if(quant%ports(pp)%type==0)then
+			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			do nn=0,quant%ports(pp)%nmax
 			do mm=1,quant%ports(pp)%mmax
 				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
 				quant%ports(pp)%A_TE_nm(nn+1,mm)=A_TE_nm_cir(nn+1,mm)
 				quant%ports(pp)%impedance_TE_nm(nn+1,mm)=BPACK_Bigvalue
 				if(quant%wavenum > kc)then
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1 
+					quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp      ! port ID
+					quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn    ! nn
+					quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm    ! mm
+					quant%waveguidemodes(quant%Nunk_waveguidemode,4)=1       ! TETM
+					quant%waveguidemodes(quant%Nunk_waveguidemode,5)=1       ! polarization
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+					quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp      ! port ID
+					quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn    ! nn
+					quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm    ! mm
+					quant%waveguidemodes(quant%Nunk_waveguidemode,4)=1       ! TETM
+					quant%waveguidemodes(quant%Nunk_waveguidemode,5)=2       ! polarization					
 					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
 					quant%ports(pp)%impedance_TE_nm(nn+1,mm)=quant%wavenum*BPACK_impedence0/betanm
 					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm)
@@ -444,6 +514,18 @@ PROGRAM ButterflyPACK_IE_3D
 				quant%ports(pp)%A_TM_nm(nn+1,mm)=A_TM_nm_cir(nn+1,mm)
 				quant%ports(pp)%impedance_TM_nm(nn+1,mm)=BPACK_Bigvalue
 				if(quant%wavenum > kc)then
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+					quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp      ! port ID
+					quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn    ! nn
+					quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm    ! mm
+					quant%waveguidemodes(quant%Nunk_waveguidemode,4)=2       ! TETM
+					quant%waveguidemodes(quant%Nunk_waveguidemode,5)=1       ! polarization			
+					quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+					quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp      ! port ID
+					quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn    ! nn
+					quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm    ! mm
+					quant%waveguidemodes(quant%Nunk_waveguidemode,4)=2       ! TETM
+					quant%waveguidemodes(quant%Nunk_waveguidemode,5)=2       ! polarization												
 					betanm=sqrt(quant%wavenum**2d0-kc**2d0)
 					quant%ports(pp)%impedance_TM_nm(nn+1,mm)=BPACK_impedence0*betanm/quant%wavenum
 					if(ptree_A%MyID==Main_ID)write(*,*)pp,'CIR','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm)
@@ -459,6 +541,12 @@ PROGRAM ButterflyPACK_IE_3D
 						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
 						quant%ports(pp)%A_TE_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*A_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*B_nm_rec(nn+1,mm+1))
 						if(quant%wavenum > kc)then
+							quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+							quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp
+							quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn
+							quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm
+							quant%waveguidemodes(quant%Nunk_waveguidemode,4)=1								
+							quant%waveguidemodes(quant%Nunk_waveguidemode,5)=1							
 							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
 							quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)=quant%wavenum*BPACK_impedence0/betanm
 							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TE',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TE_nm(nn+1,mm+1)
@@ -475,6 +563,12 @@ PROGRAM ButterflyPACK_IE_3D
 						kc = sqrt((nn*BPACK_pi/quant%ports(pp)%a)**2d0+(mm*BPACK_pi/quant%ports(pp)%b)**2d0)
 						quant%ports(pp)%A_TM_nm(nn+1,mm+1)=1d0/sqrt(quant%ports(pp)%a/quant%ports(pp)%b*mm**2d0*B_nm_rec(nn+1,mm+1) + quant%ports(pp)%b/quant%ports(pp)%a*nn**2d0*A_nm_rec(nn+1,mm+1))
 						if(quant%wavenum > kc)then
+							quant%Nunk_waveguidemode = quant%Nunk_waveguidemode+1
+							quant%waveguidemodes(quant%Nunk_waveguidemode,1)=pp
+							quant%waveguidemodes(quant%Nunk_waveguidemode,2)=nn
+							quant%waveguidemodes(quant%Nunk_waveguidemode,3)=mm
+							quant%waveguidemodes(quant%Nunk_waveguidemode,4)=2								
+							quant%waveguidemodes(quant%Nunk_waveguidemode,5)=1							
 							betanm=sqrt(quant%wavenum**2d0-kc**2d0)
 							quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)=BPACK_impedence0*betanm/quant%wavenum
 							if(ptree_A%MyID==Main_ID)write(*,*)pp,'RECT','TM',nn,mm,kc,quant%wavenum,quant%ports(pp)%impedance_TM_nm(nn+1,mm+1)
@@ -513,15 +607,18 @@ PROGRAM ButterflyPACK_IE_3D
 	do ii=1, quant%Nunk_int+quant%Nunk_port
 		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 	enddo
-	do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
-		xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
+	! use port center as the geometry for the mode unknowns 
+	do ii=quant%Nunk_int + quant%Nunk_port+1,quant%Nunk
+		pp = quant%waveguidemodes(ii-quant%Nunk_int - quant%Nunk_port,1)
+		xyz(:,ii)=quant%ports(pp)%origin
 	enddo
-
+	
     allocate(Permutation(quant%Nunk))
 	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,Coordinates=xyz)
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
 	t2 = MPI_Wtime()
+	call nxK_waveguidePrecompute(option_A,msh_A,quant,ptree_A,stats_A)
 	!**** computation of the construction phase
     call z_BPACK_construction_Element(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
 	!**** print statistics
@@ -559,9 +656,12 @@ PROGRAM ButterflyPACK_IE_3D
 			do ii=1, quant%Nunk_int+quant%Nunk_port
 				xyz(:,ii) = quant%xyz(:,quant%maxnode+ii)
 			enddo
-			do ii=quant%Nunk_int+quant%Nunk_port+1,quant%Nunk
-				xyz(:,ii) = quant%xyz(:,quant%maxnode+ii-quant%Nunk_port)
+			! use port center as the geometry for the mode unknowns 
+			do ii=quant%Nunk_int + quant%Nunk_port+1,quant%Nunk
+				pp = quant%waveguidemodes(ii-quant%Nunk_int - quant%Nunk_port,1)
+				xyz(:,ii)=quant%ports(pp)%origin
 			enddo
+
 			allocate(Permutation(quant%Nunk))
 			call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat_sh,option_sh,stats_sh,msh_sh,ker_sh,ptree_sh,Coordinates=xyz)
 			deallocate(Permutation) ! caller can use this permutation vector if needed
@@ -581,8 +681,8 @@ PROGRAM ButterflyPACK_IE_3D
 	endif
 
 	!***********************************************************************
-	allocate(xloc(Nunk_loc,quant%Nport))
-	allocate(bloc(Nunk_loc,quant%Nport))
+	allocate(xloc(Nunk_loc,quant%Nunk_waveguidemode))
+	allocate(bloc(Nunk_loc,quant%Nunk_waveguidemode))
 	call EM_solve_port_SURF(bmat_sh,option_sh,msh_sh,quant,ptree_sh,stats_sh,xloc,bloc)
 
 
@@ -590,11 +690,11 @@ PROGRAM ButterflyPACK_IE_3D
 		write(*,*)'Postprocessing: '
 	endif
 
-	do ii=1,quant%Nport
-			write(substring , *) ii
-			write(substring1 , *) quant%freq
-			call current_node_patch_mapping(0,trim(adjustl(substring2))//'_J_port_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',bloc(:,ii),msh_A,quant,ptree_A)
-			call current_node_patch_mapping(1,trim(adjustl(substring2))//'_M_port_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',bloc(:,ii),msh_A,quant,ptree_A)
+	do ii=1,quant%Nunk_waveguidemode
+		write(substring , *) ii
+		write(substring1 , *) quant%freq
+		call current_node_patch_mapping(0,trim(adjustl(substring2))//'_J_port_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',xloc(:,ii),msh_A,quant,ptree_A)
+		call current_node_patch_mapping(1,trim(adjustl(substring2))//'_M_port_'//trim(adjustl(substring))//'_freq_'//trim(adjustl(substring1))//'.out',xloc(:,ii),msh_A,quant,ptree_A)
 	enddo
 
 	if(ptree_A%MyID==Main_ID .and. option_A%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
