@@ -353,7 +353,7 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						call z_curl(nr_n,an,nxan)
+						call z_rrcurl(nr_n,an,nxan)
 						call z_scalar(am,nxan,temp)
 						value_m=value_m+sign*(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)  ! note that wm contains the factor of 2
 					else
@@ -365,7 +365,7 @@ subroutine Zelem_EMSURF_K(m,n,value,quant,sign)
 							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-							 call z_ccurl(an,dg,dg2)
+							 call z_rccurl(an,dg,dg2)
 							 call z_cscalar(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
 						enddo
@@ -443,7 +443,7 @@ subroutine Zelem_EMSURF_K_Self(m,n,value,quant,sign)
 						an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
 						an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
 						an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
-						! call z_curl(nr_n,an,nxan)
+						! call z_rrcurl(nr_n,an,nxan)
 						! call z_scalar(am,nxan,temp)
 
 						call z_scalar(am,an,temp)
@@ -634,7 +634,7 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 		phihat = 0
 		if(r>0)then
 			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
-			call z_curl(nhat,rhat,phihat)
+			call z_rrcurl(nhat,rhat,phihat)
 		endif
 
 		if(TETM==1)then !TE_nm
@@ -674,7 +674,7 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
 		endif
-		call z_curl(nhat,e,nxe)
+		call z_rrcurl(nhat,e,nxe)
 	elseif(quant%ports(pp)%type==1)then
 		Ex=0
 		Ey=0
@@ -698,7 +698,7 @@ subroutine Port_nxe(xm,ym,zm,nxe,quant,pp,mm,nn,TETM,rr)
 			Ey = mm/b*sin(nn*BPACK_pi*x/a)*cos(mm*BPACK_pi*y/b)
 			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
 		endif
-		call z_curl(quant%ports(pp)%z,e,nxe)
+		call z_rrcurl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -725,7 +725,7 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 		phihat = 0
 		if(r>0)then
 			rhat = (/xm-quant%ports(pp)%origin(1),ym-quant%ports(pp)%origin(2),zm-quant%ports(pp)%origin(3)/)/r
-			call z_curl(nhat,rhat,phihat)
+			call z_rrcurl(nhat,rhat,phihat)
 		endif
 
 		if(TETM==1)then !TE_nm
@@ -765,7 +765,7 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 			endif
 			e = (Erho*rhat+Ephi*phihat)*quant%ports(pp)%A_TM_nm(nn+1,mm)/quant%ports(pp)%R
 		endif
-		! call z_curl(nhat,e,nxe)
+		! call z_rrcurl(nhat,e,nxe)
 	elseif(quant%ports(pp)%type==1)then
 		Ex=0
 		Ey=0
@@ -789,7 +789,7 @@ subroutine Port_e(xm,ym,zm,e,quant,pp,mm,nn,TETM,rr)
 			Ey = mm/b*sin(nn*BPACK_pi*x/a)*cos(mm*BPACK_pi*y/b)
 			e = (Ex*quant%ports(pp)%x+Ey*quant%ports(pp)%y)*quant%ports(pp)%A_TM_nm(nn+1,mm+1)
 		endif
-		! call z_curl(quant%ports(pp)%z,e,nxe)
+		! call z_rrcurl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -823,7 +823,7 @@ subroutine Port_e_nxe_arbi(xm,ym,zm,e,nxe,quant,pp,nn,Nx,Ny,Exs,Eys,xs,ys)
 		call CubicInterp2D_F(xs,ys,Eys,Nx,Ny,x1,y1,Ey,1)
 		e = (Ex(1)*quant%ports(pp)%x+Ey(1)*quant%ports(pp)%y)*quant%ports(pp)%A_n_arbi(nn)
 
-		call z_curl(quant%ports(pp)%z,e,nxe)
+		call z_rrcurl(quant%ports(pp)%z,e,nxe)
 	else
 		write(*,*)'unrecognized port type',quant%ports(pp)%type
 		stop
@@ -1390,7 +1390,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
- call z_curl(a,b,w)
+ call z_rrcurl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -1404,7 +1404,7 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call z_curl(w,u,v)
+ call z_rrcurl(w,u,v)
  call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
@@ -1495,7 +1495,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
-call z_curl(a,b,w)
+call z_rrcurl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -1509,7 +1509,7 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call z_curl(w,u,v)
+ call z_rrcurl(w,u,v)
  call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
@@ -1569,9 +1569,9 @@ do i=1,3
    s2(i)=(quant%xyz(i,node1)-quant%xyz(i,node3))/l(2)
    s3(i)=(quant%xyz(i,node2)-quant%xyz(i,node1))/l(3)
 enddo
-call z_curl(s1,w,m1)
-call z_curl(s2,w,m2)
-call z_curl(s3,w,m3)
+call z_rrcurl(s1,w,m1)
+call z_rrcurl(s2,w,m2)
+call z_rrcurl(s3,w,m3)
 call z_scalar(u,m1,temp1)
 temp1=temp1*f3(1)/2
 call z_scalar(u,m2,temp2)
@@ -1762,7 +1762,7 @@ real(kind=8) function triangle_area(patch,quant)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
     enddo
 
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
     triangle_area=0.5*sqrt(c(1)**2+c(2)**2+c(3)**2)
 
     return
@@ -1782,21 +1782,21 @@ logical function in_triangle(point,patch,quant)
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
     enddo
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
 	area=0.5*sqrt(sum(c**2d0))
 
     do i=1,3
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
     enddo
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
     alpha1=0.5*sqrt(sum(c**2d0))/area
 
     do i=1,3
         a(i)=quant%xyz(i,quant%node_of_patch(2,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
     enddo
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
 	beta1=0.5*sqrt(sum(c**2d0))/area
 
 
@@ -1804,7 +1804,7 @@ logical function in_triangle(point,patch,quant)
         a(i)=quant%xyz(i,quant%node_of_patch(1,patch))-point(i)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-point(i)
     enddo
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
 	gamma1=0.5*sqrt(sum(c**2d0))/area
 
 	in_triangle = alpha1>=0 .and. alpha1<=1 .and. beta1>=0 .and. beta1<=1 .and. gamma1>=0 .and. gamma1<=1 .and. abs(alpha1+beta1+gamma1-1)<=1d-13
@@ -1854,8 +1854,8 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call z_ccurl(-k,ee,hh1)
-          call z_ccurl(nr,hh1,hh)
+          call z_rccurl(-k,ee,hh1)
+          call z_rccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
@@ -1914,8 +1914,8 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call z_ccurl(-k,ee,hh1)
-          call z_ccurl(nr,hh1,hh)
+          call z_rccurl(-k,ee,hh1)
+          call z_rccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
@@ -2252,7 +2252,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
             a(i)=(quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
             b(i)=(quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
         enddo
-        call z_curl(a,b,c)
+        call z_rrcurl(a,b,c)
         r0=sqrt(c(1)**2+c(2)**2+c(3)**2)
         c(1)=c(1)/r0
         c(2)=c(2)/r0
@@ -2966,7 +2966,7 @@ subroutine nxK_waveguidePrecompute(option,msh,quant,ptree,stats)
 												dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 												dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 												dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-												call z_ccurl(e,dg,dg2)
+												call z_rccurl(e,dg,dg2)
 												call z_cscalar(dg2,am,ctemp)
 												value_m=value_m-(-1)**(ii+1)*ctemp*wm(i)*wn(j)*lm*2d0						
 											enddo
@@ -3456,7 +3456,7 @@ subroutine Field_EMSURF_K(point,field,n,quant)
 				dg(1)=(point(1)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 				dg(2)=(point(2)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 				dg(3)=(point(3)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-				call z_ccurl(an,dg,dg2)
+				call z_rccurl(an,dg,dg2)
 				field = field - (-1)**(jj+1)*dg2*wn(j)*ln
 			enddo
 		enddo

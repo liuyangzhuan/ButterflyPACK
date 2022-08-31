@@ -186,8 +186,8 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-							 call z_ccurl(an,dg,dg1)
-							 call z_ccurl(nr_m,dg1,dg2)
+							 call z_rccurl(an,dg,dg1)
+							 call z_rccurl(nr_m,dg1,dg2)
 							 call z_cscalar(dg2,am,ctemp)
 							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
 							imp=imp+wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
@@ -481,7 +481,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
- call z_curl(a,b,w)
+ call z_rrcurl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -495,7 +495,7 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call z_curl(w,u,v)
+ call z_rrcurl(w,u,v)
  call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
@@ -586,7 +586,7 @@ do i=1,3
    a(i)=quant%xyz(i,node2)-quant%xyz(i,node1)
    b(i)=quant%xyz(i,node3)-quant%xyz(i,node1)
 enddo
-call z_curl(a,b,w)
+call z_rrcurl(a,b,w)
 area=0.5*sqrt(w(1)**2+w(2)**2+w(3)**2)
 do i=1,3
    w(i)=w(i)/2./area
@@ -600,7 +600,7 @@ l(3)=sqrt((quant%xyz(1,node1)-quant%xyz(1,node2))**2+(quant%xyz(2,node1)&
 do i=1,3
    u(i)=a(i)/l(3)
 enddo
- call z_curl(w,u,v)
+ call z_rrcurl(w,u,v)
  call z_scalar(u,b,u3)
 v3=2.*area/l(3)
 
@@ -660,9 +660,9 @@ do i=1,3
    s2(i)=(quant%xyz(i,node1)-quant%xyz(i,node3))/l(2)
    s3(i)=(quant%xyz(i,node2)-quant%xyz(i,node1))/l(3)
 enddo
-call z_curl(s1,w,m1)
-call z_curl(s2,w,m2)
-call z_curl(s3,w,m3)
+call z_rrcurl(s1,w,m1)
+call z_rrcurl(s2,w,m2)
+call z_rrcurl(s3,w,m3)
 call z_scalar(u,m1,temp1)
 temp1=temp1*f3(1)/2
 call z_scalar(u,m2,temp2)
@@ -815,7 +815,7 @@ real(kind=8) function triangle_area(patch,quant)
         b(i)=quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch))
     enddo
 
-    call z_curl(a,b,c)
+    call z_rrcurl(a,b,c)
     triangle_area=0.5*sqrt(c(1)**2+c(2)**2+c(3)**2)
 
     return
@@ -863,8 +863,8 @@ subroutine element_Vinc_VV_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call z_ccurl(-k,ee,hh1)
-          call z_ccurl(nr,hh1,hh)
+          call z_rccurl(-k,ee,hh1)
+          call z_rccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
@@ -923,8 +923,8 @@ subroutine element_Vinc_HH_SURF(theta,phi,edge,value,quant)
 	      do i=1,3
 		     ee(i)=einc(i)*exp(phase)
           end do
-          call z_ccurl(-k,ee,hh1)
-          call z_ccurl(nr,hh1,hh)
+          call z_rccurl(-k,ee,hh1)
+          call z_rccurl(nr,hh1,hh)
           a(1)=x(ii)-quant%xyz(1,node3)
 	      a(2)=y(ii)-quant%xyz(2,node3)
 	      a(3)=z(ii)-quant%xyz(3,node3)
@@ -1251,7 +1251,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
             a(i)=(quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
             b(i)=(quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
         enddo
-        call z_curl(a,b,c)
+        call z_rrcurl(a,b,c)
         r0=sqrt(c(1)**2+c(2)**2+c(3)**2)
         c(1)=c(1)/r0
         c(2)=c(2)/r0
