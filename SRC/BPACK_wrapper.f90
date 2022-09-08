@@ -1801,8 +1801,8 @@ contains
       integer times(8)
       real(kind=8) t1, t2, error, Memory, tol_comp_tmp
       integer ierr,pp,knn_tmp
-      integer:: boundary_map(1)
-      integer groupm_start, Nboundall
+      integer:: boundary_map(1,1)
+      integer groupm_start, Nboundall,Ninadmissible
 
       !>**** allocate HODLR solver structures
 
@@ -1824,14 +1824,15 @@ contains
 
       groupm_start = 0
       Nboundall = 0
+      Ninadmissible = 0
       if (option%forwardN15flag == 1) then
          knn_tmp = option%knn
          option%knn=0
-         call BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
          option%knn=knn_tmp
          call BF_sym2asym(blocks)
       elseif (option%forwardN15flag == 2) then
-         call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
          call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, -1, error)
          if(error>50*option%tol_comp)then
             pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
@@ -1840,13 +1841,13 @@ contains
             knn_tmp = option%knn
             option%tol_comp=option%tol_comp*5
             option%knn=0
-            call BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+            call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
             option%knn=knn_tmp
             option%tol_comp=option%tol_comp/5
             call BF_sym2asym(blocks)
          endif
       else
-         call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
       end if
 
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)

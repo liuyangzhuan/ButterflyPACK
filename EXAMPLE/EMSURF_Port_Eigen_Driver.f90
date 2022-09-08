@@ -402,7 +402,7 @@ PROGRAM ButterflyPACK_IE_3D
 		quant%ports(pp)%nmax=1
 
 		if(quant%ports(pp)%type==0)then
-			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+			call z_rrcurl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			quant%ports(pp)%mmax=1
 			quant%ports(pp)%nmax=1
 

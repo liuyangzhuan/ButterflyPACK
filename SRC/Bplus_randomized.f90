@@ -5476,8 +5476,8 @@ contains
       ! Bplus_randomized%LL(1)%matrices_block(1)%col_group = Bplus_randomized%col_group
       ! Bplus_randomized%LL(1)%matrices_block(1)%row_group = Bplus_randomized%row_group
       ! Bplus_randomized%LL(1)%matrices_block(1)%style = Bplus%LL(1)%matrices_block(1)%style
-      allocate (Bplus_randomized%LL(1)%boundary_map(1))
-      Bplus_randomized%LL(1)%boundary_map(1) = Bplus%LL(1)%boundary_map(1)
+      allocate (Bplus_randomized%LL(1)%boundary_map(1,1))
+      Bplus_randomized%LL(1)%boundary_map(1,1) = Bplus%LL(1)%boundary_map(1,1)
 
       do ll = 1, LplusMax
          Bplus_randomized%LL(ll)%Nbound = 0
@@ -5503,9 +5503,9 @@ contains
                levelm = ceiling_safe(dble(level_butterfly)/2d0)
                groupm_start = Bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
                ! Nboundall = 2**(Bplus%LL(ll)%matrices_block(1)%level+levelm-level_BP)
-               Nboundall = size(Bplus%LL(ll + 1)%boundary_map)
+               Nboundall = size(Bplus%LL(ll + 1)%boundary_map,1)
 
-               allocate (Bplus_randomized%LL(ll + 1)%boundary_map(Nboundall))
+               allocate (Bplus_randomized%LL(ll + 1)%boundary_map(Nboundall,1))
                ! write(*,*)shape(Bplus%LL(ll+1)%boundary_map),shape(Bplus_randomized%LL(ll+1)%boundary_map),'didi',ll
 
                ! write(*,*)'gali',ll,Nboundall,shape(Bplus%LL(ll+1)%boundary_map)

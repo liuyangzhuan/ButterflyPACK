@@ -719,20 +719,21 @@ contains
       type(mesh)::msh
       type(kernelquant)::ker
       type(proctree)::ptree
-      integer:: boundary_map(1)
-      integer level_butterfly, levelm, groupm_start, Nboundall
+      integer:: boundary_map(1,1)
+      integer level_butterfly, levelm, groupm_start, Nboundall, Ninadmissible
 
       ! t1=MPI_Wtime()
       if (blocks%style == 2) then
 
          groupm_start = 0
          Nboundall = 0
+         Ninadmissible = 0
 
          if (option%forwardN15flag == 1) then
-            call BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory_tmp, stats, msh, ker, ptree, 1)
+            call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory_tmp, stats, msh, ker, ptree, 1)
             call BF_sym2asym(blocks)
          else
-            call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory_tmp, stats, msh, ker, ptree, 1)
+            call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory_tmp, stats, msh, ker, ptree, 1)
          end if
          Memory_far = Memory_far + Memory_tmp
 
@@ -979,7 +980,7 @@ contains
       type(blockplus)::bplus
       integer:: ii, ll, bb, ierr, pp
       real(kind=8) Memory, rtemp, error
-      integer:: level_butterfly, level_BP, levelm, groupm_start, Nboundall, statflag, knn_tmp
+      integer:: level_butterfly, level_BP, levelm, groupm_start, Nboundall, Ninadmissible, statflag, knn_tmp
       type(Hoption)::option
       type(Hstat)::stats
       type(mesh)::msh
@@ -1006,11 +1007,15 @@ contains
                   levelm = bplus%LL(ll)%matrices_block(bb)%level_half
                   groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
                   Nboundall = 0
-                  if (allocated(bplus%LL(ll + 1)%boundary_map)) Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
+                  Ninadmissible = 0
+                  if (allocated(bplus%LL(ll + 1)%boundary_map)) then
+                     Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
+                     Ninadmissible = size(bplus%LL(ll + 1)%boundary_map, 2)
+                  endif
                   if (option%forwardN15flag == 1) then
                      knn_tmp = option%knn
                      option%knn=0
-                     call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                     call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                      option%knn=knn_tmp
                      call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
 
@@ -1021,7 +1026,7 @@ contains
                         call BF_ChangePattern(bplus%LL(ll)%matrices_block(bb), 1, 3, stats, ptree)
                      endif
                   elseif (option%forwardN15flag == 2) then
-                        call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                        call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                         allocate(blocks)
                         call BF_copy('N', bplus%LL(ll)%matrices_block(bb), blocks)
                         call BF_checkError(blocks, option, msh, ker, stats, ptree, 1, -1, error)
@@ -1032,7 +1037,7 @@ contains
                            call BF_delete(bplus%LL(ll)%matrices_block(bb),0)
                            knn_tmp = option%knn
                            option%knn=0
-                           call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                           call BF_compress_N15(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                            option%knn=knn_tmp
                            call BF_sym2asym(bplus%LL(ll)%matrices_block(bb))
                            ! Move singular values to leftmost factor
@@ -1043,7 +1048,7 @@ contains
                            endif
                         endif
                   else
-                     call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                     call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
                   end if
 
                   Memory = Memory + rtemp

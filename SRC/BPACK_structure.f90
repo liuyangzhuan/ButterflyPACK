@@ -1162,14 +1162,14 @@ end function distance_geo
       use MISC_Utilities
       implicit none
 
-      integer i, j, ii, jj, kk, iii, jjj, ll, bb, sortdirec, ii_sch, pgno_bplus
+      integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, sortdirec, ii_sch, pgno_bplus
       integer level, edge, patch, node, group, group_touch
       integer rank, index_near, m, n, length, flag, itemp, cnt, detection
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
       integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, index_i_m, index_j_m
-      integer level_c, iter, level_cc, level_BP, Nboundall, level_butterfly
+      integer level_c, iter, level_cc, level_BP, Nboundall, Ninadmissible, level_butterfly
       type(matrixblock), pointer::blocks, block_f, block_sch, block_inv
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
       real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
@@ -1182,6 +1182,7 @@ end function distance_geo
       type(hssbf)::hss_bf1
       character(len=1024)  :: strings
       type(proctree)::ptree
+      integer,allocatable::boundary_map(:,:)
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -1233,8 +1234,8 @@ end function distance_geo
       call ComputeParallelIndices(block_f, block_f%pgno, ptree, msh)
 
       block_f%style = 2
-      allocate (hss_bf1%BP%LL(1)%boundary_map(1))
-      hss_bf1%BP%LL(1)%boundary_map(1) = block_f%col_group
+      allocate (hss_bf1%BP%LL(1)%boundary_map(1,1))
+      hss_bf1%BP%LL(1)%boundary_map(1,1) = block_f%col_group
       hss_bf1%BP%Lplus = 0
 
       do ll = 1, LplusMax - 1
@@ -1252,43 +1253,60 @@ end function distance_geo
                levelm = ceiling_safe(dble(level_butterfly)/2d0)
                groupm_start = block_f%row_group*2**levelm
                Nboundall = 2**(block_f%level + levelm - level_BP)
-               allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall))
+               allocate(boundary_map(Nboundall,Nboundall))
+               boundary_map=-1
+
+               Ninadmissible=0
                do bb = 1, Nboundall
-                  hss_bf1%BP%LL(ll + 1)%boundary_map(bb) = bb + groupm_start - 1
+                  cnt=0
+                  do cc = 1, Nboundall
+                     group_m = bb + groupm_start - 1
+                     group_n = cc + groupm_start - 1
+                     if (near_or_far_user(group_m, group_n, msh, option, ker, option%knn_near_para) == 0)then
+                        cnt=cnt+1
+                        boundary_map(bb,cnt)=group_n
+                     endif
+                  enddo
+                  Ninadmissible = max(Ninadmissible,cnt)
                enddo
+               allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible))
+               hss_bf1%BP%LL(ll + 1)%boundary_map = boundary_map(:,1:Ninadmissible)
+               deallocate(boundary_map)
                hss_bf1%BP%LL(ll + 1)%Nbound = Nboundall
+
 
                allocate (hss_bf1%BP%LL(ll + 1)%matrices_block(hss_bf1%BP%LL(ll + 1)%Nbound))
                cnt = 0
                do bb = 1, Nboundall
-                  if (hss_bf1%BP%LL(ll + 1)%boundary_map(bb) /= -1) then
-                     cnt = cnt + 1
-                     group_m = bb + groupm_start - 1
-                     group_n = hss_bf1%BP%LL(ll + 1)%boundary_map(bb)
-                     blocks => hss_bf1%BP%LL(ll + 1)%matrices_block(cnt)
-                     blocks%row_group = group_m
-                     blocks%col_group = group_n
-                     blocks%level = GetTreelevel(group_m) - 1
-                     blocks%level_butterfly = int((hss_bf1%Maxlevel - blocks%level)/2)*2
-                     blocks%pgno = msh%basis_group(group_m)%pgno
+                  do jj=1,Ninadmissible
+                     if (hss_bf1%BP%LL(ll + 1)%boundary_map(bb,jj) /= -1) then
+                        cnt = cnt + 1
+                        group_m = bb + groupm_start - 1
+                        group_n = hss_bf1%BP%LL(ll + 1)%boundary_map(bb,jj)
+                        blocks => hss_bf1%BP%LL(ll + 1)%matrices_block(cnt)
+                        blocks%row_group = group_m
+                        blocks%col_group = group_n
+                        blocks%level = GetTreelevel(group_m) - 1
+                        blocks%level_butterfly = int((hss_bf1%Maxlevel - blocks%level)/2)*2
+                        blocks%pgno = msh%basis_group(group_m)%pgno
 
-                     blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
-                     blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
-                     blocks%headm = msh%basis_group(group_m)%head
-                     blocks%headn = msh%basis_group(group_n)%head
+                        blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+                        blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+                        blocks%headm = msh%basis_group(group_m)%head
+                        blocks%headn = msh%basis_group(group_n)%head
 
-                     call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
-                     if (blocks%level_butterfly > 0) then
-                        blocks%style = 2
-                     else
-                        blocks%style = 1  ! leaflevel or leaflevel+1 is dense
-                        if(ptree%pgrp(blocks%pgno)%nproc>1)then
-                           write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
-                           stop
+                        call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
+                        if (blocks%level_butterfly > 0) then
+                           blocks%style = 2
+                        else
+                           blocks%style = 1  ! leaflevel or leaflevel+1 is dense
+                           if(ptree%pgrp(blocks%pgno)%nproc>1)then
+                              write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
+                              stop
+                           endif
                         endif
-                     endif
-
-                  end if
+                     end if
+                  enddo
                end do
             end if
          else
@@ -1589,8 +1607,8 @@ end function distance_geo
                ! if(block_f%M==2500)write(*,*)ptree%myID,block_f%pgno,block_f%pgno_db,block_f%N_loc,block_f%N_loc_db,'eref'
 
                block_f%style = 2
-               allocate (ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1))
-               ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1) = block_f%col_group
+               allocate (ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1,1))
+               ho_bf1%levels(level_c)%BP(ii)%LL(1)%boundary_map(1,1) = block_f%col_group
                ho_bf1%levels(level_c)%BP(ii)%Lplus = 0
 
                group = floor((ii - 1 + 2**level_c)/2d0)
@@ -1615,7 +1633,7 @@ end function distance_geo
                         levelm = ceiling_safe(dble(level_butterfly)/2d0)
                         groupm_start = block_f%row_group*2**levelm
                         Nboundall = 2**(block_f%level + levelm - level_BP)
-                        allocate (ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(Nboundall))
+                        allocate (ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(Nboundall,1))
                         ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map = -1
                         ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%Nbound = 0
 
@@ -1709,7 +1727,7 @@ end function distance_geo
                                        if (dist > sqrt(sum((Centroid_N(index_j_m, :) - Centroid_M(index_i_m, :))**2d0))) then
                                           ! if(level_c==1)write(*,*)index_i_m,index_j_m
                                           dist = sqrt(sum((Centroid_N(index_j_m, :) - Centroid_M(index_i_m, :))**2d0))
-                                          ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(group_m - groupm_start + 1) = group_n
+                                          ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(group_m - groupm_start + 1,1) = group_n
                                        end if
                                     end if
                                  end do
@@ -1732,10 +1750,10 @@ end function distance_geo
 
                         cnt = 0
                         do bb = 1, Nboundall
-                           if (ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(bb) /= -1) then
+                           if (ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(bb,1) /= -1) then
                               cnt = cnt + 1
                               group_m = bb + groupm_start - 1
-                              group_n = ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(bb)
+                              group_n = ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map(bb,1)
                               blocks => ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%matrices_block(cnt)
                               blocks%row_group = group_m
                               blocks%col_group = group_n
@@ -1779,8 +1797,8 @@ end function distance_geo
 
                   ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%Nbound = 1
 
-                  allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1))
-                  ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1) = ho_bf1%levels(level_c)%BP(ii)%row_group
+                  allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1,1))
+                  ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(1)%boundary_map(1,1) = ho_bf1%levels(level_c)%BP(ii)%row_group
 
                   do ll = 1, LplusMax - 1
                      if (ho_bf1%levels(level_c)%BP(ii)%LL(ll)%Nbound > 0) then
@@ -1825,12 +1843,12 @@ end function distance_geo
                            groupm_start = ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%row_group*2**levelm
                            Nboundall = 2**(ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll)%matrices_block(1)%level + levelm - level_BP)
 
-                           allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(Nboundall))
+                           allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(Nboundall,1))
 
                            ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map = ho_bf1%levels(level_c)%BP(ii)%LL(ll + 1)%boundary_map
                            do bb = 1, Nboundall
-                              if (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(bb) /= -1) then
-                                 ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(bb) = bb + groupm_start - 1
+                              if (ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(bb,1) /= -1) then
+                                 ho_bf1%levels(level_c)%BP_inverse_schur(ii_sch)%LL(ll + 1)%boundary_map(bb,1) = bb + groupm_start - 1
                               end if
                            end do
                         end if

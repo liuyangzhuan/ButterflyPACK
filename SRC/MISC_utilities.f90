@@ -1848,7 +1848,7 @@ contains
       return
    end subroutine scalar
 
-   subroutine curl(a, b, c)
+   subroutine rrcurl(a, b, c)
       implicit none
       real(kind=8) a(3), b(3), c(3)
       real(kind=8) ax, ay, az
@@ -1862,9 +1862,9 @@ contains
       cz = ax*by - bx*ay
       c(1) = cx; c(2) = cy; c(3) = cz
       return
-   end subroutine curl
+   end subroutine rrcurl
 
-   subroutine ccurl(a, b, c)
+   subroutine rccurl(a, b, c)
       implicit none
       real(kind=8) a(3)
       complex(kind=8) b(3), c(3)
@@ -1879,12 +1879,12 @@ contains
       cz = ax*by - bx*ay
       c(1) = cx; c(2) = cy; c(3) = cz
       return
-   end subroutine ccurl
+   end subroutine rccurl
 
    subroutine cccurl(a, b, c)
       implicit none
       complex(kind=8) a(3), b(3), c(3)
-      real(kind=8) ax, ay, az
+      complex(kind=8) ax, ay, az
       complex(kind=8) bx, by, bz
       complex(kind=8) cx, cy, cz
       ax = a(1); ay = a(2); az = a(3)
@@ -1921,7 +1921,7 @@ contains
       return
     end subroutine scalar_sp
 
-    subroutine curl_sp(a, b, c)
+    subroutine rrcurl_sp(a, b, c)
       implicit none
       real(kind=4) a(3), b(3), c(3)
       real(kind=4) ax, ay, az
@@ -1935,9 +1935,9 @@ contains
       cz = ax*by - bx*ay
       c(1) = cx; c(2) = cy; c(3) = cz
       return
-    end subroutine curl_sp
+    end subroutine rrcurl_sp
 
-    subroutine ccurl_sp(a, b, c)
+    subroutine rccurl_sp(a, b, c)
       implicit none
       real(kind=4) a(3)
       complex(kind=4) b(3), c(3)
@@ -1952,12 +1952,12 @@ contains
       cz = ax*by - bx*ay
       c(1) = cx; c(2) = cy; c(3) = cz
       return
-    end subroutine ccurl_sp
+    end subroutine rccurl_sp
 
     subroutine cccurl_sp(a, b, c)
       implicit none
       complex(kind=4) a(3), b(3), c(3)
-      real(kind=4) ax, ay, az
+      complex(kind=4) ax, ay, az
       complex(kind=4) bx, by, bz
       complex(kind=4) cx, cy, cz
       ax = a(1); ay = a(2); az = a(3)

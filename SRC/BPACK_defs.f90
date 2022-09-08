@@ -312,7 +312,7 @@ module BPACK_DEFS
         integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock), pointer:: matrices_block(:) => null()
-        integer, allocatable::boundary_map(:) !< closest subgroup for each subgroup
+        integer, allocatable::boundary_map(:,:) !< inadmisible subgroups for each subgroup
     end type onelplus
 
     !>**** Bplus structure

@@ -424,7 +424,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%Nunk_waveguidemode=0
 	do pp=1,quant%Nport
 		if(quant%ports(pp)%type==0)then
-			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+			call z_rrcurl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			quant%ports(pp)%mmax=2
 			quant%ports(pp)%nmax=2
 
@@ -487,7 +487,7 @@ PROGRAM ButterflyPACK_IE_3D
 	quant%Nunk_waveguidemode=0
 	do pp=1,quant%Nport
 		if(quant%ports(pp)%type==0)then
-			call z_curl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
+			call z_rrcurl(quant%ports(pp)%z,quant%ports(pp)%x,quant%ports(pp)%y)
 			do nn=0,quant%ports(pp)%nmax
 			do mm=1,quant%ports(pp)%mmax
 				kc = r_TE_nm(nn+1,mm)/quant%ports(pp)%R
