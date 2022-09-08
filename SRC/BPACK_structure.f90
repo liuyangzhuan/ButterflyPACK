@@ -1169,7 +1169,7 @@ end function distance_geo
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
       integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, index_i_m, index_j_m
-      integer level_c, iter, level_cc, level_BP, Nboundall, Ninadmissible, level_butterfly
+      integer level_c, iter, level_cc, level_BP, Nboundall, Ninadmissible_max, Ninadmissible_tot, level_butterfly
       type(matrixblock), pointer::blocks, block_f, block_sch, block_inv
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
       real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
@@ -1256,29 +1256,31 @@ end function distance_geo
                allocate(boundary_map(Nboundall,Nboundall))
                boundary_map=-1
 
-               Ninadmissible=0
+               Ninadmissible_max=0
+               Ninadmissible_tot=0
                do bb = 1, Nboundall
                   cnt=0
                   do cc = 1, Nboundall
                      group_m = bb + groupm_start - 1
                      group_n = cc + groupm_start - 1
-                     if (near_or_far_user(group_m, group_n, msh, option, ker, option%knn_near_para) == 0)then
+                     if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
                         cnt=cnt+1
+                        Ninadmissible_tot = Ninadmissible_tot +1
                         boundary_map(bb,cnt)=group_n
                      endif
                   enddo
-                  Ninadmissible = max(Ninadmissible,cnt)
+                  Ninadmissible_max = max(Ninadmissible_max,cnt)
                enddo
-               allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible))
-               hss_bf1%BP%LL(ll + 1)%boundary_map = boundary_map(:,1:Ninadmissible)
+               allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible_max))
+               hss_bf1%BP%LL(ll + 1)%boundary_map = boundary_map(:,1:Ninadmissible_max)
                deallocate(boundary_map)
-               hss_bf1%BP%LL(ll + 1)%Nbound = Nboundall
+               hss_bf1%BP%LL(ll + 1)%Nbound = Ninadmissible_tot
 
 
                allocate (hss_bf1%BP%LL(ll + 1)%matrices_block(hss_bf1%BP%LL(ll + 1)%Nbound))
                cnt = 0
                do bb = 1, Nboundall
-                  do jj=1,Ninadmissible
+                  do jj=1,Ninadmissible_max
                      if (hss_bf1%BP%LL(ll + 1)%boundary_map(bb,jj) /= -1) then
                         cnt = cnt + 1
                         group_m = bb + groupm_start - 1
