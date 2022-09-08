@@ -29,13 +29,13 @@ module Bplus_compress
 
 contains
 
-   subroutine BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+   subroutine BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
 
       implicit none
 
-      integer Nboundall, statflag
-      integer boundary_map(*)
+      integer Nboundall, Ninadmissible, statflag
+      integer boundary_map(:,:)
       integer groupm_start
 
       type(mesh)::msh
@@ -165,7 +165,7 @@ contains
                index_j_loc = mod(index_ij - 1, nc) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
+               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
             enddo
             n2 = MPI_Wtime()
             ! time_tmp = time_tmp + n2 - n1
@@ -283,7 +283,7 @@ contains
                index_i_loc = mod(index_ij - 1, nr) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
+               call BF_compress_NlogN_oneblock_C_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
             enddo
             ! !$omp end parallel do
             n2 = MPI_Wtime()
@@ -306,7 +306,7 @@ contains
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
 
-               call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
+               call BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops = flops+flops1
 
@@ -381,13 +381,13 @@ contains
    end subroutine BF_compress_NlogN
 
 
-   subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, nnz_loc, flops)
+   subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, nnz_loc, flops)
 
 
       implicit none
 
-      integer Nboundall,nnz_loc
-      integer boundary_map(*)
+      integer Nboundall,Ninadmissible, nnz_loc
+      integer boundary_map(:,:)
       integer groupm_start
       type(intersect) :: submats(:)
       type(mesh)::msh
@@ -523,14 +523,16 @@ contains
             submats(index_ij)%masks = 1
             do i = 1, rankmax_r
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-               group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-               if (group_n_mid /= -1) then
-                  idxstart = msh%basis_group(group_n_mid)%head
-                  idxend = msh%basis_group(group_n_mid)%tail
-                  do j = 1, nn
-                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                  enddo
-               endif
+               do jj=1,Ninadmissible
+                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                  if (group_n_mid /= -1) then
+                     idxstart = msh%basis_group(group_n_mid)%head
+                     idxend = msh%basis_group(group_n_mid)%tail
+                     do j = 1, nn
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                     enddo
+                  endif
+               enddo
             enddo
          endif
 
@@ -567,14 +569,16 @@ contains
             submats(index_ij)%masks = 1
             do i = 1, mm
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-               group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-               if (group_n_mid /= -1) then
-                  idxstart = msh%basis_group(group_n_mid)%head
-                  idxend = msh%basis_group(group_n_mid)%tail
-                  do j = 1, rank_new
-                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                  enddo
-               endif
+               do jj=1,Ninadmissible
+                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                  if (group_n_mid /= -1) then
+                     idxstart = msh%basis_group(group_n_mid)%head
+                     idxend = msh%basis_group(group_n_mid)%tail
+                     do j = 1, rank_new
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                     enddo
+                  endif
+               enddo
             enddo
          endif
 
@@ -618,14 +622,16 @@ contains
 
             do i = 1, rankmax_r
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-               group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-               if (group_n_mid /= -1) then
-                  idxstart = msh%basis_group(group_n_mid)%head
-                  idxend = msh%basis_group(group_n_mid)%tail
-                  do j = 1, nn
-                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                  enddo
-               endif
+               do jj=1,Ninadmissible
+                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                  if (group_n_mid /= -1) then
+                     idxstart = msh%basis_group(group_n_mid)%head
+                     idxend = msh%basis_group(group_n_mid)%tail
+                     do j = 1, nn
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                     enddo
+                  endif
+               enddo
             enddo
          endif
 
@@ -1308,14 +1314,14 @@ contains
 
    end subroutine BF_all2all_skel
 
-   subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
+   subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, Ninadmissible,groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
 
 
       implicit none
 
       type(intersect) :: submats(:)
-      integer Nboundall,nnz_loc
-      integer boundary_map(*)
+      integer Nboundall,Ninadmissible,nnz_loc
+      integer boundary_map(:,:)
       integer groupm_start
 
       type(mesh)::msh
@@ -1462,14 +1468,16 @@ contains
 
                do i = 1, mm
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-                  if (group_n_mid /= -1) then
-                     idxstart = msh%basis_group(group_n_mid)%head
-                     idxend = msh%basis_group(group_n_mid)%tail
-                     do j = 1, rank_new
-                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                     enddo
-                  endif
+                  do jj=1,Ninadmissible
+                     group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                     if (group_n_mid /= -1) then
+                        idxstart = msh%basis_group(group_n_mid)%head
+                        idxend = msh%basis_group(group_n_mid)%tail
+                        do j = 1, rank_new
+                           if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                        enddo
+                     endif
+                  enddo
                enddo
             endif
 
@@ -1500,14 +1508,16 @@ contains
 
                do i = 1, mm
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-                  if (group_n_mid /= -1) then
-                     idxstart = msh%basis_group(group_n_mid)%head
-                     idxend = msh%basis_group(group_n_mid)%tail
-                     do j = 1, rankmax_c
-                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                     enddo
-                  endif
+                  do jj=1,Ninadmissible
+                     group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                     if (group_n_mid /= -1) then
+                        idxstart = msh%basis_group(group_n_mid)%head
+                        idxend = msh%basis_group(group_n_mid)%tail
+                        do j = 1, rankmax_c
+                           if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                        enddo
+                     endif
+                  enddo
                enddo
             endif
          endif
@@ -1548,14 +1558,16 @@ contains
 
             do i = 1, rank_new
                group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-               group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-               if (group_n_mid /= -1) then
-                  idxstart = msh%basis_group(group_n_mid)%head
-                  idxend = msh%basis_group(group_n_mid)%tail
-                  do j = 1, nn
-                     if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                  enddo
-               endif
+               do jj=1,Ninadmissible
+                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                  if (group_n_mid /= -1) then
+                     idxstart = msh%basis_group(group_n_mid)%head
+                     idxend = msh%basis_group(group_n_mid)%tail
+                     do j = 1, nn
+                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                     enddo
+                  endif
+               enddo
             enddo
          endif
 
@@ -1604,14 +1616,16 @@ contains
 
                do i = 1, mm1 + mm2
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-                  if (group_n_mid /= -1) then
-                     idxstart = msh%basis_group(group_n_mid)%head
-                     idxend = msh%basis_group(group_n_mid)%tail
-                     do j = 1, rank_new
-                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                     enddo
-                  endif
+                  do jj=1,Ninadmissible
+                     group_n_mid = boundary_map(group_m_mid - groupm_start + 1, jj)
+                     if (group_n_mid /= -1) then
+                        idxstart = msh%basis_group(group_n_mid)%head
+                        idxend = msh%basis_group(group_n_mid)%tail
+                        do j = 1, rank_new
+                           if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                        enddo
+                     endif
+                  enddo
                enddo
             endif
 
@@ -1648,14 +1662,16 @@ contains
 
                do i = 1, mm
                   group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
-                  group_n_mid = boundary_map(group_m_mid - groupm_start + 1)
-                  if (group_n_mid /= -1) then
-                     idxstart = msh%basis_group(group_n_mid)%head
-                     idxend = msh%basis_group(group_n_mid)%tail
-                     do j = 1, rankmax_c
-                        if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
-                     enddo
-                  endif
+                  do jj=1,Ninadmissible
+                     group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                     if (group_n_mid /= -1) then
+                        idxstart = msh%basis_group(group_n_mid)%head
+                        idxend = msh%basis_group(group_n_mid)%tail
+                        do j = 1, rankmax_c
+                           if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                        enddo
+                     endif
+                  enddo
                enddo
             endif
          endif
@@ -1671,14 +1687,14 @@ contains
       if (allocated(select_column)) deallocate (select_column)
    end subroutine BF_compress_NlogN_oneblock_C_sample
 
-   subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops)
+   subroutine BF_compress_NlogN_oneblock_C_rankreveal(submats, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, rank_new,flops)
 
 
       implicit none
 
       type(intersect) :: submats(:)
-      integer Nboundall
-      integer boundary_map(*)
+      integer Nboundall,Ninadmissible
+      integer boundary_map(:,:)
       integer groupm_start
 
       type(mesh)::msh
@@ -1858,12 +1874,12 @@ contains
    end subroutine BF_compress_NlogN_oneblock_C_rankreveal
 
 
-   subroutine BF_compress_N15_seq(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+   subroutine BF_compress_N15_seq(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
       implicit none
 
-      integer Nboundall, statflag
-      integer boundary_map(*)
+      integer Nboundall, Ninadmissible, statflag
+      integer boundary_map(:,:)
       integer groupm_start
 
       integer inc_c, inc_r, nc, nr, idx_c, idx_r
@@ -1897,7 +1913,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       if(level_butterfly<=1)then
-         call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
       else
 
          cnt_tmp = 0
@@ -1979,7 +1995,9 @@ contains
 
                emptyflag = 0
                if (Nboundall > 0) then
-                  if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                  do jj=1,Ninadmissible
+                     if (boundary_map(group_m - groupm_start + 1,jj) == group_n) emptyflag = 1
+                  enddo
                endif
 
                if (emptyflag == 1) then
@@ -2140,7 +2158,9 @@ contains
 
                emptyflag = 0
                if (Nboundall > 0) then
-                  if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                  do jj=1,Ninadmissible
+                     if (boundary_map(group_m - groupm_start + 1,jj) == group_n) emptyflag = 1
+                  enddo
                endif
 
                if (emptyflag == 1) then
@@ -2429,12 +2449,12 @@ contains
    end subroutine BF_compress_N15_seq
 
 
-   subroutine BF_compress_N15(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+   subroutine BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
 
       implicit none
 
-      integer Nboundall, statflag
-      integer boundary_map(*)
+      integer Nboundall, Ninadmissible, statflag
+      integer boundary_map(:,:)
       integer groupm_start
       logical finish
       integer ranknew, rankup, Nqr, bsize, r_est, r_est_knn_r, r_est_knn_c, r_est_tmp, inc_c, inc_r, nc, nr, nrc, idx_c, idx_r
@@ -2478,7 +2498,7 @@ contains
 
       level_butterfly = blocks%level_butterfly
       if(level_butterfly==0)then ! this calls LR_HBACA in BF_compress_NlogN
-         call BF_compress_NlogN(blocks, boundary_map, Nboundall, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
       else
          Memory = 0
          level_blocks = blocks%level
@@ -2570,7 +2590,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
 
                   emptyflag = 0
                   if (Nboundall > 0) then
-                     if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                     do jj=1,Ninadmissible
+                     if (boundary_map(group_m - groupm_start + 1,jj) == group_n) emptyflag = 1
+                     enddo
                   endif
 
                   if (emptyflag == 1) then
@@ -2624,7 +2646,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
 
                emptyflag = 0
                if (Nboundall > 0) then
-                  if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                  do jj=1,Ninadmissible
+                     if (boundary_map(group_m - groupm_start + 1,jj) == group_n) emptyflag = 1
+                  enddo
                endif
 
                if (emptyflag == 1) then
@@ -3097,7 +3121,9 @@ else
 
                emptyflag = 0
                if (Nboundall > 0) then
-                  if (boundary_map(group_m - groupm_start + 1) == group_n) emptyflag = 1
+                  do jj=1,Ninadmissible
+                     if (boundary_map(group_m - groupm_start + 1,jj) == group_n) emptyflag = 1
+                  enddo
                endif
 
                if (emptyflag == 1) then

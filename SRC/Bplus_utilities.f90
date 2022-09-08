@@ -91,8 +91,8 @@ contains
                if (present(memory)) memory = memory + rtemp
             end do
             if (allocated(bplus_i%LL(ll)%boundary_map)) then
-               Nboundall = size(bplus_i%LL(ll)%boundary_map)
-               allocate (bplus_o%LL(ll)%boundary_map(Nboundall))
+               Nboundall = size(bplus_i%LL(ll)%boundary_map,1)
+               allocate (bplus_o%LL(ll)%boundary_map(Nboundall,1))
                if (present(memory)) memory = memory + SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
                bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
             endif
@@ -110,7 +110,7 @@ contains
 
       integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m, ll, bb
       integer level, blocks, edge, patch, node, group, level_c
-      integer::block_num, block_num_new, num_blocks, level_butterfly, Nboundall
+      integer::block_num, block_num_new, num_blocks, level_butterfly, Nboundall, Ninadmissible
       real(kind=8), optional::memory
       real(kind=8)::rtemp
 
@@ -133,8 +133,9 @@ contains
                if (present(memory)) memory = memory + rtemp
             end do
             deallocate (bplus_i%LL(ll)%matrices_block)
-            Nboundall = size(bplus_i%LL(ll)%boundary_map)
-            allocate (bplus_o%LL(ll)%boundary_map(Nboundall))
+            Nboundall = size(bplus_i%LL(ll)%boundary_map,1)
+            Ninadmissible = size(bplus_i%LL(ll)%boundary_map,2)
+            allocate (bplus_o%LL(ll)%boundary_map(Nboundall,Ninadmissible))
             if (present(memory)) memory = memory + SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
             bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
             deallocate (bplus_i%LL(ll)%boundary_map)
