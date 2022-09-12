@@ -1162,14 +1162,14 @@ end function distance_geo
       use MISC_Utilities
       implicit none
 
-      integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, sortdirec, ii_sch, pgno_bplus
+      integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, sortdirec, ii_sch, pgno_bplus
       integer level, edge, patch, node, group, group_touch
       integer rank, index_near, m, n, length, flag, itemp, cnt, detection
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
-      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, index_i_m, index_j_m
-      integer level_c, iter, level_cc, level_BP, Nboundall, Ninadmissible_max, Ninadmissible_tot, level_butterfly
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, groupm_start1, groupn_start1, index_i_m, index_j_m
+      integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, level_butterfly, level_butterfly_ll,groupm_ll, level_ll
       type(matrixblock), pointer::blocks, block_f, block_sch, block_inv
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
       real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
@@ -1237,43 +1237,90 @@ end function distance_geo
       allocate (hss_bf1%BP%LL(1)%boundary_map(1,1))
       hss_bf1%BP%LL(1)%boundary_map(1,1) = block_f%col_group
       hss_bf1%BP%Lplus = 0
+      groupm_ll = block_f%row_group
+      level_butterfly_ll = block_f%level_butterfly
+      level_ll = GetTreelevel(groupm_ll) - 1
+      msh%basis_group(groupm_ll)%nn = 1
+      allocate(msh%basis_group(groupm_ll)%nlist(1))
+      msh%basis_group(groupm_ll)%nlist(1) = block_f%col_group
 
       do ll = 1, LplusMax - 1
          if (hss_bf1%BP%LL(ll)%Nbound > 0) then
             hss_bf1%BP%Lplus = hss_bf1%BP%Lplus + 1
             call assert(hss_bf1%BP%Lplus <= LplusMax, 'increase LplusMax')
 
-            block_f => hss_bf1%BP%LL(ll)%matrices_block(1)
-
-            if (ll == LplusMax - 1 .or. block_f%level_butterfly == 0) then
+            if (ll == LplusMax - 1 .or. level_butterfly_ll == 0) then
                hss_bf1%BP%LL(ll + 1)%Nbound = 0
             else
-               level_butterfly = block_f%level_butterfly
                level_BP = hss_bf1%BP%level
-               levelm = ceiling_safe(dble(level_butterfly)/2d0)
-               groupm_start = block_f%row_group*2**levelm
-               Nboundall = 2**(block_f%level + levelm - level_BP)
-               allocate(boundary_map(Nboundall,Nboundall))
-               boundary_map=-1
+               levelm = ceiling_safe(dble(level_butterfly_ll)/2d0)
+
+
+               groupm_start = groupm_ll*2**levelm
+               Nboundall = 2**(level_ll + levelm - level_BP)
+               do bb = 1, Nboundall
+                  group_m = bb + groupm_start - 1
+                  msh%basis_group(group_m)%nn=0   
+               enddo
 
                Ninadmissible_max=0
                Ninadmissible_tot=0
-               do bb = 1, Nboundall
-                  cnt=0
-                  do cc = 1, Nboundall
-                     group_m = bb + groupm_start - 1
-                     group_n = cc + groupm_start - 1
-                     if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
-                        cnt=cnt+1
-                        Ninadmissible_tot = Ninadmissible_tot +1
-                        boundary_map(bb,cnt)=group_n
-                     endif
+               do gg=groupm_ll,groupm_ll+2**(level_ll) -1
+                  group_m1 = gg
+                  do nn=1,msh%basis_group(gg)%nn
+                     group_n1 = msh%basis_group(gg)%nlist(nn)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     do bb = 1, Nboundall1
+                     do cc = 1, Nboundall1
+                        group_m = bb + groupm_start1 - 1
+                        group_n = cc + groupn_start1 - 1   
+                        if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
+                           msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
+                           Ninadmissible_max = max(Ninadmissible_max,msh%basis_group(group_m)%nn)
+                           Ninadmissible_tot = Ninadmissible_tot +1
+                        endif                     
+                     enddo
+                     enddo
                   enddo
-                  Ninadmissible_max = max(Ninadmissible_max,cnt)
                enddo
+
+               do bb = 1, Nboundall
+                  group_m = bb + groupm_start - 1
+                  allocate(msh%basis_group(group_m)%nlist(max(1,msh%basis_group(group_m)%nn))) 
+                  msh%basis_group(group_m)%nn=0
+               enddo
+
+               do gg=groupm_ll,groupm_ll+2**(level_ll) -1
+                  group_m1 = gg
+                  do nn=1,msh%basis_group(gg)%nn
+                     group_n1 = msh%basis_group(gg)%nlist(nn)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     do bb = 1, Nboundall1
+                     do cc = 1, Nboundall1
+                        group_m = bb + groupm_start1 - 1
+                        group_n = cc + groupn_start1 - 1   
+                        if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
+                           msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
+                           msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
+                        endif                     
+                     enddo
+                     enddo
+                  enddo
+               enddo     
+
                allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible_max))
-               hss_bf1%BP%LL(ll + 1)%boundary_map = boundary_map(:,1:Ninadmissible_max)
-               deallocate(boundary_map)
+               hss_bf1%BP%LL(ll + 1)%boundary_map=-1
+               do bb = 1, Nboundall
+                  group_m = bb + groupm_start - 1
+                  do nn=1,msh%basis_group(group_m)%nn
+                     group_n = msh%basis_group(group_m)%nlist(nn)
+                     hss_bf1%BP%LL(ll + 1)%boundary_map(bb,nn)=group_n
+                  enddo
+               enddo
                hss_bf1%BP%LL(ll + 1)%Nbound = Ninadmissible_tot
 
 
@@ -1310,11 +1357,23 @@ end function distance_geo
                      end if
                   enddo
                end do
+               groupm_ll = groupm_ll*2**levelm
+               level_ll = GetTreelevel(groupm_ll) - 1
+               level_butterfly_ll = int((hss_bf1%Maxlevel - level_ll)/2)*2
             end if
          else
             exit
          end if
       end do
+
+      do gg=1,msh%Maxgroup
+         if (allocated(msh%basis_group(gg)%nlist)) then
+            deallocate(msh%basis_group(gg)%nlist)
+            msh%basis_group(gg)%nn=0
+         endif
+      enddo
+      
+
 
       call Bplus_copy(hss_bf1%BP, hss_bf1%BP_inverse)
       call LogMemory(stats, SIZEOF(hss_bf1%BP)/1024.0d3 + SIZEOF(hss_bf1%BP_inverse)/1024.0d3)
