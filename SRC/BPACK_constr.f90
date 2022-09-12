@@ -2604,7 +2604,7 @@ contains
       type(proctree)::ptree
       type(intersect)::inters(:)
       integer nth, bidx, level_c
-      integer ii, ll, bb, row_group, col_group
+      integer ii, ll, bb, cc, row_group, col_group
       type(list)::lstblk
       type(iarray)::lstr, lstc
       type(nod), pointer::cur
@@ -2613,7 +2613,7 @@ contains
       integer flag, num_nods
       type(block_ptr)::blk_ptr
       real(kind=8)::n1, n0
-      integer, allocatable::rowblocks(:), colblocks(:)
+      integer, allocatable::rowblocks(:), colblocks(:), order_r(:), order_c(:)
       integer row0, col0, sort
       integer Nbound, level1, level0
       type(iarray)::clstr(Nbound), clstc(Nbound)
@@ -2628,22 +2628,26 @@ contains
       enddo
 
       allocate (rowblocks(hss_bf1%BP%LL(ll)%Nbound))
+      allocate (order_r(hss_bf1%BP%LL(ll)%Nbound))
       allocate (colblocks(hss_bf1%BP%LL(ll)%Nbound))
-      row0 = 0
-      col0 = 0
-      sort = 0
+      allocate (order_c(hss_bf1%BP%LL(ll)%Nbound))
+      ! row0 = 0
+      ! col0 = 0
+      ! sort = 0
       do bb = 1, hss_bf1%BP%LL(ll)%Nbound
          rowblocks(bb) = hss_bf1%BP%LL(ll)%matrices_block(bb)%row_group
          colblocks(bb) = hss_bf1%BP%LL(ll)%matrices_block(bb)%col_group
-         if (rowblocks(bb) < row0 .or. colblocks(bb) < col0) then
-            sort = 1
-            exit
-         endif
-         row0 = rowblocks(bb)
-         col0 = colblocks(bb)
+         ! if (rowblocks(bb) < row0 .or. colblocks(bb) < col0) then
+         !    sort = 1
+         !    exit
+         ! endif
+         ! row0 = rowblocks(bb)
+         ! col0 = colblocks(bb)
       enddo
+      call quick_sort_int(rowblocks,order_r,hss_bf1%BP%LL(ll)%Nbound)
+      call quick_sort_int(colblocks,order_c,hss_bf1%BP%LL(ll)%Nbound)
 
-      call assert(sort == 0, 'the rowblocks and colblocks need sorting first')
+      ! call assert(sort == 0, 'the rowblocks and colblocks need sorting first')
 
       level0 = hss_bf1%BP%LL(1)%matrices_block(1)%level
       level1 = hss_bf1%BP%LL(ll)%matrices_block(1)%level
@@ -2652,8 +2656,22 @@ contains
          row0 = findgroup(inters(nth)%rows(lstr%dat(ii)), msh, level1 - level0, hss_bf1%BP%LL(1)%matrices_block(1)%row_group)
          call binary_search(Nbound, rowblocks, row0, bb)
          if (bb /= -1) then
-            clstr(bb)%num_nods = clstr(bb)%num_nods + 1
-            clstr(bb)%dat(clstr(bb)%num_nods) = lstr%dat(ii)
+            do cc=bb,1,-1
+               if(rowblocks(cc)==row0)then
+                  clstr(order_r(cc))%num_nods = clstr(order_r(cc))%num_nods + 1
+                  clstr(order_r(cc))%dat(clstr(order_r(cc))%num_nods) = lstr%dat(ii)
+               else
+                  exit
+               endif
+            enddo
+            do cc=bb+1,hss_bf1%BP%LL(ll)%Nbound
+               if(rowblocks(cc)==row0)then
+                  clstr(order_r(cc))%num_nods = clstr(order_r(cc))%num_nods + 1
+                  clstr(order_r(cc))%dat(clstr(order_r(cc))%num_nods) = lstr%dat(ii)
+               else
+                  exit
+               endif
+            enddo
          endif
       enddo
 
@@ -2661,8 +2679,22 @@ contains
          col0 = findgroup(inters(nth)%cols(lstc%dat(ii)), msh, level1 - level0, hss_bf1%BP%LL(1)%matrices_block(1)%col_group)
          call binary_search(Nbound, colblocks, col0, bb)
          if (bb /= -1) then
-            clstc(bb)%num_nods = clstc(bb)%num_nods + 1
-            clstc(bb)%dat(clstc(bb)%num_nods) = lstc%dat(ii)
+            do cc=bb,1,-1
+               if(colblocks(cc)==col0)then
+                  clstc(order_c(cc))%num_nods = clstc(order_c(cc))%num_nods + 1
+                  clstc(order_c(cc))%dat(clstc(order_c(cc))%num_nods) = lstc%dat(ii)
+               else
+                  exit
+               endif
+            enddo
+            do cc=bb+1,hss_bf1%BP%LL(ll)%Nbound
+               if(colblocks(cc)==col0)then
+                  clstc(order_c(cc))%num_nods = clstc(order_c(cc))%num_nods + 1
+                  clstc(order_c(cc))%dat(clstc(order_c(cc))%num_nods) = lstc%dat(ii)
+               else
+                  exit
+               endif
+            enddo
          endif
       enddo
 
@@ -2685,6 +2717,8 @@ contains
 
       deallocate (rowblocks)
       deallocate (colblocks)
+      deallocate (order_r)
+      deallocate (order_c)
 
       if (ll < hss_bf1%BP%Lplus) then
          if (hss_bf1%BP%LL(ll + 1)%Nbound > 0) then

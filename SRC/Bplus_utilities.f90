@@ -64,7 +64,7 @@ contains
 
       integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m, ll, bb
       integer level, blocks, edge, patch, node, group, level_c
-      integer::block_num, block_num_new, num_blocks, level_butterfly, Nboundall
+      integer::block_num, block_num_new, num_blocks, level_butterfly, Nboundall, Ninadmissible
       real(kind=8), optional::memory
       real(kind=8)::rtemp
 
@@ -92,7 +92,8 @@ contains
             end do
             if (allocated(bplus_i%LL(ll)%boundary_map)) then
                Nboundall = size(bplus_i%LL(ll)%boundary_map,1)
-               allocate (bplus_o%LL(ll)%boundary_map(Nboundall,1))
+               Ninadmissible = size(bplus_i%LL(ll)%boundary_map,2)
+               allocate (bplus_o%LL(ll)%boundary_map(Nboundall,Ninadmissible))
                if (present(memory)) memory = memory + SIZEOF(bplus_o%LL(ll)%boundary_map)/1024.0d3
                bplus_o%LL(ll)%boundary_map = bplus_i%LL(ll)%boundary_map
             endif
@@ -14145,7 +14146,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-   subroutine Full_block_MVP_dat(blocks, chara, M, N, random1, ldi, random2, ldo, a, b)
+   subroutine Full_block_MVP_dat(blocks, chara, M, num_vectors, random1, ldi, random2, ldo, a, b)
 
 
 
@@ -14159,43 +14160,33 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT ctemp, a, b
       character chara
       type(matrixblock)::blocks
-      integer M, N
+      integer M, M1, N1
       integer ldi,ldo
       DT :: random1(ldi, *), random2(ldo, *)
       DT:: al, be
       DT, allocatable :: random2tmp(:, :)
 
-      allocate (random2tmp(M, N))
-
+      M1=size(blocks%fullmat, 1)
+      N1=size(blocks%fullmat, 2)
+      
       al = 1d0
       be = 0d0
 
-      num_vectors = N
-
-      random2tmp = random2(1:M, 1:N)
-      call assert(size(blocks%fullmat, 1) == size(blocks%fullmat, 2), 'M not square')
-      if (size(blocks%fullmat, 1) /= M) write (*, *) M, N, shape(blocks%fullmat), blocks%row_group, blocks%col_group, 'niao'
-      call assert(size(blocks%fullmat, 1) == M, 'M not equal fullmat dim')
+      call assert(M1 == M, 'M not equal fullmat dim')
 
       if (chara == 'N') then
-         group_m = blocks%row_group  ! Note: row_group and col_group interchanged here
-         group_n = blocks%col_group
-         call assert(group_m == group_n, 'fullmat not square')
-         ! level_blocks=blocks%level
-         ! write(*,*)shape(blocks%fullmat),shape(random1),shape(random2),num_vectors
-
-         ! call gemm_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'N', 'N', M, N, M, BPACK_cone, BPACK_czero)
+         allocate (random2tmp(M1, num_vectors))
+         random2tmp = random2(1:M1, 1:num_vectors)
+         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M1, 'N', 'N', M1, num_vectors, N1, BPACK_cone, BPACK_czero)
+         random2(1:M1, 1:num_vectors) = a*random2tmp + b*random2(1:M1, 1:num_vectors)
       elseif (chara == 'T') then
-         group_m = blocks%row_group  ! Note: row_group and col_group interchanged here
-         group_n = blocks%col_group
-         call assert(group_m == group_n, 'fullmat not square')
-         ! level_blocks=blocks%level
-         ! call gemmTN_omp(blocks%fullmat, random1, random2,M,N,M)
-         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M, 'T', 'N', M, N, M, al, be)
+         allocate (random2tmp(N1, num_vectors))
+         random2tmp = random2(1:N1, 1:num_vectors)      
+         call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, N1, 'T', 'N', N1, num_vectors, M1, al, be)
+         random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
 
-      random2(1:M, 1:N) = a*random2tmp + b*random2(1:M, 1:N)
+
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)
    end subroutine Full_block_MVP_dat
