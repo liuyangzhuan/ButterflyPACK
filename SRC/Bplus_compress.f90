@@ -177,7 +177,7 @@ contains
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
             endif
 
-            if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
@@ -189,7 +189,7 @@ contains
                flops =flops+flops1
             enddo
             !$omp end parallel do
-            if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
@@ -298,7 +298,7 @@ contains
 
             rank_new = 0
             flops = 0
-            if(option%format==3)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
@@ -312,7 +312,7 @@ contains
 
             enddo
             !$omp end parallel do
-            if(option%format==3)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
                   if(associated(submats(index_ij)%dat))then

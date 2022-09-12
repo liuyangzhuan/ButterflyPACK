@@ -2872,9 +2872,9 @@ contains
                         rate = option%rankrate !1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
-                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
+                        if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                         call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh,vskip=.true.)
-                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
+                        if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                         error_inout = max(error_inout, error)
                         call BF_ChangePattern(agent_block, 3, 2, stats, ptree)
@@ -2893,9 +2893,9 @@ contains
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
-                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
+                  if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                   call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_diagBinvBHSS_dat, error, 'L update', option, stats, ptree, msh, operand1=msh)
-                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
+                  if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
 #endif
@@ -2971,9 +2971,9 @@ contains
                         rate = option%rankrate !1.2d0
                         Bplus%ind_ll = llplus
                         Bplus%ind_bk = bb
-                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
+                        if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                         call BF_randomized(agent_block%pgno, level_butterfly_loc, rank0, rate, agent_block, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh,uskip=.true.)
-                        if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
+                        if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                         error_inout = max(error_inout, error)
                         call BF_ChangePattern(agent_block, 3, 1, stats, ptree)
@@ -2990,9 +2990,9 @@ contains
                   level_butterfly = block_o%level_butterfly
                   Bplus%ind_ll = llplus
                   Bplus%ind_bk = bb
-                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
+                  if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect/max(1,block_o%level_butterfly/2)
                   call BF_randomized(block_o%pgno, level_butterfly, rank0, rate, block_o, Bplus, Bplus_block_MVP_BdiagBinvHSS_dat, error, 'R update', option, stats, ptree, msh, operand1=msh)
-                  if(option%format==3)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
+                  if(option%format==3 .and. option%near_para<=0.1d0)option%tol_Rdetect = option%tol_Rdetect*max(1,block_o%level_butterfly/2)
                   stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
                   error_inout = max(error_inout, error)
 #endif
