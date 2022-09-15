@@ -1,3 +1,21 @@
+Version 2.2.0: Released Sep 15, 2022
+===================================
+ - Changed 1D layout to 2D layout in the H matrix code
+ - Added doxygen support
+ - Updated the EMSURF_Port modules with mode bases
+ - Added strong admissiblity peeling algorithms
+ - Added support for periodic kernels
+ - Added 2D inverse FIO drivers 
+ - Added HSS-BF with strong admissiblity (no inversion yet)
+ - Added cmake option to switch off OpenMP
+
+
+Version 2.1.1: Released Mar 04, 2022
+===================================
+ - Added forwardN15flag=2 as a hybrid algorithm
+ - Added diagonal regularizers for leaflevel blocks
+
+
 Version 2.1.0: Released Dec 16, 2021
 ===================================
  - Switch from Travis to github/gitlab CI
