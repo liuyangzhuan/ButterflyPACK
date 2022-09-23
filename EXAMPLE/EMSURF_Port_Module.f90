@@ -548,7 +548,7 @@ subroutine Port_nxe_dot_rwg(m,pp,mm,nn,TETM,rr,value,quant)
 			call gau_grobal(edge_m,ii,xm,ym,zm,wm,quant)
 			nr_m(1:3)=quant%normal_of_patch(1:3,quant%info_unk(ii,edge_m))
 			pp1=quant%port_of_patch(quant%info_unk(ii,edge_m))
-			if(pp1==pp)then			
+			if(pp1==pp)then
 			do i=1,quant%integral_points
 				am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
 				am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))

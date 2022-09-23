@@ -14168,7 +14168,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
-      
+
       al = 1d0
       be = 0d0
 
@@ -14181,7 +14181,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          random2(1:M1, 1:num_vectors) = a*random2tmp + b*random2(1:M1, 1:num_vectors)
       elseif (chara == 'T') then
          allocate (random2tmp(N1, num_vectors))
-         random2tmp = random2(1:N1, 1:num_vectors)      
+         random2tmp = random2(1:N1, 1:num_vectors)
          call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, N1, 'T', 'N', N1, num_vectors, M1, al, be)
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if

@@ -43,8 +43,8 @@ module BPACK_DEFS
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
     integer, parameter:: BPACK_MAJOR_VERSION = 2
-    integer, parameter:: BPACK_MINOR_VERSION = 1
-    integer, parameter:: BPACK_PATCH_VERSION = 1
+    integer, parameter:: BPACK_MINOR_VERSION = 2
+    integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !>**** common parameters
 #if defined(PGI) || defined(CRAY)
@@ -366,13 +366,6 @@ module BPACK_DEFS
         type(cascadingfactors), allocatable::levels(:) !
     end type hobf
 
-    type global_matricesblock
-        type(global_matricesblock), pointer :: father => null()
-        type(global_matricesblock), pointer :: sons(:, :) => null()
-        integer level
-        integer row_group
-        integer col_group
-    end type global_matricesblock
 
     !>**** Hmatrix structure
     type Hmat
@@ -382,7 +375,6 @@ module BPACK_DEFS
         integer, pointer:: N_p(:, :) => null() !< row sizes of all processes sharing this Hmat
         type(basisgroup), allocatable:: basis_group(:) !< basis_group at the Dist_level level, this is needed as msh is not currently passed to matvec interface
         integer:: myArows=0,myAcols=0 !< local number of row and column blocks
-        type(global_matricesblock), pointer :: blocks_root => null(), First_block_eachlevel(:) => null()
         type(matrixblock), pointer :: Local_blocks(:, :) => null()
         type(matrixblock), pointer :: Local_blocks_copy(:, :) => null() !< copy of the forward matrix
       type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()

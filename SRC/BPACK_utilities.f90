@@ -21,11 +21,47 @@ module BPACK_Utilities
 
 contains
 
-   subroutine HODLR_copy(ho_bf_i, ho_bf_o)
+
+   recursive subroutine Hmat_GetBlkLst(blocks, ptree, h_mat)
+      implicit none
+      ! type(Hoption)::option
+      ! type(Hstat)::stats
+      ! type(mesh)::msh
+      type(proctree)::ptree
+      integer nth, bidx, level_c
+      integer ii, jj, idx, row_group, col_group
+      type(Hmat)::h_mat
+      type(nod), pointer::cur
+      class(*), pointer::ptr
+      type(matrixblock), pointer::blocks, blocks_son
+      integer flag
+      type(block_ptr)::blk_ptr
+
+      row_group = blocks%row_group
+      col_group = blocks%col_group
+      if (IOwnPgrp(ptree, blocks%pgno)) then
+         if (blocks%style == 4) then ! divided blocks
+            do ii = 1, 2
+            do jj = 1, 2
+               blocks_son => blocks%sons(ii, jj)
+               call Hmat_GetBlkLst(blocks_son, ptree, h_mat)
+            enddo
+            enddo
+         else
+            blk_ptr%ptr => blocks
+            call append(h_mat%lstblks(blocks%level), blk_ptr)
+         endif
+      endif
+   end subroutine Hmat_GetBlkLst
+
+
+   subroutine HODLR_copy(ho_bf_i, ho_bf_o, ptree)
       use BPACK_DEFS
       use MISC_Utilities
+
       implicit none
 
+      type(proctree)::ptree
       type(hobf)::ho_bf_i, ho_bf_o
 
       integer ii
@@ -67,30 +103,94 @@ contains
 
    end subroutine HODLR_copy
 
-   recursive subroutine Hmat_delete_global_tree(blocks)
+
+   subroutine Hmat_copy(h_mat_i, h_mat_o, ptree)
+      use BPACK_DEFS
+      use MISC_Utilities
       implicit none
-      type(global_matricesblock), pointer :: blocks, blocks_son
-      integer group_m, group_n, i, j, k, level
+      integer ii,jj,bm,bn,level
+      type(Hmat)::h_mat_i, h_mat_o
+      type(matrixblock), pointer :: blocks1,blocks2
+      type(proctree)::ptree
 
-      group_m = blocks%row_group
-      group_n = blocks%col_group
-      level = blocks%level
+      h_mat_o%Maxlevel=h_mat_i%Maxlevel
+      h_mat_o%N=h_mat_i%N
+      h_mat_o%Dist_level=h_mat_i%Dist_level
+      h_mat_o%idxs=h_mat_i%idxs
+      h_mat_o%idxe=h_mat_i%idxe
+      h_mat_o%myArows=h_mat_i%myArows
+      h_mat_o%myAcols=h_mat_i%myAcols
 
-      if (associated(blocks%sons)) then
-         blocks_son => blocks%sons(1, 1)
-         call Hmat_delete_global_tree(blocks_son)
-         blocks_son => blocks%sons(2, 1)
-         call Hmat_delete_global_tree(blocks_son)
-         blocks_son => blocks%sons(1, 2)
-         call Hmat_delete_global_tree(blocks_son)
-         blocks_son => blocks%sons(2, 2)
-         call Hmat_delete_global_tree(blocks_son)
-         deallocate (blocks%sons)
+      if(associated(h_mat_i%N_p))then
+         allocate(h_mat_o%N_p(size(h_mat_i%N_p,1),size(h_mat_i%N_p,2)))
+         h_mat_o%N_p=h_mat_i%N_p
       endif
 
-      return
+      if(allocated(h_mat_i%basis_group))then
+         allocate (h_mat_o%basis_group(size(h_mat_i%basis_group,1)))
+         h_mat_o%basis_group = h_mat_i%basis_group
+      endif
 
-   end subroutine Hmat_delete_global_tree
+      if(associated(h_mat_i%Local_blocks))then
+         bm = size(h_mat_i%Local_blocks, 1)
+         bn = size(h_mat_i%Local_blocks, 2)
+         allocate (h_mat_o%Local_blocks(bm, bn))
+         do ii = 1, bm
+         do jj = 1, bn
+            blocks1 => h_mat_i%Local_blocks(ii, jj)
+            blocks2 => h_mat_o%Local_blocks(ii, jj)
+            call Hmat_block_copy('N',blocks2,blocks1)
+         enddo
+         enddo
+      endif
+
+      if(associated(h_mat_i%Local_blocks_copy))then
+         bm = size(h_mat_i%Local_blocks_copy, 1)
+         bn = size(h_mat_i%Local_blocks_copy, 2)
+         allocate (h_mat_o%Local_blocks_copy(bm, bn))
+         do ii = 1, bm
+         do jj = 1, bn
+            blocks1 => h_mat_i%Local_blocks_copy(ii, jj)
+            blocks2 => h_mat_o%Local_blocks_copy(ii, jj)
+            call Hmat_block_copy('N',blocks2,blocks1)
+         enddo
+         enddo
+      endif
+
+      if(allocated(h_mat_i%colorsets))then
+         allocate(h_mat_o%colorsets(0:h_mat_i%Maxlevel))
+         do level = 0, h_mat_i%Maxlevel
+            allocate(h_mat_o%colorsets(level)%dat(2**level))
+            h_mat_o%colorsets(level)%dat=h_mat_i%colorsets(level)%dat
+            h_mat_o%colorsets(level)%idx=h_mat_i%colorsets(level)%idx
+         enddo
+      endif
+
+      if(allocated(h_mat_i%fullmat))then
+         allocate(h_mat_o%fullmat(size(h_mat_i%fullmat,1),size(h_mat_i%fullmat,2)))
+         h_mat_o%fullmat=h_mat_i%fullmat
+      endif
+
+      if (allocated(h_mat_i%lstblks)) then
+         allocate (h_mat_o%lstblks(0:h_mat_o%Maxlevel))
+         do level = 0, h_mat_o%Maxlevel
+            h_mat_o%lstblks(level) = list()
+         enddo
+         bm = size(h_mat_i%Local_blocks, 1)
+         bn = size(h_mat_i%Local_blocks, 2)
+         do ii = 1, bm
+            do jj = 1, bn
+               blocks1 => h_mat_o%Local_blocks(ii, jj)
+               call Hmat_GetBlkLst(blocks1, ptree, h_mat_o)
+            enddo
+         enddo
+         do level = 0, h_mat_o%Maxlevel
+            call MergeSort(h_mat_o%lstblks(level)%head, node_score_block_ptr_row)
+         enddo
+      endif
+   end subroutine Hmat_copy
+
+
 
    subroutine Hmat_delete(h_mat)
       use BPACK_DEFS
@@ -100,10 +200,6 @@ contains
       type(Hmat)::h_mat
       integer bm, bn, ii, jj, level
 
-      call Hmat_delete_global_tree(h_mat%blocks_root)
-      deallocate (h_mat%blocks_root)
-
-      if (associated(h_mat%First_block_eachlevel)) deallocate (h_mat%First_block_eachlevel)
       if (associated(h_mat%N_p)) deallocate (h_mat%N_p)
       if (allocated(h_mat%basis_group)) deallocate (h_mat%basis_group)
       if (associated(h_mat%Local_blocks)) then
@@ -192,17 +288,18 @@ contains
    end subroutine BPACK_delete
 
 
-   subroutine BPACK_copy(bmat_i,bmat_o)
+   subroutine BPACK_copy(bmat_i,bmat_o,ptree)
       use BPACK_DEFS
       implicit none
       type(Bmatrix)::bmat_i,bmat_o
+      type(proctree)::ptree
       if (associated(bmat_i%ho_bf)) then
          if(.not. associated(bmat_o%ho_bf))allocate (bmat_o%ho_bf)
-         call HODLR_copy(bmat_i%ho_bf, bmat_o%ho_bf)
+         call HODLR_copy(bmat_i%ho_bf, bmat_o%ho_bf, ptree)
       endif
       if (associated(bmat_i%h_mat)) then
-         write(*,*)'H matrix copy not yet implemented'
-         stop
+         if(.not. associated(bmat_o%h_mat))allocate (bmat_o%h_mat)
+         call Hmat_copy(bmat_i%h_mat, bmat_o%h_mat, ptree)
       endif
       if (associated(bmat_i%hss_bf)) then
          write(*,*)'HSS-BF copy not yet implemented'

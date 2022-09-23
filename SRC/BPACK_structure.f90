@@ -311,38 +311,6 @@ end function distance_geo
    end subroutine distance_gram_block
 
 
-   recursive subroutine Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
-      implicit none
-      type(Hoption)::option
-      type(Hstat)::stats
-      type(mesh)::msh
-      type(proctree)::ptree
-      integer nth, bidx, level_c
-      integer ii, jj, idx, row_group, col_group
-      type(Hmat)::h_mat
-      type(nod), pointer::cur
-      class(*), pointer::ptr
-      type(matrixblock), pointer::blocks, blocks_son
-      integer flag
-      type(block_ptr)::blk_ptr
-
-      row_group = blocks%row_group
-      col_group = blocks%col_group
-      if (IOwnPgrp(ptree, blocks%pgno)) then
-         if (blocks%style == 4) then ! divided blocks
-            do ii = 1, 2
-            do jj = 1, 2
-               blocks_son => blocks%sons(ii, jj)
-               call Hmat_GetBlkLst(blocks_son, option, stats, msh, ptree, h_mat)
-            enddo
-            enddo
-         else
-            blk_ptr%ptr => blocks
-            call append(h_mat%lstblks(blocks%level), blk_ptr)
-         endif
-      endif
-   end subroutine Hmat_GetBlkLst
-
    recursive subroutine Hmat_construct_local_tree(blocks, option, stats, msh, ker, ptree, Maxlevel)
 
       implicit none
@@ -420,41 +388,6 @@ end function distance_geo
 
    end subroutine Hmat_construct_local_tree
 
-   recursive subroutine Hmat_construct_global_tree(blocks, treelevel, stats)
-      implicit none
-      integer treelevel
-      type(global_matricesblock), pointer :: blocks, blocks_son
-      integer group_m, group_n, i, j, k, level
-      type(Hstat)::stats
-
-      group_m = blocks%row_group
-      group_n = blocks%col_group
-      level = blocks%level
-
-      if (level < treelevel) then
-         allocate (blocks%sons(2, 2))
-         call LogMemory(stats, SIZEOF(blocks%sons)/1024.0d3)
-         do j = 1, 2
-            do i = 1, 2
-               blocks%sons(i, j)%level = blocks%level + 1
-               blocks%sons(i, j)%father => blocks
-               blocks%sons(i, j)%row_group = 2*blocks%row_group + i - 1
-               blocks%sons(i, j)%col_group = 2*blocks%col_group + j - 1
-            enddo
-         enddo
-         blocks_son => blocks%sons(1, 1)
-         call Hmat_construct_global_tree(blocks_son, treelevel, stats)
-         blocks_son => blocks%sons(2, 1)
-         call Hmat_construct_global_tree(blocks_son, treelevel, stats)
-         blocks_son => blocks%sons(1, 2)
-         call Hmat_construct_global_tree(blocks_son, treelevel, stats)
-         blocks_son => blocks%sons(2, 2)
-         call Hmat_construct_global_tree(blocks_son, treelevel, stats)
-      endif
-
-      return
-
-   end subroutine Hmat_construct_global_tree
 
    subroutine Cluster_partition(bmat, option, msh, ker, stats, ptree)
 
@@ -1260,7 +1193,7 @@ end function distance_geo
                Nboundall = 2**(level_ll + levelm - level_BP)
                do bb = 1, Nboundall
                   group_m = bb + groupm_start - 1
-                  msh%basis_group(group_m)%nn=0   
+                  msh%basis_group(group_m)%nn=0
                enddo
 
                Ninadmissible_max=0
@@ -1275,12 +1208,12 @@ end function distance_geo
                      do bb = 1, Nboundall1
                      do cc = 1, Nboundall1
                         group_m = bb + groupm_start1 - 1
-                        group_n = cc + groupn_start1 - 1   
+                        group_n = cc + groupn_start1 - 1
                         if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
                            msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
                            Ninadmissible_max = max(Ninadmissible_max,msh%basis_group(group_m)%nn)
                            Ninadmissible_tot = Ninadmissible_tot +1
-                        endif                     
+                        endif
                      enddo
                      enddo
                   enddo
@@ -1288,7 +1221,7 @@ end function distance_geo
 
                do bb = 1, Nboundall
                   group_m = bb + groupm_start - 1
-                  allocate(msh%basis_group(group_m)%nlist(max(1,msh%basis_group(group_m)%nn))) 
+                  allocate(msh%basis_group(group_m)%nlist(max(1,msh%basis_group(group_m)%nn)))
                   msh%basis_group(group_m)%nn=0
                enddo
 
@@ -1302,15 +1235,15 @@ end function distance_geo
                      do bb = 1, Nboundall1
                      do cc = 1, Nboundall1
                         group_m = bb + groupm_start1 - 1
-                        group_n = cc + groupn_start1 - 1   
+                        group_n = cc + groupn_start1 - 1
                         if (near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 0)then
                            msh%basis_group(group_m)%nn = msh%basis_group(group_m)%nn + 1
                            msh%basis_group(group_m)%nlist(msh%basis_group(group_m)%nn)=group_n
-                        endif                     
+                        endif
                      enddo
                      enddo
                   enddo
-               enddo     
+               enddo
 
                allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible_max))
                hss_bf1%BP%LL(ll + 1)%boundary_map=-1
@@ -1372,7 +1305,7 @@ end function distance_geo
             msh%basis_group(gg)%nn=0
          endif
       enddo
-      
+
 
 
       call Bplus_copy(hss_bf1%BP, hss_bf1%BP_inverse)
@@ -1966,7 +1899,6 @@ end function distance_geo
       type(matrixblock), pointer :: blocks
       type(matrixblock) :: blocks_dummy
       integer Maxgrp, ierr, row_group, col_group
-      type(global_matricesblock), pointer::global_block
       integer nprow,npcol,myrow,mycol,myArows,myAcols,mypgno
 
       msh%idxs = 1000000000
@@ -2013,12 +1945,6 @@ end function distance_geo
       h_mat%idxs = msh%idxs
       h_mat%idxe = msh%idxe
 
-      allocate (h_mat%blocks_root)
-      h_mat%blocks_root%level = 0
-      h_mat%blocks_root%row_group = 1
-      h_mat%blocks_root%col_group = 1
-      nullify (h_mat%blocks_root%father)
-
       blocks_dummy%pgno=1
       blocks_dummy%M=h_mat%N
       blocks_dummy%N=h_mat%N
@@ -2054,17 +1980,6 @@ end function distance_geo
       stats%XLUM_random_CNT = 0
       allocate (stats%XLUM_random_Time(0:h_mat%Maxlevel))
       stats%XLUM_random_Time = 0
-
-      call Hmat_construct_global_tree(h_mat%blocks_root, msh%Dist_level, stats)
-
-      allocate (h_mat%First_block_eachlevel(0:h_mat%Maxlevel))
-      h_mat%First_block_eachlevel(0)%father => h_mat%blocks_root
-      global_block => h_mat%blocks_root
-      do level = 1, msh%Dist_level
-         global_block => global_block%sons(1, 1)
-         h_mat%First_block_eachlevel(level)%father => global_block
-      enddo
-
 
       call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
@@ -2128,7 +2043,7 @@ end function distance_geo
       do i = 1, h_mat%myArows
          do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
-            call Hmat_GetBlkLst(blocks, option, stats, msh, ptree, h_mat)
+            call Hmat_GetBlkLst(blocks, ptree, h_mat)
          enddo
       enddo
 

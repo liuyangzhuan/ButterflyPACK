@@ -522,7 +522,7 @@ PROGRAM ButterflyPACK_IE_3D
 		if(abs(quant%shift)<1e-14)then  ! if zero shift, no need to compress the shifted matrix
 			call z_CopyMesh(msh_A,msh_sh)
 			call z_CopyStat(stats_A,stats_sh)
-			call z_BPACK_copy(bmat_A,bmat_sh)
+			call z_BPACK_copy(bmat_A,bmat_sh,ptree_sh)
 		else
 			!**** initialize stats_sh and option
 			call z_InitStat(stats_sh)
