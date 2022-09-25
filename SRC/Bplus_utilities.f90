@@ -781,6 +781,10 @@ contains
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(mm, nn))
                block_o%fullmat = block_i%fullmat
+               if(allocated(block_i%ipiv))then
+                  allocate(block_o%ipiv(size(block_i%ipiv,1)))
+                  block_o%ipiv=block_i%ipiv
+               endif
                if (present(memory)) memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
             endif
          else
@@ -904,6 +908,10 @@ contains
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(nn, mm))
                call copymatT(block_i%fullmat, block_o%fullmat, mm, nn)
+               if(allocated(block_i%ipiv))then
+                  allocate(block_o%ipiv(size(block_i%ipiv,1)))
+                  block_o%ipiv=block_i%ipiv
+               endif
                if (present(memory)) memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
             endif
          else
@@ -13856,6 +13864,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       block2%N = block1%N
       block2%headm = block1%headm
       block2%headn = block1%headn
+      block2%M_loc = block1%M_loc
+      block2%N_loc = block1%N_loc
 
       if (associated(block1%N_p)) then
          if (associated(block2%N_p)) deallocate (block2%N_p)
