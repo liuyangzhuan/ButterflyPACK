@@ -171,7 +171,7 @@ contains
          h_mat_o%fullmat=h_mat_i%fullmat
       endif
 
-      if (allocated(h_mat_i%lstblks)) then
+      if (allocated(h_mat_i%lstblks) .and. associated(h_mat_i%Local_blocks)) then
          allocate (h_mat_o%lstblks(0:h_mat_o%Maxlevel))
          do level = 0, h_mat_o%Maxlevel
             h_mat_o%lstblks(level) = list()
