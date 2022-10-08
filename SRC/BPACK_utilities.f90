@@ -240,7 +240,9 @@ contains
       if(allocated(h_mat%fullmat))then
          deallocate(h_mat%fullmat)
       endif
-
+      if(allocated(h_mat%fullmat2D))then
+         deallocate(h_mat%fullmat2D)
+      endif
    end subroutine Hmat_delete
 
    subroutine HODLR_delete(ho_bf_o)
@@ -268,8 +270,27 @@ contains
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_schur)
       end do
       deallocate (ho_bf_o%levels)
-
+      if(allocated(ho_bf_o%fullmat2D))then
+         deallocate(ho_bf_o%fullmat2D)
+      endif
    end subroutine HODLR_delete
+
+
+   subroutine HSSBF_delete(hss_bf1)
+      use BPACK_DEFS
+      use MISC_Utilities
+      implicit none
+
+      type(hssbf)::hss_bf1
+
+      call Bplus_delete(hss_bf1%BP)
+      call Bplus_delete(hss_bf1%BP_inverse)
+
+      if(allocated(hss_bf1%fullmat2D))then
+         deallocate(hss_bf1%fullmat2D)
+      endif
+   end subroutine HSSBF_delete
+
 
    subroutine BPACK_delete(bmat)
       use BPACK_DEFS
@@ -285,6 +306,12 @@ contains
          deallocate (bmat%h_mat)
          bmat%h_mat => null()
       endif
+      if (associated(bmat%hss_bf)) then
+         call HSSBF_delete(bmat%hss_bf)
+         deallocate (bmat%hss_bf)
+         bmat%hss_bf => null()
+      endif
+
    end subroutine BPACK_delete
 
 

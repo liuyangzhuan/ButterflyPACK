@@ -162,6 +162,7 @@ contains
       deallocate (Singular)
       deallocate (RandVectIn)
       deallocate (RandVectOut)
+      call BF_delete(block_dummy, 1)
 
 
       if (option%ErrFillFull == 1)then

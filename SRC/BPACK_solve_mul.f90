@@ -310,6 +310,88 @@ contains
 
    end subroutine BPACK_Eigen
 
+
+
+   subroutine BPACK_Convert2Dense(bmat,option,stats,msh,ker,ptree)
+      implicit none
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer num_vect,Nloc,ii
+      DT,allocatable :: RandVectIn(:, :), RandVectOut(:, :), mat2D(:,:)
+      type(matrixblock)::block_dummy
+      integer pgno
+      integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
+      integer::descsMat1D(9), descsMat2D(9)
+
+
+      ! construct a dummy block for auxiliary purposes
+      pgno=1
+      block_dummy%level = 0
+      block_dummy%row_group = 1
+      block_dummy%col_group = 1
+      block_dummy%pgno = 1
+      block_dummy%M = msh%Nunk
+      block_dummy%N = msh%Nunk
+      block_dummy%headm = 1
+      block_dummy%headn = 1
+      call ComputeParallelIndices(block_dummy, block_dummy%pgno, ptree, msh)
+
+
+      num_vect = msh%Nunk
+      Nloc = msh%idxe - msh%idxs + 1
+      allocate (RandVectIn(Nloc, num_vect))
+      RandVectIn=0
+      allocate (RandVectOut(Nloc, num_vect))
+      RandVectOut=0
+      do ii=1,msh%Nunk
+         if(ii>=msh%idxs .and. ii<=msh%idxe)then
+            RandVectIn(ii-msh%idxs+1,ii)=1d0
+         endif
+      enddo
+      call BPACK_Mult('N', Nloc, num_vect, RandVectIn, RandVectOut, bmat, ptree, option, stats)
+
+
+      !!!!>**** generate 2D grid blacs quantities
+      ctxt = ptree%pgrp(pgno)%ctxt
+      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
+         myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
+         call descinit(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (mat2D(max(1,myArows), max(1,myAcols)))
+         mat2D = 0
+      else
+         descsMat2D(2) = -1
+         allocate (mat2D(1, 1))
+         mat2D = 0
+      endif
+
+      !!!!>**** redistribution of input matrix
+      call Redistribute1Dto2D(RandVectOut, block_dummy%M_p, 0, pgno, mat2D, block_dummy%M, 0, pgno, block_dummy%N, ptree)
+      deallocate(RandVectIn)
+      deallocate(RandVectOut)
+      call BF_delete(block_dummy, 1)
+
+      if (associated(bmat%h_mat)) then
+         allocate(bmat%h_mat%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%h_mat%fullmat2D=mat2D
+      endif
+      if (associated(bmat%ho_bf)) then
+         allocate(bmat%ho_bf%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%ho_bf%fullmat2D=mat2D
+      endif
+      if (associated(bmat%hss_bf)) then
+         allocate(bmat%hss_bf%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%hss_bf%fullmat2D=mat2D
+      endif
+      deallocate(mat2D)
+
+   end subroutine BPACK_Convert2Dense
+
    subroutine BPACK_Solution(bmat, x, b, Ns_loc, num_vectors, option, ptree, stats)
 
 

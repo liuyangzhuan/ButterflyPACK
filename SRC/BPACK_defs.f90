@@ -364,6 +364,7 @@ module BPACK_DEFS
         integer Maxlevel, N !< HODLR levels and sizes
         integer ind_lv, ind_bk !< iterator of level and block number in a HODLR
         type(cascadingfactors), allocatable::levels(:) !
+        DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hobf
 
 
@@ -383,6 +384,7 @@ module BPACK_DEFS
         type(list),allocatable::admissibles(:) !< a list of admissible and inadmissible groups per each group
         type(iarray),allocatable::colorsets(:) !< the colorset (an integer array) of each level
         DT,allocatable::fullmat(:,:) !< store the full matrix for debugging purpose
+        DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type Hmat
 
     !>**** HSS structure
@@ -390,6 +392,7 @@ module BPACK_DEFS
         integer Maxlevel, N !< HSS levels and sizes
         ! ! integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
         type(blockplus)::BP, BP_inverse !< a single butterfly plus for the entire matrix
+        DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hssbf
 
     type SVD_quant
