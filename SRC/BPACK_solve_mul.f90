@@ -80,7 +80,8 @@ contains
       maxn = Nunk
       ldv = Nunk_loc
       maxnev = nev
-      maxncv = nev*2
+      ! maxncv = nev*2
+      maxncv = nev*4  ! this makes arpack converges better, but could fail the following if test when MPI count is large
       if(maxncv>Nunk_loc)then
          if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce MPI count or nev'
          stop
