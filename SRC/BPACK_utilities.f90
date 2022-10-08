@@ -171,7 +171,7 @@ contains
          h_mat_o%fullmat=h_mat_i%fullmat
       endif
 
-      if (allocated(h_mat_i%lstblks)) then
+      if (allocated(h_mat_i%lstblks) .and. associated(h_mat_i%Local_blocks)) then
          allocate (h_mat_o%lstblks(0:h_mat_o%Maxlevel))
          do level = 0, h_mat_o%Maxlevel
             h_mat_o%lstblks(level) = list()
@@ -549,47 +549,47 @@ contains
       stats_o%Time_Factor = stats_i%Time_Factor
 
       if(allocated(stats_i%rankmax_of_level))then
-         allocate(stats_o%rankmax_of_level(size(stats_i%rankmax_of_level,1)))
+         allocate(stats_o%rankmax_of_level(0:size(stats_i%rankmax_of_level,1)))
          stats_o%rankmax_of_level=stats_i%rankmax_of_level
       endif
       if(allocated(stats_i%rankmin_of_level))then
-         allocate(stats_o%rankmin_of_level(size(stats_i%rankmin_of_level,1)))
+         allocate(stats_o%rankmin_of_level(0:size(stats_i%rankmin_of_level,1)))
          stats_o%rankmin_of_level=stats_i%rankmin_of_level
       endif
       if(allocated(stats_i%rankmax_of_level_global))then
-         allocate(stats_o%rankmax_of_level_global(size(stats_i%rankmax_of_level_global,1)))
+         allocate(stats_o%rankmax_of_level_global(0:size(stats_i%rankmax_of_level_global,1)))
          stats_o%rankmax_of_level_global=stats_i%rankmax_of_level_global
       endif
       if(allocated(stats_i%rankmax_of_level_global_factor))then
-         allocate(stats_o%rankmax_of_level_global_factor(size(stats_i%rankmax_of_level_global_factor,1)))
+         allocate(stats_o%rankmax_of_level_global_factor(0:size(stats_i%rankmax_of_level_global_factor,1)))
          stats_o%rankmax_of_level_global_factor=stats_i%rankmax_of_level_global_factor
       endif
       if(allocated(stats_i%Add_random_CNT))then
-         allocate(stats_o%Add_random_CNT(size(stats_i%Add_random_CNT,1)))
+         allocate(stats_o%Add_random_CNT(0:size(stats_i%Add_random_CNT,1)))
          stats_o%Add_random_CNT=stats_i%Add_random_CNT
       endif
       if(allocated(stats_i%Mul_random_CNT))then
-         allocate(stats_o%Mul_random_CNT(size(stats_i%Mul_random_CNT,1)))
+         allocate(stats_o%Mul_random_CNT(0:size(stats_i%Mul_random_CNT,1)))
          stats_o%Mul_random_CNT=stats_i%Mul_random_CNT
       endif
       if(allocated(stats_i%XLUM_random_CNT))then
-         allocate(stats_o%XLUM_random_CNT(size(stats_i%XLUM_random_CNT,1)))
+         allocate(stats_o%XLUM_random_CNT(0:size(stats_i%XLUM_random_CNT,1)))
          stats_o%XLUM_random_CNT=stats_i%XLUM_random_CNT
       endif
       if(allocated(stats_i%Add_random_Time))then
-         allocate(stats_o%Add_random_Time(size(stats_i%Add_random_Time,1)))
+         allocate(stats_o%Add_random_Time(0:size(stats_i%Add_random_Time,1)))
          stats_o%Add_random_Time=stats_i%Add_random_Time
       endif
       if(allocated(stats_i%Mul_random_Time))then
-         allocate(stats_o%Mul_random_Time(size(stats_i%Mul_random_Time,1)))
+         allocate(stats_o%Mul_random_Time(0:size(stats_i%Mul_random_Time,1)))
          stats_o%Mul_random_Time=stats_i%Mul_random_Time
       endif
       if(allocated(stats_i%XLUM_random_Time))then
-         allocate(stats_o%XLUM_random_Time(size(stats_i%XLUM_random_Time,1)))
+         allocate(stats_o%XLUM_random_Time(0:size(stats_i%XLUM_random_Time,1)))
          stats_o%XLUM_random_Time=stats_i%XLUM_random_Time
       endif
       if(allocated(stats_i%leafs_of_level))then
-         allocate(stats_o%leafs_of_level(size(stats_i%leafs_of_level,1)))
+         allocate(stats_o%leafs_of_level(0:size(stats_i%leafs_of_level,1)))
          stats_o%leafs_of_level=stats_i%leafs_of_level
       endif
    end subroutine CopyStat

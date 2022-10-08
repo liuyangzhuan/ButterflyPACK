@@ -738,6 +738,7 @@ contains
             flops = flops + flop
          else
             rank_new = 1
+            jpvt(1) = 1
             submats(index_ij)%dat = 0
          endif
 
@@ -785,6 +786,7 @@ contains
             flops = flops + flop
          else
             rank_new = 1
+            jpvt(1) = 1            
             submats(index_ij)%dat = 0
          endif
 
@@ -1784,6 +1786,7 @@ contains
                flops = flops + flop
             else
                rank_new = 1
+               jpvt(1) = 1               
                core_tmp = 0
             endif
 
@@ -1840,6 +1843,7 @@ contains
                flops = flops + flop
             else
                rank_new = 1
+               jpvt(1) = 1
                core_tmp = 0
             endif
 
