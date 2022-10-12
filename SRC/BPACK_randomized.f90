@@ -682,7 +682,7 @@ contains
 
 
 
-      ! n3 = OMP_get_wtime()
+      ! n3 = MPI_Wtime()
 
       ! perform and store nontransposed MVP
       allocate (RandVectInR(Nloc, num_vect*ncolor))
@@ -893,7 +893,7 @@ contains
       deallocate(vector2D_i_L)
       deallocate(vector2D_o_L)
 
-      ! n4 = OMP_get_wtime()
+      ! n4 = MPI_Wtime()
       ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
 
 

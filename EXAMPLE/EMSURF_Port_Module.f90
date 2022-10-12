@@ -2911,7 +2911,7 @@ subroutine nxK_waveguidePrecompute(option,msh,quant,ptree,stats)
 	allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
 	allocate (Stamp(quant%Nunk_waveguidemode))
 
-	n1 = OMP_get_wtime()
+	n1 = MPI_Wtime()
 	if(quant%Nunk_waveguidemode>0)then
 		allocate(quant%nxK_waveguide(quant%Nunk_int + quant%Nunk_port,quant%Nunk_waveguidemode))
 		quant%nxK_waveguide=0
@@ -3007,7 +3007,7 @@ subroutine nxK_waveguidePrecompute(option,msh,quant,ptree,stats)
 		! write(897,*)dble(quant%nxK_waveguide(:,1))
 	endif
 
-	n2 = OMP_get_wtime()
+	n2 = MPI_Wtime()
 
     if(ptree%MyID==Main_ID)write(*,*)'Time for precompute nxK_waveguidePrecompute:',n2-n1,' seconds'
 
