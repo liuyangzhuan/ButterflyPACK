@@ -43,6 +43,42 @@ contains
 
    end function fnorm
 
+   integer function numroc_wp(n, nb, iproc, isrcproc, nprocs)
+      integer :: n, nb, iproc, isrcproc, nprocs
+      integer :: numroc ! blacs routine
+      numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
+   end function numroc_wp
+
+   pure subroutine g2l(i, n, np, nb, p, il)
+      implicit none
+      integer,intent(in) :: i    ! global array index, input
+      integer,intent(in) :: n    ! global array dimension, input
+      integer,intent(in) :: np   ! processor array dimension, input
+      integer,intent(in) :: nb   ! block size, input
+      integer,intent(out) :: p    ! processor array index, output
+      integer,intent(out) :: il   ! local array index, output
+      integer :: im1
+      im1 = i - 1
+      p = mod((im1/nb), np)
+      il = (im1/(np*nb))*nb + mod(im1, nb) + 1
+      return
+   end subroutine g2l
+
+! convert local index to global index in block-cyclic distribution
+   pure subroutine l2g(il, p, n, np, nb, i)
+      implicit none
+      integer,intent(in) :: il   ! local array index, input
+      integer,intent(in) :: p    ! processor array index, input
+      integer,intent(in) :: n    ! global array dimension, input
+      integer,intent(in) :: np   ! processor array dimension, input
+      integer,intent(in) :: nb   ! block size, input
+      integer,intent(out) :: i    ! global array index, output
+      integer :: ilm1
+      ilm1 = il - 1
+      i = (((ilm1/nb)*np) + p)*nb + mod(ilm1, nb) + 1
+      return
+   end subroutine l2g
+
    real(kind=8) function dlangef90(Matrix, M, N, norm)
 
 !
@@ -3082,6 +3118,523 @@ contains
 
    end subroutine pcgesvdf90
 
+
+   subroutine pgeeigf90(Matrix, N, desca, eigval, Q, flops)
+      implicit none
+      integer N
+      DTR norm1,norm0
+      DTC eigval(:)
+      DT Matrix(:, :),  Q(:,:), VL(1,1)
+      integer desca(9),descp(9),desctau0(9),desctau1(9)
+      real(kind=8), optional::flops
+      real(kind=8)::flop,t1,t2
+      integer nprow, npcol, myrow, mycol, myArows, myAcols, myAcolsTau0
+      integer ctxt, ii, jj, myi, myj, IWORK(1), iproc, jproc, info
+      DT, allocatable:: Matrix0(:,:),tau0(:), tau1(:)
+      integer,allocatable:: IPIV(:)
+      INTEGER,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
+
+      if (present(flops))flops=0
+
+      ctxt = desca(2)
+      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
+      myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+      allocate(Matrix0(max(1,myArows), max(1,myAcols)))
+      if(myArows>0 .and. myAcols>0)Matrix0 = Matrix
+
+      ! note the the use of myrow makes sure the vector is duplicated per process row
+      CALL descset( desctau1, 1, N, 1, nbslpk, myrow, desca( csrc_ ), ctxt, 1)
+      allocate(tau1(max(1,myAcols)))
+      tau1=0
+
+      ! note the the use of myrow makes sure the vector is duplicated per process row
+      CALL descset( desctau0, 1, N-1, 1, nbslpk, myrow, desca( csrc_ ), ctxt, 1)
+      myAcolsTau0 = numroc_wp(N-1, nbslpk, mycol, 0, npcol)
+      allocate(tau0(max(1,myAcolsTau0)))
+
+      ! compute Heisenberg reduction Matrix=Q H Q^h
+      t1 = MPI_Wtime()
+      call pgehrdf90(N, 1, N, Matrix, 1, 1, desca, tau0, flop)
+      if (present(flops))flops=flops+flop
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"pgehrdf90 time:",t2-t1
+      if(myArows>0 .and. myAcols>0)Q = Matrix
+
+      do jj=1,N
+      do ii=jj+2,N
+      call g2l(jj, N, npcol, nbslpk, jproc, myj)
+      call g2l(ii, N, nprow, nbslpk, iproc, myi)
+      if(jproc==mycol .and. iproc==myrow)then
+            Matrix(myi,myj)=0
+      endif
+      enddo
+      enddo
+
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm0:', norm1
+      ! write(*,*)abs(Q(1,:))
+
+
+      ! shift right Q by 1 column and zero out the upper triangular part to call pun_or_gqrf90
+      allocate(IPIV(max(1,myAcols)+nbslpk))
+      IPIV=0
+      do myj=1,myAcols
+         call l2g(myj, mycol, N, npcol, nbslpk, jj)
+         if(jj==1)then
+            IPIV(myj)=1
+         else
+            IPIV(myj)=jj-1
+         endif
+      enddo
+
+      ! note the the use of myrow makes sure the vector is duplicated per process row
+      CALL descset( descp, 1, desca( n_ ) + desca( nb_ )*npcol, 1, nbslpk, myrow, desca( csrc_ ), ctxt, 1)
+
+      t1 = MPI_Wtime()
+#if DAT==0
+      call pzlapiv('B', 'C', 'R', N, N, Q, 1, 1, desca, IPIV, 1, 1, descp, IWORK)
+#elif DAT==1
+      call pdlapiv('B', 'C', 'R', N, N, Q, 1, 1, desca, IPIV, 1, 1, descp, IWORK)
+#elif DAT==2
+      call pclapiv('B', 'C', 'R', N, N, Q, 1, 1, desca, IPIV, 1, 1, descp, IWORK)
+#elif DAT==3
+      call pslapiv('B', 'C', 'R', N, N, Q, 1, 1, desca, IPIV, 1, 1, descp, IWORK)
+#endif
+
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm1:', norm1
+      ! write(*,*) abs(Q(1,:))
+
+      do jj=1,N
+      do ii=1,jj
+      call g2l(jj, N, npcol, nbslpk, jproc, myj)
+      call g2l(ii, N, nprow, nbslpk, iproc, myi)
+      if(jproc==mycol .and. iproc==myrow)then
+         if(ii==jj)then
+            Q(myi,myj)=1d0
+         else
+            Q(myi,myj)=0
+         endif
+      endif
+      enddo
+      enddo
+
+
+#if DAT==0
+      call pzcopy(N-1,tau0,1,1,desctau0,1, tau1, 1, 2, desctau1,1)
+#elif DAT==1
+      call pdcopy(N-1,tau0,1,1,desctau0,1, tau1, 1, 2, desctau1,1)
+#elif DAT==2
+      call pccopy(N-1,tau0,1,1,desctau0,1, tau1, 1, 2, desctau1,1)
+#elif DAT==3
+      call pscopy(N-1,tau0,1,1,desctau0,1, tau1, 1, 2, desctau1,1)
+#endif
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"pxlapiv+pxcopy time:",t2-t1
+
+      ! write(*,*)myArows, myAcols,desca
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm2:', norm1, myArows, myAcols, abs(tau1)
+
+      
+      ! form Q from the Heisenberg reduction Matrix=Q H Q^h
+      t1 = MPI_Wtime()
+      call pun_or_gqrf90(ctxt, Q, tau1, N, N, N, desca, 1, 1, flop)
+      if (present(flops))flops=flops+flop
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"pun_or_gqrf90 time:",t2-t1
+
+
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm3:', norm1
+
+      ! compute the Schur decomposition H=S T S^h, and return Q=QS
+      t1 = MPI_Wtime()
+      call plahqrf90(.true., .true., N, 1, N, Matrix, desca, eigval, 1, N, Q, flop)
+      if (present(flops))flops=flops+flop
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"plahqrf90 time:",t2-t1
+
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm4:', norm1
+
+      ! compute the eigen decomposition T=Z D Z^h, and return Z=QZ
+      t1 = MPI_Wtime()
+      call ptrevcf90('R', N, Matrix, desca, VL, desca, Q, desca,flop)
+      if (present(flops))flops=flops+flop
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"ptrevcf90 time:",t2-t1
+      ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
+      ! write(*,*)'Q norm5:', norm1
+
+! check the error of the eigen decomposition
+#if 1
+      Matrix=Q
+      norm0 = pfnorm(N, N, Matrix0, 1, 1, desca, '1')
+      do jj=1,N
+         call g2l(jj, N, npcol, nbslpk, jproc, myj)
+         if(jproc==mycol)then
+            Matrix(:,myj) = Matrix(:,myj)*eigval(jj)
+         endif
+      enddo
+      call pgemmf90('N', 'N', N, N, N, BPACK_cone, Matrix0, 1, 1, desca, Q, 1, 1, desca, -BPACK_cone, Matrix, 1, 1, desca)
+      norm1 = pfnorm(N, N, Matrix, 1, 1, desca, '1')
+      if(0==mycol .and. 0==myrow)then
+      write(*,*)'Error of pgeeigf90: ', norm1/norm0
+      write(*,*)'Max and min eigenvalues: ', maxval(abs(eigval)), minval(abs(eigval))
+      endif
+#endif
+
+
+
+      Matrix = Matrix0
+      deallocate(Matrix0)
+      deallocate(IPIV)
+      deallocate(tau0)
+      deallocate(tau1)
+
+   end subroutine pgeeigf90
+
+
+
+   ! input matrix is upper triangular, it's modified but is restored on return
+   subroutine ptrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)
+
+
+      implicit none
+      character side
+      integer N
+      DT Matrix(:, :), VL(:,:), VR(:,:)
+      integer DESCT(9),DESCVL(9),DESCVR(9)
+      real(kind=8), optional::flop
+
+#if DAT==0
+      call pztrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)
+#elif DAT==1
+      write(*,*)"pdtrevc hasn't been implemented in scalapack"
+#elif DAT==2
+      call pctrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)
+#elif DAT==3
+      write(*,*)"pstrevc hasn't been implemented in scalapack"
+#endif
+
+   end subroutine ptrevcf90
+
+
+   subroutine pztrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      complex(kind=8) Matrix(:, :), VL(:,:), VR(:,:)
+      complex(kind=8) WORK(2*N)
+      real(kind=8) RWORK(N)
+      integer DESCT(9),DESCVL(9),DESCVR(9)
+      real(kind=8), optional::flop
+      integer INFO
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      call pztrevc( SIDE, HOWMNY, SELECT, N, Matrix, DESCT, VL, DESCVL, VR, DESCVR, MM, M, WORK, RWORK, INFO )
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine pztrevcf90
+
+
+   subroutine pctrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      complex(kind=4) Matrix(:, :), VL(:,:), VR(:,:)
+      complex(kind=4) WORK(2*N)
+      real(kind=4) RWORK(N)
+      integer DESCT(9),DESCVL(9),DESCVR(9)
+      real(kind=8), optional::flop
+      integer INFO
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      call pctrevc( SIDE, HOWMNY, SELECT, N, Matrix, DESCT, VL, DESCVL, VR, DESCVR, MM, M, WORK, RWORK, INFO )
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine pctrevcf90
+
+
+   subroutine pgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+      integer N, ilo, ihi
+      DT Matrix(:, :),tau(:)
+      integer desca(9)
+      integer ia,ja
+      real(kind=8), optional::flop
+
+#if DAT==0
+      call pzgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==1
+      call pdgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==2
+      call pcgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+#elif DAT==3
+      call psgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+#endif
+
+   end subroutine pgehrdf90
+
+
+   subroutine pdgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+      integer N, ilo, ihi
+      real(kind=8) Matrix(:, :),tau(:)
+      integer desca(9)
+      integer ia,ja
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      real(kind=8):: TEMP(1)
+      real(kind=8), allocatable:: WORK(:)
+
+
+      LWORK = -1
+      call PDGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PDGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 10.0/3.0*N**3d0
+
+   end subroutine pdgehrdf90
+
+   subroutine psgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+      integer N, ilo, ihi
+      real(kind=4) Matrix(:, :),tau(:)
+      integer desca(9)
+      integer ia,ja
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable:: WORK(:)
+
+
+      LWORK = -1
+      call PSGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PSGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 10.0/3.0*N**3d0
+
+   end subroutine psgehrdf90
+
+   subroutine pzgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+      integer N, ilo, ihi
+      complex(kind=8) Matrix(:, :),tau(:)
+      integer desca(9)
+      integer ia,ja
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      complex(kind=8):: TEMP(1)
+      complex(kind=8), allocatable:: WORK(:)
+
+
+      LWORK = -1
+      call PZGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PZGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 6.0* 10.0/3.0*N**3d0
+
+   end subroutine pzgehrdf90
+
+   subroutine pcgehrdf90(N, ilo, ihi, Matrix, ia, ja, desca, tau, flop)
+      implicit none
+      integer N, ilo, ihi
+      complex(kind=4) Matrix(:, :),tau(:)
+      integer desca(9)
+      integer ia,ja
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      complex(kind=4), allocatable:: WORK(:)
+
+
+      LWORK = -1
+      call PCGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, TEMP, LWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PCGEHRD(N, ilo, ihi, Matrix, ia, ja, desca, tau, WORK, LWORK, INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 6.0* 10.0/3.0*N**3d0
+
+   end subroutine pcgehrdf90
+
+   subroutine plahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+      implicit none
+      logical wantt, wantz
+      integer N, ilo, ihi, iloz, ihiz
+      DT Matrix(:, :), Z(:,:)
+      integer desca(9)
+      DTC eigval(:)
+      real(kind=8), optional::flop
+
+#if DAT==0
+      call pzlahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+#elif DAT==1
+      call pdlahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+#elif DAT==2
+      call pclahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+#elif DAT==3
+      call pslahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+#endif
+
+   end subroutine plahqrf90
+
+
+   subroutine pslahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+      implicit none
+      logical wantt, wantz
+      integer N, ilo, ihi, iloz, ihiz
+      real(kind=4) Matrix(:, :), Z(:,:), WR(N), WI(N)
+      integer desca(9)
+      complex(kind=4) eigval(:)
+
+      integer LWORK, ILWORK, INFO
+      real(kind=4):: TEMP(1)
+      integer::IWORK(1) ! not referenced, place holder for a future release
+      real(kind=4), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      ILWORK = 1
+      call PSLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, WR, WI, ILOZ, IHIZ, Z, DESCA, TEMP, LWORK, IWORK, ILWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PSLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, WR, WI, ILOZ, IHIZ, Z, DESCA, WORK, LWORK, IWORK, ILWORK, INFO)
+
+      eigval = WR + WI*BPACK_junit
+
+      deallocate (WORK)
+      if (present(flop)) flop = N**3d0 ! very rough estimate as the QR iteration convergence is unknown in prior
+
+   end subroutine pslahqrf90
+
+
+   subroutine pdlahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+      implicit none
+      logical wantt, wantz
+      integer N, ilo, ihi, iloz, ihiz
+      real(kind=8) Matrix(:, :), Z(:,:), WR(N), WI(N)
+      integer desca(9)
+      complex(kind=8) eigval(:)
+
+      integer LWORK, ILWORK, INFO
+      real(kind=8):: TEMP(1)
+      integer::IWORK(1) ! not referenced, place holder for a future release
+      real(kind=8), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      ILWORK = 1
+      call PDLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, WR, WI, ILOZ, IHIZ, Z, DESCA, TEMP, LWORK, IWORK, ILWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PDLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, WR, WI, ILOZ, IHIZ, Z, DESCA, WORK, LWORK, IWORK, ILWORK, INFO)
+
+      eigval = WR + WI*BPACK_junit
+
+      deallocate (WORK)
+      if (present(flop)) flop = N**3d0 ! very rough estimate as the QR iteration convergence is unknown in prior
+
+   end subroutine pdlahqrf90
+
+
+
+   subroutine pzlahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+      implicit none
+      logical wantt, wantz
+      integer N, ilo, ihi, iloz, ihiz
+      complex(kind=8) Matrix(:, :), Z(:,:)
+      integer desca(9)
+      complex(kind=8) eigval(:)
+
+      integer LWORK, ILWORK, INFO
+      complex(kind=8):: TEMP(1)
+      integer::IWORK(1) ! not referenced, place holder for a future release
+      complex(kind=8), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      ILWORK = 1
+      call PZLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, eigval, ILOZ, IHIZ, Z, DESCA, TEMP, LWORK, IWORK, ILWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PZLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, eigval, ILOZ, IHIZ, Z, DESCA, WORK, LWORK, IWORK, ILWORK, INFO)
+
+      deallocate (WORK)
+      if (present(flop)) flop = 4.*N**3d0 ! very rough estimate as the QR iteration convergence is unknown in prior
+
+   end subroutine pzlahqrf90
+
+   subroutine pclahqrf90(wantt, wantz, N, ilo, ihi, Matrix, desca, eigval, iloz, ihiz, Z, flop)
+      implicit none
+      logical wantt, wantz
+      integer N, ilo, ihi, iloz, ihiz
+      complex(kind=4) Matrix(:, :), Z(:,:)
+      integer desca(9)
+      complex(kind=4) eigval(:)
+
+      integer LWORK, ILWORK, INFO
+      complex(kind=4):: TEMP(1)
+      integer::IWORK(1) ! not referenced, place holder for a future release
+      complex(kind=4), allocatable:: WORK(:)
+
+      real(kind=8), optional::flop
+
+      LWORK = -1
+      ILWORK = 1
+      call PCLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, eigval, ILOZ, IHIZ, Z, DESCA, TEMP, LWORK, IWORK, ILWORK, INFO)
+
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call PCLAHQR( WANTT, WANTZ, N, ILO, IHI, Matrix, DESCA, eigval, ILOZ, IHIZ, Z, DESCA, WORK, LWORK, IWORK, ILWORK, INFO)
+
+      deallocate (WORK)
+      if (present(flop)) flop = 4.*N**3d0 ! very rough estimate as the QR iteration convergence is unknown in prior
+
+   end subroutine pclahqrf90
 
    real(kind=8) function flops_zgesdd(m, n)
       implicit none

@@ -5151,35 +5151,6 @@ contains
       endif
    end function IOwnPgrp
 
-   pure subroutine g2l(i, n, np, nb, p, il)
-      implicit none
-      integer,intent(in) :: i    ! global array index, input
-      integer,intent(in) :: n    ! global array dimension, input
-      integer,intent(in) :: np   ! processor array dimension, input
-      integer,intent(in) :: nb   ! block size, input
-      integer,intent(out) :: p    ! processor array index, output
-      integer,intent(out) :: il   ! local array index, output
-      integer :: im1
-      im1 = i - 1
-      p = mod((im1/nb), np)
-      il = (im1/(np*nb))*nb + mod(im1, nb) + 1
-      return
-   end subroutine g2l
-
-! convert local index to global index in block-cyclic distribution
-   pure subroutine l2g(il, p, n, np, nb, i)
-      implicit none
-      integer,intent(in) :: il   ! local array index, input
-      integer,intent(in) :: p    ! processor array index, input
-      integer,intent(in) :: n    ! global array dimension, input
-      integer,intent(in) :: np   ! processor array dimension, input
-      integer,intent(in) :: nb   ! block size, input
-      integer,intent(out) :: i    ! global array index, output
-      integer :: ilm1
-      ilm1 = il - 1
-      i = (((ilm1/nb)*np) + p)*nb + mod(ilm1, nb) + 1
-      return
-   end subroutine l2g
 
    integer function lcm(a, b)
       integer:: a, b
@@ -5198,11 +5169,7 @@ contains
       gcd = abs(as)
    end function gcd
 
-   integer function numroc_wp(n, nb, iproc, isrcproc, nprocs)
-      integer :: n, nb, iproc, isrcproc, nprocs
-      integer :: numroc ! blacs routine
-      numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
-   end function numroc_wp
+
 
    integer function blacs_pnum_wp(NPROW, NPCOL, PROW, PCOL)
       integer :: ICONTXT, PROW, PCOL, NPROW, NPCOL

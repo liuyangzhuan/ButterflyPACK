@@ -46,7 +46,7 @@ PROGRAM ButterflyPACK_IE_2D
 	integer times(8)
 	integer edge
 	real(kind=8) t1,t2,t3, x,y,z,r,theta,phi
-	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
+	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:),eigs(:),eivect(:,:)
 
 	character(len=:),allocatable  :: string
 	character(len=1024)  :: strings,strings1
@@ -84,6 +84,10 @@ PROGRAM ButterflyPACK_IE_2D
 	real(kind=8),external :: pdznorm2, dlapy2
 	integer nargs,flag
 	integer v_major,v_minor,v_bugfix
+
+	integer nprow, npcol, myrow, mycol, myArows, myAcols
+	integer desca(9)
+
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -207,6 +211,27 @@ PROGRAM ButterflyPACK_IE_2D
    !***********************************************************************
 
 
+! generate a random matrix and test the dense eigen solvers in scalapack
+#if 0
+	call blacs_gridinfo(ptree_A%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+	if (myrow /= -1 .and. mycol /= -1) then
+	myArows = z_numroc_wp(quant%Nunk, nbslpk, myrow, 0, nprow)
+	myAcols = z_numroc_wp(quant%Nunk, nbslpk, mycol, 0, npcol)
+	allocate(matZ1(max(1,myArows), max(1,myAcols)))
+	allocate(eigvec(max(1,myArows), max(1,myAcols)))
+	allocate(eigval(quant%Nunk))
+	call descinit(desca, quant%Nunk, quant%Nunk, nbslpk, nbslpk, 0, 0, ptree_A%pgrp(1)%ctxt, max(myArows, 1), info)
+	! matZ1=1d0
+	call z_RandomMat(max(1,myArows), max(1,myAcols),max(min(myArows,myAcols),1),matZ1,0)
+
+	call z_pgeeigf90(matZ1, quant%Nunk, desca, eigval, eigvec)
+
+	deallocate(matZ1)
+	deallocate(eigvec)
+	deallocate(eigval)
+	endif
+#endif
+
 
 
     !***********************************************************************
@@ -298,6 +323,10 @@ PROGRAM ButterflyPACK_IE_2D
 		call z_PrintStat(stats_B,ptree_B)
 	endif
 	!***********************************************************************
+
+
+	call z_BPACK_Convert2Dense(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
+
 
 
     !***********************************************************************
