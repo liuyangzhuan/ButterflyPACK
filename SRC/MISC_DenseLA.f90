@@ -3138,6 +3138,7 @@ contains
 
       ctxt = desca(2)
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
       myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
       myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
       allocate(Matrix0(max(1,myArows), max(1,myAcols)))
@@ -3152,6 +3153,7 @@ contains
       CALL descset( desctau0, 1, N-1, 1, nbslpk, myrow, desca( csrc_ ), ctxt, 1)
       myAcolsTau0 = numroc_wp(N-1, nbslpk, mycol, 0, npcol)
       allocate(tau0(max(1,myAcolsTau0)))
+      tau0=0
 
       ! compute Heisenberg reduction Matrix=Q H Q^h
       t1 = MPI_Wtime()
@@ -3237,7 +3239,7 @@ contains
       ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
       ! write(*,*)'Q norm2:', norm1, myArows, myAcols, abs(tau1)
 
-      
+
       ! form Q from the Heisenberg reduction Matrix=Q H Q^h
       t1 = MPI_Wtime()
       call pun_or_gqrf90(ctxt, Q, tau1, N, N, N, desca, 1, 1, flop)
@@ -3293,7 +3295,7 @@ contains
       deallocate(IPIV)
       deallocate(tau0)
       deallocate(tau1)
-
+endif
    end subroutine pgeeigf90
 
 
