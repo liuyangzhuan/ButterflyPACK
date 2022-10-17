@@ -393,6 +393,75 @@ contains
 
    end subroutine BPACK_Convert2Dense
 
+
+   subroutine BPACK_Eigen_Dense(bmat,option,stats,msh,ker,ptree,eigval,eigvec)
+      implicit none
+      DTC eigval(:)
+      DT eigvec(:, :)
+      DT,allocatable:: eigvec2d(:, :)
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer num_vect,Nloc,ii
+      DT,allocatable :: RandVectIn(:, :), RandVectOut(:, :), mat2D(:,:)
+      type(matrixblock)::block_dummy
+      integer pgno
+      integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
+      integer::descsMat1D(9), descsMat2D(9)
+
+      ! construct a dummy block for auxiliary purposes
+      pgno=1
+      block_dummy%level = 0
+      block_dummy%row_group = 1
+      block_dummy%col_group = 1
+      block_dummy%pgno = 1
+      block_dummy%M = msh%Nunk
+      block_dummy%N = msh%Nunk
+      block_dummy%headm = 1
+      block_dummy%headn = 1
+      call ComputeParallelIndices(block_dummy, block_dummy%pgno, ptree, msh)
+
+      !!!!>**** generate 2D grid blacs quantities
+      ctxt = ptree%pgrp(pgno)%ctxt
+      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
+         myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
+         call descinit(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (mat2D(max(1,myArows), max(1,myAcols)))
+         if (associated(bmat%h_mat)) then
+            mat2D=bmat%h_mat%fullmat2D
+         endif
+         if (associated(bmat%ho_bf)) then
+            mat2D=bmat%ho_bf%fullmat2D
+         endif
+         if (associated(bmat%hss_bf)) then
+            mat2D=bmat%hss_bf%fullmat2D
+         endif
+         allocate(eigvec2d(max(1,myArows), max(1,myAcols)))
+      else
+         descsMat2D(2) = -1
+         allocate (mat2D(1, 1))
+         mat2D = 0
+         allocate(eigvec2d(1,1))
+      endif
+
+      call pgeeigf90(mat2D, block_dummy%M, descsMat2D, eigval, eigvec2d)
+
+      !!!!>**** redistribution of input matrix
+      call Redistribute2Dto1D(eigvec2d, block_dummy%M, 0, pgno, eigvec, block_dummy%M_p, 0, pgno, block_dummy%N, ptree)
+	   deallocate(eigvec2d)
+      deallocate(mat2D)
+      call BF_delete(block_dummy, 1)
+
+
+   end subroutine BPACK_Eigen_Dense
+
+
+
    subroutine BPACK_Solution(bmat, x, b, Ns_loc, num_vectors, option, ptree, stats)
 
 

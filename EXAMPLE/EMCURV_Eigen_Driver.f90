@@ -253,9 +253,27 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** print statistics
 	call z_PrintStat(stats_A,ptree_A)
 
+
+! #define DENSEEIGEN
+
+#ifdef DENSEEIGEN
 	! call z_FULLMAT_Element(option_A,stats_A,msh_A,ker_A,ptree_sh)
 	!***********************************************************************
 
+	call z_BPACK_Convert2Dense(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
+	allocate(eigval(quant%Nunk))
+	allocate(eigvec(Nunk_loc,quant%Nunk))
+	call z_BPACK_Eigen_Dense(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A,eigval,eigvec)
+	deallocate(eigval)
+	deallocate(eigvec)
+
+	call z_delete_proctree(ptree_A)
+	call z_delete_Hstat(stats_A)
+	call z_delete_mesh(msh_A)
+	call z_delete_kernelquant(ker_A)
+	call z_BPACK_delete(bmat_A)
+
+#else
 
     !***********************************************************************
 	!**** construct compressed A - sigma I or  A - sigma real(A)
@@ -324,11 +342,6 @@ PROGRAM ButterflyPACK_IE_2D
 	endif
 	!***********************************************************************
 
-
-	call z_BPACK_Convert2Dense(bmat_A,option_A,stats_A,msh_A,ker_A,ptree_A)
-
-
-
     !***********************************************************************
 	!**** eigen solver
 	allocate(eigval(quant%nev))
@@ -361,6 +374,8 @@ PROGRAM ButterflyPACK_IE_2D
 		call z_delete_kernelquant(ker_B)
 		call z_BPACK_delete(bmat_B)
 	endif
+
+#endif
 
 
 	!**** deletion of quantities
