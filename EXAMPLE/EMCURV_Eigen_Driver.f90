@@ -224,7 +224,7 @@ PROGRAM ButterflyPACK_IE_2D
 	! matZ1=1d0
 	call z_RandomMat(max(1,myArows), max(1,myAcols),max(min(myArows,myAcols),1),matZ1,0)
 
-	call z_pgeeigf90(matZ1, quant%Nunk, desca, eigval, eigvec)
+	call z_pgeeigf90(matZ1, quant%Nunk, desca, eigval, eigvec, ptree_A%pgrp(1)%ctxt, ptree_A%pgrp(1)%ctxt_head)
 
 	deallocate(matZ1)
 	deallocate(eigvec)
