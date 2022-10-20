@@ -3119,28 +3119,189 @@ contains
    end subroutine pcgesvdf90
 
 
-   subroutine pgeeigf90(Matrix, N, desca, eigval, Q, flops)
+   subroutine zgeevf90(JOBVL,JOBVR, N, Matrix, eigval, VL, VR, flop)
+      implicit none
+      character::JOBVL,JOBVR
+      integer N
+      complex(kind=8) Matrix(:, :)
+      complex(kind=8) eigval(:)
+      complex(kind=8) VL(:,:), VR(:,:)
+      real(kind=8):: RWORK(N*2)
+
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      complex(kind=8):: TEMP(1)
+      complex(kind=8), allocatable:: WORK(:)
+
+      LWORK = -1
+      call zgeev(JOBVL,JOBVR,N,Matrix,N,eigval,VL,N,VR,N,TEMP,LWORK,RWORK,INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call zgeev(JOBVL,JOBVR,N,Matrix,N,eigval,VL,N,VR,N,WORK,LWORK,RWORK,INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 6.0* 10.0/3.0*N**3d0
+
+   end subroutine zgeevf90
+
+
+
+   subroutine cgeevf90(JOBVL,JOBVR, N, Matrix, eigval, VL, VR, flop)
+      implicit none
+      character::JOBVL,JOBVR
+      integer N
+      complex(kind=4) Matrix(:, :)
+      complex(kind=4) eigval(:)
+      complex(kind=4) VL(:,:), VR(:,:)
+      real(kind=4):: RWORK(N*2)
+
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      complex(kind=4):: TEMP(1)
+      complex(kind=4), allocatable:: WORK(:)
+
+      LWORK = -1
+      call cgeev(JOBVL,JOBVR,N,Matrix,N,eigval,VL,N,VR,N,TEMP,LWORK,RWORK,INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call cgeev(JOBVL,JOBVR,N,Matrix,N,eigval,VL,N,VR,N,WORK,LWORK,RWORK,INFO)
+
+      deallocate(WORK)
+      if (present(flop)) flop = 10.0/3.0*N**3d0
+
+   end subroutine cgeevf90
+
+
+   subroutine dgeevf90(JOBVL,JOBVR, N, Matrix, eigval, VL, VR, flop)
+      implicit none
+      character::JOBVL,JOBVR
+      integer N
+      real(kind=8) Matrix(:, :),WR(N), WI(N)
+      complex(kind=8) eigval(:)
+      real(kind=8) VL(:,:), VR(:,:)
+
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      real(kind=8):: TEMP(1)
+      real(kind=8), allocatable:: WORK(:)
+
+      LWORK = -1
+      call dgeev(JOBVL,JOBVR,N,Matrix,N,WR,WI,VL,N,VR,N,TEMP,LWORK,INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call dgeev(JOBVL,JOBVR,N,Matrix,N,WR,WI,VL,N,VR,N,WORK,LWORK,INFO)
+      eigval = WR + WI*BPACK_junit
+      deallocate(WORK)
+      if (present(flop)) flop = 6.0* 10.0/3.0*N**3d0
+
+   end subroutine dgeevf90
+
+   subroutine sgeevf90(JOBVL,JOBVR, N, Matrix, eigval, VL, VR, flop)
+      implicit none
+      character::JOBVL,JOBVR
+      integer N
+      real(kind=4) Matrix(:, :),WR(N), WI(N)
+      complex(kind=4) eigval(:)
+      real(kind=4) VL(:,:), VR(:,:)
+
+      real(kind=8), optional::flop
+
+      integer LWORK, INFO
+      real(kind=4):: TEMP(1)
+      real(kind=4), allocatable:: WORK(:)
+
+      LWORK = -1
+      call sgeev(JOBVL,JOBVR,N,Matrix,N,WR,WI,VL,N,VR,N,TEMP,LWORK,INFO)
+      LWORK = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(LWORK))
+      WORK = 0
+      call sgeev(JOBVL,JOBVR,N,Matrix,N,WR,WI,VL,N,VR,N,WORK,LWORK,INFO)
+      eigval = WR + WI*BPACK_junit
+      deallocate(WORK)
+      if (present(flop)) flop = 6.0* 10.0/3.0*N**3d0
+
+   end subroutine sgeevf90
+
+
+   subroutine geeigf90(Matrix, N, eigval, Q, flops)
+      implicit none
+      integer N
+      DTC eigval(:)
+      DT Matrix(:, :),  Q(:,:), VL(1,1)
+      real(kind=8), optional::flops
+
+#if DAT==0
+      call zgeevf90('N','V', N, Matrix, eigval, VL, Q, flops)
+#elif DAT==1
+      call dgeevf90('N','V', N, Matrix, eigval, VL, Q, flops)
+#elif DAT==2
+      call cgeevf90('N','V', N, Matrix, eigval, VL, Q, flops)
+#elif DAT==3
+      call sgeevf90('N','V', N, Matrix, eigval, VL, Q, flops)
+#endif
+
+   end subroutine geeigf90
+
+
+
+   subroutine pgeeigf90(Matrix, N, desca, eigval, Q, ctxt, ctxt_head, flops)
       implicit none
       integer N
       DTR norm1,norm0
       DTC eigval(:)
       DT Matrix(:, :),  Q(:,:), VL(1,1)
-      integer desca(9),descp(9),desctau0(9),desctau1(9)
+      integer desca(9),desca_head(9),descp(9),desctau0(9),desctau1(9)
       real(kind=8), optional::flops
       real(kind=8)::flop,t1,t2
       integer nprow, npcol, myrow, mycol, myArows, myAcols, myAcolsTau0
-      integer ctxt, ii, jj, myi, myj, IWORK(1), iproc, jproc, info
-      DT, allocatable:: Matrix0(:,:),tau0(:), tau1(:)
+      integer ctxt, ctxt_head, ii, jj, myi, myj, IWORK(1), iproc, jproc, info
+      DT, allocatable:: Matrix0(:,:),tau0(:), tau1(:),Matrix_head(:,:),Q_head(:,:)
       integer,allocatable:: IPIV(:)
       INTEGER,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
 
       if (present(flops))flops=0
 
-      ctxt = desca(2)
       call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
       myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
       myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
+
+
+#if 0
+   ! Gather the matrix to the head process and call lapack xgeev
+     t1 = MPI_Wtime()
+     if(myrow==0 .and. mycol==0) then
+         call descinit(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
+         allocate(Matrix_head(N,N))
+         Matrix_head=0
+         allocate(Q_head(N,N))
+         Q_head=0
+      else
+         desca_head(2) = -1
+         allocate(Matrix_head(1,1))
+         Matrix_head=0
+         allocate(Q_head(1,1))
+         Q_head=0
+      endif
+
+      call pgemr2df90(N, N, Matrix, 1, 1, desca, Matrix_head, 1, 1, desca_head, ctxt)
+      if(myrow==0 .and. mycol==0)then
+         call geeigf90(Matrix_head, N, eigval, Q_head, flop)
+         if (present(flops))flops=flops+flop
+      endif
+      call pgemr2df90(N, N, Q_head, 1, 1, desca_head, Q, 1, 1, desca, ctxt)
+
+      deallocate(Matrix_head)
+      deallocate(Q_head)
+      t2 = MPI_Wtime()
+      if(myrow==0 .and. mycol==0)write(*,*)"geeigf90 time:",t2-t1
+#else
       allocate(Matrix0(max(1,myArows), max(1,myAcols)))
       if(myArows>0 .and. myAcols>0)Matrix0 = Matrix
 
@@ -3263,8 +3424,37 @@ contains
 
       ! compute the eigen decomposition T=Z D Z^h, and return Z=QZ
       t1 = MPI_Wtime()
+
+
+! the strong scaling of ptrevcf90 is poor. When memory fits, it's better to gather the matrix to the head process and call ptrevcf90 sequentially
+#if 1
+      if(myrow==0 .and. mycol==0) then
+         call descinit(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
+         allocate(Matrix_head(N,N))
+         Matrix_head=0
+         allocate(Q_head(N,N))
+         Q_head=0
+      else
+         desca_head(2) = -1
+         allocate(Matrix_head(1,1))
+         Matrix_head=0
+         allocate(Q_head(1,1))
+         Q_head=0
+      endif
+
+      call pgemr2df90(N, N, Matrix, 1, 1, desca, Matrix_head, 1, 1, desca_head, ctxt)
+      call pgemr2df90(N, N, Q, 1, 1, desca, Q_head, 1, 1, desca_head, ctxt)
+      if(myrow==0 .and. mycol==0)call trevc3f90('R', N, Matrix_head, VL, Q_head,flop)
+      if (present(flops))flops=flops+flop
+      call pgemr2df90(N, N, Q_head, 1, 1, desca_head, Q, 1, 1, desca, ctxt)
+
+      deallocate(Matrix_head)
+      deallocate(Q_head)
+
+#else
       call ptrevcf90('R', N, Matrix, desca, VL, desca, Q, desca,flop)
       if (present(flops))flops=flops+flop
+#endif
       t2 = MPI_Wtime()
       if(myrow==0 .and. mycol==0)write(*,*)"ptrevcf90 time:",t2-t1
       ! norm1 = pfnorm(N, N, Q, 1, 1, desca, '1')
@@ -3295,8 +3485,36 @@ contains
       deallocate(IPIV)
       deallocate(tau0)
       deallocate(tau1)
+
+#endif
+
 endif
    end subroutine pgeeigf90
+
+
+
+   ! input matrix is upper triangular, it's modified but is restored on return
+   subroutine trevc3f90(SIDE, N, Matrix, VL, VR, flop)
+
+
+      implicit none
+      character side
+      integer N
+      DT Matrix(:, :), VL(:,:), VR(:,:)
+      real(kind=8), optional::flop
+
+#if DAT==0
+      call ztrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+#elif DAT==1
+      call dtrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+#elif DAT==2
+      call ctrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+#elif DAT==3
+      call strevc3f90(SIDE, N, Matrix, VL, VR, flop)
+#endif
+
+   end subroutine trevc3f90
+
 
 
 
@@ -3322,6 +3540,135 @@ endif
 #endif
 
    end subroutine ptrevcf90
+
+
+   subroutine dtrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      real(kind=8) Matrix(:, :), VL(:,:), VR(:,:)
+      real(kind=8),allocatable:: WORK(:)
+      real(kind=8):: TEMP(1)
+      real(kind=8), optional::flop
+      integer INFO, LWORK
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      LWORK = -1
+      call dtrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call dtrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
+
+      deallocate(WORK)
+
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine dtrevc3f90
+
+   subroutine strevc3f90(SIDE, N, Matrix, VL, VR, flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      real(kind=4) Matrix(:, :), VL(:,:), VR(:,:)
+      real(kind=4),allocatable:: WORK(:)
+      real(kind=4):: TEMP(1)
+      real(kind=8), optional::flop
+      integer INFO, LWORK
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      LWORK = -1
+      call strevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      call strevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
+
+      deallocate(WORK)
+
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine strevc3f90
+
+
+   subroutine ztrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      complex(kind=8) Matrix(:, :), VL(:,:), VR(:,:)
+      complex(kind=8),allocatable:: WORK(:)
+      real(kind=8),allocatable:: RWORK(:)
+      complex(kind=8):: TEMP(1)
+      real(kind=8):: RTEMP(1)
+      real(kind=8), optional::flop
+      integer INFO, LRWORK, LWORK
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      LWORK = -1
+      LRWORK = -1
+      call ztrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      lrwork = NINT(dble(RTEMP(1)*2.001 + 1))
+      allocate (RWORK(lrwork))
+      RWORK = 0
+      call ztrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
+
+      deallocate(WORK)
+      deallocate(RWORK)
+
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine ztrevc3f90
+
+
+   subroutine ctrevc3f90(SIDE, N, Matrix, VL, VR, flop)
+      implicit none
+      character side, howmny
+      integer N,MM,M
+      logical select(N)
+      complex(kind=4) Matrix(:, :), VL(:,:), VR(:,:)
+      complex(kind=4),allocatable:: WORK(:)
+      real(kind=4),allocatable:: RWORK(:)
+      complex(kind=4):: TEMP(1)
+      real(kind=4):: RTEMP(1)
+      real(kind=8), optional::flop
+      integer INFO, LRWORK, LWORK
+
+      howmny='B'
+      select=.true.
+      M=N
+      MM=N
+
+      LWORK = -1
+      LRWORK = -1
+      call ctrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
+      lwork = NINT(dble(TEMP(1)*2.001 + 1))
+      allocate (WORK(lwork))
+      WORK = 0
+      lrwork = NINT(dble(RTEMP(1)*2.001 + 1))
+      allocate (RWORK(lrwork))
+      RWORK = 0
+      call ctrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
+
+      deallocate(WORK)
+      deallocate(RWORK)
+
+      if (present(flop)) flop = 0 ! LOT typically ignored
+   end subroutine ctrevc3f90
 
 
    subroutine pztrevcf90(SIDE, N, Matrix, DESCT, VL, DESCVL,VR, DESCVR,flop)

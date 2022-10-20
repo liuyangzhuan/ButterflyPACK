@@ -449,7 +449,7 @@ contains
          allocate(eigvec2d(1,1))
       endif
 
-      call pgeeigf90(mat2D, block_dummy%M, descsMat2D, eigval, eigvec2d)
+      call pgeeigf90(mat2D, block_dummy%M, descsMat2D, eigval, eigvec2d, ptree%pgrp(pgno)%ctxt, ptree%pgrp(pgno)%ctxt_head)
 
       !!!!>**** redistribution of input matrix
       call Redistribute2Dto1D(eigvec2d, block_dummy%M, 0, pgno, eigvec, block_dummy%M_p, 0, pgno, block_dummy%N, ptree)
