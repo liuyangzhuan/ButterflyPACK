@@ -81,11 +81,13 @@ contains
       ldv = Nunk_loc
       maxnev = nev
       ! maxncv = nev*2
-      maxncv = nev*4  ! this makes arpack converges better, but could fail the following if test when MPI count is large
-      if(maxncv>Nunk_loc)then
-         if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce MPI count or nev'
-         stop
-      endif
+      maxncv = min(nev*4,Nunk)  
+
+      !!!! the following if test has been disabled. Make sure "else if (ncv .le. nev+1 .or.  ncv .gt. n) then" in pzneupd.f is changed to "else if (ncv .le. nev+1) then"
+      ! if(maxncv>Nunk_loc)then
+      !    if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce MPI count or nev'
+      !    stop
+      ! endif
 
       n = maxn
       ncv = maxncv
@@ -149,6 +151,9 @@ contains
                print *, ' Error with _neupd, info = ', ierr
                print *, ' Check the documentation of _neupd. '
                print *, ' '
+               if(ierr==-3)then
+                  print *, ' Consider modifying pzneupd.f in PARPACK to disable this error'
+               endif
             else
                nconv = iparam(5)
                do j = 1, nconv
