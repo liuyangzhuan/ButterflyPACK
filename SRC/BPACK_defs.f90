@@ -24,6 +24,9 @@ module BPACK_DEFS
 #ifdef MPIMODULE
     use MPI
     use iso_c_binding
+#ifdef HAVE_ZFP
+    use zfp
+#endif
 #if __GNUC__ < 5
 #else
     use ieee_arithmetic
@@ -31,7 +34,12 @@ module BPACK_DEFS
     use BPACK_linkedlist
     implicit none
 #else
+
+
     use iso_c_binding
+#ifdef HAVE_ZFP
+    use zfp
+#endif
 #if __GNUC__ < 5
 #else
     use ieee_arithmetic
@@ -283,6 +291,12 @@ module BPACK_DEFS
         integer, pointer:: ms(:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:) => null() !< sizes of accummulated local leaf column blocks
         DT, allocatable :: fullmat(:, :) !< full matrix entries
+#ifdef HAVE_ZFP
+        type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
+        type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
+        character, allocatable :: buffer_r(:) ! <ZFP buffer for the real part
+        character, allocatable :: buffer_i(:) ! <ZFP buffer for the imaginary part
+#endif
         type(butterfly_UV) :: ButterflyU !< leftmost factor
         type(butterfly_UV) :: ButterflyV !< rightmost factor
         type(butterflymatrix), allocatable :: ButterflyMiddle(:, :) !< middle factor

@@ -35,6 +35,11 @@ PROGRAM ButterflyPACK_IE_2D
 #endif
 	use z_MISC_Utilities
 	use z_BPACK_wrapper
+#ifdef HAVE_ZFP
+  use zfp
+#endif
+  use iso_c_binding
+
     implicit none
 
 	! include "mkl_vml.fi"
@@ -73,6 +78,120 @@ PROGRAM ButterflyPACK_IE_2D
 	integer nargs,flag
 	integer v_major,v_minor,v_bugfix
 	integer parent
+
+
+
+#if 0
+  ! input/decompressed arrays
+  integer xLen, yLen
+  real (kind=8), dimension(:, :), allocatable, target :: input_array
+  real (kind=8), dimension(:, :), allocatable, target :: decompressed_array
+  type(c_ptr) :: array_c_ptr
+  real (kind=8) error, max_abs_error
+
+  ! zfp_field
+  type(zFORp_field) :: field
+
+  ! bitstream
+  character, dimension(:), allocatable, target :: buffer,buffer1
+  type(c_ptr) :: buffer_c_ptr
+  integer (kind=8) buffer_size_bytes, bitstream_offset_bytes
+  type(zFORp_bitstream) :: bitstream, queried_bitstream
+
+  ! zfp_stream
+  type(zFORp_stream) :: stream, dstream
+  real (kind=8) :: desired_rate, rate_result, tol_result
+  integer :: dims, wra
+  integer :: zfp_type
+
+
+  ! initialize input and decompressed arrays
+  xLen = 8
+  yLen = 8
+  allocate(input_array(xLen, yLen))
+  do i = 1, xLen
+    do j = 1, yLen
+      CALL RANDOM_NUMBER(r)
+      input_array(i, j) = r ! i * i + j * (j + 1)
+    enddo
+  enddo
+
+  allocate(decompressed_array(xLen, yLen))
+
+  ! setup zfp_field
+  array_c_ptr = c_loc(input_array)
+  zfp_type = zFORp_type_double
+  field = zFORp_field_2d(array_c_ptr, zfp_type, xLen, yLen)
+
+  ! setup bitstream
+  buffer_size_bytes = xLen*yLen*8
+  allocate(buffer(buffer_size_bytes))
+  buffer_c_ptr = c_loc(buffer)
+  bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+  ! setup zfp_stream
+  stream = zFORp_stream_open(bitstream)
+
+  tol_result=zFORp_stream_set_accuracy(stream,1d-3)
+
+
+
+  ! compress
+  bitstream_offset_bytes = zFORp_compress(stream, field)
+  write(*, *) "After compression, bitstream offset at "
+  write(*, *) bitstream_offset_bytes
+  call zFORp_field_free(field)
+  call zFORp_bitstream_stream_close(bitstream)
+
+
+
+  ! decompress
+  allocate(buffer1(bitstream_offset_bytes))
+  buffer1=buffer(1:bitstream_offset_bytes)
+  deallocate(buffer)
+  buffer_c_ptr = c_loc(buffer1)
+  bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+#if 1
+  dstream=stream
+  call zFORp_stream_set_bit_stream(dstream, bitstream);
+#else
+  ! this doesn't work. I don't understand why
+  call zFORp_stream_close(stream)
+  dstream = zFORp_stream_open(bitstream)
+#endif
+
+
+  array_c_ptr = c_loc(decompressed_array)
+  field = zFORp_field_2d(array_c_ptr, zfp_type, xLen, yLen)
+
+  bitstream_offset_bytes = zFORp_decompress(dstream, field)
+  write(*, *) "After decompression, bitstream offset at "
+  write(*, *) bitstream_offset_bytes
+
+  max_abs_error = 0
+  do i = 1, xLen
+    do j = 1, yLen
+      error = abs(decompressed_array(i, j) - input_array(i, j))
+      max_abs_error = max(error, max_abs_error)
+    enddo
+  enddo
+  write(*, *) "Max absolute error: "
+  write(*, *) max_abs_error
+
+  ! deallocations
+  call zFORp_stream_close(dstream)
+  call zFORp_bitstream_stream_close(bitstream)
+  call zFORp_field_free(field)
+
+  deallocate(buffer1)
+  deallocate(input_array)
+  deallocate(decompressed_array)
+
+#endif
+
+
+
 
 	! nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -317,6 +436,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	call blacs_exit(1)
 	call MPI_Finalize(ierr)
+
 
 end PROGRAM ButterflyPACK_IE_2D
 

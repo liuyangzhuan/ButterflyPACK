@@ -37,13 +37,16 @@ contains
 
       integer size_m, size_n
       integer i, j, k, ii, jj, kk
-      real*8 T0, T1
+      real*8 T0, T1, tol_used
       type(matrixblock) :: blocks
       real(kind=8) flop
 
       T0 = MPI_Wtime()
       size_m = size(blocks%fullmat, 1)
       if (option%ILU == 0) then
+#if HAVE_ZFP
+      call ZFP_Decompress(blocks,tol_used)
+#endif
          ! do ii=1,size_m
          ! do jj=1,size_m
          ! write(777,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
@@ -56,6 +59,9 @@ contains
          ! write(778,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
          ! enddo
          ! enddo
+#if HAVE_ZFP
+         call ZFP_Compress(blocks,option%tol_comp)
+#endif
       else
          do ii = 1, size_m
             blocks%ipiv(ii) = ii
@@ -63,7 +69,6 @@ contains
       endif
       T1 = MPI_Wtime()
       stats%Time_Direct_LU = stats%Time_Direct_LU + T1 - T0
-
       return
 
    end subroutine Full_LU
@@ -83,7 +88,7 @@ contains
       integer style(3), data_type(3), id1, id2, id3
       character chara
       DT, allocatable::Vin(:, :), Vin1(:, :), fullmat(:, :), fullmatrix(:, :)
-      real*8 T0, T1
+      real*8 T0, T1, tol_used
       type(matrixblock) :: block1, block2, block3
 
       stats%Flop_Tmp = 0
@@ -96,6 +101,10 @@ contains
       kk = msh%basis_group(group_k)%tail - msh%basis_group(group_k)%head + 1
 
       call assert(style(3) == 1, 'block3 supposed to be style 1')
+
+#if HAVE_ZFP
+      call ZFP_Decompress(block3,tol_used)
+#endif
 
       mm = size(block3%fullmat, 1)
       nn = size(block3%fullmat, 2)
@@ -119,6 +128,10 @@ contains
       deallocate (Vin)
       deallocate (Vin1)
 
+#if HAVE_ZFP
+      call ZFP_Compress(block3,option%tol_comp)
+#endif
+
       T1 = MPI_Wtime()
       stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
@@ -127,16 +140,17 @@ contains
 
    end subroutine Full_add_multiply
 
-   subroutine Full_add(block3, chara, block1, ptree, stats)
+   subroutine Full_add(block3, chara, block1, ptree, stats, option)
 
       implicit none
 
+      type(Hoption)::option
       integer level_butterfly, flag, group_n, group_m
       integer i, j, k, level, mm, nn, rank, level_blocks, mn, ii, jj
       integer style(3), data_type(3), id1, id2, id3
       character chara
       DT, allocatable:: Vin(:, :)
-      real*8 T0, T1
+      real*8 T0, T1, tol_used
       type(matrixblock) :: block1, block3
       type(Hstat):: stats
       type(proctree):: ptree
@@ -171,7 +185,13 @@ contains
 
       if (chara == '-') fullmatrix = -fullmatrix
 
+#if HAVE_ZFP
+      call ZFP_Decompress(block3,tol_used)
+#endif
       block3%fullmat = block3%fullmat + fullmatrix
+#if HAVE_ZFP
+      call ZFP_Compress(block3,option%tol_comp)
+#endif
       deallocate (fullmatrix)
       deallocate (Vin)
 
@@ -2809,7 +2829,7 @@ contains
       type(matrixblock)::block_tmp
       type(blockplus)::Bplus
       integer rank_new_max
-      real(kind=8):: rank_new_avr, error, err_avr, err_max
+      real(kind=8):: rank_new_avr, error, err_avr, err_max, tol_used
       integer niter
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
       integer itermax, ntry, cnt, cnt_partial
@@ -2906,6 +2926,9 @@ contains
 
                n1 = MPI_Wtime()
                if (block_o%style == 1) then
+#if HAVE_ZFP
+                  call ZFP_Decompress(block_o,tol_used)
+#endif
 #if 0
                   allocate (ipiv(block_o%M))
                   call getrff90(block_o%fullmat, ipiv, flop=flop)
@@ -2922,6 +2945,9 @@ contains
                   call GeneralInverse(block_o%M, block_o%M, matrixtemp, block_o%fullmat, BPACK_SafeEps, Flops=flop)
                   stats%Flop_Factor = stats%Flop_Factor + flop
                   deallocate(matrixtemp)
+#endif
+#if HAVE_ZFP
+                  call ZFP_Compress(block_o,option%tol_comp)
 #endif
                else
                   !!!!! invert I+B1 to be I+B2

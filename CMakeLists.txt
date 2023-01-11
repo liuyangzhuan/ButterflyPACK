@@ -275,6 +275,37 @@ if(TPL_ARPACK_LIBRARIES)
   set(ARPACK_LIB_EXPORT ${ARPACK_LIB_STR})
 endif()
 
+
+#--------------------- ZFP ---------------------
+# list(APPEND CMAKE_PREFIX_PATH ${TPL_ZFP_PREFIX}
+#     $ENV{ZFP_ROOT} $ENV{ZFP_DIR})
+# find_package(ZFP)
+# if(ZFP_FOUND)
+
+# set(ZFP_LIB zfp::zfp)
+# string (REPLACE ";" " " ZFP_LIB_STR "${ZFP_LIB}")
+# set(ZFP_LIB_EXPORT ${ZFP_LIB_STR}) 
+
+
+# message("ZFP_LIB_STR='${ZFP_LIB_STR}'")
+
+# endif()
+
+if(TPL_ZFP_LIBRARIES)
+  set(ZFP_FOUND TRUE)
+endif()
+
+if(ZFP_FOUND)
+  message("-- Using TPL_ZFP_LIBRARIES='${TPL_ZFP_LIBRARIES}'")
+  set(ZFP_LIB ${TPL_ZFP_LIBRARIES})
+  # fix up ZFP library name
+  string(REPLACE ";" " " ZFP_LIB_STR "${ZFP_LIB}")
+  set(ZFP_LIB_EXPORT ${ZFP_LIB_STR})
+  set(CMAKE_Fortran_FLAGS "-DHAVE_ZFP ${CMAKE_Fortran_FLAGS} -I${TPL_ZFP_INCLUDE}")
+  set(CMAKE_C_FLAGS "-DHAVE_ZFP ${CMAKE_C_FLAGS} -I${TPL_ZFP_INCLUDE}")
+endif()
+
+
 #--------------------- MPI ---------------------
 find_package(MPI)
 if(MPI_Fortran_FOUND)

@@ -719,12 +719,18 @@ contains
       integer count1, count2, num_row, num_col, indices
       type(matrixblock), pointer :: block
       type(mesh)::msh
+      real(kind=8)::tol_used
 
       group_m = block%row_group
       group_n = block%col_group
       mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
       nn = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
       allocate (block%fullmat_MPI(mm*nn))
+
+#if HAVE_ZFP
+      call ZFP_Decompress(block,tol_used) ! no need to recompress as fullmat will be deleted before exiting
+#endif
+
       !$omp parallel do default(shared) private(i,j,indices)
       do j = 1, nn
          do i = 1, mm
@@ -739,7 +745,7 @@ contains
 
    end subroutine pack_full_blocks
 
-   subroutine unpack_full_blocks(block, Maxlevel, ptree, msh, pgno)
+   subroutine unpack_full_blocks(block, Maxlevel, ptree, msh, pgno, option)
 
       use BPACK_DEFS
       implicit none
@@ -749,6 +755,7 @@ contains
       type(matrixblock), pointer :: block
       integer Maxlevel
       type(proctree)::ptree
+      type(Hoption)::option
       type(mesh)::msh
       integer pgno
 
@@ -766,7 +773,9 @@ contains
       enddo
       !$omp end parallel do
       deallocate (block%fullmat_MPI)
-
+#if HAVE_ZFP
+      call ZFP_Compress(block,option%tol_comp)
+#endif
       return
 
    end subroutine unpack_full_blocks
@@ -818,7 +827,7 @@ contains
 
    end subroutine pack_all_blocks_one_node
 
-   recursive subroutine unpack_all_blocks_one_node(block, Maxlevel, ptree, msh, pgno)
+   recursive subroutine unpack_all_blocks_one_node(block, Maxlevel, ptree, msh, pgno,option)
 
       use BPACK_DEFS
       implicit none
@@ -828,6 +837,7 @@ contains
       type(matrixblock), pointer :: block, blocks_son
       integer Maxlevel
       type(proctree)::ptree
+      type(Hoption)::option
       type(mesh)::msh
       integer pgno, pgno1, pgno2, Maxgrp
 
@@ -853,20 +863,20 @@ contains
          endif
 
          blocks_son => block%sons(1, 1)
-         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno1)
+         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno1, option)
          blocks_son => block%sons(2, 1)
-         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno2)
+         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno2, option)
          blocks_son => block%sons(1, 2)
-         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno1)
+         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno1, option)
          blocks_son => block%sons(2, 2)
-         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno2)
+         call unpack_all_blocks_one_node(blocks_son, Maxlevel, ptree, msh, pgno2, option)
 
       elseif (block%style == 2) then
          call unpack_butterfly_blocks(block, Maxlevel, ptree, msh, pgno)
 
       elseif (block%style == 1) then
 
-         call unpack_full_blocks(block, Maxlevel, ptree, msh, pgno)
+         call unpack_full_blocks(block, Maxlevel, ptree, msh, pgno, option)
 
       endif
 

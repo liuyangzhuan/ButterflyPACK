@@ -1,7 +1,10 @@
 module purge
 module load gcc/9.1.0
 module load openmpi/gcc-9.1.0/4.0.1
-module load scalapack-netlib/gcc-9.1.0/2.0.2 
+module load scalapack-netlib/gcc-9.1.0/2.2.0
+
+export ZFP_INSTALL_DIR=/home/administrator/Desktop/Research/zfp/install/
+
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 # bash PrecisionPreprocessing.sh
@@ -17,6 +20,9 @@ cmake .. \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_doc=OFF \
+	-Denable_openmp=ON \
+	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
+	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so;/home/administrator/Desktop/Software/id_dist/libid_lib.so" \
 	-DCMAKE_Fortran_COMPILER=$MPIF90 \
@@ -38,3 +44,5 @@ cmake .. \
 	# -DTPL_BLAS_LIBRARIES="" \
 	# -DTPL_LAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_gf_lp64.so;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_intel_thread.so;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_core.so;/opt/intel/compilers_and_libraries_2018.1.163/linux/compiler/lib/intel64/libiomp5.so" \
 	# -DTPL_SCALAPACK_LIBRARIES="/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_blacs_intelmpi_lp64.so;/opt/intel/compilers_and_libraries_2018.1.163/linux/mkl/lib/intel64/libmkl_scalapack_lp64.so" \
+	# -DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
+	# -DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \

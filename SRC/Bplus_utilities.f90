@@ -621,6 +621,16 @@ contains
       blocks%rankmin = 1000
 
       if (allocated(blocks%fullmat)) deallocate (blocks%fullmat)
+#if HAVE_ZFP
+      if (allocated(blocks%buffer_r)) then
+         deallocate (blocks%buffer_r)
+         call zFORp_stream_close(blocks%stream_r)
+      endif
+      if (allocated(blocks%buffer_i))then
+         deallocate (blocks%buffer_i)
+         call zFORp_stream_close(blocks%stream_i)
+      endif
+#endif
       if (allocated(blocks%fullmat_MPI)) deallocate (blocks%fullmat_MPI)
       if (allocated(blocks%ipiv)) deallocate (blocks%ipiv)
       if (allocated(blocks%Butterfly_data_MPI)) deallocate (blocks%Butterfly_data_MPI)
@@ -647,6 +657,7 @@ contains
       integer::block_num, block_num_new, num_blocks, level_butterfly
       character::trans
       real(kind=8), optional::memory
+      real(kind=8)::tol_used
 
       if (present(memory)) memory = 0
 
@@ -787,6 +798,32 @@ contains
                endif
                if (present(memory)) memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
             endif
+#if HAVE_ZFP
+            if(allocated(block_i%buffer_r))then
+               call ZFP_Decompress(block_i,tol_used)
+               mm = size(block_i%fullmat, 1)
+               nn = size(block_i%fullmat, 2)
+               allocate (block_o%fullmat(mm, nn))
+               block_o%fullmat = block_i%fullmat
+               call ZFP_Compress(block_i,tol_used)
+               call ZFP_Compress(block_o,tol_used)
+               if (present(memory)) memory = memory + SIZEOF(block_o%buffer_r)/1024.0d3
+               if (present(memory) .and. allocated(block_o%buffer_i)) memory = memory + SIZEOF(block_o%buffer_i)/1024.0d3
+
+               ! mm = size(block_i%buffer_r,1)
+               ! allocate(block_o%buffer_r(mm))
+               ! block_o%buffer_r = block_i%buffer_r
+               ! block_o%stream_r = block_i%stream_r
+               ! if (present(memory)) memory = memory + SIZEOF(block_o%buffer_r)/1024.0d3
+            endif
+            ! if(allocated(block_i%buffer_i))then
+            !    mm = size(block_i%buffer_i,1)
+            !    allocate(block_o%buffer_i(mm))
+            !    block_o%buffer_i = block_i%buffer_i
+            !    block_o%stream_i = block_i%stream_i
+            !    if (present(memory)) memory = memory + SIZEOF(block_o%buffer_i)/1024.0d3
+            ! endif
+#endif
          else
             ! write(*,*)'block style not implemented'
             ! stop
@@ -914,6 +951,11 @@ contains
                endif
                if (present(memory)) memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
             endif
+#if HAVE_ZFP
+         write(*,*)'not yet impleted for ZFP data. Can be implemented: copy ZFP data, decompress, transpose, recompress'
+         stop
+#endif
+
          else
             ! write(*,*)'block style not implemented'
             ! stop
@@ -1144,9 +1186,29 @@ contains
       else if (block_i%style == 1) then
          mm = size(block_i%fullmat, 1)
          nn = size(block_i%fullmat, 2)
-         allocate (block_o%fullmat(mm, nn))
-         block_o%fullmat = block_i%fullmat
-         deallocate (block_i%fullmat)
+         if(allocated(block_i%fullmat))then
+            allocate (block_o%fullmat(mm, nn))
+            block_o%fullmat = block_i%fullmat
+            deallocate (block_i%fullmat)
+         endif
+#if HAVE_ZFP
+         if(allocated(block_i%buffer_r))then
+            mm = size(block_i%buffer_r,1)
+            allocate(block_o%buffer_r(mm))
+            block_o%buffer_r = block_i%buffer_r
+            block_o%stream_r = block_i%stream_r
+            deallocate(block_i%buffer_r)
+            call zFORp_stream_close(block_i%stream_r)
+         endif
+         if(allocated(block_i%buffer_i))then
+            mm = size(block_i%buffer_i,1)
+            allocate(block_o%buffer_i(mm))
+            block_o%buffer_i = block_i%buffer_i
+            block_o%stream_i = block_i%stream_i
+            deallocate(block_i%buffer_i)
+            call zFORp_stream_close(block_i%stream_i)
+         endif
+#endif
       else
          write (*, *) 'block style not implemented'
          stop
@@ -1192,6 +1254,8 @@ contains
 
       else if (block_i%style == 1) then
          if(allocated(block_i%fullmat))memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
+         if(allocated(block_i%buffer_r))memory = memory + SIZEOF(block_i%buffer_r)/1024.0d3
+         if(allocated(block_i%buffer_i))memory = memory + SIZEOF(block_i%buffer_i)/1024.0d3
       else
          write (*, *) 'block style not implemented'
          stop
@@ -1285,6 +1349,187 @@ contains
       BF_checkNAN = myisnan(temp)
 #endif
    end function BF_checkNAN
+
+
+
+#ifdef HAVE_ZFP
+   subroutine ZFP_Compress(blocks, tol_comp)
+
+      implicit none
+      type(matrixblock)::blocks
+      real(kind=8)::tol_comp,tol_abs
+
+      ! input/decompressed arrays
+      type(c_ptr) :: array_c_ptr
+      DTR, dimension(:, :), allocatable, target :: input_array
+      ! zfp_field
+      type(zFORp_field) :: field
+      ! bitstream
+      character, dimension(:), allocatable, target :: buffer
+      type(c_ptr) :: buffer_c_ptr
+      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes
+      type(zFORp_bitstream) :: bitstream
+      ! zfp_stream
+      type(zFORp_stream) :: stream, dstream
+      real (kind=8) :: tol_result, maxcal
+      DTR::maxval
+      integer :: zfp_type
+
+      maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
+      tol_abs = tol_comp * maxval
+
+      ! setup zfp_field
+      allocate(input_array(blocks%M,blocks%N))
+      input_array=dble(blocks%fullmat)
+      array_c_ptr = c_loc(input_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+
+      ! setup bitstream
+      buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+      allocate(buffer(buffer_size_bytes))
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+      ! setup zfp_stream
+      blocks%stream_r = zFORp_stream_open(bitstream)
+      tol_result=zFORp_stream_set_accuracy(blocks%stream_r,tol_abs)
+
+      ! compress
+      bitstream_offset_bytes = zFORp_compress(blocks%stream_r, field)
+      allocate(blocks%buffer_r(bitstream_offset_bytes))
+      blocks%buffer_r=buffer(1:bitstream_offset_bytes)
+      call zFORp_field_free(field)
+      call zFORp_bitstream_stream_close(bitstream)
+      deallocate(input_array)
+      deallocate(buffer)
+
+
+#if DAT==0 || DAT==2
+      ! setup zfp_field
+      allocate(input_array(blocks%M,blocks%N))
+      input_array=aimag(blocks%fullmat)
+      array_c_ptr = c_loc(input_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+
+      ! setup bitstream
+      buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+      allocate(buffer(buffer_size_bytes))
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+      ! setup zfp_stream
+      blocks%stream_i = zFORp_stream_open(bitstream)
+      tol_result=zFORp_stream_set_accuracy(blocks%stream_i,tol_abs)
+
+      ! compress
+      bitstream_offset_bytes = zFORp_compress(blocks%stream_i, field)
+      allocate(blocks%buffer_i(bitstream_offset_bytes))
+      blocks%buffer_i=buffer(1:bitstream_offset_bytes)
+      call zFORp_field_free(field)
+      call zFORp_bitstream_stream_close(bitstream)
+      deallocate(input_array)
+      deallocate(buffer)
+#endif
+      deallocate(blocks%fullmat)
+
+   end subroutine ZFP_Compress
+
+   subroutine ZFP_Decompress(blocks, tol_used)
+
+      implicit none
+      type(matrixblock)::blocks
+
+      ! input/decompressed arrays
+      type(c_ptr) :: array_c_ptr
+      DTR::maxval
+      DTR, dimension(:, :), allocatable, target :: decompressed_array
+      ! zfp_field
+      type(zFORp_field) :: field
+      ! bitstream
+      character, dimension(:), allocatable, target :: buffer
+      type(c_ptr) :: buffer_c_ptr
+      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes
+      type(zFORp_bitstream) :: bitstream
+      ! zfp_stream
+      type(zFORp_stream) :: stream
+      real (kind=8) :: tol_result,tol_used
+      integer :: zfp_type
+
+      tol_result = zFORp_stream_accuracy(blocks%stream_r)
+
+      allocate(blocks%fullmat(blocks%M,blocks%N))
+
+      ! setup zfp_field
+      allocate(decompressed_array(blocks%M,blocks%N))
+      array_c_ptr = c_loc(decompressed_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+
+      ! setup bitstream
+      buffer_size_bytes=size(blocks%buffer_r,1)
+      allocate(buffer(buffer_size_bytes))
+      buffer = blocks%buffer_r
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+      call zFORp_stream_set_bit_stream(blocks%stream_r, bitstream);
+
+      ! decompress
+      bitstream_offset_bytes = zFORp_decompress(blocks%stream_r, field)
+      blocks%fullmat=decompressed_array
+
+      ! deallocations
+      call zFORp_stream_close(blocks%stream_r)
+      call zFORp_bitstream_stream_close(bitstream)
+      call zFORp_field_free(field)
+
+      deallocate(decompressed_array)
+      deallocate(blocks%buffer_r)
+      deallocate(buffer)
+
+
+#if DAT==0 || DAT==2
+      ! setup zfp_field
+      allocate(decompressed_array(blocks%M,blocks%N))
+      array_c_ptr = c_loc(decompressed_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+
+      ! setup bitstream
+      buffer_size_bytes=size(blocks%buffer_i,1)
+      allocate(buffer(buffer_size_bytes))
+      buffer = blocks%buffer_i
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+      call zFORp_stream_set_bit_stream(blocks%stream_i, bitstream);
+
+      ! decompress
+      bitstream_offset_bytes = zFORp_decompress(blocks%stream_i, field)
+      blocks%fullmat=blocks%fullmat+BPACK_junit*decompressed_array
+
+      ! deallocations
+      call zFORp_stream_close(blocks%stream_i)
+      call zFORp_bitstream_stream_close(bitstream)
+      call zFORp_field_free(field)
+
+      deallocate(decompressed_array)
+      deallocate(blocks%buffer_i)
+      deallocate(buffer)
+#endif
+
+   maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
+   if(maxval<BPACK_SafeEps)then
+      tol_used = BPACK_SafeEps
+   else
+      tol_used = tol_result/maxval
+   endif
+
+   end subroutine ZFP_Decompress
+
+#endif
+
+
 
    subroutine BF_print_size_rank(block_i, tolerance)
 
@@ -11065,17 +11310,21 @@ end subroutine BF_block_MVP_dat_batch_magma
 
    end subroutine BF_block_MVP_partial
 
-   subroutine Full_block_extraction(blocks, inters, ptree, msh, stats)
+   subroutine Full_block_extraction(blocks, inters, ptree, msh, stats,option)
 
       implicit none
       type(matrixblock)::blocks
+      type(Hoption)::option
       type(proctree)::ptree
       type(mesh)::msh
       type(Hstat)::stats
       integer nn, ri, ci, nng, headm, headn, pp, row_group, col_group
       type(intersect)::inters(:)
       integer ii, jj
-
+      real(kind=8)::tol_used
+#if HAVE_ZFP
+      call ZFP_Decompress(blocks,tol_used)
+#endif
       headm = msh%basis_group(blocks%row_group)%head
       headn = msh%basis_group(blocks%col_group)%head
       do nn = 1, size(blocks%inters, 1)
@@ -11088,7 +11337,9 @@ end subroutine BF_block_MVP_dat_batch_magma
             enddo
          enddo
       enddo
-
+#if HAVE_ZFP
+      call ZFP_Compress(blocks,option%tol_comp)
+#endif
    end subroutine Full_block_extraction
 
    subroutine LR_block_extraction(blocks, inters, ptree, msh, stats)
@@ -13984,6 +14235,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       character trans ! 'N' means multiple L^-1 from left, 'T' means multiple L^-1 from right
       type(proctree)::ptree
       type(Hstat)::stats
+      real(kind=8)::tol_used
 
       if (blocks_l%style == 4) then
          if (trans == 'N') then
@@ -14014,7 +14266,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             enddo
          endif
          ! write(*,*)blocks_l%level,blocks_l%pgno,ptree%MyID,blocks_l%headm,mm,idx_start,'daha'
+#if HAVE_ZFP
+         call ZFP_Decompress(blocks_l,tol_used)
+#endif
          call trsmf90(blocks_l%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'L', trans, 'U', mm, nvec)
+#if HAVE_ZFP
+         call ZFP_Compress(blocks_l,tol_used)
+#endif
          if (trans /= 'N') then
             do i = mm, 1, -1
                ii = blocks_l%ipiv(i)
@@ -14051,6 +14309,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(matrixblock) :: blocks_u, blocks !!!! modified by Yang Liu. passing pointer is dangerous, blocks_u row/row_group becomes different once in this subroutine
       character trans
       integer idx_start, idxs_m
+      real(kind=8)::tol_used
 
       mark = 0
       if (blocks_u%style == 4) then
@@ -14067,7 +14326,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       else
          mm = blocks_u%M
          idxs_m = blocks_u%headm - idx_start + 1
+#if HAVE_ZFP
+         call ZFP_Decompress(blocks_u,tol_used)
+#endif
          call trsmf90(blocks_u%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'U', trans, 'N', mm, nvec)
+#if HAVE_ZFP
+         call ZFP_Compress(blocks_u,tol_used)
+#endif
       endif
 
       return
@@ -14089,6 +14354,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT, allocatable::Vintmp(:, :), Vouttmp(:, :)
       integer ldi, ldo, flag
       DT::Vin(ldi, *), Vout(ldo, *)
+      real(kind=8)::tol_used
       type(proctree)::ptree
       type(Hstat)::stats
 
@@ -14122,6 +14388,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
          if(flag==1)then
          if (style == 1) then
+#if HAVE_ZFP
+            call ZFP_Decompress(blocks,tol_used)
+#endif
             if (trans == 'N') then
                allocate (Vintmp(nn, Nrnd))
                Vintmp = Vin(idxs_n:idxs_n + nn - 1, 1:Nrnd)
@@ -14141,6 +14410,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                deallocate (Vintmp)
                deallocate (Vouttmp)
             endif
+#if HAVE_ZFP
+            call ZFP_Compress(blocks,tol_used)
+#endif
          else
             if (trans == 'N') then
                call BF_block_MVP_dat(blocks, trans, mm, nn, Nrnd, Vin(idxs_n, 1), ldi, Vout(idxs_m, 1), ldo, a, BPACK_cone, ptree, stats)
@@ -14172,12 +14444,16 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(matrixblock)::blocks
       integer M, M1, N1
       integer ldi,ldo
+      real(kind=8)::tol_used
       DT :: random1(ldi, *), random2(ldo, *)
       DT:: al, be
       DT, allocatable :: random2tmp(:, :)
-
+#if HAVE_ZFP
+      call ZFP_Decompress(blocks,tol_used)
+#endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
+
 
       al = 1d0
       be = 0d0
@@ -14195,8 +14471,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, N1, 'T', 'N', N1, num_vectors, M1, al, be)
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
-
-
+#if HAVE_ZFP
+      call ZFP_Compress(blocks,tol_used)
+#endif
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)
    end subroutine Full_block_MVP_dat

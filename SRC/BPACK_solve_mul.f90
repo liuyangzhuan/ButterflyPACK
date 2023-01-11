@@ -81,7 +81,7 @@ contains
       ldv = Nunk_loc
       maxnev = nev
       ! maxncv = nev*2
-      maxncv = min(nev*4,Nunk)  
+      maxncv = min(nev*4,Nunk)
 
       !!!! the following if test has been disabled. Make sure "else if (ncv .le. nev+1 .or.  ncv .gt. n) then" in pzneupd.f is changed to "else if (ncv .le. nev+1) then"
       ! if(maxncv>Nunk_loc)then

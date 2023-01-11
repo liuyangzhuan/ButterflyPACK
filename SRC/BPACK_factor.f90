@@ -66,7 +66,7 @@ contains
         integer rank, index_near, m, n, length, flag, itemp
         real T0
         real(kind=8)::rtemp = 0
-        real(kind=8) tmpfact
+        real(kind=8) tmpfact, tol_used
         real(kind=8) Memory, Memory_near
         integer, allocatable:: index_old(:), index_new(:)
         integer::block_num, block_num_new, level_butterfly
@@ -95,10 +95,15 @@ contains
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Computing block inverse at level Maxlevel+1...'
         level_c = ho_bf1%Maxlevel + 1
         do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
-
-         ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
-            nn = size(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, 1)
-
+#if HAVE_ZFP
+            call ZFP_Decompress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),tol_used)
+#endif
+            nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, 1)
+            allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
+            ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
+#if HAVE_ZFP
+            call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),option%tol_comp)
+#endif
             allocate(Singular(nn))
             allocate(UU(nn,nn))
             allocate(VV(nn,nn))
@@ -133,9 +138,15 @@ contains
             !!!!!!! the forward block BP can be deleted if not used in solution phase
 
             ! write(*,*)fnorm(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,nn,nn)
-
-stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
-
+#if HAVE_ZFP
+            call ZFP_Compress(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1),option%tol_comp)
+            stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_r)/1024.0d3
+#if DAT==0 || DAT==2
+            stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_i)/1024.0d3
+#endif
+#else
+            stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+#endif
         end do
 
         call MPI_barrier(ptree%Comm, ierr)
@@ -450,7 +461,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
                 if (recv == 1)then
-                    call unpack_all_blocks_one_node(blocks_r, h_mat%Maxlevel, ptree, msh, mypgno)
+                    call unpack_all_blocks_one_node(blocks_r, h_mat%Maxlevel, ptree, msh, mypgno, option)
                     Memory=0
                     call Hmat_block_ComputeMemory(blocks_r, Memory)
                     call LogMemory(stats, Memory)
@@ -509,7 +520,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                             if(iproc1==myrow .and. jproc1==mycol)then
                                 blocks_uu => h_mat%Computing_matricesblock_u(myj1, myi1)
                                 call Hmat_block_copy_MPIdata(blocks_uu, blocks_r, msh)
-                                call unpack_all_blocks_one_node(blocks_uu, h_mat%Maxlevel, ptree, msh, mypgno)
+                                call unpack_all_blocks_one_node(blocks_uu, h_mat%Maxlevel, ptree, msh, mypgno, option)
                                 Memory=0
                                 call Hmat_block_ComputeMemory(blocks_uu, Memory)
                                 call LogMemory(stats, Memory)
@@ -542,7 +553,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                             if(iproc1==myrow .and. jproc1==mycol)then
                                 blocks_ll => h_mat%Computing_matricesblock_l(myj1, myi1)
                                 call Hmat_block_copy_MPIdata(blocks_ll, blocks_r, msh)
-                                call unpack_all_blocks_one_node(blocks_ll, h_mat%Maxlevel, ptree, msh, mypgno)
+                                call unpack_all_blocks_one_node(blocks_ll, h_mat%Maxlevel, ptree, msh, mypgno, option)
                                 Memory=0
                                 call Hmat_block_ComputeMemory(blocks_ll, Memory)
                                 call LogMemory(stats, Memory)
@@ -589,7 +600,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             do j = 1, h_mat%myAcols
                 do i = 1, h_mat%myArows
                     blocks => h_mat%Local_blocks(j, i)
-                    call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
+                    call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno,option)
                     call Hmat_block_ComputeMemory(blocks, stats%Mem_Factor)
                 enddo
             enddo
@@ -850,7 +861,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         integer style(3), mark, style_m
         integer i, j, k, ii
         integer mm, nn, rank
-        real(kind=8) T0, T1, error
+        real(kind=8) T0, T1, error, tol_used
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         type(matrixblock) :: blocks_l, blocks_m
         DT:: ctemp
@@ -905,6 +916,10 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         else
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
+#if HAVE_ZFP
+                 call ZFP_Decompress(blocks_m,tol_used)
+                 call ZFP_Decompress(blocks_l,tol_used)
+#endif
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
                 do i = 1, mm
@@ -920,9 +935,15 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
                     endif
                 enddo
                 call trsmf90(blocks_l%fullmat, blocks_m%fullmat, 'L', 'L', 'N', 'U', mm, nn)
+#if HAVE_ZFP
+                 call ZFP_Compress(blocks_m,option%tol_comp)
+                 call ZFP_Compress(blocks_l,option%tol_comp)
+#endif
+
             else
 
                 write (*, *) 'should not come here H_Solve_XLM'
+                stop
 
                 mm = blocks_m%M
                 rank = size(blocks_m%ButterflyU%blocks(1)%matrix, 2)
@@ -963,7 +984,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         integer style(3), mark, style_m
         integer i, j, k, mm, nn, rank
         integer mm_1, mm_2, nn_1, nn_2, rank_1, rank_2, mm_3, nn_3, rank_3
-        real(kind=8) T0, T1, error
+        real(kind=8) T0, T1, error, tol_used
         type(matrixblock) :: blocks_u, blocks_m
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         integer rank0
@@ -1015,12 +1036,21 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
         else
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
+#if HAVE_ZFP
+                 call ZFP_Decompress(blocks_m,tol_used)
+                 call ZFP_Decompress(blocks_u,tol_used)
+#endif
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
                 call trsmf90(blocks_u%fullmat, blocks_m%fullmat, 'R', 'U', 'N', 'N', mm, nn)
+#if HAVE_ZFP
+                 call ZFP_Compress(blocks_m,option%tol_comp)
+                 call ZFP_Compress(blocks_u,option%tol_comp)
+#endif
             else
 
                 write (*, *) 'should not come here Hmat_XUM'
+                stop
                 mm = blocks_m%M
                 rank = size(blocks_m%ButterflyV%blocks(1)%matrix, 2)
                 call trsmf90(blocks_u%fullmat, blocks_m%ButterflyV%blocks(1)%matrix, 'L', 'U', 'T', 'N', mm, rank)
@@ -1213,7 +1243,7 @@ stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_i
             stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T1 - T0
             stats%Add_random_CNT(blocks_o%level) = stats%Add_random_CNT(blocks_o%level) + 1
         else if (blocks_o%style == 1) then
-            call Full_add(blocks_o, chara, blocks_1, ptree, stats)
+            call Full_add(blocks_o, chara, blocks_1, ptree, stats, option)
         end if
 
     end subroutine Hmat_BF_add

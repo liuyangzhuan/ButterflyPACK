@@ -466,7 +466,7 @@ contains
       integer level, blocks, edge, patch, node, group
       integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
       real T0
-      real(kind=8):: rtemp, rel_error, error, t1, t2, tim_tmp, rankrate_inner, rankrate_outter
+      real(kind=8):: rtemp, rel_error, error, t1, t2, tim_tmp, rankrate_inner, rankrate_outter, memory
       integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2
       type(matrixblock)::block_tmp, block_tmp1
       DT, allocatable::fullmat(:, :)
@@ -560,8 +560,8 @@ contains
                      level = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%level
                      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'constructing level', level
                   endif
-                  call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), msh, ker, stats, option, ptree)
-                  stats%Mem_Direct_for = stats%Mem_Direct_for + SIZEOF(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+                  call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), msh, ker, stats, option, ptree, memory)
+                  stats%Mem_Direct_for = stats%Mem_Direct_for + memory
                endif
                ! ! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
                ! if(level>=option%level_check .and. level_c/=ho_bf1%Maxlevel+1)then
@@ -738,8 +738,8 @@ contains
          Memory_far = Memory_far + Memory_tmp
 
       elseif (blocks%style == 1) then
-         call Full_construction(blocks, msh, ker, stats, option, ptree)
-         Memory_near = Memory_near + SIZEOF(blocks%fullmat)/1024.0d3
+         call Full_construction(blocks, msh, ker, stats, option, ptree, Memory_tmp)
+         Memory_near = Memory_near + Memory_tmp
       elseif (blocks%style == 4) then
          do ii = 1, 2
          do jj = 1, 2
@@ -996,8 +996,8 @@ contains
          do bb = 1, bplus%LL(ll)%Nbound
             if (IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(bb)%pgno)) then
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
-                  call Full_construction(bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
-                  Memory = Memory + SIZEOF(bplus%LL(ll)%matrices_block(bb)%fullmat)/1024.0d3
+                  call Full_construction(bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree, rtemp)
+                  Memory = Memory + rtemp
                else
 
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
@@ -1278,7 +1278,7 @@ contains
             ! extract entries on an array of intersections for each block
 
             if (blocks%style == 1) then
-               call Full_block_extraction(blocks, inters, ptree, msh, stats)
+               call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
             else
                if (blocks%level_butterfly == 0) then
                   call LR_block_extraction(blocks, inters, ptree, msh, stats)
@@ -1586,7 +1586,7 @@ contains
             ! extract entries on an array of intersections for each block
 
             if (blocks%style == 1) then
-               call Full_block_extraction(blocks, inters, ptree, msh, stats)
+               call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
             else
                if (blocks%level_butterfly == 0) then
                   call LR_block_extraction(blocks, inters, ptree, msh, stats)

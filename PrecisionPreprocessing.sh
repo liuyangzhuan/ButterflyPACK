@@ -49,6 +49,8 @@ echo "#if DAT==0" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT complex(kind=8)" >> $MACRO_FILE
 echo "#define DTR real(kind=8)" >> $MACRO_FILE
+echo "#define DTZFP zFORp_type_double" >> $MACRO_FILE
+echo "#define DTRBytes 8" >> $MACRO_FILE
 echo "#define DTC complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_COMPLEX" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_complex16" >> $MACRO_FILE
@@ -65,6 +67,8 @@ echo "#elif DAT==1" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT real(kind=8)" >> $MACRO_FILE
 echo "#define DTR real(kind=8)" >> $MACRO_FILE
+echo "#define DTZFP zFORp_type_double" >> $MACRO_FILE
+echo "#define DTRBytes 8" >> $MACRO_FILE
 echo "#define DTC complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_PRECISION" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_double" >> $MACRO_FILE
@@ -81,6 +85,8 @@ echo "#elif DAT==2" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT complex(kind=4)" >> $MACRO_FILE
 echo "#define DTR real(kind=4)" >> $MACRO_FILE
+echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
+echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_COMPLEX" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_complex" >> $MACRO_FILE
@@ -97,6 +103,8 @@ echo "#elif DAT==3" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
 echo "#define DT real(kind=4)" >> $MACRO_FILE
 echo "#define DTR real(kind=4)" >> $MACRO_FILE
+echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
+echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_FLOAT" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_float" >> $MACRO_FILE

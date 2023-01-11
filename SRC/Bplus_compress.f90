@@ -786,7 +786,7 @@ contains
             flops = flops + flop
          else
             rank_new = 1
-            jpvt(1) = 1            
+            jpvt(1) = 1
             submats(index_ij)%dat = 0
          endif
 
@@ -1786,7 +1786,7 @@ contains
                flops = flops + flop
             else
                rank_new = 1
-               jpvt(1) = 1               
+               jpvt(1) = 1
                core_tmp = 0
             endif
 
@@ -7549,7 +7549,8 @@ time_tmp = time_tmp + n2 - n1
 
    end subroutine LocalButterflySVD_Right
 
-   subroutine Full_construction(blocks, msh, ker, stats, option, ptree)
+
+   subroutine Full_construction(blocks, msh, ker, stats, option, ptree, memory)
 
 
       implicit none
@@ -7567,6 +7568,7 @@ time_tmp = time_tmp + n2 - n1
       integer, allocatable::mrange(:), nrange(:)
       integer passflag
       type(intersect)::submats(1)
+      real(kind=8)::memory
 
       mm = blocks%M
       head_m = blocks%headm
@@ -7600,7 +7602,15 @@ time_tmp = time_tmp + n2 - n1
       deallocate(submats(1)%cols)
       deallocate(submats(1)%dat)
 
-
+#if HAVE_ZFP
+      call ZFP_Compress(blocks, option%tol_comp)
+      memory = SIZEOF(blocks%buffer_r)/1024.0d3
+#if DAT==0 || DAT==2
+      memory = memory + SIZEOF(blocks%buffer_i)/1024.0d3
+#endif
+#else
+      memory = SIZEOF(blocks%fullmat)/1024.0d3
+#endif
 
       deallocate (mrange)
       deallocate (nrange)
