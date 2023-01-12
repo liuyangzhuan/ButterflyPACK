@@ -45,7 +45,7 @@ contains
       size_m = size(blocks%fullmat, 1)
       if (option%ILU == 0) then
 #if HAVE_ZFP
-      call ZFP_Decompress(blocks,tol_used)
+      if(option%use_zfp==1)call ZFP_Decompress(blocks,tol_used)
 #endif
          ! do ii=1,size_m
          ! do jj=1,size_m
@@ -60,7 +60,7 @@ contains
          ! enddo
          ! enddo
 #if HAVE_ZFP
-         call ZFP_Compress(blocks,option%tol_comp)
+         if(option%use_zfp==1)call ZFP_Compress(blocks,option%tol_comp)
 #endif
       else
          do ii = 1, size_m
@@ -103,7 +103,7 @@ contains
       call assert(style(3) == 1, 'block3 supposed to be style 1')
 
 #if HAVE_ZFP
-      call ZFP_Decompress(block3,tol_used)
+      if(option%use_zfp==1)call ZFP_Decompress(block3,tol_used)
 #endif
 
       mm = size(block3%fullmat, 1)
@@ -129,7 +129,7 @@ contains
       deallocate (Vin1)
 
 #if HAVE_ZFP
-      call ZFP_Compress(block3,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(block3,option%tol_comp)
 #endif
 
       T1 = MPI_Wtime()
@@ -186,11 +186,11 @@ contains
       if (chara == '-') fullmatrix = -fullmatrix
 
 #if HAVE_ZFP
-      call ZFP_Decompress(block3,tol_used)
+      if(option%use_zfp==1)call ZFP_Decompress(block3,tol_used)
 #endif
       block3%fullmat = block3%fullmat + fullmatrix
 #if HAVE_ZFP
-      call ZFP_Compress(block3,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(block3,option%tol_comp)
 #endif
       deallocate (fullmatrix)
       deallocate (Vin)
@@ -2927,7 +2927,7 @@ contains
                n1 = MPI_Wtime()
                if (block_o%style == 1) then
 #if HAVE_ZFP
-                  call ZFP_Decompress(block_o,tol_used)
+                  if(option%use_zfp==1)call ZFP_Decompress(block_o,tol_used)
 #endif
 #if 0
                   allocate (ipiv(block_o%M))
@@ -2947,7 +2947,7 @@ contains
                   deallocate(matrixtemp)
 #endif
 #if HAVE_ZFP
-                  call ZFP_Compress(block_o,option%tol_comp)
+                  if(option%use_zfp==1)call ZFP_Compress(block_o,option%tol_comp)
 #endif
                else
                   !!!!! invert I+B1 to be I+B2

@@ -1153,11 +1153,15 @@ contains
                         deallocate(matrixtemp)
                      endif
 #if HAVE_ZFP
-                     call ZFP_Compress(blocks,option%tol_comp)
-                     Memory = Memory + SIZEOF(blocks%buffer_r)/1024.0d3
+                     if(option%use_zfp==1)then
+                        call ZFP_Compress(blocks,option%tol_comp)
+                        Memory = Memory + SIZEOF(blocks%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-                     Memory = Memory + SIZEOF(blocks%buffer_i)/1024.0d3
+                        Memory = Memory + SIZEOF(blocks%buffer_i)/1024.0d3
 #endif
+                     else
+                        Memory = Memory + SIZEOF(blocks%fullmat)/1024.0d3
+                     endif
 #else
                      Memory = Memory + SIZEOF(blocks%fullmat)/1024.0d3
 #endif
@@ -1828,11 +1832,15 @@ contains
             block_o%fullmat = RandVectOutR(k + 1:k + mm, 1:nn)
 
 #if HAVE_ZFP
-            call ZFP_Compress(block_o,option%tol_comp)
-            Memory = Memory + SIZEOF(block_o%buffer_r)/1024.0d3
+            if(option%use_zfp==1)then
+               call ZFP_Compress(block_o,option%tol_comp)
+               Memory = Memory + SIZEOF(block_o%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-            Memory = Memory + SIZEOF(block_o%buffer_i)/1024.0d3
+               Memory = Memory + SIZEOF(block_o%buffer_i)/1024.0d3
 #endif
+            else
+               Memory = Memory + SIZEOF(block_o%fullmat)/1024.0d3
+            endif
 #else
             Memory = Memory + SIZEOF(block_o%fullmat)/1024.0d3
 #endif

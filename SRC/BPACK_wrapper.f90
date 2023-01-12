@@ -573,6 +573,10 @@ contains
          val_d = option%knn
          valid_opt = 1
       endif
+      if (trim(str) == 'use_zfp') then
+         val_d = option%use_zfp
+         valid_opt = 1
+      endif
       if (trim(str) == 'cpp') then
          val_d = option%cpp
          valid_opt = 1
@@ -824,6 +828,12 @@ contains
       if (trim(str) == 'cpp') then
          call c_f_pointer(val_Cptr, val_i)
          option%cpp = val_i
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'use_zfp') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%use_zfp = val_i
          valid_opt = 1
       endif
 

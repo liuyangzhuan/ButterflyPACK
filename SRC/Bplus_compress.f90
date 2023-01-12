@@ -7603,11 +7603,15 @@ time_tmp = time_tmp + n2 - n1
       deallocate(submats(1)%dat)
 
 #if HAVE_ZFP
-      call ZFP_Compress(blocks, option%tol_comp)
-      memory = SIZEOF(blocks%buffer_r)/1024.0d3
+      if(option%use_zfp==1)then
+         call ZFP_Compress(blocks, option%tol_comp)
+         memory = SIZEOF(blocks%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-      memory = memory + SIZEOF(blocks%buffer_i)/1024.0d3
+         memory = memory + SIZEOF(blocks%buffer_i)/1024.0d3
 #endif
+      else
+         memory = SIZEOF(blocks%fullmat)/1024.0d3
+      endif
 #else
       memory = SIZEOF(blocks%fullmat)/1024.0d3
 #endif

@@ -1257,7 +1257,7 @@ contains
 #if HAVE_ZFP
          if(allocated(block_i%buffer_r))memory = memory + SIZEOF(block_i%buffer_r)/1024.0d3
          if(allocated(block_i%buffer_i))memory = memory + SIZEOF(block_i%buffer_i)/1024.0d3
-#endif         
+#endif
       else
          write (*, *) 'block style not implemented'
          stop
@@ -11325,7 +11325,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer ii, jj
       real(kind=8)::tol_used
 #if HAVE_ZFP
-      call ZFP_Decompress(blocks,tol_used)
+      if(option%use_zfp==1)call ZFP_Decompress(blocks,tol_used)
 #endif
       headm = msh%basis_group(blocks%row_group)%head
       headn = msh%basis_group(blocks%col_group)%head
@@ -11340,7 +11340,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 #if HAVE_ZFP
-      call ZFP_Compress(blocks,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(blocks,option%tol_comp)
 #endif
    end subroutine Full_block_extraction
 
@@ -14227,7 +14227,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       ! integer vectors_y
       integer style(3)
-      integer i, j, k, ii
+      integer i, j, k, ii, zfpflag
       integer mm, nn, nvec, idxs_m, idx_start ! idx_start means the global indice of the first element of Vinout
       integer head, tail
       DT ctemp
@@ -14269,11 +14269,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
          ! write(*,*)blocks_l%level,blocks_l%pgno,ptree%MyID,blocks_l%headm,mm,idx_start,'daha'
 #if HAVE_ZFP
-         call ZFP_Decompress(blocks_l,tol_used)
+         zfpflag=0
+         if(allocated(blocks_l%buffer_r))zfpflag=1
+         if(zfpflag==1)call ZFP_Decompress(blocks_l,tol_used)
 #endif
          call trsmf90(blocks_l%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'L', trans, 'U', mm, nvec)
 #if HAVE_ZFP
-         call ZFP_Compress(blocks_l,tol_used)
+         if(zfpflag==1)call ZFP_Compress(blocks_l,tol_used)
 #endif
          if (trans /= 'N') then
             do i = mm, 1, -1
@@ -14303,7 +14305,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       integer vectors_x, vectors_y
       integer style(3), mark
-      integer i, j, k, ii
+      integer i, j, k, ii, zfpflag
       integer mm, nn, nvec
       integer head, tail
       integer ld
@@ -14329,11 +14331,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          mm = blocks_u%M
          idxs_m = blocks_u%headm - idx_start + 1
 #if HAVE_ZFP
-         call ZFP_Decompress(blocks_u,tol_used)
+         zfpflag=0
+         if(allocated(blocks_u%buffer_r))zfpflag=1
+         if(zfpflag==1)call ZFP_Decompress(blocks_u,tol_used)
 #endif
          call trsmf90(blocks_u%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'U', trans, 'N', mm, nvec)
 #if HAVE_ZFP
-         call ZFP_Compress(blocks_u,tol_used)
+         if(zfpflag==1)call ZFP_Compress(blocks_u,tol_used)
 #endif
       endif
 
@@ -14347,7 +14351,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer,optional:: level_start, level_end
       integer idx_start_m, idx_start_n
       integer Nrnd
-      integer mm, nn, idxs_m, idxs_n
+      integer mm, nn, idxs_m, idxs_n, zfpflag
       DT a
       character trans
       type(matrixblock)::blocks
@@ -14391,7 +14395,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          if(flag==1)then
          if (style == 1) then
 #if HAVE_ZFP
-            call ZFP_Decompress(blocks,tol_used)
+            zfpflag=0
+            if(allocated(blocks%buffer_r))zfpflag=1
+            if(zfpflag==1)call ZFP_Decompress(blocks,tol_used)
 #endif
             if (trans == 'N') then
                allocate (Vintmp(nn, Nrnd))
@@ -14413,7 +14419,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                deallocate (Vouttmp)
             endif
 #if HAVE_ZFP
-            call ZFP_Compress(blocks,tol_used)
+            if(zfpflag==1)call ZFP_Compress(blocks,tol_used)
 #endif
          else
             if (trans == 'N') then
@@ -14444,14 +14450,16 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT ctemp, a, b
       character chara
       type(matrixblock)::blocks
-      integer M, M1, N1
+      integer M, M1, N1, zfpflag
       integer ldi,ldo
       real(kind=8)::tol_used
       DT :: random1(ldi, *), random2(ldo, *)
       DT:: al, be
       DT, allocatable :: random2tmp(:, :)
 #if HAVE_ZFP
-      call ZFP_Decompress(blocks,tol_used)
+      zfpflag=0
+      if(allocated(blocks%buffer_r))zfpflag=1
+      if(zfpflag==1)call ZFP_Decompress(blocks,tol_used)
 #endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
@@ -14474,7 +14482,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
 #if HAVE_ZFP
-      call ZFP_Compress(blocks,tol_used)
+      if(zfpflag==1)call ZFP_Compress(blocks,tol_used)
 #endif
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)

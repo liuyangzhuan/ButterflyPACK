@@ -767,6 +767,7 @@ contains
       option%forwardN15flag = 0
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
+      option%use_zfp = 0
       ! option%sample_heuristic = 1
       option%pat_comp = 3
       option%elem_extract = 0
@@ -876,6 +877,8 @@ contains
                   read (strings1, *) option%sample_para
                else if (trim(strings) == '--sample_para_outer') then
                   read (strings1, *) option%sample_para_outer
+               else if (trim(strings) == '--use_zfp') then
+                  read (strings1, *) option%use_zfp
                ! else if (trim(strings) == '--sample_heuristic') then
                !    read (strings1, *) option%sample_heuristic
                else if (trim(strings) == '--pat_comp') then
@@ -951,6 +954,7 @@ contains
       option1%forwardN15flag = option%forwardN15flag
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
+      option1%use_zfp = option%use_zfp
       ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
       option1%elem_extract = option%elem_extract
@@ -1006,6 +1010,7 @@ contains
          write (*, '(A18,I8)') 'ErrSol', option%ErrSol
          ! write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
          write (*, '(A18,I8)') 'less_adapt', option%less_adapt
+         write (*, '(A18,I8)') 'use_zfp', option%use_zfp
 
          write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
          write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp

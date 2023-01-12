@@ -448,6 +448,7 @@ module BPACK_DEFS
         real(kind=8) sample_para_outer   !< parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
         ! integer sample_heuristic   !< 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp !< pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
+        integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 0: do not use zfp
 
         ! options for matrix construction
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5

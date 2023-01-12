@@ -710,7 +710,7 @@ contains
 
    end subroutine unpack_butterfly_blocks
 
-   subroutine pack_full_blocks(block, msh)
+   subroutine pack_full_blocks(block, msh, option)
 
       use BPACK_DEFS
       implicit none
@@ -719,6 +719,7 @@ contains
       integer count1, count2, num_row, num_col, indices
       type(matrixblock), pointer :: block
       type(mesh)::msh
+      type(Hoption)::option
       real(kind=8)::tol_used
 
       group_m = block%row_group
@@ -728,7 +729,7 @@ contains
       allocate (block%fullmat_MPI(mm*nn))
 
 #if HAVE_ZFP
-      call ZFP_Decompress(block,tol_used) ! no need to recompress as fullmat will be deleted before exiting
+      if(option%use_zfp==1)call ZFP_Decompress(block,tol_used) ! no need to recompress as fullmat will be deleted before exiting
 #endif
 
       !$omp parallel do default(shared) private(i,j,indices)
@@ -774,13 +775,13 @@ contains
       !$omp end parallel do
       deallocate (block%fullmat_MPI)
 #if HAVE_ZFP
-      call ZFP_Compress(block,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(block,option%tol_comp)
 #endif
       return
 
    end subroutine unpack_full_blocks
 
-   recursive subroutine pack_all_blocks_one_node(block, msh)
+   recursive subroutine pack_all_blocks_one_node(block, msh, option)
 
       use BPACK_DEFS
       implicit none
@@ -789,6 +790,7 @@ contains
       integer i, ii, j, jj, k, kk, level, style
       type(matrixblock), pointer :: block, blocks_son
       type(mesh)::msh
+      type(Hoption)::option
 
       block%blockinfo_MPI(1) = block%level
       block%blockinfo_MPI(2) = block%row_group
@@ -805,13 +807,13 @@ contains
       if (block%style == 4) then
 
          blocks_son => block%sons(1, 1)
-         call pack_all_blocks_one_node(blocks_son, msh)
+         call pack_all_blocks_one_node(blocks_son, msh, option)
          blocks_son => block%sons(2, 1)
-         call pack_all_blocks_one_node(blocks_son, msh)
+         call pack_all_blocks_one_node(blocks_son, msh, option)
          blocks_son => block%sons(1, 2)
-         call pack_all_blocks_one_node(blocks_son, msh)
+         call pack_all_blocks_one_node(blocks_son, msh, option)
          blocks_son => block%sons(2, 2)
-         call pack_all_blocks_one_node(blocks_son, msh)
+         call pack_all_blocks_one_node(blocks_son, msh, option)
 
       elseif (block%style == 2) then
 
@@ -819,7 +821,7 @@ contains
 
       elseif (block%style == 1) then
 
-         call pack_full_blocks(block, msh)
+         call pack_full_blocks(block, msh, option)
 
       endif
 

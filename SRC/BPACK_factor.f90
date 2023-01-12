@@ -96,13 +96,13 @@ contains
         level_c = ho_bf1%Maxlevel + 1
         do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
 #if HAVE_ZFP
-            call ZFP_Decompress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),tol_used)
+            if(option%use_zfp==1)call ZFP_Decompress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),tol_used)
 #endif
             nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, 1)
             allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
             ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 #if HAVE_ZFP
-            call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),option%tol_comp)
+            if(option%use_zfp==1)call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),option%tol_comp)
 #endif
             allocate(Singular(nn))
             allocate(UU(nn,nn))
@@ -139,11 +139,15 @@ contains
 
             ! write(*,*)fnorm(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,nn,nn)
 #if HAVE_ZFP
-            call ZFP_Compress(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1),option%tol_comp)
-            stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_r)/1024.0d3
+            if(option%use_zfp==1)then
+                call ZFP_Compress(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1),option%tol_comp)
+                stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-            stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_i)/1024.0d3
+                stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_i)/1024.0d3
 #endif
+            else
+                stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
+            endif
 #else
             stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat)/1024.0d3
 #endif
@@ -398,7 +402,7 @@ contains
             do j = 1, h_mat%myAcols
             do i = 1, h_mat%myArows
                 blocks => h_mat%Local_blocks(j, i)
-                ! call pack_all_blocks_one_node(blocks, msh)
+                ! call pack_all_blocks_one_node(blocks, msh,option)
                 mypgno = blocks%pgno
             enddo
             enddo
@@ -427,7 +431,7 @@ contains
                     blocks => h_mat%Local_blocks(myj, myi)
                     ! call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
                     call Hmat_LU(blocks, h_mat, option, stats, ptree, msh)
-                    call pack_all_blocks_one_node(blocks, msh)
+                    call pack_all_blocks_one_node(blocks, msh, option)
                     send=1
                 endif
 
@@ -472,7 +476,7 @@ contains
                         blocks_uu => h_mat%Local_blocks(myj1, myi)
                         blocks_mm => h_mat%Computing_matricesblock_m(1, 1)
                         call Hmat_LXM(blocks_mm, blocks_uu, h_mat, option, stats, ptree, msh)
-                        call pack_all_blocks_one_node(blocks_uu, msh)
+                        call pack_all_blocks_one_node(blocks_uu, msh, option)
                     endif
                 enddo
                 do i=kk+1,num_blocks
@@ -481,7 +485,7 @@ contains
                         blocks_ll => h_mat%Local_blocks(myj, myi1)
                         blocks_mm => h_mat%Computing_matricesblock_m(1, 1)
                         call Hmat_XUM(blocks_mm, blocks_ll, h_mat, option, stats, ptree, msh)
-                        call pack_all_blocks_one_node(blocks_ll, msh)
+                        call pack_all_blocks_one_node(blocks_ll, msh, option)
                     endif
                 enddo
                 if (recv == 1)then
@@ -917,8 +921,10 @@ contains
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
+            if(option%use_zfp==1)then
                  call ZFP_Decompress(blocks_m,tol_used)
                  call ZFP_Decompress(blocks_l,tol_used)
+            endif
 #endif
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
@@ -936,8 +942,10 @@ contains
                 enddo
                 call trsmf90(blocks_l%fullmat, blocks_m%fullmat, 'L', 'L', 'N', 'U', mm, nn)
 #if HAVE_ZFP
-                 call ZFP_Compress(blocks_m,option%tol_comp)
-                 call ZFP_Compress(blocks_l,option%tol_comp)
+                if(option%use_zfp==1)then
+                    call ZFP_Compress(blocks_m,option%tol_comp)
+                    call ZFP_Compress(blocks_l,option%tol_comp)
+                endif
 #endif
 
             else
@@ -1037,15 +1045,19 @@ contains
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
-                 call ZFP_Decompress(blocks_m,tol_used)
-                 call ZFP_Decompress(blocks_u,tol_used)
+                if(option%use_zfp==1)then
+                    call ZFP_Decompress(blocks_m,tol_used)
+                    call ZFP_Decompress(blocks_u,tol_used)
+                endif
 #endif
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
                 call trsmf90(blocks_u%fullmat, blocks_m%fullmat, 'R', 'U', 'N', 'N', mm, nn)
 #if HAVE_ZFP
-                 call ZFP_Compress(blocks_m,option%tol_comp)
-                 call ZFP_Compress(blocks_u,option%tol_comp)
+                if(option%use_zfp==1)then
+                    call ZFP_Compress(blocks_m,option%tol_comp)
+                    call ZFP_Compress(blocks_u,option%tol_comp)
+                endif
 #endif
             else
 
