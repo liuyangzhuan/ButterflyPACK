@@ -1254,8 +1254,10 @@ contains
 
       else if (block_i%style == 1) then
          if(allocated(block_i%fullmat))memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
+#if HAVE_ZFP
          if(allocated(block_i%buffer_r))memory = memory + SIZEOF(block_i%buffer_r)/1024.0d3
          if(allocated(block_i%buffer_i))memory = memory + SIZEOF(block_i%buffer_i)/1024.0d3
+#endif         
       else
          write (*, *) 'block style not implemented'
          stop
