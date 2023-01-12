@@ -1144,7 +1144,6 @@ contains
                   if(blocks%style==1 .and. blocks%col_group==group_n)then
                      allocate(blocks%fullmat(blocks%M,blocks%N))
                      blocks%fullmat = RandVectOutR_glo(msh%basis_group(blocks%row_group)%head:msh%basis_group(blocks%row_group)%tail,1:blocks%N)
-                     Memory = Memory + SIZEOF(blocks%fullmat)/1024.0d3
                      if (blocks%row_group == blocks%col_group) allocate (blocks%ipiv(blocks%M))
 
                      if (option%ErrFillFull == 1)then
@@ -1153,7 +1152,15 @@ contains
                         write(*,*)'checking error for inadmissible block:',ptree%MyID,blocks%row_group,blocks%col_group,fnorm(blocks%fullmat-matrixtemp,blocks%M,blocks%N)/matnorm
                         deallocate(matrixtemp)
                      endif
-
+#if HAVE_ZFP
+                     call ZFP_Compress(blocks,option%tol_comp)
+                     Memory = Memory + SIZEOF(blocks%buffer_r)/1024.0d3
+#if DAT==0 || DAT==2
+                     Memory = Memory + SIZEOF(blocks%buffer_i)/1024.0d3
+#endif
+#else
+                     Memory = Memory + SIZEOF(blocks%fullmat)/1024.0d3
+#endif
                   endif
                end select
                curr => curr%next
@@ -1819,7 +1826,16 @@ contains
             allocate (block_o%fullmat(mm, nn))
             ! call copymatN(RandVectOutR(k+1:k+mm,1:nn),block_o%fullmat,mm,nn)
             block_o%fullmat = RandVectOutR(k + 1:k + mm, 1:nn)
+
+#if HAVE_ZFP
+            call ZFP_Compress(block_o,option%tol_comp)
+            Memory = Memory + SIZEOF(block_o%buffer_r)/1024.0d3
+#if DAT==0 || DAT==2
+            Memory = Memory + SIZEOF(block_o%buffer_i)/1024.0d3
+#endif
+#else
             Memory = Memory + SIZEOF(block_o%fullmat)/1024.0d3
+#endif
          endif
       end do
 
