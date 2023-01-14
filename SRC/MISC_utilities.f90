@@ -4423,7 +4423,7 @@ contains
 ! end subroutine CreateNewGrid
 
 ! redistribute array 1D block array dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o
-   subroutine Redistribute1Dto1D(dat_i, ldi, M_p_i, head_i, pgno_i, dat_o, ldo, M_p_o, head_o, pgno_o, N, ptree)
+   subroutine Redistribute1Dto1D(dat_i, ldi, M_p_i, head_i, pgno_i, dat_o, ldo, M_p_o, head_o, pgno_o, N, ptree, addflag)
       implicit none
       integer ldi, ldo
       DT::dat_i(ldi, *), dat_o(ldo, *)
@@ -4435,6 +4435,7 @@ contains
       integer, allocatable::S_req(:), R_req(:)
       integer, allocatable:: statuss(:, :), statusr(:, :)
       integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_i, head_o, sizes, sizer, offs, offr
+      integer,optional::addflag
 
       if (pgno_i == pgno_o .and. ptree%pgrp(pgno_i)%nproc == 1) then
          idxs_i = M_p_i(1, 1) + head_i
@@ -4446,7 +4447,11 @@ contains
             sizes = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
             offr = max(idxs_i, idxs_o) - idxs_o
             sizer = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
-            dat_o(offr + 1:offr + sizer, 1:N) = dat_i(offs + 1:offs + sizes, 1:N)
+            if(present(addflag))then
+               dat_o(offr + 1:offr + sizer, 1:N) = dat_o(offr + 1:offr + sizer, 1:N) + dat_i(offs + 1:offs + sizes, 1:N)
+            else
+               dat_o(offr + 1:offr + sizer, 1:N) = dat_i(offs + 1:offs + sizes, 1:N)
+            endif
          endif
       else
 
@@ -4543,7 +4548,11 @@ contains
          ! copy data from receive buffer
          do ii = 1, nproc_i
             if (recvquant(ii)%size > 0) then
-               dat_o(recvquant(ii)%offset + 1:recvquant(ii)%offset + recvquant(ii)%size, 1:N) = recvquant(ii)%dat
+               if(present(addflag))then
+                  dat_o(recvquant(ii)%offset + 1:recvquant(ii)%offset + recvquant(ii)%size, 1:N) = dat_o(recvquant(ii)%offset + 1:recvquant(ii)%offset + recvquant(ii)%size, 1:N) + recvquant(ii)%dat
+               else
+                  dat_o(recvquant(ii)%offset + 1:recvquant(ii)%offset + recvquant(ii)%size, 1:N) = recvquant(ii)%dat
+               endif
             endif
          enddo
 

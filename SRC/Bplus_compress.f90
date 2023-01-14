@@ -7604,7 +7604,7 @@ time_tmp = time_tmp + n2 - n1
 
 #if HAVE_ZFP
       if(option%use_zfp==1)then
-         call ZFP_Compress(blocks, option%tol_comp)
+         call ZFP_Compress(blocks, option%tol_comp,0)
          memory = SIZEOF(blocks%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
          memory = memory + SIZEOF(blocks%buffer_i)/1024.0d3

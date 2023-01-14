@@ -102,12 +102,12 @@ PROGRAM ButterflyPACK_IE_2D
   type(zFORp_stream) :: stream, dstream
   real (kind=8) :: desired_rate, rate_result, tol_result
   integer :: dims, wra
-  integer :: zfp_type
+  integer :: zfp_type, is_success
 
 
   ! initialize input and decompressed arrays
-  xLen = 8
-  yLen = 8
+  xLen = 512
+  yLen = 512
   allocate(input_array(xLen, yLen))
   do i = 1, xLen
     do j = 1, yLen
@@ -133,13 +133,18 @@ PROGRAM ButterflyPACK_IE_2D
   stream = zFORp_stream_open(bitstream)
 
   tol_result=zFORp_stream_set_accuracy(stream,1d-3)
+!   is_success = zFORp_stream_set_execution(stream,zFORp_exec_omp)
+!   is_success = zFORp_stream_set_omp_threads(stream,0)
 
 
 
   ! compress
+  t1 = MPI_Wtime()
   bitstream_offset_bytes = zFORp_compress(stream, field)
+  t2 = MPI_Wtime()
   write(*, *) "After compression, bitstream offset at "
   write(*, *) bitstream_offset_bytes
+  write(*,*)'compression time: ', t2-t1
   call zFORp_field_free(field)
   call zFORp_bitstream_stream_close(bitstream)
 
@@ -165,9 +170,12 @@ PROGRAM ButterflyPACK_IE_2D
   array_c_ptr = c_loc(decompressed_array)
   field = zFORp_field_2d(array_c_ptr, zfp_type, xLen, yLen)
 
+  t1 = MPI_Wtime()
   bitstream_offset_bytes = zFORp_decompress(dstream, field)
+  t2 = MPI_Wtime()
   write(*, *) "After decompression, bitstream offset at "
   write(*, *) bitstream_offset_bytes
+  write(*,*)'decompression time: ', t2-t1
 
   max_abs_error = 0
   do i = 1, xLen

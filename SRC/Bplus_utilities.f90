@@ -285,6 +285,7 @@ contains
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
       real(kind=8)::n2,n1
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
+      type(vectorsblock),allocatable:: Vin_locs(:), Vout_locs(:)
 
       integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
 
@@ -297,48 +298,66 @@ contains
       if (chara == 'T') allocate (Vout(N, Nrnd))
       Vout = 0
 
-      ctemp1 = 1.0d0; ctemp2 = 1.0d0
+      ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
 
       do ll = level_s, level_e
+
+         allocate(Vin_locs(bplus%LL(ll)%Nbound))
+         allocate(Vout_locs(bplus%LL(ll)%Nbound))
+         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
          do bb = 1, bplus%LL(ll)%Nbound
             blocks => bplus%LL(ll)%matrices_block(bb)
 
             n1 = MPI_Wtime()
             if (chara == 'N') then
-               if (blocks%M_loc > 0) allocate (Vout_loc(blocks%M_loc, Nrnd))
-               if (blocks%N_loc > 0) allocate (Vin_loc(blocks%N_loc, Nrnd))
-               call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
-               call Redistribute1Dto1D(Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+               if (blocks%M_loc > 0) then
+                  allocate (Vout_locs(bb)%vector(blocks%M_loc, Nrnd))
+                  Vout_locs(bb)%vector=0
+               endif
+               if (blocks%N_loc > 0) allocate (Vin_locs(bb)%vector(blocks%N_loc, Nrnd))
+               call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
             else
-               if (blocks%N_loc > 0) allocate (Vout_loc(blocks%N_loc, Nrnd))
-               if (blocks%M_loc > 0) allocate (Vin_loc(blocks%M_loc, Nrnd))
-               call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
-               call Redistribute1Dto1D(Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+               if (blocks%N_loc > 0)then
+                  allocate (Vout_locs(bb)%vector(blocks%N_loc, Nrnd))
+                  Vout_locs(bb)%vector=0
+               endif
+               if (blocks%M_loc > 0) allocate (Vin_locs(bb)%vector(blocks%M_loc, Nrnd))
+               call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
             endif
             n2 = MPI_Wtime()
             stats%Time_RedistV = stats%Time_RedistV + n2-n1
+         enddo
+
+         do bb = 1, bplus%LL(ll)%Nbound
+            blocks => bplus%LL(ll)%matrices_block(bb)
 
             if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
                call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
-               &Vin_loc, size(Vin_loc,1), Vout_loc, size(Vout_loc,1), ctemp1, ctemp2, ptree, stats)
+               &Vin_locs(bb)%vector, size(Vin_locs(bb)%vector,1), Vout_locs(bb)%vector, size(Vout_locs(bb)%vector,1), ctemp1, ctemp2, ptree, stats)
             endif
+         enddo
 
+         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+         do bb = 1, bplus%LL(ll)%Nbound
+            blocks => bplus%LL(ll)%matrices_block(bb)
             n1 = MPI_Wtime()
             if (chara == 'N') then
-               call Redistribute1Dto1D(Vout_loc, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree)
-               if (blocks%M_loc > 0) deallocate (Vout_loc)
-               if (blocks%N_loc > 0) deallocate (Vin_loc)
+               call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
+               if (blocks%M_loc > 0) deallocate (Vout_locs(bb)%vector)
+               if (blocks%N_loc > 0) deallocate (Vin_locs(bb)%vector)
             else
-               call Redistribute1Dto1D(Vout_loc, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree)
-               if (blocks%N_loc > 0) deallocate (Vout_loc)
-               if (blocks%M_loc > 0) deallocate (Vin_loc)
+               call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
+               if (blocks%N_loc > 0) deallocate (Vout_locs(bb)%vector)
+               if (blocks%M_loc > 0) deallocate (Vin_locs(bb)%vector)
             endif
             n2 = MPI_Wtime()
             stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
          end do
+         deallocate(Vin_locs)
+         deallocate(Vout_locs)
       end do
 
       random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
@@ -800,13 +819,13 @@ contains
             endif
 #if HAVE_ZFP
             if(allocated(block_i%buffer_r))then
-               call ZFP_Decompress(block_i,tol_used)
+               call ZFP_Decompress(block_i,tol_used,1)
                mm = size(block_i%fullmat, 1)
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(mm, nn))
                block_o%fullmat = block_i%fullmat
-               call ZFP_Compress(block_i,tol_used)
-               call ZFP_Compress(block_o,tol_used)
+               call ZFP_Compress(block_i,tol_used,1)
+               call ZFP_Compress(block_o,tol_used,0)
                if (present(memory)) memory = memory + SIZEOF(block_o%buffer_r)/1024.0d3
                if (present(memory) .and. allocated(block_o%buffer_i)) memory = memory + SIZEOF(block_o%buffer_i)/1024.0d3
 
@@ -1355,7 +1374,8 @@ contains
 
 
 #ifdef HAVE_ZFP
-   subroutine ZFP_Compress(blocks, tol_comp)
+   !>**** ZFP compression of blocks%fullmat into blocks%buffer_r/buffer_i into with relative tolerance tol_comp. If the flag already_compressed is set to 1, only the fullmat will be deleted.
+   subroutine ZFP_Compress(blocks, tol_comp, already_compressed)
 
       implicit none
       type(matrixblock)::blocks
@@ -1375,70 +1395,74 @@ contains
       type(zFORp_stream) :: stream, dstream
       real (kind=8) :: tol_result, maxcal
       DTR::maxval
-      integer :: zfp_type
+      integer :: zfp_type, already_compressed
 
-      maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
-      tol_abs = tol_comp * maxval
+      if(already_compressed==0)then
+         maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
+         tol_abs = tol_comp * maxval
 
-      ! setup zfp_field
-      allocate(input_array(blocks%M,blocks%N))
-      input_array=dble(blocks%fullmat)
-      array_c_ptr = c_loc(input_array)
-      zfp_type = DTZFP
-      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+         ! setup zfp_field
+         allocate(input_array(blocks%M,blocks%N))
+         input_array=dble(blocks%fullmat)
+         array_c_ptr = c_loc(input_array)
+         zfp_type = DTZFP
+         field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
 
-      ! setup bitstream
-      buffer_size_bytes = blocks%M*blocks%N*DTRBytes
-      allocate(buffer(buffer_size_bytes))
-      buffer_c_ptr = c_loc(buffer)
-      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+         ! setup bitstream
+         buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+         allocate(buffer(buffer_size_bytes))
+         buffer_c_ptr = c_loc(buffer)
+         bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
-      ! setup zfp_stream
-      blocks%stream_r = zFORp_stream_open(bitstream)
-      tol_result=zFORp_stream_set_accuracy(blocks%stream_r,tol_abs)
+         ! setup zfp_stream
+         blocks%stream_r = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(blocks%stream_r,tol_abs)
 
-      ! compress
-      bitstream_offset_bytes = zFORp_compress(blocks%stream_r, field)
-      allocate(blocks%buffer_r(bitstream_offset_bytes))
-      blocks%buffer_r=buffer(1:bitstream_offset_bytes)
-      call zFORp_field_free(field)
-      call zFORp_bitstream_stream_close(bitstream)
-      deallocate(input_array)
-      deallocate(buffer)
+         ! compress
+         bitstream_offset_bytes = zFORp_compress(blocks%stream_r, field)
+         allocate(blocks%buffer_r(bitstream_offset_bytes))
+         blocks%buffer_r=buffer(1:bitstream_offset_bytes)
+         call zFORp_field_free(field)
+         call zFORp_bitstream_stream_close(bitstream)
+         deallocate(input_array)
+         deallocate(buffer)
 
 
 #if DAT==0 || DAT==2
-      ! setup zfp_field
-      allocate(input_array(blocks%M,blocks%N))
-      input_array=aimag(blocks%fullmat)
-      array_c_ptr = c_loc(input_array)
-      zfp_type = DTZFP
-      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+         ! setup zfp_field
+         allocate(input_array(blocks%M,blocks%N))
+         input_array=aimag(blocks%fullmat)
+         array_c_ptr = c_loc(input_array)
+         zfp_type = DTZFP
+         field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
 
-      ! setup bitstream
-      buffer_size_bytes = blocks%M*blocks%N*DTRBytes
-      allocate(buffer(buffer_size_bytes))
-      buffer_c_ptr = c_loc(buffer)
-      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+         ! setup bitstream
+         buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+         allocate(buffer(buffer_size_bytes))
+         buffer_c_ptr = c_loc(buffer)
+         bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
-      ! setup zfp_stream
-      blocks%stream_i = zFORp_stream_open(bitstream)
-      tol_result=zFORp_stream_set_accuracy(blocks%stream_i,tol_abs)
+         ! setup zfp_stream
+         blocks%stream_i = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(blocks%stream_i,tol_abs)
 
-      ! compress
-      bitstream_offset_bytes = zFORp_compress(blocks%stream_i, field)
-      allocate(blocks%buffer_i(bitstream_offset_bytes))
-      blocks%buffer_i=buffer(1:bitstream_offset_bytes)
-      call zFORp_field_free(field)
-      call zFORp_bitstream_stream_close(bitstream)
-      deallocate(input_array)
-      deallocate(buffer)
+         ! compress
+         bitstream_offset_bytes = zFORp_compress(blocks%stream_i, field)
+         allocate(blocks%buffer_i(bitstream_offset_bytes))
+         blocks%buffer_i=buffer(1:bitstream_offset_bytes)
+         call zFORp_field_free(field)
+         call zFORp_bitstream_stream_close(bitstream)
+         deallocate(input_array)
+         deallocate(buffer)
 #endif
+      endif
       deallocate(blocks%fullmat)
 
    end subroutine ZFP_Compress
 
-   subroutine ZFP_Decompress(blocks, tol_used)
+
+   !>**** ZFP decompression of blocks%buffer_r/buffer_i into blocks%fullmat. tol_used is the relative tolerance in the compression phase. The flag keep_compressed incidates whether the compressed data will be deleted.
+   subroutine ZFP_Decompress(blocks, tol_used, keep_compressed)
 
       implicit none
       type(matrixblock)::blocks
@@ -1457,7 +1481,7 @@ contains
       ! zfp_stream
       type(zFORp_stream) :: stream
       real (kind=8) :: tol_result,tol_used
-      integer :: zfp_type
+      integer :: zfp_type, keep_compressed
 
       tol_result = zFORp_stream_accuracy(blocks%stream_r)
 
@@ -1482,14 +1506,15 @@ contains
       blocks%fullmat=decompressed_array
 
       ! deallocations
-      call zFORp_stream_close(blocks%stream_r)
       call zFORp_bitstream_stream_close(bitstream)
       call zFORp_field_free(field)
 
       deallocate(decompressed_array)
-      deallocate(blocks%buffer_r)
       deallocate(buffer)
-
+      if(keep_compressed==0)then
+         call zFORp_stream_close(blocks%stream_r)
+         deallocate(blocks%buffer_r)
+      endif
 
 #if DAT==0 || DAT==2
       ! setup zfp_field
@@ -1511,13 +1536,16 @@ contains
       blocks%fullmat=blocks%fullmat+BPACK_junit*decompressed_array
 
       ! deallocations
-      call zFORp_stream_close(blocks%stream_i)
       call zFORp_bitstream_stream_close(bitstream)
       call zFORp_field_free(field)
 
       deallocate(decompressed_array)
-      deallocate(blocks%buffer_i)
       deallocate(buffer)
+
+      if(keep_compressed==0)then
+         call zFORp_stream_close(blocks%stream_i)
+         deallocate(blocks%buffer_i)
+      endif
 #endif
 
    maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
@@ -11325,7 +11353,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer ii, jj
       real(kind=8)::tol_used
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(blocks,tol_used)
+      if(option%use_zfp==1)call ZFP_Decompress(blocks,tol_used,1)
 #endif
       headm = msh%basis_group(blocks%row_group)%head
       headn = msh%basis_group(blocks%col_group)%head
@@ -11340,7 +11368,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(blocks,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(blocks,option%tol_comp,1)
 #endif
    end subroutine Full_block_extraction
 
@@ -14271,11 +14299,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #if HAVE_ZFP
          zfpflag=0
          if(allocated(blocks_l%buffer_r))zfpflag=1
-         if(zfpflag==1)call ZFP_Decompress(blocks_l,tol_used)
+         if(zfpflag==1)call ZFP_Decompress(blocks_l,tol_used,1)
 #endif
          call trsmf90(blocks_l%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'L', trans, 'U', mm, nvec)
 #if HAVE_ZFP
-         if(zfpflag==1)call ZFP_Compress(blocks_l,tol_used)
+         if(zfpflag==1)call ZFP_Compress(blocks_l,tol_used,1)
 #endif
          if (trans /= 'N') then
             do i = mm, 1, -1
@@ -14333,11 +14361,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #if HAVE_ZFP
          zfpflag=0
          if(allocated(blocks_u%buffer_r))zfpflag=1
-         if(zfpflag==1)call ZFP_Decompress(blocks_u,tol_used)
+         if(zfpflag==1)call ZFP_Decompress(blocks_u,tol_used,1)
 #endif
          call trsmf90(blocks_u%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'U', trans, 'N', mm, nvec)
 #if HAVE_ZFP
-         if(zfpflag==1)call ZFP_Compress(blocks_u,tol_used)
+         if(zfpflag==1)call ZFP_Compress(blocks_u,tol_used,1)
 #endif
       endif
 
@@ -14397,7 +14425,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #if HAVE_ZFP
             zfpflag=0
             if(allocated(blocks%buffer_r))zfpflag=1
-            if(zfpflag==1)call ZFP_Decompress(blocks,tol_used)
+            if(zfpflag==1)call ZFP_Decompress(blocks,tol_used,1)
 #endif
             if (trans == 'N') then
                allocate (Vintmp(nn, Nrnd))
@@ -14419,7 +14447,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                deallocate (Vouttmp)
             endif
 #if HAVE_ZFP
-            if(zfpflag==1)call ZFP_Compress(blocks,tol_used)
+            if(zfpflag==1)call ZFP_Compress(blocks,tol_used,1)
 #endif
          else
             if (trans == 'N') then
@@ -14459,7 +14487,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #if HAVE_ZFP
       zfpflag=0
       if(allocated(blocks%buffer_r))zfpflag=1
-      if(zfpflag==1)call ZFP_Decompress(blocks,tol_used)
+      if(zfpflag==1)call ZFP_Decompress(blocks,tol_used,1)
 #endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
@@ -14482,7 +14510,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
 #if HAVE_ZFP
-      if(zfpflag==1)call ZFP_Compress(blocks,tol_used)
+      if(zfpflag==1)call ZFP_Compress(blocks,tol_used,1)
 #endif
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)

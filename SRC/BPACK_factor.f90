@@ -53,6 +53,7 @@ contains
 
         if (option%ErrSol == 1) then
             call BPACK_Test_Solve_error(bmat, msh%idxe - msh%idxs + 1, option, ptree, stats)
+            if(ptree%MyID==Main_ID)write(*,*) 'RedistV time: ', stats%Time_RedistV
         endif
 
     end subroutine BPACK_Factorization
@@ -96,13 +97,13 @@ contains
         level_c = ho_bf1%Maxlevel + 1
         do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
 #if HAVE_ZFP
-            if(option%use_zfp==1)call ZFP_Decompress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),tol_used)
+            if(option%use_zfp==1)call ZFP_Decompress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),tol_used,1)
 #endif
             nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, 1)
             allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
             ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 #if HAVE_ZFP
-            if(option%use_zfp==1)call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),option%tol_comp)
+            if(option%use_zfp==1)call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),option%tol_comp,1)
 #endif
             allocate(Singular(nn))
             allocate(UU(nn,nn))
@@ -140,7 +141,7 @@ contains
             ! write(*,*)fnorm(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat,nn,nn)
 #if HAVE_ZFP
             if(option%use_zfp==1)then
-                call ZFP_Compress(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1),option%tol_comp)
+                call ZFP_Compress(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1),option%tol_comp,0)
                 stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
                 stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%buffer_i)/1024.0d3
@@ -922,8 +923,8 @@ contains
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
             if(option%use_zfp==1)then
-                 call ZFP_Decompress(blocks_m,tol_used)
-                 call ZFP_Decompress(blocks_l,tol_used)
+                 call ZFP_Decompress(blocks_m,tol_used,0)
+                 call ZFP_Decompress(blocks_l,tol_used,1)
             endif
 #endif
                 mm = size(blocks_m%fullmat, 1)
@@ -943,8 +944,8 @@ contains
                 call trsmf90(blocks_l%fullmat, blocks_m%fullmat, 'L', 'L', 'N', 'U', mm, nn)
 #if HAVE_ZFP
                 if(option%use_zfp==1)then
-                    call ZFP_Compress(blocks_m,option%tol_comp)
-                    call ZFP_Compress(blocks_l,option%tol_comp)
+                    call ZFP_Compress(blocks_m,option%tol_comp,0)
+                    call ZFP_Compress(blocks_l,option%tol_comp,1)
                 endif
 #endif
 
@@ -1046,8 +1047,8 @@ contains
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
                 if(option%use_zfp==1)then
-                    call ZFP_Decompress(blocks_m,tol_used)
-                    call ZFP_Decompress(blocks_u,tol_used)
+                    call ZFP_Decompress(blocks_m,tol_used,0)
+                    call ZFP_Decompress(blocks_u,tol_used,1)
                 endif
 #endif
                 mm = size(blocks_m%fullmat, 1)
@@ -1055,8 +1056,8 @@ contains
                 call trsmf90(blocks_u%fullmat, blocks_m%fullmat, 'R', 'U', 'N', 'N', mm, nn)
 #if HAVE_ZFP
                 if(option%use_zfp==1)then
-                    call ZFP_Compress(blocks_m,option%tol_comp)
-                    call ZFP_Compress(blocks_u,option%tol_comp)
+                    call ZFP_Compress(blocks_m,option%tol_comp,0)
+                    call ZFP_Compress(blocks_u,option%tol_comp,1)
                 endif
 #endif
             else

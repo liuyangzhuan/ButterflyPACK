@@ -729,7 +729,7 @@ contains
       allocate (block%fullmat_MPI(mm*nn))
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block,tol_used) ! no need to recompress as fullmat will be deleted before exiting
+      if(option%use_zfp==1)call ZFP_Decompress(block,tol_used,0) ! no need to recompress as fullmat will be deleted before exiting
 #endif
 
       !$omp parallel do default(shared) private(i,j,indices)
@@ -775,7 +775,7 @@ contains
       !$omp end parallel do
       deallocate (block%fullmat_MPI)
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block,option%tol_comp)
+      if(option%use_zfp==1)call ZFP_Compress(block,option%tol_comp,0)
 #endif
       return
 
