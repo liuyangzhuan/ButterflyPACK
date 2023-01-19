@@ -158,12 +158,14 @@ PROGRAM ButterflyPACK_IE_2D
   bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
 #if 1
+  ! this works. 
   dstream=stream
   call zFORp_stream_set_bit_stream(dstream, bitstream);
 #else
-  ! this doesn't work. I don't understand why
+  ! this also works. but the decompression stream needs to use the same option as the compression stream
   call zFORp_stream_close(stream)
   dstream = zFORp_stream_open(bitstream)
+  tol_result=zFORp_stream_set_accuracy(dstream,1d-3)
 #endif
 
 
