@@ -106,6 +106,7 @@ contains
       allocate (d(maxn))
       allocate (v(ldv, maxncv))
       allocate (workd(3*Nunk_loc))
+      workd=0
       allocate (workev(3*maxncv))
       allocate (resid(maxn))
       allocate (workl(3*maxncv*maxncv + 5*maxncv))
