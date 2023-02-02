@@ -592,6 +592,10 @@ contains
       if (trim(str) == 'tol_LS') then
          val_d = option%tol_LS
          valid_opt = 1
+      endif      
+      if (trim(str) == 'jitter') then
+         val_d = option%jitter
+         valid_opt = 1
       endif
       if (trim(str) == 'tol_itersol') then
          val_d = option%tol_itersol
@@ -857,6 +861,11 @@ contains
       if (trim(str) == 'tol_LS') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_LS = val_d
+         valid_opt = 1
+      endif      
+      if (trim(str) == 'jitter') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%jitter = val_d
          valid_opt = 1
       endif
       if (trim(str) == 'tol_itersol') then

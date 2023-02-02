@@ -763,6 +763,7 @@ contains
       option%format = HODLR
       option%verbosity = 0
       option%scale_factor = 1d0
+      option%jitter = 1d-13
       option%rmax = 3000
       option%forwardN15flag = 0
       option%sample_para = 2.0d0
@@ -950,6 +951,7 @@ contains
       option1%format = option%format
       option1%verbosity = option%verbosity
       option1%scale_factor = option%scale_factor
+      option1%jitter = option%jitter
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
       option1%sample_para = option%sample_para
@@ -1022,6 +1024,7 @@ contains
          write (*, '(A18,Es14.7)') 'near_para', option%near_para
          write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
          write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+         write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
          write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
          write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
          write (*, *) '***************************'
