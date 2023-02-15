@@ -109,11 +109,11 @@ contains
             allocate(UU(nn,nn))
             allocate(VV(nn,nn))
             call gesvd_robust(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, Singular, UU, VV, nn, nn, nn)
-            if(Singular(nn)/Singular(1)<BPACK_Jitter)then
+            if(Singular(nn)/Singular(1)<option%jitter)then
                 norm = Singular(1)
-                ! write(*,*)norm*BPACK_Jitter,norm
+                ! write(*,*)norm*option%jitter,norm
                 do iii=1,nn
-                    ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)=ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)+norm*BPACK_Jitter
+                    ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)=ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(iii,iii)+norm*option%jitter
                 enddo
             endif
             deallocate(UU)
