@@ -448,7 +448,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "knn", opt_i);
-      } break;      
+      } break;
       case 31: {
         std::istringstream iss(optarg);
         iss >> opt_i;
@@ -705,7 +705,19 @@ if(myrank==master_rank){
 	z_c_bpack_createstats(&stats_a);
 	z_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m, &msh0_n, &bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_a);
 	z_c_bf_construct_element_compute(&bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_a); // C_FuncBZmnBlock is not referenced since elem_extract=0
-	if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
+	
+  int nvec=1;
+  int cnt = (nvec)*(myseg_n);
+  _Complex double* xout = new _Complex double[cnt];
+  _Complex double* xin = new _Complex double[cnt];
+  for(int i=0;i<cnt;i++)
+    xin[i]=0;
+
+  char trans='N';
+	z_c_bf_mult(&trans, xin, xout, &myseg_n, &myseg_m, &nvec, &bf_a, &option, &stats_a, &ptree);
+  
+  
+  if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_a,&ptree);
 
 
