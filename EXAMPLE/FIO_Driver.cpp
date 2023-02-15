@@ -706,16 +706,17 @@ if(myrank==master_rank){
 	z_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m, &msh0_n, &bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_a);
 	z_c_bf_construct_element_compute(&bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_a); // C_FuncBZmnBlock is not referenced since elem_extract=0
 	
+  {/* test matrix vector multiplication performance*/
   int nvec=1;
-  int cnt = (nvec)*(myseg_n);
-  _Complex double* xout = new _Complex double[cnt];
-  _Complex double* xin = new _Complex double[cnt];
-  for(int i=0;i<cnt;i++)
-    xin[i]=0;
-
+  int cnt_i = (nvec)*(myseg_n);
+  int cnt_o = (nvec)*(myseg_m);
+  _Complex double* xout = new _Complex double[cnt_o];
+  _Complex double* xin = new _Complex double[cnt_i];
+  for(int i=0;i<cnt_i;i++)
+    xin[i]=1;
   char trans='N';
 	z_c_bf_mult(&trans, xin, xout, &myseg_n, &myseg_m, &nvec, &bf_a, &option, &stats_a, &ptree);
-  
+  }
   
   if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_a,&ptree);
