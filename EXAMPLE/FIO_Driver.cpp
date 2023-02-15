@@ -143,7 +143,23 @@ public:
 			// double ki = n;
 			// double phi = xi*ki;
 			// *val = cexp(2*M_PI*Im*phi);
+		}else if(_ker==4){
+      double a=-32.0;
+      double b=32.0;
+      double h=(b-a)/((double)_m_rand);
+			double xj = a + h*m;
+      double mu_k = 2.0*M_PI*(n-_n_rand/2)/(b-a);
+      // double sj= 1 + 0.3*sin(M_PI*xj/8.0);
+      double sj= 1 + 0.2*tanh(cos(M_PI*xj/8.0));
 
+      *val = pow(abs(mu_k),2*sj) * (cos(mu_k*(xj))+Im*sin(mu_k*(xj)))/(double)_m_rand;
+		}else if(_ker==5){
+      double a=-32.0;
+      double b=32.0;
+      double h=(b-a)/((double)_n_rand);
+			double xl = a + h*n;
+      double mu_k = 2.0*M_PI*(m-_m_rand/2)/(b-a);
+      *val = (cos(-mu_k*xl)+Im*sin(-mu_k*xl));
 		}
   }
 };
@@ -271,6 +287,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
        {"sample_para", required_argument, 0, 28},
        {"pat_comp",    required_argument, 0, 29},
        {"knn",         required_argument, 0, 30},
+       {"forwardN15flag",         required_argument, 0, 31},
        {NULL, 0, NULL, 0}
       };
     int c, option_index = 0;
@@ -431,6 +448,11 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "knn", opt_i);
+      } break;      
+      case 31: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "forwardN15flag", opt_i);
       } break;
       default: break;
       }
@@ -587,6 +609,12 @@ if(myrank==master_rank){
   	if(myrank==master_rank)std::cout<<"M "<<M<<" N "<<N<<" K "<<K<<" L "<<L<<std::endl;
 	}
 
+	if(tst ==3){
+		quant_ptr_a=new C_QuantApp(M, N, 0, 0, 4);
+    quant_ptr_b=new C_QuantApp(N, K, 0, 0, 5);
+  	if(myrank==master_rank)std::cout<<"M "<<M<<" N "<<N<<" K "<<K<<std::endl;
+	}
+
 
 	nogeo=1;
 	sort_opt=0;
@@ -673,12 +701,14 @@ if(myrank==master_rank){
 	tree_l[0] = L;
 	z_c_bpack_construct_init(&L, &Ndim, dat_ptr_l, nns_ptr_l,&nlevel_l, tree_l, perms_l, &myseg_l, &bmat_dummy, &option, &stats_dummy, &msh0_l, &kerquant_dummy, &ptree, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
 
-// construct the two bfs from entry evaluation
+// construct the three bfs from entry evaluation
 	z_c_bpack_createstats(&stats_a);
 	z_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m, &msh0_n, &bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_a);
 	z_c_bf_construct_element_compute(&bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_a); // C_FuncBZmnBlock is not referenced since elem_extract=0
 	if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_a,&ptree);
+
+
 
 	z_c_bpack_createstats(&stats_b);
 	z_c_bf_construct_init(&N, &K, &myseg_n, &myseg_k, nns_ptr_n, nns_ptr_k, &msh0_n, &msh0_k, &bf_b, &option, &stats_b, &msh_b, &kerquant_b, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_b);
@@ -686,6 +716,7 @@ if(myrank==master_rank){
 	if(myrank==master_rank)std::cout<<"\nPrinting stats of the second BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_b,&ptree);
 
+if(tst ==1 || tst ==2){
 	z_c_bpack_createstats(&stats_c);
 	z_c_bf_construct_init(&K, &L, &myseg_k, &myseg_l, nns_ptr_k, nns_ptr_l, &msh0_k, &msh0_l, &bf_c, &option, &stats_c, &msh_c, &kerquant_c, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_c);
 	z_c_bf_construct_element_compute(&bf_c, &option, &stats_c, &msh_c, &kerquant_c, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_c); // C_FuncBZmnBlock is not referenced since elem_extract=0
@@ -745,7 +776,6 @@ if(myrank==master_rank){
 	z_c_bf_deletebf(&bf_mv);
 
 	delete quant_ptr_mv;
-
 	z_c_bpack_deletestats(&stats_dummy);
 	z_c_bpack_deletestats(&stats_a);
 	z_c_bpack_deletestats(&stats_b);
@@ -780,6 +810,35 @@ if(myrank==master_rank){
 	delete[] tree_n;
 	delete[] tree_k;
 	delete[] tree_l;
+}else{
+	z_c_bpack_deletestats(&stats_dummy);
+	z_c_bpack_deletestats(&stats_a);
+	z_c_bpack_deletestats(&stats_b);
+	z_c_bpack_deleteproctree(&ptree);
+	z_c_bpack_deletemesh(&msh_a);
+	z_c_bpack_deletemesh(&msh_b);
+	z_c_bpack_deletekernelquant(&kerquant_a);
+	z_c_bpack_deletekernelquant(&kerquant_b);
+	z_c_bpack_delete(&bmat_dummy);
+	z_c_bpack_deletekernelquant(&kerquant_dummy);
+	z_c_bpack_deleteoption(&option);
+	z_c_bf_deletebf(&bf_a);
+	z_c_bf_deletebf(&bf_b);
+
+	z_c_bpack_deletemesh(&msh0_m);
+	z_c_bpack_deletemesh(&msh0_n);
+	z_c_bpack_deletemesh(&msh0_k);
+
+	delete quant_ptr_a;
+	delete quant_ptr_b;
+	delete[] perms_m;
+	delete[] perms_n;
+	delete[] perms_k;
+	delete[] tree_m;
+	delete[] tree_n;
+	delete[] tree_k;
+}
+
 
 
 	Cblacs_exit(1);
