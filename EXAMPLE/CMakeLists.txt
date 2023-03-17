@@ -126,13 +126,20 @@ target_link_libraries(cfio ${all_link_libs_d})
 target_link_libraries(cfio ${all_link_libs_z})
 add_dependencies(cfio ctest)
 
+set(CFEXM2 RankBenchmark_Driver.cpp)
+add_executable(rankben ${CFEXM2})
+target_link_libraries(rankben ${all_link_libs_d})
+target_link_libraries(rankben ${all_link_libs_z})
+add_dependencies(rankben cfio)
+
+
 # exclude Clang as Clang<13 doesn't support cabs,conj
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CIFEXM InverseFIO_Driver.cpp)
 add_executable(cifio ${CIFEXM})
 target_link_libraries(cifio ${all_link_libs_d})
 target_link_libraries(cifio ${all_link_libs_z})
-add_dependencies(cifio cfio)
+add_dependencies(cifio rankben)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
