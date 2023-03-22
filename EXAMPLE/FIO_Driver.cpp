@@ -18,24 +18,26 @@
  * @brief This c++ example compresses 1D Fourier integral operators (FIO) using entry-evaluation-based APIs, then compresses composition of 1D FIOs using matvec-based APIs. The example works on the double-complex data type.
 */
 //------------------------------------------------------------------------------
-#include <iostream>
-#include <math.h>
-#include <fstream>
-#include <time.h>
+#include <iostream> // header that defines the standard input/output stream objects
+#include <math.h> // <cmath> (math.h) header that declares a set of functions to compute common mathematical operations and transformations
+#include <fstream> // header providing file stream classes
+#include <time.h> // <ctime> header contains definitions of functions to get and manipulate date and time information
 #include <stdlib.h>
-#include <sstream>
-#include <string>
-#include <iomanip>
-#include <memory>
+/* <cstdlib> defines several general purpose functions, including dynamic memory management, random number generation,
+   communication with the environment, integer arithmetics, searching, sorting and converting */
+#include <sstream> // header provide string stream classes
+#include <string> // header introducing string types, character traits and a set of converting functions
+#include <iomanip> // header providing parametric manipulators
+#include <memory> // header defines general utilities to manage dynamic memory
 
-#include <pthread.h>
+#include <pthread.h> //
 
 #include <cmath>
-#include <cassert>
+#include <cassert> // defines one macro function that can be used as a standard debugging tool
 #include <iostream>
-#include <random>
-#include <vector>
-#include <atomic>
+#include <random> // introduce random number generation facilities
+#include <vector>  // defines the vector container class
+#include <atomic> // Atomic types are types that encapsulate a value whose access is guaranteed to not cause data races and can be used to synchronize memory accesses among different threads
 #include <mpi.h>
 #include <complex.h>
 
@@ -144,8 +146,8 @@ public:
 			// double phi = xi*ki;
 			// *val = cexp(2*M_PI*Im*phi);
 		}else if(_ker==4){
-      double a=-32.0;
-      double b=32.0;
+      double a=-1.0;
+      double b=1.0;
       double h=(b-a)/((double)_m_rand);
 			double xj = a + h*m;
       double mu_k = 2.0*M_PI*(n-_n_rand/2)/(b-a);
@@ -154,8 +156,8 @@ public:
 
       *val = pow(abs(mu_k),2*sj) * (cos(mu_k*(xj))+Im*sin(mu_k*(xj)))/(double)_m_rand;
 		}else if(_ker==5){
-      double a=-32.0;
-      double b=32.0;
+      double a=-1.0;
+      double b=1.0;
       double h=(b-a)/((double)_n_rand);
 			double xl = a + h*n;
       double mu_k = 2.0*M_PI*(m-_m_rand/2)/(b-a);
@@ -211,6 +213,37 @@ inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nall
 
 //   z_c_bf_extractelement(Q->bf,Q->option,Q->msh,Q->stats,Q->ptree,Ninter,Nallrows, Nallcols, Nalldat_loc, allrows,allcols,alldat_loc,rowidx,colidx,pgidx,Npmap,pmaps);
 
+}
+
+
+
+// The matvec sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
+  C_QuantApp* Q = (C_QuantApp*) quant;
+  int cnt = (*nvec)*(*nout);
+  _Complex double* xbuf1 = new _Complex double[(*nvec)*(Q->_ni1_rand)];
+
+  if(*trans=='N'){
+	z_c_bf_mult(trans, xin, xbuf1, nin, &(Q->_ni1_rand), nvec, Q->bf_b,Q->option_b,Q->stats_b,Q->ptree_b);
+	z_c_bf_mult(trans, xbuf1, xout, &(Q->_ni1_rand), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+  }else if(*trans=='T'){
+	z_c_bf_mult(trans, xin, xbuf1, nin, &(Q->_ni1_rand), nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+	z_c_bf_mult(trans, xbuf1, xout, &(Q->_ni1_rand), nout, nvec, Q->bf_b,Q->option_b,Q->stats_b,Q->ptree_b);
+  }
+
+
+// for (int nth=0; nth<*nvec; nth++){
+//   for(int i=0; i<*nout; i++)
+//     xout[i+nth*(Q->_ni1_rand)]=xin[i+nth*(Q->_ni1_rand)];
+//   xout[*nout-1+nth*(Q->_ni1_rand)]=xin[*nout-1+nth*(Q->_ni1_rand)]*1e-10;
+// }
+
+// for (int nth=0; nth<*nvec; nth++){
+//   for(int i=0; i<*nout; i++)
+//     xout[i+nth*(Q->_ni1_rand)]=xin[i+nth*(Q->_ni1_rand)]*(i+1);
+// }
+
+  delete[] xbuf1;
 }
 
 
@@ -705,19 +738,19 @@ if(myrank==master_rank){
 	z_c_bpack_createstats(&stats_a);
 	z_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m, &msh0_n, &bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_a);
 	z_c_bf_construct_element_compute(&bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_a); // C_FuncBZmnBlock is not referenced since elem_extract=0
-	
-  {/* test matrix vector multiplication performance*/
-  int nvec=1;
-  int cnt_i = (nvec)*(myseg_n);
-  int cnt_o = (nvec)*(myseg_m);
-  _Complex double* xout = new _Complex double[cnt_o];
-  _Complex double* xin = new _Complex double[cnt_i];
-  for(int i=0;i<cnt_i;i++)
-    xin[i]=1;
-  char trans='N';
-	z_c_bf_mult(&trans, xin, xout, &myseg_n, &myseg_m, &nvec, &bf_a, &option, &stats_a, &ptree);
-  }
-  
+
+  // {/* test matrix vector multiplication performance*/
+  // int nvec=1;
+  // int cnt_i = (nvec)*(myseg_n);
+  // int cnt_o = (nvec)*(myseg_m);
+  // _Complex double* xout = new _Complex double[cnt_o];
+  // _Complex double* xin = new _Complex double[cnt_i];
+  // for(int i=0;i<cnt_i;i++)
+  //   xin[i]=1;
+  // char trans='N';
+	// z_c_bf_mult(&trans, xin, xout, &myseg_n, &myseg_m, &nvec, &bf_a, &option, &stats_a, &ptree);
+  // }
+
   if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_a,&ptree);
 
@@ -728,6 +761,150 @@ if(myrank==master_rank){
 	z_c_bf_construct_element_compute(&bf_b, &option, &stats_b, &msh_b, &kerquant_b, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_b); // C_FuncBZmnBlock is not referenced since elem_extract=0
 	if(myrank==master_rank)std::cout<<"\nPrinting stats of the second BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_b,&ptree);
+
+
+if(tst ==3){
+  /* test matrix vector multiplication performance*/
+  if(myrank==master_rank)
+  std::cout<<"\n Test one matrix vector multiplication: "<<std::endl;
+  int nvec=1;
+  double a=-1.0;
+  double b=1.0;
+  double s=4.0;
+  double h=(b-a)/((double)K);
+  vector<_Complex double> xout1((nvec)*(myseg_n),{0.0,0.0});
+  vector<_Complex double> xout2((nvec)*(myseg_m),{0.0,0.0});
+  vector<_Complex double> xin((nvec)*(myseg_k),{0.0,0.0});
+  vector<_Complex double> xin_glo((nvec)*(K),{0.0,0.0});
+  vector<_Complex double> xout_glo((nvec)*(M),{0.0,0.0});
+  fstream myfile0;
+
+  // generate the global input vector on all MPI ranks
+  for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+    for (int i=0; i<myseg_k; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bf_new2old_col(&msh0_k,&i_new_loc,&i_old);
+      xin_glo.data()[i_old-1+nth*K] = pow(1.0-(a+h*(i_old-1))*(a+h*(i_old-1)),s)+0.0*Im;
+      xin.data()[i+nth*myseg_k] = xin_glo.data()[i_old-1+nth*K]; // generate the local input vector
+    }
+  }
+  MPI_Allreduce(MPI_IN_PLACE,xin_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+
+  if(myrank==master_rank){   // only MPI rank 0 write data to file
+    fstream myfile1;
+    myfile1.open("sol_u.txt",fstream::out);
+    for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+      for (int i=0; i<K; i++){
+        myfile1 << creal(xin_glo.data()[i+nth*K]) << "  " << cimag(xin_glo.data()[i+nth*K])<< std::endl;
+      }
+    }
+  }
+
+  char trans='N';
+	z_c_bf_mult(&trans, xin.data(), xout1.data(), &myseg_n, &myseg_m, &nvec, &bf_b, &option, &stats_b, &ptree);
+	z_c_bf_mult(&trans, xout1.data(), xout2.data(), &myseg_n, &myseg_m, &nvec, &bf_a, &option, &stats_a, &ptree);
+
+  // gather the global output on all MPI ranks
+  for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+    for (int i=0; i<myseg_m; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bf_new2old_row(&msh0_m,&i_new_loc,&i_old);
+      xout_glo.data()[i_old-1+nth*M] = xout2.data()[i+nth*myseg_m];
+    }
+  }
+  MPI_Allreduce(MPI_IN_PLACE,xout_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+
+  /* save the matrix vector production results*/
+  if(myrank==master_rank){   // only MPI rank 0 write data to file
+    fstream myfile;
+    myfile.open("vofL.txt",fstream::out);
+    for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+      for (int i=0; i<M; i++){
+        myfile << creal(xout_glo.data()[i+nth*M]) << "  " << cimag(xout_glo.data()[i+nth*M])<< std::endl;
+      }
+    }
+  }
+  }
+
+
+  if(tst ==3){
+  /* test TFQMR*/
+  if(myrank==master_rank)
+  std::cout<<"\n Test TFQMR: "<<std::endl;
+
+  int nvec=1;
+  vector<_Complex double> rhs((nvec)*(myseg_m),{0.0,0.0});
+  vector<_Complex double> rhs_glo((nvec)*(M),{0.0,0.0});
+  vector<_Complex double> x_glo((nvec)*(K),{0.0,0.0});
+  vector<_Complex double> x((nvec)*(myseg_k),{0.0,0.0});
+
+  fstream myfile0;
+
+  // generate the global RHS vector on all MPI ranks
+  for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+    for (int i=0; i<myseg_m; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bf_new2old_col(&msh0_m,&i_new_loc,&i_old);
+      rhs_glo.data()[i_old-1+nth*M] = 1.0;
+      rhs.data()[i+nth*myseg_m] = rhs_glo.data()[i_old-1+nth*M]; // generate the local input vector
+    }
+  }
+  MPI_Allreduce(MPI_IN_PLACE,rhs_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+  if(myrank==master_rank){   // only MPI rank 0 write data to file
+    fstream myfile1;
+    myfile1.open("rhs.txt",fstream::out);
+    for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+      for (int i=0; i<M; i++){
+        myfile1 << creal(rhs_glo.data()[i+nth*M]) << "  " << cimag(rhs_glo.data()[i+nth*M])<< std::endl;
+      }
+    }
+  }
+
+  C_QuantApp *quant_ptr_H;
+
+	quant_ptr_H=new C_QuantApp(M,K,myseg_n,0,0); // the last two parameters are not used
+
+  quant_ptr_H->bf_a=&bf_a;
+	quant_ptr_H->msh_a=&msh_a;
+	quant_ptr_H->ptree_a=&ptree;
+	quant_ptr_H->stats_a=&stats_a;
+	quant_ptr_H->option_a=&option;
+
+	quant_ptr_H->bf_b=&bf_b;
+	quant_ptr_H->msh_b=&msh_b;
+	quant_ptr_H->ptree_b=&ptree;
+	quant_ptr_H->stats_b=&stats_b;
+	quant_ptr_H->option_b=&option;
+
+
+  F2Cptr kerquant_H;
+  z_c_bpack_tfqmr_noprecon(x.data(),rhs.data(),&myseg_m,&nvec,&option, &stats_a, &ptree, &kerquant_H, &C_FuncHMatVec, quant_ptr_H);
+
+  // gather the global solution on all MPI ranks
+  for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+    for (int i=0; i<myseg_k; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bf_new2old_row(&msh0_k,&i_new_loc,&i_old);
+      x_glo.data()[i_old-1+nth*K] = x.data()[i+nth*myseg_k];
+    }
+  }
+  MPI_Allreduce(MPI_IN_PLACE,x_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+
+  /* save the tfqmr results*/
+  if(myrank==master_rank){   // only MPI rank 0 write data to file
+    fstream myfile;
+    myfile.open("x.txt",fstream::out);
+    for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
+      for (int i=0; i<K; i++){
+        myfile << creal(x_glo.data()[i+nth*K]) << "  " << cimag(x_glo.data()[i+nth*K])<< std::endl;
+      }
+    }
+  }
+  }
 
 if(tst ==1 || tst ==2){
 	z_c_bpack_createstats(&stats_c);

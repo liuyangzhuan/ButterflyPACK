@@ -515,6 +515,388 @@ contains
 
    end subroutine BPACK_Solution
 
+
+   !!!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is the same as BPACK_Ztfqmr
+   ! subroutine BPACK_Ztfqmr_usermatvec_noprecon(ntotal, nn_loc, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
+   !    implicit none
+   !    integer level_c, rowblock, ierr
+   !    integer, intent(in)::ntotal
+   !    integer::iter, itmax, it, nn_loc
+   !    DT, dimension(1:nn_loc,1)::x, bb, b, ytmp
+   !    real(kind=8)::err, rerr
+   !    DT, dimension(1:nn_loc,1)::w, yo, ayo, ye, aye, r, d, v
+   !    real(kind=8)::ta, we, cm
+   !    DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+   !    DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+   !    DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+   !    real(kind=8)::bmag
+   !    real(kind=8)::tim1, tim2
+   !    integer::kk, ll
+   !    ! Variables for storing current
+   !    integer::count_unk, srcbox_id
+   !    DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
+   !    real(kind=8)::mem_est
+   !    character:: trans
+   !    type(Hstat)::stats
+   !    type(kernelquant)::ker
+   !    procedure(HMatVec)::blackbox_MVP
+
+   !    DT::r0_initial(:,:)
+   !    type(proctree)::ptree
+   !    type(Hoption)::option
+
+
+   !    if(myisnan(sum(abs(x))))then
+   !       write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
+   !       stop
+   !    endif
+
+   !    itmax = iter
+
+   !    ! call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
+   !    bb=b
+
+   !    ! ! ! if (myid == main_id) then
+   !    ! ! ! call cpu_time(tim1)
+   !    ! ! ! open(unit=32,file='iterations.out',status='unknown')
+   !    ! ! ! end if
+
+   !    if (iter .eq. 0) itmax = ntotal
+
+   !    !  set initial values
+   !    !
+   !    d = 0d0
+   !    ! write(*,*)'1'
+   !    ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+   !    call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+   !    stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !    ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+   !    r=ytmp
+
+   !    r = bb - r !residual from the initial guess
+   !    w = r
+   !    yo = r
+   !    ! ! write(*,*)'2'
+   !    ! ! if(myisnan(sum(abs(yo)**2)))then
+   !    ! ! write(*,*)'shitddd'
+   !    ! ! stop
+   !    ! ! end if
+   !    ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+   !    call blackbox_MVP('N',nn_loc,nn_loc,1,yo,ytmp,ker)
+   !    stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !    ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+   !    ayo = ytmp
+
+   !    v = ayo
+   !    we = 0d0
+   !    etha = 0d0
+
+   !    ta_local = dot_product(r(:,1), r(:,1))
+   !    rho_local = dot_product(r0_initial(:,1), r(:,1))
+   !    bmag_local = dot_product(bb(:,1), bb(:,1))
+
+   !    dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+   !    call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+   !                       MPI_SUM, ptree%Comm, ierr)
+   !    ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+   !    ta = sqrt(abs(ta_sum))
+   !    bmag = sqrt(abs(bmag_sum1))
+   !    rerr = ta/bmag
+
+   !    iters: do it = 1, itmax
+   !       amgis_local = dot_product(r0_initial(:,1), v(:,1))
+   !       call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+   !                          ptree%Comm, ierr)
+   !       ahpla = rho/amgis
+   !       ye = yo - ahpla*v
+   !       ! write(*,*)'3'
+   !       ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
+   !       call blackbox_MVP('N',nn_loc,nn_loc,1,ye,ytmp,ker)
+   !       stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !       ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
+   !       aye=ytmp
+
+   !       !  start odd (2n-1) m loop
+   !       d = yo + (we*we*etha/ahpla)*d
+   !       w = w - ahpla*ayo
+   !       we_local = dot_product(w(:,1), w(:,1))
+   !       call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+   !                          ptree%Comm, ierr)
+   !       we = sqrt(abs(we_sum))/ta
+   !       cm = 1.0d0/sqrt(1.0d0 + we*we)
+   !       ta = ta*we*cm
+   !       etha = ahpla*cm*cm
+   !       x = x + etha*d
+   !       !  check if the result has converged.
+   !       !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+   !       !
+   !       !  start even (2n)  m loop
+   !       d = ye + (we*we*etha/ahpla)*d
+   !       w = w - ahpla*aye
+   !       we_local = dot_product(w(:,1), w(:,1))
+   !       call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+   !                          ptree%Comm, ierr)
+   !       we = sqrt(abs(we_sum))/ta
+   !       cm = 1.0d0/sqrt(1.0d0 + we*we)
+   !       ta = ta*we*cm
+   !       etha = ahpla*cm*cm
+   !       x = x + etha*d
+
+   !       !  check if the result has converged.
+   !       if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+   !          ! write(*,*)'4'
+   !          ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+   !          call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+   !          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !          ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+   !          r=ytmp
+
+   !          r = bb - r
+   !          rerr_local = dot_product(r(:,1), r(:,1))
+   !          call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+   !                             ptree%Comm, ierr)
+   !          rerr = sqrt(abs(rerr_sum))/bmag
+
+   !          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+   !             print *, '# ofiter,error:', it, rerr
+   !             ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+   !          end if
+
+   !          if (err > rerr) then
+   !             err = rerr
+   !             iter = it
+
+   !             ! ! ! if (myid == main_id) then
+   !             ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+   !             ! ! ! end if
+
+   !             return
+   !          endif
+   !       end if
+   !       !  make preparations for next iteration
+   !       dum_local = dot_product(r0_initial(:,1), w(:,1))
+   !       call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+   !                          ptree%Comm, ierr)
+   !       beta = dum/rho
+   !       rho = dum
+   !       yo = w + beta*ye
+   !       ! write(*,*)'5'
+   !       ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+   !       call blackbox_MVP('N',nn_loc,nn_loc,1,yo,ytmp,ker)
+   !       stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !       ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+   !       ayo=ytmp
+
+   !       !MAGIC
+   !       v = ayo + beta*(aye + beta*v)
+   !    enddo iters
+   !    ! write(*,*)'6'
+   !    ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+   !    call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+   !    stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+   !    ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+   !    r=ytmp
+
+   !    !MAGIC
+   !    r = bb - r
+   !    err_local = dot_product(r(:,1), r(:,1))
+   !    call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+   !                       ierr)
+   !    err = sqrt(abs(err_sum))/bmag
+   !    iter = itmax
+
+   !    print *, 'Iterative solver is terminated without convergence!!!', it, err
+   !    stop
+
+   !    return
+   ! end subroutine BPACK_Ztfqmr_usermatvec_noprecon
+
+
+   !!!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is translated from matlab's tfqmr implementaion and slightly different compared to BPACK_Ztfqmr
+   subroutine BPACK_Ztfqmr_usermatvec_noprecon(ntotal, nn_loc, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
+      implicit none
+      integer ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b, ytmp, r, r0, u_m, w, pu_m, v, Au, d, u_mp1, Ad, Au_new
+      DT, allocatable:: eye(:,:),fullmat(:,:),UU(:,:),VV(:,:)
+      DTR, allocatable::Singular(:)
+      real(kind=8)::err
+      integer::mm
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      DT::r0_initial(:,:) ! not used
+      type(proctree)::ptree
+      type(Hoption)::option
+      DT::nb_local,nr_local,nw_local,eta,alpha,r0v,r0w,sigma,beta,rho,rho_old
+      integer flag,even
+      real(kind=8)::tolb,nb,nr,nw,nr_act,tau,theta,c_mp1
+
+
+      !!!!!!!!! check condition number of the operator
+      ! if (ptree%nproc==1)then
+      ! allocate(eye(nn_loc,nn_loc))
+      ! allocate(fullmat(nn_loc,nn_loc))
+      ! allocate(UU(nn_loc,nn_loc))
+      ! allocate(VV(nn_loc,nn_loc))
+      ! allocate(Singular(nn_loc))
+      ! eye=0
+      ! do mm=1,nn_loc
+      !    eye(mm,mm)=1
+      ! enddo
+      ! fullmat=0
+      ! call blackbox_MVP('N',nn_loc,nn_loc,nn_loc,eye,fullmat,ker)
+
+      ! UU = 0
+      ! VV = 0
+      ! Singular = 0
+      ! call gesvd_robust(fullmat, Singular, UU, VV, nn_loc, nn_loc, nn_loc)
+      ! write(*,*)'condition number:', Singular(1)/Singular(nn_loc)
+      ! deallocate(eye)
+      ! deallocate(fullmat)
+      ! deallocate(UU)
+      ! deallocate(VV)
+      ! deallocate(Singular)
+      ! endif
+
+      if(myisnan(sum(abs(x))))then
+         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
+         stop
+      endif
+
+      itmax = ntotal
+
+
+      nb_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(MPI_IN_PLACE, nb_local, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+      nb = sqrt(abs(nb_local))
+
+      flag=1
+      tolb=err*nb
+
+      call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+      r = b-ytmp
+
+      nr_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+      nr = sqrt(abs(nr_local))
+      nr_act = nr
+
+      if (nr <= tolb)then  ! Initial guess is a good enough solution
+         flag = 0
+         iter = 0
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# ofiter,error:', iter, nr
+         end if
+         return
+      endif
+
+      r0 = r
+      u_m = r
+      w = r
+      pu_m = u_m
+      call blackbox_MVP('N',nn_loc,nn_loc,1,pu_m,v,ker)
+      Au = v
+      d = 0
+      Ad = d
+
+      tau = nr
+      theta = 0
+      eta = 0
+
+      rho = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(MPI_IN_PLACE, rho, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+      rho_old = rho
+
+      even=1
+
+      do mm=1,itmax
+         if(even==1)then
+            r0v = dot_product(r0(:,1), v(:,1))
+            call MPI_ALLREDUCE(MPI_IN_PLACE, r0v, 1, MPI_DT, MPI_SUM, &
+                                 ptree%Comm, ierr)
+            alpha = rho/r0v
+            u_mp1 = u_m - alpha*v
+         endif
+         w = w - alpha*Au
+         sigma = (theta**2/alpha)*eta
+         d = pu_m + sigma*d
+         Ad = Au + sigma*Ad
+
+         nw_local = dot_product(w(:,1), w(:,1))
+         call MPI_ALLREDUCE(MPI_IN_PLACE, nw_local, 1, MPI_DT, MPI_SUM, &
+                              ptree%Comm, ierr)
+         nw = sqrt(abs(nw_local))
+         theta = nw/tau
+
+         c_mp1 = 1d0/sqrt(1+theta**2);
+         tau = tau*theta*c_mp1;
+         eta = c_mp1**2*alpha;
+
+         x = x + eta*d
+         r = r - eta*Ad
+         nr_local = dot_product(r(:,1), r(:,1))
+         call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+                              ptree%Comm, ierr)
+         nr = sqrt(abs(nr_local))
+         nr_act = nr;
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# ofiter,error:', mm, nr_act
+         end if
+         iter = mm
+
+         ! check for convergence
+         if (nr <= tolb)then
+            call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+            r = b - ytmp
+
+            nr_local = dot_product(r(:,1), r(:,1))
+            call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+                                 ptree%Comm, ierr)
+            nr_act = sqrt(abs(nr_local))
+            if (nr_act <= tolb)then
+                  flag = 0
+                  exit
+            endif
+         endif
+
+         if(even==0)then
+            r0w = dot_product(r0(:,1), w(:,1))
+            call MPI_ALLREDUCE(MPI_IN_PLACE, r0w, 1, MPI_DT, MPI_SUM, &
+                              ptree%Comm, ierr)
+            rho = r0w;
+            beta = rho/rho_old
+            rho_old = rho
+            u_mp1 = w + beta*u_m
+         endif
+
+         pu_m = u_mp1;
+         call blackbox_MVP('N',nn_loc,nn_loc,1,pu_m,Au_new,ker)
+
+         if(even==0)then
+            v = Au_new + beta*(Au+beta*v)
+         endif
+
+         Au = Au_new
+         u_m = u_mp1
+         even=1-even
+      enddo
+
+      if (ptree%MyID == Main_ID )then 
+      if(iter>=itmax)then
+         print *, 'Iterative solver is terminated without convergence!!!', iter, nr_act
+         stop
+      endif
+      endif
+
+      return
+   end subroutine BPACK_Ztfqmr_usermatvec_noprecon
+   
    subroutine BPACK_Ztfqmr(precond, ntotal, nn_loc, b, x, err, iter, r0_initial, bmat, ptree, option, stats)
       implicit none
       integer level_c, rowblock, ierr

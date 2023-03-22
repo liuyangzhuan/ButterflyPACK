@@ -592,7 +592,7 @@ contains
       if (trim(str) == 'tol_LS') then
          val_d = option%tol_LS
          valid_opt = 1
-      endif      
+      endif
       if (trim(str) == 'jitter') then
          val_d = option%jitter
          valid_opt = 1
@@ -862,7 +862,7 @@ contains
          call c_f_pointer(val_Cptr, val_d)
          option%tol_LS = val_d
          valid_opt = 1
-      endif      
+      endif
       if (trim(str) == 'jitter') then
          call c_f_pointer(val_Cptr, val_d)
          option%jitter = val_d
@@ -1238,6 +1238,38 @@ contains
 
    end subroutine C_BPACK_New2Old
 
+
+
+
+!>**** C interface of converting from new,local index to old, global index, the indexs start from 1
+   !> @param newidx_loc: new, local index, from 1 to Nloc (in)
+   !> @param oldidx: old, global index, from 1 to N (out)
+   !> @param mshr_Cptr: the structure containing points and ordering information for the row dimension (in)
+   subroutine C_BF_New2Old_Row(mshr_Cptr, newidx_loc, oldidx) bind(c, name="c_bf_new2old_row")
+      implicit none
+      integer newidx_loc,oldidx
+      type(c_ptr) :: msh_Cptr
+      type(c_ptr) :: mshr_Cptr
+      type(mesh), pointer::msh,mshr
+
+      call c_f_pointer(mshr_Cptr, mshr)
+      oldidx = mshr%new2old(mshr%idxs + newidx_loc - 1)
+   end subroutine C_BF_New2Old_Row
+
+!>**** C interface of converting from new,local index to old, global index, the indexs start from 1
+   !> @param newidx_loc: new, local index, from 1 to Nloc (in)
+   !> @param oldidx: old, global index, from 1 to N (out)
+   !> @param mshr_Cptr: the structure containing points and ordering information for the column dimension (in)
+   subroutine C_BF_New2Old_Col(mshc_Cptr, newidx_loc, oldidx) bind(c, name="c_bf_new2old_col")
+      implicit none
+      integer newidx_loc,oldidx
+      type(c_ptr) :: msh_Cptr
+      type(c_ptr) :: mshc_Cptr
+      type(mesh), pointer::msh,mshc
+
+      call c_f_pointer(mshc_Cptr, mshc)
+      oldidx = mshc%new2old(mshc%idxs + newidx_loc - 1)
+   end subroutine C_BF_New2Old_Col
 
 !>**** C interface of matrix construction via entry evaluation and using it for gram distance
    !> @param N: matrix size (in)
@@ -1986,6 +2018,76 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
 
    end subroutine C_BPACK_Solve
+
+
+!>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec
+   !> @param x: local solution vector
+   !> @param b: local RHS
+   !> @param Nloc: size of local RHS
+   !> @param Nrhs: number of RHSs
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+   !> @param ker_Cptr: the structure containing kernel quantities
+   !> @param C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+   subroutine C_BPACK_TFQMR_Noprecon(x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec, C_QuantApp) bind(c, name="c_bpack_tfqmr_noprecon")
+      implicit none
+
+      integer Nloc, Nrhs
+      DT::x(Nloc, Nrhs), b(Nloc, Nrhs), r0_initial(Nloc,1)
+
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: stats_Cptr
+      type(c_ptr) :: ker_Cptr
+      type(c_funptr), intent(in), value, target :: C_FuncHMatVec
+      type(c_ptr), intent(in), target :: C_QuantApp
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      type(kernelquant), pointer::ker
+
+      real(kind=8):: rel_error, error, n1, n2
+      integer ii, iter
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      allocate (ker)
+
+      !>**** register the user-defined function and type in ker
+      ker%C_QuantApp => C_QuantApp
+      ker%C_FuncHMatVec => C_FuncHMatVec
+
+      stats%Flop_Sol = 0
+      stats%Time_Sol = 0
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve ......"
+
+      n1 = MPI_Wtime()
+      do ii = 1, Nloc
+         call random_dp_number(r0_initial(ii,1))
+      end do
+
+      do ii = 1, Nrhs
+         iter = 0
+         rel_error = option%tol_itersol
+         call BPACK_Ztfqmr_usermatvec_noprecon(option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, matvec_user_C, ptree, option, stats, ker)
+      end do
+      n2 = MPI_Wtime()
+      stats%Time_Sol = stats%Time_Sol + n2 - n1
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+
+      ker_Cptr = c_loc(ker)
+
+   end subroutine C_BPACK_TFQMR_Noprecon
+
+
+
 
 !>**** C interface of butterfly-vector multiplication
    !> @param xin: input vector
