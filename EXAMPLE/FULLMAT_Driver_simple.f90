@@ -140,8 +140,19 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 
 	quant%tst = 2 ! 1: use a LR product as the kernel, 2: read the full matrix from a file as the kernel
-	quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv' ! file storing the full matrix
-	quant%Nunk = 4096  ! matrix size
+	
+	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv' ! file storing the full matrix
+	! quant%Nunk = 4096  ! matrix size
+	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N64.csv' ! file storing the full matrix
+	! quant%Nunk = 63  ! matrix size
+	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N128.csv' ! file storing the full matrix
+	! quant%Nunk = 127  ! matrix size
+	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N256.csv' ! file storing the full matrix
+	! quant%Nunk = 255  ! matrix size
+	quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N512.csv' ! file storing the full matrix
+	quant%Nunk = 511  ! matrix size
+
+
 	quant%rank = 6   ! rank of the LR product kernel
 	option%nogeo = 1  ! 1. no geometry info available. 2. geometry info available
 
