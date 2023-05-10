@@ -1,7 +1,9 @@
 image: gcc
 default:
   before_script:
+    - cat etc/apt/sources.list      
     - echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
+    - cat etc/apt/sources.list
     - apt update
     - apt -y install gcc-9 g++-9 gfortran-9
     - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 --slave /usr/bin/g++ g++ /usr/bin/g++-9
