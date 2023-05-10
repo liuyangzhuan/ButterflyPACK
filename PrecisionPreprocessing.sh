@@ -150,7 +150,7 @@ for file in *; do
 		fi
 	fi
 done
-sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\n    z$CONFIG_FILE.fi/g" $ZSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi 	z$CONFIG_FILE.fi/g" $ZSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/zbutterflypack/g" $ZSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/ZButterflyPACKLIB/g" $ZSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=0/g" $ZSRCDIR/CMakeLists.txt
@@ -196,7 +196,7 @@ for file in *; do
 		fi
 	fi
 done
-sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\n    d$CONFIG_FILE.fi/g" $DSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi 	d$CONFIG_FILE.fi/g" $DSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/dbutterflypack/g" $DSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/DButterflyPACKLIB/g" $DSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=1/g" $DSRCDIR/CMakeLists.txt
@@ -242,7 +242,7 @@ for file in *; do
 		fi
 	fi
 done
-sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\n    c$CONFIG_FILE.fi/g" $CSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi 	c$CONFIG_FILE.fi/g" $CSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/cbutterflypack/g" $CSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/CButterflyPACKLIB/g" $CSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=2/g" $CSRCDIR/CMakeLists.txt
@@ -287,7 +287,7 @@ for file in *; do
 		fi
 	fi
 done
-sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi\\n    s$CONFIG_FILE.fi/g" $SSRCDIR/CMakeLists.txt  # still keep ButterflyPACK_config.fi for backward compatibility
+sed -i -e "s/$CONFIG_FILE.fi/$CONFIG_FILE.fi 	s$CONFIG_FILE.fi/g" $SSRCDIR/CMakeLists.txt   # still keep ButterflyPACK_config.fi for backward compatibility
 sed -i -e "s/butterflypack/sbutterflypack/g" $SSRCDIR/CMakeLists.txt
 sed -i -e "s/ButterflyPACKLIB/SButterflyPACKLIB/g" $SSRCDIR/Makefile
 sed -i -e "s/-DDAT/-DDAT=3/g" $SSRCDIR/CMakeLists.txt
