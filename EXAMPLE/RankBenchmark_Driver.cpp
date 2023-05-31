@@ -71,7 +71,7 @@ public:
   vector<double> _data;
   int _d = 0;
   int _n = 0;
-  int _ker=1; // 1. coplannar unit plates 2. parallel unitplates 3. two unit cubes 
+  int _ker=1; // 1. coplannar unit plates 2. parallel unitplates 3. two unit cubes
   int _ppw=5; // points per wavelength
   double _wavelen=1.0; // wavelength
   int _Nperdim=100; //number of points per dimension
@@ -122,14 +122,14 @@ public:
       }
 		}else if(_ker==1){
       double ds = _wavelen/_ppw;
-	    int ii = (m+1)%_Nperdim+1; 
+	    int ii = (m+1)%_Nperdim+1;
 	    int jj = (m+1)/_Nperdim;
       double pos_o[3];
       pos_o[0]=ii*ds+2;
       pos_o[1]=jj*ds;
       pos_o[2]=0;
 
-	    ii = (n+1)%_Nperdim+1; 
+	    ii = (n+1)%_Nperdim+1;
 	    jj = (n+1)/_Nperdim;
       double pos_s[3];
       pos_s[0]=ii*ds;
@@ -142,17 +142,17 @@ public:
 
 		}else if(_ker==2){
       double ds = _wavelen/_ppw;
-	    int ii = (m+1)%_Nperdim+1; 
+	    int ii = (m+1)%_Nperdim+1;
 	    int jj = (m+1)/_Nperdim;
       double pos_o[3];
       pos_o[0]=0;
       pos_o[1]=ii*ds;
       pos_o[2]=jj*ds;
 
-	    ii = (n+1)%_Nperdim+1; 
+	    ii = (n+1)%_Nperdim+1;
 	    jj = (n+1)/_Nperdim;
       double pos_s[3];
-      pos_s[0]=1;
+      pos_s[0]=2;
       pos_s[1]=ii*ds;
       pos_s[2]=jj*ds;
 
@@ -515,7 +515,7 @@ int main(int argc, char* argv[])
 	C_QuantApp *quant_ptr_a, *quant_ptr_b, *quant_ptr_c, *quant_ptr_dummy;
 	int v_major,v_minor,v_bugfix; //version numbers
 
-  int tst = 1; // 1. coplannar unit plates 2. parallel unit plates 3. two unit cubes 
+  int tst = 1; // 1. coplannar unit plates 2. parallel unit plates 3. two unit cubes
 	int lrlevel=100;
 
 if(myrank==master_rank){
@@ -591,8 +591,8 @@ if(myrank==master_rank){
   }
 
 
-  for(int t=0; t<20;t++){
-    double wavelen = 0.25/pow(2,t/2.0);  
+  for(int t=8; t<20;t++){
+    double wavelen = 0.25/pow(2,t/2.0);
     double ds = wavelen/ppw;
     if(tst==1){
       Nperdim = ceil(1.0/ds);
@@ -601,16 +601,16 @@ if(myrank==master_rank){
     }else if(tst==2){
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim;
-      N = Nperdim*Nperdim;     
+      N = Nperdim*Nperdim;
     }else if(tst==3){
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim*Nperdim;
-      N = Nperdim*Nperdim*Nperdim;   
+      N = Nperdim*Nperdim*Nperdim;
     }
-    quant_ptr_a=new C_QuantApp(wavelen, ppw, tst, Nperdim);    
+    quant_ptr_a=new C_QuantApp(wavelen, ppw, tst, Nperdim);
 
     if(myrank==master_rank)std::cout<<"tst "<<tst<<" M "<<M<<" N "<<N<<std::endl;
-    
+
     nogeo=1;
     sort_opt=0;
 
