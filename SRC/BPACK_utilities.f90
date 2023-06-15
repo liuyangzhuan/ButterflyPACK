@@ -457,7 +457,7 @@ contains
 
          basis_group2(node2)%head = basis_group1(node1)%head + offset
          basis_group2(node2)%tail = basis_group1(node1)%tail + offset
-         basis_group2(node2)%pgno = basis_group1(node1)%pgno
+         ! basis_group2(node2)%pgno = basis_group1(node1)%pgno
          basis_group2(node2)%radius = basis_group1(node1)%radius
          if(allocated(basis_group1(node1)%center))then
             Dimn = size(basis_group1(node1)%center, 1)
@@ -975,6 +975,7 @@ contains
          write (*, *) ' '
          write (*, *) '***************************'
          write (*, '(A25)') 'Printing Solver Options:'
+         write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'Nmin_leaf', option%Nmin_leaf
          write (*, '(A18,I8)') 'n_iter', option%n_iter
          write (*, '(A18,I8)') 'level_check', option%level_check
