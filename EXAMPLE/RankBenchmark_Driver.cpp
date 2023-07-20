@@ -68,7 +68,8 @@ extern "C" {
 // The object handling kernel parameters and sampling function
 class C_QuantApp {
 public:
-  vector<double> _data;
+  vector<double> _data_m;
+  vector<double> _data_n;
   int _d = 0;
   int _n = 0;
   int _ker=1; // 1. coplannar unit plates 2. parallel unitplates 3. two unit cubes
@@ -84,8 +85,10 @@ public:
   std::vector<_Complex double> _MatU;
   std::vector<_Complex double> _MatV;
 
-  std::vector<int> _Hperm;
-  std::vector<int> _iHperm;
+  std::vector<int> _Hperm_m;
+  std::vector<int> _iHperm_m;
+  std::vector<int> _Hperm_n;
+  std::vector<int> _iHperm_n;
   int _nloc = 0;
 
   F2Cptr* bmat;  //hierarchical matrix returned by Fortran code
@@ -108,80 +111,17 @@ public:
     : _m_rand(m_rand), _n_rand(n_rand), _ni1_rand(ni1_rand), _ni2_rand(ni2_rand),_ker(ker){
 	}
 
-  C_QuantApp(double wavelen, int ppw, int ker, int Nperdim)
-    : _wavelen(wavelen), _ppw(ppw), _ker(ker),_Nperdim(Nperdim){
+  C_QuantApp(double wavelen, int ppw, int ker, int Nperdim, int Ndim)
+    : _wavelen(wavelen), _ppw(ppw), _ker(ker),_Nperdim(Nperdim),_d(Ndim){
 	}
 
 
-  inline void Sample(int m, int n, _Complex double* val){
+  inline void Sample(double pos_o[3], double pos_s[3], _Complex double* val){
 
-	  if(_ker==0){
-      *val =0;
-      for (int k = 0; k < _rank_rand; k++){
-        *val += _MatU[k*_m_rand+m]*_MatV[k*_n_rand+n];
-      }
-		}else if(_ker==1){
-      double ds = _wavelen/_ppw;
-	    int ii = (m+1)%_Nperdim+1;
-	    int jj = (m+1)/_Nperdim;
-      double pos_o[3];
-      pos_o[0]=ii*ds+2;
-      pos_o[1]=jj*ds;
-      pos_o[2]=0;
 
-	    ii = (n+1)%_Nperdim+1;
-	    jj = (n+1)/_Nperdim;
-      double pos_s[3];
-      pos_s[0]=ii*ds;
-      pos_s[1]=jj*ds;
-      pos_s[2]=0;
-
-	    double dist = sqrt(pow(pos_o[0]-pos_s[0],2)+pow(pos_o[1]-pos_s[1],2)+pow(pos_o[2]-pos_s[2],2));
-	    double waven=2*M_PI/_wavelen;
-      *val = (cos(-waven*dist)+Im*sin(-waven*dist))/dist;
-
-		}else if(_ker==2){
-      double ds = _wavelen/_ppw;
-	    int ii = (m+1)%_Nperdim+1;
-	    int jj = (m+1)/_Nperdim;
-      double pos_o[3];
-      pos_o[0]=0;
-      pos_o[1]=ii*ds;
-      pos_o[2]=jj*ds;
-
-	    ii = (n+1)%_Nperdim+1;
-	    jj = (n+1)/_Nperdim;
-      double pos_s[3];
-      pos_s[0]=2;
-      pos_s[1]=ii*ds;
-      pos_s[2]=jj*ds;
-
-	    double dist = sqrt(pow(pos_o[0]-pos_s[0],2)+pow(pos_o[1]-pos_s[1],2)+pow(pos_o[2]-pos_s[2],2));
-	    double waven=2*M_PI/_wavelen;
-      *val = (cos(-waven*dist)+Im*sin(-waven*dist))/dist;
-		}else if(_ker==3){
-      double ds = _wavelen/_ppw;
-
-      int ii = ((m+1)%(int)pow(_Nperdim,2)+1)%_Nperdim+1;
-      int jj = ((m+1)%(int)pow(_Nperdim,2)+1)/_Nperdim;
-      int kk = (m+1)/pow(_Nperdim,2);
-      double pos_o[3];
-      pos_o[0]=ii*ds;
-      pos_o[1]=jj*ds;
-      pos_o[2]=kk*ds;
-
-      ii = ((n+1)%(int)pow(_Nperdim,2)+1)%_Nperdim+1;
-      jj = ((n+1)%(int)pow(_Nperdim,2)+1)/_Nperdim;
-      kk = (n+1)/pow(_Nperdim,2);
-      double pos_s[3];
-      pos_s[0]=ii*ds+2;
-      pos_s[1]=jj*ds;
-      pos_s[2]=kk*ds;
-
-	    double dist = sqrt(pow(pos_o[0]-pos_s[0],2)+pow(pos_o[1]-pos_s[1],2)+pow(pos_o[2]-pos_s[2],2));
-	    double waven=2*M_PI/_wavelen;
-      *val = (cos(-waven*dist)+Im*sin(-waven*dist))/dist;
-		}
+    double dist = sqrt(pow(pos_o[0]-pos_s[0],2)+pow(pos_o[1]-pos_s[1],2)+pow(pos_o[2]-pos_s[2],2));
+    double waven=2*M_PI/_wavelen;
+    *val = (cos(-waven*dist)+Im*sin(-waven*dist))/dist;
   }
 };
 
@@ -190,7 +130,20 @@ public:
 inline void C_FuncZmn(int *m, int *n, _Complex double *val, C2Fptr quant) {
 
   C_QuantApp* Q = (C_QuantApp*) quant;
-  Q->Sample(*m-1,*n-1,val);
+
+  double pos_o[3];
+  pos_o[0] = Q->_data_m[(*m-1) * Q->_d];
+  pos_o[1] = Q->_data_m[(*m-1) * Q->_d+1];
+  pos_o[2] = Q->_data_m[(*m-1) * Q->_d+2];
+
+  double pos_s[3];
+  pos_s[0] = Q->_data_n[(*n-1) * Q->_d];
+  pos_s[1] = Q->_data_n[(*n-1) * Q->_d+1];
+  pos_s[2] = Q->_data_n[(*n-1) * Q->_d+2];
+
+
+  Q->Sample(pos_o,pos_s,val);
+
 }
 
 // The sampling function wrapper required by the Fortran HODLR code
@@ -206,7 +159,23 @@ inline void C_FuncBZmn(int *m, int *n, _Complex double *val, C2Fptr quant) {
 	  m1=*n;
 	  n1=-*m;
   }
-  Q->Sample(m1-1,n1-1,val);
+
+  // m1 and n1 still need to convert to the original order, using new2old of msh0_m and msh_bf
+  int m1_1, n1_1;
+  m1_1 = Q->_Hperm_m[m1-1];
+  n1_1 = Q->_Hperm_n[n1-1];
+  double pos_o[3];
+  pos_o[0] = Q->_data_m[(m1_1-1) * Q->_d];
+  pos_o[1] = Q->_data_m[(m1_1-1) * Q->_d+1];
+  pos_o[2] = Q->_data_m[(m1_1-1) * Q->_d+2];
+
+  double pos_s[3];
+  pos_s[0] = Q->_data_n[(n1_1-1) * Q->_d];
+  pos_s[1] = Q->_data_n[(n1_1-1) * Q->_d+1];
+  pos_s[2] = Q->_data_n[(n1_1-1) * Q->_d+2];
+
+
+  Q->Sample(pos_o,pos_s,val);
 }
 
 // The distance function wrapper required by the Fortran HODLR code
@@ -496,14 +465,14 @@ int main(int argc, char* argv[])
 	double h=0.1; //kernel parameter
 	double lambda=10.0 ; //kernel parameter
 	int Npo=5000;   // matrix size
-	int Ndim=1; //data dimension
+	int Ndim=3; //data dimension
 	double starttime, endtime;
 	double* dat_ptr_m, *dat_ptr_n, *dat_ptr_k, *dat_ptr_l;
 	int* nns_ptr_m, *nns_ptr_n, *nns_ptr_k, *nns_ptr_l;
-	int nogeo;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
+	int nogeo;  // if 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy; if 0: geometrical information passed
 	int ker=0 ; // kernel choice
 
-	int Nmin=4; //finest leafsize
+	int Nmin=16; //finest leafsize
 	double tol=1e-4; //compression tolerance
 	double sample_para=2.0; //oversampling factor in entry evaluation
 	int com_opt=5; //1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton
@@ -591,28 +560,87 @@ if(myrank==master_rank){
   }
 
 
-  for(int t=8; t<20;t++){
+  for(int t=5; t<20;t++){
     double wavelen = 0.25/pow(2,t/2.0);
     double ds = wavelen/ppw;
-    if(tst==1){
+    vector<double> data_geo_m;
+    vector<double> data_geo_n;
+    if(tst==1){ // two colinear plate 
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim;
       N = Nperdim*Nperdim;
-    }else if(tst==2){
+      data_geo_m.resize(M*Ndim);
+      data_geo_n.resize(N*Ndim);
+
+      for(int m=0;m<M;m++){
+        int ii = (m+1)%Nperdim+1;
+	      int jj = (m+1)/Nperdim;
+        data_geo_m[(m) * Ndim]=ii*ds+2;
+        data_geo_m[(m) * Ndim+1]=jj*ds;
+        data_geo_m[(m) * Ndim+2]=0;
+      }
+      for(int n=0;n<N;n++){
+        int ii = (n+1)%Nperdim+1;
+	      int jj = (n+1)/Nperdim;
+        data_geo_n[(n) * Ndim]=ii*ds;
+        data_geo_n[(n) * Ndim+1]=jj*ds;
+        data_geo_n[(n) * Ndim+2]=0;
+      }
+
+    }else if(tst==2){ // two parallel plate 
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim;
       N = Nperdim*Nperdim;
-    }else if(tst==3){
+      data_geo_m.resize(M*Ndim);
+      data_geo_n.resize(N*Ndim);
+
+      for(int m=0;m<M;m++){
+        int ii = (m+1)%Nperdim+1;
+	      int jj = (m+1)/Nperdim;
+        data_geo_m[(m) * Ndim]=0;
+        data_geo_m[(m) * Ndim+1]=ii*ds;
+        data_geo_m[(m) * Ndim+2]=jj*ds;
+      }
+      for(int n=0;n<N;n++){
+        int ii = (n+1)%Nperdim+1;
+	      int jj = (n+1)/Nperdim;
+        data_geo_n[(n) * Ndim]=2;
+        data_geo_n[(n) * Ndim+1]=ii*ds;
+        data_geo_n[(n) * Ndim+2]=jj*ds;
+      }
+    }else if(tst==3){ // two 3D cubes
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim*Nperdim;
       N = Nperdim*Nperdim*Nperdim;
+      data_geo_m.resize(M*Ndim);
+      data_geo_n.resize(N*Ndim);
+      for(int m=0;m<M;m++){
+        int ii = ((m+1)%(int)pow(Nperdim,2)+1)%Nperdim+1;
+        int jj = ((m+1)%(int)pow(Nperdim,2)+1)/Nperdim;
+        int kk = (m+1)/pow(Nperdim,2);
+        data_geo_m[(m) * Ndim]=ii*ds;
+        data_geo_m[(m) * Ndim+1]=jj*ds;
+        data_geo_m[(m) * Ndim+2]=kk*ds;
+      }
+      for(int n=0;n<N;n++){
+        int ii = ((n+1)%(int)pow(Nperdim,2)+1)%Nperdim+1;
+        int jj = ((n+1)%(int)pow(Nperdim,2)+1)/Nperdim;
+        int kk = (n+1)/pow(Nperdim,2);
+        data_geo_n[(n) * Ndim]=ii*ds+2;
+        data_geo_n[(n) * Ndim+1]=jj*ds;
+        data_geo_n[(n) * Ndim+2]=kk*ds;
+      }      
     }
-    quant_ptr_a=new C_QuantApp(wavelen, ppw, tst, Nperdim);
+    quant_ptr_a=new C_QuantApp(wavelen, ppw, tst, Nperdim, Ndim);
+    quant_ptr_a->_data_m.resize(Ndim*M);
+    quant_ptr_a->_data_m = data_geo_m;
+    quant_ptr_a->_data_n.resize(Ndim*N);
+    quant_ptr_a->_data_n = data_geo_n;
 
     if(myrank==master_rank)std::cout<<"tst "<<tst<<" M "<<M<<" N "<<N<<std::endl;
 
-    nogeo=1;
-    sort_opt=0;
+    nogeo=0;
+    sort_opt=2;
 
     /*****************************************************************/
     int myseg_m=0;     // local number of unknowns
@@ -674,14 +702,16 @@ if(myrank==master_rank){
     int nlevel_m = 0; // 0: tree level, nonzero if a tree is provided
     int* tree_m = new int[(int)pow(2,nlevel_m)]; //user provided array containing size of each leaf node, not used if nlevel=0
     tree_m[0] = M;
-    z_c_bpack_construct_init(&M, &Ndim, dat_ptr_m, nns_ptr_m,&nlevel_m, tree_m, perms_m, &myseg_m, &bmat_dummy, &option, &stats_dummy, &msh0_m, &kerquant_dummy, &ptree, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
-
+    z_c_bpack_construct_init(&M, &Ndim, data_geo_m.data(), nns_ptr_m,&nlevel_m, tree_m, perms_m, &myseg_m, &bmat_dummy, &option, &stats_dummy, &msh0_m, &kerquant_dummy, &ptree, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
+    quant_ptr_a->_Hperm_m.resize(M);
+    std::copy(perms_m, perms_m + M, quant_ptr_a->_Hperm_m.begin());
 
     int nlevel_n = 0; // 0: tree level, nonzero if a tree is provided
     int* tree_n = new int[(int)pow(2,nlevel_n)]; //user provided array containing size of each leaf node, not used if nlevel=0
     tree_n[0] = N;
-    z_c_bpack_construct_init(&N, &Ndim, dat_ptr_n, nns_ptr_n,&nlevel_n, tree_n, perms_n, &myseg_n, &bmat_dummy, &option, &stats_dummy, &msh0_n, &kerquant_dummy, &ptree, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
-
+    z_c_bpack_construct_init(&N, &Ndim, data_geo_n.data(), nns_ptr_n,&nlevel_n, tree_n, perms_n, &myseg_n, &bmat_dummy, &option, &stats_dummy, &msh0_n, &kerquant_dummy, &ptree, &C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_dummy);
+    quant_ptr_a->_Hperm_n.resize(N);
+    std::copy(perms_n, perms_n + N, quant_ptr_a->_Hperm_n.begin());
 
   // construct the three bfs from entry evaluation
     z_c_bpack_createstats(&stats_a);
