@@ -2294,7 +2294,9 @@ contains
                      nn = size(block_rand%ButterflyV%blocks(j)%matrix, 1)
                      if (.not. associated(random%RandomVectorRR(1)%blocks(1, j)%matrix)) allocate (random%RandomVectorRR(1)%blocks(1, j)%matrix(rank, num_vect_subsub))
                      random%RandomVectorRR(1)%blocks(1, j)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                      !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                      do jj = 1, num_vect_subsub
                         do ii = 1, rank
                            ctemp = 0d0
@@ -2304,8 +2306,9 @@ contains
                            random%RandomVectorRR(1)%blocks(1, j)%matrix(ii, jj + (nth - nth_s)*num_vect_subsub) = ctemp
                         enddo
                      enddo
+#ifdef HAVE_OPENMP
                      !$omp end parallel do
-
+#endif
                   enddo
                   ! !$omp end parallel do
                enddo
@@ -2332,7 +2335,9 @@ contains
                         ! write(*,*)ij,i,j,level,'ha',index_i
                         if (.not. associated(random%RandomVectorRR(level + 1)%blocks(i, index_j)%matrix)) allocate (random%RandomVectorRR(level + 1)%blocks(i, index_j)%matrix(mm, num_vect_subsub))
                         random%RandomVectorRR(level + 1)%blocks(i, index_j)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                         !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                         do jj = 1, num_vect_subsub
                            do ii = 1, mm
                               ctemp = 0d0
@@ -2345,15 +2350,18 @@ contains
                               random%RandomVectorRR(level + 1)%blocks(i, index_j)%matrix(ii, jj + (nth - nth_s)*num_vect_subsub) = ctemp
                            enddo
                         enddo
+#ifdef HAVE_OPENMP
                         !$omp end parallel do
-
+#endif
                         nn1 = size(block_rand%ButterflyKerl(level)%blocks(i + 1, j)%matrix, 2)
                         nn2 = size(block_rand%ButterflyKerl(level)%blocks(i + 1, j + 1)%matrix, 2)
                         mm = size(block_rand%ButterflyKerl(level)%blocks(i + 1, j)%matrix, 1)
                         ! write(*,*)ij,i,j,level,'ha',index_i
                         if (.not. associated(random%RandomVectorRR(level + 1)%blocks(i + 1, index_j)%matrix)) allocate (random%RandomVectorRR(level + 1)%blocks(i + 1, index_j)%matrix(mm, num_vect_subsub))
                         random%RandomVectorRR(level + 1)%blocks(i + 1, index_j)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                         !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                         do jj = 1, num_vect_subsub
                            do ii = 1, mm
                               ctemp = 0d0
@@ -2366,8 +2374,9 @@ contains
                               random%RandomVectorRR(level + 1)%blocks(i + 1, index_j)%matrix(ii, jj + (nth - nth_s)*num_vect_subsub) = ctemp
                            enddo
                         enddo
+#ifdef HAVE_OPENMP
                         !$omp end parallel do
-
+#endif
                         ! write(*,*)ij,i,j,level,'ha done0',index_i
                         deallocate (random%RandomVectorRR(level)%blocks(index_i, j)%matrix)
                         deallocate (random%RandomVectorRR(level)%blocks(index_i, j + 1)%matrix)
@@ -2393,7 +2402,9 @@ contains
                      mm = size(block_rand%ButterflyU%blocks(i)%matrix, 1)
                      if (.not. associated(random%RandomVectorLL(1)%blocks(i, 1)%matrix)) allocate (random%RandomVectorLL(1)%blocks(i, 1)%matrix(rank, num_vect_subsub))
                      random%RandomVectorLL(1)%blocks(i, 1)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                      !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                      do jj = 1, num_vect_subsub
                         do ii = 1, rank
                            ctemp = 0d0
@@ -2403,7 +2414,9 @@ contains
                            random%RandomVectorLL(1)%blocks(i, 1)%matrix(ii, jj + (nth - nth_s)*num_vect_subsub) = ctemp
                         enddo
                      enddo
+#ifdef HAVE_OPENMP
                      !$omp end parallel do
+#endif
                   end do
                   ! !$omp end parallel do
                enddo
@@ -2428,7 +2441,9 @@ contains
                         nn = size(block_rand%ButterflyKerl(level_butterfly - level + 1)%blocks(i, j)%matrix, 2)
                         if (.not. associated(random%RandomVectorLL(level + 1)%blocks(index_i, j)%matrix)) allocate (random%RandomVectorLL(level + 1)%blocks(index_i, j)%matrix(nn, num_vect_subsub))
                         random%RandomVectorLL(level + 1)%blocks(index_i, j)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                         !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                         do ii = 1, num_vect_subsub
                            do jj = 1, nn
                               ctemp = 0d0
@@ -2441,13 +2456,17 @@ contains
                               random%RandomVectorLL(level + 1)%blocks(index_i, j)%matrix(jj, ii + (nth - nth_s)*num_vect_subsub) = ctemp
                            enddo
                         enddo
+#ifdef HAVE_OPENMP
                         !$omp end parallel do
+#endif
                         mm1 = size(block_rand%ButterflyKerl(level_butterfly - level + 1)%blocks(i, j + 1)%matrix, 1)
                         mm2 = size(block_rand%ButterflyKerl(level_butterfly - level + 1)%blocks(i + 1, j + 1)%matrix, 1)
                         nn = size(block_rand%ButterflyKerl(level_butterfly - level + 1)%blocks(i, j + 1)%matrix, 2)
                         if (.not. associated(random%RandomVectorLL(level + 1)%blocks(index_i, j + 1)%matrix)) allocate (random%RandomVectorLL(level + 1)%blocks(index_i, j + 1)%matrix(nn, num_vect_subsub))
                         random%RandomVectorLL(level + 1)%blocks(index_i, j + 1)%matrix(:, (nth - nth_s)*num_vect_subsub + 1:(nth - nth_s + 1)*num_vect_subsub) = 0
+#ifdef HAVE_OPENMP
                         !$omp parallel do default(shared) private(ii,jj,kk,ctemp)
+#endif
                         do ii = 1, num_vect_subsub
                            do jj = 1, nn
                               ctemp = 0d0
@@ -2460,7 +2479,9 @@ contains
                               random%RandomVectorLL(level + 1)%blocks(index_i, j + 1)%matrix(jj, ii + (nth - nth_s)*num_vect_subsub) = ctemp
                            enddo
                         enddo
+#ifdef HAVE_OPENMP
                         !$omp end parallel do
+#endif
                         deallocate (random%RandomVectorLL(level)%blocks(i, index_j)%matrix)
                         deallocate (random%RandomVectorLL(level)%blocks(i + 1, index_j)%matrix)
                      end if
@@ -11012,7 +11033,9 @@ end subroutine BF_block_MVP_dat_batch_magma
          call GetLocalBlockRange(ptree, blocks%pgno, 0, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
          if (BFvec%vec(0)%nc > 1) then
             call assert(associated(blocks%ns),'blocks%ns not computed in BF_block_MVP_partial')
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(i,nn,ii,jj,idxs)
+#endif
             do i = 1, BFvec%vec(0)%nc
                if(i==1)then
                   idxs = 0
@@ -11028,7 +11051,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                   enddo
                enddo
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
+#endif
          else
             allocate (BFvec%vec(0)%blocks(1, 1)%matrix(blocks%N_loc, num_vectors))
             BFvec%vec(0)%blocks(1, 1)%matrix = VectIn
@@ -11063,8 +11088,9 @@ end subroutine BF_block_MVP_dat_batch_magma
 
                if (level == 0) then
                   flops = 0
-
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s,idxs) reduction(+:flops)
+#endif
                   do j = 1, blocks%ButterflyV%nblk_loc
                      index_j = (j - 1)*inc_c + idx_c
                      index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
@@ -11075,7 +11101,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(0)%blocks(1, j)%matrix, nn, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
                      flops = flops + flop
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -11102,7 +11130,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
+#ifdef HAVE_OPENMP
                      !$omp parallel do default(shared) private(i,rank,mm,flop) reduction(+:flops)
+#endif
                      do i = 1, blocks%ButterflyU%nblk_loc
                         rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                         mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
@@ -11112,14 +11142,17 @@ end subroutine BF_block_MVP_dat_batch_magma
                         call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(i, 1)%matrix, rank, BFvec%vec(level + 1)%blocks(i, 1)%matrix, mm, 'N', 'N', mm, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
                      enddo
+#ifdef HAVE_OPENMP
                      !$omp end parallel do
+#endif
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                else
                   flops = 0
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
-
+#endif
                   do index_ij = 1, nr*nc
                      index_j_loc = (index_ij - 1)/nr + 1
                      index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
@@ -11149,7 +11182,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, BPACK_cone, BPACK_cone, flop=flop)
                      flops = flops + flop
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                endif
             endif
@@ -11184,7 +11219,9 @@ end subroutine BF_block_MVP_dat_batch_magma
          call GetLocalBlockRange(ptree, blocks%pgno, level_butterfly + 1, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
          if (BFvec%vec(0)%nr > 1) then
             call assert(associated(blocks%ms),'blocks%ms not computed in BF_block_MVP_partial')
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(i,mm,ii,jj,idxs)
+#endif
             do i = 1, BFvec%vec(0)%nr
                if(i==1)then
                   idxs = 0
@@ -11200,7 +11237,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                   enddo
                enddo
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
+#endif
          else
             allocate (BFvec%vec(0)%blocks(1, 1)%matrix(blocks%M_loc, num_vectors))
             BFvec%vec(0)%blocks(1, 1)%matrix = VectIn
@@ -11235,7 +11274,9 @@ end subroutine BF_block_MVP_dat_batch_magma
 
                if (level == level_butterfly + 1) then
                   flops = 0
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s,idxs) reduction(+:flops)
+#endif
                   do i = 1, blocks%ButterflyU%nblk_loc
                      index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
@@ -11248,7 +11289,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      flops = flops + flop
 
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                   call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
@@ -11276,7 +11319,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      flops = flops + flop
                      deallocate (matrixtemp)
                   else
+#ifdef HAVE_OPENMP
                      !$omp parallel do default(shared) private(j,rank,nn,flop) reduction(+:flops)
+#endif
                      do j = 1, blocks%ButterflyV%nblk_loc
                         nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                         rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
@@ -11285,12 +11330,16 @@ end subroutine BF_block_MVP_dat_batch_magma
                         call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, j)%matrix, rank, BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix, nn, 'N', 'N', nn, num_vectors, rank, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
                      enddo
+#ifdef HAVE_OPENMP
                      !$omp end parallel do
+#endif
                   endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                else
                   flops = 0
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
+#endif
                   do index_ij = 1, nr*nc
                      index_j_loc = (index_ij - 1)/nr + 1
                      index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
@@ -11319,7 +11368,9 @@ end subroutine BF_block_MVP_dat_batch_magma
                      flops = flops + flop
 
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   stats%Flop_Tmp = stats%Flop_Tmp + flops
                endif
             endif
@@ -14285,13 +14336,17 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             do i = 1, mm
                ii = blocks_l%ipiv(i)
                if (ii /= i) then
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(j,ctemp)
+#endif
                   do j = 1, nvec
                      ctemp = Vinout(idxs_m + i - 1, j)
                      Vinout(idxs_m + i - 1, j) = Vinout(idxs_m + ii - 1, j)
                      Vinout(idxs_m + ii - 1, j) = ctemp
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             enddo
          endif
@@ -14309,13 +14364,17 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             do i = mm, 1, -1
                ii = blocks_l%ipiv(i)
                if (ii /= i) then
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(j,ctemp)
+#endif
                   do j = 1, nvec
                      ctemp = Vinout(idxs_m + i - 1, j)
                      Vinout(idxs_m + i - 1, j) = Vinout(idxs_m + ii - 1, j)
                      Vinout(idxs_m + ii - 1, j) = ctemp
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             enddo
          end if
@@ -14681,7 +14740,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             !$omp single
             !$omp taskloop default(shared) private(ij,ii,jj,value_e)
 #else
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 #endif
             do ij = 1, ncol*nrow
                jj = (ij - 1)/nrow + 1
@@ -14696,7 +14757,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             !$omp end single
             !$omp end parallel
 #else
+#ifdef HAVE_OPENMP
             !$omp end parallel do
+#endif
 #endif
          else
             proc1 => ker%FuncZmn
@@ -14706,7 +14769,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                !$omp single
                !$omp taskloop default(shared) private(ij,ii,jj,value_e)
 #else
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 #endif
                do ij = 1, ncol*nrow
                   jj = (ij - 1)/nrow + 1
@@ -14721,7 +14786,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                !$omp end single
                !$omp end parallel
 #else
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
 #endif
 
             endif
@@ -15033,7 +15100,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                !$omp single
                !$omp taskloop default(shared) private(ij,ii,jj,value_e)
 #else
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 #endif
                do ij = 1, submats1(nn)%nc*submats1(nn)%nr
                   jj = (ij - 1)/submats1(nn)%nr + 1
@@ -15048,7 +15117,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                !$omp end single
                !$omp end parallel
 #else
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
 #endif
             else
                proc1 => ker%FuncZmn
@@ -15058,7 +15129,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   !$omp single
                   !$omp taskloop default(shared) private(ij,ii,jj,value_e)
 #else
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(ij,ii,jj,value_e)
+#endif
 #endif
                   do ij = 1, submats1(nn)%nc*submats1(nn)%nr
                      jj = (ij - 1)/submats1(nn)%nr + 1
@@ -15073,7 +15146,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   !$omp end single
                   !$omp end parallel
 #else
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
 #endif
 
                endif

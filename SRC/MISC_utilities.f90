@@ -606,7 +606,9 @@ contains
          norm_V = norm_vector(row_R, rankmax_c)
 
          inner_UV = 0
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+#endif
          do j = 1, rank
             inner_U = 0
             inner_V = 0
@@ -624,8 +626,9 @@ contains
             ! !$omp end parallel do
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
-
+#endif
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
          ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'
@@ -1058,14 +1061,17 @@ contains
                stop
             end if
             A_tmp = 0
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(ii,jj)
+#endif
             do ii = 1, mn
                do jj = ii, mn
                   A_tmp(ii, jj) = Atmp(ii, jj)
                enddo
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             rank = mn
             do i = 1, mn
                if (abs(A_tmp(i, i))/abs(A_tmp(1, 1))/mnl <= eps) then

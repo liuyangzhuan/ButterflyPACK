@@ -723,8 +723,9 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 	current_at_node=0
 	current_at_patch=0
 	vec_current_at_patch=0
-
+#ifdef HAVE_OPENMP
 	!$omp parallel do default(shared) private(lr,patch,signs,info_idx,i,j,center,edge,current_abs,current_patch,a,r)
+#endif
 	do edge=msh%idxs,msh%idxe
 		do lr=3,4
 		patch = quant%info_unk(lr,msh%new2old(edge))
@@ -751,23 +752,30 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 			r=sqrt(r)
 			current_patch = current_patch/r
 			do i=1,3
+#ifdef HAVE_OPENMP
 			!$omp atomic
+#endif
 			vec_current_at_patch(i,patch)=vec_current_at_patch(i,patch) + current_patch(i)
+#ifdef HAVE_OPENMP
 			!$omp end atomic
+#endif
 			enddo
 		endif
 		enddo
 	enddo
+#ifdef HAVE_OPENMP
 	!$omp end parallel do
+#endif
 	call MPI_ALLREDUCE(MPI_IN_PLACE,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
 
 	do i=1,quant%maxpatch
 	current_at_patch(i) = sqrt(sum(vec_current_at_patch(1:3,i)**2))
 	enddo
-
+#ifdef HAVE_OPENMP
     !$omp parallel do default(shared) private(patch,i,ii,node,a)
-    do node=1, quant%maxnode
+#endif
+	do node=1, quant%maxnode
         ii=0; a=0.
         do patch=1, quant%maxpatch
             do i=1,3
@@ -779,8 +787,9 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
         enddo
         current_at_node(node)=a/dble(ii)
     enddo
+#ifdef HAVE_OPENMP
     !$omp end parallel do
-
+#endif
 	if(ptree%MyID == Main_ID)then
     ! string='current'//chara//'.out'
     open(30,file=string)
@@ -971,13 +980,16 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
         phi=i*dphi
         ctemp_loc=(0.,0.)
         rcs=0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
-        do edge=msh%idxs,msh%idxe
+#endif
+		do edge=msh%idxs,msh%idxe
             call VV_polar_SURF(theta,phi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1,1),quant)
             ctemp_loc=ctemp_loc+ctemp_1
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
@@ -994,13 +1006,16 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
         phi=i*dphi
         ctemp_loc=(0,0)
         rcs=0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
-        do edge=msh%idxs,msh%idxe
+#endif
+		do edge=msh%idxs,msh%idxe
             call HH_polar_SURF(theta,phi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1,2),quant)
             ctemp_loc=ctemp_loc+ctemp_1
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
@@ -1126,13 +1141,16 @@ subroutine RCS_monostatic_VV_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
     ctemp_loc=(0.,0.)
         rcs=0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
-        do edge=msh%idxs,msh%idxe
+#endif
+		do edge=msh%idxs,msh%idxe
             call VV_polar_SURF(dsita,dphi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1),quant)
 	        ctemp_loc=ctemp_loc+ctemp_1
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
@@ -1159,13 +1177,16 @@ subroutine RCS_monostatic_HH_SURF(dsita,dphi,rcs,curr,msh,quant,ptree)
 
     ctemp_loc=(0.,0.)
         rcs=0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
-        do edge=msh%idxs,msh%idxe
+#endif
+		do edge=msh%idxs,msh%idxe
             call HH_polar_SURF(dsita,dphi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1),quant)
 	        ctemp_loc=ctemp_loc+ctemp_1
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
@@ -1244,9 +1265,10 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     close(111)
 
     !************quant%normal_of_patch****************
-
+#ifdef HAVE_OPENMP
     !$omp parallel do default(shared) private(patch,i,a,b,c,r0)
-    do patch=1,quant%maxpatch
+#endif
+	do patch=1,quant%maxpatch
         do i=1,3
             a(i)=(quant%xyz(i,quant%node_of_patch(2,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
             b(i)=(quant%xyz(i,quant%node_of_patch(3,patch))-quant%xyz(i,quant%node_of_patch(1,patch)))
@@ -1258,8 +1280,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
         c(3)=c(3)/r0
         quant%normal_of_patch(1:3,patch)=c(1:3)
     enddo
+#ifdef HAVE_OPENMP
     !$omp end parallel do
-
+#endif
     !************quant%info_unk****************
 
     edge=0
@@ -1389,9 +1412,10 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
     ! enddo
 
     ! Maxedge=edge
-
+#ifdef HAVE_OPENMP
     !$omp parallel do default(shared) private(edge,node_temp,jj,iii,jjj)
-    do edge=1,maxedge
+#endif
+	do edge=1,maxedge
 	    node_temp(1)=0
 	    node_temp(2)=0
 	    do jj=3,4
@@ -1408,8 +1432,9 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
          quant%info_unk(5,edge)=quant%node_of_patch(node_temp(1),quant%info_unk(3,edge))
          quant%info_unk(6,edge)=quant%node_of_patch(node_temp(2),quant%info_unk(4,edge))
     enddo
+#ifdef HAVE_OPENMP
     !$omp end parallel do
-
+#endif
     node=quant%maxnode
     do edge=1, Maxedge
         node=node+1
@@ -1486,16 +1511,18 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 		Current=0
         allocate (voltage(N_unk_loc,2))
 
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=msh%idxs, msh%idxe
+#endif
+		do edge=msh%idxs, msh%idxe
             call element_Vinc_VV_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
 			voltage(edge-msh%idxs+1,1)=value_Z
 			call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
             voltage(edge-msh%idxs+1,2)=value_Z
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         n1 = MPI_Wtime()
 		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,2,option,ptree,stats)
 		n2 = MPI_Wtime()
@@ -1536,12 +1563,16 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 
         do j=0, num_sample
             phi=j*dphi
+#ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,value_Z)
+#endif
 			do edge=msh%idxs, msh%idxe
 				call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
 				b(edge-msh%idxs+1,j+1)=value_Z
 			enddo
+#ifdef HAVE_OPENMP
 			!$omp end parallel do
+#endif
         enddo
 
 		call z_BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)

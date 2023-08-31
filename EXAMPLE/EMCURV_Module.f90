@@ -223,13 +223,16 @@ contains
 			dphi=i*ddphi
 			ctemp_loc=0
 			rcs=0
+#ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
+#endif
 			do edge=msh%idxs,msh%idxe
 				call VV_polar_CURV(dphi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1),msh,quant)
 				ctemp_loc=ctemp_loc+ctemp_1
 			enddo
+#ifdef HAVE_OPENMP
 			!$omp end parallel do
-
+#endif
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
 			rcs=(abs(BPACK_impedence0*ctemp))**2/4d0*quant%wavenum
@@ -262,13 +265,16 @@ contains
 
 		ctemp_loc=0
 			rcs=0
+#ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
+#endif
 			do edge=msh%idxs,msh%idxe
 				call VV_polar_CURV(dphi,msh%new2old(edge),ctemp_1,curr(edge-msh%idxs+1),msh,quant)
 				ctemp_loc=ctemp_loc+ctemp_1
 			enddo
+#ifdef HAVE_OPENMP
 			!$omp end parallel do
-
+#endif
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
 			rcs=(abs(BPACK_impedence0*ctemp))**2/4d0*quant%wavenum
@@ -337,14 +343,18 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         quant%xyz(1,0)=-1d0 ; quant%xyz(2,0)=0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, quant%maxnode-1
+#endif
+		do node=1, quant%maxnode-1
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node)=dx-1d0
             quant%xyz(2,node)=0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1   ! 1 start 0 center 2 end
+#endif
+		quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1   ! 1 start 0 center 2 end
         do edge=2, Maxedge
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
             quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
@@ -358,20 +368,28 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
         quant%xyz(1,0)=-1d0/sqrt(2d0) ; quant%xyz(2,0)=1d0/sqrt(2d0)
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node)=(dx-1d0)/sqrt(2d0)
             quant%xyz(2,node)=(1d0-dx)/sqrt(2d0)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
+#endif
         do node=1, Maxedge
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node+Maxedge)=dx/sqrt(2d0)
             quant%xyz(2,node+Maxedge)=dx/sqrt(2d0)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
+#endif
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
@@ -391,22 +409,29 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
         quant%xyz(1,0)=-0.5d0 ; quant%xyz(2,0)=1.0d0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
+#endif
         do node=1, Maxedge
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node)=dx-0.5d0
             quant%xyz(2,node)=1.0d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-        quant%xyz(1,Maxedge+1)=-0.5d0 ; quant%xyz(2,Maxedge+1)=-1.0d0
+#endif
+		quant%xyz(1,Maxedge+1)=-0.5d0 ; quant%xyz(2,Maxedge+1)=-1.0d0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node+Maxedge+1)=dx-0.5d0
             quant%xyz(2,node+Maxedge+1)=-1.0d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         intemp=int(Maxedge/2)
 
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
@@ -430,14 +455,18 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         quant%maxnode=2*Maxedge
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
         quant%xyz(1,0)=1.0d0 ; quant%xyz(2,0)=0.0d0
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx)
-        do node=1, quant%maxnode-1
+#endif
+		do node=1, quant%maxnode-1
             dx=node*quant%Delta_ll/2
             quant%xyz(1,node)=cos(dx)
             quant%xyz(2,node)=sin(dx)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-        quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
+#endif
+		quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge-1
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
             quant%info_unk(2,edge)=quant%info_unk(2,edge-1)+2
@@ -528,22 +557,27 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
         quant%xyz(1,0)=cos(0*BPACK_pi) ; quant%xyz(2,0)=sin(0*BPACK_pi)
-        !$omp parallel do default(shared) private(node,dx)
+#ifdef HAVE_OPENMP
+		!$omp parallel do default(shared) private(node,dx)
+#endif
         do node=1, Maxedge
             dx=node*quant%Delta_ll
             quant%xyz(1,node*2)=cos(0*BPACK_pi+dx)
             quant%xyz(2,node*2)=sin(0*BPACK_pi+dx)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
-
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
+#endif
         do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
@@ -562,22 +596,27 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
         quant%xyz(1,0)=cos(phi_start) ; quant%xyz(2,0)=sin(phi_start)
-        !$omp parallel do default(shared) private(node,dx)
-        do node=1, Maxedge
+#ifdef HAVE_OPENMP
+		!$omp parallel do default(shared) private(node,dx)
+#endif
+		do node=1, Maxedge
             dx=node*quant%Delta_ll
             quant%xyz(1,node*2)=(1+M*sin(2*BPACK_pi*dx/L))*cos(phi_start+dx)
             quant%xyz(2,node*2)=(1+M*sin(2*BPACK_pi*dx/L))*sin(phi_start+dx)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
-
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
@@ -598,33 +637,42 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 
 		Am = M*sin(BPACK_pi/2-2*BPACK_pi/L)-M
 		quant%xyz(1,0)=-1d0/sqrt(2d0)+Am/sqrt(2d0); quant%xyz(2,0)=1d0/sqrt(2d0)+Am/sqrt(2d0)
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx,Am)
-        do node=1, Maxedge/2
+#endif
+		do node=1, Maxedge/2
             dx=node*quant%Delta_ll
 			Am = M*sin(2*BPACK_pi*dx/L+BPACK_pi/2-2*BPACK_pi/L)-M
 
             quant%xyz(1,node*2)=(dx-1d0)/sqrt(2d0)+Am/sqrt(2d0)
             quant%xyz(2,node*2)=(1d0-dx)/sqrt(2d0)+Am/sqrt(2d0)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-        !$omp parallel do default(shared) private(node,dx,Am)
-        do node=1, Maxedge/2
+#endif
+#ifdef HAVE_OPENMP
+		!$omp parallel do default(shared) private(node,dx,Am)
+#endif
+		do node=1, Maxedge/2
             dx=node*quant%Delta_ll
 			Am = M*sin(2*BPACK_pi*(dx+1)/L+BPACK_pi/2-2*BPACK_pi/L)-M
 
             quant%xyz(1,node*2+Maxedge)=dx/sqrt(2d0)-Am/sqrt(2d0)
             quant%xyz(2,node*2+Maxedge)=dx/sqrt(2d0)+Am/sqrt(2d0)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
+#endif
         do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
@@ -647,9 +695,10 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx,tt)
-        do node=0, Maxedge
+#endif
+		do node=0, Maxedge
             dx=node*quant%Delta_ll
 			if(dx<=L1)then
 				tt = dx
@@ -681,15 +730,19 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 				quant%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)
 			end if
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
@@ -717,9 +770,10 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         quant%maxnode=2*Maxedge+1
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node,dx,tt)
-        do node=0, Maxedge
+#endif
+		do node=0, Maxedge
             dx=node*quant%Delta_ll
 			if(dx<=L1)then
 				tt = dx
@@ -751,15 +805,19 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 				quant%xyz(2,node*2)= (L3+L2)/sqrt(2d0)+tt/sqrt(2d0)
 			end if
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
             quant%info_unk(1,edge)=quant%info_unk(2,edge-1)
@@ -792,22 +850,28 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
         allocate (quant%xyz(2,0:quant%maxnode-1), quant%info_unk(0:2,Maxedge))
 
         quant%xyz(1,0)=r_st*cos(0*BPACK_pi) ; quant%xyz(2,0)=r_st*sin(0*BPACK_pi)
-        !$omp parallel do default(shared) private(node,dx)
+#ifdef HAVE_OPENMP
+		!$omp parallel do default(shared) private(node,dx)
+#endif
         do node=1, Maxedge
             dx=node*quant%Delta_ll
             quant%xyz(1,node*2)=cos(0*BPACK_pi+dx)*(r_st+node*delta_r)
             quant%xyz(2,node*2)=sin(0*BPACK_pi+dx)*(r_st+node*delta_r)
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
+#endif
 
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
-        do node=1, Maxedge
+#endif
+		do node=1, Maxedge
             quant%xyz(1,node*2-1)=(quant%xyz(1,node*2-2)+quant%xyz(1,node*2))/2d0
             quant%xyz(2,node*2-1)=(quant%xyz(2,node*2-2)+quant%xyz(2,node*2))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 
         quant%info_unk(1,1)=0 ; quant%info_unk(2,1)=2 ; quant%info_unk(0,1)=1
         do edge=2, Maxedge
@@ -837,22 +901,28 @@ subroutine geo_modeling_CURV(quant,MPIcomm)
 		edgeoff = ((ii-1)*nc+jj-1)*Maxedge_cell
 
         quant%xyz(1,0+nodeoff)=cos(0*BPACK_pi)+ (jj-1)*spacec ; quant%xyz(2,0+nodeoff)=sin(0*BPACK_pi) + (ii-1)*spacer
-        !$omp parallel do default(shared) private(node,dx)
-        do node=1, Maxedge_cell
+#ifdef HAVE_OPENMP
+		!$omp parallel do default(shared) private(node,dx)
+#endif
+		do node=1, Maxedge_cell
             dx=node*quant%Delta_ll
             quant%xyz(1,node*2+nodeoff)=cos(0*BPACK_pi+dx) + (jj-1)*spacec
             quant%xyz(2,node*2+nodeoff)=sin(0*BPACK_pi+dx) + (ii-1)*spacer
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
+#endif
 
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(node)
-        do node=1, Maxedge_cell
+#endif
+		do node=1, Maxedge_cell
             quant%xyz(1,node*2-1+nodeoff)=(quant%xyz(1,node*2-2+nodeoff)+quant%xyz(1,node*2+nodeoff))/2d0
             quant%xyz(2,node*2-1+nodeoff)=(quant%xyz(2,node*2-2+nodeoff)+quant%xyz(2,node*2+nodeoff))/2d0
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
 
         quant%info_unk(1,1+edgeoff)=0+nodeoff ; quant%info_unk(2,1+edgeoff)=2+nodeoff ; quant%info_unk(0,1+edgeoff)=1+nodeoff
         do edge=2, Maxedge_cell
@@ -928,14 +998,16 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
         allocate (current(N_unk_loc))
 		Current=0
         allocate (voltage(N_unk_loc))
-
+#ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,value_Z)
-        do edge=msh%idxs, msh%idxe
+#endif
+		do edge=msh%idxs, msh%idxe
             call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
             voltage(edge-msh%idxs+1)=value_Z
         enddo
+#ifdef HAVE_OPENMP
         !$omp end parallel do
-
+#endif
         n1 = MPI_Wtime()
 
 		call z_BPACK_Solution(bmat,Current,Voltage,N_unk_loc,1,option,ptree,stats)
@@ -979,12 +1051,16 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
         n1=MPI_Wtime()
         do j=0, num_sample
             phi=j*dphi
+#ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,value_Z)
+#endif
 			do edge=msh%idxs, msh%idxe
 				call element_Vinc_VV_CURV(phi,msh%new2old(edge),value_Z,msh,quant)
 				b(edge-msh%idxs+1,j+1)=value_Z
 			enddo
+#ifdef HAVE_OPENMP
 			!$omp end parallel do
+#endif
 		enddo
 
 		call z_BPACK_Solution(bmat,x,b,N_unk_loc,num_sample+1,option,ptree,stats)

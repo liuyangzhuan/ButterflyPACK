@@ -2243,7 +2243,9 @@ contains
             idx_m_e = idx_r + nr - 1
 
             do nth = nth_s, nth_e
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,mm,idxs,idxe)
+#endif
                do i = (nth - 1)*Ng + 1, nth*Ng
                   if (i >= idx_m_s .and. i <= idx_m_e) then
                      idxs = msh%basis_group(groupm_start + i - 1)%head - msh%idxs + 1
@@ -2252,7 +2254,9 @@ contains
                      call RandomSubMat(idxs, idxe, (nth - nth_s)*num_vect_subsub + 1, (nth - nth_s)*num_vect_subsub + num_vect_subsub, min(mm, num_vect_subsub), RandVectIn, 0)
                   endif
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
             enddo
          endif
       enddo

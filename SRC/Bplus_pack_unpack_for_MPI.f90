@@ -529,14 +529,18 @@ contains
          count1 = count1 + 1
          nn = size(block%ButterflyU%blocks(i)%matrix, 2)
          block%Butterfly_index_MPI(count1) = nn
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
          do jj = 1, nn
             do ii = 1, mm
                indices = (jj - 1)*mm + ii
                block%Butterfly_data_MPI(count2 + indices) = block%ButterflyU%blocks(i)%matrix(ii, jj)
             enddo
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
          count2 = count2 + mm*nn
       enddo
       do i = 1, num_blocks
@@ -546,14 +550,18 @@ contains
          count1 = count1 + 1
          nn = size(block%ButterflyV%blocks(i)%matrix, 2)
          block%Butterfly_index_MPI(count1) = nn
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
          do jj = 1, nn
             do ii = 1, mm
                indices = (jj - 1)*mm + ii
                block%Butterfly_data_MPI(count2 + indices) = block%ButterflyV%blocks(i)%matrix(ii, jj)
             enddo
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
          count2 = count2 + mm*nn
       enddo
 
@@ -573,31 +581,40 @@ contains
                   nn = size(block%ButterflyKerl(level)%blocks(i, j)%matrix, 2)
                   count1 = count1 + 1
                   block%Butterfly_index_MPI(count1) = nn
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
                   do jj = 1, nn
                      do ii = 1, mm
                         indices = (jj - 1)*mm + ii
                         block%Butterfly_data_MPI(count2 + indices) = block%ButterflyKerl(level)%blocks(i, j)%matrix(ii, jj)
                      enddo
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   count2 = count2 + mm*nn
                enddo
             enddo
          enddo
       endif
-
+#ifdef HAVE_OPENMP
       !$omp parallel do default(shared) private(i)
+#endif
       do i = 1, num_blocks
          deallocate (block%ButterflyU%blocks(i)%matrix)
          deallocate (block%ButterflyV%blocks(i)%matrix)
       enddo
+#ifdef HAVE_OPENMP
       !$omp end parallel do
+#endif
       deallocate (block%ButterflyU%blocks)
       deallocate (block%ButterflyV%blocks)
 
       if (level_butterfly /= 0) then
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(level,i,j,num_col,num_row)
+#endif
          do level = 1, level_butterfly
             num_col = block%ButterflyKerl(level)%num_col
             num_row = block%ButterflyKerl(level)%num_row
@@ -608,7 +625,9 @@ contains
             enddo
             deallocate (block%ButterflyKerl(level)%blocks)
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
          deallocate (block%ButterflyKerl)
       endif
 
@@ -645,14 +664,18 @@ contains
          count1 = count1 + 1
          nn = block%Butterfly_index_MPI(count1)
          allocate (block%ButterflyU%blocks(i)%matrix(mm, nn))
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
          do jj = 1, nn
             do ii = 1, mm
                indices = (jj - 1)*mm + ii
                block%ButterflyU%blocks(i)%matrix(ii, jj) = block%Butterfly_data_MPI(count2 + indices)
             enddo
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
          count2 = count2 + mm*nn
       enddo
       allocate (block%ButterflyV%blocks(num_blocks))
@@ -662,14 +685,18 @@ contains
          count1 = count1 + 1
          nn = block%Butterfly_index_MPI(count1)
          allocate (block%ButterflyV%blocks(i)%matrix(mm, nn))
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
          do jj = 1, nn
             do ii = 1, mm
                indices = (jj - 1)*mm + ii
                block%ButterflyV%blocks(i)%matrix(ii, jj) = block%Butterfly_data_MPI(count2 + indices)
             enddo
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
          count2 = count2 + mm*nn
       enddo
 
@@ -690,14 +717,18 @@ contains
                   count1 = count1 + 1
                   nn = block%Butterfly_index_MPI(count1)
                   allocate (block%ButterflyKerl(level)%blocks(i, j)%matrix(mm, nn))
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(ii,jj,indices)
+#endif
                   do jj = 1, nn
                      do ii = 1, mm
                         indices = (jj - 1)*mm + ii
                         block%ButterflyKerl(level)%blocks(i, j)%matrix(ii, jj) = block%Butterfly_data_MPI(count2 + indices)
                      enddo
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                   count2 = count2 + mm*nn
                enddo
             enddo
@@ -731,15 +762,18 @@ contains
 #if HAVE_ZFP
       if(option%use_zfp==1)call ZFP_Decompress(block,tol_used,0) ! no need to recompress as fullmat will be deleted before exiting
 #endif
-
+#ifdef HAVE_OPENMP
       !$omp parallel do default(shared) private(i,j,indices)
+#endif
       do j = 1, nn
          do i = 1, mm
             indices = mm*(j - 1) + i
             block%fullmat_MPI(indices) = block%fullmat(i, j)
          enddo
       enddo
+#ifdef HAVE_OPENMP
       !$omp end parallel do
+#endif
       deallocate (block%fullmat)
 
       return
@@ -765,14 +799,18 @@ contains
       mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
       nn = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
       allocate (block%fullmat(mm, nn))
+#ifdef HAVE_OPENMP
       !$omp parallel do default(shared) private(i,j,indices)
+#endif
       do j = 1, nn
          do i = 1, mm
             indices = mm*(j - 1) + i
             block%fullmat(i, j) = block%fullmat_MPI(indices)
          enddo
       enddo
+#ifdef HAVE_OPENMP
       !$omp end parallel do
+#endif
       deallocate (block%fullmat_MPI)
 #if HAVE_ZFP
       if(option%use_zfp==1)call ZFP_Compress(block,option%tol_comp,0)

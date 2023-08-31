@@ -178,7 +178,9 @@ contains
             endif
 
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+#endif
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
@@ -188,7 +190,9 @@ contains
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
+#endif
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
             do index_ij = 1, nr*nc
@@ -299,7 +303,9 @@ contains
             rank_new = 0
             flops = 0
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+#endif
             do index_ij = 1, nr*nc
                index_j_loc = (index_ij - 1)/nr + 1
                index_i_loc = mod(index_ij - 1, nr) + 1
@@ -311,7 +317,9 @@ contains
                flops = flops+flops1
 
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
+#endif
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
@@ -2032,14 +2040,17 @@ contains
                blocks%rankmin = min(blocks%rankmin, rank)
 
                allocate (mat_tmp(mm, rank))
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j,k,ctemp)
+#endif
                do j = 1, rank
                   do i = 1, mm
                      mat_tmp(i, j) = SVD_Q%matU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                mm1 = msh%basis_group(group_m*2)%tail - msh%basis_group(group_m*2)%head + 1
                allocate (ButterflyP_old%blocks(2*index_i_loc - 1, index_j_loc)%matrix(mm1, rank))
                allocate (ButterflyP_old%blocks(2*index_i_loc, index_j_loc)%matrix(mm - mm1, rank))
@@ -2064,16 +2075,18 @@ contains
                ! do index_j_loc=1, 2**(level_butterflyL-level_loc)
 
                ! write(*,*)'addaa111111'
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(index_ij_loc,index_i_loc,index_j_loc)
+#endif
                do index_ij_loc = 1, 2**level_butterflyL
                   index_j_loc = mod(index_ij_loc - 1, 2**(level_butterflyL - level_loc)) + 1
                   index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**(level_butterflyL - level_loc)))
 
                   call LocalButterflySVD_Left(index_i_loc, index_j_loc, level_loc, level_butterflyL, level, index_i_m, blocks, option, msh, ButterflyP_old, ButterflyP)
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                ! write(*,*)'addaa1111112222'
 
                do index_ij_loc = 1, 2**level_butterflyL
@@ -2188,14 +2201,17 @@ contains
                ! end if
 
                allocate (mat_tmp(rank, nn))
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j,k,ctemp)
+#endif
                do j = 1, nn
                   do i = 1, rank
                      mat_tmp(i, j) = SVD_Q%matV(i, j)*SVD_Q%Singular(i)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                nn1 = msh%basis_group(group_n*2)%tail - msh%basis_group(group_n*2)%head + 1
                allocate (ButterflyP_old%blocks(index_i_loc, 2*index_j_loc - 1)%matrix(rank, nn1))
                allocate (ButterflyP_old%blocks(index_i_loc, 2*index_j_loc)%matrix(rank, nn - nn1))
@@ -2213,15 +2229,17 @@ contains
                if (level_loc /= level_butterflyR) then
                   allocate (ButterflyP%blocks(2**(level_butterflyR - level_loc), 2**(level_loc + 1)))
                end if
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(index_ij_loc,index_i_loc,index_j_loc)
+#endif
                do index_ij_loc = 1, 2**level_butterflyR
                   index_j_loc = mod(index_ij_loc - 1, 2**level_loc) + 1
                   index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**level_loc))
                   call LocalButterflySVD_Right(index_i_loc, index_j_loc, level_loc, level_butterflyR, level, level_butterfly, index_j_m, blocks, option, msh, ButterflyP_old, ButterflyP)
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                do index_ij_loc = 1, 2**level_butterflyR
                   index_j_loc = mod(index_ij_loc - 1, 2**level_loc) + 1
                   index_i_loc = ceiling_safe(dble(index_ij_loc)/dble(2**level_loc))
@@ -2911,8 +2929,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
             ! the columns
             if(fullmatflag==0)call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
 
-
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
+#endif
             do index_ij_loc = 1, nr*nc
                M = acaquants(index_ij_loc)%M
                N = acaquants(index_ij_loc)%N
@@ -2925,8 +2944,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                endif
                flops =flops+flops1
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             do index_i_loc = 1, nr
                do index_j_loc = 1, nc
                   index_ij_loc = (index_j_loc-1)*nr+index_i_loc
@@ -2976,8 +2996,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
             enddo
             ! the rows
             if(fullmatflag==0)call element_Zmn_blocklist_user(submats, nrc*2, msh, option, ker, 0, passflag, ptree, stats)
-
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij_loc,M,N,header_m,header_n,flops1) reduction(+:flops)
+#endif
             do index_ij_loc = 1, nr*nc
                M = acaquants(index_ij_loc)%M
                N = acaquants(index_ij_loc)%N
@@ -2990,8 +3011,9 @@ if(option%elem_extract>=1)then ! advancing multiple acas for entry extraction
                endif
                flops =flops+flops1
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             finish=.true.
             do index_i_loc = 1, nr
                do index_j_loc = 1, nc
@@ -3298,7 +3320,9 @@ time_tmp = time_tmp + n2 - n1
             allocate (ButterflyP%blocks(ButterflyP%nr, ButterflyP%nc))
 
             rank_new=0
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij,index_i, index_i_loc,index_j,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new)  reduction(+:flops)
+#endif
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
@@ -3308,8 +3332,9 @@ time_tmp = time_tmp + n2 - n1
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
 
             call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
@@ -3370,7 +3395,9 @@ time_tmp = time_tmp + n2 - n1
             allocate (ButterflyP%blocks(ButterflyP%nr, ButterflyP%nc))
 
             rank_new=0
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij,index_i,index_i_loc,index_j,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+#endif
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
@@ -3380,8 +3407,9 @@ time_tmp = time_tmp + n2 - n1
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
@@ -4188,24 +4216,29 @@ time_tmp = time_tmp + n2 - n1
                blocks%rankmin = rank
 
                allocate (blocks%ButterflyV%blocks(1)%matrix(blocks%N, rank))
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%N
                      blocks%ButterflyV%blocks(1)%matrix(i, j) = SVD_Q%MatV(j, i)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M, rank))
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%M
                      blocks%ButterflyU%blocks(1)%matrix(i, j) = SVD_Q%MatU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
                deallocate (SVD_Q%MatU, SVD_Q%MatV, SVD_Q%Singular)
 
             else if (option%RecLR_leaf == BACA .or. option%RecLR_leaf == BACANOVER) then
@@ -4223,24 +4256,29 @@ time_tmp = time_tmp + n2 - n1
                blocks%rankmin = rank
 
                allocate (blocks%ButterflyV%blocks(1)%matrix(blocks%N, rank))
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%N
                      blocks%ButterflyV%blocks(1)%matrix(i, j) = SVD_Q%MatV(j, i)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M, rank))
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%M
                      blocks%ButterflyU%blocks(1)%matrix(i, j) = SVD_Q%MatU(i, j)*SVD_Q%Singular(j)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
                deallocate (SVD_Q%MatU, SVD_Q%MatV, SVD_Q%Singular)
 
             else if (option%RecLR_leaf == SVD) then
@@ -4299,26 +4337,30 @@ time_tmp = time_tmp + n2 - n1
                ! do j=1, rank
                ! blocks%ButterflyV%blocks(1)%matrix(j,j)=1d0
                ! enddo
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%N
                      blocks%ButterflyV%blocks(1)%matrix(i, j) = VV(j, i)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                allocate (blocks%ButterflyU%blocks(1)%matrix(blocks%M, rank))
                ! blocks%ButterflyU%blocks(1)%matrix = QQ1
-
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(i,j)
+#endif
                do j = 1, rank
                   do i = 1, blocks%M
                      blocks%ButterflyU%blocks(1)%matrix(i, j) = UU(i, j)*Singular(j)
                   enddo
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
                deallocate (QQ1, UU, VV, Singular)
             else if (option%RecLR_leaf == RRQR) then
                !!!!! RRQR
@@ -4845,7 +4887,9 @@ time_tmp = time_tmp + n2 - n1
          norm_V = norm_vector(row_R, rankmax_c)
 
          inner_UV = 0
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+#endif
          do j = 1, rank
             inner_U = 0
             inner_V = 0
@@ -4863,8 +4907,9 @@ time_tmp = time_tmp + n2 - n1
             ! !$omp end parallel do
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
-
+#endif
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
          ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'

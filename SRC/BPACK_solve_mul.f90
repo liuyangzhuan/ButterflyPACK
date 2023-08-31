@@ -887,7 +887,7 @@ contains
          even=1-even
       enddo
 
-      if (ptree%MyID == Main_ID )then 
+      if (ptree%MyID == Main_ID )then
       if(iter>=itmax)then
          print *, 'Iterative solver is terminated without convergence!!!', iter, nr_act
          stop
@@ -896,7 +896,7 @@ contains
 
       return
    end subroutine BPACK_Ztfqmr_usermatvec_noprecon
-   
+
    subroutine BPACK_Ztfqmr(precond, ntotal, nn_loc, b, x, err, iter, r0_initial, bmat, ptree, option, stats)
       implicit none
       integer level_c, rowblock, ierr

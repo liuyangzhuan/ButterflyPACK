@@ -335,13 +335,16 @@ PROGRAM ButterflyPACK_IE_3D
 			theta=i*dtheta
 			ctemp_loc=(0.,0.)
 			rcs=0
+#ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,ctemp_1) reduction(+:ctemp_loc)
+#endif
 			do edge=msh_A%idxs,msh_A%idxe
 				call VV_polar_SURF(theta,phi,msh_A%new2old(edge),ctemp_1,eigvec(edge-msh_A%idxs+1,ii),quant)
 				ctemp_loc=ctemp_loc+ctemp_1
 			enddo
+#ifdef HAVE_OPENMP
 			!$omp end parallel do
-
+#endif
 			call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
 
 			rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi

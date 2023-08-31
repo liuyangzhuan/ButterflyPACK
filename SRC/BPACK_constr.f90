@@ -2072,10 +2072,14 @@ contains
                   ci = blocks%inters(nn)%cols(jj)
                   call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
                   pp = jproc*nprow + iproc + idstart + 1
+#ifdef HAVE_TASKLOOP
                   !$omp atomic capture
+#endif
                   idxs = sendquant(pp)%size
                   sendquant(pp)%size = sendquant(pp)%size + 4
+#ifdef HAVE_TASKLOOP
                   !$omp end atomic
+#endif
                   sendquant(pp)%dat(idxs + 1, 1) = myi
                   sendquant(pp)%dat(idxs + 2, 1) = myj
                   sendquant(pp)%dat(idxs + 3, 1) = idx

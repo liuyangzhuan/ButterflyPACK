@@ -158,7 +158,7 @@ PROGRAM ButterflyPACK_IE_2D
   bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
 #if 1
-  ! this works. 
+  ! this works.
   dstream=stream
   call zFORp_stream_set_bit_stream(dstream, bitstream);
 #else

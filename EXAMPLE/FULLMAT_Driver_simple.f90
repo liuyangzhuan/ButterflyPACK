@@ -140,7 +140,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 
 	quant%tst = 2 ! 1: use a LR product as the kernel, 2: read the full matrix from a file as the kernel
-	
+
 	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv' ! file storing the full matrix
 	! quant%Nunk = 4096  ! matrix size
 	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N64.csv' ! file storing the full matrix

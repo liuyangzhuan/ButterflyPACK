@@ -678,13 +678,16 @@ contains
 
                   deallocate (N_p)
                else
-
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(j,index_j)
+#endif
                   do j = 1, nc
                      index_j = idx_c + (j - 1)*inc_c
                      call BF_OneBlock_LL(index_i, index_j, level, num_vect_sub, num_vect_subsub, nth, nth_s, blocks, BFvec, option, stats, norm_tol)
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             endif
          endif
@@ -961,12 +964,16 @@ contains
                   deallocate (matB)
                   deallocate (M_p)
                else
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(i,index_i)
+#endif
                   do i = 1, nr
                      index_i = idx_r + (i - 1)*inc_r
                      call BF_OneBlock_RR(index_i, index_j, level, num_vect_sub, num_vect_subsub, nth, nth_s, blocks, BFvec, BFvec1, option, stats,norm_tol)
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             endif
          endif
@@ -2168,7 +2175,9 @@ contains
 !          !$omp single
 !          !$omp taskloop default(shared) private(i,mm1,idxs,idxe,nth)
 ! #else
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(i,mm1,idxs,idxe,nth)
+#endif
 ! #endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
@@ -2195,7 +2204,9 @@ contains
 !          !$omp end single
 !          !$omp end parallel
 ! #else
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
 ! #endif
       elseif (side == 'R') then
          trans = 'N'
@@ -2208,7 +2219,9 @@ contains
 !          !$omp single
 !          !$omp taskloop default(shared) private(i,nn1,idxs,idxe,nth)
 ! #else
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(i,nn1,idxs,idxe,nth)
+#endif
 ! #endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
@@ -2234,7 +2247,9 @@ contains
 !          !$omp end single
 !          !$omp end parallel
 ! #else
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
 ! #endif
 
       endif
