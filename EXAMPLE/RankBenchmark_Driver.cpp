@@ -55,13 +55,16 @@ using namespace std;
 
 const _Complex double Im={0.0,1.0};
 
-
+#ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
       void Cblacs_exit(int);
 }
+#else
+    void Cblacs_exit(int){};
+#endif
 
 
 
@@ -565,7 +568,7 @@ if(myrank==master_rank){
     double ds = wavelen/ppw;
     vector<double> data_geo_m;
     vector<double> data_geo_n;
-    if(tst==1){ // two colinear plate 
+    if(tst==1){ // two colinear plate
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim;
       N = Nperdim*Nperdim;
@@ -587,7 +590,7 @@ if(myrank==master_rank){
         data_geo_n[(n) * Ndim+2]=0;
       }
 
-    }else if(tst==2){ // two parallel plate 
+    }else if(tst==2){ // two parallel plate
       Nperdim = ceil(1.0/ds);
       M = Nperdim*Nperdim;
       N = Nperdim*Nperdim;
@@ -629,7 +632,7 @@ if(myrank==master_rank){
         data_geo_n[(n) * Ndim]=ii*ds+2;
         data_geo_n[(n) * Ndim+1]=jj*ds;
         data_geo_n[(n) * Ndim+2]=kk*ds;
-      }      
+      }
     }
     quant_ptr_a=new C_QuantApp(wavelen, ppw, tst, Nperdim, Ndim);
     quant_ptr_a->_data_m.resize(Ndim*M);

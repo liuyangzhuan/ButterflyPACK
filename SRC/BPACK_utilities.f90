@@ -397,10 +397,10 @@ contains
             ! deallocate(ptree%pgrp(ii)%gd)
             ! ptree%pgrp(ii)%gd=>null()
             ! endif
-            if (ptree%pgrp(ii)%ctxt /= -1) call blacs_gridexit(ptree%pgrp(ii)%ctxt)
-            if (ptree%pgrp(ii)%ctxt1D /= -1) call blacs_gridexit(ptree%pgrp(ii)%ctxt1D)
-            if (ptree%pgrp(ii)%ctxt1DCol /= -1) call blacs_gridexit(ptree%pgrp(ii)%ctxt1DCol)
-            if (ptree%pgrp(ii)%ctxt_head /= -1) call blacs_gridexit(ptree%pgrp(ii)%ctxt_head)
+            if (ptree%pgrp(ii)%ctxt /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt)
+            if (ptree%pgrp(ii)%ctxt1D /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1D)
+            if (ptree%pgrp(ii)%ctxt1DCol /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt1DCol)
+            if (ptree%pgrp(ii)%ctxt_head /= -1) call blacs_gridexit_wrp(ptree%pgrp(ii)%ctxt_head)
             if (ptree%pgrp(ii)%Comm /= MPI_COMM_NULL) call MPI_Comm_free(ptree%pgrp(ii)%Comm, ierr)
          enddo
          deallocate (ptree%pgrp)
@@ -417,7 +417,7 @@ contains
 ! integer ierr
 
 ! if(.not. associated(gd%gdc))then
-   ! if(gd%ctxt/=-1)call blacs_gridexit(gd%ctxt)
+   ! if(gd%ctxt/=-1)call blacs_gridexit_wrp(gd%ctxt)
    ! if(gd%Comm/=MPI_COMM_NULL)call MPI_Comm_free(gd%Comm,ierr)
    ! return
 ! else

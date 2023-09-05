@@ -346,7 +346,7 @@ contains
       rank_new_max = 0
       num_vect = rmax
 
-      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       num_blocks = 2**h_mat%Dist_level
 
 

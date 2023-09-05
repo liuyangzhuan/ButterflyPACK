@@ -48,14 +48,16 @@
 //------------------------------------------------------------------------------
 using namespace std;
 
-
+#ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
       void Cblacs_exit(int);
 }
-
+#else
+    void Cblacs_exit(int){};
+#endif
 /**  2-norm distance */
 inline double dist2(double *x, double *y, int d) {
   double k = 0.;

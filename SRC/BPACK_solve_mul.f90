@@ -364,11 +364,11 @@ contains
 
       !!!!>**** generate 2D grid blacs quantities
       ctxt = ptree%pgrp(pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
-         call descinit(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (mat2D(max(1,myArows), max(1,myAcols)))
          mat2D = 0
       else
@@ -432,11 +432,11 @@ contains
 
       !!!!>**** generate 2D grid blacs quantities
       ctxt = ptree%pgrp(pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
-         call descinit(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (mat2D(max(1,myArows), max(1,myAcols)))
          if (associated(bmat%h_mat)) then
             mat2D=bmat%h_mat%fullmat2D
@@ -1510,7 +1510,7 @@ contains
       Nsendactive = 0
       Nrecvactive = 0
 
-      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       nprow = ptree%pgrp(1)%nprow
       npcol = ptree%pgrp(1)%npcol
       num_blocks = 2**h_mat%Dist_level
@@ -1770,7 +1770,7 @@ contains
       Nsendactive = 0
       Nrecvactive = 0
 
-      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       nprow = ptree%pgrp(1)%nprow
       npcol = ptree%pgrp(1)%npcol
       num_blocks = 2**h_mat%Dist_level
@@ -2100,7 +2100,7 @@ contains
             Vin = conjg(cmplx(Vin, kind=8))
          endif
 
-         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
          num_blocks = 2**h_mat%Dist_level
          if (trans == 'N') then
             mode_i='C'
@@ -2236,7 +2236,7 @@ contains
       if (trans == 'N') then
          Nreq=0
          num_blocks = 2**h_mat%Dist_level
-         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
          nrecvx=0
          nrecvmod=0
          N_glo = h_mat%N
@@ -2473,7 +2473,7 @@ contains
 
          Nreq=0
          num_blocks = 2**h_mat%Dist_level
-         call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
          nrecvx=0
          nrecvmod=0
          N_glo = h_mat%N

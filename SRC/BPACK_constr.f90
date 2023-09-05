@@ -811,7 +811,7 @@ contains
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      ! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      ! call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       ! nprow = ptree%pgrp(pgno)%nprow
       ! npcol = ptree%pgrp(pgno)%npcol
 
@@ -1741,7 +1741,7 @@ contains
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      ! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      ! call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       ! nprow = ptree%pgrp(pgno)%nprow
       ! npcol = ptree%pgrp(pgno)%npcol
 

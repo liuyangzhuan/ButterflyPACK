@@ -2,6 +2,7 @@ module purge
 module load gcc/9.1.0
 module load openmpi/gcc-9.1.0/4.0.1
 module load scalapack-netlib/gcc-9.1.0/2.2.0
+module load cmake/3.19.2
 
 export ZFP_INSTALL_DIR=/home/administrator/Desktop/Research/zfp/install/
 
@@ -21,6 +22,7 @@ cmake .. \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_doc=OFF \
 	-Denable_openmp=ON \
+	-Denable_mpi=OFF \
 	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
@@ -30,7 +32,7 @@ cmake .. \
 	-DCMAKE_C_COMPILER=$MPICC \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_INSTALL_LIBDIR=./lib \
-	-DCMAKE_BUILD_TYPE=Release\
+	-DCMAKE_BUILD_TYPE=Debug\
 	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 

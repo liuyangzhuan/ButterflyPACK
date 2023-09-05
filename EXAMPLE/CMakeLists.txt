@@ -77,12 +77,15 @@ install(TARGETS ie3dport RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
 
 ########################################### double Fortran drivers
+set(FDEXMSEQ1 KERREG_Driver_seq.f90)
+add_executable(krr_seq ${FDEXMSEQ1})
+target_link_libraries(krr_seq ${all_link_libs_d})
 
 set(FDEXM1 FULLMAT_Driver.f90)
 add_executable(full ${FDEXM1})
 target_link_libraries(full ${all_link_libs_d})
 target_link_libraries(full ${all_link_libs_z})
-add_dependencies(full frontaldist)
+add_dependencies(full krr_seq)
 
 set(FDEXM1-1 FULLMAT_Driver_simple.f90)
 add_executable(full_simple ${FDEXM1-1})

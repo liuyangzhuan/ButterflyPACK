@@ -213,14 +213,14 @@ PROGRAM ButterflyPACK_IE_2D
 
 ! generate a random matrix and test the dense eigen solvers in scalapack
 #if 0
-	call blacs_gridinfo(ptree_A%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+	call z_blacs_gridinfo_wrp(ptree_A%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
 	if (myrow /= -1 .and. mycol /= -1) then
 	myArows = z_numroc_wp(quant%Nunk, nbslpk, myrow, 0, nprow)
 	myAcols = z_numroc_wp(quant%Nunk, nbslpk, mycol, 0, npcol)
 	allocate(matZ1(max(1,myArows), max(1,myAcols)))
 	allocate(eigvec(max(1,myArows), max(1,myAcols)))
 	allocate(eigval(quant%Nunk))
-	call descinit(desca, quant%Nunk, quant%Nunk, nbslpk, nbslpk, 0, 0, ptree_A%pgrp(1)%ctxt, max(myArows, 1), info)
+	call z_descinit_wp(desca, quant%Nunk, quant%Nunk, nbslpk, nbslpk, 0, 0, ptree_A%pgrp(1)%ctxt, max(myArows, 1), info)
 	! matZ1=1d0
 	call z_RandomMat(max(1,myArows), max(1,myAcols),max(min(myArows,myAcols),1),matZ1,0)
 
@@ -381,7 +381,7 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** deletion of quantities
 	call delete_quant_EMCURV(quant)
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_IE_2D

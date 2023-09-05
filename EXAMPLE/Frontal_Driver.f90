@@ -122,15 +122,15 @@ contains
 
 		!!!!**** generate 2D d_grid blacs quantities
 		ctxt = quant%ptree%pgrp(pgno)%ctxt
-		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		call d_blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 			myArows = d_numroc_wp(N, nbslpk, myrow, 0, nprow)
 			myAcols = d_numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
-			call descinit( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
-			call descinit( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call d_descinit_wp( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call d_descinit_wp( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			myArows = d_numroc_wp(N, nbslpk, myrow, 0, nprow)
 			myAcols = d_numroc_wp(N, nbslpk, mycol, 0, npcol)
-			call descinit( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call d_descinit_wp( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			allocate(Vin_tmp_2D(myArows,myAcols))
 			allocate(Vout_tmp_2D(myArows,myAcols))
 			Vout_tmp_2D=0
@@ -206,7 +206,7 @@ contains
 
 		!!!!****** assemble the full matrix in 1D blacs layout
 		ctxt = ptree%pgrp(pgno)%ctxt
-		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		call d_blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 		myArows = d_numroc_wp(N, nbslpk, myrow, 0, nprow)
 		myAcols = d_numroc_wp(N, nbslpk, mycol, 0, npcol)
@@ -533,7 +533,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-	call blacs_exit(1)
+	call d_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
 

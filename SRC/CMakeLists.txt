@@ -11,10 +11,6 @@ LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 LAPACK_sgeqp3mod.f
 LAPACK_cgeqp3mod.f
-SCALAPACK_pdgeqpfmod.f
-SCALAPACK_pzgeqpfmod.f
-SCALAPACK_psgeqpfmod.f
-SCALAPACK_pcgeqpfmod.f
 MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
@@ -33,6 +29,9 @@ BPACK_factor.f90
 BPACK_wrapper.f90
 )
 
+if (enable_mpi)
+  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f)
+endif ()
 
 
 add_library(butterflypack ${sources} ${HEADERS})

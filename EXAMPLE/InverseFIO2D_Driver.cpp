@@ -57,12 +57,16 @@ const _Complex double Im={0.0,1.0};
 char const transN='N';
 char const transT='T';
 
+#ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
       void Cblacs_exit(int);
 }
+#else
+    void Cblacs_exit(int){};
+#endif
 
 
 
@@ -675,7 +679,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option1, "per_geo", 1);// periodic geometry points
 	z_c_bpack_set_D_option(&option1, "period1", 1e0);// period in the first dimension
 	z_c_bpack_set_D_option(&option1, "period2", 1e0);// period in the second dimension
-    
+
   // tol=1e-4;
 	// z_c_bpack_set_D_option(&option1, "tol_comp", tol);
 	// z_c_bpack_set_D_option(&option1, "tol_rand", tol);           // bf_mv uses this tolerance

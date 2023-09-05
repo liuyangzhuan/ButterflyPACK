@@ -3717,8 +3717,8 @@ time_tmp = time_tmp + n2 - n1
 
          if (IOwnPgrp(ptree, pgno)) then
 
-            call blacs_gridinfo(ptree%pgrp(pgno1)%ctxt, nprow1, npcol1, myrow1, mycol1)
-            call blacs_gridinfo(ptree%pgrp(pgno2)%ctxt, nprow2, npcol2, myrow2, mycol2)
+            call blacs_gridinfo_wrp(ptree%pgrp(pgno1)%ctxt, nprow1, npcol1, myrow1, mycol1)
+            call blacs_gridinfo_wrp(ptree%pgrp(pgno2)%ctxt, nprow2, npcol2, myrow2, mycol2)
 
             dims_tmp(1:3) = 0
             ! if(ptree%MyID==31)write(*,*)ptree%MyID,nprow1,npcol1,myrow1,mycol1,'dddd'
@@ -3749,7 +3749,7 @@ time_tmp = time_tmp + n2 - n1
             N2 = dims(5)
             rank2 = dims(6)
 
-            call blacs_gridinfo(ptree%pgrp(pgno)%ctxt, nprow, npcol, myrow, mycol)
+            call blacs_gridinfo_wrp(ptree%pgrp(pgno)%ctxt, nprow, npcol, myrow, mycol)
 
             if (mod(cridx + 1, 2) == 0) then  ! merge along column dimension
 
@@ -3760,20 +3760,20 @@ time_tmp = time_tmp + n2 - n1
                   myAcols = numroc_wp(rank1 + rank2, nbslpk, mycol, 0, npcol)
                   allocate (matU(max(1,myArows), max(1,myAcols)))
                   matU = 0
-                  call descinit(descsmatU, M1, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU')
+                  call descinit_wp(descsmatU, M1, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU')
 
                   myArows = numroc_wp(N1, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank1, nbslpk, mycol, 0, npcol)
                   allocate (matV1(max(1,myArows), max(1,myAcols)))
-                  call descinit(descsmatV1, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV1')
+                  call descinit_wp(descsmatV1, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV1')
 
                   myArows = numroc_wp(N2, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
                   allocate (matV2(max(1,myArows), max(1,myAcols)))
-                  call descinit(descsmatV2, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV2')
+                  call descinit_wp(descsmatV2, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV2')
                else
                   descsmatU(2) = -1
                   descsmatV1(2) = -1
@@ -3788,8 +3788,8 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute U1
                   myArows = numroc_wp(M1, nbslpk, myrow1, 0, nprow1)
                   myAcols = numroc_wp(rank1, nbslpk, mycol1, 0, npcol1)
-                  call descinit(descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU1c')
+                  call descinit_wp(descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU1c')
 
                   call pgemr2df90(M1, rank1, blocks%sons(1, 1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU, 1, 1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(1, 1)%ButterflyU%blocks(1)%matrix)
@@ -3797,8 +3797,8 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute V1
                   myArows = numroc_wp(N1, nbslpk, myrow1, 0, nprow1)
                   myAcols = numroc_wp(rank1, nbslpk, mycol1, 0, npcol1)
-                  call descinit(descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV1c')
+                  call descinit_wp(descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV1c')
                   call pgemr2df90(N1, rank1, blocks%sons(1, 1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV1, 1, 1, descsmatV1, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(1, 1)%ButterflyV%blocks(1)%matrix)
                else
@@ -3814,16 +3814,16 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute U2
                   myArows = numroc_wp(M2, nbslpk, myrow2, 0, nprow2)
                   myAcols = numroc_wp(rank2, nbslpk, mycol2, 0, npcol2)
-                  call descinit(descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU2c')
+                  call descinit_wp(descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU2c')
                   call pgemr2df90(M2, rank2, blocks%sons(2, 1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU, 1, 1 + rank1, descsmatU, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(2, 1)%ButterflyU%blocks(1)%matrix)
 
                   ! redistribute V2
                   myArows = numroc_wp(N2, nbslpk, myrow2, 0, nprow2)
                   myAcols = numroc_wp(rank2, nbslpk, mycol2, 0, npcol2)
-                  call descinit(descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV2c')
+                  call descinit_wp(descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV2c')
                   call pgemr2df90(N2, rank2, blocks%sons(2, 1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV2, 1, 1, descsmatV2, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(2, 1)%ButterflyV%blocks(1)%matrix)
                else
@@ -3843,14 +3843,14 @@ time_tmp = time_tmp + n2 - n1
                   myArows = numroc_wp(M1, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
                   allocate (UU(max(1,myArows), max(1,myAcols)))
-                  call descinit(descUU, M1, mnmin, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descUU')
+                  call descinit_wp(descUU, M1, mnmin, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descUU')
                   UU = 0
                   myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank1 + rank2, nbslpk, mycol, 0, npcol)
                   allocate (VV(max(1,myArows), max(1,myAcols)))
-                  call descinit(descVV, mnmin, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descVV')
+                  call descinit_wp(descVV, mnmin, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descVV')
                   VV = 0
 
                   allocate (Singular(mnmin))
@@ -3875,14 +3875,14 @@ time_tmp = time_tmp + n2 - n1
                   allocate (blocks%ButterflyV%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
                   blocks%ButterflyV%blocks(1)%matrix = 0
 
-                  call descinit(descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descButterflyV')
+                  call descinit_wp(descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descButterflyV')
 
                   myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
                   allocate (blocks%ButterflyU%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
-                  call descinit(descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descButterflyU')
+                  call descinit_wp(descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descButterflyU')
                   blocks%ButterflyU%blocks(1)%matrix = UU(1:max(1,myArows), 1:max(1,myAcols))
 
                   call pgemmf90('N', 'T', N1, rank, rank1, BPACK_cone, matV1, 1, 1, descsmatV1, VV, 1, 1, descVV, BPACK_czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descButterflyV, flop=flop)
@@ -3910,20 +3910,20 @@ time_tmp = time_tmp + n2 - n1
                   myArows = numroc_wp(N1, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank1 + rank2, nbslpk, mycol, 0, npcol)
                   allocate (matV(max(1,myArows), max(1,myAcols)))
-                  call descinit(descsmatV, N1, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV')
+                  call descinit_wp(descsmatV, N1, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV')
 
                   myArows = numroc_wp(M1, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank1, nbslpk, mycol, 0, npcol)
                   allocate (matU1(max(1,myArows), max(1,myAcols)))
-                  call descinit(descsmatU1, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU1')
+                  call descinit_wp(descsmatU1, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU1')
 
                   myArows = numroc_wp(M2, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
                   allocate (matU2(max(1,myArows), max(1,myAcols)))
-                  call descinit(descsmatU2, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU2')
+                  call descinit_wp(descsmatU2, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU2')
                else
                   descsmatV(2) = -1
                   descsmatU1(2) = -1
@@ -3937,8 +3937,8 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute U1
                   myArows = numroc_wp(M1, nbslpk, myrow1, 0, nprow1)
                   myAcols = numroc_wp(rank1, nbslpk, mycol1, 0, npcol1)
-                  call descinit(descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU1c')
+                  call descinit_wp(descsmatU1c, M1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU1c')
                   ! write(*,*)shape(blocks%sons(1,1)%ButterflyU%blocks(1)%matrix),shape(matU1),rank1,M1,blocks%sons(1,1)%rankmax
                   call pgemr2df90(M1, rank1, blocks%sons(1, 1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU1c, matU1, 1, 1, descsmatU1, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(1, 1)%ButterflyU%blocks(1)%matrix)
@@ -3946,8 +3946,8 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute V1
                   myArows = numroc_wp(N1, nbslpk, myrow1, 0, nprow1)
                   myAcols = numroc_wp(rank1, nbslpk, mycol1, 0, npcol1)
-                  call descinit(descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV1c')
+                  call descinit_wp(descsmatV1c, N1, rank1, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno1)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV1c')
                   call pgemr2df90(N1, rank1, blocks%sons(1, 1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV1c, matV, 1, 1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(1, 1)%ButterflyV%blocks(1)%matrix)
                else
@@ -3963,16 +3963,16 @@ time_tmp = time_tmp + n2 - n1
                   ! redistribute U2
                   myArows = numroc_wp(M2, nbslpk, myrow2, 0, nprow2)
                   myAcols = numroc_wp(rank2, nbslpk, mycol2, 0, npcol2)
-                  call descinit(descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatU2c')
+                  call descinit_wp(descsmatU2c, M2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatU2c')
                   call pgemr2df90(M2, rank2, blocks%sons(2, 1)%ButterflyU%blocks(1)%matrix, 1, 1, descsmatU2c, matU2, 1, 1, descsmatU2, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(2, 1)%ButterflyU%blocks(1)%matrix)
 
                   ! redistribute V2
                   myArows = numroc_wp(N2, nbslpk, myrow2, 0, nprow2)
                   myAcols = numroc_wp(rank2, nbslpk, mycol2, 0, npcol2)
-                  call descinit(descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descsmatV2c')
+                  call descinit_wp(descsmatV2c, N2, rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno2)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descsmatV2c')
                   call pgemr2df90(N2, rank2, blocks%sons(2, 1)%ButterflyV%blocks(1)%matrix, 1, 1, descsmatV2c, matV, 1, 1 + rank1, descsmatV, ptree%pgrp(pgno)%ctxt1DCol)
                   deallocate (blocks%sons(2, 1)%ButterflyV%blocks(1)%matrix)
                else
@@ -3992,14 +3992,14 @@ time_tmp = time_tmp + n2 - n1
                   myArows = numroc_wp(N1, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
                   allocate (UU(max(1,myArows), max(1,myAcols)))
-                  call descinit(descUU, N1, mnmin, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descUU')
+                  call descinit_wp(descUU, N1, mnmin, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descUU')
                   UU = 0
                   myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank1 + rank2, nbslpk, mycol, 0, npcol)
                   allocate (VV(max(1,myArows), max(1,myAcols)))
-                  call descinit(descVV, mnmin, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descVV')
+                  call descinit_wp(descVV, mnmin, rank1 + rank2, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descVV')
                   VV = 0
 
                   allocate (Singular(mnmin))
@@ -4023,14 +4023,14 @@ time_tmp = time_tmp + n2 - n1
                   allocate (blocks%ButterflyV%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
                   blocks%ButterflyV%blocks(1)%matrix = UU(1:max(1,myArows), 1:max(1,myAcols))
 
-                  call descinit(descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descButterflyV')
+                  call descinit_wp(descButterflyV, blocks%N, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descButterflyV')
 
                   myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
                   allocate (blocks%ButterflyU%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
-                  call descinit(descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
-                  call assert(info == 0, 'descinit fail for descButterflyU')
+                  call descinit_wp(descButterflyU, blocks%M, rank, nbslpk, nbslpk, 0, 0, ptree%pgrp(pgno)%ctxt, max(myArows, 1), info)
+                  call assert(info == 0, 'descinit_wp fail for descButterflyU')
                   blocks%ButterflyU%blocks(1)%matrix = 0
 
                   call pgemmf90('N', 'T', M1, rank, rank1, BPACK_cone, matU1, 1, 1, descsmatU1, VV, 1, 1, descVV, BPACK_czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descButterflyU, flop=flop)
@@ -4066,7 +4066,7 @@ time_tmp = time_tmp + n2 - n1
 
             ! distribute UV factor into 1D grid
             ! write(*,*)rank,'wocanide',ptree%MyID
-            call blacs_gridinfo(ptree%pgrp(pgno)%ctxt, nprow, npcol, myrow, mycol)
+            call blacs_gridinfo_wrp(ptree%pgrp(pgno)%ctxt, nprow, npcol, myrow, mycol)
             if (myrow /= -1 .and. mycol /= -1) then
                myArows = numroc_wp(blocks%M, nbslpk, myrow, 0, nprow)
                myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -5400,11 +5400,11 @@ time_tmp = time_tmp + n2 - n1
 
       !!!!>**** generate 2D grid blacs quantities for matU
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatU2D, M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatU2D, M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (matU2D(max(1,myArows), max(1,myAcols)))
          matU2D = 0
 
@@ -5418,11 +5418,11 @@ time_tmp = time_tmp + n2 - n1
 
       !!!!>**** generate 2D grid blacs quantities for matV transpose
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatV2D, N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatV2D, N, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (matV2D(max(1,myArows), max(1,myAcols)))
          matV2D = 0
       else
@@ -5497,7 +5497,7 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
          allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
-         call descinit(descsMatSml, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatSml, rank, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank, rank, rank, BPACK_cone, RR1, 1, 1, descsMatSml, RR2, 1, 1, descsMatSml, BPACK_czero, mattemp, 1, 1, descsMatSml, flop=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
@@ -5509,7 +5509,7 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (blocks%ButterflyU%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
          blocks%ButterflyU%blocks(1)%matrix = 0
-         call descinit(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', M, ranknew, rank, BPACK_cone, matU2D, 1, 1, descsMatU2D, UUsml, 1, 1, descsMatSml, BPACK_czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descsMatU2Dnew, flop=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
@@ -5522,7 +5522,7 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (blocks%ButterflyV%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
          blocks%ButterflyV%blocks(1)%matrix = 0
-         call descinit(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', N, ranknew, rank, BPACK_cone, matV2D, 1, 1, descsMatV2D, VVsml, 1, 1, descsMatSml, BPACK_czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descsMatV2Dnew, flop=flop)
          stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
@@ -5535,11 +5535,11 @@ time_tmp = time_tmp + n2 - n1
          mn1 = min(M, rank)
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn1, nbslpk, mycol, 0, npcol)
-         call descinit(descsUU_u, M, mn1, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsUU_u, M, mn1, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (UUu(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(mn1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         call descinit(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsVV_u, mn1, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVu(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
          call PSVD_Truncate(M, rank, matU2D, descsMatU2D, UUu, VVu, descsUU_u, descsVV_u, Singularuv, SVD_tolerance, rank1, ctxt, BPACK_SafeUnderflow, flop=flop)
@@ -5554,11 +5554,11 @@ time_tmp = time_tmp + n2 - n1
          mn2 = min(N, rank)
          myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn2, nbslpk, mycol, 0, npcol)
-         call descinit(descsUU_v, N, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsUU_v, N, mn2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (UUv(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(mn2, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-         call descinit(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsVV_v, mn2, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVv(max(1,myArows), max(1,myAcols)))
          allocate (Singularuv(mn1))
          call PSVD_Truncate(N, rank, matV2D, descsMatV2D, UUv, VVv, descsUU_v, descsVV_v, Singularuv, SVD_tolerance, rank2, ctxt, BPACK_SafeUnderflow, flop=flop)
@@ -5574,16 +5574,16 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
          allocate (mattemp(max(1,myArows), max(1,myAcols)))
          mattemp = 0
-         call descinit(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatSml, rank1, rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', rank1, rank2, rank, BPACK_cone, VVu, 1, 1, descsVV_u, VVv, 1, 1, descsVV_v, BPACK_czero, mattemp, 1, 1, descsMatSml, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          myArows = numroc_wp(rank1, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(min(rank1, rank2), nbslpk, mycol, 0, npcol)
-         call descinit(descsUUSml, rank1, min(rank1, rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsUUSml, rank1, min(rank1, rank2), nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (UUsml(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(min(rank1, rank2), nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rank2, nbslpk, mycol, 0, npcol)
-         call descinit(descsVVSml, min(rank1, rank2), rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsVVSml, min(rank1, rank2), rank2, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VVsml(max(1,myArows), max(1,myAcols)))
          allocate (Singularsml(min(rank1, rank2)))
          call PSVD_Truncate(rank1, rank2, mattemp, descsMatSml, UUsml, VVsml, descsUUSml, descsVVSml, Singularsml, SVD_tolerance, ranknew, ctxt, BPACK_SafeUnderflow, flop=flop)
@@ -5592,7 +5592,7 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (blocks%ButterflyU%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
          blocks%ButterflyU%blocks(1)%matrix = 0
-         call descinit(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatU2Dnew, M, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'N', M, ranknew, rank1, BPACK_cone, UUu, 1, 1, descsUU_u, UUsml, 1, 1, descsUUSml, BPACK_czero, blocks%ButterflyU%blocks(1)%matrix, 1, 1, descsMatU2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          do myj = 1, myAcols
@@ -5604,7 +5604,7 @@ time_tmp = time_tmp + n2 - n1
          myAcols = numroc_wp(ranknew, nbslpk, mycol, 0, npcol)
          allocate (blocks%ButterflyV%blocks(1)%matrix(max(1,myArows), max(1,myAcols)))
          blocks%ButterflyV%blocks(1)%matrix = 0
-         call descinit(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatV2Dnew, N, ranknew, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          call pgemmf90('N', 'T', N, ranknew, rank2, BPACK_cone, UUv, 1, 1, descsUU_v, VVsml, 1, 1, descsVVSml, BPACK_czero, blocks%ButterflyV%blocks(1)%matrix, 1, 1, descsMatV2Dnew, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
          rank = ranknew
@@ -6687,7 +6687,7 @@ time_tmp = time_tmp + n2 - n1
 
       rank_new = 0
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
 
       if (nprow*npcol == 1) then
 
@@ -6796,14 +6796,14 @@ time_tmp = time_tmp + n2 - n1
             call linspaceI(1, M, rmaxr, select_row)
             call linspaceI(1, N, rmaxc, select_col)
 
-            call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+            call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
             ! nproc = npcol*nprow
             myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rmaxr, nbslpk, mycol, 0, npcol)
             allocate (matV(max(1,myArows), max(1,myAcols)))
             allocate (matV_tmp(max(1,myAcols), max(1,myArows)))
-            call descinit(descsmatV, N, rmaxr, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descsmatV')
+            call descinit_wp(descsmatV, N, rmaxr, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descsmatV')
             matV = 0
             do myj = 1, myAcols
                call l2g(myj, mycol, rmaxr, npcol, nbslpk, jj)
@@ -6831,13 +6831,13 @@ time_tmp = time_tmp + n2 - n1
             call copymatT(matV_tmp, matV, myAcols, myArows)
             deallocate (matV_tmp)
 
-            call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+            call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
             myArows = numroc_wp(rmaxr, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rmaxc, nbslpk, mycol, 0, npcol)
 
             allocate (MatrixSubselection(max(1,myArows), max(1,myAcols)))
-            call descinit(descsub, rmaxr, rmaxc, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descsub')
+            call descinit_wp(descsub, rmaxr, rmaxc, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descsub')
             MatrixSubselection = 0
             do myi = 1, myArows
                call l2g(myi, myrow, rmaxr, nprow, nbslpk, ii)
@@ -6888,33 +6888,33 @@ time_tmp = time_tmp + n2 - n1
                call ptrsmf90('R', 'U', 'T', 'N', N, rank_new, BPACK_cone, MatrixSubselection, 1, 1, descsub, matV, 1, 1, descsmatV, flop=flop)
                stats%Flop_Fill = stats%Flop_Fill + flop/dble(nprow*npcol)
 
-               call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+               call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
                myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
                myAcols = numroc_wp(rank_new, nbslpk, mycol, 0, npcol)
                allocate (matV2D(max(1,myArows), max(1,myAcols)))
-               call descinit(descButterV2D, N, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-               call assert(info == 0, 'descinit fail for descButterV2D')
+               call descinit_wp(descButterV2D, N, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descButterV2D')
                matV2D(1:max(1,myArows), 1:max(1,myAcols)) = matV(1:max(1,myArows), 1:max(1,myAcols))
 
             else
                rank = 1
                rank_new = 1
 
-               call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+               call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
                myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
                myAcols = numroc_wp(rank_new, nbslpk, mycol, 0, npcol)
                allocate (matV2D(max(1,myArows), max(1,myAcols)))
-               call descinit(descButterV2D, N, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-               call assert(info == 0, 'descinit fail for descButterV2D')
+               call descinit_wp(descButterV2D, N, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descButterV2D')
                matV2D(1:max(1,myArows), 1:max(1,myAcols)) = 0
             endif
 
-            call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+            call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
             myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank_new, nbslpk, mycol, 0, npcol)
             allocate (matU2D(max(1,myArows), max(1,myAcols)))
-            call descinit(descButterU2D, M, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descButterU2D')
+            call descinit_wp(descButterU2D, M, rank_new, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descButterU2D')
             matU2D = 0
 
             do myi = 1, myArows

@@ -105,15 +105,15 @@ contains
 
 		!!!!**** generate 2D z_grid blacs quantities
 		ctxt = quant%ptree%pgrp(pgno)%ctxt
-		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		call z_blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
 		if(myrow/=-1 .and. mycol/=-1)then
 			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
 			myAcols = z_numroc_wp(num_vect, nbslpk, mycol, 0, npcol)
-			call descinit( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
-			call descinit( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call z_descinit_wp( descsVin2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call z_descinit_wp( descsVout2D, N, num_vect, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			myArows = z_numroc_wp(N, nbslpk, myrow, 0, nprow)
 			myAcols = z_numroc_wp(N, nbslpk, mycol, 0, npcol)
-			call descinit( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
+			call z_descinit_wp( descsMat2D, N, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows,1), info )
 			allocate(Vin_tmp_2D(myArows,myAcols))
 			allocate(Vout_tmp_2D(myArows,myAcols))
 			Vout_tmp_2D=0
@@ -190,7 +190,7 @@ contains
 
 		!!!!****** assemble the full matrix in 2D blacs layout
 		ctxt = ptree%pgrp(pgno)%ctxt
-		call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+		call z_blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
 
 
 
@@ -366,7 +366,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
 
 
-	call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+	call z_blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
 	write(smyrow , *) myrow
 	write(smycol , *) mycol
 	open(unit=888,file=trim(quant%DATA_DIR)//'_pr'//trim(adjustl(smyrow))//'_pc'//trim(adjustl(smycol))//'.dat',status='old')
@@ -508,7 +508,7 @@ PROGRAM ButterflyPACK_FrontalMatrix_Matvec
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
 

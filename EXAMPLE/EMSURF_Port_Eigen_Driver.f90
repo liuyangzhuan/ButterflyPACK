@@ -905,7 +905,7 @@ PROGRAM ButterflyPACK_IE_3D
 		call MPI_Comm_disconnect(parent,ierr)
 	endif
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
     ! ! ! ! pause

@@ -2000,7 +2000,7 @@ end function distance_geo
       allocate (stats%XLUM_random_Time(0:h_mat%Maxlevel))
       stats%XLUM_random_Time = 0
 
-      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
 
          num_blocks = 2**msh%Dist_level

@@ -318,7 +318,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_TEMPLATE

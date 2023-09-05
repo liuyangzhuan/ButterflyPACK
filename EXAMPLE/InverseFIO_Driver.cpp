@@ -57,12 +57,16 @@ const _Complex double Im={0.0,1.0};
 char const transN='N';
 char const transT='T';
 
+#ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
       void Cblacs_exit(int);
 }
+#else
+    void Cblacs_exit(int){};
+#endif
 
 
 
