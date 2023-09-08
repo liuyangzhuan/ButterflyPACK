@@ -39,7 +39,7 @@ make install
 ```
 
 ### Without MPI
-For users don't want to use MPI, ButterflyPACK can be built with only shared-memory parallelism. The installation uses CMake build system and requires BLAS and LAPACK. A Fortran example for kernel ridge regression can be found at https://github.com/liuyangzhuan/ButterflyPACK/blob/master/EXAMPLE/KERREG_Driver_seq.f90
+For users that don't want to use MPI, ButterflyPACK can be built with only shared-memory parallelism. The installation uses CMake build system and requires BLAS and LAPACK. A Fortran example for kernel ridge regression can be found at https://github.com/liuyangzhuan/ButterflyPACK/blob/master/EXAMPLE/KERREG_Driver_seq.f90
 
 For an installation with GNU compiliers, do:
 ```
