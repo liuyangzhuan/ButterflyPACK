@@ -11,7 +11,7 @@ ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyP
 
 
 ## Installation
-
+### With MPI
 The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
 
 For an installation with GNU compiliers, do:
@@ -20,7 +20,6 @@ export BLAS_LIB=<Lib of the BLAS installation>
 export LAPACK_LIB=<Lib of the LAPACK installation>
 export SCALAPACK_LIB=<Lib of the SCALAPACK installation>
 export ARPACK_LIB=<Lib of the ARPACK installation>
-sh PrecisionPreprocessing.sh
 mkdir build ; cd build;
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
@@ -35,8 +34,31 @@ cmake .. \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release
-make
+make install
 ( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
+```
+
+### Without MPI
+For users don't want to use MPI, ButterflyPACK can be built with only shared-memory parallelism. The installation uses CMake build system and requires BLAS and LAPACK. A Fortran example for kernel ridge regression can be found at https://github.com/liuyangzhuan/ButterflyPACK/blob/master/EXAMPLE/KERREG_Driver_seq.f90
+
+For an installation with GNU compiliers, do:
+```
+export BLAS_LIB=<Lib of the BLAS installation>
+export LAPACK_LIB=<Lib of the LAPACK installation>
+mkdir build ; cd build;
+cmake .. \
+	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
+	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
+	-DBUILD_SHARED_LIBS=ON \
+	-Denable_openmp=ON \
+	-Denable_mpi=OFF \
+	-DCMAKE_Fortran_COMPILER=gfortran \
+	-DCMAKE_CXX_COMPILER=g++ \
+	-DCMAKE_C_COMPILER=gcc \
+	-DCMAKE_INSTALL_PREFIX=. \
+	-DCMAKE_BUILD_TYPE=Release
+make install
+( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu_mpi4_gcc910_sequential.sh)
 ```
 
 ## Website
