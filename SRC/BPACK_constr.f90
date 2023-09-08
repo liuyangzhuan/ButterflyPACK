@@ -101,7 +101,9 @@ contains
       stats%Time_Entry_Comm = 0
 
       !>**** set thread number here
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)

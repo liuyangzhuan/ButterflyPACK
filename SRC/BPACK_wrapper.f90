@@ -1098,9 +1098,9 @@ contains
       stats%Time_Entry_Traverse = 0
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -1347,9 +1347,9 @@ contains
       stats%Time_Entry_Traverse = 0
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -1596,9 +1596,9 @@ contains
       call c_f_pointer(ptree_Cptr, ptree)
       call c_f_pointer(mshr_Cptr, mshr)
       call c_f_pointer(mshc_Cptr, mshc)
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)

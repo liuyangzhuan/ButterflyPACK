@@ -109,39 +109,45 @@ target_link_libraries(fullkrr ${all_link_libs_d})
 add_dependencies(fullkrr frontal)
 
 
+########################################### non-MPI double C++ drivers
+set(CDEXM_SEQ InterfaceTest_simple_seq.cpp)
+add_executable(ctest_simple_seq ${CDEXM_SEQ})
+target_link_libraries(ctest_simple_seq ${all_link_libs_d})
+
+
 if(enable_mpi) # YL: I haven't add the MPI dummy library in C yet.
 
 ########################################### double C++ drivers
-set(CDEXM InterfaceTest.cpp)
-add_executable(ctest ${CDEXM})
+set(CDEXM1 InterfaceTest.cpp)
+add_executable(ctest ${CDEXM1})
 target_link_libraries(ctest ${all_link_libs_d})
 
-set(CDEXM InterfaceTest_simple.cpp)
-add_executable(ctest_simple ${CDEXM})
+set(CDEXM2 InterfaceTest_simple.cpp)
+add_executable(ctest_simple ${CDEXM2})
 target_link_libraries(ctest_simple ${all_link_libs_d})
 add_dependencies(ctest_simple ctest)
 
 ########################################### double complex C++ drivers
 
-set(FZEXM7 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp G2D/bessel.cpp)
-add_executable(go2d ${FZEXM7})
+set(CZEXM1 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp G2D/bessel.cpp)
+add_executable(go2d ${CZEXM1})
 target_link_libraries(go2d ${all_link_libs_z})
 add_dependencies(go2d ctest_simple)
 
-set(FZEXM8 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_nonfinite.cpp)
-add_executable(go3d ${FZEXM8})
+set(CZEXM2 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_nonfinite.cpp)
+add_executable(go3d ${CZEXM2})
 target_link_libraries(go3d ${all_link_libs_z})
 add_dependencies(go3d go2d)
 
 
-set(CFEXM FIO_Driver.cpp)
-add_executable(cfio ${CFEXM})
+set(CZEXM3 FIO_Driver.cpp)
+add_executable(cfio ${CZEXM3})
 target_link_libraries(cfio ${all_link_libs_d})
 target_link_libraries(cfio ${all_link_libs_z})
 add_dependencies(cfio go3d)
 
-set(CFEXM2 RankBenchmark_Driver.cpp)
-add_executable(rankben ${CFEXM2})
+set(CZEXM4 RankBenchmark_Driver.cpp)
+add_executable(rankben ${CZEXM4})
 target_link_libraries(rankben ${all_link_libs_d})
 target_link_libraries(rankben ${all_link_libs_z})
 add_dependencies(rankben cfio)

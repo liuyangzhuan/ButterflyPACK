@@ -4,8 +4,6 @@ module load gcc/9.1.0
 # module load scalapack-netlib/gcc-9.1.0/2.2.0
 module load cmake/3.19.2
 
-export ZFP_INSTALL_DIR=/home/administrator/Desktop/Research/zfp/install/
-
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 # bash PrecisionPreprocessing.sh
@@ -17,7 +15,7 @@ rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
-	-DCMAKE_Fortran_FLAGS="-DMPIMODULE -ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
+	-DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_doc=OFF \
@@ -33,8 +31,9 @@ cmake .. \
 	-DCMAKE_BUILD_TYPE=Debug\
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
-make krr_seq 
-make install
+make krr_seq -j16
+make ctest_simple_seq -j16
+
 
 	# -DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
 
