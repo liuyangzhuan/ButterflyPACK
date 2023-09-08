@@ -1,7 +1,7 @@
 module purge
 module load gcc/9.1.0
-module load openmpi/gcc-9.1.0/4.0.1
-module load scalapack-netlib/gcc-9.1.0/2.2.0
+# module load openmpi/gcc-9.1.0/4.0.1
+# module load scalapack-netlib/gcc-9.1.0/2.2.0
 module load cmake/3.19.2
 
 export ZFP_INSTALL_DIR=/home/administrator/Desktop/Research/zfp/install/
@@ -22,19 +22,19 @@ cmake .. \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_doc=OFF \
 	-Denable_openmp=ON \
-	-Denable_mpi=ON \
-	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
-	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
+	-Denable_mpi=OFF \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
-	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so;/home/administrator/Desktop/Software/id_dist/libid_lib.so" \
-	-DCMAKE_Fortran_COMPILER=$MPIF90 \
-	-DCMAKE_CXX_COMPILER=$MPICXX \
-	-DCMAKE_C_COMPILER=$MPICC \
+	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so" \
+	-DCMAKE_Fortran_COMPILER=$F90 \
+	-DCMAKE_CXX_COMPILER=$CXX \
+	-DCMAKE_C_COMPILER=$CC \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_INSTALL_LIBDIR=./lib \
 	-DCMAKE_BUILD_TYPE=Debug\
-	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+
+make krr_seq 
+make install
 
 	# -DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
 

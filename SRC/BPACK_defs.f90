@@ -22,7 +22,9 @@
 module BPACK_DEFS
 
 #ifdef MPIMODULE
+#ifdef HAVE_MPI
     use MPI
+#endif
     use iso_c_binding
 #ifdef HAVE_ZFP
     use zfp
@@ -46,8 +48,15 @@ module BPACK_DEFS
 #endif
     use BPACK_linkedlist
     implicit none
+#ifdef HAVE_MPI
     INCLUDE 'mpif.h'
 #endif
+#endif
+
+#ifndef HAVE_MPI
+    INCLUDE "mpi_dummy.fi"
+#endif
+
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
     integer, parameter:: BPACK_MAJOR_VERSION = 2

@@ -314,6 +314,7 @@ endif()
 
 
 #--------------------- MPI ---------------------
+if(enable_mpi)
 find_package(MPI)
 if(MPI_Fortran_FOUND)
   set(CMAKE_Fortran_FLAGS "${MPI_Fortran_COMPILE_FLAGS} ${CMAKE_Fortran_FLAGS}")
@@ -339,6 +340,8 @@ if(BUTTERFLYPACK_USE_MPI3)
   set(CMAKE_Fortran_FLAGS "-DHAVE_MPI3 ${CMAKE_Fortran_FLAGS}")
   message("-- Using MPI3 features")
 endif()
+endif()
+
 
 # Test Fortran Destructor
 check_fortran_source_compiles(
@@ -369,7 +372,9 @@ endif()
 # Include directories
 #
 ######################################################################
+if(enable_mpi)
 include_directories(${MPI_Fortran_INCLUDE_PATH})
+endif()
 include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 
 ######################################################################
@@ -450,7 +455,9 @@ else()
 endif()
 
 
-
+if(NOT enable_mpi)
+add_subdirectory(MPI_DUMMY)
+endif()
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(SRC_SINGLE)

@@ -1,3 +1,5 @@
+include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
+
 set(headers
     C_BPACK_wrapper.h
     ButterflyPACK_config.fi
@@ -35,9 +37,14 @@ endif ()
 
 
 add_library(butterflypack ${sources} ${HEADERS})
+
+if (enable_mpi)
 target_link_libraries(butterflypack
-                      ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
-set_target_properties(butterflypack PROPERTIES
+                       ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+else()
+target_link_libraries(butterflypack mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+endif()
+                      set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
 

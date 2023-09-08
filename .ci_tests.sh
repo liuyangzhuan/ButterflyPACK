@@ -51,6 +51,7 @@ case "${TEST_NUMBER}" in
 16) mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cfio" "--tst" "2" "--M" "1500" "--N" "1000" "--K" "2000" "--L" "1800" "--lrlevel" "100" # test CPP interface for compressing product of three FIOs 
     mpirun --allow-run-as-root --oversubscribe "-n" "7" "$EXAMPLE_FOLDER/cifio" "--M" "1000" "--N" "1000" "--ker" "1" "--errsol 1" "--format" "1" # test CPP interface for approximate inverse of a 1D FIO, using HODLR    
     mpirun --allow-run-as-root --oversubscribe "-n" "8" "$EXAMPLE_FOLDER/cifio" "--M" "1000" "--N" "1000" "--ker" "1" "--errsol 1" "--format" "2" "--near_para" "4.0";; # test CPP interface for approximate inverse of a 1D FIO, using strong admissible H matrix     
+17) "$EXAMPLE_FOLDER/krr_seq" "-quant" "--data_dir" "$DATA_FOLDER/KRR_DATA/susy_10Kn" "--dimn" "8" "--ntrain" "10000" "--ntest" "1000" "--sigma" "0.1" "--lambda" "1.0" "-option" "--xyzsort" "2" "--reclr_leaf" "2";; # test HODLR with LR for KRR (non-MPI)
 *) printf "${RED} ###YL: Unknown test\n" ;;
 esac
 

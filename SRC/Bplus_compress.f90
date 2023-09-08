@@ -942,23 +942,33 @@ contains
       enddo
 
       ! communicate receive buffer sizes
+      Nreqs=0
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat_i(sendquant(pp)%size_i, 1))
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         endif
       enddo
 
+      Nreqr=0
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+         else
+            recvquant(pp)%size_i = sendquant(pp)%size_i
+         endif
       enddo
-      if (Nsendactive > 0) then
-         call MPI_waitall(Nsendactive, S_req, statuss, ierr)
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
-      if (Nrecvactive > 0) then
-         call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 
       do tt = 1, Nsendactive
@@ -1017,23 +1027,33 @@ contains
       enddo
 
       ! communicate the data buffer
+      Nreqs=0
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         endif
       enddo
 
+      Nreqr=0
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         if(sendid /= ptree%MyID)then
+            Nreqr =Nreqr+1
+            call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+         else
+            if(recvquant(pp)%size_i>0)recvquant(pp)%dat_i = sendquant(pp)%dat_i
+         endif
       enddo
 
-      if (Nsendactive > 0) then
-         call MPI_waitall(Nsendactive, S_req, statuss, ierr)
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
-      if (Nrecvactive > 0) then
-         call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 
       ! copy data from buffer to target
@@ -1189,23 +1209,33 @@ contains
       enddo
 
       ! communicate receive buffer sizes
+      Nreqs=0
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat_i(sendquant(pp)%size_i, 1))
          recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(tt), ierr)
+         if(recvid/=ptree%MyID)then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            recvquant(pp)%size_i = sendquant(pp)%size_i
+         endif
       enddo
 
+      Nreqr = 0
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
-         call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(tt), ierr)
+         if(sendid/=ptree%MyID)then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+         endif
       enddo
-      if (Nsendactive > 0) then
-         call MPI_waitall(Nsendactive, S_req, statuss, ierr)
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
       endif
-      if (Nrecvactive > 0) then
-         call MPI_waitall(Nrecvactive, R_req, statusr, ierr)
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
       endif
 
       do tt = 1, Nsendactive

@@ -52,6 +52,24 @@ contains
    ! print *, "x"," is a nice matrix! Huzzah!"
 ! #endif
 
+   function seq_wtime ( )
+
+   implicit none
+
+   integer count
+   integer count_max
+   integer count_rate
+   real ( kind = 8 ) seq_wtime
+
+   call system_clock ( count, count_rate, count_max )
+
+   seq_wtime = real ( count, kind = 8 ) / real ( count_rate, kind = 8 )
+
+   return
+   end function seq_wtime
+
+
+
    subroutine linspaceI(startI, endI, N, array)
       implicit none
       integer startI, endI, N
