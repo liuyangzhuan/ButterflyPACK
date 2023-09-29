@@ -530,6 +530,8 @@ contains
                   ! call BF_copy('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
                   ! endif
 
+                  if (option%verbosity >= 2)call BF_print_size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+
                   if (level == option%level_check) then
                      ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
 

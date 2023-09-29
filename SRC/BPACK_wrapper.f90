@@ -1786,6 +1786,8 @@ contains
 
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
+      if (option%verbosity >= 2)call BF_print_size(blocks)
+
       t2 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction finished in", t2-t1, 'Seconds with', stats%Mem_Comp_for,'MB Memory'
@@ -1903,6 +1905,8 @@ contains
 
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+      if (option%verbosity >= 2)call BF_print_size(blocks)
 
       !>**** delete neighours in msh
       if(allocated(msh%nns))then

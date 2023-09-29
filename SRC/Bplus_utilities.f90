@@ -1373,6 +1373,91 @@ contains
 
 
 
+
+   subroutine BF_print_size(block_i)
+
+
+      implicit none
+      type(matrixblock)::block_i
+
+      integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, index_i_loc, index_j_loc, levelm, index_i_m, index_j_m
+      integer level, blocks, edge, patch, node, group, level_c, inc_r, inc_c, idx_r, idx_c
+      integer::block_num, block_num_new, num_blocks, level_butterfly
+      DTR:: temp
+
+      level_butterfly = block_i%level_butterfly
+      num_blocks = 2**level_butterfly
+
+      if (block_i%style == 2) then
+         do level = 0, level_butterfly + 1
+            if (level == 0) then
+               if (allocated(block_i%ButterflyV%blocks)) then
+               do index_j_loc = 1, block_i%ButterflyV%nblk_loc
+                  if (associated(block_i%ButterflyV%blocks(index_j_loc)%matrix)) then
+                     idx_c = block_i%ButterflyV%idx
+                     inc_c = block_i%ButterflyV%inc
+                     index_j = (index_j_loc - 1)*inc_c + idx_c
+                     mm = size(block_i%ButterflyV%blocks(index_j_loc)%matrix, 1)
+                     nn = size(block_i%ButterflyV%blocks(index_j_loc)%matrix, 2)
+                     write (*, *) "BF",block_i%row_group,block_i%col_group,'L:',level_butterfly, 'V idx:', index_j, 'size:', mm, nn
+                  endif
+               enddo
+               endif
+            elseif (level == level_butterfly + 1) then
+               if (allocated(block_i%ButterflyU%blocks)) then
+               do index_i_loc = 1, block_i%ButterflyU%nblk_loc
+                  if (associated(block_i%ButterflyU%blocks(index_i_loc)%matrix)) then
+                     idx_r = block_i%ButterflyU%idx
+                     inc_r = block_i%ButterflyU%inc
+                     index_i = (index_i_loc - 1)*inc_r + idx_r
+
+                     mm = size(block_i%ButterflyU%blocks(index_i_loc)%matrix, 1)
+                     nn = size(block_i%ButterflyU%blocks(index_i_loc)%matrix, 2)
+                     write (*, *) "BF",block_i%row_group,block_i%col_group,'L:',level_butterfly, 'U idx:', index_i, 'size:', mm, nn
+                  endif
+               enddo
+               endif
+            else
+               if (allocated(block_i%ButterflyKerl)) then
+               if (allocated(block_i%ButterflyKerl(level)%blocks)) then
+               do index_i_loc = 1, block_i%ButterflyKerl(level)%nr
+                  do index_j_loc = 1, block_i%ButterflyKerl(level)%nc
+
+                     inc_r = block_i%ButterflyKerl(level)%inc_r
+                     idx_r = block_i%ButterflyKerl(level)%idx_r
+                     inc_c = block_i%ButterflyKerl(level)%inc_c
+                     idx_c = block_i%ButterflyKerl(level)%idx_c
+                     index_i = (index_i_loc - 1)*inc_r + idx_r
+                     index_j = (index_j_loc - 1)*inc_c + idx_c
+
+                     if (associated(block_i%ButterflyKerl(level)%blocks(index_i_loc, index_j_loc)%matrix)) then
+                        mm = size(block_i%ButterflyKerl(level)%blocks(index_i_loc, index_j_loc)%matrix, 1)
+                        nn = size(block_i%ButterflyKerl(level)%blocks(index_i_loc, index_j_loc)%matrix, 2)
+                        write (*, *) "BF",block_i%row_group,block_i%col_group,'L:', level_butterfly, "ker level:", level,' idx:', index_i, index_j, 'size:', mm, nn
+                     endif
+                  enddo
+               enddo
+               endif
+               endif
+            endif
+         enddo
+      else if (block_i%style == 1) then
+         if (allocated(block_i%fullmat)) then
+            mm = size(block_i%fullmat, 1)
+            nn = size(block_i%fullmat, 2)
+            write (*, *) "Dense",block_i%row_group,block_i%col_group, 'size:', mm, nn
+         endif
+      else
+         write (*, *) 'block style not implemented'
+         stop
+      end if
+
+   end subroutine BF_print_size
+
+
+
+
+
 #ifdef HAVE_ZFP
    !>**** ZFP compression of blocks%fullmat into blocks%buffer_r/buffer_i into with relative tolerance tol_comp. If the flag already_compressed is set to 1, only the fullmat will be deleted.
    subroutine ZFP_Compress(blocks, tol_comp, already_compressed)
