@@ -16,6 +16,8 @@ The installation uses CMake build system. You may need "bash" for the build proc
 
 For an installation with GNU compiliers, do:
 ```
+git clone https://github.com/liuyangzhuan/ButterflyPACK.git
+cd ButterflyPACK
 export BLAS_LIB=<Lib of the BLAS installation>
 export LAPACK_LIB=<Lib of the LAPACK installation>
 export SCALAPACK_LIB=<Lib of the SCALAPACK installation>
