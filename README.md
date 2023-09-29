@@ -45,6 +45,8 @@ For users that don't want to use MPI, ButterflyPACK can be built with only share
 
 For an installation with GNU compiliers, do:
 ```
+git clone https://github.com/liuyangzhuan/ButterflyPACK.git
+cd ButterflyPACK
 export BLAS_LIB=<Lib of the BLAS installation>
 export LAPACK_LIB=<Lib of the LAPACK installation>
 mkdir build ; cd build;
