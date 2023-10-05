@@ -424,6 +424,7 @@ module BPACK_DEFS
     end type SVD_quant
 
     type Bmatrix
+        integer Maxlevel
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()

@@ -52,12 +52,12 @@ contains
    end subroutine Zelem_block_Extraction
 
 !>**** Initialization of the construction phase
-   ! N is matrix dimension
-   ! P is the permutation vector returned
-   ! N_loc is the local number of rows/columns
+   ! Nunk is matrix dimension
+   ! Permutation is the permutation vector returned
+   ! Nunk_loc is the local number of rows/columns
    ! bmat is the meta-data storing the compressed matrix
    ! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
-   ! clustertree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
+   ! tree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
    ! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.
    ! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
    ! nns(optional) of dimension option%knn*N is the array of user provided nearest neighbours
@@ -197,6 +197,320 @@ contains
 
    end subroutine BPACK_construction_Init
 
+
+
+!>**** Interface of BF construction via blackbox matvec or entry extraction with mshr and mshc already generated
+   !> @param M,N: matrix size (in)
+   !> @param M_loc,N_loc: number of local row/column indices (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh: the structure containing points and ordering information combined from mshr and mshc (out)
+   !> @param mshr: the structure containing points and ordering information for the row dimension (in)
+   !> @param mshc: the structure containing points and ordering information for the column dimension (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param nns_m: (optional) (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+      implicit none
+      integer M, N
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+      integer M_loc, N_loc
+      integer, optional:: nns_m(:, :),nns_n(:, :)
+
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh, mshr, mshc
+      type(kernelquant) ::ker
+      type(matrixblock) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc
+      integer(kind=8)::idx,kk,knn
+
+
+      call assert(mshr%Nunk == M, 'mshr%Nunk\=M')
+      call assert(mshc%Nunk == N, 'mshc%Nunk\=N')
+      Maxgroup_rc = min(mshc%Maxgroup, mshr%Maxgroup)
+      ! call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+
+      msh%Nunk = N + M
+      msh%Maxgroup = Maxgroup_rc*2 + 1
+      allocate (msh%basis_group(msh%Maxgroup))
+      msh%basis_group(1)%head = 1
+      msh%basis_group(1)%tail = N + M
+      msh%basis_group(1)%pgno = 1
+      call copy_basis_group(mshr%basis_group, 1, Maxgroup_rc, msh%basis_group, 2, msh%Maxgroup, 0)
+      call copy_basis_group(mshc%basis_group, 1, Maxgroup_rc, msh%basis_group, 3, msh%Maxgroup, mshr%Nunk)
+      ! msh%new2old maps the indices in a larger (M+N)x(M+N) matrix into the MxM and NxN matrices
+      allocate (msh%new2old(msh%Nunk))
+      do ii = 1, M
+         msh%new2old(ii) = ii
+      enddo
+      do ii = 1 + M, N + M
+         msh%new2old(ii) = -(ii - M)
+      enddo
+      !>**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
+      if (option%nogeo ==0 .or. option%nogeo ==4) then
+         Dimn = size(mshr%xyz,1)
+         allocate(msh%xyz(1:Dimn,-N:M))
+         msh%xyz=0
+         do ii=1,M
+            msh%xyz(1:Dimn,ii) = mshr%xyz(1:Dimn,mshr%new2old(ii))
+         enddo
+         do ii=1,N
+            msh%xyz(:,-ii) = mshc%xyz(:,mshc%new2old(ii))
+         enddo
+      endif
+
+      !>**** construct a list of k-nearest neighbours for each point
+      if (option%nogeo /= 3 .and. option%nogeo /= 4 .and. option%knn > 0) then
+         call FindKNNs(option, msh, ker, stats, ptree, 2, 3)
+      endif
+
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+         allocate (msh%nns(msh%Nunk, option%knn))
+         do ii = 1, M
+         do kk = 1, option%knn
+            knn = option%knn
+            if (nns_m(kk,ii) /= 0) then
+               msh%nns(ii, kk) = nns_m(kk,ii) + M
+            else
+               msh%nns(ii, kk) = 0
+            endif
+         enddo
+         enddo
+         do ii = 1, N
+         do kk = 1, option%knn
+            knn = option%knn
+            if (nns_m(kk,ii) /= 0) then
+               msh%nns(ii + M, kk) = nns_n(kk,ii)
+            else
+               msh%nns(ii + M, kk) = 0
+            endif
+         enddo
+         enddo
+      endif
+
+      blocks%level = 1
+      blocks%col_group = 3
+      blocks%row_group = 2
+      blocks%pgno = 1
+      blocks%headm = msh%basis_group(blocks%row_group)%head
+      blocks%headn = msh%basis_group(blocks%col_group)%head
+      blocks%M = M
+      blocks%N = N
+      blocks%style = 2
+
+      Maxlevel = GetTreelevel(msh%Maxgroup) - 1
+
+      if (blocks%level > option%LRlevel) then
+         blocks%level_butterfly = 0 ! low rank below LRlevel
+      else
+         blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly
+      endif
+
+      call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
+
+      M_loc = blocks%M_loc
+      N_loc = blocks%N_loc
+
+   end subroutine BF_Construct_Init_from_mshrc
+
+
+
+
+!>**** Interface of BF construction via blackbox matvec or entry extraction
+   !> @param M,N: matrix size (in)
+   !> @param M_loc,N_loc: number of local row/column indices (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh: the structure containing points and ordering information combined from mshr and mshc (out)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param Permutation_m,Permutation_n: the permutation vectors on the row and column dimensions (out)
+   !> @param tree_m, tree_n: (optional) is an array of leafsizes in a user-provided cluster tree for the row and column dimensions (in)
+   !> @param Coordinates_m, Coordinates_n: (optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
+   !> @param nns_m: (optional) (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_Construct_Init(M, N, M_loc, N_loc, Permutation_m, Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m, Coordinates_n, tree_m, tree_n, nns_m, nns_n)
+      implicit none
+      integer M, N
+
+      integer Permutation_m(M),Permutation_n(N)
+      real(kind=8), optional:: Coordinates_m(:, :), Coordinates_n(:, :)
+      integer, optional:: tree_m(:),tree_n(:)
+      integer, optional:: nns_m(:, :),nns_n(:, :)
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+      integer M_loc, N_loc
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh, mshr, mshc
+      type(kernelquant) ::ker
+      type(matrixblock) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc,verbosity_save
+      integer(kind=8)::idx,kk,knn
+      type(Bmatrix)::bmat_m,bmat_n ! dummy
+
+#ifdef HAVE_MPI
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
+      threads_num = 1
+      CALL getenv("OMP_NUM_THREADS", strings)
+      strings = TRIM(strings)
+      if (LEN_TRIM(strings) > 0) then
+         read (strings, *) threads_num
+      endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
+      call OMP_set_num_threads(threads_num)
+#endif
+
+      !>**** create a random seed
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! seed_myid(1) = myid*1000
+      ! call RANDOM_SEED(PUT=seed_myid)
+      call init_random_seed()
+      verbosity_save=option%verbosity
+      option%verbosity=-1
+      call BPACK_construction_Init(M, Permutation_m, M_loc, bmat_m, option, stats, mshr, ker, ptree, Coordinates_m, tree_m)
+      call BPACK_construction_Init(N, Permutation_n, N_loc, bmat_n, option, stats, mshc, ker, ptree, Coordinates_n, tree_n)
+      option%verbosity=verbosity_save
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', bmat_m%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', int(mshr%Nunk/(2**bmat_m%Maxlevel))
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc%Nunk/(2**bmat_n%Maxlevel))
+
+
+      call BF_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+
+
+   end subroutine BF_Construct_Init
+
+
+
+
+
+
+!>**** Interface of BF construction via entry extraction
+   !> @param blocks: the structure containing the block (inout)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (inout)
+   !> @param msh: the structure containing points and ordering information (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   subroutine BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
+      implicit none
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(matrixblock),target::blocks
+      type(matrixblock),pointer::blocks_1
+      type(proctree)::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2, error, Memory, tol_comp_tmp
+      integer ierr,pp,knn_tmp
+      integer:: boundary_map(1,1)
+      integer groupm_start, Nboundall,Ninadmissible
+      blocks_1 => blocks
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
+
+      t1 = MPI_Wtime()
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction......"
+
+      groupm_start = 0
+      Nboundall = 0
+      Ninadmissible = 0
+      if (option%forwardN15flag == 1) then
+         knn_tmp = option%knn
+         option%knn=0
+         call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         option%knn=knn_tmp
+         call BF_sym2asym(blocks)
+      elseif (option%forwardN15flag == 2) then
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, -1, error)
+         if(error>50*option%tol_comp)then
+            pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+            if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: error ',error,',  with the N15 algorithm'
+            call BF_delete(blocks,0)
+            knn_tmp = option%knn
+            option%tol_comp=option%tol_comp*5
+            option%knn=0
+            call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+            option%knn=knn_tmp
+            option%tol_comp=option%tol_comp/5
+            call BF_sym2asym(blocks)
+         endif
+      else
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+      end if
+
+      if (option%verbosity >= 0) call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
+      call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+      if (option%verbosity >= 2)call BF_print_size(blocks)
+
+      !>**** delete neighours in msh
+      if(allocated(msh%nns))then
+         call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
+         deallocate(msh%nns)
+      endif
+
+      t2 = MPI_Wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
+
+      if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
+      if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
+      stats%rankmax_of_level(0) = blocks%rankmax
+      stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+      stats%Time_Fill = stats%Time_Fill + t2 - t1
+      ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
+
+   end subroutine BF_Construct_Element_Compute
+
+
+
+
+
+
+
+
 !>**** Computation of the full matrix with matrix entry evaluation
    subroutine FULLMAT_Element(option, stats, msh, ker, ptree)
 
@@ -295,14 +609,7 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction finished"
 
-      select case (option%format)
-      case (HODLR)
-         Maxlevel = bmat%ho_bf%Maxlevel
-      case (HMAT)
-         Maxlevel = bmat%h_mat%Maxlevel
-      case (HSS)
-         Maxlevel = bmat%hss_bf%Maxlevel
-      end select
+      Maxlevel = bmat%Maxlevel
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
 
    end subroutine BPACK_construction_Element

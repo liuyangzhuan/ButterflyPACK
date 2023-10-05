@@ -471,6 +471,7 @@ end function distance_geo
          allocate (bmat%hss_bf)
          bmat%hss_bf%Maxlevel = Maxlevel
       end select
+      bmat%Maxlevel=Maxlevel
 
       !>************** check whether the sorting option is valid
       if (Maxlevel > nlevel_pre) then
