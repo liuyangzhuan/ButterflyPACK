@@ -14516,6 +14516,90 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       deallocate (random2tmp)
    end subroutine Full_block_MVP_dat
 
+
+! compute arrays M_p(1:P+1,1:2,1:Ndim) and N_p(1:P+1,1:2,1:Ndim) the holds the start and end column/row of each process sharing this block
+   subroutine ComputeParallelIndices_MD(block, pgno, Ndim, ptree, msh)
+      implicit none
+      type(matrixblock_MD)::block
+      integer found, Ndim, pp, MyID, pgno, pgno1, level, level_p(Ndim), ith(Ndim), nleaf(Ndim), level_butterfly, nproc, num_blocks, proc, gg, ii, ii_new, Maxlevel, dim_i, dim_s
+      type(proctree)::ptree
+      integer, pointer::M_p(:, :, :), N_p(:, :, :)
+      type(mesh)::msh(Ndim)
+
+      if(.not. allocated(block%M_loc))allocate(block%M_loc(Ndim))
+      block%M_loc = 0
+      if(.not. allocated(block%N_loc))allocate(block%N_loc(Ndim))
+      block%N_loc = 0
+
+      Maxlevel = GetTreelevel(msh(1)%Maxgroup) - 1
+      ! write(*,*)msh%Maxgroup,GetTreelevel(msh%Maxgroup),Maxlevel-block%level,block%level,ptree%nlevel-GetTreelevel(pgno),pgno,Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),pgno
+      call assert((Maxlevel - block%level)*Ndim >= ptree%nlevel - GetTreelevel(pgno), 'too many process sharing this group')
+
+      nproc = ptree%pgrp(pgno)%nproc
+
+      if (associated(block%M_p)) deallocate (block%M_p)
+      if (associated(block%N_p)) deallocate (block%N_p)
+      allocate (block%M_p(nproc, 2, Ndim))
+      allocate (block%N_p(nproc, 2, Ndim))
+      M_p => block%M_p
+      N_p => block%N_p
+
+      do dim_i=1,Ndim
+         M_p(:, 1, dim_i) = block%M(dim_i) + 1
+         N_p(:, 1, dim_i) = block%N(dim_i) + 1
+         M_p(:, 2, dim_i) = -block%M(dim_i) - 1
+         N_p(:, 2, dim_i) = -block%N(dim_i) - 1
+      enddo
+
+      do pp=1,nproc
+         MyID=ptree%pgrp(pgno)%head+pp-1
+         found = 0
+         level_p = 0
+         pgno1 = pgno
+         ith = 1
+         dim_i = dim_s
+
+         do while (found == 0)
+            if (ptree%pgrp(pgno1)%nproc == 1) then
+               found = 1
+               exit
+            endif
+            if (MyID >= ptree%pgrp(pgno1*2)%head .and. MyID <= ptree%pgrp(pgno1*2)%tail) then
+               pgno1 = pgno1*2
+               ith(dim_i) = ith(dim_i)*2
+            elseif (MyID >= ptree%pgrp(pgno1*2+1)%head .and. MyID <= ptree%pgrp(pgno1*2+1)%tail) then
+               pgno1 = pgno1*2 + 1
+               ith(dim_i) = ith(dim_i)*2 + 1
+            endif
+            level_p(dim_i) = level_p(dim_i) + 1
+            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
+            dim_i = dim_i + 1
+         enddo
+         ith = ith - 2**level_p + 1
+         nleaf = 2**(level_butterfly - level_p)
+
+         do dim_i=1,ndim
+            gg = block%row_group(dim_i)*2**level_p(dim_i) + (ith(dim_i) - 1)*nleaf(dim_i)
+            M_p(proc + 1, 1, dim_i) = min(M_p(proc + 1, 1, dim_i), msh(dim_i)%basis_group(gg)%head - msh(dim_i)%basis_group(block%row_group(dim_i))%head + 1)
+            gg = block%row_group(dim_i)*2**level_p(dim_i) + ith(dim_i)*nleaf(dim_i) -1
+            M_p(proc + 1, 2, dim_i) = max(M_p(proc + 1, 2, dim_i), msh(dim_i)%basis_group(gg)%tail - msh(dim_i)%basis_group(block%row_group(dim_i))%head + 1)
+            gg = block%col_group(dim_i)*2**level_p(dim_i) + (ith(dim_i) - 1)*nleaf(dim_i)
+            N_p(proc + 1, 1, dim_i) = min(N_p(proc + 1, 1, dim_i), msh(dim_i)%basis_group(gg)%head - msh(dim_i)%basis_group(block%col_group(dim_i))%head + 1)
+            gg = block%col_group(dim_i)*2**level_p(dim_i) + ith(dim_i)*nleaf(dim_i) -1
+            N_p(proc + 1, 2, dim_i) = max(N_p(proc + 1, 2, dim_i), msh(dim_i)%basis_group(gg)%tail - msh(dim_i)%basis_group(block%col_group(dim_i))%head + 1)
+         enddo
+      enddo
+
+      if (IOwnPgrp(ptree, pgno)) then
+         ii = ptree%myid - ptree%pgrp(pgno)%head + 1
+         block%M_loc = M_p(ii, 2, :) - M_p(ii, 1, :) + 1
+         block%N_loc = N_p(ii, 2, :) - N_p(ii, 1, :) + 1
+      endif
+      ! write(*,*)level_butterfly,level_p,block%M_loc,block%N_loc,'nima',M_p,N_p,block%M,block%N,block%row_group,block%col_group
+      ! endif
+   end subroutine ComputeParallelIndices_MD
+
+
 ! compute arrays M_p(1:P+1) and N_p(1:P+1) the holds the start and end column/row of each process sharing this block
    subroutine ComputeParallelIndices(block, pgno, ptree, msh)
       implicit none

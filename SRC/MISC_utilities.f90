@@ -4077,6 +4077,170 @@ contains
       endif
    end subroutine GetLocalBlockRange
 
+
+   subroutine SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)
+      implicit none
+      integer:: Ndim
+      integer:: dims(Ndim)
+      integer :: single_index, single_index_in, multi_index(Ndim)
+      integer:: i
+
+      single_index = single_index_in
+
+      ! Initialize multi_index
+      multi_index = 0
+
+      ! Calculate Multi-Indices
+      do i = Ndim, 1, -1
+         multi_index(i) = mod(single_index - 1, dims(i)) + 1
+         single_index = (single_index - 1) / dims(i) + 1
+      end do
+
+   end subroutine SingleIndexToMultiIndex
+
+
+
+   subroutine MultiIndexToSingleIndex(Ndim,dims, single_index, multi_index)
+      implicit none
+      integer:: Ndim
+      integer:: dims(Ndim)
+      integer :: single_index, multi_index(Ndim)
+      integer :: i, product
+
+      ! Initialize single_index
+      single_index = 1
+
+      ! Calculate Single Index
+      product = 1
+      do i = 1, Ndim
+         single_index = single_index + (multi_index(i) - 1) * product
+         product = product * dims(i)
+      end do
+
+   end subroutine MultiIndexToSingleIndex
+
+
+
+
+
+
+
+!>**** computation of the local (multi-dimensinonal) butterfly block ranges owned by this MPI rank
+   !ptree: process tree
+   !pgno: the process group number that shares this butterfly
+   !level_butterfly: number of butterfly levels
+   !level: the specified level that requires the computation 0<=level<=level_butterfly+1
+   !ndim: number of dimensions
+   !dim_s: which dimension to split first at the level 1 of the process tree
+   !idx_r(ndim): starting index of local row blocks
+   !inc_r(ndim): increments of local row blocks
+   !nr(ndim): number of local row blocks
+   !idx_c(ndim): starting index of local column blocks
+   !inc_c(ndim): increments of local column blocks
+   !nc(ndim): number of local column blocks
+   !dir: 'R': row-wise ordering (2^level row blocks and 2^(level_butterfly-level) column blocks) or 'C': column-wise ordering (2^(level-1) row blocks and 2^(level_butterfly-level+1) column blocks)
+   subroutine GetLocalBlockRange_MD(ptree, pgno, level, level_butterfly, ndim, dim_s, idx_r, inc_r, nr, idx_c, inc_c, nc, dir)
+      implicit none
+      type(proctree)::ptree
+      integer :: ndim, dim_s, dim_i
+      integer :: level_p(ndim), level, ll, group, level_butterfly, level_half, idx_r(ndim), inc_r(ndim), nr(ndim), idx_c(ndim), inc_c(ndim), nc(ndim), pgno, pgno1, found, nleaf(ndim), ith(ndim)
+      character::dir
+
+      level_half = floor_safe(dble(level_butterfly)/2d0) ! from outer to inner
+
+      if (IOwnPgrp(ptree, pgno)) then
+         found = 0
+         level_p = 0
+         pgno1 = pgno
+         ith = 1
+         dim_i = dim_s
+         do while (found == 0)
+            if (ptree%pgrp(pgno1)%nproc == 1 .or. minval(level_p) == level_half) then
+               found = 1
+               exit
+            endif
+            if (IOwnPgrp(ptree, pgno1*2)) then
+               pgno1 = pgno1*2
+               ith(dim_i) = ith(dim_i)*2
+            elseif (IOwnPgrp(ptree, pgno1*2 + 1)) then
+               pgno1 = pgno1*2 + 1
+               ith(dim_i) = ith(dim_i)*2 + 1
+            endif
+            level_p(dim_i) = level_p(dim_i) + 1
+            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
+            dim_i = dim_i + 1
+         enddo
+         ith = ith - 2**level_p + 1
+         call assert(minval(level_p) <= level_half, 'too many processes sharing this block as GetLocalBlockRange_MD parallelization goes at most to the middle level')
+         nleaf = 2**(level_butterfly - level_p)
+
+         do dim_i=1,ndim
+            if (dir == 'R') then
+               idx_c(dim_i) = (ith(dim_i) - 1)*nleaf(dim_i) + 1
+               nc(dim_i) = nleaf(dim_i)
+               inc_c(dim_i) = 1
+               idx_r(dim_i) = 1
+               nr(dim_i) = 1
+               inc_r(dim_i) = 1
+               do ll = 1, level
+                  if (ll /= level_butterfly + 1) then
+                     idx_r(dim_i) = 2*idx_r(dim_i) - mod(idx_c(dim_i), 2) ! odd/even column indices mapped to odd/even row indices
+                     idx_c(dim_i) = floor((idx_c(dim_i) - 1)/2d0) + 1
+                     if (nc(dim_i) > 1) then ! if at previous level column blocks are contiguous, double #row and half #column
+                        nc(dim_i) = nc(dim_i)/2
+                        nr(dim_i) = nr(dim_i)*2
+                     else         ! otherwise double row increments
+                        write(*,*)'nc(dim_i) == 1 should not happen for GetLocalBlockRange_MD'
+                        stop
+                     endif
+                  endif
+               enddo
+            elseif (dir == 'C') then
+               idx_r(dim_i) = (ith(dim_i) - 1)*nleaf(dim_i) + 1
+               nr(dim_i) = nleaf(dim_i)
+               inc_r(dim_i) = 1
+               idx_c(dim_i) = 1
+               nc(dim_i) = 1
+               inc_c(dim_i) = 1
+               do ll = level_butterfly, level, -1
+                  if (ll /= 0) then
+                     idx_c(dim_i) = 2*idx_c(dim_i) - mod(idx_r(dim_i), 2) ! odd/even row indices mapped to odd/even column indices
+                     idx_r(dim_i) = floor((idx_r(dim_i) - 1)/2d0) + 1
+                     if (nr(dim_i) > 1) then ! if at previous level row blocks are contiguous, double #column and half #row
+                        nr(dim_i) = nr(dim_i)/2
+                        nc(dim_i) = nc(dim_i)*2
+                     else
+                        write(*,*)'nr(dim_i) == 1 should not happen for GetLocalBlockRange_MD'
+                        stop
+                     endif
+                  endif
+               enddo
+            endif
+
+            if (ptree%MyID /= ptree%pgrp(pgno1)%head .and. level > 0 .and. level < level_butterfly + 1) then ! for the kernel levels: if several processe own one block, only the head process has it.
+               idx_r(dim_i) = 0
+               inc_r(dim_i) = 0
+               nr(dim_i) = 0
+               idx_c(dim_i) = 0
+               inc_c(dim_i) = 0
+               nc(dim_i) = 0
+               write(*,*)'pgno1 should only have 1 rank in GetLocalBlockRange_MD'
+               stop
+            endif
+         enddo
+
+      else
+         idx_r = 0
+         inc_r = 0
+         nr = 0
+         idx_c = 0
+         inc_c = 0
+         nc = 0
+      endif
+   end subroutine GetLocalBlockRange_MD
+
+
+
 !>**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
    !ptree: process tree
    !pgno: the process group number that shares this butterfly
@@ -4153,6 +4317,124 @@ contains
 
       ! pid = ptree%pgrp(pgno_sub)%head
    end subroutine GetBlockPID
+
+
+
+
+!>**** computation of the process group number "pgno_sub" that shares the multi-dimensional (index_i(ndim),index_j(ndim),level) block. Note for blocks in the kernels, only the head process in pgno_sub is active; for blocks in the outtermost factors, all processes could be active
+   !ptree: process tree
+   !pgno: the process group number that shares this multi-dimensional butterfly
+   !ndim: number of dimensions
+   !ndim: number of dimensions
+   !dim_s: which dimension to split first at the level 1 of the process tree
+   !level_butterfly: number of butterfly levels
+   !level: the level where the block resides 0<=level<=level_butterfly+1
+   !index_i(ndim): row index of the block
+   !index_j(ndim): column index of the block
+   !dir: 'R': row-wise ordering (2^level row blocks and 2^(level_butterfly-level) column blocks) or 'C': column-wise ordering (2^(level-1) row blocks and 2^(level_butterfly-level+1) column blocks)
+   !pgno_sub: the process group number that shares the (index_i,index_j) block
+   subroutine GetBlockPID_MD(ptree, pgno, ndim, dim_s, level, level_butterfly, index_i, index_j, dir, pgno_sub)
+      implicit none
+      type(proctree)::ptree
+      integer:: ndim,dim_i,dim_s, idx_tmp
+      integer:: idx_r(ndim), idx_c(ndim), idx(ndim), index_i(ndim), index_j(ndim), level_ps(ndim), idx_p(ndim)
+      integer :: pid, pp, level_p, num_blocks, level, ll, group, level_butterfly, pgno, pgno_sub, found
+      character::dir
+
+      idx_r = index_i
+      idx_c = index_j
+
+      do dim_i=1,ndim
+         if (dir == 'R') then
+            do ll = level, 1, -1
+               if (ll /= level_butterfly + 1) then
+                  idx_c(dim_i) = 2*idx_c(dim_i) - mod(idx_r(dim_i), 2) ! odd/even row indices mapped to odd/even column indices
+                  idx_r(dim_i) = floor_safe((idx_r(dim_i) - 1)/2d0) + 1
+               endif
+            enddo
+            idx(dim_i) = idx_c(dim_i)
+         elseif (dir == 'C') then
+            do ll = level, level_butterfly
+               if (ll /= 0) then
+                  idx_r(dim_i) = 2*idx_r(dim_i) - mod(idx_c(dim_i), 2) ! odd/even column indices mapped to odd/even row indices
+                  idx_c(dim_i) = floor_safe((idx_c(dim_i) - 1)/2d0) + 1
+               endif
+            enddo
+            idx(dim_i) = idx_r(dim_i)
+         endif
+         idx(dim_i) = idx(dim_i) + 2**level_butterfly - 1 ! index of this leaf-level group in the corresponding level_butterfly-level tree
+      enddo
+
+      level_p = ptree%nlevel - GetTreelevel(pgno)
+      pgno_sub = pgno
+      dim_i = dim_s
+      level_ps=0
+      idx_p = 1
+      do pp=1,level_p
+         idx_tmp = idx(dim_i)
+         do ll = 1, level_butterfly - level_ps(dim_i)-1
+            idx_tmp = floor_safe(idx_tmp/2d0)
+         enddo
+         if(idx_tmp==idx_p(dim_i)*2)then
+            pgno_sub=pgno_sub*2
+         elseif(idx_tmp==idx_p(dim_i)*2+1)then
+            pgno_sub=pgno_sub*2+1
+         else
+            write(*,*)"something wrong for the value of idx_tmp and idx_p", idx_tmp, idx_p(dim_i)
+            stop
+         endif
+         idx_p(dim_i) = idx_tmp
+         level_ps(dim_i) = level_ps(dim_i) + 1
+         dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
+         dim_i = dim_i + 1
+      enddo
+
+   end subroutine GetBlockPID_MD
+
+
+
+
+
+
+!>**** get the pgno for the multi-dimensinoal group in msh.
+   !ptree: process tree
+   !ndim: number of dimensions
+   !group(ndim): multi-index for the group
+   integer function GetMshGroup_Pgno(ptree, ndim, group)
+      implicit none
+      type(proctree)::ptree
+      integer:: ndim,dim_i, idx_tmp, Maxgrp
+      integer:: idx_p(ndim)
+      integer :: pp, level, ll, group(*), pgno
+
+
+      level = GetTreelevel(group(1)) - 1
+      pgno=1
+      Maxgrp = 2**(ptree%nlevel) - 1
+      idx_p = 1
+      do pp=1,level
+         do dim_i=1,Ndim
+            idx_tmp = group(dim_i)
+            do ll = 1, level - pp
+               idx_tmp = floor_safe(idx_tmp/2d0)
+            enddo
+            if(idx_tmp==idx_p(dim_i)*2)then
+               if(pgno*2<=Maxgrp)pgno=pgno*2
+            elseif(idx_tmp==idx_p(dim_i)*2+1)then
+               if(pgno*2+1<=Maxgrp)pgno=pgno*2+1
+            else
+               write(*,*)"something wrong for the value of idx_tmp and idx_p", idx_tmp, idx_p(dim_i)
+               stop
+            endif
+
+            idx_p(dim_i) = idx_tmp
+         enddo
+      enddo
+
+      GetMshGroup_Pgno= pgno
+   end function GetMshGroup_Pgno
+
+
 
    subroutine CreatePtree(nmpi, groupmembers, MPI_Comm_base, ptree)
       implicit none

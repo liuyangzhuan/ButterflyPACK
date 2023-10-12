@@ -148,6 +148,88 @@ contains
 
    end function near_or_far_geo
 
+
+
+! far is returning 1, near if returning 0
+   integer function near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, para)
+      implicit none
+      type(Hoption)::option
+      type(kernelquant)::ker
+      integer Ndim
+      integer group_m(Ndim), group_n(Ndim)
+      real*8 para
+      type(mesh)::msh(Ndim)
+      ! procedure(F_Compressibility), POINTER :: proc1
+      ! procedure(C_Compressibility), POINTER :: proc1_c
+
+      if (option%nogeo == 0 .or. option%nogeo == 4) then  ! geometrical information is provided
+         near_or_far_user_MD = near_or_far_geo_MD(group_m, group_n, Ndim, msh, option, ker, para)
+      else if (option%nogeo == 1) then ! no geometrical information is provided, ! only return 0 for self elements
+         if (ALL(group_m == group_n)) then
+            near_or_far_user_MD = 0
+         else
+            near_or_far_user_MD = 1
+         endif
+      else if (option%nogeo == 2) then  ! no geometrical information is provided, but user provides a compressibility function
+         write(*,*)"near_or_far_user_MD with nogeo=2 has not been implemented"
+         stop
+      endif
+
+   end function near_or_far_user_MD
+
+
+! far is returning 1, near if returning 0
+   integer function near_or_far_geo_MD(group_m, group_n, Ndim, msh, option, ker, para)
+      implicit none
+      integer Ndim
+      type(mesh)::msh(Ndim)
+      type(Hoption)::option
+      type(kernelquant)::ker
+      integer group_m(Ndim), group_n(Ndim), farblock, level
+      integer i, j, ii, jj, kk
+      real*8 dis, rad1, rad2, para, dis0
+      real*8, allocatable:: a(:), b(:), a_ext(:)
+      integer Dimn
+
+      Dimn = Ndim
+      allocate (a(Dimn))
+      allocate (b(Dimn))
+      rad1 = 0d0
+      rad2 = 0d0
+      do i = 1, Dimn
+         a(i) = msh(i)%basis_group(group_m(i))%center(1)
+         b(i) = msh(i)%basis_group(group_n(i))%center(1)
+         rad1 = rad1 + msh(i)%basis_group(group_m(i))%radius**2d0
+         rad2 = rad2 + msh(i)%basis_group(group_n(i))%radius**2d0
+      enddo
+      rad1 = rad1**(1d0/Dimn)
+      rad2 = rad2**(1d0/Dimn)
+
+      if(option%per_geo==0)then
+         dis = 0d0
+         do i = 1, Dimn
+            dis = dis + (a(i) - b(i))**2
+         enddo
+         dis = dis**(1d0/Dimn)
+      else
+         write(*,*)'periodic geometry has not been implemented for near_or_far_geo_MD'
+         stop
+      endif
+
+      ! write(*,*)dis/((rad1+rad2)/2)
+
+      ! if (dis>para*max(rad1,rad2)) then
+      if (dis > para*(rad1 + rad2)/2) then
+         near_or_far_geo_MD = 1
+      else
+         near_or_far_geo_MD = 0
+      endif
+      deallocate (a, b)
+
+   end function near_or_far_geo_MD
+
+
+
    real(kind=8) function distance_user(edgem, edgen, ker, msh, option, ptree, stats)
 
       implicit none
@@ -524,7 +606,7 @@ end function distance_geo
       endif
 
       !>**** construct the top few levels whose ordering is provided by the user
-      msh%basis_group(1)%head = 1; msh%basis_group(1)%tail = msh%Nunk; msh%basis_group(1)%pgno = 1
+      msh%basis_group(1)%head = 1; msh%basis_group(1)%tail = msh%Nunk
       do level = nlevel_pre, 0, -1
          idxstart = 1
          do group = 2**level, 2**(level + 1) - 1
@@ -866,6 +948,393 @@ end function distance_geo
 
    end subroutine Cluster_partition
 
+
+   subroutine Cluster_partition_MD(Ndim, bmat, option, msh, ker, stats, ptree)
+
+
+      implicit none
+
+      integer Cflag
+      integer i, j, ii, jj, iii, jjj, kk, Ndim, dim_i, Ns_max
+      integer level, edge, node, patch, group, group_m, group_n, col_group, row_group, fidx
+      integer blocks
+      integer center_edge
+
+      integer index_temp
+      DT r1, r2, r3, r4, rr(2, 2)
+      integer rows(2), cols(2)
+      real(kind=8) a, b, c, d, para, xmax, xmin, ymax, ymin, zmax, zmin, seperator, r, theta, phi, phi_tmp
+      real(kind=8) radius, radiusmax, radius2, radiusmax2
+      real(kind=8), allocatable:: xyzrange(:), xyzmin(:), xyzmax(:), auxpoint(:), groupcenter(:)
+      real(kind=8), allocatable :: distance(:), array(:, :), dist_gram(:, :)
+      integer level_c, sortdirec, mm, phi_end, Ninfo_edge, ind_i, ind_j
+      real(kind=8) t1, t2
+      integer Maxgroup, nlevel_pre, passflag
+      character(len=1024)  :: strings
+      integer, allocatable :: order(:), edge_temp(:), map_temp(:)
+      integer dimn, groupsize, idxstart, Nsmp
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      integer Maxlevel, Maxgrp
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer, allocatable:: perms(:), rows_gram(:), cols_gram(:)
+      integer Navr, Bidxs, Bidxe, ierr
+
+      !>*************Initialize permutation vector ********
+      Ns_max=0
+      do dim_i=1, Ndim
+         allocate (msh(dim_i)%new2old(msh(dim_i)%Nunk))
+         call LogMemory(stats, SIZEOF(msh(dim_i)%new2old)/1024.0d3)
+         do ii = 1, msh(dim_i)%Nunk
+            msh(dim_i)%new2old(ii) = ii
+         end do
+         Ns_max = max(msh(dim_i)%Nunk,Ns_max)
+      end do
+
+      !>************Compute Maxlevel of hodlr tree*******************
+      nlevel_pre = 0
+      level = 0; i = 1
+      do while (int(Ns_max/i) > option%Nmin_leaf)
+         level = level + 1
+         i = 2**level
+      enddo
+      Maxlevel = level
+
+      if (Maxlevel < ptree%nlevel) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
+         Maxlevel = ptree%nlevel
+      endif
+
+      ! the following is needed when bplus is used as bplus only support even number of levels for now.
+      if (Maxlevel == ptree%nlevel .and. option%lnoBP < Maxlevel) then
+         Maxlevel = ptree%nlevel + 1
+      endif
+
+      select case (option%format)
+      case (HSS_MD)
+         allocate (bmat%hss_bf_md)
+         bmat%hss_bf_md%Maxlevel = Maxlevel
+         bmat%hss_bf_md%Ndim = Ndim
+         allocate (bmat%hss_bf_md%N(Ndim))
+         do dim_i=1,Ndim
+            bmat%hss_bf_md%N(dim_i)=msh(dim_i)%Nunk
+         enddo
+      case default
+         write(*,*)'not supported format in Cluster_partition_MD:', option%format
+         stop
+      end select
+
+      !>************** check whether the sorting option is valid
+      if (Maxlevel > nlevel_pre) then
+         if (.not. allocated(msh(1)%xyz)) then
+            if (option%xyzsort == CKD .or. option%xyzsort == TM) then
+               write (*, *) 'Geometrical information is not provided. Try use NATRUAL or TM_GRAM ordering'
+               stop
+            endif
+         endif
+      endif
+
+      !>***************************************************
+
+      Maxgroup = 2**(Maxlevel + 1) - 1
+      do dim_i = 1, Ndim
+         msh(dim_i)%Maxgroup = Maxgroup
+         allocate (msh(dim_i)%basis_group(Maxgroup))
+         call LogMemory(stats, SIZEOF(msh(dim_i)%basis_group)/1024.0d3)
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'MD dimension:', dim_i
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks:', Maxlevel
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf:', int(msh(dim_i)%Nunk/(2**Maxlevel))
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Constructing basis groups...'
+
+         dimn = 0
+         if (allocated(msh(dim_i)%xyz)) Dimn = size(msh(dim_i)%xyz, 1)
+         if (dimn > 0) then
+            allocate (xyzrange(dimn))
+            allocate (xyzmin(dimn))
+            allocate (xyzmax(dimn))
+            allocate (auxpoint(dimn))
+            allocate (groupcenter(dimn))
+         endif
+
+         !>**** construct the top few levels whose ordering is provided by the user
+         msh(dim_i)%basis_group(1)%head = 1; msh(dim_i)%basis_group(1)%tail = msh(dim_i)%Nunk
+         do level = nlevel_pre, 0, -1
+            idxstart = 1
+            do group = 2**level, 2**(level + 1) - 1
+               ! msh%basis_group(group)%level=level
+
+               if (level == nlevel_pre) then
+                  if (nlevel_pre == 0) then
+                     groupsize = msh(dim_i)%Nunk
+                  else
+                     groupsize = msh(dim_i)%pretree(group - 2**nlevel_pre + 1)
+                  endif
+                  call assert(groupsize > 0, 'zero leafsize may not be handled')
+                  msh(dim_i)%basis_group(group)%head = idxstart
+                  msh(dim_i)%basis_group(group)%tail = idxstart + groupsize - 1
+                  idxstart = idxstart + groupsize
+               else
+                  msh(dim_i)%basis_group(group)%head = msh(dim_i)%basis_group(2*group)%head
+                  msh(dim_i)%basis_group(group)%tail = msh(dim_i)%basis_group(2*group + 1)%tail
+               endif
+
+               !>***** the following is needed for the near_or_far function in H matrix, this needs to be improved
+               if (allocated(msh(dim_i)%xyz)) then
+                  Dimn = size(msh(dim_i)%xyz, 1)
+                  groupcenter(1:dimn) = 0.0d0
+                  do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                     do ii = 1, dimn
+                        groupcenter(ii) = groupcenter(ii) + msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge))
+                     enddo
+                  enddo
+                  do ii = 1, dimn
+                     groupcenter(ii) = groupcenter(ii)/(msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1)
+                  enddo
+
+                  radiusmax = 0.
+                  do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                     radius = 0
+                     do ii = 1, dimn
+                        radius = radius + (msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)) - groupcenter(ii))**2
+                     enddo
+                     radius = sqrt(radius)
+                     if (radius > radiusmax) then
+                        radiusmax = radius
+                        center_edge = edge
+                     endif
+                  enddo
+
+                  allocate (msh(dim_i)%basis_group(group)%center(dimn))
+                  msh(dim_i)%basis_group(group)%center = groupcenter
+                  msh(dim_i)%basis_group(group)%radius = radiusmax
+               endif
+
+            enddo
+         enddo
+
+         if (ptree%MyID == Main_ID) then
+
+            !>**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
+            do level = nlevel_pre, Maxlevel
+               do group = 2**level, 2**(level + 1) - 1
+                  ! msh%basis_group(group)%level=level
+
+                  if (allocated(msh(dim_i)%xyz)) then
+                  if (.not. allocated(msh(dim_i)%basis_group(group)%center)) then
+                     groupcenter(1:dimn) = 0.0d0
+                     ! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
+                     do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        do ii = 1, dimn
+                           groupcenter(ii) = groupcenter(ii) + msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge))
+                        enddo
+                     enddo
+                     ! !$omp end parallel do
+                     do ii = 1, dimn
+                        groupcenter(ii) = groupcenter(ii)/(msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1)
+                     enddo
+
+                     radiusmax = 0.
+                     do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        radius = 0
+                        do ii = 1, dimn
+                           radius = radius + (msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)) - groupcenter(ii))**2
+                        enddo
+                        radius = sqrt(radius)
+                        if (radius > radiusmax) then
+                           radiusmax = radius
+                           center_edge = edge
+                        endif
+                     enddo
+
+                     allocate (msh(dim_i)%basis_group(group)%center(dimn))
+                     msh(dim_i)%basis_group(group)%center = groupcenter
+                     msh(dim_i)%basis_group(group)%radius = radiusmax
+                  endif
+                  endif
+
+                  if (option%xyzsort == NATURAL) then !natural ordering
+                     mm = msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1
+                     allocate (distance(mm))
+                     do i = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        distance(i - msh(dim_i)%basis_group(group)%head + 1) = dble(i)
+                     enddo
+
+                  else if (option%xyzsort == CKD) then !msh%xyz sort
+                     xyzmin = 1d300
+                     xyzmax = -1d300
+                     do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        do ii = 1, Dimn
+                           xyzmax(ii) = max(xyzmax(ii), msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)))
+                           xyzmin(ii) = min(xyzmin(ii), msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)))
+                        enddo
+                     enddo
+                     xyzrange(1:Dimn) = xyzmax(1:Dimn) - xyzmin(1:Dimn)
+
+                     mm = msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1
+                     allocate (distance(mm))
+                     sortdirec = maxloc(xyzrange(1:Dimn), 1)
+                     ! write(*,*)'gaw',sortdirec,xyzrange(1:Dimn)
+
+                     ! ! if(ker%Kernel==EMSURF)then
+                     ! if(mod(level,2)==1)then           !!!!!!!!!!!!!!!!!!!!!!!!! note: applys only to plates
+                     ! sortdirec=1
+                     ! else
+                     ! sortdirec=2
+                     ! end if
+                     ! ! endif
+
+                     !$omp parallel do default(shared) private(i)
+                     do i = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        distance(i - msh(dim_i)%basis_group(group)%head + 1) = msh(dim_i)%xyz(sortdirec, msh(dim_i)%new2old(i))
+                     enddo
+                     !$omp end parallel do
+
+                  else if (option%xyzsort == TM) then !cobblestone sort
+
+                     mm = msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1
+                     allocate (distance(mm))
+
+                     distance(1:mm) = BPACK_Bigvalue
+                     !$omp parallel do default(shared) private(i)
+                     do i = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                        distance(i - msh(dim_i)%basis_group(group)%head + 1) = distance_user(msh(dim_i)%new2old(i), msh(dim_i)%new2old(center_edge), ker, msh(dim_i), option, ptree, stats)
+                     enddo
+                     !$omp end parallel do
+                  end if
+
+                  allocate (order(mm))
+                  allocate (map_temp(mm))
+
+                  call quick_sort(distance, order, mm)
+                  !$omp parallel do default(shared) private(ii)
+                  do ii = 1, mm
+                     map_temp(ii) = msh(dim_i)%new2old(order(ii) + msh(dim_i)%basis_group(group)%head - 1)
+                  enddo
+                  !$omp end parallel do
+
+                  !$omp parallel do default(shared) private(ii)
+                  do ii = 1, mm
+                     msh(dim_i)%new2old(ii + msh(dim_i)%basis_group(group)%head - 1) = map_temp(ii)
+                  enddo
+                  !$omp end parallel do
+                  deallocate (map_temp)
+                  deallocate (order)
+
+                  deallocate (distance)
+
+                  if (level < Maxlevel) then
+
+                     call assert(msh(dim_i)%basis_group(group)%tail /= msh(dim_i)%basis_group(group)%head, 'detected zero-sized group, try larger leafsizes or smaller MPI counts')
+                     msh(dim_i)%basis_group(2*group)%head = msh(dim_i)%basis_group(group)%head
+                     msh(dim_i)%basis_group(2*group)%tail = int((msh(dim_i)%basis_group(group)%head + msh(dim_i)%basis_group(group)%tail)/2)
+                     msh(dim_i)%basis_group(2*group + 1)%head = msh(dim_i)%basis_group(2*group)%tail + 1
+                     msh(dim_i)%basis_group(2*group + 1)%tail = msh(dim_i)%basis_group(group)%tail
+                  endif
+               enddo
+            enddo
+         endif
+
+         call MPI_Bcast(msh(dim_i)%new2old, msh(dim_i)%Nunk, MPI_integer, Main_ID, ptree%Comm, ierr)
+
+         !>**** generate tree structures on other processes
+         do level = nlevel_pre, Maxlevel
+            do group = 2**level, 2**(level + 1) - 1
+               ! msh%basis_group(group)%level=level
+
+               if (allocated(msh(dim_i)%xyz)) then
+               if (.not. allocated(msh(dim_i)%basis_group(group)%center)) then
+                  groupcenter(1:dimn) = 0.0d0
+                  ! !$omp parallel do default(shared) private(edge,ii) reduction(+:groupcenter)
+                  do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                     do ii = 1, dimn
+                        groupcenter(ii) = groupcenter(ii) + msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge))
+                     enddo
+                  enddo
+                  ! !$omp end parallel do
+                  do ii = 1, dimn
+                     groupcenter(ii) = groupcenter(ii)/(msh(dim_i)%basis_group(group)%tail - msh(dim_i)%basis_group(group)%head + 1)
+                  enddo
+
+                  radiusmax = 0.
+                  do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                     radius = 0
+                     do ii = 1, dimn
+                        radius = radius + (msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)) - groupcenter(ii))**2
+                     enddo
+                     radius = sqrt(radius)
+                     if (radius > radiusmax) then
+                        radiusmax = radius
+                     endif
+                  enddo
+
+                  allocate (msh(dim_i)%basis_group(group)%center(dimn))
+                  msh(dim_i)%basis_group(group)%center = groupcenter
+                  msh(dim_i)%basis_group(group)%radius = radiusmax
+               endif
+               endif
+
+               if (option%xyzsort == CKD) then !msh%xyz sort
+                  xyzmin = 1d300
+                  xyzmax = -1d300
+                  do edge = msh(dim_i)%basis_group(group)%head, msh(dim_i)%basis_group(group)%tail
+                     do ii = 1, Dimn
+                        xyzmax(ii) = max(xyzmax(ii), msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)))
+                        xyzmin(ii) = min(xyzmin(ii), msh(dim_i)%xyz(ii, msh(dim_i)%new2old(edge)))
+                     enddo
+                  enddo
+                  xyzrange(1:Dimn) = xyzmax(1:Dimn) - xyzmin(1:Dimn)
+                  sortdirec = maxloc(xyzrange(1:Dimn), 1)
+                  seperator = msh(dim_i)%xyz(sortdirec, msh(dim_i)%new2old(int((msh(dim_i)%basis_group(group)%head + msh(dim_i)%basis_group(group)%tail)/2)))
+                  msh(dim_i)%basis_group(group)%boundary(1) = sortdirec
+                  msh(dim_i)%basis_group(group)%boundary(2) = seperator
+               end if
+
+               if (level < Maxlevel) then
+                  call assert(msh(dim_i)%basis_group(group)%tail /= msh(dim_i)%basis_group(group)%head, 'detected zero-sized group, try larger leafsizes or smaller MPI counts')
+                  msh(dim_i)%basis_group(2*group)%head = msh(dim_i)%basis_group(group)%head
+                  msh(dim_i)%basis_group(2*group)%tail = int((msh(dim_i)%basis_group(group)%head + msh(dim_i)%basis_group(group)%tail)/2)
+                  msh(dim_i)%basis_group(2*group + 1)%head = msh(dim_i)%basis_group(2*group)%tail + 1
+                  msh(dim_i)%basis_group(2*group + 1)%tail = msh(dim_i)%basis_group(group)%tail
+               endif
+            enddo
+         enddo
+
+         if (dimn > 0) then
+            deallocate (xyzrange)
+            deallocate (xyzmin)
+            deallocate (xyzmax)
+            deallocate (auxpoint)
+            deallocate (groupcenter)
+         endif
+
+         allocate (msh(dim_i)%old2new(msh(dim_i)%Nunk))
+         do ii = 1, msh(dim_i)%Nunk
+            msh(dim_i)%old2new(msh(dim_i)%new2old(ii)) = ii
+         end do
+
+
+         if (option%nogeo == 1 .and. option%knn > 0) then
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "no geometrical information or distance function provided, force option%knn to be 0"
+            option%knn = 0
+         endif
+
+   !>**** construct a list of k-nearest neighbours for each point
+         if (option%knn > 0 .and. option%nogeo /= 3 .and. option%nogeo /= 4) then
+            call FindKNNs(option, msh(dim_i), ker, stats, ptree, 1, 1)
+         endif
+      end do
+
+      return
+
+   end subroutine Cluster_partition_MD
+
+
    subroutine FindKNNs(option, msh, ker, stats, ptree, groupm_start, groupn_start)
       implicit none
       real(kind=8), allocatable :: distance(:, :)
@@ -1090,6 +1559,290 @@ end function distance_geo
       end select
    end subroutine BPACK_structuring
 
+
+
+   subroutine BPACK_structuring_MD(Ndim, bmat, option, msh, ker, ptree, stats)
+      implicit none
+      integer Ndim
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+
+      select case (option%format)
+      case (HSS_MD)
+         call HSS_MD_structuring(Ndim, bmat%hss_bf_md, option, msh, ker, ptree, stats)
+      case default
+         write(*,*)'not supported format in BPACK_structuring_MD:', option%format
+         stop
+      end select
+   end subroutine BPACK_structuring_MD
+
+
+
+
+   subroutine HSS_MD_structuring(Ndim, hss_bf1_md, option, msh, ker, ptree, stats)
+      use BPACK_DEFS
+      use MISC_Utilities
+      implicit none
+
+      integer Ndim
+      integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, gg2, sortdirec, ii_sch, pgno_bplus
+      integer level, edge, patch, node, group, group_touch
+      integer rank, index_near, m, n, length, flag, itemp, cnt, detection, dim_i
+      real T0
+      real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
+      real(kind=8) Memory_direct_forward, Memory_butterfly_forward
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
+      integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
+      type(matrixblock_MD), pointer::blocks, block_f
+      real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
+      real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
+      integer, allocatable::Isboundary_M(:), Isboundary_N(:)
+      integer Dimn, col_group, row_group, Maxgrp
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(Hstat)::stats
+      type(hssbf_md)::hss_bf1_md
+      character(len=1024)  :: strings
+      type(proctree)::ptree
+      integer,allocatable::boundary_map(:,:)
+      type(nil_onelevel_MD),allocatable:: nlist_MD(:)
+
+      Maxgrp = 2**(ptree%nlevel) - 1
+
+      hss_bf1_md%BP%level = 0
+      allocate(hss_bf1_md%BP%col_group(Ndim))
+      hss_bf1_md%BP%col_group = 1
+      allocate(hss_bf1_md%BP%row_group(Ndim))
+      hss_bf1_md%BP%row_group = 1
+      hss_bf1_md%BP%pgno = 1
+      allocate (hss_bf1_md%BP%LL(LplusMax))
+      do ll = 1, LplusMax
+         hss_bf1_md%BP%LL(ll)%Nbound = 0
+      end do
+
+      allocate(nlist_MD(LplusMax))
+
+      hss_bf1_md%BP%LL(1)%Nbound = 1
+      allocate (hss_bf1_md%BP%LL(1)%matrices_block(1))
+      block_f => hss_bf1_md%BP%LL(1)%matrices_block(1)
+      block_f%level = hss_bf1_md%BP%level
+      block_f%level_butterfly = int((hss_bf1_md%Maxlevel - block_f%level)/2)*2 ! butterfly plus needs even number of levels
+
+      allocate(block_f%col_group(Ndim))
+      block_f%col_group = hss_bf1_md%BP%col_group
+      allocate(block_f%row_group(Ndim))
+      block_f%row_group = hss_bf1_md%BP%row_group
+      block_f%pgno = hss_bf1_md%BP%pgno
+      ! pgno_bplus=block_f%pgno
+
+      block_f%Ndim = Ndim
+      allocate(block_f%M(Ndim))
+      allocate(block_f%N(Ndim))
+      allocate(block_f%headm(Ndim))
+      allocate(block_f%headn(Ndim))
+      do dim_i=1,Ndim
+         block_f%M(dim_i) = msh(dim_i)%basis_group(block_f%row_group(dim_i))%tail - msh(dim_i)%basis_group(block_f%row_group(dim_i))%head + 1
+         block_f%N(dim_i) = msh(dim_i)%basis_group(block_f%col_group(dim_i))%tail - msh(dim_i)%basis_group(block_f%col_group(dim_i))%head + 1
+         block_f%headm(dim_i) = msh(dim_i)%basis_group(block_f%row_group(dim_i))%head
+         block_f%headn(dim_i) = msh(dim_i)%basis_group(block_f%col_group(dim_i))%head
+      enddo
+
+      call ComputeParallelIndices_MD(block_f, block_f%pgno, Ndim, ptree, msh)
+
+
+      block_f%style = 2
+      allocate (hss_bf1_md%BP%LL(1)%boundary_map(1,1,Ndim))
+      hss_bf1_md%BP%LL(1)%boundary_map(1,1,:) = block_f%col_group
+      hss_bf1_md%BP%Lplus = 0
+      groupm_ll = block_f%row_group
+      level_butterfly_ll = block_f%level_butterfly
+      level_ll = GetTreelevel(groupm_ll(1)) - 1
+
+      nlist_MD(1)%len=1
+      allocate(nlist_MD(1)%list(1))
+      nlist_MD(1)%list(1)%nn=1
+      allocate(nlist_MD(1)%list(1)%nlist(1,Ndim))
+      nlist_MD(1)%list(1)%nlist(1,:)=block_f%col_group
+
+      do ll = 1, LplusMax - 1
+         if (hss_bf1_md%BP%LL(ll)%Nbound > 0) then
+            hss_bf1_md%BP%Lplus = hss_bf1_md%BP%Lplus + 1
+            call assert(hss_bf1_md%BP%Lplus <= LplusMax, 'increase LplusMax')
+
+            if (ll == LplusMax - 1 .or. level_butterfly_ll == 0) then
+               hss_bf1_md%BP%LL(ll + 1)%Nbound = 0
+            else
+               level_BP = hss_bf1_md%BP%level
+               levelm = ceiling_safe(dble(level_butterfly_ll)/2d0)
+
+
+               groupm_start = groupm_ll*2**levelm
+               Nboundall = 2**(level_ll + levelm - level_BP)
+               dims2 = Nboundall
+               nlist_MD(ll+1)%len = Nboundall**Ndim
+               allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
+
+               do bb = 1, Nboundall**Ndim
+                  nlist_MD(ll+1)%list(bb)%nn=0
+               enddo
+
+               Ninadmissible_max=0
+               Ninadmissible_tot=0
+               dims = 2**(level_ll)
+               do gg=1,product(dims)
+                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  do nn=1,nlist_MD(ll)%list(gg)%nn
+                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     dims1 = Nboundall1
+                     do bb = 1, Nboundall1**Ndim
+                     do cc = 1, Nboundall1**Ndim
+                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
+                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
+                        group_m = group_m + groupm_start1 - 1
+                        group_n = group_n + groupn_start1 - 1
+                        call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                           Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
+                           Ninadmissible_tot = Ninadmissible_tot +1
+                        endif
+                     enddo
+                     enddo
+                  enddo
+               enddo
+
+               do bb = 1, Nboundall**Ndim
+                  allocate(nlist_MD(ll+1)%list(bb)%nlist(max(1,nlist_MD(ll+1)%list(bb)%nn),Ndim))
+                  nlist_MD(ll+1)%list(bb)%nn=0
+               enddo
+
+               dims = 2**(level_ll)
+               do gg=1,product(dims)
+                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  do nn=1,nlist_MD(ll)%list(gg)%nn
+                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     dims1 = Nboundall1
+                     do bb = 1, Nboundall1**Ndim
+                     do cc = 1, Nboundall1**Ndim
+                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
+                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
+                        group_m = group_m + groupm_start1 - 1
+                        group_n = group_n + groupn_start1 - 1
+                        call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                           nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                        endif
+                     enddo
+                     enddo
+                  enddo
+               enddo
+
+               allocate (hss_bf1_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Ninadmissible_max,Ndim))
+               hss_bf1_md%BP%LL(ll + 1)%boundary_map=-1
+
+               do bb = 1, Nboundall**Ndim
+                  do nn=1,nlist_MD(ll+1)%list(bb)%nn
+                     group_n = nlist_MD(ll+1)%list(bb)%nlist(nn,:)
+                     hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,nn,:)=group_n
+                  enddo
+               enddo
+               hss_bf1_md%BP%LL(ll + 1)%Nbound = Ninadmissible_tot
+
+
+               allocate (hss_bf1_md%BP%LL(ll + 1)%matrices_block(hss_bf1_md%BP%LL(ll + 1)%Nbound))
+               cnt = 0
+               do bb = 1, Nboundall**Ndim
+                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                  do jj=1,Ninadmissible_max
+                     if (hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,1) /= -1) then
+                        cnt = cnt + 1
+                        group_m = group_m + groupm_start - 1
+                        group_n = hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,:)
+                        blocks => hss_bf1_md%BP%LL(ll + 1)%matrices_block(cnt)
+                        blocks%Ndim = Ndim
+                        allocate(blocks%row_group(Ndim))
+                        allocate(blocks%col_group(Ndim))
+                        blocks%row_group = group_m
+                        blocks%col_group = group_n
+                        blocks%level = GetTreelevel(group_m(1)) - 1
+                        blocks%level_butterfly = int((hss_bf1_md%Maxlevel - blocks%level)/2)*2
+                        blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+
+                        allocate(blocks%M(Ndim))
+                        allocate(blocks%N(Ndim))
+                        allocate(blocks%headm(Ndim))
+                        allocate(blocks%headn(Ndim))
+
+                        do dim_i=1,Ndim
+                           blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+                           blocks%N(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+                           blocks%headm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+                           blocks%headn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+                        enddo
+
+                        call ComputeParallelIndices_MD(blocks, blocks%pgno, Ndim, ptree, msh)
+                        if (blocks%level_butterfly > 0) then
+                           blocks%style = 2
+                        else
+                           blocks%style = 1  ! leaflevel or leaflevel+1 is dense
+                           if(ptree%pgrp(blocks%pgno)%nproc>1)then
+                              write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
+                              stop
+                           endif
+                        endif
+                     end if
+                  enddo
+               end do
+               groupm_ll = groupm_ll*2**levelm
+               level_ll = GetTreelevel(groupm_ll(1)) - 1
+               level_butterfly_ll = int((hss_bf1_md%Maxlevel - level_ll)/2)*2
+            end if
+         else
+            exit
+         end if
+      end do
+
+      do ll = 1, LplusMax
+      do bb = 1, nlist_MD(ll)%len
+         if (allocated(nlist_MD(ll)%list(bb)%nlist)) then
+            deallocate(nlist_MD(ll)%list(bb)%nlist)
+            nlist_MD(ll)%list(bb)%nn=0
+         endif
+      enddo
+      if(nlist_MD(ll)%len>0)deallocate(nlist_MD(ll)%list)
+      enddo
+
+      !!!!!! hss_bf1_md%BP_inverse has not been considered yet
+      ! call Bplus_copy(hss_bf1_md%BP, hss_bf1_md%BP_inverse)
+      call LogMemory(stats, SIZEOF(hss_bf1_md%BP)/1024.0d3)
+
+      do dim_i=1,Ndim
+         msh(dim_i)%idxs = hss_bf1_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, dim_i)
+         msh(dim_i)%idxe = hss_bf1_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2, dim_i)
+
+         if (allocated(msh(dim_i)%xyz)) then
+            call LogMemory(stats, - SIZEOF(msh(dim_i)%xyz)/1024.0d3)
+            deallocate (msh(dim_i)%xyz)
+         endif
+      enddo
+
+   end subroutine HSS_MD_structuring
+
+
+
+
    subroutine HSS_structuring(hss_bf1, option, msh, ker, ptree, stats)
       use BPACK_DEFS
       use MISC_Utilities
@@ -1101,7 +1854,7 @@ end function distance_geo
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
-      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, groupm_start1, groupn_start1, index_i_m, index_j_m
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_m_tmp(1),group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, groupm_start1, groupn_start1, index_i_m, index_j_m
       integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, level_butterfly, level_butterfly_ll,groupm_ll, level_ll
       type(matrixblock), pointer::blocks, block_f, block_sch, block_inv
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
@@ -1118,24 +1871,6 @@ end function distance_geo
       integer,allocatable::boundary_map(:,:)
 
       Maxgrp = 2**(ptree%nlevel) - 1
-
-      msh%basis_group(1)%pgno = 1
-      do level = 0, hss_bf1%Maxlevel
-         do group = 2**level, 2**(level + 1) - 1
-            if (level < hss_bf1%Maxlevel) then
-            if (msh%basis_group(group)%pgno*2 <= Maxgrp) then
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno*2
-            else
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno
-            endif
-            if (msh%basis_group(group)%pgno*2 + 1 <= Maxgrp) then
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno*2 + 1
-            else
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno
-            endif
-            endif
-         enddo
-      enddo
 
       hss_bf1%N = msh%Nunk
       hss_bf1%BP%level = 0
@@ -1270,7 +2005,8 @@ end function distance_geo
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m) - 1
                         blocks%level_butterfly = int((hss_bf1%Maxlevel - blocks%level)/2)*2
-                        blocks%pgno = msh%basis_group(group_m)%pgno
+                        group_m_tmp(1) = group_m
+                        blocks%pgno = GetMshGroup_Pgno(ptree, 1,  group_m_tmp)
 
                         blocks%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
                         blocks%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
@@ -1333,7 +2069,7 @@ end function distance_geo
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
-      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, index_i_m, index_j_m
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_tmp(1),group_tmp_1(1), group_n, group_m1, group_n1, group_m2, group_n2, levelm, groupm_start, index_i_m, index_j_m
       integer level_c, iter, level_cc, level_BP, Nboundall, level_butterfly
       type(matrixblock), pointer::blocks, block_f, block_sch, block_inv
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
@@ -1349,24 +2085,6 @@ end function distance_geo
       type(proctree)::ptree
 
       Maxgrp = 2**(ptree%nlevel) - 1
-
-      msh%basis_group(1)%pgno = 1
-      do level = 0, ho_bf1%Maxlevel
-         do group = 2**level, 2**(level + 1) - 1
-            if (level < ho_bf1%Maxlevel) then
-            if (msh%basis_group(group)%pgno*2 <= Maxgrp) then
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno*2
-            else
-               msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno
-            endif
-            if (msh%basis_group(group)%pgno*2 + 1 <= Maxgrp) then
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno*2 + 1
-            else
-               msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno
-            endif
-            endif
-         enddo
-      enddo
 
       ho_bf1%N = msh%Nunk
       allocate (ho_bf1%levels(ho_bf1%Maxlevel + 1))
@@ -1518,7 +2236,8 @@ end function distance_geo
                block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
                block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
                block_f%style = 1  !!!!! be careful here
-               block_f%pgno = msh%basis_group(block_f%row_group)%pgno
+               group_tmp(1) = block_f%row_group
+               block_f%pgno = GetMshGroup_Pgno(ptree, 1, group_tmp)
 
                block_f%M = msh%basis_group(block_f%row_group)%tail - msh%basis_group(block_f%row_group)%head + 1
                block_f%N = msh%basis_group(block_f%col_group)%tail - msh%basis_group(block_f%col_group)%head + 1
@@ -1548,7 +2267,9 @@ end function distance_geo
                block_inv%col_group = ho_bf1%levels(level_c)%BP_inverse(ii)%col_group
                block_inv%row_group = ho_bf1%levels(level_c)%BP_inverse(ii)%row_group
                block_inv%style = 1  !!!!! be careful here
-               block_inv%pgno = msh%basis_group(block_inv%row_group)%pgno
+               group_tmp(1) = block_inv%row_group
+               block_inv%pgno = GetMshGroup_Pgno(ptree, 1, group_tmp)
+
 
                block_inv%M = msh%basis_group(block_inv%row_group)%tail - msh%basis_group(block_inv%row_group)%head + 1
                block_inv%N = msh%basis_group(block_inv%col_group)%tail - msh%basis_group(block_inv%col_group)%head + 1
@@ -1583,7 +2304,8 @@ end function distance_geo
 
                block_f%col_group = ho_bf1%levels(level_c)%BP(ii)%col_group
                block_f%row_group = ho_bf1%levels(level_c)%BP(ii)%row_group
-               block_f%pgno = msh%basis_group(block_f%row_group)%pgno
+               group_tmp(1) = block_f%row_group
+               block_f%pgno = GetMshGroup_Pgno(ptree, 1, group_tmp)
                pgno_bplus = block_f%pgno
 
                ! compute the partial indices when BP is shared by double number of processes
@@ -1754,8 +2476,8 @@ end function distance_geo
                               blocks%level = GetTreelevel(group_m) - 1
                               ! blocks%level_butterfly = int((ho_bf1%Maxlevel - blocks%level)/2)*2
                               blocks%level_butterfly = 0 ! only two layer butterfly plus here
-
-                              blocks%pgno = msh%basis_group(group_m)%pgno
+                              group_tmp(1) = group_m
+                              blocks%pgno = GetMshGroup_Pgno(ptree,1,group_tmp)
                               do while (blocks%pgno > pgno_bplus)
                                  if (level_butterfly < ptree%nlevel - GetTreelevel(blocks%pgno)) exit
                                  blocks%pgno = blocks%pgno/2
@@ -1810,11 +2532,12 @@ end function distance_geo
 
                            block_sch%row_group = row_group
                            block_sch%col_group = row_group
-
-                           if (msh%basis_group(row_group)%pgno /= msh%basis_group(INT(row_group/2d0))%pgno) then
-                              block_sch%pgno = msh%basis_group(INT(row_group/2d0))%pgno
+                           group_tmp(1) = row_group
+                           group_tmp_1(1) = INT(row_group/2d0)
+                           if (GetMshGroup_Pgno(ptree, 1, group_tmp) /=  GetMshGroup_Pgno(ptree, 1, group_tmp_1)) then
+                              block_sch%pgno = GetMshGroup_Pgno(ptree, 1, group_tmp_1)
                            else
-                              block_sch%pgno = msh%basis_group(row_group)%pgno
+                              block_sch%pgno = GetMshGroup_Pgno(ptree, 1, group_tmp)
                            end if
 
                            block_sch%style = block_f%style
@@ -1894,7 +2617,7 @@ end function distance_geo
       type(proctree)::ptree
       type(Hstat)::stats
       integer i, j, ii, jj, iii, jjj, k, kk, kkk
-      integer level, edge, node, patch, group, group_m, group_n
+      integer level, edge, node, patch, group, group_m, group_n, group_tmp(1)
       integer mm, nn, num_blocks,group_start,gg
       type(matrixblock), pointer :: blocks
       type(matrixblock) :: blocks_dummy
@@ -1917,26 +2640,13 @@ end function distance_geo
       h_mat%Dist_level = level
 
       Maxgrp = 2**(ptree%nlevel) - 1
-      msh%basis_group(1)%pgno = 1
-      do level = 0, h_mat%Maxlevel
+      do level = h_mat%Maxlevel, h_mat%Maxlevel
          do group = 2**level, 2**(level + 1) - 1
-            if (level < h_mat%Maxlevel) then
-               if (msh%basis_group(group)%pgno*2 <= Maxgrp) then
-                  msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno*2
-               else
-                  msh%basis_group(2*group)%pgno = msh%basis_group(group)%pgno
-               endif
-               if (msh%basis_group(group)%pgno*2 + 1 <= Maxgrp) then
-                  msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno*2 + 1
-               else
-                  msh%basis_group(2*group + 1)%pgno = msh%basis_group(group)%pgno
-               endif
-            else
-               if(ptree%pgrp(msh%basis_group(group)%pgno)%head==ptree%MyID)then
-                  msh%idxs = min(msh%idxs,msh%basis_group(group)%head)
-                  msh%idxe = max(msh%idxe,msh%basis_group(group)%tail)
-                  mypgno = msh%basis_group(group)%pgno
-               endif
+            group_tmp(1) = group
+            if(ptree%pgrp(GetMshGroup_Pgno(ptree, 1, group_tmp))%head==ptree%MyID)then
+               msh%idxs = min(msh%idxs,msh%basis_group(group)%head)
+               msh%idxe = max(msh%idxe,msh%basis_group(group)%tail)
+               mypgno = GetMshGroup_Pgno(ptree, 1, group_tmp)
             endif
          enddo
       enddo

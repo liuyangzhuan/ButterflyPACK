@@ -1223,6 +1223,168 @@ contains
 
 
 
+
+
+!>**** C interface of multi-dimensional BF construction via entry evaluation
+   !> @param Ns: size for each dimension (in)
+   !> @param Nmax: maximum size among all dimensions (in)
+   !> @param Ndim: data set dimensionality (in)
+   !> @param Locations: coordinates (1D coordinates per dimension) used for clustering (in)
+   !> @param Permutation: return the permutation vector (per dimension) new2old (indexed from 1) (out)
+   !> @param N_loc: number of local row/column indices (per dimension) (out)
+   !> @param bmat_Cptr: the structure containing the compressed operator (out)
+   !> @param option_Cptr: the structure containing option (in)
+   !> @param stats_Cptr: the structure containing statistics (inout)
+   !> @param msh_Cptr: the structure containing points and ordering information per dimension (out)
+   !> @param ker_Cptr: the structure containing kernel quantities (out)
+   !> @param ptree_Cptr: the structure containing process tree (in)
+   !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+   subroutine C_BPACK_MD_Construct_Init(Ns, Nmax, Ndim, Locations, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncNearFar, C_QuantApp) bind(c, name="c_bpack_md_construct_init")
+      implicit none
+      integer Ndim,Nmax
+      integer Ns(Ndim)
+      real(kind=8) Locations(*)
+      real(kind=8) para
+      real(kind=8) tolerance, h, lam
+      integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
+      integer i, j, k, ii, edge, threads_num, nth, nmpi, ninc, acam
+      real(kind=8), parameter :: BPACK_cd = 299792458d0
+      integer, allocatable:: groupmembers(:)
+      integer nlevel, level, dim_i
+      integer Permutation(Nmax*Ndim)
+      integer N_loc(Ndim)
+      ! type(matricesblock), pointer :: blocks_i
+      integer groupm
+      type(c_ptr) :: bmat_Cptr
+      type(c_ptr) :: option_Cptr
+      type(c_ptr) :: stats_Cptr
+      type(c_ptr) :: msh_Cptr
+      type(c_ptr) :: ker_Cptr
+      type(c_ptr) :: ptree_Cptr
+      type(c_ptr), intent(in), target :: C_QuantApp
+      type(c_funptr), intent(in), value, target :: C_FuncNearFar
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(mesh), pointer::msh(:)
+      type(kernelquant), pointer::ker
+      type(Bmatrix), pointer::bmat
+      type(proctree), pointer::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2, x, y, z, r, theta, phi
+      real(kind=8):: Memory = 0d0, error
+      character(len=1024)  :: strings
+      integer(kind=8) idx,kk,knn
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+
+      call assert(option%xyzsort /= TM_GRAM, 'gram distance based clustering is not supported in this interface')
+
+      !>**** allocate HODLR solver structures
+      allocate (bmat)
+      ! allocate(option)
+      ! allocate(stats)
+      allocate (msh(Ndim))
+      allocate (ker)
+
+      stats%Flop_Fill = 0
+      stats%Time_Fill = 0
+      stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+
+      threads_num = 1
+      CALL getenv("OMP_NUM_THREADS", strings)
+      strings = TRIM(strings)
+      if (LEN_TRIM(strings) > 0) then
+         read (strings, *) threads_num
+      endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
+      call OMP_set_num_threads(threads_num)
+#endif
+
+      !>**** create a random seed
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! seed_myid(1) = myid*1000
+      ! call RANDOM_SEED(PUT=seed_myid)
+      call init_random_seed()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write (*, *) "HODLR_BUTTERFLY_SOLVER"
+         write (*, *) "   "
+      endif
+
+      !>**** register the user-defined function and type in ker
+      if (option%nogeo == 2) then
+         write(*,*)"option%nogeo not yet implemented for BPACK_MD_Construct_Init"
+         ker%C_QuantApp => C_QuantApp
+         ker%C_FuncNearFar => C_FuncNearFar
+      endif
+
+      t1 = MPI_Wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
+      Maxlevel = nlevel
+
+
+
+      !>**** the geometry points are provided by user
+      if (option%nogeo == 0 .or. option%nogeo == 4) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
+         do dim_i=1,Ndim
+            msh(dim_i)%Nunk = Ns(dim_i)
+            allocate (msh(dim_i)%xyz(1, 1:msh(dim_i)%Nunk))
+            ii = dim_i-1
+            do edge = 1, msh(dim_i)%Nunk
+               msh(dim_i)%xyz(1, edge) = Locations(ii + 1)
+               ii = ii + Ndim
+            enddo
+         enddo
+      endif
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+      t2 = MPI_Wtime()
+
+      t1 = MPI_Wtime()
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
+      call Cluster_partition_MD(Ndim, bmat, option, msh, ker, stats, ptree)
+      call BPACK_structuring_MD(Ndim, bmat, option, msh, ker, ptree, stats)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+      t2 = MPI_Wtime()
+
+      !>**** return the permutation vector
+      Permutation=-1
+      do dim_i=1,Ndim
+         N_loc(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
+         ! if (ptree%MyID == Main_ID) then
+            do edge = 1, Ns(dim_i)
+               Permutation(edge+(dim_i-1)*Nmax) = msh(dim_i)%new2old(edge)
+            enddo
+         ! endif
+      enddo
+
+      !>**** return the C address of hodlr structures to C caller
+      bmat_Cptr = c_loc(bmat)
+      option_Cptr = c_loc(option)
+      stats_Cptr = c_loc(stats)
+      msh_Cptr = c_loc(msh)
+      ker_Cptr = c_loc(ker)
+      ptree_Cptr = c_loc(ptree)
+
+   end subroutine C_BPACK_MD_Construct_Init
+
+
+
 !>**** C interface of converting from new,local index to old, global index, the indexs start from 1
    !> @param newidx_loc: new, local index, from 1 to Nloc
    !> @param oldidx: old, global index, from 1 to N (out)
@@ -1639,7 +1801,6 @@ contains
       allocate (msh%basis_group(msh%Maxgroup))
       msh%basis_group(1)%head = 1
       msh%basis_group(1)%tail = N + M
-      msh%basis_group(1)%pgno = 1
       call copy_basis_group(mshr%basis_group, 1, Maxgroup_rc, msh%basis_group, 2, msh%Maxgroup, 0)
       call copy_basis_group(mshc%basis_group, 1, Maxgroup_rc, msh%basis_group, 3, msh%Maxgroup, mshr%Nunk)
       ! msh%new2old maps the indices in a larger (M+N)x(M+N) matrix into the MxM and NxN matrices

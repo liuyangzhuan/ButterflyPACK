@@ -195,6 +195,611 @@ contains
 
    end subroutine BPACK_construction_Init
 
+
+
+
+
+
+!>**** Initialization of the construction phase for tensor butterfly-based hierarchical tensors
+   ! Nunk(Ndim) is tensor size in each dimension
+   ! Ndim is dimensionility
+   ! Permutation(Ndim) is the permutation vector (per dimension) returned
+   ! Nunk_loc(Ndim) is the local number of indices per dimension
+   ! bmat is the meta-data storing the compressed matrix
+   ! Coordinates(optional) of dimension dim*max(Nunk) is the array of Cartesian coordinates corresponding to each dimension
+   ! tree(optional) is an array of leafsizes in a user-provided cluster tree (per dimension). tree(:,dim_i) has length 2*nl with nl denoting level of the tree of dimension dim_i.
+   ! If tree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified tree.
+   ! If the hierarchical matrix has more levels than tree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
+   ! nns(optional) of dimension option%knn*max(Nunk)*Ndim is the array of user provided nearest neighbours
+   subroutine BPACK_MD_construction_Init(Nunk, Ndim, Permutation, Nunk_loc, bmat, option, stats, msh, ker, ptree, Coordinates, tree, nns)
+      implicit none
+      integer Ndim,Nunk(Ndim)
+      real(kind=8), optional:: Coordinates(:, :)
+      integer, optional:: nns(:, :, :)
+
+      real(kind=8) para
+      real(kind=8) tolerance
+      integer nn, mm, Maxlevel, give, need
+      integer i, j, k, ii, edge, Dimn, kk, dim_i
+      integer nlevel, level
+      integer Permutation(:,:)
+      integer, optional:: tree(:,:)
+      integer Nunk_loc(Ndim)
+
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer threads_num
+
+      call init_random_seed()
+
+      call assert(associated(ker%QuantApp), 'ker%QuantApp is not assigned')
+      if(option%cpp==0)call assert(associated(ker%FuncZmnBlock) .or. associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'one of the following should be assigned: ker%FuncZmn, ker%FuncZmnBlock, ker%FuncHMatVec')
+
+      stats%Flop_Fill = 0
+      stats%Time_Fill = 0
+      stats%Time_Entry = 0
+      stats%Time_Entry_Traverse = 0
+      stats%Time_Entry_BF = 0
+      stats%Time_Entry_Comm = 0
+
+      !>**** set thread number here
+#ifdef HAVE_MPI
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
+      threads_num = 1
+      CALL getenv("OMP_NUM_THREADS", strings)
+      strings = TRIM(strings)
+      if (LEN_TRIM(strings) > 0) then
+         read (strings, *) threads_num
+      endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
+      call OMP_set_num_threads(threads_num)
+#endif
+      do dim_i=1,Ndim
+      msh(dim_i)%Nunk = Nunk(dim_i)
+      enddo
+
+      t1 = MPI_Wtime()
+      nlevel = 0
+      if (present(tree)) then
+         do dim_i=1,Ndim
+            nlevel = ceiling_safe(log(dble(size(tree, 1)))/log(2d0))
+            Maxlevel = nlevel
+            allocate (msh(dim_i)%pretree(2**Maxlevel))
+            msh(dim_i)%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel,dim_i)
+
+            !>**** make 0-element node a 1-element node
+
+            ! write(*,*)'before adjustment:',msh%pretree
+            call assert(Nunk(dim_i)>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
+            need = 0
+            do ii = 1, 2**Maxlevel
+               if (msh(dim_i)%pretree(ii) == 0) need = need + 1
+            enddo
+            do while (need > 0)
+               give = ceiling_safe(need/dble(2**Maxlevel - need))
+               do ii = 1, 2**Maxlevel
+                  nn = msh(dim_i)%pretree(ii)
+                  if (nn > 1) then
+                     msh(dim_i)%pretree(ii) = msh(dim_i)%pretree(ii) - min(min(nn - 1, give), need)
+                     need = need - min(min(nn - 1, give), need)
+                  endif
+               enddo
+            enddo
+            do ii = 1, 2**Maxlevel
+               if (msh(dim_i)%pretree(ii) == 0) msh(dim_i)%pretree(ii) = 1
+            enddo
+            ! write(*,*)'after adjustment:',msh%pretree
+            tree(1:2**Maxlevel,dim_i) = msh(dim_i)%pretree(1:2**Maxlevel)
+         enddo
+      endif
+
+      !>**** copy geometry points if present
+      if (option%nogeo == 0 .or. option%nogeo == 4) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder"
+         call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0 or 4')
+         call assert(Ndim == size(Coordinates, 1),'Ndim should be equal to the first dimension of Coordinates')
+         do dim_i=1,Ndim
+            allocate (msh(dim_i)%xyz(1, 1:msh(dim_i)%Nunk))
+            call LogMemory(stats, SIZEOF(msh(dim_i)%xyz)/1024.0d3)
+            msh(dim_i)%xyz(1,:) = Coordinates(dim_i,1:msh(dim_i)%Nunk)
+         enddo
+      endif
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+      t2 = MPI_Wtime()
+
+      t1 = MPI_Wtime()
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
+      call Cluster_partition_MD(Ndim, bmat, option, msh, ker, stats, ptree)
+      call BPACK_structuring_MD(Ndim, bmat, option, msh, ker, ptree, stats)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+      t2 = MPI_Wtime()
+
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+         call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3 or 4')
+         do dim_i=1,Ndim
+         allocate (msh(dim_i)%nns(msh(dim_i)%Nunk, option%knn))
+         call LogMemory(stats, SIZEOF(msh(dim_i)%nns)/1024.0d3)
+         do ii = 1, msh(dim_i)%Nunk
+         do kk = 1, option%knn
+            if (nns(kk, msh(dim_i)%new2old(ii),dim_i) /= 0) then
+               msh(dim_i)%nns(ii, kk) = msh(dim_i)%old2new(nns(kk, msh(dim_i)%new2old(ii),dim_i))
+            else
+               msh(dim_i)%nns(ii, kk) = 0
+            endif
+         enddo
+         enddo
+         enddo
+      endif
+
+      !>**** return the permutation vector
+      do dim_i=1,Ndim
+      Nunk_loc(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
+      if (ptree%MyID == Main_ID) then
+         do edge = 1, Nunk(dim_i)
+            Permutation(edge,dim_i) = msh(dim_i)%new2old(edge)
+         enddo
+      endif
+      enddo
+
+   end subroutine BPACK_MD_construction_Init
+
+
+
+!>**** Interface of BF construction via blackbox matvec or entry extraction with mshr and mshc already generated
+   !> @param M,N: matrix size (in)
+   !> @param M_loc,N_loc: number of local row/column indices (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh: the structure containing points and ordering information combined from mshr and mshc (out)
+   !> @param mshr: the structure containing points and ordering information for the row dimension (in)
+   !> @param mshc: the structure containing points and ordering information for the column dimension (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param nns_m: (optional) (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+      implicit none
+      integer M, N
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+      integer M_loc, N_loc
+      integer, optional:: nns_m(:, :),nns_n(:, :)
+
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh, mshr, mshc
+      type(kernelquant) ::ker
+      type(matrixblock) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc
+      integer(kind=8)::idx,kk,knn
+
+
+      call assert(mshr%Nunk == M, 'mshr%Nunk\=M')
+      call assert(mshc%Nunk == N, 'mshc%Nunk\=N')
+      Maxgroup_rc = min(mshc%Maxgroup, mshr%Maxgroup)
+      ! call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+
+      msh%Nunk = N + M
+      msh%Maxgroup = Maxgroup_rc*2 + 1
+      allocate (msh%basis_group(msh%Maxgroup))
+      msh%basis_group(1)%head = 1
+      msh%basis_group(1)%tail = N + M
+      call copy_basis_group(mshr%basis_group, 1, Maxgroup_rc, msh%basis_group, 2, msh%Maxgroup, 0)
+      call copy_basis_group(mshc%basis_group, 1, Maxgroup_rc, msh%basis_group, 3, msh%Maxgroup, mshr%Nunk)
+      ! msh%new2old maps the indices in a larger (M+N)x(M+N) matrix into the MxM and NxN matrices
+      allocate (msh%new2old(msh%Nunk))
+      do ii = 1, M
+         msh%new2old(ii) = ii
+      enddo
+      do ii = 1 + M, N + M
+         msh%new2old(ii) = -(ii - M)
+      enddo
+      !>**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
+      if (option%nogeo ==0 .or. option%nogeo ==4) then
+         Dimn = size(mshr%xyz,1)
+         allocate(msh%xyz(1:Dimn,-N:M))
+         msh%xyz=0
+         do ii=1,M
+            msh%xyz(1:Dimn,ii) = mshr%xyz(1:Dimn,mshr%new2old(ii))
+         enddo
+         do ii=1,N
+            msh%xyz(:,-ii) = mshc%xyz(:,mshc%new2old(ii))
+         enddo
+      endif
+
+      !>**** construct a list of k-nearest neighbours for each point
+      if (option%nogeo /= 3 .and. option%nogeo /= 4 .and. option%knn > 0) then
+         call FindKNNs(option, msh, ker, stats, ptree, 2, 3)
+      endif
+
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+         allocate (msh%nns(msh%Nunk, option%knn))
+         do ii = 1, M
+         do kk = 1, option%knn
+            knn = option%knn
+            if (nns_m(kk,ii) /= 0) then
+               msh%nns(ii, kk) = nns_m(kk,ii) + M
+            else
+               msh%nns(ii, kk) = 0
+            endif
+         enddo
+         enddo
+         do ii = 1, N
+         do kk = 1, option%knn
+            knn = option%knn
+            if (nns_m(kk,ii) /= 0) then
+               msh%nns(ii + M, kk) = nns_n(kk,ii)
+            else
+               msh%nns(ii + M, kk) = 0
+            endif
+         enddo
+         enddo
+      endif
+
+      blocks%level = 1
+      blocks%col_group = 3
+      blocks%row_group = 2
+      blocks%pgno = 1
+      blocks%headm = msh%basis_group(blocks%row_group)%head
+      blocks%headn = msh%basis_group(blocks%col_group)%head
+      blocks%M = M
+      blocks%N = N
+      blocks%style = 2
+
+      Maxlevel = GetTreelevel(msh%Maxgroup) - 1
+
+      if (blocks%level > option%LRlevel) then
+         blocks%level_butterfly = 0 ! low rank below LRlevel
+      else
+         blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly
+      endif
+
+      call ComputeParallelIndices(blocks, blocks%pgno, ptree, msh)
+
+      M_loc = blocks%M_loc
+      N_loc = blocks%N_loc
+
+   end subroutine BF_Construct_Init_from_mshrc
+
+
+
+
+!>**** Interface of BF construction via blackbox matvec or entry extraction
+   !> @param M,N: matrix size (in)
+   !> @param M_loc,N_loc: number of local row/column indices (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh: the structure containing points and ordering information combined from mshr and mshc (out)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param Permutation_m,Permutation_n: the permutation vectors on the row and column dimensions (out)
+   !> @param tree_m, tree_n: (optional) is an array of leafsizes in a user-provided cluster tree for the row and column dimensions (in)
+   !> @param Coordinates_m, Coordinates_n: (optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
+   !> @param nns_m: (optional) (DIM knn*M) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*N) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_Construct_Init(M, N, M_loc, N_loc, Permutation_m, Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m, Coordinates_n, tree_m, tree_n, nns_m, nns_n)
+      implicit none
+      integer M, N
+
+      integer Permutation_m(M),Permutation_n(N)
+      real(kind=8), optional:: Coordinates_m(:, :), Coordinates_n(:, :)
+      integer, optional:: tree_m(:),tree_n(:)
+      integer, optional:: nns_m(:, :),nns_n(:, :)
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+      integer M_loc, N_loc
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh, mshr, mshc
+      type(kernelquant) ::ker
+      type(matrixblock) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc,verbosity_save
+      integer(kind=8)::idx,kk,knn
+      type(Bmatrix)::bmat_m,bmat_n ! dummy
+
+#ifdef HAVE_MPI
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
+      threads_num = 1
+      CALL getenv("OMP_NUM_THREADS", strings)
+      strings = TRIM(strings)
+      if (LEN_TRIM(strings) > 0) then
+         read (strings, *) threads_num
+      endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
+      call OMP_set_num_threads(threads_num)
+#endif
+
+      !>**** create a random seed
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! seed_myid(1) = myid*1000
+      ! call RANDOM_SEED(PUT=seed_myid)
+      call init_random_seed()
+      verbosity_save=option%verbosity
+      option%verbosity=-1
+      call BPACK_construction_Init(M, Permutation_m, M_loc, bmat_m, option, stats, mshr, ker, ptree, Coordinates_m, tree_m)
+      call BPACK_construction_Init(N, Permutation_n, N_loc, bmat_n, option, stats, mshc, ker, ptree, Coordinates_n, tree_n)
+      option%verbosity=verbosity_save
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', bmat_m%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', int(mshr%Nunk/(2**bmat_m%Maxlevel))
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc%Nunk/(2**bmat_n%Maxlevel))
+
+
+      call BF_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+
+
+   end subroutine BF_Construct_Init
+
+
+
+!>**** Interface of BF (tensor) construction via blackbox matvec or entry extraction with mshr and mshc already generated
+   !> @param Ndim: number of dimensions (in)
+   !> @param M(Ndim),N(Ndim): tensor sizes per dimension (in)
+   !> @param M_loc(Ndim),N_loc(Ndim): local tensor sizes per dimension (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh(Ndim): the structure containing points and ordering information combined from mshr and mshc (out)
+   !> @param mshr(Ndim): the structure containing points and ordering information for the row dimension (in)
+   !> @param mshc(Ndim): the structure containing points and ordering information for the column dimension (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param nns_m: (optional) (DIM knn*max(M)*Ndim) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*max(N)*Ndim) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_MD_Construct_Init_from_mshrc(Ndim, M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+      implicit none
+      integer Ndim
+      integer M(Ndim), N(Ndim)
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level, dim_i
+      integer M_loc(Ndim), N_loc(Ndim)
+      integer, optional:: nns_m(:, :, :),nns_n(:, :, :)
+
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh(Ndim), mshr(Ndim), mshc(Ndim)
+      type(kernelquant) ::ker
+      type(matrixblock_MD) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc
+      integer(kind=8)::idx,kk,knn
+
+      do dim_i=1,Ndim
+         call assert(mshr(dim_i)%Nunk == M(dim_i), 'mshr%Nunk\=M')
+         call assert(mshc(dim_i)%Nunk == N(dim_i), 'mshc%Nunk\=N')
+         Maxgroup_rc = min(mshc(dim_i)%Maxgroup, mshr(dim_i)%Maxgroup)
+         ! call assert(mshc%Maxgroup==mshr%Maxgroup,'mshc%Maxgroup\=mshr%Maxgroup')
+
+         msh(dim_i)%Nunk = N(dim_i) + M(dim_i)
+         msh(dim_i)%Maxgroup = Maxgroup_rc*2 + 1
+         allocate (msh(dim_i)%basis_group(msh(dim_i)%Maxgroup))
+         msh(dim_i)%basis_group(1)%head = 1
+         msh(dim_i)%basis_group(1)%tail = N(dim_i) + M(dim_i)
+         call copy_basis_group(mshr(dim_i)%basis_group, 1, Maxgroup_rc, msh(dim_i)%basis_group, 2, msh(dim_i)%Maxgroup, 0)
+         call copy_basis_group(mshc(dim_i)%basis_group, 1, Maxgroup_rc, msh(dim_i)%basis_group, 3, msh(dim_i)%Maxgroup, mshr(dim_i)%Nunk)
+         ! msh%new2old maps the indices in a larger (M+N)x(M+N) matrix into the MxM and NxN matrices
+         allocate (msh(dim_i)%new2old(msh(dim_i)%Nunk))
+         do ii = 1, M(dim_i)
+            msh(dim_i)%new2old(ii) = ii
+         enddo
+         do ii = 1 + M(dim_i), N(dim_i) + M(dim_i)
+            msh(dim_i)%new2old(ii) = -(ii - M(dim_i))
+         enddo
+         !>**** generate msh%xyz(1:Dimn,-N:M), needed in KNN
+         if (option%nogeo ==0 .or. option%nogeo ==4) then
+            allocate(msh(dim_i)%xyz(1,-N(dim_i):M(dim_i)))
+            msh(dim_i)%xyz=0
+            do ii=1,M(dim_i)
+               msh(dim_i)%xyz(1,ii) = mshr(dim_i)%xyz(1,mshr(dim_i)%new2old(ii))
+            enddo
+            do ii=1,N(dim_i)
+               msh(dim_i)%xyz(:,-ii) = mshc(dim_i)%xyz(:,mshc(dim_i)%new2old(ii))
+            enddo
+         endif
+
+         !>**** construct a list of k-nearest neighbours for each point
+         if (option%nogeo /= 3 .and. option%nogeo /= 4 .and. option%knn > 0) then
+            call FindKNNs(option, msh(dim_i), ker, stats, ptree, 2, 3)
+         endif
+
+         if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+            allocate (msh(dim_i)%nns(msh(dim_i)%Nunk, option%knn))
+            do ii = 1, M(dim_i)
+            do kk = 1, option%knn
+               knn = option%knn
+               if (nns_m(kk,ii,dim_i) /= 0) then
+                  msh(dim_i)%nns(ii, kk) = nns_m(kk,ii, dim_i) + M(dim_i)
+               else
+                  msh(dim_i)%nns(ii, kk) = 0
+               endif
+            enddo
+            enddo
+            do ii = 1, N(dim_i)
+            do kk = 1, option%knn
+               knn = option%knn
+               if (nns_m(kk,ii,dim_i) /= 0) then
+                  msh(dim_i)%nns(ii + M(dim_i), kk) = nns_n(kk,ii,dim_i)
+               else
+                  msh(dim_i)%nns(ii + M(dim_i), kk) = 0
+               endif
+            enddo
+            enddo
+         endif
+      enddo
+
+
+
+      blocks%Ndim = Ndim
+      allocate(blocks%row_group(Ndim))
+      allocate(blocks%col_group(Ndim))
+      blocks%col_group = 3
+      blocks%row_group = 2
+      blocks%level = 1
+      blocks%pgno = 1
+      blocks%style = 2
+
+      allocate(blocks%M(Ndim))
+      allocate(blocks%N(Ndim))
+      allocate(blocks%headm(Ndim))
+      allocate(blocks%headn(Ndim))
+
+      do dim_i=1,Ndim
+         blocks%headm(dim_i) = msh(dim_i)%basis_group(blocks%row_group(dim_i))%head
+         blocks%headn(dim_i) = msh(dim_i)%basis_group(blocks%col_group(dim_i))%head
+         blocks%M(dim_i) = M(dim_i)
+         blocks%N(dim_i) = N(dim_i)
+      enddo
+
+
+      Maxlevel = GetTreelevel(msh(1)%Maxgroup) - 1
+
+      if (blocks%level > option%LRlevel) then
+         blocks%level_butterfly = 0 ! low rank below LRlevel
+      else
+         blocks%level_butterfly = Maxlevel - blocks%level   ! butterfly
+      endif
+
+      call ComputeParallelIndices_MD(blocks, blocks%pgno, Ndim, ptree, msh)
+
+      M_loc = blocks%M_loc
+      N_loc = blocks%N_loc
+
+   end subroutine BF_MD_Construct_Init_from_mshrc
+
+
+
+!>**** Interface of BF (tensor) construction via blackbox matvec or entry extraction
+   !> @param Ndim: dimensionality (in)
+   !> @param M(Ndim),N(Ndim): tensor sizes of each dimension (in)
+   !> @param M_loc,N_loc: local tensor sizes of each dimension (out)
+   !> @param blocks: the structure containing the block (out)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (in)
+   !> @param msh(Ndim): the structure containing points and ordering information combined from mshr(Ndim) and mshc(Ndim) (out)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   !> @param Permutation_m(max(M),Ndim),Permutation_n(max(N),Ndim): the permutation vectors in each dimension (out)
+   !> @param tree_m, tree_n: (optional) (2^L,Ndim) is an array of leafsizes in a user-provided cluster tree for the row and column dimensions (in)
+   !> @param Coordinates_m, Coordinates_n: (optional) of dimension Ndim*N is the array of Cartesian coordinates corresponding to each row or column
+   !> @param nns_m: (optional) (DIM knn*max(M)*Ndim) nearest neighbours(indexed from 1 to N) for each row (from 1 to M) provided by user (referenced if nogeo=3 or 4)
+   !> @param nns_n: (optional) (DIM knn*max(N)*Ndim) nearest neighbours(indexed from 1 to M) for each column (from 1 to N) provided by user (referenced if nogeo=3 or 4)
+   subroutine BF_MD_Construct_Init(Ndim, M, N, M_loc, N_loc, Permutation_m, Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m, Coordinates_n, tree_m, tree_n, nns_m, nns_n)
+      implicit none
+      integer Ndim
+      integer M(Ndim), N(Ndim)
+
+      integer Permutation_m(:,:),Permutation_n(:,:)
+      real(kind=8), optional:: Coordinates_m(:, :), Coordinates_n(:, :)
+      integer, optional:: tree_m(:,:),tree_n(:,:)
+      integer, optional:: nns_m(:, :, :),nns_n(:, :, :)
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam, dim_i
+      integer, allocatable:: groupmembers(:)
+      integer level
+      integer M_loc(Ndim), N_loc(Ndim)
+
+      type(Hoption) ::option
+      type(Hstat) ::stats
+      type(mesh) ::msh(Ndim), mshr(Ndim), mshc(Ndim)
+      type(kernelquant) ::ker
+      type(matrixblock_MD) ::blocks
+      type(proctree) ::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2
+      character(len=1024)  :: strings
+      integer Maxgroup_rc,verbosity_save
+      integer(kind=8)::idx,kk,knn
+      type(Bmatrix)::bmat_m,bmat_n ! dummy
+
+#ifdef HAVE_MPI
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
+      threads_num = 1
+      CALL getenv("OMP_NUM_THREADS", strings)
+      strings = TRIM(strings)
+      if (LEN_TRIM(strings) > 0) then
+         read (strings, *) threads_num
+      endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'OMP_NUM_THREADS=', threads_num
+#ifdef HAVE_OPENMP
+      call OMP_set_num_threads(threads_num)
+#endif
+
+      !>**** create a random seed
+      ! call DATE_AND_TIME(values=times)     ! Get the current time
+      ! seed_myid(1) = times(4)*(360000*times(5) + 6000*times(6) + 100*times(7) + times(8))
+      ! seed_myid(1) = myid*1000
+      ! call RANDOM_SEED(PUT=seed_myid)
+      call init_random_seed()
+      verbosity_save=option%verbosity
+      option%verbosity=-1
+      call BPACK_MD_construction_Init(M, Ndim, Permutation_m, M_loc, bmat_m, option, stats, mshr, ker, ptree, Coordinates_m, tree_m)
+      call BPACK_MD_construction_Init(N, Ndim, Permutation_n, N_loc, bmat_n, option, stats, mshc, ker, ptree, Coordinates_n, tree_n)
+      option%verbosity=verbosity_save
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', bmat_m%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
+      do dim_i=1,Ndim
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'For dimension ', dim_i
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', int(mshr(dim_i)%Nunk/(2**bmat_m%Maxlevel))
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc(dim_i)%Nunk/(2**bmat_n%Maxlevel))
+      enddo
+
+      call BF_MD_Construct_Init_from_mshrc(Ndim, M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
+
+
+   end subroutine BF_MD_Construct_Init
+
+
+
+
 !>**** Computation of the full matrix with matrix entry evaluation
    subroutine FULLMAT_Element(option, stats, msh, ker, ptree)
 

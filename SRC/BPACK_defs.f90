@@ -74,6 +74,7 @@ module BPACK_DEFS
     integer, parameter :: INDEX_Header = 4 !< number of integers in header of Butterfly_index_MPI
     integer, parameter :: vec_oversample = 5 !< number of extra vectors adding onto estimated rank in the randomized scheme
     integer, parameter:: msg_chunk = 100000 !< used to determine message tag and hence the massage size
+    integer, parameter:: Ndim_max = 100 !< maximum dimension of the inputs
 
     !>**** parameters for CEM
     real(kind=8), parameter :: BPACK_cd = 299792458d0 !< free-space speed of light
@@ -92,6 +93,7 @@ module BPACK_DEFS
     integer, parameter:: HODLR = 1  !< use hodlr solver
     integer, parameter:: HMAT = 2  !< use H matrix solver
     integer, parameter:: HSS = 3  !< use hss_bf solver
+    integer, parameter:: HSS_MD = 4  !< use hss_bf_md solver
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -158,7 +160,6 @@ module BPACK_DEFS
 
     !>**** cluster of points/indices
     type basisgroup
-        integer:: pgno=-1 !< process group number of this cluster
         integer:: head=-1 !< head index
         integer:: tail=-1 !< tail index
         ! integer level ! level of this cluster group
@@ -168,6 +169,19 @@ module BPACK_DEFS
         integer, allocatable:: nlist(:) !< list of nearfield groups
         integer::nn = 0 !< # of nearfield groups
     end type basisgroup
+
+    !>**** near-interaction list
+    type nil_MD
+        integer, allocatable:: nlist(:,:) !< list of nearfield groups
+        integer::nn = 0 !< # of nearfield groups
+    end type nil_MD
+
+    !>**** near-interaction list of all groups at one level
+    type nil_onelevel_MD
+        integer::len = 0 !< # length of the list
+        type(nil_MD),allocatable::list(:) !< list of nlist for each group
+    end type nil_onelevel_MD
+
 
     !>**** input and output vectors for applying a Bplus
     type vectorsblock
@@ -222,6 +236,15 @@ module BPACK_DEFS
         type(butterflyindex), allocatable :: inds(:, :)
     end type butterfly_skel
 
+
+    !>**** keep track of skeleton columns and rows for one butterfly level
+    type butterfly_skel_MD
+        integer, allocatable:: nc(:), nr(:) !< # local block rows/columns
+        integer, allocatable:: idx_c(:), idx_r(:) !< column and row number of the first local block
+        integer, allocatable :: inc_c(:), inc_r(:) !< increment of local block row and columns
+        type(butterflyindex), allocatable :: inds(:, :)
+    end type butterfly_skel_MD
+
     !>**** one interior factor
     type butterfly_kerl
         integer num_col !< # block columns
@@ -234,6 +257,19 @@ module BPACK_DEFS
         integer, allocatable::index(:, :) !< an array of id of active blocks
     end type butterfly_kerl
 
+    !>**** one interior factor
+    type butterfly_kerl_MD
+        integer num_col !< # block columns
+        integer num_row !< # block rows
+        integer, allocatable:: nc(:), nr(:) !< # local block rows/columns
+        integer, allocatable :: idx_c(:), idx_r(:) !< column and row number of the first local block
+        integer, allocatable :: inc_c(:), inc_r(:) !< increment of local block row and columns
+        type(butterflymatrix), allocatable :: blocks(:, :)
+        type(list):: lst!< a list of active blocks
+        integer, allocatable::index(:, :) !< an array of id of active blocks
+    end type butterfly_kerl_MD
+
+
     !>**** one outter most factor
     type butterfly_UV
         integer num_blk
@@ -242,6 +278,16 @@ module BPACK_DEFS
         integer:: inc = 0 !< increment of local block row or columns
         type(butterflymatrix), allocatable :: blocks(:)
     end type butterfly_UV
+
+    !>**** one outter most factor
+    type butterfly_UV_MD
+        integer num_blk
+        integer, allocatable :: nblk_loc(:) !< # local block rows/columns
+        integer, allocatable :: idx(:)  !< column or row number of the first local block
+        integer, allocatable :: inc(:) !< increment of local block row or columns
+        type(butterflymatrix), allocatable :: blocks(:)
+    end type butterfly_UV_MD
+
 
     !>**** a derived type containing an integer array
     type:: iarray
@@ -321,6 +367,60 @@ module BPACK_DEFS
         DT, allocatable:: R(:,:), Rc(:,:), MVP(:,:),MVPc(:,:) !< temporary results for non-transposed and conjugate transposed MVP results and input
     end type matrixblock
 
+
+    !>**** butterfly or LR structure
+    type matrixblock_MD
+        integer Ndim !< dimensionality
+        integer pgno !< process group
+        integer pgno_db !< process group when MPI count is doubled
+        integer level !< level in HODLR
+        integer, allocatable:: col_group(:) !< column group number per dimension
+        integer, allocatable:: row_group(:) !< row group number per dimension
+        integer style !< 1: full block 2: compressed block 4: hierarchical block
+        integer level_butterfly !< butterfly levels
+        integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
+        integer:: rankmax=0 !< maximum butterfly ranks
+        integer:: rankmin=BPACK_BigINT !< minimum butterfly ranks
+        integer dimension_rank !< estimated maximum rank
+        integer, allocatable:: M(:), N(:) !< size of the block
+        integer, allocatable:: M_loc(:), N_loc(:) !< local size of the block
+        integer, allocatable:: headm(:), headn(:) !< header indices in row and column dimension
+        integer, pointer:: M_p(:, :, :) => null() !< row sizes of all processes sharing this block
+        integer, pointer:: N_p(:, :, :) => null() !< column sizes of all processes sharing this block
+        integer, pointer:: ms(:,:) => null() !< sizes of accummulated local leaf row blocks
+        integer, pointer:: ns(:,:) => null() !< sizes of accummulated local leaf column blocks
+#ifdef HAVE_ZFP
+        type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
+        type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
+        character, allocatable :: buffer_r(:) ! <ZFP buffer for the real part
+        character, allocatable :: buffer_i(:) ! <ZFP buffer for the imaginary part
+#endif
+        type(butterfly_UV_MD) :: ButterflyU !< leftmost factor
+        type(butterfly_UV_MD) :: ButterflyV !< rightmost factor
+        type(butterflymatrix), allocatable :: ButterflyMiddle(:, :) !< middle factor
+        type(butterfly_kerl_MD), allocatable :: ButterflyKerl(:) !< interior factors
+        type(butterfly_skel_MD), allocatable :: ButterflySkel(:) !< keep track of skeleton columns or rows of each level
+
+        ! the following is for blocks in H matrix solver
+        type(matrixblock_MD), pointer :: father => null() !< pointer to its fater
+        type(matrixblock_MD), pointer :: sons(:, :) => null() !< pointer to its children
+        ! integer prestyle   !< the block style before the split operation 1: full block 2: compressed block 4: hierarchical block
+        ! integer data_type  !< the block data_type, need better documentation later
+        ! integer nested_num !< depreciated
+        integer, allocatable :: ipiv(:)        !< permutation of the LU of the dense diagonal blocks
+        integer blockinfo_MPI(MPI_Header) !< high-level data extracted from the index message: 1. level 2. row_group 3. col_group 4. nested_num(depreciated) 5. style 6. prestyle(depreciated) 7. data_type(depreciated) 8. level_butterfly 9. length_Butterfly_index_MPI 10. length_Butterfly_data_MPI 11. memory (depreciated)
+        integer length_Butterfly_index_MPI !< length of the index message, the first INDEX_Header integers are 1. decpreciated 2. rankmax 3. level_butterfly. 4. num_blocks
+        integer length_Butterfly_data_MPI !< length of the value message
+        DT, allocatable :: fullmat_MPI(:) !< massage for the dense blocks
+        integer, allocatable :: Butterfly_index_MPI(:) !< index message the first 4 entries are: 1. depreciated 2. depreciated 3. level_butterfly 4. num_blocks
+        DT, allocatable :: Butterfly_data_MPI(:) !< value message
+        type(list):: lstr, lstc !< a list of intersections
+        type(intersect), allocatable::inters(:) !< an array of intersections
+    end type matrixblock_MD
+
+
+
+
     !>**** one layer in a Bplus
     type onelplus
         integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
@@ -328,6 +428,16 @@ module BPACK_DEFS
         type(matrixblock), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:) !< inadmisible subgroups for each subgroup
     end type onelplus
+
+
+    !>**** one layer in a Bplus
+    type onelplus_MD
+        integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
+        integer rankmax !< maximum butterfly rank on this layer
+        type(matrixblock_MD), pointer:: matrices_block(:) => null()
+        integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
+    end type onelplus_MD
+
 
     !>**** Bplus structure
     type blockplus
@@ -340,6 +450,18 @@ module BPACK_DEFS
         real(kind=8):: boundary(2) = 0 !< A analytical seperator defined by one out of three coordinates, boundary(1): direction, boundary(2): value
         type(onelplus), pointer:: LL(:) => null() !
     end type blockplus
+
+
+    !>**** Bplus structure
+    type blockplus_MD
+        integer level !< block level in HODLR
+        integer, allocatable:: col_group(:) !< column group number
+        integer, allocatable:: row_group(:) !< row group number
+        integer pgno   !< process group number
+        integer Lplus  !< Number of Bplus layers
+        integer ind_ll, ind_bk !< iterator of level and block number in a blockplus
+        type(onelplus_MD), pointer:: LL(:) => null() !
+    end type blockplus_MD
 
 
     !>**** Structure holding block-diagonal approximations as the Schultz initial guess
@@ -409,15 +531,26 @@ module BPACK_DEFS
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hssbf
 
+    !>**** HSS_MD structure
+    type hssbf_md
+        integer Maxlevel, Ndim !< HSS_MD levels and dimensionility
+        integer, allocatable:: N(:) !< size per dimension
+        ! ! integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
+        type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
+    end type hssbf_md
+
+
     type SVD_quant
         DT, allocatable:: matU(:,:),matV(:,:)
         DTR,allocatable:: Singular(:)
     end type SVD_quant
 
     type Bmatrix
+        integer Maxlevel
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()
+        type(hssbf_md), pointer::hss_bf_md => null()
     end type Bmatrix
 
     !>**** intermidate vectors for applying a butterfly
@@ -456,7 +589,7 @@ module BPACK_DEFS
         integer::Nmin_leaf !< leaf sizes of HODLR tree
         integer nogeo !< 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided
         integer per_geo !< 1: the geomerical points are periodical. 0: the points are not periodical
-        real(kind=8):: periods(3) !< the periods in each dimension (currently only supports maximum of 3 dimensions) of the geometry points when per_geo=1
+        real(kind=8):: periods(Ndim_max) !< the periods in each dimension (currently only supports maximum of 3 dimensions) of the geometry points when per_geo=1
         integer xyzsort !< clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
         integer::RecLR_leaf !< bottom level operations in a recursive merge-based LR compression: SVD, RRQR, ACA, BACA
         real(kind=8):: near_para !< parameters used to determine whether two groups are nearfield or farfield pair
