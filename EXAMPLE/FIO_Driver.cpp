@@ -58,12 +58,16 @@ using namespace std;
 const _Complex double Im={0.0,1.0};
 
 
+#ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
       ////// BLACS //////////////////////////////////
       ///////////////////////////////////////////////
       void Cblacs_exit(int);
 }
+#else
+    void Cblacs_exit(int){};
+#endif
 
 
 
@@ -772,11 +776,21 @@ if(tst ==3){
   double b=1.0;
   double s=4.0;
   double h=(b-a)/((double)K);
-  vector<_Complex double> xout1((nvec)*(myseg_n),{0.0,0.0});
-  vector<_Complex double> xout2((nvec)*(myseg_m),{0.0,0.0});
-  vector<_Complex double> xin((nvec)*(myseg_k),{0.0,0.0});
-  vector<_Complex double> xin_glo((nvec)*(K),{0.0,0.0});
-  vector<_Complex double> xout_glo((nvec)*(M),{0.0,0.0});
+  vector<_Complex double> xout1((nvec)*(myseg_n));
+  for (int ii=0;ii<xout1.size();ii++)
+    xout1[ii]={0.0,0.0};
+  vector<_Complex double> xout2((nvec)*(myseg_m));
+  for (int ii=0;ii<xout2.size();ii++)
+    xout2[ii]={0.0,0.0};
+  vector<_Complex double> xin((nvec)*(myseg_k));
+  for (int ii=0;ii<xin.size();ii++)
+    xin[ii]={0.0,0.0};
+  vector<_Complex double> xin_glo((nvec)*(K));
+  for (int ii=0;ii<xin_glo.size();ii++)
+    xin_glo[ii]={0.0,0.0};
+  vector<_Complex double> xout_glo((nvec)*(M));
+  for (int ii=0;ii<xout_glo.size();ii++)
+    xout_glo[ii]={0.0,0.0};
   fstream myfile0;
 
   // generate the global input vector on all MPI ranks
@@ -835,11 +849,18 @@ if(tst ==3){
   std::cout<<"\n Test TFQMR: "<<std::endl;
 
   int nvec=1;
-  vector<_Complex double> rhs((nvec)*(myseg_m),{0.0,0.0});
-  vector<_Complex double> rhs_glo((nvec)*(M),{0.0,0.0});
-  vector<_Complex double> x_glo((nvec)*(K),{0.0,0.0});
-  vector<_Complex double> x((nvec)*(myseg_k),{0.0,0.0});
-
+  vector<_Complex double> rhs((nvec)*(myseg_m));
+  for (int ii=0;ii<rhs.size();ii++)
+    rhs[ii]={0.0,0.0};
+  vector<_Complex double> rhs_glo((nvec)*(M));
+  for (int ii=0;ii<rhs_glo.size();ii++)
+    rhs_glo[ii]={0.0,0.0};
+  vector<_Complex double> x_glo((nvec)*(K));
+  for (int ii=0;ii<x_glo.size();ii++)
+    x_glo[ii]={0.0,0.0};
+  vector<_Complex double> x((nvec)*(myseg_k));
+  for (int ii=0;ii<x.size();ii++)
+    x[ii]={0.0,0.0};
   fstream myfile0;
 
   // generate the global RHS vector on all MPI ranks

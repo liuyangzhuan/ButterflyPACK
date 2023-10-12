@@ -27,6 +27,29 @@ module MISC_DenseLA
 
 contains
 
+
+   subroutine blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
+      integer ctxt,nprow,npcol,myrow,mycol
+#ifdef HAVE_MPI
+      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+#else
+      if(ctxt==-1)then
+         nprow=0
+         npcol=0
+         myrow=-1
+         mycol=-1
+      else
+         nprow=1
+         npcol=1
+         myrow=0
+         mycol=0
+      endif
+#endif
+   end subroutine blacs_gridinfo_wrp
+
+
+
+
    DTR function fnorm(Matrix, M, N, norm)
       DT Matrix(:, :)
       integer M, N
@@ -43,10 +66,24 @@ contains
 
    end function fnorm
 
+   subroutine descinit_wp( DESC, M, N, MB, NB, IRSRC, ICSRC, ICTXT,LLD, INFO )
+      integer DESC(9)
+      integer M,N,MB,NB,IRSRC, ICSRC, ICTXT,LLD, INFO
+#ifdef HAVE_MPI
+      call descinit( DESC, M, N, MB, NB, IRSRC, ICSRC, ICTXT,LLD, INFO )
+#else
+      INFO=0
+#endif
+   end subroutine descinit_wp
+
    integer function numroc_wp(n, nb, iproc, isrcproc, nprocs)
       integer :: n, nb, iproc, isrcproc, nprocs
+#ifdef HAVE_MPI
       integer :: numroc ! blacs routine
       numroc_wp = numroc(n, nb, iproc, isrcproc, nprocs)
+#else
+      numroc_wp = n
+#endif
    end function numroc_wp
 
    pure subroutine g2l(i, n, np, nb, p, il)
@@ -200,7 +237,7 @@ contains
       DT Matrix(:, :)
       integer desca(9)
       character, optional:: norm
-
+#ifdef HAVE_MPI
 #if DAT==0
          pfnorm = pzlangef90(M, N, Matrix, ia, ja, desca, norm)
 #elif DAT==1
@@ -210,9 +247,12 @@ contains
 #elif DAT==3
          pfnorm = pslangef90(M, N, Matrix, ia, ja, desca, norm)
 #endif
+#else
+         pfnorm = fnorm(Matrix, M, N, norm)
+#endif
    end function pfnorm
 
-
+#ifdef HAVE_MPI
    real(kind=8) function pdlangef90(M, N, Matrix, ia, ja, desca, norm)
       implicit none
       integer M, N, ia, ja
@@ -314,7 +354,7 @@ contains
          deallocate (WORK)
       end if
    end function pclangef90
-
+#endif
 
    subroutine gesvd_robust(Matrix, Singular, UU, VV, mm, nn, mn_min, flop)
       implicit none
@@ -1474,6 +1514,7 @@ contains
       character ROWBTOP, COLBTOP
       integer ctxt
 
+#ifdef HAVE_MPI
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPGET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
@@ -1487,11 +1528,12 @@ contains
       call sporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 #endif
 
-
-
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Rowwise', ROWBTOP)
       CALL PB_TOPSET(ctxt, 'Broadcast', 'Columnwise', COLBTOP)
 
+#else
+      call un_or_gqrf90(Matrix, tau, m, n, k, flop)
+#endif
    end subroutine pun_or_gqrf90
 
    subroutine dorgqrf90(Matrix, tau, m, n, k, flop)
@@ -1560,6 +1602,7 @@ contains
       if (present(flop)) flop = flops_dungqr(m, n, k)
    end subroutine sorgqrf90
 
+#ifdef HAVE_MPI
    subroutine dporgqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 !
       implicit none
@@ -1623,7 +1666,7 @@ contains
 ! call ungqr(Matrix,tau)
       if (present(flop)) flop = flops_dungqr(m, n, k)
    end subroutine sporgqrf90
-
+#endif
 
    subroutine zungqrf90(Matrix, tau, m, n, k, flop)
 !
@@ -1692,6 +1735,7 @@ contains
 
    end subroutine cungqrf90
 
+#ifdef HAVE_MPI
    subroutine zpungqrf90(Matrix, tau, m, n, k, desca, ia, ja, flop)
 !
       implicit none
@@ -1756,6 +1800,7 @@ contains
 ! call ungqr(Matrix,tau)
 
    end subroutine cpungqrf90
+#endif
 
    subroutine getrff90(Matrix, ipiv, flop)
       DT Matrix(:, :)
@@ -2373,7 +2418,7 @@ contains
       integer desca(9), descc(9)
       real(kind=8), optional::flop
 
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzunmqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
 #elif DAT==1
@@ -2383,11 +2428,14 @@ contains
 #elif DAT==3
       call psormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
 #endif
-
+#else
+      call un_or_mqrf90(MatA, tau, MatC, side, trans, m, n, k, flop)
+#endif
 
 
    end subroutine pun_or_mqrf90
 
+#ifdef HAVE_MPI
    subroutine pdormqrf90(side, trans, m, n, k, MatA, ia, ja, desca, tau, MatC, ic, jc, descc, flop)
       implicit none
       character side, trans
@@ -2475,7 +2523,7 @@ contains
       deallocate (WORK)
       if (present(flop)) flop = flops_zunmqr(side, m, n, k)
    end subroutine pcunmqrf90
-
+#endif
 
 
    subroutine pgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
@@ -2486,6 +2534,7 @@ contains
       integer desca(9)
       real(kind=8), optional::flop
 
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
 #elif DAT==1
@@ -2495,9 +2544,12 @@ contains
 #elif DAT==3
       call psgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
 #endif
-
+#else
+      call geqrff90(Matrix, tau, flop)
+#endif
    end subroutine pgeqrff90
 
+#ifdef HAVE_MPI
    subroutine pzgeqrff90(M, N, Matrix, ia, ja, desca, tau, flop)
       implicit none
 
@@ -2594,7 +2646,7 @@ contains
 
       if (present(flop)) flop = flops_dgeqpfmod(m, n, min(m, n))
    end subroutine psgeqrff90
-
+#endif
 
    subroutine pgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
       implicit none
@@ -2605,7 +2657,7 @@ contains
       integer desca(9)
       real(kind=8)::rtol, atol
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
 #elif DAT==1
@@ -2615,10 +2667,13 @@ contains
 #elif DAT==3
       call psgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, real(rtol), real(atol), flop)
 #endif
-
-
+#else
+      call geqp3modf90(Matrix, ipiv, tau, rtol, atol, rank, flop)
+#endif
    end subroutine pgeqpfmodf90
 
+
+#ifdef HAVE_MPI
    subroutine pzgeqpfmodf90(M, N, Matrix, ia, ja, desca, ipiv, tau, JPERM, jpiv, rank, rtol, atol, flop)
       implicit none
       integer M, N, ia, ja
@@ -2735,6 +2790,7 @@ contains
       if (present(flop)) flop = flops_dgeqpfmod(m, n, rank)
 
    end subroutine psgeqpfmodf90
+#endif
 
 
    subroutine pgemr2df90(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
@@ -2743,7 +2799,7 @@ contains
       DT MatA(:, :), MatB(:, :)
       integer desca(9), descb(9)
       integer ictxt
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 #elif DAT==1
@@ -2753,17 +2809,20 @@ contains
 #elif DAT==3
       call psgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 #endif
-
+#else
+      MatB(1:M,1:N) = MatA(1:M,1:N)
+#endif
    end subroutine pgemr2df90
+
 
    subroutine pgemmf90(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc, flop)
       implicit none
       character transa, transb
-      integer m, n, k, ia, ja, ib, jb, ic, jc
+      integer m, n, k, ia, ja, ib, jb, ic, jc, lda, ldb, ldc
       DT alpha, beta, a(:, :), b(:, :), c(:, :)
       integer desca(9), descb(9), descc(9)
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
       if (present(flop)) flop = flops_gemm(m, n, k)
@@ -2777,7 +2836,12 @@ contains
       call psgemm(transa, transb, m, n, k, alpha, a, ia, ja, desca, b, ib, jb, descb, beta, c, ic, jc, descc)
       if (present(flop)) flop = flops_gemm(m, n, k)
 #endif
-
+#else
+      ldc=size(c,1)
+      lda = size(a,1)
+      ldb = size(b,1)
+      call gemmf90(a, lda, b, ldb, c, ldc, transa, transb, m, n, k, alpha, beta, flop)
+#endif
    end subroutine pgemmf90
 
    subroutine ptrsmf90(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb, flop)
@@ -2787,7 +2851,7 @@ contains
       integer desca(9), descb(9)
       DT a(:, :), b(:, :), alpha
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pztrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
       if (present(flop)) flop = flops_ztrsm(side, m, n)
@@ -2801,7 +2865,9 @@ contains
       call pstrsm(side, uplo, transa, diag, m, n, alpha, a, ia, ja, desca, b, ib, jb, descb)
       if (present(flop)) flop = flops_dtrsm(side, m, n)
 #endif
-
+#else
+      call trsmf90(a, b, side, uplo, transa, diag, m, n, flop)
+#endif
    end subroutine ptrsmf90
 
    subroutine pgetrff90(m, n, a, ia, ja, desca, ipiv, info, flop)
@@ -2812,7 +2878,7 @@ contains
       integer ipiv(:)
       integer info
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgetrf(m, n, a, ia, ja, desca, ipiv, info)
       if (present(flop)) flop = flops_zgetrf(m, n)
@@ -2826,7 +2892,9 @@ contains
       call psgetrf(m, n, a, ia, ja, desca, ipiv, info)
       if (present(flop)) flop = flops_dgetrf(m, n)
 #endif
-
+#else
+      call getrff90(a, ipiv, flop)
+#endif
    end subroutine pgetrff90
 
    subroutine pgetrif90(n, a, ia, ja, desca, ipiv, flop)
@@ -2836,7 +2904,7 @@ contains
       integer desca(9)
       integer ipiv(:)
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgetrif90(n, a, ia, ja, desca, ipiv, flop)
 #elif DAT==1
@@ -2846,10 +2914,14 @@ contains
 #elif DAT==3
       call psgetrif90(n, a, ia, ja, desca, ipiv, flop)
 #endif
-
+#else
+      call getrif90(a, ipiv, flop)
+#endif
 
    end subroutine pgetrif90
 
+
+#ifdef HAVE_MPI
    subroutine pdgetrif90(n, a, ia, ja, desca, ipiv, flop)
       implicit none
       integer n, ia, ja
@@ -2969,6 +3041,7 @@ contains
       if (present(flop)) flop = flops_zgetri(n)
 
    end subroutine pcgetrif90
+#endif
 
    subroutine pgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
       implicit none
@@ -2979,7 +3052,7 @@ contains
       integer desca(9), descu(9), descvt(9)
       DTR:: s(:)
       real(kind=8), optional::flop
-
+#ifdef HAVE_MPI
 #if DAT==0
       call pzgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
 #elif DAT==1
@@ -2989,10 +3062,13 @@ contains
 #elif DAT==3
       call psgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
 #endif
-
+#else
+      call gesvdf90(a, s, u, vt, flop)
+#endif
 
    end subroutine pgesvdf90
 
+#ifdef HAVE_MPI
    subroutine pdgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
       implicit none
 
@@ -3117,6 +3193,7 @@ contains
       if (present(flop)) flop = flops_zgesvd(m, n)
 
    end subroutine pcgesvdf90
+#endif
 
 
    subroutine zgeevf90(JOBVL,JOBVR, N, Matrix, eigval, VL, VR, flop)
@@ -3265,9 +3342,11 @@ contains
       integer,allocatable:: IPIV(:)
       INTEGER,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
 
+
+#ifdef HAVE_MPI
       if (present(flops))flops=0
 
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
       myArows = numroc_wp(N, nbslpk, myrow, 0, nprow)
       myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
@@ -3277,7 +3356,7 @@ contains
    ! Gather the matrix to the head process and call lapack xgeev
      t1 = MPI_Wtime()
      if(myrow==0 .and. mycol==0) then
-         call descinit(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
+         call descinit_wp(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
          allocate(Matrix_head(N,N))
          Matrix_head=0
          allocate(Q_head(N,N))
@@ -3429,7 +3508,7 @@ contains
 ! the strong scaling of ptrevcf90 is poor. When memory fits, it's better to gather the matrix to the head process and call ptrevcf90 sequentially
 #if 1
       if(myrow==0 .and. mycol==0) then
-         call descinit(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
+         call descinit_wp(desca_head, N, N, nbslpk, nbslpk, 0, 0, ctxt_head, max(N, 1), info)
          allocate(Matrix_head(N,N))
          Matrix_head=0
          allocate(Q_head(N,N))
@@ -3485,14 +3564,17 @@ contains
       deallocate(IPIV)
       deallocate(tau0)
       deallocate(tau1)
-
+#endif
+endif
+#else
+      call geeigf90(Matrix, N, eigval, Q, flops)
 #endif
 
-endif
+
    end subroutine pgeeigf90
 
 
-
+#ifdef HAVE_MPI
    ! input matrix is upper triangular, it's modified but is restored on return
    subroutine trevc3f90(SIDE, N, Matrix, VL, VR, flop)
 
@@ -3984,6 +4066,7 @@ endif
       if (present(flop)) flop = 4.*N**3d0 ! very rough estimate as the QR iteration convergence is unknown in prior
 
    end subroutine pclahqrf90
+#endif
 
    real(kind=8) function flops_zgesdd(m, n)
       implicit none

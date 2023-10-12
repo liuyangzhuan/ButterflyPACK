@@ -24,6 +24,7 @@
 ! This exmple works with double precision data
 module APPLICATION_MODULE
 use d_BPACK_DEFS
+use d_MISC_Utilities
 implicit none
 
 	!**** define your application-related variables here
@@ -121,33 +122,24 @@ PROGRAM ButterflyPACK_KRR
 	type(d_kernelquant)::ker
 	type(quant_app),target::quant
 	type(d_Bmatrix)::bmat
-	integer,allocatable:: groupmembers(:)
-	integer nmpi
+	integer groupmembers(1)
 	type(d_proctree)::ptree
-	integer MPI_thread
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
 	integer nargs,flag
 	integer v_major,v_minor,v_bugfix
+	integer:: dummy_comm=321
 
-	call MPI_Init(ierr)
-	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
-	allocate(groupmembers(nmpi))
-	do ii=1,nmpi
-		groupmembers(ii)=(ii-1)
-	enddo
+	groupmembers(1)=0
 
-	!**** create the process tree
-	call d_CreatePtree(nmpi,groupmembers,MPI_Comm_World,ptree)
-	deallocate(groupmembers)
+	!**** create the process tree, this call is still needed even though this is a sequential example
+	call d_CreatePtree(1,groupmembers,dummy_comm,ptree)
 
-	if(ptree%MyID==Main_ID)then
     write(*,*) "-------------------------------Program Start----------------------------------"
-    write(*,*) "ButterflyPACK_KRR"
+    write(*,*) "ButterflyPACK_KRR (non-MPI)"
 	call d_BPACK_GetVersionNumber(v_major,v_minor,v_bugfix)
 	write(*,'(A23,I1,A1,I1,A1,I1,A1)') " ButterflyPACK Version:",v_major,".",v_minor,".",v_bugfix
     write(*,*) "   "
-	endif
 
 	!**** initialize stats and option
 	call d_InitStat(stats)
@@ -189,7 +181,7 @@ PROGRAM ButterflyPACK_KRR
 						else if	(trim(strings)=='--lambda')then
 							read(strings1,*)quant%lambda
 						else
-							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+							write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
 					else
 						flag=0
@@ -201,7 +193,7 @@ PROGRAM ButterflyPACK_KRR
 		else if(trim(strings)=='-option')then ! options of ButterflyPACK
 			call d_ReadOption(option,ptree,ii)
 		else
-			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			write(*,*)'ignoring unknown argument: ',trim(strings)
 			ii=ii+1
 		endif
 	enddo
@@ -214,19 +206,19 @@ PROGRAM ButterflyPACK_KRR
 	quant%testfile_p=trim(quant%DATA_DIR)//'_test.csv'
 	quant%testfile_l=trim(quant%DATA_DIR)//'_test_label.csv'
 	quant%Nunk = quant%ntrain
-	if(ptree%MyID==Main_ID)write(*,*)'training set: ',trim(quant%trainfile_p)
+	write(*,*)'training set: ',trim(quant%trainfile_p)
 
-	t1 = MPI_Wtime()
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "geometry modeling......"
+	t1 = d_seq_wtime()
+    if(option%verbosity>=0)write(*,*) "geometry modeling......"
 	open (90,file=quant%trainfile_p)
 	allocate (quant%xyz(quant%dimn,1:quant%Nunk))
 	do ii=1,quant%Nunk
 		read (90,*) quant%xyz(1:quant%dimn,ii)
 	enddo
     close(90)
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "modeling finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
-	t2 = MPI_Wtime()
+    if(option%verbosity>=0)write(*,*) "modeling finished"
+    if(option%verbosity>=0)write(*,*) "    "
+	t2 = d_seq_wtime()
 
 
 	!**** register the user-defined function and type in ker
@@ -258,11 +250,8 @@ PROGRAM ButterflyPACK_KRR
 	call d_delete_kernelquant(ker)
 	call d_BPACK_delete(bmat)
 
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
+    if(option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-
-	call d_blacs_exit_wrp(1)
-	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_KRR
 
@@ -299,7 +288,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	real(kind=8) r_mn
 	integer label
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction......"
+	if(option%verbosity>=0)write(*,*) "Solve and Prediction......"
 
 	N_unk=msh%Nunk
 	Dimn=quant%dimn
@@ -331,21 +320,19 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	deallocate(labels)
 	close(91)
 
-	n1 = MPI_Wtime()
+	n1 = d_seq_wtime()
 
 	call d_BPACK_Solution(bmat,x,b,N_unk_loc,1,option,ptree,stats)
 
-	n2 = MPI_Wtime()
+	n2 = d_seq_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
-	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',rtemp,'Seconds'
-	call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
+	if(option%verbosity>=0)write (*,*) 'Solving:',stats%Time_Sol,'Seconds'
+	if(option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',stats%Flop_Sol
 
 	!**** prediction on the test sets
 
 	ntest=quant%ntest
-	T0 = MPI_Wtime()
+	T0 = d_seq_wtime()
 	open (92,file=quant%testfile_p)
 	allocate (xyz_test(Dimn,ntest))
 	do edge=1,ntest
@@ -363,41 +350,39 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 			vout_tmp(edge_m,1) = vout_tmp(edge_m,1) + value_Z*x(edge,1)
 		enddo
 	enddo
-
-	call MPI_REDUCE(vout_tmp, vout, ntest,MPI_double_precision, MPI_SUM, Main_ID, ptree%Comm,ierr)
-	T1 = MPI_Wtime()
-	if (ptree%MyID==Main_ID) then
-		do ii=1,ntest
-			if(dble(vout(ii,1))>0)then
-				vout(ii,1)=1
-			else
-				vout(ii,1)=-1
-			endif
-		enddo
+	vout = vout_tmp
 
 
-		open (93,file=quant%testfile_l)
-		do edge=1,ntest
-			read (93,*) label
-			vout_tmp(edge,1)=label
-		enddo
-		close(93)
+	T1 = d_seq_wtime()
 
-		ncorrect=0
-		do edge=1,ntest
-			if(dble(vout_tmp(edge,1))*dble(vout(edge,1))>0)then
-				ncorrect = ncorrect + 1
-			endif
-		enddo
+	do ii=1,ntest
+		if(dble(vout(ii,1))>0)then
+			vout(ii,1)=1
+		else
+			vout(ii,1)=-1
+		endif
+	enddo
 
-		rate = dble(ncorrect)/dble(ntest)
+	open (93,file=quant%testfile_l)
+	do edge=1,ntest
+		read (93,*) label
+		vout_tmp(edge,1)=label
+	enddo
+	close(93)
 
-		write (*,*) ''
-		write (*,*) 'Prediction time:',T1-T0,'Seconds'
-		write (*,*) 'Success rate:',rate
-		write (*,*) ''
+	ncorrect=0
+	do edge=1,ntest
+		if(dble(vout_tmp(edge,1))*dble(vout(edge,1))>0)then
+			ncorrect = ncorrect + 1
+		endif
+	enddo
 
-	endif
+	rate = dble(ncorrect)/dble(ntest)
+
+	write (*,*) ''
+	write (*,*) 'Prediction time:',T1-T0,'Seconds'
+	write (*,*) 'Success rate:',rate
+	write (*,*) ''
 
 	deallocate (vout)
 	deallocate (vout_tmp)
@@ -406,10 +391,8 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	deallocate(b)
 	deallocate(xyz_test)
 
-	call MPI_barrier(ptree%Comm,ierr)
-
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Solve and Prediction finished"
-    if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+    if(option%verbosity>=0)write(*,*) "Solve and Prediction finished"
+    if(option%verbosity>=0)write(*,*) "    "
 
     return
 

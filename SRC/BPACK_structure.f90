@@ -553,6 +553,7 @@ end function distance_geo
          allocate (bmat%hss_bf)
          bmat%hss_bf%Maxlevel = Maxlevel
       end select
+      bmat%Maxlevel=Maxlevel
 
       !>************** check whether the sorting option is valid
       if (Maxlevel > nlevel_pre) then
@@ -731,25 +732,30 @@ end function distance_geo
                   ! sortdirec=2
                   ! end if
                   ! ! endif
-
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(i)
+#endif
                   do i = msh%basis_group(group)%head, msh%basis_group(group)%tail
                      distance(i - msh%basis_group(group)%head + 1) = msh%xyz(sortdirec, msh%new2old(i))
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
-
+#endif
                else if (option%xyzsort == TM) then !cobblestone sort
 
                   mm = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
                   allocate (distance(mm))
 
                   distance(1:mm) = BPACK_Bigvalue
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(i)
+#endif
                   do i = msh%basis_group(group)%head, msh%basis_group(group)%tail
                      distance(i - msh%basis_group(group)%head + 1) = distance_user(msh%new2old(i), msh%new2old(center_edge), ker, msh, option, ptree, stats)
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
-
+#endif
                else if (option%xyzsort == TM_GRAM) then !GRAM-distance-based cobblestone sort
 
                   Nsmp = min(msh%basis_group(group)%tail - msh%basis_group(group)%head + 1, 50)
@@ -811,17 +817,24 @@ end function distance_geo
                allocate (map_temp(mm))
 
                call quick_sort(distance, order, mm)
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(ii)
+#endif
                do ii = 1, mm
                   map_temp(ii) = msh%new2old(order(ii) + msh%basis_group(group)%head - 1)
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
-
+#endif
+#ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(ii)
+#endif
                do ii = 1, mm
                   msh%new2old(ii + msh%basis_group(group)%head - 1) = map_temp(ii)
                enddo
+#ifdef HAVE_OPENMP
                !$omp end parallel do
+#endif
                deallocate (map_temp)
                deallocate (order)
 
@@ -1353,8 +1366,9 @@ end function distance_geo
 
       real(kind=8), allocatable :: dist_gram(:, :)
       integer, allocatable:: rows_gram(:), cols_gram(:)
-
+#ifdef HAVE_OPENMP
 !$omp threadprivate(my_tid)
+#endif
 
 #ifdef HAVE_OPENMP
 !$omp parallel default(shared)
@@ -1442,8 +1456,9 @@ end function distance_geo
             enddo
 
             call distance_gram_block(msh%basis_group(ii)%tail - msh%basis_group(ii)%head + 1, kk, rows_gram, cols_gram, dist_gram, ker, msh, option, ptree, stats)
-
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(iii,kk,jj,jjj)
+#endif
             do iii = msh%basis_group(ii)%head, msh%basis_group(ii)%tail
                kk = 0
                do jj = 1, msh%basis_group(ii)%nn
@@ -1457,15 +1472,18 @@ end function distance_geo
                kk = min(kk, option%knn)
                msh%nns(iii, 1:kk) = edge_temp(order(1:kk, my_tid + 1), my_tid + 1)
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             deallocate (dist_gram)
             deallocate (rows_gram)
             deallocate (cols_gram)
 
          enddo
       else
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(ii,iii,kk,jj,jjj)
+#endif
          do ii = Bidxs, Bidxe
             do iii = msh%basis_group(ii)%head, msh%basis_group(ii)%tail
                kk = 0
@@ -1483,7 +1501,9 @@ end function distance_geo
                msh%nns(iii, 1:kk) = edge_temp(order(1:kk, my_tid + 1), my_tid + 1)
             enddo
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
       endif
 
       do ii=1,option%knn
@@ -2691,7 +2711,7 @@ end function distance_geo
       allocate (stats%XLUM_random_Time(0:h_mat%Maxlevel))
       stats%XLUM_random_Time = 0
 
-      call blacs_gridinfo(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
 
          num_blocks = 2**msh%Dist_level

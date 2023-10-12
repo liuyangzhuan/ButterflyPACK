@@ -52,6 +52,24 @@ contains
    ! print *, "x"," is a nice matrix! Huzzah!"
 ! #endif
 
+   function seq_wtime ( )
+
+   implicit none
+
+   integer count
+   integer count_max
+   integer count_rate
+   real ( kind = 8 ) seq_wtime
+
+   call system_clock ( count, count_rate, count_max )
+
+   seq_wtime = real ( count, kind = 8 ) / real ( count_rate, kind = 8 )
+
+   return
+   end function seq_wtime
+
+
+
    subroutine linspaceI(startI, endI, N, array)
       implicit none
       integer startI, endI, N
@@ -606,7 +624,9 @@ contains
          norm_V = norm_vector(row_R, rankmax_c)
 
          inner_UV = 0
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+#endif
          do j = 1, rank
             inner_U = 0
             inner_V = 0
@@ -624,8 +644,9 @@ contains
             ! !$omp end parallel do
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
          enddo
+#ifdef HAVE_OPENMP
          !$omp end parallel do
-
+#endif
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
          ! ! write(*,*)norm_Z,inner_UV,norm_U,norm_V,maxvalue,rank,'gan'
@@ -1058,14 +1079,17 @@ contains
                stop
             end if
             A_tmp = 0
+#ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(ii,jj)
+#endif
             do ii = 1, mn
                do jj = ii, mn
                   A_tmp(ii, jj) = Atmp(ii, jj)
                enddo
             enddo
+#ifdef HAVE_OPENMP
             !$omp end parallel do
-
+#endif
             rank = mn
             do i = 1, mn
                if (abs(A_tmp(i, i))/abs(A_tmp(1, 1))/mnl <= eps) then
@@ -1155,11 +1179,11 @@ contains
             else
                !!!!>**** generate 2D grid blacs quantities
                ctxt = ptree%pgrp(pgno)%ctxt
-               call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+               call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
                if (myrow /= -1 .and. mycol /= -1) then
                   myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
                   myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
-                  call descinit(descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+                  call descinit_wp(descsMat2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
                   allocate (mat2D(max(1,myArows), max(1,myAcols)))
                   mat2D = 0
                else
@@ -2289,24 +2313,24 @@ contains
 
       if (present(Flops))Flops=0
 
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(n, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatA, m, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatA, m, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
 
          myArows = numroc_wp(n, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(m, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatAinv, n, m, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatAinv, n, m, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
 
          mn = min(m, n)
          myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(mn, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatU, m, mn, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatU, m, mn, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (UU(max(1,myArows), max(1,myAcols)))
          myArows = numroc_wp(mn, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(n, nbslpk, mycol, 0, npcol)
-         call descinit(descsMatV, mn, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(descsMatV, mn, n, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
          allocate (VV(max(1,myArows), max(1,myAcols)))
          allocate (Singular(mn))
 
@@ -3228,7 +3252,7 @@ contains
       integer::descMat(9), descUU(9), descVV(9)
       integer::ctxt, nprow, npcol, myrow, mycol, iproc, myi
 
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       mnmin = min(mm, nn)
 
       call pgesvdf90('V', 'V', mm, nn, mat, 1, 1, descMat, Singular, UU, 1, 1, descUU, VV, 1, 1, descVV, flop=flop)
@@ -4435,6 +4459,40 @@ contains
    end function GetMshGroup_Pgno
 
 
+   subroutine blacs_exit_wrp(flag)
+      integer flag
+#ifdef HAVE_MPI
+      call blacs_exit(flag)
+#endif
+   end subroutine blacs_exit_wrp
+
+   subroutine blacs_gridexit_wrp(ctxt)
+      integer ctxt
+#ifdef HAVE_MPI
+      call blacs_gridexit(ctxt)
+#endif
+   end subroutine blacs_gridexit_wrp
+
+
+   subroutine blacs_gridmap_wrp(ctxt, pmap, ldu, nprow, npcol)
+      integer ctxt,ldu,nprow,npcol
+      integer pmap(:,:)
+#ifdef HAVE_MPI
+      call blacs_gridmap(ctxt, pmap, ldu, nprow, npcol)
+#else
+      ctxt=1
+#endif
+   end subroutine blacs_gridmap_wrp
+
+   integer function sys2blacs_handle_wrp(comm)
+      integer comm
+#ifdef HAVE_MPI
+      integer, external :: sys2blacs_handle
+      sys2blacs_handle_wrp=sys2blacs_handle(comm)
+#else
+      sys2blacs_handle_wrp=1
+#endif
+   end function sys2blacs_handle_wrp
 
    subroutine CreatePtree(nmpi, groupmembers, MPI_Comm_base, ptree)
       implicit none
@@ -4444,7 +4502,7 @@ contains
       integer :: nprow, npcol, myrow, mycol, nproc, nproc_tmp, nproc_tmp1, nsprow, nsprow1, nspcol, nlevelrow, nlevelcol
       integer, allocatable::pmap(:, :), groupmembers_sml(:), MPI_Group_H_sml(:)
 
-      integer, external :: sys2blacs_handle
+
 
       call MPI_Comm_rank(MPI_Comm_base, MyID_old, ierr)
       call MPI_Comm_group(MPI_Comm_base, MPI_Group_base, ierr)
@@ -4530,8 +4588,8 @@ contains
                enddo
 
                ! the context involving 2D grids
-               ptree%pgrp(group)%ctxt = sys2blacs_handle(ptree%pgrp(group)%Comm)
-               call blacs_gridmap(ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol)
+               ptree%pgrp(group)%ctxt = sys2blacs_handle_wrp(ptree%pgrp(group)%Comm)
+               call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt, pmap, nprow, nprow, npcol)
                deallocate (pmap)
 
                ! the context involving 1D grids non-cyclic row
@@ -4540,8 +4598,8 @@ contains
                   pmap(kk, 1) = kk - 1
                enddo
 
-               ptree%pgrp(group)%ctxt1D = sys2blacs_handle(ptree%pgrp(group)%Comm)
-               call blacs_gridmap(ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1)
+               ptree%pgrp(group)%ctxt1D = sys2blacs_handle_wrp(ptree%pgrp(group)%Comm)
+               call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt1D, pmap, nproc, nproc, 1)
                deallocate (pmap)
 
                ! the context involving 1D grids non-cyclic column
@@ -4549,15 +4607,15 @@ contains
                do kk = 1, nproc
                   pmap(1, kk) = kk - 1
                enddo
-               ptree%pgrp(group)%ctxt1DCol = sys2blacs_handle(ptree%pgrp(group)%Comm)
-               call blacs_gridmap(ptree%pgrp(group)%ctxt1DCol, pmap, 1, 1, nproc)
+               ptree%pgrp(group)%ctxt1DCol = sys2blacs_handle_wrp(ptree%pgrp(group)%Comm)
+               call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt1DCol, pmap, 1, 1, nproc)
                deallocate (pmap)
 
                ! the context involving head proc only
-               ptree%pgrp(group)%ctxt_head = sys2blacs_handle(ptree%pgrp(group)%Comm)
+               ptree%pgrp(group)%ctxt_head = sys2blacs_handle_wrp(ptree%pgrp(group)%Comm)
                allocate (pmap(1, 1))
                pmap=0
-               call blacs_gridmap(ptree%pgrp(group)%ctxt_head, pmap, 1, 1, 1)
+               call blacs_gridmap_wrp(ptree%pgrp(group)%ctxt_head, pmap, 1, 1, 1)
                deallocate (pmap)
 
                ! call MPI_barrier(ptree%pgrp(group)%Comm,ierr)
@@ -4627,7 +4685,7 @@ contains
    ! integer nspcol_parent,ii,jj,kk,nsproc
    ! integer MPI_Group_parent,MPI_Group_H_sml,ierr,MPI_Comm_parent
    ! integer,allocatable::pmap(:,:),groupmembers_sml(:)
-   ! integer,external :: sys2blacs_handle
+   ! integer,external :: sys2blacs_handle_wrp
 
    ! gd%ctxt=-1
    ! gd%Comm=MPI_COMM_NULL
@@ -4663,8 +4721,8 @@ contains
    ! enddo
 
    ! ! the context involving 2D grids
-   ! gd%ctxt = sys2blacs_handle(gd%Comm)
-   ! call blacs_gridmap( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
+   ! gd%ctxt = sys2blacs_handle_wrp(gd%Comm)
+   ! call blacs_gridmap_wrp( gd%ctxt, pmap, gd%nsprow, gd%nsprow, gd%nspcol )
    ! deallocate(pmap)
    ! endif
 
@@ -5326,7 +5384,7 @@ contains
       jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
       myArows = M_p_1D(jj, 2) - M_p_1D(jj, 1) + 1
       myAcols = N
-      call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
+      call descinit_wp(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
       ld=0
       if (myArows > 0 .and. myAcols > 0) then
@@ -5335,11 +5393,11 @@ contains
          dat_1D = 0
       endif
       ctxt = ptree%pgrp(pgno_o)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
-         call descinit(desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
       else
          desc2D(2) = -1
       endif
@@ -5386,7 +5444,7 @@ contains
       jj = ptree%myid - ptree%pgrp(pgno_i)%head + 1
       myArows = M_p_1D(jj, 2) - M_p_1D(jj, 1) + 1
       myAcols = N
-      call descinit(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
+      call descinit_wp(desc1D, M, N, nb1Dr, nb1Dc, 0, 0, ctxt1D, max(myArows, 1), info)
 ! write(*,*)ptree%MyID,M,N,myArows,myAcols,'1D',nproc
       ld=0
       if (myArows > 0 .and. myAcols > 0) then
@@ -5396,11 +5454,11 @@ contains
       endif
 
       ctxt = ptree%pgrp(pgno_i)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
          myArows = numroc_wp(M, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(N, nbslpk, mycol, 0, npcol)
-         call descinit(desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call descinit_wp(desc2D, M, N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
       else
          myArows = 0
          myAcols = 0

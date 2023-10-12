@@ -1,3 +1,13 @@
+Version 2.3.1: Released Aug 31, 2022
+===================================
+- Added rank benchmark for low-rank and butterfly compression of free space green's functions
+- Added conversion to dense matrix and calling dense eigensolvers
+- Improved compiling and calling of the arpack interface
+- Added drivers for compressing fractional Laplacian operators
+- Added ZFP for dense blocks in the hierarchical matrix formats
+- Added more macros guarding OMP semantics
+
+
 Version 2.2.0: Released Sep 15, 2022
 ===================================
  - Changed 1D layout to 2D layout in the H matrix code

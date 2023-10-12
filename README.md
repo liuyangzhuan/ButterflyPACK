@@ -1,8 +1,6 @@
 # ButterflyPACK
 ButterflyPACK, Copyright (c) 2018, The Regents of the University of California, through Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy).  All rights reserved.
 
-[![Build Status](https://travis-ci.com/liuyangzhuan/ButterflyPACK.svg?token=xooeQZbwgfe8y48ztwEU&branch=master)](https://travis-ci.com/liuyangzhuan/ButterflyPACK)
-
 
 ## Overview
 ButterflyPACK is a mathematical software for rapidly solving large-scale dense linear systems that exhibit off-diagonal rank-deficiency. These systems arise frequently from boundary element methods, or factorization phases in finite-difference/finite-element methods. ButterflyPACK relies on low-rank or butterfly formats under Hierarchical matrix, HODLR or other hierarchically nested frameworks to compress, factor and solve the linear system in quasi-linear time. The computationally most intensive phase, factorization, is accelerated via randomized linear algebras. The butterfly format, originally inspired by the butterfly data flow in fast Fourier Transform, is a linear algebra tool well-suited for compressing matrices arising from high-frequency wave equations or highly oscillatory integral operators. ButterflyPACK also provides preconditioned TFQMR iterative solvers.
@@ -11,16 +9,17 @@ ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyP
 
 
 ## Installation
-
+### With MPI
 The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
 
 For an installation with GNU compiliers, do:
 ```
+git clone https://github.com/liuyangzhuan/ButterflyPACK.git
+cd ButterflyPACK
 export BLAS_LIB=<Lib of the BLAS installation>
 export LAPACK_LIB=<Lib of the LAPACK installation>
 export SCALAPACK_LIB=<Lib of the SCALAPACK installation>
 export ARPACK_LIB=<Lib of the ARPACK installation>
-sh PrecisionPreprocessing.sh
 mkdir build ; cd build;
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
@@ -35,8 +34,33 @@ cmake .. \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release
-make
+make install
 ( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
+```
+
+### Without MPI
+For users that don't want to use MPI, ButterflyPACK can be built with only shared-memory parallelism. The installation uses CMake build system and requires BLAS and LAPACK. Fortran and CPP examples for kernel ridge regression can be found at https://github.com/liuyangzhuan/ButterflyPACK/blob/master/EXAMPLE/KERREG_Driver_seq.f90 and https://github.com/liuyangzhuan/ButterflyPACK/blob/master/EXAMPLE/InterfaceTest_simple_seq.cpp 
+
+For an installation with GNU compiliers, do:
+```
+git clone https://github.com/liuyangzhuan/ButterflyPACK.git
+cd ButterflyPACK
+export BLAS_LIB=<Lib of the BLAS installation>
+export LAPACK_LIB=<Lib of the LAPACK installation>
+mkdir build ; cd build;
+cmake .. \
+	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
+	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
+	-DBUILD_SHARED_LIBS=ON \
+	-Denable_openmp=ON \
+	-Denable_mpi=OFF \
+	-DCMAKE_Fortran_COMPILER=gfortran \
+	-DCMAKE_CXX_COMPILER=g++ \
+	-DCMAKE_C_COMPILER=gcc \
+	-DCMAKE_INSTALL_PREFIX=. \
+	-DCMAKE_BUILD_TYPE=Release
+make install
+( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu_mpi4_gcc910_sequential.sh)
 ```
 
 ## Website

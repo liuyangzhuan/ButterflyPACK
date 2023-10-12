@@ -18,6 +18,15 @@ Developers:Yang Liu
 #ifndef BPACK_WRAP /* allow multiple inclusions */
 #define BPACK_WRAP
 
+#ifdef HAVE_MPI
+#include <mpi.h>
+#else
+#ifndef MPI_Fint
+#define MPI_Fint int
+#endif
+#endif
+
+
 // #include "ButterflyPACK_config.fi"
 
 //typedef struct{double r, i; }doublecomplex;
@@ -42,6 +51,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc,
 void c_bpack_extractelement(F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
+void c_bpack_createptree(int*nmpi, int*groupmembers, int* MPIcomm, F2Cptr*ptree);
 void c_bpack_createstats(F2Cptr*stats);
 void c_bpack_new2old(F2Cptr* msh, int* newidx_loc, int* oldidx);
 void c_bpack_printstats(F2Cptr*stats, F2Cptr*ptree);

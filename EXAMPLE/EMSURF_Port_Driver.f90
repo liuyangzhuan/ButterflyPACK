@@ -719,7 +719,7 @@ PROGRAM ButterflyPACK_IE_3D
 	call delete_quant_EMSURF(quant)
 
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
     ! ! ! ! pause

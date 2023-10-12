@@ -1098,9 +1098,9 @@ contains
       stats%Time_Entry_Traverse = 0
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -1509,9 +1509,9 @@ contains
       stats%Time_Entry_Traverse = 0
       stats%Time_Entry_BF = 0
       stats%Time_Entry_Comm = 0
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -1758,9 +1758,9 @@ contains
       call c_f_pointer(ptree_Cptr, ptree)
       call c_f_pointer(mshr_Cptr, mshr)
       call c_f_pointer(mshc_Cptr, mshc)
-
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
-
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -1947,6 +1947,8 @@ contains
 
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
+      if (option%verbosity >= 2)call BF_print_size(blocks)
+
       t2 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction finished in", t2-t1, 'Seconds with', stats%Mem_Comp_for,'MB Memory'
@@ -2064,6 +2066,8 @@ contains
 
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+      if (option%verbosity >= 2)call BF_print_size(blocks)
 
       !>**** delete neighours in msh
       if(allocated(msh%nns))then

@@ -1,3 +1,5 @@
+include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
+
 set(headers
     C_BPACK_wrapper.h
     ButterflyPACK_config.fi
@@ -11,10 +13,6 @@ LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 LAPACK_sgeqp3mod.f
 LAPACK_cgeqp3mod.f
-SCALAPACK_pdgeqpfmod.f
-SCALAPACK_pzgeqpfmod.f
-SCALAPACK_psgeqpfmod.f
-SCALAPACK_pcgeqpfmod.f
 MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
@@ -33,12 +31,20 @@ BPACK_factor.f90
 BPACK_wrapper.f90
 )
 
+if (enable_mpi)
+  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f)
+endif ()
 
 
 add_library(butterflypack ${sources} ${HEADERS})
+
+if (enable_mpi)
 target_link_libraries(butterflypack
-                      ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
-set_target_properties(butterflypack PROPERTIES
+                       ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+else()
+target_link_libraries(butterflypack mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+endif()
+                      set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
 

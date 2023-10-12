@@ -224,7 +224,7 @@ PROGRAM ButterflyPACK_IE_3D
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-	call blacs_exit(1)
+	call c_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
     ! ! ! ! pause

@@ -678,13 +678,16 @@ contains
 
                   deallocate (N_p)
                else
-
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(j,index_j)
+#endif
                   do j = 1, nc
                      index_j = idx_c + (j - 1)*inc_c
                      call BF_OneBlock_LL(index_i, index_j, level, num_vect_sub, num_vect_subsub, nth, nth_s, blocks, BFvec, option, stats, norm_tol)
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             endif
          endif
@@ -961,12 +964,16 @@ contains
                   deallocate (matB)
                   deallocate (M_p)
                else
+#ifdef HAVE_OPENMP
                   !$omp parallel do default(shared) private(i,index_i)
+#endif
                   do i = 1, nr
                      index_i = idx_r + (i - 1)*inc_r
                      call BF_OneBlock_RR(index_i, index_j, level, num_vect_sub, num_vect_subsub, nth, nth_s, blocks, BFvec, BFvec1, option, stats,norm_tol)
                   enddo
+#ifdef HAVE_OPENMP
                   !$omp end parallel do
+#endif
                endif
             endif
          endif
@@ -1584,21 +1591,21 @@ contains
 
          !!!!>**** generate 2D grid blacs quantities
          ctxt = ptree%pgrp(block_rand%pgno)%ctxt
-         call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+         call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
             ! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descQ2D')
+            call descinit_wp(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descQ2D')
             allocate (matQ2D(max(1,myArows), max(1,myAcols)))
             matQ2D = 0
 
             myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
             ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descQcA_trans2D')
+            call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
             allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
             MatQcA_trans2D = 0
 
@@ -1608,16 +1615,16 @@ contains
             myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
             allocate (UU(max(1,myArows), max(1,myAcols)))
             ! write(*,*)ptree%MyID,'descUU',N, mnmin
-            call descinit(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descUU')
+            call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descUU')
             UU = 0
 
             myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
             allocate (VV(max(1,myArows), max(1,myAcols)))
             ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descVV')
+            call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descVV')
             VV = 0
 
             allocate (Singular(mnmin))
@@ -1665,8 +1672,8 @@ contains
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
             allocate (matQUt2D(max(1,myArows), max(1,myAcols)))
             ! write(*,*)'descQUt2D', M, rank
-            call descinit(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit fail for descQUt2D')
+            call descinit_wp(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+            call assert(info == 0, 'descinit_wp fail for descQUt2D')
             matQUt2D = 0
 
             call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
@@ -1730,14 +1737,14 @@ contains
 
       !!!!>**** generate 2D grid blacs quantities
       ctxt = ptree%pgrp(block_rand%pgno)%ctxt
-      call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
 
          myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
          ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-         call descinit(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call assert(info == 0, 'descinit fail for descQcA_trans2D')
+         call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
          allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
          MatQcA_trans2D = 0
 
@@ -1747,16 +1754,16 @@ contains
          myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
          allocate (UU(max(1,myArows), max(1,myAcols)))
          ! write(*,*)ptree%MyID,'descUU',N, mnmin
-         call descinit(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call assert(info == 0, 'descinit fail for descUU')
+         call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call assert(info == 0, 'descinit_wp fail for descUU')
          UU = 0
 
          myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
          myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
          allocate (VV(max(1,myArows), max(1,myAcols)))
          ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-         call descinit(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-         call assert(info == 0, 'descinit fail for descVV')
+         call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         call assert(info == 0, 'descinit_wp fail for descVV')
          VV = 0
       else
          descQcA_trans2D(2) = -1
@@ -2168,7 +2175,9 @@ contains
 !          !$omp single
 !          !$omp taskloop default(shared) private(i,mm1,idxs,idxe,nth)
 ! #else
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(i,mm1,idxs,idxe,nth)
+#endif
 ! #endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
@@ -2195,7 +2204,9 @@ contains
 !          !$omp end single
 !          !$omp end parallel
 ! #else
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
 ! #endif
       elseif (side == 'R') then
          trans = 'N'
@@ -2208,7 +2219,9 @@ contains
 !          !$omp single
 !          !$omp taskloop default(shared) private(i,nn1,idxs,idxe,nth)
 ! #else
+#ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(i,nn1,idxs,idxe,nth)
+#endif
 ! #endif
          do nth = nth_s, nth_e
             do i = (nth - 1)*Ng + 1, nth*Ng
@@ -2234,7 +2247,9 @@ contains
 !          !$omp end single
 !          !$omp end parallel
 ! #else
+#ifdef HAVE_OPENMP
          !$omp end parallel do
+#endif
 ! #endif
 
       endif

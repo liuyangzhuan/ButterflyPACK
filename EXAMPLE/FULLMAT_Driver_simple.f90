@@ -13,13 +13,14 @@ implicit none
 	type quant_app
 		complex(kind=8), allocatable :: matU_glo(:,:),matV_glo(:,:) ! Full Matrix: the random LR matrix to sample its entries
 		complex(kind=8), allocatable :: matZ_glo(:,:) ! Full Matrix: Full matrix read from files
-		real(kind=8), allocatable :: locations(:,:) ! geometrical points
+		real(kind=8), allocatable :: locations(:,:),locations_m(:,:),locations_n(:,:) ! geometrical points
+		integer,allocatable:: permutation_m(:),permutation_n(:)
 		integer:: rank
-		integer:: Nunk
+		integer:: Nunk,Nunk_m,Nunk_n
 		integer:: Ndim
 		real(kind=8):: lambda
 		CHARACTER (LEN=1000) DATA_DIR
-		CHARACTER (LEN=1000) GEO_DIR
+		CHARACTER (LEN=1000) GEO_DIR,GEO_DIR_m,GEO_DIR_n
 		integer:: tst=1
 	end type quant_app
 
@@ -55,6 +56,39 @@ contains
 	end subroutine Zelem_LR
 
 
+	!**** user-defined subroutine to sample Z_mn as two LR products (note that this is for the BF interface not for the BPACK interface)
+	subroutine ZBelem_LR(m,n,value_e,quant)
+		use z_BPACK_DEFS
+		implicit none
+
+		class(*),pointer :: quant
+		integer, INTENT(IN):: m,n
+		complex(kind=8)::value_e
+		integer ii,m1,n1
+
+		if(m>0)then
+			m1=m
+			n1=-n
+		else
+			m1=n
+			n1=-m
+		endif
+
+		!!! m,n still need to convert to the original order, using new2old of mshr and mshc
+		select TYPE(quant)
+		type is (quant_app)
+			m1=quant%permutation_m(m1)
+			n1=quant%permutation_n(n1)
+		class default
+			write(*,*)"unexpected type"
+			stop
+		end select
+
+
+		call Zelem_LR(m1,n1,value_e,quant)
+	end subroutine ZBelem_LR
+
+
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_FULL(m,n,value,quant)
 		use z_BPACK_DEFS
@@ -75,6 +109,40 @@ contains
 			stop
 		end select
 	end subroutine Zelem_FULL
+
+
+	!**** user-defined subroutine to sample Z_mn as full matrix (note that this is for the BF interface not for the BPACK interface)
+	subroutine ZBelem_FULL(m,n,value_e,quant)
+		use z_BPACK_DEFS
+		implicit none
+
+		class(*),pointer :: quant
+		integer, INTENT(IN):: m,n
+		complex(kind=8)::value_e
+		integer ii,m1,n1
+
+		if(m>0)then
+			m1=m
+			n1=-n
+		else
+			m1=n
+			n1=-m
+		endif
+
+		!!! m,n still need to convert to the original order, using new2old of mshr and mshc
+		select TYPE(quant)
+		type is (quant_app)
+			m1=quant%permutation_m(m1)
+			n1=quant%permutation_n(n1)
+		class default
+			write(*,*)"unexpected type"
+			stop
+		end select
+
+		call Zelem_FULL(m1,n1,value_e,quant)
+	end subroutine ZBelem_FULL
+
+
 end module APPLICATION_MODULE_FULL_SIMPLE
 
 
@@ -100,7 +168,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 	integer :: ierr
 	type(z_Hoption),target::option
 	type(z_Hstat),target::stats
-	type(z_mesh),target::msh
+	type(z_mesh),target::msh,mshr,mshc
 	type(z_kernelquant),target::ker
 	type(quant_app),target::quant
 	type(z_Bmatrix),target::bmat
@@ -109,11 +177,13 @@ PROGRAM ButterflyPACK_TEMPLATE
 	integer level,Maxlevel
 	type(z_proctree),target::ptree
 	integer,allocatable::Permutation(:)
-	integer Nunk_loc
-	integer,allocatable::tree(:)
+	integer Nunk_loc,Nunk_m_loc, Nunk_n_loc
+	integer,allocatable::tree(:),tree_m(:),tree_n(:)
 	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),x_glo(:,:),x_loc(:,:)
 	integer nrhs
-
+	type(z_matrixblock) ::blocks
+	character(len=1024)  :: strings,strings1
+	integer flag,nargs
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -139,8 +209,8 @@ PROGRAM ButterflyPACK_TEMPLATE
 	option%LRlevel=0             ! 0: low-rank compression 100: butterfly compression
 
 
-	quant%tst = 2 ! 1: use a LR product as the kernel, 2: read the full matrix from a file as the kernel
-	
+	quant%tst = 1 ! 1: use a LR product as the kernel, 2: read the full matrix from a file as the kernel
+
 	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/K05N4096.csv' ! file storing the full matrix
 	! quant%Nunk = 4096  ! matrix size
 	! quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N64.csv' ! file storing the full matrix
@@ -151,7 +221,6 @@ PROGRAM ButterflyPACK_TEMPLATE
 	! quant%Nunk = 255  ! matrix size
 	quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/A_alpha_N512.csv' ! file storing the full matrix
 	quant%Nunk = 511  ! matrix size
-
 
 	quant%rank = 6   ! rank of the LR product kernel
 	option%nogeo = 1  ! 1. no geometry info available. 2. geometry info available
@@ -169,10 +238,46 @@ PROGRAM ButterflyPACK_TEMPLATE
 	endif
 
 
+
+	nargs = iargc()
+	ii=1
+	do while(ii<=nargs)
+		call getarg(ii,strings)
+		if(trim(strings)=='-quant')then ! user-defined quantity parameters
+			flag=1
+			do while(flag==1)
+				ii=ii+1
+				if(ii<=nargs)then
+					call getarg(ii,strings)
+					if(strings(1:2)=='--')then
+						ii=ii+1
+						call getarg(ii,strings1)
+						if(trim(strings)=='--tst')then
+							read(strings1,*)quant%tst
+						else
+							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
+						endif
+					else
+						flag=0
+					endif
+				else
+					flag=0
+				endif
+			enddo
+		else if(trim(strings)=='-option')then ! options of ButterflyPACK
+			call z_ReadOption(option,ptree,ii)
+		else
+			if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown argument: ',trim(strings)
+			ii=ii+1
+		endif
+	enddo
+
+
+
 	call z_PrintOptions(option,ptree)
 
 !******************************************************************************!
-! generate a LR matrix as two matrix product
+! generate a LR matrix as two matrix product and do a H matrix compression and factorization
 	if(quant%tst==1)then
 		allocate(tree(1))
 		tree=quant%Nunk
@@ -202,10 +307,42 @@ PROGRAM ButterflyPACK_TEMPLATE
 		allocate(Permutation(quant%Nunk))
 		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree)
 		call MPI_Bcast(Permutation,quant%Nunk,MPI_integer,0,ptree%comm,ierr)
+
+		!**** computation of the construction phase
+		call z_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+
+		!**** factorization phase
+		call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
+
+		!**** generate testing RHSs stored globally on each rank
+		nrhs=2
+		allocate(rhs_glo(quant%Nunk,nrhs))
+		allocate(x_glo(quant%Nunk,nrhs))
+		rhs_glo=1d0
+		call MPI_Bcast(rhs_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,0,ptree%comm,ierr)
+
+		!**** convert global RHSs to local RHSs
+		allocate(rhs_loc(msh%idxe-msh%idxs+1,nrhs))
+		allocate(x_loc(msh%idxe-msh%idxs+1,nrhs))
+		x_loc=0
+		do ii=1,msh%idxe-msh%idxs+1
+			rhs_loc(ii,:) = rhs_glo(Permutation(ii+msh%idxs-1),:)
+		end do
+
+		!**** call the solve routine
+		call z_BPACK_Solution(bmat,x_loc,rhs_loc,msh%idxe-msh%idxs+1,1,option,ptree,stats)
+
+		!**** convert local solutions to global solutions
+		x_glo=0
+		do ii=1,msh%idxe-msh%idxs+1
+			x_glo(Permutation(ii+msh%idxs-1),:) = x_loc(ii,:)
+		end do
+		call MPI_ALLREDUCE(MPI_IN_PLACE,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
+
 	endif
 
 !******************************************************************************!
-! generate a full matrix stored in a files
+! generate a full matrix stored in a files and do a H matrix compression and factorization
 	if(quant%tst==2)then
 		allocate(tree(1))
 		tree=quant%Nunk
@@ -259,46 +396,153 @@ PROGRAM ButterflyPACK_TEMPLATE
 		call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=quant%locations,tree=tree)
 		call MPI_Bcast(Permutation,quant%Nunk,MPI_integer,0,ptree%comm,ierr)
 		deallocate(tree)
+
+		!**** computation of the construction phase
+		call z_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+
+		deallocate(quant%matZ_glo)
+		!**** factorization phase
+		call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
+
+		!**** generate testing RHSs stored globally on each rank
+		nrhs=2
+		allocate(rhs_glo(quant%Nunk,nrhs))
+		allocate(x_glo(quant%Nunk,nrhs))
+		rhs_glo=1d0
+		call MPI_Bcast(rhs_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,0,ptree%comm,ierr)
+
+		!**** convert global RHSs to local RHSs
+		allocate(rhs_loc(msh%idxe-msh%idxs+1,nrhs))
+		allocate(x_loc(msh%idxe-msh%idxs+1,nrhs))
+		x_loc=0
+		do ii=1,msh%idxe-msh%idxs+1
+			rhs_loc(ii,:) = rhs_glo(Permutation(ii+msh%idxs-1),:)
+		end do
+
+		!**** call the solve routine
+		call z_BPACK_Solution(bmat,x_loc,rhs_loc,msh%idxe-msh%idxs+1,1,option,ptree,stats)
+
+		!**** convert local solutions to global solutions
+		x_glo=0
+		do ii=1,msh%idxe-msh%idxs+1
+			x_glo(Permutation(ii+msh%idxs-1),:) = x_loc(ii,:)
+		end do
+		call MPI_ALLREDUCE(MPI_IN_PLACE,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
+	endif
+
+
+!******************************************************************************!
+! generate a LR matrix as two matrix product and do a BF compression
+	if(quant%tst==3)then
+		quant%Nunk_m=1000
+		quant%Nunk_n=800
+
+		!**** Get matrix size and rank and create the matrix
+		quant%lambda = 0
+		allocate(quant%matU_glo(quant%Nunk_m,quant%rank))
+		call z_RandomMat(quant%Nunk_m,quant%rank,quant%rank,quant%matU_glo,0)
+		call MPI_Bcast(quant%matU_glo,quant%Nunk_m*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
+
+		allocate(quant%matV_glo(quant%rank,quant%Nunk_n))
+		call z_RandomMat(quant%rank,quant%Nunk_n,quant%rank,quant%matV_glo,0)
+		call MPI_Bcast(quant%matV_glo,quant%Nunk_n*quant%rank,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
+	   !***********************************************************************
+	   if(ptree%MyID==Main_ID)then
+	   write (*,*) ''
+	   write (*,*) 'Random LR Kernel computing'
+	   write (*,*) 'Matrix size:', quant%Nunk_m, quant%Nunk_n
+       write (*,*) ''
+	   endif
+	   !***********************************************************************
+
+		!**** register the user-defined function and type in ker
+		ker%QuantApp => quant
+		ker%FuncZmn => ZBelem_LR
+
+		allocate(quant%Permutation_m(quant%Nunk_m))
+		allocate(quant%Permutation_n(quant%Nunk_n))
+		call z_BF_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, blocks, option, stats, msh, ker, ptree)
+		call MPI_Bcast(quant%Permutation_m,quant%Nunk_m,MPI_integer,0,ptree%comm,ierr)
+		call MPI_Bcast(quant%Permutation_n,quant%Nunk_n,MPI_integer,0,ptree%comm,ierr)
+
+		call z_BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
 	endif
 
 !******************************************************************************!
+! Read a full non-square matrix and do a BF compression
+	if(quant%tst==4)then
+		quant%Nunk_m=26040
+		quant%Nunk_n=15930
+		quant%Ndim=2
+		quant%DATA_DIR = '../EXAMPLE/FULLMAT_DATA/Mat_redatuming_Freq200.csv' ! file storing the full matrix
+		quant%GEO_DIR_m = '../EXAMPLE/FULLMAT_DATA/Geometry_redatuming_src.csv' ! file storing the geometry
+		quant%GEO_DIR_n = '../EXAMPLE/FULLMAT_DATA/Geometry_redatuming_rec.csv' ! file storing the geometry
+
+		!**** Get matrix size and rank and create the matrix
+		allocate(quant%matZ_glo(quant%Nunk_m,quant%Nunk_n))
+
+		!***** assuming reading one row every time, the first half of a row is the real part, the second half is the imaginary part
+		allocate(datain(quant%Nunk_n*2))
+		if(ptree%MyID==Main_ID)then
+		open(10, file=quant%DATA_DIR)
+		do ii=1,quant%Nunk_m
+			read(10,*) datain
+			quant%matZ_glo(ii,:)=datain(1:quant%Nunk_n) + BPACK_junit*datain(1+quant%Nunk_n:quant%Nunk_n*2)
+		enddo
+		close(10)
+		endif
+		deallocate(datain)
+
+		call MPI_Bcast(quant%matZ_glo,quant%Nunk_m*quant%Nunk_n,MPI_DOUBLE_COMPLEX,Main_ID,ptree%Comm,ierr)
+
+		if(option%nogeo==0)then
+			!***** assuming reading one dimension each time, the geometry is used to partition the matrix
+			allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))
+			quant%locations_m=0
+			allocate(datain(quant%Nunk_m))
+			open(10, file=quant%GEO_DIR_m)
+			do ii=1,quant%Ndim
+				read(10,*) datain(:)
+				quant%locations_m(ii,:)=datain(:)
+			enddo
+			close(10)
+			deallocate(datain)
+
+			allocate(quant%locations_n(quant%Ndim,quant%Nunk_n))
+			quant%locations_n=0
+			allocate(datain(quant%Nunk_n))
+			open(10, file=quant%GEO_DIR_n)
+			do ii=1,quant%Ndim
+				read(10,*) datain(:)
+				quant%locations_n(ii,:)=datain(:)
+			enddo
+			close(10)
+			deallocate(datain)			
+		endif
 
 
-	!**** computation of the construction phase
-    call z_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
+	   if(ptree%MyID==Main_ID)then
+	   write (*,*) ''
+	   write (*,*) 'FullMat Kernel computing'
+	   write (*,*) 'Matrix size:', quant%Nunk_m, quant%Nunk_n
+       write (*,*) ''
+	   endif
+	   !***********************************************************************
 
-	if(quant%tst==2)deallocate(quant%matZ_glo)
+		!**** register the user-defined function and type in ker
+		ker%QuantApp => quant
+		ker%FuncZmn => ZBelem_FULL
 
+		allocate(quant%Permutation_m(quant%Nunk_m))
+		allocate(quant%Permutation_n(quant%Nunk_n))
+		call z_BF_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m=quant%locations_m,Coordinates_n=quant%locations_n)
+		call MPI_Bcast(quant%Permutation_m,quant%Nunk_m,MPI_integer,0,ptree%comm,ierr)
+		call MPI_Bcast(quant%Permutation_n,quant%Nunk_n,MPI_integer,0,ptree%comm,ierr)
 
-	!**** factorization phase
-    call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
+		call z_BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
+	endif
 
-
-	!**** generate testing RHSs stored globally on each rank
-	nrhs=2
-	allocate(rhs_glo(quant%Nunk,nrhs))
-	allocate(x_glo(quant%Nunk,nrhs))
-	rhs_glo=1d0
-	call MPI_Bcast(rhs_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,0,ptree%comm,ierr)
-
-
-	!**** convert global RHSs to local RHSs
-	allocate(rhs_loc(msh%idxe-msh%idxs+1,nrhs))
-	allocate(x_loc(msh%idxe-msh%idxs+1,nrhs))
-	x_loc=0
-	do ii=1,msh%idxe-msh%idxs+1
-		rhs_loc(ii,:) = rhs_glo(Permutation(ii+msh%idxs-1),:)
-	end do
-
-	!**** call the solve routine
-	call z_BPACK_Solution(bmat,x_loc,rhs_loc,msh%idxe-msh%idxs+1,1,option,ptree,stats)
-
-	!**** convert local solutions to global solutions
-	x_glo=0
-	do ii=1,msh%idxe-msh%idxs+1
-		x_glo(Permutation(ii+msh%idxs-1),:) = x_loc(ii,:)
-	end do
-	call MPI_ALLREDUCE(MPI_IN_PLACE,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
+!******************************************************************************!
 
 
 	!**** print statistics
@@ -314,11 +558,11 @@ PROGRAM ButterflyPACK_TEMPLATE
 	call z_delete_kernelquant(ker)
 	call z_BPACK_delete(bmat)
 
-	deallocate(Permutation)
+	if(allocated(Permutation))deallocate(Permutation)
 
     if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "-------------------------------program end-------------------------------------"
 
-	call blacs_exit(1)
+	call z_blacs_exit_wrp(1)
 	call MPI_Finalize(ierr)
 
 end PROGRAM ButterflyPACK_TEMPLATE

@@ -1,0 +1,63 @@
+  integer mpi_comm_world
+  parameter ( mpi_comm_world = 0 )
+
+  integer MPI_COMM_NULL
+  parameter (MPI_COMM_NULL=2)
+  integer MPI_GROUP_NULL
+  parameter (MPI_GROUP_NULL=0)
+  integer MPI_ADDRESS_KIND
+  parameter (MPI_ADDRESS_KIND=8)
+
+  integer mpi_failure
+  parameter ( mpi_failure = 1 )
+  integer mpi_success
+  parameter ( mpi_success = 0 )
+
+  integer mpi_status_size
+  parameter ( mpi_status_size = 3 )
+  integer mpi_source
+  parameter ( mpi_source = 1 )
+  integer mpi_tag
+  parameter ( mpi_tag = 2 )
+  integer mpi_count
+  parameter ( mpi_count = 3 )
+
+  integer mpi_any_source
+  parameter ( mpi_any_source = -1 )
+  integer mpi_any_tag
+  parameter ( mpi_any_tag = -1 )
+
+  integer mpi_integer
+  parameter ( mpi_integer = 1 )
+  integer mpi_double_precision
+  parameter ( mpi_double_precision = 3 )
+  integer MPI_COMPLEX
+  parameter (MPI_COMPLEX=18)
+  integer MPI_DOUBLE_COMPLEX
+  parameter (MPI_DOUBLE_COMPLEX=22)
+  integer MPI_FLOAT
+  parameter (MPI_FLOAT=45)
+  integer mpi_logical
+  parameter ( mpi_logical = 4 )
+  integer mpi_character
+  parameter ( mpi_character = 5 )
+
+  integer mpi_sum
+  parameter ( mpi_sum = 1 )
+  integer mpi_max
+  parameter ( mpi_max = 2 )
+  integer mpi_min
+  parameter ( mpi_min = 3 )
+  integer mpi_product
+  parameter ( mpi_product = 4 )
+  
+
+  ! YL: I cannot find better ways than the following. It's possible that data equals 2147483646, then the MPI function will give wrong results. 
+  integer MPI_IN_PLACE
+  parameter ( MPI_IN_PLACE = 2147483646 ) 
+  integer MPI_BOTTOM
+  parameter ( MPI_BOTTOM = 2147483646 )
+
+  external MPI_WTIME, MPI_WTICK , PMPI_WTICK, PMPI_WTIME
+  double precision MPI_WTIME, MPI_WTICK , PMPI_WTICK, PMPI_WTIME
+

@@ -13,12 +13,13 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 project(ButterflyPACK C CXX Fortran)
 set(VERSION_MAJOR "2")
 set(VERSION_MINOR "3")
-set(VERSION_BugFix "0")
+set(VERSION_BugFix "1")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 # Set up options
 option(enable_doc       "Build doxygen documentation" OFF)
 option(enable_openmp    "Build with OpenMP support" ON)
+option(enable_mpi    "Build with MPI support" ON)
 
 ######################################################################
 #
@@ -232,6 +233,10 @@ if(LAPACK_FOUND)
 endif()
 
 #--------------------- SCALAPACK ---------------------
+if(enable_mpi)
+  set(CMAKE_Fortran_FLAGS "-DHAVE_MPI ${CMAKE_Fortran_FLAGS}")
+  set(CMAKE_CXX_FLAGS "-DHAVE_MPI ${CMAKE_CXX_FLAGS}")
+
 if(TPL_SCALAPACK_LIBRARIES)
   set(SCALAPACK_FOUND TRUE)
 else()
@@ -249,7 +254,7 @@ if(SCALAPACK_FOUND)
   string(REPLACE ";" " " SCALAPACK_LIB_STR "${SCALAPACK_LIB}")
   set(SCALAPACK_LIB_EXPORT ${SCALAPACK_LIB_STR})
 endif()
-
+endif()
 #--------------------- MAGMA ---------------------
 if(TPL_MAGMA_LIBRARIES)
   set(MAGMA_FOUND TRUE)
@@ -266,6 +271,7 @@ if(MAGMA_FOUND)
 endif()
 
 #--------------------- ARPACK ---------------------
+if(enable_mpi)
 if(TPL_ARPACK_LIBRARIES)
   set(CMAKE_Fortran_FLAGS "-DHAVE_ARPACK ${CMAKE_Fortran_FLAGS}")
   message("-- Using TPL_ARPACK_LIBRARIES='${TPL_ARPACK_LIBRARIES}'")
@@ -273,6 +279,7 @@ if(TPL_ARPACK_LIBRARIES)
   # fix up ARPACK library name
   string(REPLACE ";" " " ARPACK_LIB_STR "${ARPACK_LIB}")
   set(ARPACK_LIB_EXPORT ${ARPACK_LIB_STR})
+endif()
 endif()
 
 
@@ -307,6 +314,7 @@ endif()
 
 
 #--------------------- MPI ---------------------
+if(enable_mpi)
 find_package(MPI)
 if(MPI_Fortran_FOUND)
   set(CMAKE_Fortran_FLAGS "${MPI_Fortran_COMPILE_FLAGS} ${CMAKE_Fortran_FLAGS}")
@@ -332,6 +340,8 @@ if(BUTTERFLYPACK_USE_MPI3)
   set(CMAKE_Fortran_FLAGS "-DHAVE_MPI3 ${CMAKE_Fortran_FLAGS}")
   message("-- Using MPI3 features")
 endif()
+endif()
+
 
 # Test Fortran Destructor
 check_fortran_source_compiles(
@@ -362,7 +372,9 @@ endif()
 # Include directories
 #
 ######################################################################
+if(enable_mpi)
 include_directories(${MPI_Fortran_INCLUDE_PATH})
+endif()
 include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 
 ######################################################################
@@ -443,7 +455,9 @@ else()
 endif()
 
 
-
+if(NOT enable_mpi)
+add_subdirectory(MPI_DUMMY)
+endif()
 add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(SRC_SINGLE)

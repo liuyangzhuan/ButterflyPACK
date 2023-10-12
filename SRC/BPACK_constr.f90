@@ -52,12 +52,12 @@ contains
    end subroutine Zelem_block_Extraction
 
 !>**** Initialization of the construction phase
-   ! N is matrix dimension
-   ! P is the permutation vector returned
-   ! N_loc is the local number of rows/columns
+   ! Nunk is matrix dimension
+   ! Permutation is the permutation vector returned
+   ! Nunk_loc is the local number of rows/columns
    ! bmat is the meta-data storing the compressed matrix
    ! Coordinates(optional) of dimension dim*N is the array of Cartesian coordinates corresponding to each row or column
-   ! clustertree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
+   ! tree(optional) is an array of leafsizes in a user-provided cluster tree. clustertree has length 2*nl with nl denoting level of the clustertree.
    ! If clustertree is incomplete with 0 element, ButterflyPACK will adjust it to a complete tree and return a modified clustertree.
    ! If the hierarchical matrix has more levels than clustertree, the code will generate more levels according to option%xyzsort, option%nogeo, and option%Nmin_leaf
    ! nns(optional) of dimension option%knn*N is the array of user provided nearest neighbours
@@ -101,7 +101,9 @@ contains
       stats%Time_Entry_Comm = 0
 
       !>**** set thread number here
+#ifdef HAVE_MPI
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'NUMBER_MPI=', ptree%nproc
+#endif
       threads_num = 1
       CALL getenv("OMP_NUM_THREADS", strings)
       strings = TRIM(strings)
@@ -800,6 +802,104 @@ contains
 
 
 
+
+
+!>**** Interface of BF construction via entry extraction
+   !> @param blocks: the structure containing the block (inout)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (inout)
+   !> @param msh: the structure containing points and ordering information (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   subroutine BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
+      implicit none
+
+      integer Maxlevel
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(matrixblock),target::blocks
+      type(matrixblock),pointer::blocks_1
+      type(proctree)::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2, error, Memory, tol_comp_tmp
+      integer ierr,pp,knn_tmp
+      integer:: boundary_map(1,1)
+      integer groupm_start, Nboundall,Ninadmissible
+      blocks_1 => blocks
+      if (allocated(msh%xyz)) deallocate (msh%xyz)
+
+      t1 = MPI_Wtime()
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction......"
+
+      groupm_start = 0
+      Nboundall = 0
+      Ninadmissible = 0
+      if (option%forwardN15flag == 1) then
+         knn_tmp = option%knn
+         option%knn=0
+         call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         option%knn=knn_tmp
+         call BF_sym2asym(blocks)
+      elseif (option%forwardN15flag == 2) then
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, -1, error)
+         if(error>50*option%tol_comp)then
+            pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+            if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: error ',error,',  with the N15 algorithm'
+            call BF_delete(blocks,0)
+            knn_tmp = option%knn
+            option%tol_comp=option%tol_comp*5
+            option%knn=0
+            call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+            option%knn=knn_tmp
+            option%tol_comp=option%tol_comp/5
+            call BF_sym2asym(blocks)
+         endif
+      else
+         call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+      end if
+
+      if (option%verbosity >= 0) call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
+      call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+      if (option%verbosity >= 2)call BF_print_size(blocks)
+
+      !>**** delete neighours in msh
+      if(allocated(msh%nns))then
+         call LogMemory(stats, -SIZEOF(msh%nns)/1024.0d3)
+         deallocate(msh%nns)
+      endif
+
+      t2 = MPI_Wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
+
+      if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
+      if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
+      stats%rankmax_of_level(0) = blocks%rankmax
+      stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+      stats%Time_Fill = stats%Time_Fill + t2 - t1
+      ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
+
+   end subroutine BF_Construct_Element_Compute
+
+
+
+
+
+
+
+
 !>**** Computation of the full matrix with matrix entry evaluation
    subroutine FULLMAT_Element(option, stats, msh, ker, ptree)
 
@@ -898,14 +998,7 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction finished"
 
-      select case (option%format)
-      case (HODLR)
-         Maxlevel = bmat%ho_bf%Maxlevel
-      case (HMAT)
-         Maxlevel = bmat%h_mat%Maxlevel
-      case (HSS)
-         Maxlevel = bmat%hss_bf%Maxlevel
-      end select
+      Maxlevel = bmat%Maxlevel
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
 
    end subroutine BPACK_construction_Element
@@ -1132,6 +1225,8 @@ contains
                   ! call BF_delete(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1),1)
                   ! call BF_copy('T',ho_bf1%levels(level_c)%BP(ii-1)%LL(1)%matrices_block(1),ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
                   ! endif
+
+                  if (option%verbosity >= 2)call BF_print_size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
 
                   if (level == option%level_check) then
                      ! call Bplus_randomized_Exact_test(ho_bf1%levels(level_c)%BP(ii))
@@ -1416,7 +1511,7 @@ contains
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      ! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      ! call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       ! nprow = ptree%pgrp(pgno)%nprow
       ! npcol = ptree%pgrp(pgno)%npcol
 
@@ -2346,7 +2441,7 @@ contains
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
-      ! call blacs_gridinfo(ctxt, nprow, npcol, myrow, mycol)
+      ! call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       ! nprow = ptree%pgrp(pgno)%nprow
       ! npcol = ptree%pgrp(pgno)%npcol
 
@@ -2677,10 +2772,14 @@ contains
                   ci = blocks%inters(nn)%cols(jj)
                   call g2l(ci, inters(idx)%nc, npcol, nbslpk, jproc, myj)
                   pp = jproc*nprow + iproc + idstart + 1
+#ifdef HAVE_TASKLOOP
                   !$omp atomic capture
+#endif
                   idxs = sendquant(pp)%size
                   sendquant(pp)%size = sendquant(pp)%size + 4
+#ifdef HAVE_TASKLOOP
                   !$omp end atomic
+#endif
                   sendquant(pp)%dat(idxs + 1, 1) = myi
                   sendquant(pp)%dat(idxs + 2, 1) = myj
                   sendquant(pp)%dat(idxs + 3, 1) = idx

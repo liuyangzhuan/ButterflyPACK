@@ -35,7 +35,6 @@
 #include <random>
 #include <vector>
 #include <atomic>
-#include <mpi.h>
 #include <sstream>
 #include <cstring>
 #include <getopt.h>
@@ -49,16 +48,6 @@
 using namespace std;
 
 
-#ifdef HAVE_MPI
-extern "C" {
-      ///////////////////////////////////////////////
-      ////// BLACS //////////////////////////////////
-      ///////////////////////////////////////////////
-      void Cblacs_exit(int);
-}
-#else
-    void Cblacs_exit(int){};
-#endif
 
 // 2-norm distance
 inline double dist2(double *x, double *y, int d) {
@@ -452,12 +441,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
 int main(int argc, char* argv[])
 {
 
-    int myrank, size;                     // Store values of processor rank and total no of procs requestedss
-    int master_rank = 0;
-	MPI_Init(&argc, &argv); 	                            // Initialize MPI, called only once
-    MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
-    MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
-    MPI_Op op;
+    int size=1;                     // total no of procs (1 for non-MPI examples)
 	double h=0.1; //kernel parameter
 	double lambda=10.0 ; //kernel parameter
 	int ker=1 ; // kernel choice
@@ -567,7 +551,6 @@ int main(int argc, char* argv[])
   	//   iss >> fullmatfile;
     } break;
 	case 'h': {
-		if(myrank==master_rank)
 		std::cout<<" tst=1: testing data sets with csv formats with ker 1:5 \n "<<std::endl;
 	} break;
     default: break;
@@ -575,10 +558,10 @@ int main(int argc, char* argv[])
   }
 
 
-if(myrank==master_rank){
+
 	d_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
 	std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
-}
+
 
 
 	/*****************************************************************/
@@ -593,60 +576,13 @@ if(tst==1){
 	nogeo=0;
 }
 
-// 	/*****************************************************************/
-// 	/* Test Full matrices*/
-// if(tst==4){
-// 	if(ker !=7){
-// 		if(myrank==master_rank)std::cout<<"Forcing ker to 7 for tst=4."<<std::endl;
-// 		ker = 7;
-// 	}
-// 	// Npo = 40000;
-
-// 	delete(tree);
-// 	// nlevel = 7;
-// 	vector<int> t1((int)pow(2,nlevel));
-// 	vector<double> matFull(Npo*Npo);
-// 	vector<int> perm(Npo);
-// 	if(myrank==master_rank){
-// 		// vector<double> matFull1(Npo*Npo);
-// 		ifstream f(fullmatfile, ios::binary);
-// 		f.read((char*)matFull.data(), sizeof(double)*Npo*Npo);
-
-// 		// perm = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/sorder_40000.dat");
-
-
-// 		// vector<int> perm1=perm;
-// 		// for(int ii=0;ii<Npo;ii++)
-// 		// 	perm.data()[perm1.data()[ii]]=ii;
-
-
-// 		t1 = write_from_file<int>(leaffile);
-
-// 		// std::cout<<matFull.data()[Npo*Npo-1]<<" "<<perm.data()[Npo-1]<<" "<<ccc<<std::endl;
-// 	}
-// 	MPI_Bcast(matFull.data(), Npo*Npo, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-// 	// MPI_Bcast(perm.data(), Npo, MPI_INT, 0, MPI_COMM_WORLD);
-// 	MPI_Bcast(t1.data(), (int)pow(2,nlevel), MPI_INT, 0, MPI_COMM_WORLD);
-
-// 	tree = new int[(int)pow(2,nlevel)];
-// 	for(int ii=0;ii<(int)pow(2,nlevel);ii++)
-// 	tree[ii] = t1.data()[ii];
-
-
-// 	quant_ptr=new C_QuantApp(Npo, ker, matFull);
-// 	nogeo=1;
-// 	sort_opt=0;
-// }
-
-
-
 	/*****************************************************************/
 
-	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
+	std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
 
 	int myseg=0;     // local number of unknowns
 	int* perms = new int[Npo]; //permutation vector returned by HODLR
-	int* groups = new int[size];
+	int* groups = new int[1];
 	int i_opt;
 	double d_opt;
 	int cpp=1; //1: use user-defined cpp/c functions for construction
@@ -660,10 +596,9 @@ if(tst==1){
 	F2Cptr ptree;      //process tree returned by Fortran code
 
 
-	MPI_Fint Fcomm;  // the fortran MPI communicator
-	Fcomm = MPI_Comm_c2f(MPI_COMM_WORLD);
+	int Fcomm=321;  // dummy fortran MPI communicator
 
-	for (int i = 0; i < size; i++)groups[i]=i;
+	groups[0]=0;
 	// create butterflypack data structures
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree);
 	d_c_bpack_createoption(&option);
@@ -739,7 +674,7 @@ if(tst==1){
 
 
 
-	if(myrank==master_rank)std::cout<<"Printing stats of the first hierarchical matrix: "<<std::endl;
+	std::cout<<"Printing stats of the first hierarchical matrix: "<<std::endl;
 	d_c_bpack_printstats(&stats,&ptree);
 
 	d_c_bpack_deletestats(&stats);
@@ -756,9 +691,6 @@ if(tst==1){
 	delete[] b;
 	delete[] x;
 
-
-	Cblacs_exit(1);
-	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
-    return 0;
+  return 0;
 }
 //------------------------------------------------------------------------------

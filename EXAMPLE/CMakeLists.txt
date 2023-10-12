@@ -3,16 +3,25 @@ include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_SINGLE)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_COMPLEX)
 include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
+if(NOT enable_mpi)
+include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
+endif()
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_SINGLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_COMPLEX)
 # Libs linked to all of the examples
+if(enable_mpi)
 set(all_link_libs_z zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
 set(all_link_libs_d dbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_c cbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_s sbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-
+else()
+set(all_link_libs_z zbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
+set(all_link_libs_d dbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_c cbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_s sbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+endif()
 ########################################### single complex Fortran drivers
 
 set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
@@ -25,6 +34,7 @@ set(FZEXM1 EMCURV_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2d ${FZEXM1})
 target_link_libraries(ie2d ${all_link_libs_z})
 install(TARGETS ie2d RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+add_dependencies(ie2d ie3d_sp)
 
 set(FZEXM2 EMCURV_Eigen_Driver.f90 EMCURV_Module.f90)
 add_executable(ie2deigen ${FZEXM2})
@@ -34,6 +44,7 @@ add_dependencies(ie2deigen ie2d)
 set(FZEXM3 EMSURF_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3d ${FZEXM3})
 target_link_libraries(ie3d ${all_link_libs_z})
+add_dependencies(ie3d ie2deigen)
 
 set(FZEXM4 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3deigen ${FZEXM4})
@@ -44,28 +55,17 @@ install(TARGETS ie3deigen RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 set(FZEXM5 SMAT_Driver.f90)
 add_executable(smat ${FZEXM5})
 target_link_libraries(smat ${all_link_libs_z})
+add_dependencies(smat ie3deigen)
 
 set(FZEXM6 FrontalDist_Driver.f90)
 add_executable(frontaldist ${FZEXM6})
 target_link_libraries(frontaldist ${all_link_libs_z})
 add_dependencies(frontaldist smat)
 
-
-set(FZEXM7 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp G2D/bessel.cpp)
-add_executable(go2d ${FZEXM7})
-target_link_libraries(go2d ${all_link_libs_z})
-add_dependencies(go2d frontaldist)
-
-set(FZEXM8 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_nonfinite.cpp)
-add_executable(go3d ${FZEXM8})
-target_link_libraries(go3d ${all_link_libs_z})
-add_dependencies(go3d go2d)
-
-
 set(FZEXM9 EMSURF_Port_Eigen_Driver.f90 EMSURF_Port_Module.f90 DoCubicInterp2D.c)
 add_executable(ie3dporteigen ${FZEXM9})
 target_link_libraries(ie3dporteigen ${all_link_libs_z})
-add_dependencies(ie3dporteigen ie3d)
+add_dependencies(ie3dporteigen frontaldist)
 install(TARGETS ie3dporteigen RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
 
@@ -77,12 +77,15 @@ install(TARGETS ie3dport RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
 
 ########################################### double Fortran drivers
+set(FDEXMSEQ1 KERREG_Driver_seq.f90)
+add_executable(krr_seq ${FDEXMSEQ1})
+target_link_libraries(krr_seq ${all_link_libs_d})
 
 set(FDEXM1 FULLMAT_Driver.f90)
 add_executable(full ${FDEXM1})
 target_link_libraries(full ${all_link_libs_d})
 target_link_libraries(full ${all_link_libs_z})
-add_dependencies(full frontaldist)
+add_dependencies(full krr_seq)
 
 set(FDEXM1-1 FULLMAT_Driver_simple.f90)
 add_executable(full_simple ${FDEXM1-1})
@@ -106,28 +109,45 @@ target_link_libraries(fullkrr ${all_link_libs_d})
 add_dependencies(fullkrr frontal)
 
 
+########################################### non-MPI double C++ drivers
+set(CDEXM_SEQ InterfaceTest_simple_seq.cpp)
+add_executable(ctest_simple_seq ${CDEXM_SEQ})
+target_link_libraries(ctest_simple_seq ${all_link_libs_d})
+
+
+if(enable_mpi) # YL: I haven't add the MPI dummy library in C yet.
 
 ########################################### double C++ drivers
-
-set(CDEXM InterfaceTest.cpp)
-add_executable(ctest ${CDEXM})
+set(CDEXM1 InterfaceTest.cpp)
+add_executable(ctest ${CDEXM1})
 target_link_libraries(ctest ${all_link_libs_d})
 
-set(CDEXM InterfaceTest_simple.cpp)
-add_executable(ctest_simple ${CDEXM})
+set(CDEXM2 InterfaceTest_simple.cpp)
+add_executable(ctest_simple ${CDEXM2})
 target_link_libraries(ctest_simple ${all_link_libs_d})
 add_dependencies(ctest_simple ctest)
 
 ########################################### double complex C++ drivers
 
-set(CFEXM FIO_Driver.cpp)
-add_executable(cfio ${CFEXM})
+set(CZEXM1 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp G2D/bessel.cpp)
+add_executable(go2d ${CZEXM1})
+target_link_libraries(go2d ${all_link_libs_z})
+add_dependencies(go2d ctest_simple)
+
+set(CZEXM2 Taylor3D.cpp G3D/G3D.cpp G3D/rtGetInf.cpp G3D/rtGetNaN.cpp G3D/rt_nonfinite.cpp)
+add_executable(go3d ${CZEXM2})
+target_link_libraries(go3d ${all_link_libs_z})
+add_dependencies(go3d go2d)
+
+
+set(CZEXM3 FIO_Driver.cpp)
+add_executable(cfio ${CZEXM3})
 target_link_libraries(cfio ${all_link_libs_d})
 target_link_libraries(cfio ${all_link_libs_z})
-add_dependencies(cfio ctest)
+add_dependencies(cfio go3d)
 
-set(CFEXM2 RankBenchmark_Driver.cpp)
-add_executable(rankben ${CFEXM2})
+set(CZEXM4 RankBenchmark_Driver.cpp)
+add_executable(rankben ${CZEXM4})
 target_link_libraries(rankben ${all_link_libs_d})
 target_link_libraries(rankben ${all_link_libs_z})
 add_dependencies(rankben cfio)
@@ -149,7 +169,7 @@ target_link_libraries(cifio2d ${all_link_libs_d})
 target_link_libraries(cifio2d ${all_link_libs_z})
 add_dependencies(cifio2d cifio)
 endif()
-
+endif()
 
 
 
