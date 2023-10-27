@@ -2069,7 +2069,7 @@ end function distance_geo
       do i = 1, h_mat%myArows
          do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
-            call Hmat_GetBlkLst(blocks, ptree, h_mat%lstblks)
+            call Hmat_GetBlkLst(blocks, ptree, h_mat%lstblks,h_mat%Maxlevel)
          enddo
       enddo
 

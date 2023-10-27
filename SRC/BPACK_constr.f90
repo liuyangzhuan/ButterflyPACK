@@ -588,7 +588,7 @@ contains
          do level = 0, Maxlevel
             blocks%lstblks(level) = list()
          enddo
-         call Hmat_GetBlkLst(blocks, ptree, blocks%lstblks)
+         call Hmat_GetBlkLst(blocks, ptree, blocks%lstblks,Maxlevel)
          do level = 0, Maxlevel
             call MergeSort(blocks%lstblks(level)%head, node_score_block_ptr_row)
          enddo

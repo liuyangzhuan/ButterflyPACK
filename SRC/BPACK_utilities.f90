@@ -22,15 +22,15 @@ module BPACK_Utilities
 contains
 
 
-   recursive subroutine Hmat_GetBlkLst(blocks, ptree, lstblks)
+   recursive subroutine Hmat_GetBlkLst(blocks, ptree, lstblks, Maxlevel)
       implicit none
       ! type(Hoption)::option
       ! type(Hstat)::stats
       ! type(mesh)::msh
       type(proctree)::ptree
-      integer nth, bidx, level_c
+      integer nth, bidx, level_c, Maxlevel
       integer ii, jj, idx, row_group, col_group
-      type(list)::lstblks(:)
+      type(list)::lstblks(0:Maxlevel)
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(matrixblock), pointer::blocks, blocks_son
@@ -44,7 +44,7 @@ contains
             do ii = 1, 2
             do jj = 1, 2
                blocks_son => blocks%sons(ii, jj)
-               call Hmat_GetBlkLst(blocks_son, ptree, lstblks)
+               call Hmat_GetBlkLst(blocks_son, ptree, lstblks, Maxlevel)
             enddo
             enddo
          else
@@ -181,7 +181,7 @@ contains
          do ii = 1, bm
             do jj = 1, bn
                blocks1 => h_mat_o%Local_blocks(ii, jj)
-               call Hmat_GetBlkLst(blocks1, ptree, h_mat_o%lstblks)
+               call Hmat_GetBlkLst(blocks1, ptree, h_mat_o%lstblks, h_mat_o%Maxlevel)
             enddo
          enddo
          do level = 0, h_mat_o%Maxlevel
