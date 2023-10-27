@@ -22,7 +22,7 @@ module BPACK_Utilities
 contains
 
 
-   recursive subroutine Hmat_GetBlkLst(blocks, ptree, h_mat)
+   recursive subroutine Hmat_GetBlkLst(blocks, ptree, lstblks)
       implicit none
       ! type(Hoption)::option
       ! type(Hstat)::stats
@@ -30,7 +30,7 @@ contains
       type(proctree)::ptree
       integer nth, bidx, level_c
       integer ii, jj, idx, row_group, col_group
-      type(Hmat)::h_mat
+      type(list)::lstblks(:)
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(matrixblock), pointer::blocks, blocks_son
@@ -39,19 +39,19 @@ contains
 
       row_group = blocks%row_group
       col_group = blocks%col_group
-      if (IOwnPgrp(ptree, blocks%pgno)) then
+      ! if (IOwnPgrp(ptree, blocks%pgno)) then
          if (blocks%style == 4) then ! divided blocks
             do ii = 1, 2
             do jj = 1, 2
                blocks_son => blocks%sons(ii, jj)
-               call Hmat_GetBlkLst(blocks_son, ptree, h_mat)
+               call Hmat_GetBlkLst(blocks_son, ptree, lstblks)
             enddo
             enddo
          else
             blk_ptr%ptr => blocks
-            call append(h_mat%lstblks(blocks%level), blk_ptr)
+            call append(lstblks(blocks%level), blk_ptr)
          endif
-      endif
+      ! endif
    end subroutine Hmat_GetBlkLst
 
 
@@ -181,7 +181,7 @@ contains
          do ii = 1, bm
             do jj = 1, bn
                blocks1 => h_mat_o%Local_blocks(ii, jj)
-               call Hmat_GetBlkLst(blocks1, ptree, h_mat_o)
+               call Hmat_GetBlkLst(blocks1, ptree, h_mat_o%lstblks)
             enddo
          enddo
          do level = 0, h_mat_o%Maxlevel

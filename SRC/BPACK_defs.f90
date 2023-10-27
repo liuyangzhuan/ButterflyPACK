@@ -315,6 +315,7 @@ module BPACK_DEFS
         ! the following is for blocks in H matrix solver
         type(matrixblock), pointer :: father => null() !< pointer to its fater
         type(matrixblock), pointer :: sons(:, :) => null() !< pointer to its children
+        type(list), allocatable::lstblks(:) !< lstblks(level) is the list of blocks at that level
         ! integer prestyle   !< the block style before the split operation 1: full block 2: compressed block 4: hierarchical block
         ! integer data_type  !< the block data_type, need better documentation later
         ! integer nested_num !< depreciated

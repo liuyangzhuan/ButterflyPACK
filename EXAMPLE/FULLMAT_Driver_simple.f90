@@ -182,6 +182,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),x_glo(:,:),x_loc(:,:)
 	integer nrhs
 	type(z_matrixblock) ::blocks
+	type(z_blockplus) ::BP
 	character(len=1024)  :: strings,strings1
 	integer flag,nargs
 
@@ -461,11 +462,11 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 		allocate(quant%Permutation_m(quant%Nunk_m))
 		allocate(quant%Permutation_n(quant%Nunk_n))
-		call z_BF_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, blocks, option, stats, msh, ker, ptree)
+		call z_BP_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, BP, option, stats, msh, ker, ptree)
 		call MPI_Bcast(quant%Permutation_m,quant%Nunk_m,MPI_integer,0,ptree%comm,ierr)
 		call MPI_Bcast(quant%Permutation_n,quant%Nunk_n,MPI_integer,0,ptree%comm,ierr)
 
-		call z_BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
+		call z_BP_Construct_Element_Compute(BP, option, stats, msh, ker, ptree)
 	endif
 
 !******************************************************************************!
@@ -478,8 +479,10 @@ PROGRAM ButterflyPACK_TEMPLATE
 		quant%GEO_DIR_m = '../EXAMPLE/FULLMAT_DATA/Geometry_redatuming_src.csv' ! file storing the geometry
 		quant%GEO_DIR_n = '../EXAMPLE/FULLMAT_DATA/Geometry_redatuming_rec.csv' ! file storing the geometry
 
+
 		!**** Get matrix size and rank and create the matrix
 		allocate(quant%matZ_glo(quant%Nunk_m,quant%Nunk_n))
+		quant%matZ_glo=1d0
 
 		!***** assuming reading one row every time, the first half of a row is the real part, the second half is the imaginary part
 		allocate(datain(quant%Nunk_n*2))
@@ -517,7 +520,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 				quant%locations_n(ii,:)=datain(:)
 			enddo
 			close(10)
-			deallocate(datain)			
+			deallocate(datain)
 		endif
 
 
@@ -535,11 +538,19 @@ PROGRAM ButterflyPACK_TEMPLATE
 
 		allocate(quant%Permutation_m(quant%Nunk_m))
 		allocate(quant%Permutation_n(quant%Nunk_n))
-		call z_BF_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m=quant%locations_m,Coordinates_n=quant%locations_n)
+		call z_BP_Construct_Init(quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, BP, option, stats, msh, ker, ptree, Coordinates_m=quant%locations_m,Coordinates_n=quant%locations_n)
 		call MPI_Bcast(quant%Permutation_m,quant%Nunk_m,MPI_integer,0,ptree%comm,ierr)
 		call MPI_Bcast(quant%Permutation_n,quant%Nunk_n,MPI_integer,0,ptree%comm,ierr)
 
-		call z_BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
+		call z_BP_Construct_Element_Compute(BP, option, stats, msh, ker, ptree)
+
+		nrhs=1
+		allocate(rhs_loc(Nunk_m_loc,nrhs))
+		rhs_loc=0
+		allocate(x_loc(Nunk_n_loc,nrhs))
+		x_loc=1 ! a simple test vector
+		call z_BP_Mult(BP, 'N', x_loc, rhs_loc, Nunk_n_loc, Nunk_m_loc, nrhs, ptree, stats)
+
 	endif
 
 !******************************************************************************!

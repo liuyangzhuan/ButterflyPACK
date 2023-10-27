@@ -4178,6 +4178,44 @@ contains
       ! pid = ptree%pgrp(pgno_sub)%head
    end subroutine GetBlockPID
 
+!>**** get the pgno for the multi-dimensinoal group in msh.
+   !ptree: process tree
+   !ndim: number of dimensions
+   !group(ndim): multi-index for the group
+   integer function GetMshGroup_Pgno(ptree, ndim, group)
+      implicit none
+      type(proctree)::ptree
+      integer:: ndim,dim_i, idx_tmp, Maxgrp
+      integer:: idx_p(ndim)
+      integer :: pp, level, ll, group(*), pgno
+
+
+      level = GetTreelevel(group(1)) - 1
+      pgno=1
+      Maxgrp = 2**(ptree%nlevel) - 1
+      idx_p = 1
+      do pp=1,level
+         do dim_i=1,Ndim
+            idx_tmp = group(dim_i)
+            do ll = 1, level - pp
+               idx_tmp = floor_safe(idx_tmp/2d0)
+            enddo
+            if(idx_tmp==idx_p(dim_i)*2)then
+               if(pgno*2<=Maxgrp)pgno=pgno*2
+            elseif(idx_tmp==idx_p(dim_i)*2+1)then
+               if(pgno*2+1<=Maxgrp)pgno=pgno*2+1
+            else
+               write(*,*)"something wrong for the value of idx_tmp and idx_p", idx_tmp, idx_p(dim_i)
+               stop
+            endif
+
+            idx_p(dim_i) = idx_tmp
+         enddo
+      enddo
+
+      GetMshGroup_Pgno= pgno
+   end function GetMshGroup_Pgno
+
 
    subroutine blacs_exit_wrp(flag)
       integer flag

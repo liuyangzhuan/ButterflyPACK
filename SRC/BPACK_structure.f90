@@ -362,8 +362,15 @@ end function distance_geo
 
                   group_m = blocks%sons(i, j)%row_group
                   group_n = blocks%sons(i, j)%col_group
-
-                  blocks%sons(i, j)%pgno = blocks%pgno
+                  if(ptree%pgrp(blocks%pgno)%nproc>1)then
+                     if(i==1)then
+                        blocks%sons(i, j)%pgno = blocks%pgno*2
+                     else
+                        blocks%sons(i, j)%pgno = blocks%pgno*2+1
+                     endif
+                  else
+                     blocks%sons(i, j)%pgno = blocks%pgno
+                  endif
                   blocks%sons(i, j)%M = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
                   blocks%sons(i, j)%N = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
                   blocks%sons(i, j)%headm = msh%basis_group(group_m)%head
@@ -380,7 +387,6 @@ end function distance_geo
             call Hmat_construct_local_tree(blocks_son, option, stats, msh, ker, ptree, Maxlevel)
             blocks_son => blocks%sons(2, 2)
             call Hmat_construct_local_tree(blocks_son, option, stats, msh, ker, ptree, Maxlevel)
-
          endif
       endif
 
@@ -2063,7 +2069,7 @@ end function distance_geo
       do i = 1, h_mat%myArows
          do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
-            call Hmat_GetBlkLst(blocks, ptree, h_mat)
+            call Hmat_GetBlkLst(blocks, ptree, h_mat%lstblks)
          enddo
       enddo
 
