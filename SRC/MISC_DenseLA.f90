@@ -3641,11 +3641,11 @@ endif
       MM=N
 
       LWORK = -1
-      call dtrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
+      call dtrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
       lwork = NINT(dble(TEMP(1)*2.001 + 1))
       allocate (WORK(lwork))
       WORK = 0
-      call dtrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
+      call dtrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
 
       deallocate(WORK)
 
@@ -3669,11 +3669,11 @@ endif
       MM=N
 
       LWORK = -1
-      call strevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
+      call strevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, INFO )
       lwork = NINT(dble(TEMP(1)*2.001 + 1))
       allocate (WORK(lwork))
       WORK = 0
-      call strevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
+      call strevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, INFO )
 
       deallocate(WORK)
 
@@ -3701,14 +3701,14 @@ endif
 
       LWORK = -1
       LRWORK = -1
-      call ztrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
+      call ztrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
       lwork = NINT(dble(TEMP(1)*2.001 + 1))
       allocate (WORK(lwork))
       WORK = 0
       lrwork = NINT(dble(RTEMP(1)*2.001 + 1))
       allocate (RWORK(lrwork))
       RWORK = 0
-      call ztrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
+      call ztrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
 
       deallocate(WORK)
       deallocate(RWORK)
@@ -3737,14 +3737,14 @@ endif
 
       LWORK = -1
       LRWORK = -1
-      call ctrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
+      call ctrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, TEMP, lwork, RTEMP, lrwork, INFO )
       lwork = NINT(dble(TEMP(1)*2.001 + 1))
       allocate (WORK(lwork))
       WORK = 0
       lrwork = NINT(dble(RTEMP(1)*2.001 + 1))
       allocate (RWORK(lrwork))
       RWORK = 0
-      call ctrevc3( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
+      call ctrevc3mod( SIDE, HOWMNY, SELECT, N, Matrix, N, VL, N, VR, N, MM, M, WORK, lwork, RWORK, lrwork, INFO )
 
       deallocate(WORK)
       deallocate(RWORK)
