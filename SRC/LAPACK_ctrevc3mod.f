@@ -239,7 +239,7 @@
 *> \endverbatim
 *>
 *  =====================================================================
-      SUBROUTINE CTREVC3mod( SIDE, HOWMNY, SELECT, N, T, LDT, VL, LDVL, VR,
+      SUBROUTINE CTREVC3mod( SIDE, HOWMNY, SELECT, N, T, LDT,VL,LDVL,VR,
      $                    LDVR, MM, M, WORK, LWORK, RWORK, LRWORK, INFO)
       IMPLICIT NONE
 *
