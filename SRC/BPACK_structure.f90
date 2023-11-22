@@ -1039,6 +1039,7 @@ end function distance_geo
          write(*,*)'not supported format in Cluster_partition_MD:', option%format
          stop
       end select
+      bmat%Maxlevel=Maxlevel
 
       !>************** check whether the sorting option is valid
       if (Maxlevel > nlevel_pre) then
@@ -1615,7 +1616,7 @@ end function distance_geo
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
-      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start_global(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
       integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
       type(matrixblock_MD), pointer::blocks, block_f
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
@@ -1700,9 +1701,9 @@ end function distance_geo
                level_BP = hss_bf1_md%BP%level
                levelm = ceiling_safe(dble(level_butterfly_ll)/2d0)
 
-
-               groupm_start = groupm_ll*2**levelm
                Nboundall = 2**(level_ll + levelm - level_BP)
+               groupm_start_global = hss_bf1_md%BP%row_group * Nboundall ! this is the ID of the first group at level ll+levelm
+               groupm_start = hss_bf1_md%BP%row_group * 2**(level_ll - level_BP) ! this is the ID of the first group at level ll
                dims2 = Nboundall
                nlist_MD(ll+1)%len = Nboundall**Ndim
                allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
@@ -1716,6 +1717,7 @@ end function distance_geo
                dims = 2**(level_ll)
                do gg=1,product(dims)
                   call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  group_m1 = group_m1 + groupm_start -1
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                      Nboundall1 = 2**(levelm)
@@ -1726,10 +1728,12 @@ end function distance_geo
                      do cc = 1, Nboundall1**Ndim
                         call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
                         call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
+                        ! write(*,*)ll,group_m,groupm_start1,groupm_start_global,groupn_start1,'dd',group_n1,ll,gg,nn
                         group_m = group_m + groupm_start1 - 1
                         group_n = group_n + groupn_start1 - 1
-                        call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                         if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
                            Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
                            Ninadmissible_tot = Ninadmissible_tot +1
@@ -1747,6 +1751,7 @@ end function distance_geo
                dims = 2**(level_ll)
                do gg=1,product(dims)
                   call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  group_m1 = group_m1 + groupm_start -1
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                      Nboundall1 = 2**(levelm)
@@ -1759,10 +1764,12 @@ end function distance_geo
                         call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
                         group_m = group_m + groupm_start1 - 1
                         group_n = group_n + groupn_start1 - 1
-                        call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                         if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
                            nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                           ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
                         endif
                      enddo
                      enddo
@@ -1785,10 +1792,10 @@ end function distance_geo
                cnt = 0
                do bb = 1, Nboundall**Ndim
                   call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                  group_m = group_m + groupm_start_global - 1
                   do jj=1,Ninadmissible_max
                      if (hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,1) /= -1) then
                         cnt = cnt + 1
-                        group_m = group_m + groupm_start - 1
                         group_n = hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,:)
                         blocks => hss_bf1_md%BP%LL(ll + 1)%matrices_block(cnt)
                         blocks%Ndim = Ndim
@@ -1852,10 +1859,10 @@ end function distance_geo
          msh(dim_i)%idxs = hss_bf1_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, dim_i)
          msh(dim_i)%idxe = hss_bf1_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2, dim_i)
 
-         if (allocated(msh(dim_i)%xyz)) then
-            call LogMemory(stats, - SIZEOF(msh(dim_i)%xyz)/1024.0d3)
-            deallocate (msh(dim_i)%xyz)
-         endif
+         ! if (allocated(msh(dim_i)%xyz)) then
+         !    call LogMemory(stats, - SIZEOF(msh(dim_i)%xyz)/1024.0d3)
+         !    deallocate (msh(dim_i)%xyz)
+         ! endif
       enddo
 
    end subroutine HSS_MD_structuring

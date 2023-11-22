@@ -59,9 +59,9 @@ module BPACK_DEFS
 
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
-    integer, parameter:: BPACK_MAJOR_VERSION = 2
-    integer, parameter:: BPACK_MINOR_VERSION = 3
-    integer, parameter:: BPACK_PATCH_VERSION = 1
+    integer, parameter:: BPACK_MAJOR_VERSION = 3
+    integer, parameter:: BPACK_MINOR_VERSION = 0
+    integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !>**** common parameters
 #if defined(PGI) || defined(CRAY)
@@ -245,13 +245,13 @@ module BPACK_DEFS
         type(butterflyindex), allocatable :: inds(:, :)
     end type butterfly_skel
 
-
     !>**** keep track of skeleton columns and rows for one butterfly level
     type butterfly_skel_MD
-        integer, allocatable:: nc(:), nr(:) !< # local block rows/columns
+        integer, allocatable:: nc(:) !< # local block columns per dimension. L: 2^l.  L: 2^l. R: 2^(level_half-l)
+        integer, allocatable:: nr(:) !< # local block rows per dimension. L: 2^(level_butterfly-level_half-l). R: 2^l
         integer, allocatable:: idx_c(:), idx_r(:) !< column and row number of the first local block
         integer, allocatable :: inc_c(:), inc_r(:) !< increment of local block row and columns
-        type(butterflyindex), allocatable :: inds(:, :)
+        type(butterflyindex), allocatable :: inds(:, :, :) !< L: sizes nr(1) * product(nc) * Ndim. !< R: sizes product(nr) * nc(1) * Ndim
     end type butterfly_skel_MD
 
     !>**** one interior factor
@@ -266,16 +266,16 @@ module BPACK_DEFS
         integer, allocatable::index(:, :) !< an array of id of active blocks
     end type butterfly_kerl
 
-    !>**** one interior factor
+    !>**** one interior factor at level l (L: l=1,level_butterflyL. R: l=1:level_butterflyR)
     type butterfly_kerl_MD
-        integer num_col !< # block columns
-        integer num_row !< # block rows
-        integer, allocatable:: nc(:), nr(:) !< # local block rows/columns
+        integer, allocatable:: num_col(:) !< # block columns per dimension. L: 2^l.  L: 2^l. R: 2^(level_half-l+1)
+        integer, allocatable:: num_row(:) !< # block rows per dimension. L: 2^(level_butterfly-level_half-l+1). R: 2^l
+        integer, allocatable:: nc(:), nr(:) !< # local block rows/columns, should be the same as num_col and num_row
         integer, allocatable :: idx_c(:), idx_r(:) !< column and row number of the first local block
         integer, allocatable :: inc_c(:), inc_r(:) !< increment of local block row and columns
-        type(butterflymatrix), allocatable :: blocks(:, :)
+        type(butterflymatrix), allocatable :: blocks(:, :, :) !< L: sizes nr(1) * product(nc) * Ndim. !< R: sizes product(nr) * nc(1) * Ndim
         type(list):: lst!< a list of active blocks
-        integer, allocatable::index(:, :) !< an array of id of active blocks
+        integer, allocatable::index(:, :, :) !< an array of id of active blocks
     end type butterfly_kerl_MD
 
 
@@ -290,11 +290,11 @@ module BPACK_DEFS
 
     !>**** one outter most factor
     type butterfly_UV_MD
-        integer num_blk
-        integer, allocatable :: nblk_loc(:) !< # local block rows/columns
-        integer, allocatable :: idx(:)  !< column or row number of the first local block
-        integer, allocatable :: inc(:) !< increment of local block row or columns
-        type(butterflymatrix), allocatable :: blocks(:)
+        integer :: num_blk
+        integer :: nblk_loc !< # local block rows/columns
+        integer :: idx  !< column or row number of the first local block
+        integer :: inc !< increment of local block row or columns
+        type(butterflymatrix), allocatable :: blocks(:,:)
     end type butterfly_UV_MD
 
 
@@ -324,6 +324,27 @@ module BPACK_DEFS
         DT, pointer::dat(:, :) => null()
         DT, pointer::dat_loc(:, :) => null()
     end type intersect
+
+
+    !>**** subtensor of a full tensor
+    type:: intersect_MD
+        integer::pg !< the index in the process group
+        integer::idx
+        integer,allocatable::idx_r_m(:),idx_c_m(:)
+        integer::sender, receiver
+        integer,allocatable::nc(:), nr(:)
+        ! integer::nr_loc
+        type(iarray), allocatable:: idxmap(:) !< map based on masks from the nonzero indices to original indices
+        integer, allocatable::masks(:,:) !< store mask of each entry that determine whether to skip the evaluation
+        type(iarray), allocatable::rows(:)  !< store indices in bmat or global list of intersections
+        type(iarray), allocatable::cols(:)  !< store indices in bmat or global list of intersections
+        ! integer, allocatable::rows_loc(:) !< store indices in rows
+        ! integer, allocatable::glo2loc(:) !< store index mapping from rows to rows_loc
+        DT, pointer::dat(:, :) => null() !< shape product(nr), product(nc)
+        ! DT, pointer::dat_loc(:, :) => null()
+    end type intersect_MD
+
+
 
     !>**** butterfly or LR structure
     type matrixblock
@@ -377,7 +398,7 @@ module BPACK_DEFS
     end type matrixblock
 
 
-    !>**** butterfly or LR structure
+    !>**** butterfly or LR structure in tensor format
     type matrixblock_MD
         integer Ndim !< dimensionality
         integer pgno !< process group
@@ -398,17 +419,22 @@ module BPACK_DEFS
         integer, pointer:: N_p(:, :, :) => null() !< column sizes of all processes sharing this block
         integer, pointer:: ms(:,:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:,:) => null() !< sizes of accummulated local leaf column blocks
+        DT, allocatable :: fullmat(:, :) !< full matrix entries
 #ifdef HAVE_ZFP
         type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
         type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
-        character, allocatable :: buffer_r(:) ! <ZFP buffer for the real part
-        character, allocatable :: buffer_i(:) ! <ZFP buffer for the imaginary part
+        character, allocatable :: buffer_r(:) !< ZFP buffer for the real part
+        character, allocatable :: buffer_i(:) !< ZFP buffer for the imaginary part
 #endif
-        type(butterfly_UV_MD) :: ButterflyU !< leftmost factor
-        type(butterfly_UV_MD) :: ButterflyV !< rightmost factor
-        type(butterflymatrix), allocatable :: ButterflyMiddle(:, :) !< middle factor
-        type(butterfly_kerl_MD), allocatable :: ButterflyKerl(:) !< interior factors
-        type(butterfly_skel_MD), allocatable :: ButterflySkel(:) !< keep track of skeleton columns or rows of each level
+        integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
+        integer, allocatable:: idx_r_m(:), idx_c_m(:) !< starting index for the middle-level groups per dimension
+        type(butterfly_UV_MD), allocatable :: ButterflyU(:) !< leftmost factor of length product(nr_m)
+        type(butterfly_UV_MD), allocatable :: ButterflyV(:) !< rightmost factor of length product(nc_m)
+        type(butterflymatrix), allocatable :: ButterflyMiddle(:) !< middle factor of sizes product(nr_m) * 2^(level_butterfly-level_half)
+        type(butterfly_kerl_MD), allocatable :: ButterflyKerl_L(:,:) !< left half interior factors of sizes product(nr_m) * (level_butterfly-level_half)
+        type(butterfly_kerl_MD), allocatable :: ButterflyKerl_R(:,:) !< right half interior factors of sizes product(nr_c) * level_half
+        type(butterfly_skel_MD), allocatable :: ButterflySkel_L(:,:) !< keep track of skeleton rows of each level (left half), sizes product(nr_m) * (level_butterfly-level_half+1)
+        type(butterfly_skel_MD), allocatable :: ButterflySkel_R(:,:) !< keep track of skeleton columns of each level (right half), sizes product(nr_c) * (level_half+1)
 
         ! the following is for blocks in H matrix solver
         type(matrixblock_MD), pointer :: father => null() !< pointer to its fater
@@ -676,6 +702,7 @@ module BPACK_DEFS
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z
+        procedure(F_Zelem_MD), nopass, pointer :: FuncZmn_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z (as tensors)
         procedure(F_Dist), nopass, pointer :: FuncDistmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing distance between one row and one column
         procedure(F_Compressibility), nopass, pointer :: FuncNearFar => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not
         procedure(F_Zelem_block), nopass, pointer :: FuncZmnBlock => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
@@ -755,6 +782,17 @@ module BPACK_DEFS
             integer, INTENT(IN):: m, n
             DT::val
         end subroutine F_Zelem
+
+
+        !> interface of user-defined element evaluation routine in Fortran. m,n represents (multi-dimensional) indices in natural order
+        subroutine F_Zelem_MD(Ndim, m, n, val, quant)
+            import::mesh, kernelquant
+            class(*), pointer :: quant
+            integer, INTENT(IN):: Ndim
+            integer, INTENT(IN):: m(Ndim), n(Ndim)
+            DT::val
+        end subroutine F_Zelem_MD
+
 
         !> interface of user-defined distance computation routine in Fortran. m,n represents indices in natural order
         subroutine F_Dist(m, n, val, quant)

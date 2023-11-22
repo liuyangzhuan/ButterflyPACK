@@ -691,7 +691,7 @@ if(myrank==master_rank){
     z_c_bpack_set_I_option(&option, "cpp", cpp);
     z_c_bpack_set_I_option(&option, "LRlevel", lrlevel);
     z_c_bpack_set_I_option(&option, "knn", knn);
-    z_c_bpack_set_I_option(&option, "verbosity", 2);
+    z_c_bpack_set_I_option(&option, "verbosity", 1);
     z_c_bpack_set_I_option(&option, "less_adapt", 1);
     z_c_bpack_set_I_option(&option, "itermax", 10);
     z_c_bpack_set_I_option(&option, "ErrSol", 1);

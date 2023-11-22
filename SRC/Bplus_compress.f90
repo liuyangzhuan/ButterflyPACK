@@ -656,6 +656,185 @@ contains
    end subroutine BF_compress_NlogN_oneblock_R_sample
 
 
+   subroutine BF_MD_compress_N_oneblock_R_sample(Ndim, dim_MD, subtensors, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_ij, bb_m, level, flops)
+
+
+      implicit none
+
+      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_ii_scalar
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_c_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
+      integer boundary_map(:,:,:)
+      integer groupm_start(Ndim)
+      type(intersect_MD) :: subtensors(:)
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      integer i, j, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_ij, index_j, jj
+      integer level
+      integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_jj
+      real(kind=8) flops
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      type(iarray),allocatable::select_idx(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+
+      call SingleIndexToMultiIndex(Ndim+2,dim_MD, index_ij, idx_MD)
+      index_i = idx_MD(1:Ndim)
+      dim = idx_MD(Ndim+2)
+      index_j = idx_MD(Ndim+1)
+      ! dims_m = 2**(level_butterfly-levelm)
+      call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb_m, idx_c_m)
+
+
+      group_m = blocks%row_group
+      group_n = blocks%col_group
+      group_m = group_m*2**level - 1 + index_i
+      group_n = group_n*2**(level_butterfly-levelm) + blocks%idx_c_m - 1 + idx_c_m -1
+      group_n(dim) = group_n(dim)*2**(levelm - level) + index_j - 1
+      do dim_i=1,Ndim
+         mm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+      enddo
+      do dim_i=1,Ndim
+         nn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+      enddo
+
+      if (level == 0) then
+         nn_scalar = nn(dim)
+      elseif (level == level_butterfly + 1) then
+         write(*,*)"should not come to level == level_butterfly + 1 in BF_MD_compress_N_oneblock_R_sample"
+      else
+         do dim_i=1,Ndim
+         index_ii(dim_i) = int((index_i(dim_i) + 1)/2)
+         enddo
+         index_jj = 2*index_j - 1
+         dims_row = 2**(level-1)
+         call MultiIndexToSingleIndex(Ndim, dims_row, index_ii_scalar, index_ii)
+
+         nn1 = size(blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj, dim)%array, 1)
+         nn2 = size(blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj + 1, dim)%array, 1)
+         nn_scalar = nn1 + nn2
+      endif
+      mmnn(1:Ndim)=mm
+      mmnn(1+Ndim:Ndim*2)=nn
+
+      overrate=1
+      ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
+      allocate (select_idx(Ndim*2))
+      do dim_i=1,Ndim*2
+         sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
+         if (level == 0) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
+         allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+         call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
+         call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+      enddo
+      dims_row = sampleidx(1:Ndim)
+      dims_col = sampleidx(1+Ndim:2*Ndim)
+      dims_col(dim) = nn_scalar
+
+
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level > 0 .and. dim==dim_i) then
+            header_n1 = header_n(dim_i)
+            header_n2 = msh(dim_i)%basis_group(2*group_n(dim_i)+1)%head
+         endif
+      enddo
+
+      allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
+      subtensors(index_ij)%dat=0
+      call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+      subtensors(index_ij)%nr = dims_row
+      subtensors(index_ij)%nc = dims_col
+      allocate (subtensors(index_ij)%rows(Ndim))
+      do dim_i=1,Ndim
+         allocate (subtensors(index_ij)%rows(dim_i)%dat(dims_row(dim_i)))
+         do i = 1, dims_row(dim_i)
+            subtensors(index_ij)%rows(dim_i)%dat(i) = header_m(dim_i) + select_idx(dim_i)%dat(i) - 1
+         enddo
+      enddo
+
+      allocate (subtensors(index_ij)%cols(Ndim))
+      do dim_i=1,Ndim
+         allocate (subtensors(index_ij)%cols(dim_i)%dat(dims_col(dim_i)))
+         do j = 1, dims_col(dim_i)
+            if(dim==dim_i)then
+               if (level == 0) then
+                  subtensors(index_ij)%cols(dim_i)%dat(j) = header_n(dim_i) + j - 1
+               elseif (level == level_butterfly + 1) then
+                  write(*,*)"should not come here in BF_MD_compress_N_oneblock_R_sample"
+               else
+                  if (j <= nn1) then
+                     subtensors(index_ij)%cols(dim_i)%dat(j) = blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj, dim)%array(j) + header_n1 - 1
+                  else
+                     subtensors(index_ij)%cols(dim_i)%dat(j) = blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj + 1, dim)%array(j - nn1) + header_n2 - 1
+                  endif
+               endif
+            else
+               subtensors(index_ij)%cols(dim_i)%dat(j) = header_n(dim_i) + select_idx(dim_i+Ndim)%dat(j) - 1
+            endif
+         enddo
+      enddo
+
+
+      if (Nboundall > 0) then
+         allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
+         call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
+         subtensors(index_ij)%masks = 1
+         do i = 1, product(dims_row)
+            call SingleIndexToMultiIndex(Ndim,dims_row, i, idx_m)
+            do dim_i = 1,Ndim
+               group_m_mid(dim_i) = findgroup(subtensors(index_ij)%rows(dim_i)%dat(idx_m(dim_i)), msh(dim_i), levelm, blocks%row_group(dim_i))
+            enddo
+
+            dims_bm= Nboundall
+            call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
+            do jj=1,Ninadmissible
+               group_n_mid = boundary_map(group_scalar,jj,:)
+               if (ALL(group_n_mid /= -1)) then
+                  do dim_i=1,Ndim
+                     idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head
+                     idxend(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%tail
+                  enddo
+                  do j = 1, product(dims_col)
+                     call SingleIndexToMultiIndex(Ndim,dims_col, j, idx_n)
+                     flag=Ndim
+                     do dim_i=1,Ndim
+                        if (subtensors(index_ij)%cols(dim_i)%dat(idx_n(dim_i)) >= idxstart(dim_i) .and. subtensors(index_ij)%cols(dim_i)%dat(idx_n(dim_i)) <= idxend(dim_i))flag = flag-1
+                     enddo
+                     if(flag==0)subtensors(index_ij)%masks(i, j) = 0
+                  enddo
+               endif
+            enddo
+         enddo
+      endif
+
+
+      do dim_i=1,Ndim*2
+         deallocate(select_idx(dim_i)%dat)
+      enddo
+      deallocate(select_idx)
+
+   end subroutine BF_MD_compress_N_oneblock_R_sample
+
+
+
+
    subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops)
 
 
@@ -826,6 +1005,534 @@ contains
       if (allocated(select_column)) deallocate (select_column)
 
    end subroutine BF_compress_NlogN_oneblock_R_rankreveal
+
+
+
+
+   subroutine BF_MD_compress_N_oneblock_R_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb_m, level, rank_new, flops)
+
+
+      implicit none
+
+      integer Ndim, bb_m, dim,dim_i,dim_ii,flag
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_c_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim),idx_n1(Ndim-1),dims_col1(Ndim-1)
+      type(intersect_MD) :: subtensors(:)
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      integer i, j, j1, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_i_scalar, index_ij, index_j, index_j_s, index_j_k, jj,nnn1
+      integer level
+      integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_ii_scalar, index_jj
+      real(kind=8) flops,flop
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      type(iarray),allocatable::select_idx(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+
+      call SingleIndexToMultiIndex(Ndim+2,dim_MD, index_ij, idx_MD)
+      index_i = idx_MD(1:Ndim)
+      dim = idx_MD(Ndim+2)
+      index_j = idx_MD(Ndim+1)
+      ! dims_m = 2**(level_butterfly-levelm)
+      call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb_m, idx_c_m)
+
+
+      group_m = blocks%row_group
+      group_n = blocks%col_group
+      group_m = group_m*2**level - 1 + index_i
+      group_n = group_n*2**(level_butterfly-levelm) + blocks%idx_c_m - 1 + idx_c_m -1
+      group_n(dim) = group_n(dim)*2**(levelm - level) + index_j - 1
+      do dim_i=1,Ndim
+         mm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+      enddo
+      do dim_i=1,Ndim
+         nn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+      enddo
+
+      if (level == 0) then
+         nn_scalar = nn(dim)
+      elseif (level == level_butterfly + 1) then
+         write(*,*)"should not come to level == level_butterfly + 1 in BF_MD_compress_N_oneblock_R_rankreveal"
+      else
+         do dim_i=1,Ndim
+         index_ii(dim_i) = int((index_i(dim_i) + 1)/2)
+         enddo
+         index_jj = 2*index_j - 1
+         dims_row = 2**level
+         call MultiIndexToSingleIndex(Ndim, dims_row, index_i_scalar, index_i)
+         dims_row = 2**(level-1)
+         call MultiIndexToSingleIndex(Ndim, dims_row, index_ii_scalar, index_ii)
+
+         nn1 = size(blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj, dim)%array, 1)
+         nn2 = size(blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj + 1, dim)%array, 1)
+         nn_scalar = nn1 + nn2
+      endif
+      mmnn(1:Ndim)=mm
+      mmnn(1+Ndim:Ndim*2)=nn
+
+      dims_row = subtensors(index_ij)%nr
+      dims_col = subtensors(index_ij)%nc
+
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level > 0 .and. dim==dim_i) then
+            header_n1 = header_n(dim_i)
+            header_n2 = msh(dim_i)%basis_group(2*group_n(dim_i)+1)%head
+         endif
+      enddo
+
+
+      rankmax_c = dims_col(dim)
+      rankmax_r=product(dims_row)
+      do dim_i=1,Ndim
+         if(dim_i/=dim)rankmax_r = rankmax_r*dims_col(dim_i)
+      enddo
+      allocate (core(rankmax_r, rankmax_c))
+      allocate (core_tmp(rankmax_r, rankmax_c))
+
+      ! reshaping
+      do j = 1, product(dims_col)
+         call SingleIndexToMultiIndex(Ndim, dims_col, j, idx_n)
+         dim_ii=0
+         do dim_i=1,Ndim
+         if(dim_i/=dim)then
+            dim_ii = dim_ii+1
+            idx_n1(dim_ii) = idx_n(dim_i)
+            dims_col1(dim_ii) = dims_col(dim_i)
+         endif
+         enddo
+         call MultiIndexToSingleIndex(Ndim-1, dims_col1, j1, idx_n1)
+         core(product(dims_row)*(j1-1)+1:product(dims_row)*j1,idx_n(dim)) = subtensors(index_ij)%dat(1:product(dims_row),j)
+      enddo
+      core_tmp=core
+
+      allocate (jpvt(max(rankmax_c, rankmax_r)))
+      allocate (tau(max(rankmax_c, rankmax_r)))
+      jpvt = 0
+      call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
+      flops = flops + flop
+
+      if (rank_new > 0) then
+         call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_r, rankmax_c, rank_new, flop=flop)
+         flops = flops + flop
+         call trsmf90(core, core_tmp, 'L', 'U', 'N', 'N', rank_new, rankmax_c, flop=flop)
+         flops = flops + flop
+      else
+         rank_new = 1
+         jpvt(1) = 1
+         core_tmp = 0
+      endif
+
+      if (level == 0) then
+         index_j_k=index_j
+         index_j_s=index_j
+         allocate (blocks%ButterflyV(bb_m)%blocks(index_j_k,dim)%matrix(rankmax_c, rank_new))
+         call copymatT(core_tmp(1:rank_new, 1:rankmax_c), blocks%ButterflyV(bb_m)%blocks(index_j_k,dim)%matrix, rank_new, rankmax_c)
+         allocate (blocks%ButterflySkel_R(bb_m,level)%inds(1, index_j_s,dim)%array(rank_new))
+         do j = 1, rank_new
+            blocks%ButterflySkel_R(bb_m,level)%inds(1, index_j_s,dim)%array(j) = jpvt(j)
+         enddo
+
+      elseif (level == level_butterfly + 1) then
+         write(*,*)"should not arrive at level == level_butterfly + 1 in BF_MD_compress_N_oneblock_R_rankreveal"
+      else
+         index_j_k=2*index_j-1
+         index_j_s=index_j
+         nnn1 = msh(dim)%basis_group(2*group_n(dim))%tail - msh(dim)%basis_group(2*group_n(dim))%head + 1
+         allocate (blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k,dim)%matrix(rank_new, nn1))
+         allocate (blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k+1,dim)%matrix(rank_new, nn2))
+         blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k,dim)%matrix = core_tmp(1:rank_new, 1:nn1)
+         blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k+1,dim)%matrix = core_tmp(1:rank_new, 1 + nn1:rankmax_c)
+
+         allocate (blocks%ButterflySkel_R(bb_m,level)%inds(index_i_scalar, index_j_s,dim)%array(rank_new))
+         do j = 1, rank_new
+            if (jpvt(j) <= nn1) then
+               blocks%ButterflySkel_R(bb_m,level)%inds(index_i_scalar, index_j_s,dim)%array(j) = blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj,dim)%array(jpvt(j))
+            else
+               blocks%ButterflySkel_R(bb_m,level)%inds(index_i_scalar, index_j_s,dim)%array(j) = blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj + 1,dim)%array(jpvt(j) - nn1) + nnn1
+            endif
+         enddo
+
+      endif
+
+      deallocate(core)
+      deallocate(core_tmp)
+      deallocate(jpvt)
+      deallocate(tau)
+
+   end subroutine BF_MD_compress_N_oneblock_R_rankreveal
+
+
+   subroutine BF_MD_compress_N_oneblock_C_sample(Ndim, dim_MD, subtensors, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_ij, bb_m, level, flops)
+
+
+      implicit none
+
+      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_jj_scalar
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_r_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
+      integer boundary_map(:,:,:)
+      integer groupm_start(Ndim)
+      type(intersect_MD) :: subtensors(:)
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      integer i, j, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), mm_scalar, mmnn(Ndim*2), index_j(Ndim), index_ij, index_i, jj
+      integer level
+      integer header_m1, header_m2, mm1, mm2, index_jj(Ndim), index_ii
+      real(kind=8) flops
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      type(iarray),allocatable::select_idx(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+
+      call SingleIndexToMultiIndex(Ndim+2,dim_MD, index_ij, idx_MD)
+      index_i = idx_MD(1)
+      dim = idx_MD(Ndim+2)
+      index_j = idx_MD(2:Ndim+1)
+      ! dims_m = 2**(levelm)
+      call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb_m, idx_r_m)
+
+
+      group_m = blocks%row_group
+      group_n = blocks%col_group
+      group_n = group_n*2**(level_butterfly - level + 1) - 1 + index_j
+
+      group_m = group_m*2**(levelm) + blocks%idx_r_m - 1 + idx_r_m -1
+      group_m(dim) = group_m(dim)*2**(level - levelm -1) + index_i - 1
+
+      do dim_i=1,Ndim
+         mm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+      enddo
+      do dim_i=1,Ndim
+         nn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+      enddo
+
+      if (level == 0) then
+         write(*,*)"should not come to level == 0 in BF_MD_compress_N_oneblock_C_sample"
+      elseif (level == level_butterfly + 1) then
+         mm_scalar = mm(dim)
+      else
+         do dim_i=1,Ndim
+         index_jj(dim_i) = int((index_j(dim_i) + 1)/2)
+         enddo
+         index_ii = 2*index_i - 1
+         dims_col = 2**(level_butterfly - level)
+         call MultiIndexToSingleIndex(Ndim, dims_col, index_jj_scalar, index_jj)
+
+         mm1 = size(blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii, index_jj_scalar, dim)%array, 1)
+         mm2 = size(blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii+1, index_jj_scalar, dim)%array, 1)
+         mm_scalar = mm1 + mm2
+      endif
+      mmnn(1:Ndim)=mm
+      mmnn(1+Ndim:Ndim*2)=nn
+
+      overrate=1
+      ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
+      allocate (select_idx(Ndim*2))
+      do dim_i=1,Ndim*2
+         sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
+         if (level == level_butterfly+1) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
+         allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+         call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
+         call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+      enddo
+      dims_row = sampleidx(1:Ndim)
+      dims_col = sampleidx(1+Ndim:2*Ndim)
+      dims_row(dim) = mm_scalar
+
+
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level < level_butterfly+1 .and. dim==dim_i) then
+            header_m1 = header_m(dim_i)
+            header_m2 = msh(dim_i)%basis_group(2*group_m(dim_i)+1)%head
+         endif
+      enddo
+
+      allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
+      subtensors(index_ij)%dat=0
+      call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+      subtensors(index_ij)%nr = dims_row
+      subtensors(index_ij)%nc = dims_col
+      allocate (subtensors(index_ij)%rows(Ndim))
+      do dim_i=1,Ndim
+         allocate (subtensors(index_ij)%rows(dim_i)%dat(dims_row(dim_i)))
+         do i = 1, dims_row(dim_i)
+            if(dim==dim_i)then
+               if (level == 0) then
+                    write(*,*)"should not come here in BF_MD_compress_N_oneblock_C_sample"
+               elseif (level == level_butterfly + 1) then
+                  subtensors(index_ij)%rows(dim_i)%dat(i) = header_m(dim_i) + i - 1
+               else
+                  if (i <= mm1) then
+                     subtensors(index_ij)%rows(dim_i)%dat(i) = blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii, index_jj_scalar, dim)%array(i) + header_m1 - 1
+                  else
+                     subtensors(index_ij)%rows(dim_i)%dat(i) = blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii+1, index_jj_scalar, dim)%array(i - mm1) + header_m2 - 1
+                  endif
+               endif
+            else
+                subtensors(index_ij)%rows(dim_i)%dat(i) = header_m(dim_i) + select_idx(dim_i)%dat(i) - 1
+            endif
+         enddo
+      enddo
+
+      allocate (subtensors(index_ij)%cols(Ndim))
+      do dim_i=1,Ndim
+         allocate (subtensors(index_ij)%cols(dim_i)%dat(dims_col(dim_i)))
+         do j = 1, dims_col(dim_i)
+               subtensors(index_ij)%cols(dim_i)%dat(j) = header_n(dim_i) + select_idx(dim_i+Ndim)%dat(j) - 1
+         enddo
+      enddo
+
+
+      if (Nboundall > 0) then
+         allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
+         call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
+         subtensors(index_ij)%masks = 1
+         do i = 1, product(dims_row)
+            call SingleIndexToMultiIndex(Ndim,dims_row, i, idx_m)
+            do dim_i = 1,Ndim
+               group_m_mid(dim_i) = findgroup(subtensors(index_ij)%rows(dim_i)%dat(idx_m(dim_i)), msh(dim_i), levelm, blocks%row_group(dim_i))
+            enddo
+
+            dims_bm= Nboundall
+            call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
+            do jj=1,Ninadmissible
+               group_n_mid = boundary_map(group_scalar,jj,:)
+               if (ALL(group_n_mid /= -1)) then
+                  do dim_i=1,Ndim
+                     idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head
+                     idxend(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%tail
+                  enddo
+                  do j = 1, product(dims_col)
+                     call SingleIndexToMultiIndex(Ndim,dims_col, j, idx_n)
+                     flag=Ndim
+                     do dim_i=1,Ndim
+                        if (subtensors(index_ij)%cols(dim_i)%dat(idx_n(dim_i)) >= idxstart(dim_i) .and. subtensors(index_ij)%cols(dim_i)%dat(idx_n(dim_i)) <= idxend(dim_i))flag = flag-1
+                     enddo
+                     if(flag==0)subtensors(index_ij)%masks(i, j) = 0
+                  enddo
+               endif
+            enddo
+         enddo
+      endif
+
+
+      do dim_i=1,Ndim*2
+         deallocate(select_idx(dim_i)%dat)
+      enddo
+      deallocate(select_idx)
+
+   end subroutine BF_MD_compress_N_oneblock_C_sample
+
+
+
+   subroutine BF_MD_compress_N_oneblock_C_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb_m, level, rank_new, flops)
+
+
+      implicit none
+
+      integer bb_m, dim,dim_i,dim_ii,flag,index_jj_scalar,Ndim
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_r_m(Ndim), dims_m(Ndim), dims_row(Ndim), dims_row1(Ndim), dims_col(Ndim),idx_m(Ndim),idx_m1(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
+      type(intersect_MD) :: subtensors(:)
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      integer i, j, i1, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), mm_scalar, mmnn(Ndim*2), index_j(Ndim), index_j_scalar, index_ij, index_i, jj, index_i_s, index_i_k, mmm1
+      integer level
+      integer header_m1, header_m2, mm1, mm2, index_jj(Ndim), index_ii
+      real(kind=8) flops,flop
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      type(iarray),allocatable::select_idx(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+
+      call SingleIndexToMultiIndex(Ndim+2,dim_MD, index_ij, idx_MD)
+      index_i = idx_MD(1)
+      dim = idx_MD(Ndim+2)
+      index_j = idx_MD(2:Ndim+1)
+      ! dims_m = 2**(levelm)
+      call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb_m, idx_r_m)
+
+
+      group_m = blocks%row_group
+      group_n = blocks%col_group
+      group_n = group_n*2**(level_butterfly - level + 1) - 1 + index_j
+
+      group_m = group_m*2**(levelm) + blocks%idx_r_m - 1 + idx_r_m -1
+      group_m(dim) = group_m(dim)*2**(level - levelm -1) + index_i - 1
+
+      do dim_i=1,Ndim
+         mm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+      enddo
+      do dim_i=1,Ndim
+         nn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+      enddo
+
+      if (level == 0) then
+         write(*,*)"should not come to level == 0 in BF_MD_compress_N_oneblock_C_sample"
+      elseif (level == level_butterfly + 1) then
+         mm_scalar = mm(dim)
+      else
+         do dim_i=1,Ndim
+         index_jj(dim_i) = int((index_j(dim_i) + 1)/2)
+         enddo
+         index_ii = 2*index_i - 1
+         dims_col = 2**(level_butterfly - level+1)
+         call MultiIndexToSingleIndex(Ndim, dims_col, index_j_scalar, index_j)
+         dims_col = 2**(level_butterfly - level)
+         call MultiIndexToSingleIndex(Ndim, dims_col, index_jj_scalar, index_jj)
+
+         mm1 = size(blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii, index_jj_scalar, dim)%array, 1)
+         mm2 = size(blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii+1, index_jj_scalar, dim)%array, 1)
+         mm_scalar = mm1 + mm2
+      endif
+      mmnn(1:Ndim)=mm
+      mmnn(1+Ndim:Ndim*2)=nn
+
+      dims_row = subtensors(index_ij)%nr
+      dims_col = subtensors(index_ij)%nc
+
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level < level_butterfly+1 .and. dim==dim_i) then
+            header_m1 = header_m(dim_i)
+            header_m2 = msh(dim_i)%basis_group(2*group_m(dim_i)+1)%head
+         endif
+      enddo
+
+
+      rankmax_r = dims_row(dim)
+      rankmax_c=product(dims_col)
+      do dim_i=1,Ndim
+         if(dim_i/=dim)rankmax_c = rankmax_c*dims_row(dim_i)
+      enddo
+      allocate (core(rankmax_c, rankmax_r))
+      allocate (core_tmp(rankmax_c, rankmax_r))
+      allocate (matrix_tmp(product(dims_col), product(dims_row)))
+      call copymatT(subtensors(index_ij)%dat, matrix_tmp, product(dims_row), product(dims_col))
+
+      ! reshaping
+      do i = 1, product(dims_row)
+         call SingleIndexToMultiIndex(Ndim, dims_row, i, idx_m)
+         dim_ii=0
+         do dim_i=1,Ndim
+         if(dim_i/=dim)then
+            dim_ii = dim_ii+1
+            idx_m1(dim_ii) = idx_m(dim_i)
+            dims_row1(dim_ii) = dims_row(dim_i)
+         endif
+         enddo
+         call MultiIndexToSingleIndex(Ndim-1, dims_row1, i1, idx_m1)
+         core(product(dims_col)*(i1-1)+1:product(dims_col)*i1,idx_m(dim)) = matrix_tmp(1:product(dims_col),i)
+      enddo
+      core_tmp=core
+
+
+      allocate (jpvt(max(rankmax_c, rankmax_r)))
+      allocate (tau(max(rankmax_c, rankmax_r)))
+      jpvt = 0
+      call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
+      flops = flops + flop
+
+      if (rank_new > 0) then
+         call un_or_mqrf90(core, tau, core_tmp, 'L', 'C', rankmax_c, rankmax_r, rank_new, flop=flop)
+         flops = flops + flop
+         call trsmf90(core, core_tmp, 'L', 'U', 'N', 'N', rank_new, rankmax_r, flop=flop)
+         flops = flops + flop
+      else
+         rank_new = 1
+         jpvt(1) = 1
+         core_tmp = 0
+      endif
+
+      if (level == 0) then
+        write(*,*)"should not arrive at level == 0 in BF_MD_compress_N_oneblock_C_rankreveal"
+      elseif (level == level_butterfly + 1) then
+         index_i_k=index_i
+         index_i_s=index_i
+         allocate (blocks%ButterflyU(bb_m)%blocks(index_i_k,dim)%matrix(rankmax_r, rank_new))
+         call copymatT(core_tmp(1:rank_new, 1:rankmax_r), blocks%ButterflyU(bb_m)%blocks(index_i_k,dim)%matrix, rank_new, rankmax_r)
+         allocate (blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,1,dim)%array(rank_new))
+         do j = 1, rank_new
+            blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,1,dim)%array(j) = jpvt(j)
+         enddo
+      else
+         index_i_k=2*index_i-1
+         index_i_s=index_i
+         mmm1 = msh(dim)%basis_group(2*group_m(dim))%tail - msh(dim)%basis_group(2*group_m(dim))%head + 1
+         allocate (blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k,index_j_scalar,dim)%matrix(mm1,rank_new))
+         allocate (blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k+1,index_j_scalar,dim)%matrix(mm2,rank_new))
+         call copymatT(core_tmp(1:rank_new, 1:mm1), blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k,index_j_scalar,dim)%matrix, rank_new, mm1)
+         call copymatT(core_tmp(1:rank_new, 1 + mm1:rankmax_r), blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k+1,index_j_scalar,dim)%matrix, rank_new, rankmax_r - mm1)
+
+         allocate (blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,index_j_scalar,dim)%array(rank_new))
+         do j = 1, rank_new
+            if (jpvt(j) <= mm1) then
+               blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,index_j_scalar,dim)%array(j) = blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii, index_jj_scalar,dim)%array(jpvt(j))
+            else
+               blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,index_j_scalar,dim)%array(j) = blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii+1, index_jj_scalar,dim)%array(jpvt(j) - mm1) + mmm1
+            endif
+         enddo
+
+      endif
+
+      deallocate(core)
+      deallocate(core_tmp)
+      deallocate(jpvt)
+      deallocate(tau)
+      deallocate(matrix_tmp)
+
+
+   end subroutine BF_MD_compress_N_oneblock_C_rankreveal
 
    subroutine BF_exchange_skel(blocks, skels, option, stats, msh, ptree, level, mode, collect)
 
@@ -1353,6 +2060,304 @@ contains
       ! time_tmp = time_tmp + n2 - n1
 
    end subroutine BF_all2all_skel
+
+
+
+!>*********** all to all communication of skeletons at the middle butterfly level from row-wise ordering to column-wise ordering
+   subroutine BF_MD_all2all_skel(Ndim, blocks, ButterflySkel_R_transposed, option, stats, msh, ptree)
+
+
+      implicit none
+      integer Ndim
+      type(mesh)::msh(Ndim)
+      integer i, j, levelm, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new
+      integer group_m, group_n, mm, nn, index_i, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij, pp, tt
+      integer level, length_1, length_2, level_blocks
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2
+      real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+      integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
+      real(kind=8) flop
+      DT ctemp
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_little_cc(:, :), core(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer ierr, nsendrecv, pid, pgno_sub, tag, nproc, Ncol, Nskel(Ndim), Nreqr, Nreqs, recvid, sendid, tmpi
+      integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new, dim_i, bb
+
+      type(commquant1D), allocatable::sendquant(:), recvquant(:)
+      integer, allocatable::S_req(:), R_req(:)
+      integer, allocatable:: statuss(:, :), statusr(:, :)
+      character::mode, mode_new
+      real(kind=8)::n1, n2
+      integer, allocatable::sendIDactive(:), recvIDactive(:)
+      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+      logical all2all
+      integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+      integer, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer,allocatable::proc_of_groupc(:),proc_of_groupr(:)
+      integer:: dims_r(Ndim),dims_c(Ndim),idx_r_m(Ndim),idx_c_m(Ndim),idx_r_scalar,idx_c_scalar
+      type(butterfly_skel_MD):: ButterflySkel_R_transposed(:)
+
+      n1 = MPI_Wtime()
+
+      levelm = blocks%level_half
+      level_butterfly = blocks%level_butterfly
+      nproc = ptree%pgrp(blocks%pgno)%nproc
+      tag = blocks%pgno
+      dims_r = 2**levelm
+      dims_c = 2**(level_butterfly-levelm)
+
+      ! computation of the process ID of each middle level group
+      allocate(proc_of_groupr(product(dims_r)))
+      proc_of_groupr=0
+      allocate(proc_of_groupc(product(dims_c)))
+      proc_of_groupc=0
+      pp = ptree%MyID - ptree%pgrp(blocks%pgno)%head + 1
+      do bb=1, product(blocks%nr_m)
+         call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb, idx_r_m)
+         idx_r_m = idx_r_m + blocks%idx_r_m - 1
+         call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
+         proc_of_groupr(idx_r_scalar)=pp
+      enddo
+      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      do bb=1, product(blocks%nc_m)
+         call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
+         idx_c_m = idx_c_m + blocks%idx_c_m - 1
+         call MultiIndexToSingleIndex(Ndim, dims_c, idx_c_scalar, idx_c_m)
+         proc_of_groupc(idx_c_scalar)=pp
+      enddo
+      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+
+
+
+      do bb=1, product(blocks%nr_m)
+         allocate(ButterflySkel_R_transposed(bb)%nc(Ndim))
+         ButterflySkel_R_transposed(bb)%nc = blocks%ButterflySkel_L(bb,levelm+1)%nc
+         allocate(ButterflySkel_R_transposed(bb)%nr(Ndim))
+         ButterflySkel_R_transposed(bb)%nr = blocks%ButterflySkel_L(bb,levelm+1)%nr
+         allocate(ButterflySkel_R_transposed(bb)%idx_r(Ndim))
+         ButterflySkel_R_transposed(bb)%idx_r=blocks%ButterflySkel_L(bb,levelm+1)%idx_r
+         allocate(ButterflySkel_R_transposed(bb)%inc_r(Ndim))
+         ButterflySkel_R_transposed(bb)%inc_r=blocks%ButterflySkel_L(bb,levelm+1)%inc_r
+         allocate(ButterflySkel_R_transposed(bb)%idx_c(Ndim))
+         ButterflySkel_R_transposed(bb)%idx_c=blocks%ButterflySkel_L(bb,levelm+1)%idx_c
+         allocate(ButterflySkel_R_transposed(bb)%inc_c(Ndim))
+         ButterflySkel_R_transposed(bb)%inc_c=blocks%ButterflySkel_L(bb,levelm+1)%inc_c
+         allocate (ButterflySkel_R_transposed(bb)%inds(ButterflySkel_R_transposed(bb)%nr(1), product(ButterflySkel_R_transposed(bb)%nc),Ndim))
+      enddo
+
+
+
+      ! allocation of communication quantities
+      allocate (statuss(MPI_status_size, nproc))
+      allocate (statusr(MPI_status_size, nproc))
+      allocate (S_req(nproc))
+      allocate (R_req(nproc))
+      allocate (sendquant(nproc))
+      do ii = 1, nproc
+         sendquant(ii)%size_i = 0
+         sendquant(ii)%active = 0
+      enddo
+      allocate (recvquant(nproc))
+      do ii = 1, nproc
+         recvquant(ii)%size_i = 0
+         recvquant(ii)%active = 0
+      enddo
+      allocate (sendIDactive(nproc))
+      allocate (recvIDactive(nproc))
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      ! calculate send buffer sizes in the first pass
+      do bb=1, product(blocks%nr_m)
+         call assert(ButterflySkel_R_transposed(bb)%nr(1)==1,'ButterflySkel_R_transposed(bb)%nr(1) should be 1')
+         do ii = 1, ButterflySkel_R_transposed(bb)%nr(1)
+            do jj=1,product(ButterflySkel_R_transposed(bb)%nc)
+               pp = proc_of_groupc(jj)
+               if (recvquant(pp)%active == 0) then
+                  recvquant(pp)%active = 1
+                  Nrecvactive = Nrecvactive + 1
+                  recvIDactive(Nrecvactive) = pp
+               endif
+            enddo
+         enddo
+      enddo
+
+      do bb=1, product(blocks%nc_m)
+         do ii = 1, product(blocks%ButterflySkel_R(bb,levelm)%nr)
+            call assert(blocks%ButterflySkel_R(bb,levelm)%nc(1)==1,'blocks%ButterflySkel_R(bb,levelm)%nc(1) should be 1')
+            do jj=1, blocks%ButterflySkel_R(bb,levelm)%nc(1)
+               pp = proc_of_groupr(ii)
+               if (sendquant(pp)%active == 0) then
+                  sendquant(pp)%active = 1
+                  Nsendactive = Nsendactive + 1
+                  sendIDactive(Nsendactive) = pp
+               endif
+               sendquant(pp)%size_i = sendquant(pp)%size_i + 2 + Ndim
+               do dim_i=1,Ndim
+                  sendquant(pp)%size_i = sendquant(pp)%size_i + size(blocks%ButterflySkel_R(bb,levelm)%inds(ii, jj, dim_i)%array)
+               enddo
+            enddo
+         enddo
+      enddo
+
+      ! communicate receive buffer sizes
+      Nreqs=0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat_i(sendquant(pp)%size_i, 1))
+         recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if(recvid/=ptree%MyID)then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            recvquant(pp)%size_i = sendquant(pp)%size_i
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if(sendid/=ptree%MyID)then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%size_i, 1, MPI_INTEGER, pp - 1, tag, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+      if (Nreqr > 0) then
+         call MPI_waitall(Nreqr, R_req, statusr, ierr)
+      endif
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         sendquant(pp)%size_i = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat_i(recvquant(pp)%size_i, 1))
+      enddo
+
+      ! pack the send buffer in the second pass
+      do bb=1, product(blocks%nc_m)
+         do ii = 1, product(blocks%ButterflySkel_R(bb,levelm)%nr)
+            do jj=1, blocks%ButterflySkel_R(bb,levelm)%nc(1)
+               pp = proc_of_groupr(ii)
+               call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
+               idx_c_m = idx_c_m + blocks%idx_c_m - 1
+               call MultiIndexToSingleIndex(Ndim, dims_c, idx_c_scalar, idx_c_m)
+               sendquant(pp)%dat_i(sendquant(pp)%size_i + 1, 1) = ii ! global row index at the middle level
+               sendquant(pp)%dat_i(sendquant(pp)%size_i + 2, 1) = idx_c_scalar ! global column index at the middle level
+               do dim_i=1,Ndim
+                  sendquant(pp)%dat_i(sendquant(pp)%size_i + 2 + dim_i, 1) = size(blocks%ButterflySkel_R(bb,levelm)%inds(ii, jj, dim_i)%array)
+               enddo
+               sendquant(pp)%size_i = sendquant(pp)%size_i + 2 + Ndim
+
+               do dim_i=1,Ndim
+                  do i = 1, size(blocks%ButterflySkel_R(bb,levelm)%inds(ii, jj, dim_i)%array)
+                     sendquant(pp)%dat_i(sendquant(pp)%size_i + i, 1) = blocks%ButterflySkel_R(bb,levelm)%inds(ii, jj, dim_i)%array(i)
+                  enddo
+                  sendquant(pp)%size_i = sendquant(pp)%size_i + size(blocks%ButterflySkel_R(bb,levelm)%inds(ii, jj, dim_i)%array)
+               enddo
+            enddo
+         enddo
+      enddo
+
+      ! communicate the data buffer
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat_i, sendquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size_i > 0) recvquant(pp)%dat_i = sendquant(pp)%dat_i
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks%pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat_i, recvquant(pp)%size_i, MPI_INTEGER, pp - 1, tag + 1, ptree%pgrp(blocks%pgno)%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(blocks%pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size_i)
+            i = i + 1
+            idx_r_scalar = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+            call SingleIndexToMultiIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
+            idx_r_m = idx_r_m - blocks%idx_r_m + 1
+            call MultiIndexToSingleIndex(Ndim, blocks%nr_m, bb, idx_r_m)
+
+            i = i + 1
+            jj = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+
+            do dim_i=1,Ndim
+               i = i + 1
+               Nskel(dim_i) = NINT(dble(recvquant(pp)%dat_i(i, 1)))
+            enddo
+            do dim_i=1,Ndim
+               call assert(.not. allocated(ButterflySkel_R_transposed(bb)%inds(1,jj,dim_i)%array), 'receiving dat_ia alreay exists locally')
+               allocate (ButterflySkel_R_transposed(bb)%inds(1,jj,dim_i)%array(Nskel(dim_i)))
+               ButterflySkel_R_transposed(bb)%inds(1,jj,dim_i)%array = NINT(dble(recvquant(pp)%dat_i(i + 1:i + Nskel(dim_i), 1)))
+               i = i + Nskel(dim_i)
+            enddo
+         enddo
+      enddo
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      deallocate (S_req)
+      deallocate (R_req)
+      deallocate (statuss)
+      deallocate (statusr)
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat_i)) deallocate (sendquant(pp)%dat_i)
+      enddo
+      deallocate (sendquant)
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat_i)) deallocate (recvquant(pp)%dat_i)
+      enddo
+      deallocate (recvquant)
+      deallocate (sendIDactive)
+      deallocate (recvIDactive)
+
+      deallocate (proc_of_groupr)
+      deallocate (proc_of_groupc)
+
+      n2 = MPI_Wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+   end subroutine BF_MD_all2all_skel
+
+
+
 
    subroutine BF_compress_NlogN_oneblock_C_sample(submats, blocks, boundary_map, Nboundall, Ninadmissible,groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, level_final, nnz_loc)
 
@@ -1914,6 +2919,491 @@ contains
       if (allocated(select_row)) deallocate (select_row)
       if (allocated(select_column)) deallocate (select_column)
    end subroutine BF_compress_NlogN_oneblock_C_rankreveal
+
+
+  subroutine BF_MD_delete_subtensors(Ndim, dims, subtensors, stats)
+  implicit none
+  integer Ndim,index_ij,dim_i
+  integer dims(Ndim)
+  type(Hstat)::stats
+  type(intersect_MD) :: subtensors(:)
+
+   do index_ij = 1, product(dims)
+      call LogMemory(stats, -SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+
+      if(associated(subtensors(index_ij)%dat))deallocate(subtensors(index_ij)%dat)
+      if(allocated(subtensors(index_ij)%rows))then
+         do dim_i=1,Ndim
+            call iarray_finalizer(subtensors(index_ij)%rows(dim_i))
+         enddo
+         deallocate(subtensors(index_ij)%rows)
+      endif
+      if(allocated(subtensors(index_ij)%nr))deallocate(subtensors(index_ij)%nr)
+      if(allocated(subtensors(index_ij)%cols))then
+         do dim_i=1,Ndim
+            call iarray_finalizer(subtensors(index_ij)%cols(dim_i))
+         enddo
+         deallocate(subtensors(index_ij)%cols)
+      endif
+      if(allocated(subtensors(index_ij)%nc))deallocate(subtensors(index_ij)%nc)
+      if(allocated(subtensors(index_ij)%masks))then
+         call LogMemory(stats, -SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
+         deallocate(subtensors(index_ij)%masks)
+      endif
+   enddo
+
+  end subroutine BF_MD_delete_subtensors
+
+
+
+   subroutine BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+
+
+      implicit none
+
+      integer Nboundall, Ninadmissible, statflag, Ndim, dim_i
+      integer boundary_map(:,:,:)
+      integer groupm_start(Ndim)
+
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      integer i, j, bb, bb_g, level_butterfly, level_butterflyL, level_butterflyR, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new, rank_new1
+      integer group_m(Ndim), group_n(Ndim), mm, nn, index_i, index_i_loc, index_j_loc, index_j, ii, jj, ij
+      integer level, length_1, length_2, level_blocks, index_ij
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2
+      real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e, flops, flops1
+      integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, nnn1, ierr
+      real(kind=8) Memory, flop,n2,n1, Memory_dense, Memory_comp
+      DT ctemp
+      DT,target,allocatable:: alldat_loc_in(:)
+      type(matrixblock_MD)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row(:), select_column(:), column_pivot(:), row_pivot(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_little_cc(:, :), core(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, level_half, level_final, dim_MD(Ndim+2), idx_MD(Ndim+2), idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), idx_c_scalar, idx_r_scalar, dim_subtensor(Ndim*2),idx_subtensor(Ndim*2)
+      integer passflag, nnz_loc
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
+      integer::mrange_dummy(1), nrange_dummy(1)
+      type(intersect_MD), allocatable :: subtensors(:)
+      type(intersect_MD) :: subtensors_dummy(1)
+      type(butterfly_skel_MD), allocatable :: ButterflySkel_R_transposed(:)
+
+      ! DT:: mat_dummy(1, 1)
+      Memory = 0.
+
+      blocks%rankmax = -100000
+      blocks%rankmin = 100000
+
+      group_m = blocks%row_group ! Note: row_group and col_group interchanged here
+      group_n = blocks%col_group
+      level_blocks = blocks%level
+
+      level_butterfly = blocks%level_butterfly
+
+      allocate (rankmax_for_butterfly(0:level_butterfly))
+      rankmax_for_butterfly = -100000
+      allocate (rankmin_for_butterfly(0:level_butterfly))
+      rankmin_for_butterfly = 100000
+
+      call assert(option%pat_comp==3, 'option%pat_comp can only be set to 3 for BF_MD_compress_N')
+      num_blocks = 2**level_butterfly
+      blocks%level_half = BF_Switchlevel(level_butterfly, option%pat_comp)
+      level_half = blocks%level_half
+
+      if (level_butterfly == 0) then
+         write(*,*)'level_butterfly = 0 has not been implemented in BF_MD_compress_N'
+
+      else
+         level_butterflyL = level_butterfly-blocks%level_half
+         level_butterflyR = blocks%level_half
+         allocate(blocks%nr_m(Ndim))
+         allocate(blocks%nc_m(Ndim))
+         allocate(blocks%idx_r_m(Ndim))
+         allocate(blocks%idx_c_m(Ndim))
+         call GetLocalBlockRange_MD(ptree, blocks%pgno, blocks%level_half+1, level_butterfly, Ndim, 1, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
+         call assert(product(inc_r)==1,'inc_r has to be 1 for matrixblock_MD type')
+         blocks%nr_m = nr
+         blocks%idx_r_m = idx_r
+         call GetLocalBlockRange_MD(ptree, blocks%pgno, blocks%level_half, level_butterfly, Ndim, 1, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
+         call assert(product(inc_c)==1,'inc_c has to be 1 for matrixblock_MD type')
+         blocks%nc_m = nc
+         blocks%idx_c_m = idx_c
+
+         allocate(blocks%ButterflyU(product(blocks%nr_m)))
+         allocate(blocks%ButterflyV(product(blocks%nc_m)))
+         if (level_butterfly /= 0) then
+            allocate (blocks%ButterflyKerl_L(product(blocks%nr_m),blocks%level_half+1:level_butterfly))
+            allocate (blocks%ButterflyKerl_R(product(blocks%nc_m),1:blocks%level_half))
+         endif
+         allocate (blocks%ButterflySkel_L(product(blocks%nr_m),blocks%level_half+1:level_butterfly+1))
+         allocate (blocks%ButterflySkel_R(product(blocks%nc_m),0:blocks%level_half))
+         allocate (ButterflySkel_R_transposed(product(blocks%nr_m)))
+
+         do bb=1, product(blocks%nc_m)
+         do level = 0, level_half
+            nr=2**(level)
+            nc=2**(blocks%level_half-level)
+            idx_r=1
+            idx_c=1
+            inc_r=1
+            inc_c=1
+
+            if (level == 0) then
+               blocks%ButterflyV(bb)%num_blk = nc(1)
+               blocks%ButterflyV(bb)%nblk_loc = nc(1)
+               blocks%ButterflyV(bb)%idx = idx_c(1)
+               blocks%ButterflyV(bb)%inc = inc_c(1)
+               allocate (blocks%ButterflyV(bb)%blocks(blocks%ButterflyV(bb)%nblk_loc,Ndim))
+            elseif (level == level_butterfly + 1) then
+               write(*,*)"should not reach level == level_butterfly + 1 for the right half of matrixblock_MD"
+            else
+               allocate(blocks%ButterflyKerl_R(bb,level)%num_col(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%num_col = nc*2
+               allocate(blocks%ButterflyKerl_R(bb,level)%nc(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%nc = nc*2
+               allocate(blocks%ButterflyKerl_R(bb,level)%num_row(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%num_row = nr
+               allocate(blocks%ButterflyKerl_R(bb,level)%nr(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%nr = nr
+               allocate(blocks%ButterflyKerl_R(bb,level)%idx_r(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%idx_r=idx_r
+               allocate(blocks%ButterflyKerl_R(bb,level)%inc_r(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%inc_r=inc_r
+               allocate(blocks%ButterflyKerl_R(bb,level)%idx_c(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%idx_c=idx_c
+               allocate(blocks%ButterflyKerl_R(bb,level)%inc_c(Ndim))
+               blocks%ButterflyKerl_R(bb,level)%inc_c=inc_c
+               allocate (blocks%ButterflyKerl_R(bb,level)%blocks(product(blocks%ButterflyKerl_R(bb,level)%nr), blocks%ButterflyKerl_R(bb,level)%nc(1),Ndim))
+            endif
+
+            allocate(blocks%ButterflySkel_R(bb,level)%nc(Ndim))
+            blocks%ButterflySkel_R(bb,level)%nc = nc
+            allocate(blocks%ButterflySkel_R(bb,level)%nr(Ndim))
+            blocks%ButterflySkel_R(bb,level)%nr = nr
+            allocate(blocks%ButterflySkel_R(bb,level)%idx_r(Ndim))
+            blocks%ButterflySkel_R(bb,level)%idx_r=idx_r
+            allocate(blocks%ButterflySkel_R(bb,level)%inc_r(Ndim))
+            blocks%ButterflySkel_R(bb,level)%inc_r=inc_r
+            allocate(blocks%ButterflySkel_R(bb,level)%idx_c(Ndim))
+            blocks%ButterflySkel_R(bb,level)%idx_c=idx_c
+            allocate(blocks%ButterflySkel_R(bb,level)%inc_c(Ndim))
+            blocks%ButterflySkel_R(bb,level)%inc_c=inc_c
+            allocate (blocks%ButterflySkel_R(bb,level)%inds(product(blocks%ButterflySkel_R(bb,level)%nr), blocks%ButterflySkel_R(bb,level)%nc(1),Ndim))
+
+            rank_new = 0
+            flops = 0
+
+            dim_MD(1:Ndim)=nr
+            dim_MD(1+Ndim)=nc(1)
+            dim_MD(2+Ndim)=Ndim
+
+            allocate(subtensors(product(dim_MD)))
+            do index_ij = 1, product(dim_MD)
+               allocate(subtensors(index_ij)%nr(Ndim))
+               allocate(subtensors(index_ij)%nc(Ndim))
+               subtensors(index_ij)%nr=0
+               subtensors(index_ij)%nc=0
+            enddo
+            n1 = MPI_Wtime()
+
+            do index_ij = 1, product(dim_MD)
+               call BF_MD_compress_N_oneblock_R_sample(Ndim, dim_MD, subtensors, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_ij, bb, level, flops1)
+            enddo
+            n2 = MPI_Wtime()
+            ! time_tmp = time_tmp + n2 - n1
+
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_MD), msh, option, ker, 0, passflag, ptree, stats)
+
+
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+#ifdef HAVE_OPENMP
+            !$omp parallel do default(shared) private(index_ij,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+#endif
+            do index_ij = 1, product(dim_MD)
+               call BF_MD_compress_N_oneblock_R_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new, flops1)
+               rank_new = MAX(rank_new, rank_new1)
+               flops =flops+flops1
+            enddo
+#ifdef HAVE_OPENMP
+            !$omp end parallel do
+#endif
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+
+            call BF_MD_delete_subtensors(Ndim, dim_MD, subtensors, stats)
+            deallocate(subtensors)
+
+            passflag = 0
+            do while (passflag == 0)
+               call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+            enddo
+            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            if (level < level_butterfly + 1) then
+            if (rank_new > rankmax_for_butterfly(level)) then
+               rankmax_for_butterfly(level) = rank_new
+            endif
+            endif
+            if (level /= level_butterfly + 1) then
+            if (level_half == level) then
+               nc=2**(level_butterfly-level_half)
+               call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c)
+               idx_c=idx_c + blocks%idx_c_m -1
+               call MultiIndexToSingleIndex(Ndim, nc, bb_g, idx_c)
+               if(option%verbosity>=1)write(*,*)"R: good until here!!",bb_g,product(nc),'rank_new',rank_new
+               ! call BF_all2all_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'C')
+            endif
+            endif
+            stats%Flop_Fill = stats%Flop_Fill + flops
+         enddo
+         enddo
+
+         level_final = level_half + 1
+         do bb=1, product(blocks%nr_m)
+         do level = level_butterfly + 1, level_final, -1
+            nr=2**(level - blocks%level_half - 1 )
+            nc=2**(level_butterfly + 1-level)
+            idx_r=1
+            idx_c=1
+            inc_r=1
+            inc_c=1
+            if (level == 0) then
+               write(*,*)"should not reach level == 0 for the left half of matrixblock_MD"
+            elseif (level == level_butterfly + 1) then
+               blocks%ButterflyU(bb)%num_blk = nr(1)
+               blocks%ButterflyU(bb)%nblk_loc = nr(1)
+               blocks%ButterflyU(bb)%idx = idx_r(1)
+               blocks%ButterflyU(bb)%inc = inc_r(1)
+               allocate (blocks%ButterflyU(bb)%blocks(blocks%ButterflyU(bb)%nblk_loc,Ndim))
+            else
+               allocate(blocks%ButterflyKerl_L(bb,level)%num_col(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%num_col = nc
+               allocate(blocks%ButterflyKerl_L(bb,level)%nc(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%nc = nc
+               allocate(blocks%ButterflyKerl_L(bb,level)%num_row(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%num_row = nr*2
+               allocate(blocks%ButterflyKerl_L(bb,level)%nr(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%nr = nr*2
+               allocate(blocks%ButterflyKerl_L(bb,level)%idx_r(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%idx_r=idx_r
+               allocate(blocks%ButterflyKerl_L(bb,level)%inc_r(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%inc_r=inc_r
+               allocate(blocks%ButterflyKerl_L(bb,level)%idx_c(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%idx_c=idx_c
+               allocate(blocks%ButterflyKerl_L(bb,level)%inc_c(Ndim))
+               blocks%ButterflyKerl_L(bb,level)%inc_c=inc_c
+               allocate (blocks%ButterflyKerl_L(bb,level)%blocks(blocks%ButterflyKerl_L(bb,level)%nr(1), product(blocks%ButterflyKerl_L(bb,level)%nc),Ndim))
+            endif
+
+            allocate(blocks%ButterflySkel_L(bb,level)%nc(Ndim))
+            blocks%ButterflySkel_L(bb,level)%nc = nc
+            allocate(blocks%ButterflySkel_L(bb,level)%nr(Ndim))
+            blocks%ButterflySkel_L(bb,level)%nr = nr
+            allocate(blocks%ButterflySkel_L(bb,level)%idx_r(Ndim))
+            blocks%ButterflySkel_L(bb,level)%idx_r=idx_r
+            allocate(blocks%ButterflySkel_L(bb,level)%inc_r(Ndim))
+            blocks%ButterflySkel_L(bb,level)%inc_r=inc_r
+            allocate(blocks%ButterflySkel_L(bb,level)%idx_c(Ndim))
+            blocks%ButterflySkel_L(bb,level)%idx_c=idx_c
+            allocate(blocks%ButterflySkel_L(bb,level)%inc_c(Ndim))
+            blocks%ButterflySkel_L(bb,level)%inc_c=inc_c
+            allocate (blocks%ButterflySkel_L(bb,level)%inds(blocks%ButterflySkel_L(bb,level)%nr(1), product(blocks%ButterflySkel_L(bb,level)%nc),Ndim))
+
+            rank_new = 0
+            flops = 0
+
+            dim_MD(1)=nr(1)
+            dim_MD(2:1+Ndim)=nc
+            dim_MD(2+Ndim)=Ndim
+
+            allocate(subtensors(product(dim_MD)))
+            do index_ij = 1, product(dim_MD)
+               allocate(subtensors(index_ij)%nr(Ndim))
+               allocate(subtensors(index_ij)%nc(Ndim))
+               subtensors(index_ij)%nr=0
+               subtensors(index_ij)%nc=0
+            enddo
+            n1 = MPI_Wtime()
+
+            do index_ij = 1, product(dim_MD)
+               call BF_MD_compress_N_oneblock_C_sample(Ndim, dim_MD, subtensors, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_ij, bb, level, flops1)
+            enddo
+            n2 = MPI_Wtime()
+            ! time_tmp = time_tmp + n2 - n1
+
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_MD), msh, option, ker, 0, passflag, ptree, stats)
+
+
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
+#ifdef HAVE_OPENMP
+            !$omp parallel do default(shared) private(index_ij,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+#endif
+            do index_ij = 1, product(dim_MD)
+               call BF_MD_compress_N_oneblock_C_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new, flops1)
+               rank_new = MAX(rank_new, rank_new1)
+               flops =flops+flops1
+            enddo
+#ifdef HAVE_OPENMP
+            !$omp end parallel do
+#endif
+            if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
+
+
+            call BF_MD_delete_subtensors(Ndim, dim_MD, subtensors, stats)
+            deallocate(subtensors)
+
+            passflag = 0
+            do while (passflag == 0)
+               call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+            enddo
+
+            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            if (level > 0) then
+            if (rank_new > rankmax_for_butterfly(level - 1)) then
+               rankmax_for_butterfly(level - 1) = rank_new
+            endif
+            endif
+            if (level_final == level) then
+
+               nr=2**(level_half)
+               call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb, idx_r)
+               idx_r=idx_r + blocks%idx_r_m -1
+               call MultiIndexToSingleIndex(Ndim, nr, bb_g, idx_r)
+               if(option%verbosity>=1)write(*,*)"L: good until here!!",bb_g,product(nr),'rank_new',rank_new
+               ! call BF_all2all_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'C')
+            endif
+
+            stats%Flop_Fill = stats%Flop_Fill + flops
+         enddo
+         enddo
+
+         call BF_MD_all2all_skel(Ndim, blocks, ButterflySkel_R_transposed, option, stats, msh, ptree)
+
+         nc=2**(level_butterfly -level_half)
+         dim_subtensor(1:Ndim)=blocks%nr_m
+         dim_subtensor(1+Ndim:Ndim*2)=nc
+         allocate(subtensors(product(dim_subtensor)))
+         do index_ij = 1, product(dim_subtensor)
+            call SingleIndexToMultiIndex(Ndim*2, dim_subtensor, index_ij, idx_subtensor)
+            call MultiIndexToSingleIndex(Ndim, blocks%nr_m, idx_r_scalar, idx_subtensor(1:Ndim))
+            call MultiIndexToSingleIndex(Ndim, nc, idx_c_scalar, idx_subtensor(1+Ndim:2*Ndim))
+
+            group_m = blocks%row_group
+            group_n = blocks%col_group
+            group_m = group_m*2**(level_half) + blocks%idx_r_m - 1 + idx_subtensor(1:Ndim) -1
+            group_n = group_n*2**(level_butterfly - level_half) + idx_subtensor(1+Ndim:2*Ndim) -1
+
+            allocate(subtensors(index_ij)%nr(Ndim))
+            allocate(subtensors(index_ij)%nc(Ndim))
+            allocate(subtensors(index_ij)%rows(Ndim))
+            allocate(subtensors(index_ij)%cols(Ndim))
+            do dim_i=1,Ndim
+               subtensors(index_ij)%nr(dim_i)=size(blocks%ButterflySkel_L(idx_r_scalar,level_final)%inds(1, idx_c_scalar, dim_i)%array)
+               allocate (subtensors(index_ij)%rows(dim_i)%dat(subtensors(index_ij)%nr(dim_i)))
+               subtensors(index_ij)%rows(dim_i)%dat = blocks%ButterflySkel_L(idx_r_scalar,level_final)%inds(1, idx_c_scalar, dim_i)%array + msh(dim_i)%basis_group(group_m(dim_i))%head - 1
+            enddo
+
+            do dim_i=1,Ndim
+               subtensors(index_ij)%nc(dim_i)=size(ButterflySkel_R_transposed(idx_r_scalar)%inds(1, idx_c_scalar, dim_i)%array)
+               allocate (subtensors(index_ij)%cols(dim_i)%dat(subtensors(index_ij)%nc(dim_i)))
+               subtensors(index_ij)%cols(dim_i)%dat = ButterflySkel_R_transposed(idx_r_scalar)%inds(1, idx_c_scalar, dim_i)%array + msh(dim_i)%basis_group(group_n(dim_i))%head - 1
+            enddo
+            allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
+         enddo
+
+         call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats)
+
+         allocate(blocks%ButterflyMiddle(product(dim_subtensor)))
+         do index_ij = 1, product(dim_subtensor)
+            allocate(blocks%ButterflyMiddle(index_ij)%matrix(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
+            blocks%ButterflyMiddle(index_ij)%matrix = subtensors(index_ij)%dat
+         enddo
+
+         call BF_MD_delete_subtensors(Ndim, dim_subtensor, subtensors, stats)
+         deallocate(subtensors)
+
+         passflag = 0
+         do while (passflag == 0)
+            call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+         enddo
+
+
+      endif
+
+      if (statflag == 1) then
+         if (allocated(stats%rankmax_of_level)) stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly), stats%rankmax_of_level(level_blocks))
+      endif
+
+      deallocate (rankmax_for_butterfly)
+      deallocate (rankmin_for_butterfly)
+
+
+
+      do bb=1, product(blocks%nc_m)
+      do level = 0, blocks%level_half
+      if (allocated(blocks%ButterflySkel_R(bb,level)%inds)) then
+         do i = 1, size(blocks%ButterflySkel_R(bb,level)%inds, 1)
+         do j = 1, size(blocks%ButterflySkel_R(bb,level)%inds, 2)
+         do k = 1, Ndim
+            if (allocated(blocks%ButterflySkel_R(bb,level)%inds(i, j,k)%array)) deallocate (blocks%ButterflySkel_R(bb,level)%inds(i, j,k)%array)
+         enddo
+         enddo
+         enddo
+         deallocate (blocks%ButterflySkel_R(bb,level)%inds)
+      endif
+      enddo
+      enddo
+      deallocate (blocks%ButterflySkel_R)
+
+
+      do bb=1, product(blocks%nr_m)
+      do level = blocks%level_half+1,level_butterfly+1
+      if (allocated(blocks%ButterflySkel_L(bb,level)%inds)) then
+         do i = 1, size(blocks%ButterflySkel_L(bb,level)%inds, 1)
+         do j = 1, size(blocks%ButterflySkel_L(bb,level)%inds, 2)
+         do k = 1, Ndim
+            if (allocated(blocks%ButterflySkel_L(bb,level)%inds(i, j,k)%array)) deallocate (blocks%ButterflySkel_L(bb,level)%inds(i, j,k)%array)
+         enddo
+         enddo
+         enddo
+         deallocate (blocks%ButterflySkel_L(bb,level)%inds)
+      endif
+      enddo
+      enddo
+      deallocate (blocks%ButterflySkel_L)
+
+
+      do bb=1, product(blocks%nr_m)
+      if (allocated(ButterflySkel_R_transposed(bb)%inds)) then
+         do i = 1, size(ButterflySkel_R_transposed(bb)%inds, 1)
+         do j = 1, size(ButterflySkel_R_transposed(bb)%inds, 2)
+         do k = 1, Ndim
+            if (allocated(ButterflySkel_R_transposed(bb)%inds(i, j,k)%array)) deallocate (ButterflySkel_R_transposed(bb)%inds(i, j,k)%array)
+         enddo
+         enddo
+         enddo
+         deallocate (ButterflySkel_R_transposed(bb)%inds)
+      endif
+      enddo
+      deallocate(ButterflySkel_R_transposed)
+
+
+      call BF_MD_ComputeMemory(Ndim, blocks, memory_dense,memory_comp)
+      Memory = memory_dense + memory_comp
+      call BF_MD_get_rank(Ndim, blocks, ptree)
+      if(option%verbosity>=2)write(*,*)"After BF_MD_compress_N: myID",ptree%MyID, "rankmin",blocks%rankmin,"rankmax",blocks%rankmax,"memory_subtensor",memory_dense,"memory_factormat",memory_comp
+      return
+
+   end subroutine BF_MD_compress_N
+
+
+
+
+
 
 
    subroutine BF_compress_N15_seq(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)

@@ -242,7 +242,7 @@ contains
       call init_random_seed()
 
       call assert(associated(ker%QuantApp), 'ker%QuantApp is not assigned')
-      if(option%cpp==0)call assert(associated(ker%FuncZmnBlock) .or. associated(ker%FuncZmn) .or. associated(ker%FuncHMatVec), 'one of the following should be assigned: ker%FuncZmn, ker%FuncZmnBlock, ker%FuncHMatVec')
+      if(option%cpp==0)call assert(associated(ker%FuncZmn_MD) , 'one of the following should be assigned: ker%FuncZmn_MD, ker%FuncZmn_MDBlock')
 
       stats%Flop_Fill = 0
       stats%Time_Fill = 0
@@ -732,7 +732,7 @@ contains
    subroutine BF_MD_Construct_Init(Ndim, M, N, M_loc, N_loc, Permutation_m, Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m, Coordinates_n, tree_m, tree_n, nns_m, nns_n)
       implicit none
       integer Ndim
-      integer M(Ndim), N(Ndim)
+      integer M(Ndim), N(Ndim), N_leaf_m(Ndim), N_leaf_n(Ndim)
 
       integer Permutation_m(:,:),Permutation_n(:,:)
       real(kind=8), optional:: Coordinates_m(:, :), Coordinates_n(:, :)
@@ -789,10 +789,11 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', bmat_m%Maxlevel
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
       do dim_i=1,Ndim
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'For dimension ', dim_i
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', int(mshr(dim_i)%Nunk/(2**bmat_m%Maxlevel))
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc(dim_i)%Nunk/(2**bmat_n%Maxlevel))
+         N_leaf_m(dim_i)=int(mshr(dim_i)%Nunk/(2**bmat_m%Maxlevel))
+         N_leaf_n(dim_i)=int(mshc(dim_i)%Nunk/(2**bmat_n%Maxlevel))
       enddo
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', N_leaf_m
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', N_leaf_n
 
       call BF_MD_Construct_Init_from_mshrc(Ndim, M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
 
@@ -896,6 +897,83 @@ contains
 
 
 
+
+
+!>**** Interface of BF construction via entry extraction
+   !> @param Ndim: dimensionality (in)
+   !> @param blocks: the structure containing the block (inout)
+   !> @param option: the structure containing option (in)
+   !> @param stats: the structure containing statistics (inout)
+   !> @param msh: the structure containing points and ordering information (in)
+   !> @param ker: the structure containing kernel quantities (in)
+   !> @param ptree: the structure containing process tree (in)
+   subroutine BF_MD_Construct_Element_Compute(Ndim, blocks, option, stats, msh, ker, ptree)
+      implicit none
+
+      integer Maxlevel,Ndim,dim_i
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer, allocatable:: groupmembers(:)
+      integer level
+
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(matrixblock_MD),target::blocks
+      type(matrixblock_MD),pointer::blocks_1
+      type(proctree)::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2, error, Memory, tol_comp_tmp
+      integer ierr,pp,knn_tmp
+      integer:: boundary_map(1,1,Ndim)
+      integer groupm_start(Ndim), Nboundall,Ninadmissible
+      blocks_1 => blocks
+      do dim_i =1,Ndim
+         if (allocated(msh(dim_i)%xyz)) deallocate (msh(dim_i)%xyz)
+      enddo
+
+      t1 = MPI_Wtime()
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction......"
+
+      groupm_start = 0
+      Nboundall = 0
+      Ninadmissible = 0
+      if (option%forwardN15flag == 0) then
+
+         call BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+      else
+         write(*,*)'forwardN15flag=',option%forwardN15flag,'is not supported in BF_MD_Construct_Element_Compute'
+      end if
+
+      ! !!!! the following functions have not been tensorized
+      if (option%verbosity >= 0)call BF_MD_checkError(Ndim, blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
+      ! call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+
+
+      !>**** delete neighours in msh
+      do dim_i =1,Ndim
+         if(allocated(msh(dim_i)%nns))then
+            call LogMemory(stats, -SIZEOF(msh(dim_i)%nns)/1024.0d3)
+            deallocate(msh(dim_i)%nns)
+         endif
+      enddo
+
+      t2 = MPI_Wtime()
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
+
+      if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
+      if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
+      stats%rankmax_of_level(0) = blocks%rankmax
+      stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+      stats%Time_Fill = stats%Time_Fill + t2 - t1
+      ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
+
+   end subroutine BF_MD_Construct_Element_Compute
 
 
 
@@ -1670,6 +1748,182 @@ contains
       !stop
 
    end subroutine BF_checkError
+
+
+
+
+
+!!!!!!! check error of BF construction using parallel element extraction
+   subroutine BF_MD_checkError(Ndim, blocks, option, msh, ker, stats, ptree, bpackflag, verbosity,error)
+      use BPACK_DEFS
+      implicit none
+      integer Ndim
+      integer bpackflag ! whether blocks is treated as one offdiagonal block in a hierarhical matrix or one standalone block
+      type(Hoption)::option
+      type(Hstat)::stats
+      ! type(Bmatrix)::bmat
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(intersect), allocatable::inters(:)
+      real(kind=8)::n1, n2, n3, n4
+      integer Ntest, passflag, verbosity
+      integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, rank1, rank2, ierr, MyID
+      integer:: cridx, info, dim_i
+      integer, allocatable::rows(:), cols(:)
+      DT, allocatable:: Vin(:, :), Vout1(:, :), Vout2(:, :), Vinter(:, :), Mat(:, :)
+      integer::descVin(9), descVout(9), descVinter(9), descFull(9), descButterflyU(9), descButterflyV(9)
+      integer N, M, i, j, ii, jj, nn, pp, myi, myj, iproc, jproc, rmax
+      integer edge_n, edge_m, rank
+      real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
+      real(kind=8):: a, v1, v2, v3
+      real(kind=8),optional:: error
+      DT:: value1, value2, value3
+      type(list)::lstr, lstc, lst, lstblk
+      type(nod), pointer::cur, curr, curc, curri, curci
+      class(*), pointer::ptr, ptrr, ptrc, ptrri, ptrci
+      integer::head, tail, idx, pgno, ctxt, nr_loc, nc_loc
+      type(matrixblock_MD), pointer::blocks
+      integer num_blocks, idx_row, idx_col, idx_dat
+      integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
+      integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
+      DT, target, allocatable::alldat_loc(:)
+      integer:: Ninter, dims_r, dims_c, idx_m(Ndim), idx_r_m(Ndim), idx_c_m(Ndim), ntot_loc, level, Npmap, nproc, npavr, np
+      type(intersect_MD)::subtensor(1)
+      type(intersect_MD),allocatable::inter_MD(:)
+      integer level_butterfly,level_half,levelm,receiver, sender
+      integer,allocatable::order(:)
+      integer:: dims_row(Ndim),dims_col(Ndim), dims_one(Ndim),group_m(Ndim),group_n(Ndim)
+
+      level_butterfly=blocks%level_butterfly
+      level_half=blocks%level_half
+      levelm=level_half
+      nproc = ptree%pgrp(blocks%pgno)%nproc
+      pp = ptree%MyID - ptree%pgrp(blocks%pgno)%head + 1
+
+      dims_r=2**level_half
+      dims_c=2**(level_butterfly-level_half)
+
+      Ninter = min(4, min(dims_r**Ndim,dims_c**Ndim))
+      allocate(inter_MD(Ninter))
+      do nn=1,Ninter
+         allocate(inter_MD(nn)%nr(Ndim))
+         allocate(inter_MD(nn)%rows(Ndim))
+         do dim_i=1,Ndim
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            idx_r_m(dim_i) = max(floor_safe(dims_r*a), 1)
+            group_m = blocks%row_group
+            group_m(dim_i) = group_m(dim_i)*2**levelm - 1 + idx_r_m(dim_i)
+            inter_MD(nn)%nr(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+            allocate(inter_MD(nn)%rows(dim_i)%dat(inter_MD(nn)%nr(dim_i)))
+            do ii = 1, inter_MD(nn)%nr(dim_i)
+               inter_MD(nn)%rows(dim_i)%dat(ii) = ii + msh(dim_i)%basis_group(group_m(dim_i))%head -1
+            enddo
+            allocate(order(inter_MD(nn)%nr(dim_i)))
+            call quick_sort_int(inter_MD(nn)%rows(dim_i)%dat,order,inter_MD(nn)%nr(dim_i))
+            inter_MD(nn)%rows(dim_i)%dat=inter_MD(nn)%rows(dim_i)%dat(order)
+            deallocate(order)
+         enddo
+
+         allocate(inter_MD(nn)%nc(Ndim))
+         allocate(inter_MD(nn)%cols(Ndim))
+         do dim_i=1,Ndim
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            idx_c_m(dim_i) = max(floor_safe(dims_c*a), 1)
+            group_n = blocks%col_group
+            group_n(dim_i) = group_n(dim_i)*2**(level_butterfly-levelm) - 1 + idx_c_m(dim_i)
+            inter_MD(nn)%nc(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+            allocate(inter_MD(nn)%cols(dim_i)%dat(inter_MD(nn)%nc(dim_i)))
+            do ii = 1, inter_MD(nn)%nc(dim_i)
+               inter_MD(nn)%cols(dim_i)%dat(ii) = ii + msh(dim_i)%basis_group(group_n(dim_i))%head -1
+            enddo
+            allocate(order(inter_MD(nn)%nc(dim_i)))
+            call quick_sort_int(inter_MD(nn)%cols(dim_i)%dat,order,inter_MD(nn)%nc(dim_i))
+            inter_MD(nn)%cols(dim_i)%dat=inter_MD(nn)%cols(dim_i)%dat(order)
+            deallocate(order)
+         enddo
+
+         receiver=0
+         sender=0
+         idx_m=idx_r_m-blocks%idx_r_m+1
+         if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nr_m))receiver=pp
+         idx_m=idx_c_m-blocks%idx_c_m+1
+         if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nc_m))sender=pp
+         call MPI_ALLREDUCE(MPI_IN_PLACE, receiver, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, sender, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+
+         inter_MD(nn)%receiver=receiver
+         inter_MD(nn)%sender=sender
+         allocate(inter_MD(nn)%idx_r_m(Ndim))
+         inter_MD(nn)%idx_r_m=idx_r_m
+         allocate(inter_MD(nn)%idx_c_m(Ndim))
+         inter_MD(nn)%idx_c_m=idx_c_m
+         ! write(*,*)"inter nn",nn,idx_r_m,idx_c_m
+         if(receiver==pp)then
+            allocate(inter_MD(nn)%dat(product(inter_MD(nn)%nr),product(inter_MD(nn)%nc)))
+         endif
+      enddo
+
+      n1 = MPI_Wtime()
+      call BF_MD_block_extraction(blocks, Ndim, Ninter, inter_MD, ptree, msh, stats)
+      n2 = MPI_Wtime()
+
+      ! compare extracted values with element_Zmn
+      v1 = 0
+      v2 = 0
+      v3 = 0
+      do nn = 1, Ninter
+         receiver = inter_MD(nn)%receiver
+         if(receiver==pp)then
+            if(option%verbosity>=2)write(*,*)'generating subtensor from entry evaluation',nn,'of',Ninter
+            allocate(subtensor(1)%nr(Ndim))
+            subtensor(1)%nr=inter_MD(nn)%nr
+            allocate(subtensor(1)%nc(Ndim))
+            subtensor(1)%nc=inter_MD(nn)%nc
+            allocate(subtensor(1)%rows(Ndim))
+            allocate(subtensor(1)%cols(Ndim))
+            do dim_i=1,Ndim
+               allocate (subtensor(1)%rows(dim_i)%dat(subtensor(1)%nr(dim_i)))
+               subtensor(1)%rows(dim_i)%dat=inter_MD(nn)%rows(dim_i)%dat
+               allocate (subtensor(1)%cols(dim_i)%dat(subtensor(1)%nc(dim_i)))
+               subtensor(1)%cols(dim_i)%dat=inter_MD(nn)%cols(dim_i)%dat
+            enddo
+            allocate (subtensor(1)%dat(product(subtensor(1)%nr),product(subtensor(1)%nc)))
+            subtensor(1)%dat=0
+            call element_Zmn_tensorlist_user(Ndim, subtensor, 1, msh, option, ker, 0, passflag, ptree, stats)
+            allocate (Mat(product(subtensor(1)%nr),product(subtensor(1)%nc)))
+            Mat = subtensor(1)%dat
+
+            do myi = 1, product(subtensor(1)%nr)
+            do myj = 1, product(subtensor(1)%nc)
+               value2 = inter_MD(nn)%dat(myi,myj)
+               value1 = Mat(myi, myj)
+               v1 = v1 + abs(value1)**2d0
+               v2 = v2 + abs(value2)**2d0
+               v3 = v3 + abs(value2 - value1)**2d0
+               ! if(abs(value2-value1)**2d0/abs(value1)**2d0>1D-3)write(*,*)ptree%MyID,nn,myi,myj,abs(value2-value1)**2d0/abs(value1)**2d0,value2,value1
+            enddo
+            enddo
+            dims_one=1
+            call BF_MD_delete_subtensors(Ndim, dims_one, subtensor, stats)
+            deallocate(Mat)
+         else
+            call element_Zmn_tensorlist_user(Ndim, subtensor, 0, msh, option, ker, 2, passflag, ptree, stats)
+         endif
+      enddo
+
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+
+      if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+      if(present(error)) error=sqrt(v3/v1)
+
+      !stop
+
+   end subroutine BF_MD_checkError
 
 
 

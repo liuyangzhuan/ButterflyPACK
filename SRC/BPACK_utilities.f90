@@ -976,7 +976,7 @@ contains
          write (*, *) '***************************'
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
-         write (*, '(A18,I8)') 'Nmin_leaf', option%Nmin_leaf
+         write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
          write (*, '(A18,I8)') 'n_iter', option%n_iter
          write (*, '(A18,I8)') 'level_check', option%level_check
          write (*, '(A18,I8)') 'precon', option%precon
@@ -988,20 +988,20 @@ contains
          write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
          write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
          write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
-         write (*, '(A18,I8)') 'LRlevel', option%LRlevel
-         write (*, '(A18,I8)') 'BACA_Batch', option%BACA_Batch
-         write (*, '(A18,I8)') 'RecLR_leaf', option%RecLR_leaf
+         write (*, '(A18,I8)') 'lrlevel', option%LRlevel
+         write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+         write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
          write (*, '(A18,I8)') 'nogeo', option%nogeo
          write (*, '(A18,I8)') 'per_geo', option%per_geo
          write (*, '(A18,Es14.7)') 'period1', option%periods(1)
          write (*, '(A18,Es14.7)') 'period2', option%periods(2)
          write (*, '(A18,Es14.7)') 'period3', option%periods(3)
-         write (*, '(A18,I8)') 'LR_BLK_NUM', option%LR_BLK_NUM
+         write (*, '(A18,I8)') 'lr_blk_num', option%LR_BLK_NUM
          write (*, '(A18,I8)') 'rank0', option%rank0
          write (*, '(A18,I8)') 'itermax', option%itermax
          write (*, '(A18,I8)') 'powiter', option%powiter
-         write (*, '(A18,I8)') 'ILU', option%ILU
-         write (*, '(A18,I8)') 'Nbundle', option%Nbundle
+         write (*, '(A18,I8)') 'ilu', option%ILU
+         write (*, '(A18,I8)') 'nbundle', option%Nbundle
          write (*, '(A18,I8)') 'verbosity', option%verbosity
          write (*, '(A18,I8)') 'rmax', option%rmax
          write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
@@ -1009,8 +1009,8 @@ contains
          write (*, '(A18,I8)') 'elem_extract', option%elem_extract
          write (*, '(A18,I8)') 'cpp', option%cpp
          write (*, '(A18,I8)') 'knn', option%knn
-         write (*, '(A18,I8)') 'ErrFillFull', option%ErrFillFull
-         write (*, '(A18,I8)') 'ErrSol', option%ErrSol
+         write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+         write (*, '(A18,I8)') 'errsol', option%ErrSol
          ! write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
          write (*, '(A18,I8)') 'less_adapt', option%less_adapt
          write (*, '(A18,I8)') 'use_zfp', option%use_zfp

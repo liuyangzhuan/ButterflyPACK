@@ -76,6 +76,20 @@ add_dependencies(ie3dport ie3dporteigen)
 install(TARGETS ie3dport RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
 
+set(FZEXM11 RankBenchmark_Driver.f90)
+add_executable(frankben ${FZEXM11})
+target_link_libraries(frankben ${all_link_libs_z})
+add_dependencies(frankben ie3dport)
+install(TARGETS frankben RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
+
+set(FZEXM12 RankBenchmark_tensor_Driver.f90)
+add_executable(frankben_t ${FZEXM12})
+target_link_libraries(frankben_t ${all_link_libs_z})
+add_dependencies(frankben_t frankben)
+install(TARGETS frankben_t RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
+
 ########################################### double Fortran drivers
 set(FDEXMSEQ1 KERREG_Driver_seq.f90)
 add_executable(krr_seq ${FDEXMSEQ1})

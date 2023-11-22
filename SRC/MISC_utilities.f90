@@ -4101,29 +4101,31 @@ contains
       endif
    end subroutine GetLocalBlockRange
 
-
+   !>**** convert single index to multi-index, assuming first index is the fastest
    subroutine SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)
       implicit none
       integer:: Ndim
       integer:: dims(Ndim)
       integer :: single_index, single_index_in, multi_index(Ndim)
-      integer:: i
+      integer:: i,product
 
       single_index = single_index_in
 
       ! Initialize multi_index
       multi_index = 0
+      product=1
 
       ! Calculate Multi-Indices
-      do i = Ndim, 1, -1
-         multi_index(i) = mod(single_index - 1, dims(i)) + 1
-         single_index = (single_index - 1) / dims(i) + 1
+      do i = 1,Ndim
+         multi_index(i) = mod((single_index - 1)/product, dims(i)) + 1
+         single_index = single_index - (multi_index(i) - 1) *product
+         product = product * dims(i)
       end do
 
    end subroutine SingleIndexToMultiIndex
 
 
-
+   !>**** convert multi-index to single-index, assuming first index is the fastest
    subroutine MultiIndexToSingleIndex(Ndim,dims, single_index, multi_index)
       implicit none
       integer:: Ndim
