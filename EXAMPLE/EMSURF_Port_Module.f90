@@ -1672,11 +1672,11 @@ subroutine current_node_patch_mapping(JMflag,string,curr,msh,quant,ptree)
 						r=sqrt(r)
 						current_patch = current_patch/r
 						do i=1,3
-#ifdef HAVE_OPENMP
+#ifdef HAVE_TASKLOOP
 						!$omp atomic
 #endif
 						vec_current_at_patch(i,patch)=vec_current_at_patch(i,patch) + current_patch(i)
-#ifdef HAVE_OPENMP
+#ifdef HAVE_TASKLOOP
 						!$omp end atomic
 #endif
 						enddo

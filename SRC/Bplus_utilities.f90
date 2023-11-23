@@ -259,6 +259,142 @@ contains
 #endif
    end function Bplus_checkNAN
 
+
+
+
+   subroutine Hmat_parallelblock_MVP_dat(blocks_1, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+
+
+
+      implicit none
+
+      integer M, N, Nrnd, index_i, index_j, na, nb, index_start, num_vectors
+      integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
+      integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
+      integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+      integer vector_a, vector_b, nn1, nn2, mm1, mm2, levelm
+      DT ctemp, a, b, ctemp1, ctemp2
+      character chara
+      type(matrixblock), pointer::blocks
+      type(matrixblock)::blocks_1
+      integer ll, bb, Maxlevel
+      type(proctree)::ptree
+      type(Hstat)::stats
+      integer:: ldi, ldo
+      DT :: random1(ldi, *), random2(ldo, *)
+      DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
+      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
+      real(kind=8)::n2,n1
+      integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
+      type(vectorsblock),allocatable:: Vin_locs(:), Vout_locs(:)
+
+      integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
+
+      type(nod), pointer::cur
+      class(*), pointer::ptr
+
+      if (chara == 'N') allocate (Vout(M, Nrnd))
+      if (chara == 'T') allocate (Vout(N, Nrnd))
+      Vout = 0
+
+      ctemp1 = 1.0d0; ctemp2 = 0.0d0
+      Maxlevel = size(blocks_1%lstblks)-1
+
+      do level = 0, Maxlevel
+
+         allocate(Vin_locs(blocks_1%lstblks(level)%num_nods))
+         allocate(Vout_locs(blocks_1%lstblks(level)%num_nods))
+         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+         cur => blocks_1%lstblks(level)%head
+         do bb = 1, blocks_1%lstblks(level)%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               n1 = MPI_Wtime()
+               if (chara == 'N') then
+                  if (blocks%M_loc > 0) then
+                     allocate (Vout_locs(bb)%vector(blocks%M_loc, Nrnd))
+                     Vout_locs(bb)%vector=0
+                  endif
+                  if (blocks%N_loc > 0) allocate (Vin_locs(bb)%vector(blocks%N_loc, Nrnd))
+                  call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+               else
+                  if (blocks%N_loc > 0)then
+                     allocate (Vout_locs(bb)%vector(blocks%N_loc, Nrnd))
+                     Vout_locs(bb)%vector=0
+                  endif
+                  if (blocks%M_loc > 0) allocate (Vin_locs(bb)%vector(blocks%M_loc, Nrnd))
+                  call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+               endif
+               n2 = MPI_Wtime()
+               stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+            end select
+            cur => cur%next
+         enddo
+
+
+         cur => blocks_1%lstblks(level)%head
+         do bb = 1, blocks_1%lstblks(level)%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
+                  call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
+                  &Vin_locs(bb)%vector, size(Vin_locs(bb)%vector,1), Vout_locs(bb)%vector, size(Vout_locs(bb)%vector,1), ctemp1, ctemp2, ptree, stats)
+               endif
+            end select
+            cur => cur%next
+         enddo
+
+
+         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+         cur => blocks_1%lstblks(level)%head
+         do bb = 1, blocks_1%lstblks(level)%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               n1 = MPI_Wtime()
+               if (chara == 'N') then
+                  call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
+                  if (blocks%M_loc > 0) deallocate (Vout_locs(bb)%vector)
+                  if (blocks%N_loc > 0) deallocate (Vin_locs(bb)%vector)
+               else
+                  call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
+                  if (blocks%N_loc > 0) deallocate (Vout_locs(bb)%vector)
+                  if (blocks%M_loc > 0) deallocate (Vin_locs(bb)%vector)
+               endif
+               n2 = MPI_Wtime()
+               stats%Time_RedistV = stats%Time_RedistV + n2-n1
+            end select
+            cur => cur%next
+         enddo
+
+         deallocate(Vin_locs)
+         deallocate(Vout_locs)
+      end do
+
+      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+      deallocate (Vout)
+
+   end subroutine Hmat_parallelblock_MVP_dat
+
+   subroutine BP_Mult(BP, chara, xin, xout, Ninloc, Noutloc, Ncol, ptree, stats)
+      implicit none
+      type(blockplus)::BP
+      integer Ninloc, Noutloc, Ncol
+      character chara
+      type(proctree)::ptree
+      type(Hstat)::stats
+      DT::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+      if (chara == 'N') then
+         call Bplus_block_MVP_dat(BP, chara, Noutloc, Ninloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      else
+         call Bplus_block_MVP_dat(BP, chara, Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      endif
+   end subroutine BP_Mult
+
+
    subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, level_start, level_end)
 
 
@@ -289,80 +425,82 @@ contains
 
       integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
 
-      level_s = 1
-      level_e = bplus%Lplus
-      if (present(level_start)) level_s = level_start
-      if (present(level_end)) level_e = level_end
-
-      if (chara == 'N') allocate (Vout(M, Nrnd))
-      if (chara == 'T') allocate (Vout(N, Nrnd))
-      Vout = 0
-
-      ctemp1 = 1.0d0; ctemp2 = 0.0d0
-
       blocks_1 => bplus%LL(1)%matrices_block(1)
+      if(blocks_1%style==4)then
+         call Hmat_parallelblock_MVP_dat(blocks_1, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+      else
+         level_s = 1
+         level_e = bplus%Lplus
+         if (present(level_start)) level_s = level_start
+         if (present(level_end)) level_e = level_end
 
-      do ll = level_s, level_e
+         if (chara == 'N') allocate (Vout(M, Nrnd))
+         if (chara == 'T') allocate (Vout(N, Nrnd))
+         Vout = 0
 
-         allocate(Vin_locs(bplus%LL(ll)%Nbound))
-         allocate(Vout_locs(bplus%LL(ll)%Nbound))
-         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
-         do bb = 1, bplus%LL(ll)%Nbound
-            blocks => bplus%LL(ll)%matrices_block(bb)
+         ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
-            n1 = MPI_Wtime()
-            if (chara == 'N') then
-               if (blocks%M_loc > 0) then
-                  allocate (Vout_locs(bb)%vector(blocks%M_loc, Nrnd))
-                  Vout_locs(bb)%vector=0
+         do ll = level_s, level_e
+
+            allocate(Vin_locs(bplus%LL(ll)%Nbound))
+            allocate(Vout_locs(bplus%LL(ll)%Nbound))
+            ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+            do bb = 1, bplus%LL(ll)%Nbound
+               blocks => bplus%LL(ll)%matrices_block(bb)
+
+               n1 = MPI_Wtime()
+               if (chara == 'N') then
+                  if (blocks%M_loc > 0) then
+                     allocate (Vout_locs(bb)%vector(blocks%M_loc, Nrnd))
+                     Vout_locs(bb)%vector=0
+                  endif
+                  if (blocks%N_loc > 0) allocate (Vin_locs(bb)%vector(blocks%N_loc, Nrnd))
+                  call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+               else
+                  if (blocks%N_loc > 0)then
+                     allocate (Vout_locs(bb)%vector(blocks%N_loc, Nrnd))
+                     Vout_locs(bb)%vector=0
+                  endif
+                  if (blocks%M_loc > 0) allocate (Vin_locs(bb)%vector(blocks%M_loc, Nrnd))
+                  call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
                endif
-               if (blocks%N_loc > 0) allocate (Vin_locs(bb)%vector(blocks%N_loc, Nrnd))
-               call Redistribute1Dto1D(random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
-            else
-               if (blocks%N_loc > 0)then
-                  allocate (Vout_locs(bb)%vector(blocks%N_loc, Nrnd))
-                  Vout_locs(bb)%vector=0
+               n2 = MPI_Wtime()
+               stats%Time_RedistV = stats%Time_RedistV + n2-n1
+            enddo
+
+            do bb = 1, bplus%LL(ll)%Nbound
+               blocks => bplus%LL(ll)%matrices_block(bb)
+
+               if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
+                  call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
+                  &Vin_locs(bb)%vector, size(Vin_locs(bb)%vector,1), Vout_locs(bb)%vector, size(Vout_locs(bb)%vector,1), ctemp1, ctemp2, ptree, stats)
                endif
-               if (blocks%M_loc > 0) allocate (Vin_locs(bb)%vector(blocks%M_loc, Nrnd))
-               call Redistribute1Dto1D(random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
-            endif
-            n2 = MPI_Wtime()
-            stats%Time_RedistV = stats%Time_RedistV + n2-n1
-         enddo
+            enddo
 
-         do bb = 1, bplus%LL(ll)%Nbound
-            blocks => bplus%LL(ll)%matrices_block(bb)
+            ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+            do bb = 1, bplus%LL(ll)%Nbound
+               blocks => bplus%LL(ll)%matrices_block(bb)
+               n1 = MPI_Wtime()
+               if (chara == 'N') then
+                  call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
+                  if (blocks%M_loc > 0) deallocate (Vout_locs(bb)%vector)
+                  if (blocks%N_loc > 0) deallocate (Vin_locs(bb)%vector)
+               else
+                  call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
+                  if (blocks%N_loc > 0) deallocate (Vout_locs(bb)%vector)
+                  if (blocks%M_loc > 0) deallocate (Vin_locs(bb)%vector)
+               endif
+               n2 = MPI_Wtime()
+               stats%Time_RedistV = stats%Time_RedistV + n2-n1
 
-            if (blocks%N_loc > 0 .or. blocks%M_loc > 0) then
-               call BF_block_MVP_dat(blocks, chara, blocks%M_loc, blocks%N_loc, Nrnd,&
-               &Vin_locs(bb)%vector, size(Vin_locs(bb)%vector,1), Vout_locs(bb)%vector, size(Vout_locs(bb)%vector,1), ctemp1, ctemp2, ptree, stats)
-            endif
-         enddo
-
-         ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
-         do bb = 1, bplus%LL(ll)%Nbound
-            blocks => bplus%LL(ll)%matrices_block(bb)
-            n1 = MPI_Wtime()
-            if (chara == 'N') then
-               call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
-               if (blocks%M_loc > 0) deallocate (Vout_locs(bb)%vector)
-               if (blocks%N_loc > 0) deallocate (Vin_locs(bb)%vector)
-            else
-               call Redistribute1Dto1D(Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
-               if (blocks%N_loc > 0) deallocate (Vout_locs(bb)%vector)
-               if (blocks%M_loc > 0) deallocate (Vin_locs(bb)%vector)
-            endif
-            n2 = MPI_Wtime()
-            stats%Time_RedistV = stats%Time_RedistV + n2-n1
-
+            end do
+            deallocate(Vin_locs)
+            deallocate(Vout_locs)
          end do
-         deallocate(Vin_locs)
-         deallocate(Vout_locs)
-      end do
 
-      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
-      deallocate (Vout)
-
+         random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+         deallocate (Vout)
+      endif
    end subroutine Bplus_block_MVP_dat
 
 ! redistribute Bplus
@@ -656,6 +794,13 @@ contains
       if (allocated(blocks%Butterfly_index_MPI)) deallocate (blocks%Butterfly_index_MPI)
       if (associated(blocks%ms)) deallocate (blocks%ms)
       if (associated(blocks%ns)) deallocate (blocks%ns)
+
+      if (allocated(blocks%lstblks)) then
+         do level = 0, size(blocks%lstblks)-1
+            call list_finalizer(blocks%lstblks(level))
+         enddo
+         deallocate (blocks%lstblks)
+      endif
 
       if (allflag == 1) then
          if (associated(blocks%N_p)) deallocate (blocks%N_p)

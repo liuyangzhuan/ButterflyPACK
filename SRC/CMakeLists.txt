@@ -9,6 +9,10 @@ set(headers
 set(sources
 MAGMA_offset.c
 MAGMA_utilities.f90
+LAPACK_dtrevc3mod.f
+LAPACK_ztrevc3mod.f
+LAPACK_strevc3mod.f
+LAPACK_ctrevc3mod.f
 LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 LAPACK_sgeqp3mod.f
