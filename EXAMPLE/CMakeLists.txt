@@ -153,7 +153,8 @@ add_executable(go3d ${CZEXM2})
 target_link_libraries(go3d ${all_link_libs_z})
 add_dependencies(go3d go2d)
 
-
+# exclude Clang as Clang<13 doesn't support creal
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CZEXM3 FIO_Driver.cpp)
 add_executable(cfio ${CZEXM3})
 target_link_libraries(cfio ${all_link_libs_d})
@@ -165,7 +166,7 @@ add_executable(rankben ${CZEXM4})
 target_link_libraries(rankben ${all_link_libs_d})
 target_link_libraries(rankben ${all_link_libs_z})
 add_dependencies(rankben cfio)
-
+endif()
 
 # exclude Clang as Clang<13 doesn't support cabs,conj
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
