@@ -1550,6 +1550,7 @@ contains
 
       ! !!!! the following functions have not been tensorized
       if (option%verbosity >= 0)call BF_MD_checkError(Ndim, blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
+      stats%Mem_Comp_for=Memory
       ! call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
 

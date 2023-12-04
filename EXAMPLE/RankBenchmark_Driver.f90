@@ -117,7 +117,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc,Nunk_m_loc, Nunk_n_loc
 	integer,allocatable::tree(:),tree_m(:),tree_n(:)
-	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),x_glo(:,:),x_loc(:,:)
+	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),x_glo(:,:),x_loc(:,:),xin_loc(:,:),xout_loc(:,:)
 	integer nrhs
 	type(z_matrixblock) ::blocks
 	character(len=1024)  :: strings,strings1
@@ -153,7 +153,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 
 
 	quant%tst = 2
-
+    quant%wavelen = 0.25d0/8d0
 
 	nargs = iargc()
 	ii=1
@@ -170,6 +170,8 @@ PROGRAM ButterflyPACK_RankBenchmark
 						call getarg(ii,strings1)
 						if(trim(strings)=='--tst')then
 							read(strings1,*)quant%tst
+						elseif(trim(strings)=='--wavelen')then
+							read(strings1,*)quant%wavelen
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -199,7 +201,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 ! Read a full non-square matrix and do a BF compression
 
 	ppw=5
-    quant%wavelen = 0.25d0/8d0
+
     ds = quant%wavelen/ppw
     if(quant%tst==1)then ! two colinear plate
       Nperdim = z_ceiling_safe(1d0/ds)
@@ -298,7 +300,13 @@ PROGRAM ButterflyPACK_RankBenchmark
 	call MPI_Bcast(quant%Permutation_n,quant%Nunk_n,MPI_integer,0,ptree%comm,ierr)
 
 	call z_BF_Construct_Element_Compute(blocks, option, stats, msh, ker, ptree)
-
+	nrhs=1
+	allocate(xin_loc(Nunk_n_loc,nrhs))
+	xin_loc=1
+	allocate(xout_loc(Nunk_m_loc,nrhs))
+	call z_BF_Mult('N', xin_loc, xout_loc, Nunk_n_loc, Nunk_m_loc, nrhs, blocks, option, stats, ptree)
+	deallocate(xin_loc)
+	deallocate(xout_loc)
 !******************************************************************************!
 
 	!**** print statistics

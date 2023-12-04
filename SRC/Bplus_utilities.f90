@@ -7054,6 +7054,42 @@ contains
 
    end subroutine BF_all2all_V_split
 
+   subroutine BF_Mult(chara, xin, xout, Ninloc, Noutloc, Ncol, blocks, option, stats, ptree)
+      implicit none
+      real(kind=8) t1, t2
+      character chara
+      integer Ninloc, Noutloc, Ncol
+      DT::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(matrixblock)::blocks
+
+      type(proctree)::ptree
+
+      t1 = MPI_Wtime()
+
+      stats%Flop_Tmp = 0
+      stats%Flop_C_Mult = 0
+      stats%Time_C_Mult = 0
+      xout = 0
+      if (chara == 'N') then
+         call BF_block_MVP_dat(blocks, chara, Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      else
+         call BF_block_MVP_dat(blocks, chara, Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      endif
+
+      t2 = MPI_Wtime()
+
+      xout = xout/option%scale_factor
+
+      stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
+      stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+
+   end subroutine BF_Mult
+
+
+
 
    subroutine BF_block_MVP_dat(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
       implicit none
