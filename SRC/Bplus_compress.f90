@@ -741,7 +741,7 @@ contains
             allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
             select_idx(dim_i)%dat(1)=1
             select_idx(dim_i)%dat(2)=mmnn(dim_i)
-         else 
+         else
             sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
             if (level == 0) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
             allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
@@ -1314,12 +1314,12 @@ do j_dim = 1,dims_col(dim)
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       allocate (select_idx(Ndim*2))
       do dim_i=1,Ndim*2
-         
-         if(option%fastsample_tensor==2 .and. dim_i<Ndim .and. dim_i/=dim)then
+
+         if(option%fastsample_tensor==2 .and. dim_i<=Ndim .and. dim_i/=dim)then
             sampleidx(dim_i) =2
             allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
             select_idx(dim_i)%dat(1)=1
-            select_idx(dim_i)%dat(2)=mmnn(dim_i)         
+            select_idx(dim_i)%dat(2)=mmnn(dim_i)
          else
             sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
             if (level == level_butterfly+1) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
