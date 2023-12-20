@@ -215,13 +215,13 @@ PROGRAM ButterflyPACK_RankBenchmark
 !******************************************************************************!
 ! Read a full non-square matrix and do a BF compression
 
-	ppw=5
+	ppw=2
 
     ds = quant%wavelen/ppw
     if(quant%tst==1)then ! two colinear plate
 	  quant%Ndim = 2
 	  quant%zdist = 0
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
       quant%Nunk_m = Nperdim
@@ -240,7 +240,7 @@ PROGRAM ButterflyPACK_RankBenchmark
     elseif(quant%tst==2)then ! two parallel plate
 	  quant%Ndim = 2
 	  quant%zdist = 1d0
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
       quant%Nunk_m = Nperdim
@@ -260,7 +260,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	elseif(quant%tst==3)then ! two 3D cubes
 
 	  quant%Ndim = 3
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
       quant%Nunk_m = Nperdim

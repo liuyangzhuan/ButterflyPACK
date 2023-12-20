@@ -661,15 +661,15 @@ contains
 
       implicit none
 
-      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_ii_scalar
-      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_c_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
+      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_ii_scalar,dim_ii
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), dim_MD1(Ndim*2-1),idx_MD1(Ndim*2-1), idx_c_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar, dim_product, Nsample
       integer boundary_map(:,:,:)
       integer groupm_start(Ndim)
       type(intersect_MD) :: subtensors(:)
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
-      integer i, j, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
-      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_ij, index_j, jj
+      integer i, j,j1, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_ij, index_ij1, index_j, jj
       integer level
       integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_jj
       real(kind=8) flops
@@ -683,7 +683,7 @@ contains
       integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
-      integer, allocatable::jpvt(:)
+      integer, allocatable::jpvt(:),p(:)
       integer Nlayer, passflag, levelm, nrow, ncol,rank_new
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
@@ -736,11 +736,18 @@ contains
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       allocate (select_idx(Ndim*2))
       do dim_i=1,Ndim*2
-         sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
-         if (level == 0) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
-         allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
-         call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
-         call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+         if(option%fastsample_tensor==2 .and. dim_i>Ndim .and. dim_i/=Ndim+dim)then
+            sampleidx(dim_i) =2
+            allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
+            select_idx(dim_i)%dat(1)=1
+            select_idx(dim_i)%dat(2)=mmnn(dim_i)
+         else 
+            sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
+            if (level == 0) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
+            allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+            call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
+            call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+         endif
       enddo
       dims_row = sampleidx(1:Ndim)
       dims_col = sampleidx(1+Ndim:2*Ndim)
@@ -759,6 +766,50 @@ contains
       allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
       subtensors(index_ij)%dat=0
       call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+      allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
+      call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
+      subtensors(index_ij)%masks=1
+
+
+      if(option%fastsample_tensor==1)then ! uniform sampling the row dimension of the unfolded tensor
+         subtensors(index_ij)%masks=0
+         dim_product = product(dims_row)
+         do dim_i =1,Ndim
+            if (dim/=dim_i) then
+               dim_product = dim_product*dims_col(dim_i)
+            endif
+         enddo
+         Nsample = min(dim_product,ceiling_safe(nn_scalar*option%sample_para*Ndim))
+         dim_MD1(1:Ndim) = dims_row
+         dim_ii=0
+         do dim_i=1,Ndim
+            if(dim_i/=dim)then
+               dim_ii=dim_ii+1
+               dim_MD1(Ndim+dim_ii) = dims_col(dim_i)
+            endif
+         enddo
+         allocate(p(dim_product))
+         call rperm(dim_product, p)
+         do index_ij1=1,Nsample
+            call SingleIndexToMultiIndex(Ndim*2-1,dim_MD1, p(index_ij1), idx_MD1)
+            idx_m = idx_MD1(1:Ndim)
+            dim_ii=0
+            do dim_i=1,Ndim
+               if(dim_i/=dim)then
+                  dim_ii=dim_ii+1
+                  idx_n(dim_i) = idx_MD1(Ndim+dim_ii)
+               endif
+            enddo
+            do j1=1,dims_col(dim)
+               idx_n(dim)=j1
+               call MultiIndexToSingleIndex(Ndim,dims_row, i, idx_m)
+               call MultiIndexToSingleIndex(Ndim,dims_col, j, idx_n)
+               subtensors(index_ij)%masks(i,j)=1
+            enddo
+         enddo
+         deallocate(p)
+      endif
+
       subtensors(index_ij)%nr = dims_row
       subtensors(index_ij)%nc = dims_col
       allocate (subtensors(index_ij)%rows(Ndim))
@@ -1019,9 +1070,9 @@ contains
       type(intersect_MD) :: subtensors(:)
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
-      integer i, j, j1, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
+      integer i, j, j1, j_dim, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
       integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_i_scalar, index_ij, index_j, index_j_s, index_j_k, jj,nnn1
-      integer level
+      integer level, cnt
       integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_ii_scalar, index_jj
       real(kind=8) flops,flop
       type(matrixblock_MD)::blocks
@@ -1104,21 +1155,23 @@ contains
          if(dim_i/=dim)rankmax_r = rankmax_r*dims_col(dim_i)
       enddo
       allocate (core(rankmax_r, rankmax_c))
+core=0
       allocate (core_tmp(rankmax_r, rankmax_c))
 
       ! reshaping
+do j_dim = 1,dims_col(dim)
+         cnt=0
       do j = 1, product(dims_col)
          call SingleIndexToMultiIndex(Ndim, dims_col, j, idx_n)
-         dim_ii=0
-         do dim_i=1,Ndim
-         if(dim_i/=dim)then
-            dim_ii = dim_ii+1
-            idx_n1(dim_ii) = idx_n(dim_i)
-            dims_col1(dim_ii) = dims_col(dim_i)
+         if(idx_n(dim)==j_dim)then ! this makes sure that all the other 2*Ndim-1 indices are traversed before moving to the next idx_n(dim) value
+            do i=1,product(dims_row)
+               if(subtensors(index_ij)%masks(i,j)==1)then
+                  cnt = cnt+1
+                  core(cnt,idx_n(dim)) = subtensors(index_ij)%dat(i,j)
          endif
          enddo
-         call MultiIndexToSingleIndex(Ndim-1, dims_col1, j1, idx_n1)
-         core(product(dims_row)*(j1-1)+1:product(dims_row)*j1,idx_n(dim)) = subtensors(index_ij)%dat(1:product(dims_row),j)
+         endif
+         enddo
       enddo
       core_tmp=core
 
@@ -1184,15 +1237,15 @@ contains
 
       implicit none
 
-      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_jj_scalar
-      integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_r_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
+      integer Nboundall,Ninadmissible, Ndim, bb_m, dim,dim_i,flag,index_jj_scalar, dim_ii
+      integer dim_MD(Ndim+2),idx_MD(Ndim+2), dim_MD1(Ndim*2-1),idx_MD1(Ndim*2-1), idx_r_m(Ndim), dims_m(Ndim), dims_row(Ndim),dims_col(Ndim),idx_m(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar, dim_product, Nsample
       integer boundary_map(:,:,:)
       integer groupm_start(Ndim)
       type(intersect_MD) :: subtensors(:)
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
-      integer i, j, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
-      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), mm_scalar, mmnn(Ndim*2), index_j(Ndim), index_ij, index_i, jj
+      integer i, j, i1, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
+      integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), mm_scalar, mmnn(Ndim*2), index_j(Ndim), index_ij, index_ij1, index_i, jj
       integer level
       integer header_m1, header_m2, mm1, mm2, index_jj(Ndim), index_ii
       real(kind=8) flops
@@ -1206,7 +1259,7 @@ contains
       integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
-      integer, allocatable::jpvt(:)
+      integer, allocatable::jpvt(:),p(:)
       integer Nlayer, passflag, levelm, nrow, ncol,rank_new
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
@@ -1261,11 +1314,19 @@ contains
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       allocate (select_idx(Ndim*2))
       do dim_i=1,Ndim*2
-         sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
-         if (level == level_butterfly+1) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
-         allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
-         call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
-         call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+         
+         if(option%fastsample_tensor==2 .and. dim_i<Ndim .and. dim_i/=dim)then
+            sampleidx(dim_i) =2
+            allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
+            select_idx(dim_i)%dat(1)=1
+            select_idx(dim_i)%dat(2)=mmnn(dim_i)         
+         else
+            sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
+            if (level == level_butterfly+1) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
+            allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+            call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
+            call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+         endif
       enddo
       dims_row = sampleidx(1:Ndim)
       dims_col = sampleidx(1+Ndim:2*Ndim)
@@ -1284,6 +1345,53 @@ contains
       allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
       subtensors(index_ij)%dat=0
       call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
+      call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
+      subtensors(index_ij)%masks=1
+
+      if(option%fastsample_tensor==1)then ! uniform sampling the row dimension of the unfolded tensor
+         subtensors(index_ij)%masks=0
+         dim_product = product(dims_col)
+         do dim_i =1,Ndim
+            if (dim/=dim_i) then
+               dim_product = dim_product*dims_row(dim_i)
+            endif
+         enddo
+         Nsample = min(dim_product,ceiling_safe(mm_scalar*option%sample_para*Ndim))
+
+         dim_ii=0
+         do dim_i=1,Ndim
+            if(dim_i/=dim)then
+               dim_ii=dim_ii+1
+               dim_MD1(dim_ii) = dims_row(dim_i)
+            endif
+         enddo
+         dim_MD1(Ndim:2*Ndim-1) = dims_col
+
+         allocate(p(dim_product))
+         call rperm(dim_product, p)
+         do index_ij1=1,Nsample
+            call SingleIndexToMultiIndex(Ndim*2-1,dim_MD1, p(index_ij1), idx_MD1)
+            dim_ii=0
+            do dim_i=1,Ndim
+               if(dim_i/=dim)then
+                  dim_ii=dim_ii+1
+                  idx_m(dim_i) = idx_MD1(dim_ii)
+               endif
+            enddo
+            idx_n = idx_MD1(Ndim:Ndim*2-1)
+
+            do i1=1,dims_row(dim)
+               idx_m(dim)=i1
+               call MultiIndexToSingleIndex(Ndim,dims_row, i, idx_m)
+               call MultiIndexToSingleIndex(Ndim,dims_col, j, idx_n)
+               subtensors(index_ij)%masks(i,j)=1
+            enddo
+         enddo
+         deallocate(p)
+      endif
+
+
       subtensors(index_ij)%nr = dims_row
       subtensors(index_ij)%nc = dims_col
       allocate (subtensors(index_ij)%rows(Ndim))
@@ -1364,12 +1472,12 @@ contains
 
       implicit none
 
-      integer bb_m, dim,dim_i,dim_ii,flag,index_jj_scalar,Ndim
+      integer bb_m, dim,dim_i,dim_ii,flag,index_jj_scalar,Ndim, cnt
       integer dim_MD(Ndim+2),idx_MD(Ndim+2), idx_r_m(Ndim), dims_m(Ndim), dims_row(Ndim), dims_row1(Ndim), dims_col(Ndim),idx_m(Ndim),idx_m1(Ndim),idx_n(Ndim), dims_bm(Ndim), group_scalar
       type(intersect_MD) :: subtensors(:)
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
-      integer i, j, i1, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
+      integer i, j, i1, i_dim, level_butterfly, header_m(Ndim), header_n(Ndim), rankmax_r, rankmax_c
       integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), mm_scalar, mmnn(Ndim*2), index_j(Ndim), index_j_scalar, index_ij, index_i, jj, index_i_s, index_i_k, mmm1
       integer level
       integer header_m1, header_m2, mm1, mm2, index_jj(Ndim), index_ii
@@ -1456,23 +1564,25 @@ contains
          if(dim_i/=dim)rankmax_c = rankmax_c*dims_row(dim_i)
       enddo
       allocate (core(rankmax_c, rankmax_r))
+core=0
       allocate (core_tmp(rankmax_c, rankmax_r))
       allocate (matrix_tmp(product(dims_col), product(dims_row)))
       call copymatT(subtensors(index_ij)%dat, matrix_tmp, product(dims_row), product(dims_col))
 
       ! reshaping
+do i_dim = 1,dims_row(dim)
+         cnt=0
       do i = 1, product(dims_row)
          call SingleIndexToMultiIndex(Ndim, dims_row, i, idx_m)
-         dim_ii=0
-         do dim_i=1,Ndim
-         if(dim_i/=dim)then
-            dim_ii = dim_ii+1
-            idx_m1(dim_ii) = idx_m(dim_i)
-            dims_row1(dim_ii) = dims_row(dim_i)
+         if(idx_m(dim)==i_dim)then ! this makes sure that all the other 2*Ndim-1 indices are traversed before moving to the next idx_m(dim) value
+            do j=1,product(dims_col)
+               if(subtensors(index_ij)%masks(i,j)==1)then
+                  cnt = cnt+1
+                  core(cnt,idx_m(dim)) = matrix_tmp(j,i)
          endif
          enddo
-         call MultiIndexToSingleIndex(Ndim-1, dims_row1, i1, idx_m1)
-         core(product(dims_col)*(i1-1)+1:product(dims_col)*i1,idx_m(dim)) = matrix_tmp(1:product(dims_col),i)
+         endif
+         enddo
       enddo
       core_tmp=core
 
@@ -3126,7 +3236,7 @@ contains
             !$omp parallel do default(shared) private(index_ij,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
 #endif
             do index_ij = 1, product(dim_MD)
-               call BF_MD_compress_N_oneblock_R_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new, flops1)
+               call BF_MD_compress_N_oneblock_R_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
@@ -3243,7 +3353,7 @@ contains
             !$omp parallel do default(shared) private(index_ij,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
 #endif
             do index_ij = 1, product(dim_MD)
-               call BF_MD_compress_N_oneblock_C_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new, flops1)
+               call BF_MD_compress_N_oneblock_C_rankreveal(Ndim, dim_MD, subtensors, blocks, option, stats, msh, ker, ptree, index_ij, bb, level, rank_new1, flops1)
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo

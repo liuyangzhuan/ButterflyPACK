@@ -16950,7 +16950,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       implicit none
 
 
-      integer Ndim, ii, jj, nn, pp, ij, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol, dim_i, my_tid
+      integer Ndim, ii, jj, nn, pp, ij, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol, dim_i
       type(mesh)::msh(Ndim)
       integer:: dims(2*Ndim),num_threads
       integer,allocatable::idxs(:,:)
@@ -16972,9 +16972,25 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer statusm(MPI_status_size), statusn(MPI_status_size)
       type(intersect_MD) :: subtensors(*)
       DT:: value_e
+integer, save:: my_tid = 0
+#ifdef HAVE_OPENMP
+!$omp threadprivate(my_tid)
+#endif
 
       myflag1 = myflag
       if(Nsub==0)myflag1=max(myflag,1)
+
+#ifdef HAVE_OPENMP
+!$omp parallel default(shared)
+!$omp master
+      num_threads = omp_get_num_threads()
+!$omp end master
+      my_tid = omp_get_thread_num()
+!$omp end parallel
+#else
+      num_threads = 1
+      my_tid = 0
+#endif
 
       if (option%elem_extract == 0) then
 
@@ -16988,34 +17004,31 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                proc1 => ker%FuncZmn_MD
                dims(1:Ndim) = subtensors(nn)%nr
                dims(1+Ndim:2*Ndim) = subtensors(nn)%nc
-#ifdef HAVE_OPENMP
-               num_threads = omp_get_num_threads()
-#else
-               num_threads = 1
-#endif
 
                if (product(dims)> 0) then
                   allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
                   !$omp parallel
                   !$omp single
-                  !$omp taskloop default(shared) private(ij,i,j,my_tid,value_e,dim_i)
+                  !$omp taskloop default(shared) private(ij,i,j,value_e,dim_i,empty)
 #else
 #ifdef HAVE_OPENMP
-                  !$omp parallel do default(shared) private(ij,i,j,my_tid,value_e,dim_i)
+                  !$omp parallel do default(shared) private(ij,i,j,value_e,dim_i,empty)
 #endif
 #endif
                   do ij = 1, product(dims)
-#ifdef HAVE_OPENMP
-                     my_tid = omp_get_thread_num()
-#else
-                     my_tid = 0
-#endif
                      call SingleIndexToMultiIndex(2*Ndim,dims, ij, idxs(:,my_tid+1))
 
                      call MultiIndexToSingleIndex(Ndim,dims(1:Ndim), i, idxs(1:Ndim,my_tid+1))
                      call MultiIndexToSingleIndex(Ndim,dims(1+Ndim:2*Ndim), j, idxs(1+Ndim:2*Ndim,my_tid+1))
 
+empty = 0
+                     if(allocated(subtensors(nn)%masks))then
+                        if (subtensors(nn)%masks(i,j) == 0) then
+                           empty=1
+                        endif
+                     endif
+                     if(empty==0)then
                      do dim_i=1,Ndim
                         idxs(dim_i,my_tid+1) = msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat(idxs(dim_i,my_tid+1)))
                      enddo
@@ -17028,6 +17041,9 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      value_e = value_e*option%scale_factor
 
                      subtensors(nn)%dat(i, j) = value_e
+else
+                        subtensors(nn)%dat(i, j) = 0
+                     endif
                   enddo
 #ifdef HAVE_TASKLOOP
                   !$omp end taskloop

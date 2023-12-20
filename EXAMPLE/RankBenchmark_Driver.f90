@@ -200,11 +200,11 @@ PROGRAM ButterflyPACK_RankBenchmark
 !******************************************************************************!
 ! Read a full non-square matrix and do a BF compression
 
-	ppw=5
+	ppw=2
 
     ds = quant%wavelen/ppw
     if(quant%tst==1)then ! two colinear plate
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
       quant%Nunk_m = Nperdim*Nperdim
       quant%Nunk_n = Nperdim*Nperdim
 	  allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))
@@ -229,7 +229,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 
     elseif(quant%tst==2)then ! two parallel plate
 
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
       quant%Nunk_m = Nperdim*Nperdim
       quant%Nunk_n = Nperdim*Nperdim
 	  allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))
@@ -247,13 +247,13 @@ PROGRAM ButterflyPACK_RankBenchmark
 		call z_SingleIndexToMultiIndex(2,dims, n, inds)
 		ii=inds(1)
 		jj=inds(2)
-		quant%locations_n(1,n)=2
+		quant%locations_n(1,n)=1
 		quant%locations_n(2,n)=ii*ds
 		quant%locations_n(3,n)=jj*ds
 	  enddo
 
 	elseif(quant%tst==3)then ! two 3D cubes
-      Nperdim = z_ceiling_safe(1d0/ds)
+      Nperdim = NINT(1d0/ds)
       quant%Nunk_m = Nperdim*Nperdim*Nperdim
       quant%Nunk_n = Nperdim*Nperdim*Nperdim
 	  allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))

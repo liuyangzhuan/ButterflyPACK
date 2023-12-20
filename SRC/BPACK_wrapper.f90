@@ -561,6 +561,10 @@ contains
          val_d = option%forwardN15flag
          valid_opt = 1
       endif
+      if (trim(str) == 'fastsample_tensor') then
+         val_d = option%fastsample_tensor
+         valid_opt = 1
+      endif
       if (trim(str) == 'pat_comp') then
          val_d = option%pat_comp
          valid_opt = 1
@@ -808,6 +812,11 @@ contains
       if (trim(str) == 'forwardN15flag') then
          call c_f_pointer(val_Cptr, val_i)
          option%forwardN15flag = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'fastsample_tensor') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%fastsample_tensor = val_i
          valid_opt = 1
       endif
 

@@ -635,6 +635,7 @@ module BPACK_DEFS
         integer:: elem_extract !< 1: use user-defined element extraction 0: use user-defined formula
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
         integer:: knn !< number of nearest neighbour points for each point
+integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse

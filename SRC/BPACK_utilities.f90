@@ -56,8 +56,7 @@ contains
 
 
    subroutine HODLR_copy(ho_bf_i, ho_bf_o, ptree)
-      use BPACK_DEFS
-      use MISC_Utilities
+
 
       implicit none
 
@@ -105,8 +104,7 @@ contains
 
 
    subroutine Hmat_copy(h_mat_i, h_mat_o, ptree)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
       integer ii,jj,bm,bn,level
       type(Hmat)::h_mat_i, h_mat_o
@@ -193,8 +191,7 @@ contains
 
 
    subroutine Hmat_delete(h_mat)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       type(Hmat)::h_mat
@@ -246,8 +243,7 @@ contains
    end subroutine Hmat_delete
 
    subroutine HODLR_delete(ho_bf_o)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       type(hobf)::ho_bf_o
@@ -277,8 +273,7 @@ contains
 
 
    subroutine HSSBF_delete(hss_bf1)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       type(hssbf)::hss_bf1
@@ -293,7 +288,7 @@ contains
 
 
    subroutine BPACK_delete(bmat)
-      use BPACK_DEFS
+
       implicit none
       type(Bmatrix)::bmat
       if (associated(bmat%ho_bf)) then
@@ -316,7 +311,7 @@ contains
 
 
    subroutine BPACK_copy(bmat_i,bmat_o,ptree)
-      use BPACK_DEFS
+
       implicit none
       type(Bmatrix)::bmat_i,bmat_o
       type(proctree)::ptree
@@ -337,16 +332,14 @@ contains
 
 
    subroutine delete_kernelquant(ker)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
       type(kernelquant)::ker
       if (allocated(ker%matZ_glo)) deallocate (ker%matZ_glo)
    end subroutine delete_kernelquant
 
    subroutine delete_mesh(msh,stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
       type(mesh)::msh
       type(Hstat),optional::stats
@@ -382,8 +375,7 @@ contains
    end subroutine delete_mesh
 
    subroutine delete_proctree(ptree)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
       type(proctree)::ptree
       integer ii, Maxgrp
@@ -410,8 +402,7 @@ contains
    end subroutine delete_proctree
 
 ! recursive subroutine delete_grid(gd)
-! use BPACK_DEFS
-! use MISC_Utilities
+
 ! implicit none
 ! type(grid)::gd
 ! integer ierr
@@ -429,8 +420,7 @@ contains
 ! end subroutine delete_grid
 
    subroutine delete_Hstat(stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
       type(Hstat)::stats
 
@@ -766,6 +756,7 @@ contains
       option%jitter = 1d-13
       option%rmax = 3000
       option%forwardN15flag = 0
+      option%fastsample_tensor = 0
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
@@ -832,6 +823,8 @@ contains
                   read (strings1, *) option%ErrFillFull
                else if (trim(strings) == '--forwardN15flag') then
                   read (strings1, *) option%forwardN15flag
+               else if (trim(strings) == '--fastsample_tensor') then
+                  read (strings1, *) option%fastsample_tensor
                else if (trim(strings) == '--baca_batch') then
                   read (strings1, *) option%BACA_Batch
                else if (trim(strings) == '--reclr_leaf') then
@@ -954,6 +947,7 @@ contains
       option1%jitter = option%jitter
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
+option1%fastsample_tensor = option%fastsample_tensor
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
@@ -1005,6 +999,7 @@ contains
          write (*, '(A18,I8)') 'verbosity', option%verbosity
          write (*, '(A18,I8)') 'rmax', option%rmax
          write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
+         write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
          write (*, '(A18,I8)') 'pat_comp', option%pat_comp
          write (*, '(A18,I8)') 'elem_extract', option%elem_extract
          write (*, '(A18,I8)') 'cpp', option%cpp
@@ -1034,7 +1029,6 @@ contains
    end subroutine PrintOptions
 
    subroutine BPACK_GetVersionNumber(v_major, v_minor, v_bugfix)
-      use BPACK_DEFS
       implicit none
       integer v_major, v_minor, v_bugfix
       v_major = BPACK_MAJOR_VERSION
