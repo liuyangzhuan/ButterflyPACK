@@ -32,16 +32,22 @@ contains
 		complex(kind=8)::value
 		integer ii
 
-		real(kind=8)::pos_o(3),pos_s(3), dist, waven
+		real(kind=8)::pos_o(100),pos_s(100), dist, waven, dotp
 
 		select TYPE(quant)
 		type is (quant_app)
-			pos_o = quant%locations_m(:,m)
-			pos_s = quant%locations_n(:,n)
-			dist = sqrt(sum((pos_o-pos_s)**2d0))
-			waven=2*BPACK_pi/quant%wavelen
-			value = EXP(-BPACK_junit*waven*dist)/dist
-
+			if(quant%tst==4)then
+				pos_o(1:quant%Ndim) = quant%locations_m(:,m)
+				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
+				dotp = dot_product(pos_o(1:quant%Ndim),pos_s(1:quant%Ndim))
+				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
+			else
+				pos_o(1:quant%Ndim) = quant%locations_m(:,m)
+				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
+				dist = sqrt(sum((pos_o-pos_s)**2d0))
+				waven=2*BPACK_pi/quant%wavelen
+				value = EXP(-BPACK_junit*waven*dist)/dist
+			endif
 		class default
 			write(*,*)"unexpected type"
 			stop
@@ -111,7 +117,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	type(quant_app),target::quant
 	type(z_Bmatrix),target::bmat
 	integer,allocatable:: groupmembers(:)
-	integer nmpi, Nperdim, dims(3), inds(3)
+	integer nmpi, Nperdim, dim_i, dims(100), inds(100)
 	integer level,Maxlevel,m,n
 	type(z_proctree),target::ptree
 	integer,allocatable::Permutation(:)
@@ -172,6 +178,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 							read(strings1,*)quant%tst
 						elseif(trim(strings)=='--wavelen')then
 							read(strings1,*)quant%wavelen
+						elseif(trim(strings)=='--ndim_FIO')then
+							read(strings1,*)quant%Ndim
+						elseif(trim(strings)=='--N_FIO')then
+							read(strings1,*)Nperdim
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -189,11 +199,6 @@ PROGRAM ButterflyPACK_RankBenchmark
 			ii=ii+1
 		endif
 	enddo
-
-
-
-	call z_PrintOptions(option,ptree)
-
 
 
 
@@ -277,8 +282,29 @@ PROGRAM ButterflyPACK_RankBenchmark
 		quant%locations_n(2,n)=jj*ds
 		quant%locations_n(3,n)=kk*ds
 	  enddo
+	elseif(quant%tst==4)then ! DFT
+      quant%Nunk_m = Nperdim**quant%Ndim
+      quant%Nunk_n = Nperdim**quant%Ndim
+	  allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))
+	  allocate(quant%locations_n(quant%Ndim,quant%Nunk_n))
+	  dims = Nperdim
+	  do m=1,quant%Nunk_m
+		call z_SingleIndexToMultiIndex(quant%Ndim,dims, m, inds)
+		do dim_i=1,quant%Ndim
+			quant%locations_m(dim_i,m)=inds(dim_i)-1
+		enddo
+	  enddo
+	  do n=1,quant%Nunk_n
+		call z_SingleIndexToMultiIndex(quant%Ndim,dims, n, inds)
+		do dim_i=1,quant%Ndim
+			quant%locations_n(dim_i,n)=dble(inds(dim_i)-1)/Nperdim
+		enddo
+	  enddo
 	endif
 
+
+
+	call z_PrintOptions(option,ptree)
 
 
 	if(ptree%MyID==Main_ID)then

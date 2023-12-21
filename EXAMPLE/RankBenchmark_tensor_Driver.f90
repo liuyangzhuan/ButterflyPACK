@@ -33,7 +33,7 @@ contains
 		complex(kind=8)::value
 		integer ii, dim_i
 
-		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven
+		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven, dotp
 
 		select TYPE(quant)
 		type is (quant_app)
@@ -43,16 +43,22 @@ contains
 			enddo
 			if(quant%tst==1)then
 				dist = sqrt(sum((pos_o-pos_s)**2d0))
+				waven=2*BPACK_pi/quant%wavelen
+				value = EXP(-BPACK_junit*waven*dist)/dist
 			elseif(quant%tst==2)then
 				dist = sqrt(sum((pos_o-pos_s)**2d0) + quant%zdist**2d0)
+				waven=2*BPACK_pi/quant%wavelen
+				value = EXP(-BPACK_junit*waven*dist)/dist
 			elseif(quant%tst==3)then
 				dist = sqrt(sum((pos_o-pos_s)**2d0))
+				waven=2*BPACK_pi/quant%wavelen
+				value = EXP(-BPACK_junit*waven*dist)/dist	
+			elseif(quant%tst==4)then
+				dotp = dot_product(pos_o,pos_s)
+				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
 			else
 				write(*,*)'tst unknown'
 			endif
-
-			waven=2*BPACK_pi/quant%wavelen
-			value = EXP(-BPACK_junit*waven*dist)/dist
 
 		class default
 			write(*,*)"unexpected type"
@@ -187,6 +193,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 							read(strings1,*)quant%tst
 						elseif(trim(strings)=='--wavelen')then
 							read(strings1,*)quant%wavelen
+						elseif(trim(strings)=='--ndim_FIO')then
+							read(strings1,*)quant%Ndim
+						elseif(trim(strings)=='--N_FIO')then
+							read(strings1,*)Nperdim
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -206,9 +216,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	enddo
 
 
-
 	call z_PrintOptions(option,ptree)
-
 
 
 
@@ -276,6 +284,20 @@ PROGRAM ButterflyPACK_RankBenchmark
 		quant%locations_n(1,n)=n*ds+2
 		quant%locations_n(2,n)=n*ds
 		quant%locations_n(3,n)=n*ds
+	  enddo
+
+	elseif(quant%tst==4)then ! DFT
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)=m-1
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)=dble(n-1)/Nperdim
 	  enddo
 	endif
 
