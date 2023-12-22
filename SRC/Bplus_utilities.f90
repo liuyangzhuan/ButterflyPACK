@@ -15992,8 +15992,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                ith(dim_i) = ith(dim_i)*2 + 1
             endif
             level_p(dim_i) = level_p(dim_i) + 1
-            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
             dim_i = dim_i + 1
+            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
          enddo
          ith = ith - 2**level_p + 1
          nleaf = 2**(level_butterfly - level_p)

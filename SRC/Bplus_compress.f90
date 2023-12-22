@@ -2235,8 +2235,9 @@ do i_dim = 1,dims_row(dim)
          idx_r_m = idx_r_m + blocks%idx_r_m - 1
          call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
          proc_of_groupr(idx_r_scalar)=pp
-      enddo
+      enddo  
       call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+ 
       do bb=1, product(blocks%nc_m)
          call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
          idx_c_m = idx_c_m + blocks%idx_c_m - 1
@@ -3126,6 +3127,9 @@ do i_dim = 1,dims_row(dim)
       blocks%level_half = BF_Switchlevel(level_butterfly, option%pat_comp)
       level_half = blocks%level_half
 
+
+
+
       if (level_butterfly == 0) then
          write(*,*)'level_butterfly = 0 has not been implemented in BF_MD_compress_N'
 
@@ -3252,7 +3256,7 @@ do i_dim = 1,dims_row(dim)
             do while (passflag == 0)
                call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level < level_butterfly + 1) then
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
@@ -3371,7 +3375,7 @@ do i_dim = 1,dims_row(dim)
                call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
 
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level > 0) then
             if (rank_new > rankmax_for_butterfly(level - 1)) then
                rankmax_for_butterfly(level - 1) = rank_new
@@ -3443,6 +3447,8 @@ do i_dim = 1,dims_row(dim)
 
 
       endif
+
+      call MPI_ALLREDUCE(MPI_IN_PLACE, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
       if (statflag == 1) then
          if (allocated(stats%rankmax_of_level)) stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly), stats%rankmax_of_level(level_blocks))

@@ -988,7 +988,7 @@ end function distance_geo
       real(kind=8), allocatable :: distance(:), array(:, :), dist_gram(:, :)
       integer level_c, sortdirec, mm, phi_end, Ninfo_edge, ind_i, ind_j
       real(kind=8) t1, t2
-      integer Maxgroup, nlevel_pre, passflag
+      integer Maxgroup, nlevel_pre, passflag, nlevel_more
       character(len=1024)  :: strings
       integer, allocatable :: order(:), edge_temp(:), map_temp(:)
       integer dimn, groupsize, idxstart, Nsmp
@@ -996,6 +996,7 @@ end function distance_geo
       type(Hstat)::stats
       type(Bmatrix)::bmat
       integer Maxlevel, Maxgrp
+      real(kind=8) tmp
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
       type(proctree)::ptree
@@ -1021,15 +1022,14 @@ end function distance_geo
          i = 2**level
       enddo
       Maxlevel = level
+      tmp = floor_safe(Maxlevel/2d0)*Ndim
 
-      if (Maxlevel < ptree%nlevel) then
+      if (tmp+1 < ptree%nlevel) then  !!!! floor_safe(Maxlevel/2d0)*Ndim is the number of parallelism at the middle level of a tensor butterfly of bmat
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
-         Maxlevel = ptree%nlevel
-      endif
-
-      ! the following is needed when bplus is used as bplus only support even number of levels for now.
-      if (Maxlevel == ptree%nlevel .and. option%lnoBP < Maxlevel) then
-         Maxlevel = ptree%nlevel + 1
+         nlevel_more = ptree%nlevel-tmp-1
+         do i=1,nlevel_more,Ndim
+            Maxlevel = Maxlevel + 2 - mod(Maxlevel,2)
+         enddo
       endif
 
       select case (option%format)
@@ -1531,7 +1531,7 @@ end function distance_geo
    end subroutine FindKNNs
 
    recursive subroutine append_nlist(ker, option, stats, msh, ptree, group_m, group_n, flag,Bidxs, Bidxe)
-      use BPACK_DEFS
+
       implicit none
       type(Hoption)::option
       type(Hstat)::stats
@@ -1611,8 +1611,7 @@ end function distance_geo
 
 
    subroutine HSS_MD_structuring(Ndim, hss_bf1_md, option, msh, ker, ptree, stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       integer Ndim
@@ -1877,8 +1876,7 @@ end function distance_geo
 
 
    subroutine HSS_structuring(hss_bf1, option, msh, ker, ptree, stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, sortdirec, ii_sch, pgno_bplus
@@ -2092,8 +2090,7 @@ end function distance_geo
    end subroutine HSS_structuring
 
    subroutine HODLR_structuring(ho_bf1, option, msh, ker, ptree, stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       integer i, j, ii, jj, kk, iii, jjj, ll, bb, sortdirec, ii_sch, pgno_bplus
@@ -2639,8 +2636,7 @@ end function distance_geo
    end subroutine HODLR_structuring
 
    subroutine Hmat_structuring(h_mat, option, msh, ker, ptree, stats)
-      use BPACK_DEFS
-      use MISC_Utilities
+
       implicit none
 
       type(Hmat)::h_mat

@@ -29,7 +29,6 @@ contains
 
 !>**** user-defined subroutine to sample a list of intersections from the bmat of Z
    subroutine Zelem_block_Extraction(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
-      use BPACK_DEFS
       implicit none
 
       class(*), pointer :: quant
@@ -1837,7 +1836,6 @@ contains
 
    subroutine HODLR_construction(ho_bf1, option, stats, msh, ker, ptree)
 
-      use BPACK_DEFS
       implicit none
       real(kind=8) n1, n2, n3, n4, n5
       integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
@@ -2000,7 +1998,6 @@ contains
 
    subroutine HSS_construction(hss_bf1, option, stats, msh, ker, ptree)
 
-      use BPACK_DEFS
       implicit none
       real(kind=8) n1, n2, n3, n4, n5
       integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
@@ -2137,7 +2134,6 @@ contains
 
 !!!!!!! check error of BF construction using parallel element extraction
    subroutine BF_checkError(blocks, option, msh, ker, stats, ptree, bpackflag, verbosity,error)
-      use BPACK_DEFS
       implicit none
 
       integer bpackflag ! whether blocks is treated as one offdiagonal block in a hierarhical matrix or one standalone block
@@ -2259,7 +2255,7 @@ contains
 
       n1 = MPI_Wtime()
       call BF_ExtractElement(blocks, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      n2 = MPI_Wtime()
+
 
       ! compare extracted values with element_Zmn
       v1 = 0
@@ -2341,6 +2337,7 @@ contains
       deallocate (alldat_loc)
       deallocate (pmaps)
 
+      n2 = MPI_Wtime()
       call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
@@ -2356,7 +2353,7 @@ contains
 
 !!!!!!! check error of BP construction using parallel element extraction
    subroutine BP_checkError(BP, option, msh, ker, stats, ptree, bpackflag, verbosity,error)
-      use BPACK_DEFS
+
       implicit none
 
       integer bpackflag ! whether blocks is treated as one offdiagonal block in a hierarhical matrix or one standalone block
@@ -2683,7 +2680,7 @@ contains
 
 !!!!!!! check error of BF construction using parallel element extraction
    subroutine BF_MD_checkError(Ndim, blocks, option, msh, ker, stats, ptree, bpackflag, verbosity,error)
-      use BPACK_DEFS
+
       implicit none
       integer Ndim
       integer bpackflag ! whether blocks is treated as one offdiagonal block in a hierarhical matrix or one standalone block
@@ -2796,7 +2793,7 @@ contains
 
       n1 = MPI_Wtime()
       call BF_MD_block_extraction(blocks, Ndim, Ninter, inter_MD, ptree, msh, stats)
-      n2 = MPI_Wtime()
+
 
       ! compare extracted values with element_Zmn
       v1 = 0
@@ -2841,7 +2838,7 @@ contains
             call element_Zmn_tensorlist_user(Ndim, subtensor, 0, msh, option, ker, 2, passflag, ptree, stats)
          endif
       enddo
-
+      n2 = MPI_Wtime()
       call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
@@ -2954,7 +2951,7 @@ contains
 
 !!!!!!! extract a list of intersections from a block
    subroutine BF_ExtractElement(blocks_o, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      use BPACK_DEFS
+
       implicit none
 
       type(Hoption)::option
@@ -3255,7 +3252,7 @@ contains
 
 !!!!!!! extract a list of intersections from a blockplus
    subroutine BP_ExtractElement(BP_o, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      use BPACK_DEFS
+
       implicit none
 
       type(Hoption)::option
@@ -3567,7 +3564,7 @@ contains
 
 !!!!!!! extract a list of intersections from a bmat
    subroutine BPACK_ExtractElement(bmat, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      use BPACK_DEFS
+
       implicit none
 
       type(Hoption)::option
@@ -3872,7 +3869,7 @@ contains
 
 !!!!!!! check error of BPACK construction using parallel element extraction
    subroutine BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
-      use BPACK_DEFS
+
       implicit none
 
       type(Hoption)::option
@@ -4093,7 +4090,7 @@ contains
 !>*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
    subroutine BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 
-      use BPACK_DEFS
+
       implicit none
       integer i, j, k
       integer mm, nn, index_i, index_j, bb, ii, jj, ij, pp, tt, idx, idxs
@@ -4388,7 +4385,6 @@ contains
 ! YL: This subroutine seems to be slower than BPACK_all2all_inters
    subroutine BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)
 
-      use BPACK_DEFS
       implicit none
       integer i, j, k
       integer mm, nn, index_i, index_j, bb, ii, jj, ij, pp, tt, idx, nr, nc, nr_max, nc_max
@@ -4686,7 +4682,7 @@ contains
    end subroutine BPACK_all2all_inters_optimized
 
    recursive subroutine HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, level_c, bidx, flag)
-      use BPACK_DEFS
+
       implicit none
       type(Hoption)::option
       type(Hstat)::stats
@@ -4794,7 +4790,7 @@ contains
    end subroutine HODLR_MapIntersec2Block
 
    recursive subroutine BP_MapIntersec2Block(BP, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, ll, Nbound)
-      use BPACK_DEFS
+
       implicit none
       type(Hoption)::option
       type(Hstat)::stats
@@ -4928,7 +4924,7 @@ contains
    end subroutine BP_MapIntersec2Block
 
    subroutine Hmat_MapIntersec2Block(h_mat, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, num_blocks)
-      use BPACK_DEFS
+
       implicit none
       type(Hoption)::option
       type(Hstat)::stats
@@ -5010,7 +5006,7 @@ contains
    end subroutine Hmat_MapIntersec2Block
 
    recursive subroutine Hmat_MapIntersec2Block_Loc(blocks, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk)
-      use BPACK_DEFS
+
       implicit none
       type(Hoption)::option
       type(Hstat)::stats

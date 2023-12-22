@@ -4193,8 +4193,8 @@ contains
                ith(dim_i) = ith(dim_i)*2 + 1
             endif
             level_p(dim_i) = level_p(dim_i) + 1
-            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
             dim_i = dim_i + 1
+            dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
          enddo
          ith = ith - 2**level_p + 1
          call assert(minval(level_p) <= level_half, 'too many processes sharing this block as GetLocalBlockRange_MD parallelization goes at most to the middle level')
@@ -4409,8 +4409,8 @@ contains
          endif
          idx_p(dim_i) = idx_tmp
          level_ps(dim_i) = level_ps(dim_i) + 1
+         dim_i = dim_i + 1         
          dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
-         dim_i = dim_i + 1
       enddo
 
    end subroutine GetBlockPID_MD
