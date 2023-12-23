@@ -671,7 +671,7 @@ contains
       integer i, j,j1, level_butterfly, header_m(Ndim), header_n(Ndim), sampleidx(Ndim*2), sampleidx1(Ndim*2)
       integer group_m(Ndim), group_n(Ndim), group_m_mid(Ndim), group_n_mid(Ndim), idxstart(Ndim), idxend(Ndim), mm(Ndim), nn(Ndim), nn_scalar, mmnn(Ndim*2), index_i(Ndim), index_ij, index_ij1, index_j, jj
       integer level
-      integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_jj
+      integer header_n1, header_n2, nn1, nn2, index_ii(Ndim), index_jj, edge_n,jjj
       real(kind=8) flops
       type(matrixblock_MD)::blocks
       type(Hoption)::option
@@ -684,9 +684,9 @@ contains
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:),p(:)
-      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new, Nnear_dim(Ndim), Nmoresample
 
-      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), tmpidx(:)
       real(kind=8)::n2, n1,overrate
 
       flops = 0
@@ -732,6 +732,16 @@ contains
       mmnn(1:Ndim)=mm
       mmnn(1+Ndim:Ndim*2)=nn
 
+
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level > 0 .and. dim==dim_i) then
+            header_n1 = header_n(dim_i)
+            header_n2 = msh(dim_i)%basis_group(2*group_n(dim_i)+1)%head
+         endif
+      enddo
+
       overrate=1
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       allocate (select_idx(Ndim*2))
@@ -742,26 +752,104 @@ contains
             select_idx(dim_i)%dat(1)=1
             select_idx(dim_i)%dat(2)=mmnn(dim_i)
          else
-            sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
-            if (level == 0) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
-            allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
-            call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
-            call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+            sampleidx(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
+            if (level == 0) sampleidx(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
+            allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
+            call linspaceI(1, mmnn(dim_i), sampleidx(dim_i), select_idx(dim_i)%dat(1:sampleidx(dim_i)))
          endif
       enddo
+
+      if(option%knn>0)then
+         Nnear_dim=0
+         do dim_i=1,Ndim ! first loop the Ndim-1 dimensions on the column dimension
+            do j = 1, nn(dim_i)
+               edge_n = header_n(dim_i) + j - 1
+               do jjj = 1, option%knn
+               if (msh(dim_i)%nns(edge_n, jjj) >= msh(dim_i)%basis_group(group_m(dim_i))%head .and. msh(dim_i)%nns(edge_n, jjj) <= msh(dim_i)%basis_group(group_m(dim_i))%tail) then
+                  Nnear_dim(dim_i) = 1
+               endif
+               enddo
+            enddo
+         enddo
+         if(sum(Nnear_dim)==Ndim)then ! group_m and group_n are closeby
+            do dim_i=1,Ndim
+               if(dim_i/=dim)then
+                  Nmoresample=0
+                  do j = 1, nn(dim_i)
+                     edge_n = header_n(dim_i) + j - 1
+                     do jjj = 1, option%knn
+                     if (msh(dim_i)%nns(edge_n, jjj) >= msh(dim_i)%basis_group(group_m(dim_i))%head .and. msh(dim_i)%nns(edge_n, jjj) <= msh(dim_i)%basis_group(group_m(dim_i))%tail) then
+                        Nmoresample = Nmoresample + 1
+                        exit
+                     endif
+                     enddo
+                  enddo
+                  if(Nmoresample>0)then
+                     sampleidx1(dim_i+Ndim) = sampleidx(dim_i+Ndim) + Nmoresample
+                     allocate(tmpidx(sampleidx(dim_i+Ndim)))
+                     tmpidx=select_idx(dim_i+Ndim)%dat
+                     deallocate(select_idx(dim_i+Ndim)%dat)
+                     allocate(select_idx(dim_i+Ndim)%dat(sampleidx1(dim_i+Ndim)))
+                     select_idx(dim_i+Ndim)%dat(1:sampleidx(dim_i+Ndim))=tmpidx
+                     deallocate(tmpidx)
+                     Nmoresample=0
+
+                     do j = 1, nn(dim_i)
+                        edge_n = header_n(dim_i) + j - 1
+                        do jjj = 1, option%knn
+                        if (msh(dim_i)%nns(edge_n, jjj) >= msh(dim_i)%basis_group(group_m(dim_i))%head .and. msh(dim_i)%nns(edge_n, jjj) <= msh(dim_i)%basis_group(group_m(dim_i))%tail) then
+                           Nmoresample = Nmoresample + 1
+                           select_idx(dim_i+Ndim)%dat(sampleidx(dim_i+Ndim)+Nmoresample)=j
+                           exit
+                        endif
+                        enddo
+                     enddo                     
+                     call remove_dup_int(select_idx(dim_i+Ndim)%dat, sampleidx1(dim_i+Ndim), sampleidx(dim_i+Ndim))
+                  endif
+               endif
+            enddo
+
+            do dim_i=1,Ndim ! then loop the Ndim dimensions on the row dimension
+               Nmoresample=0
+               do j = 1, nn(dim_i)
+                  edge_n = header_n(dim_i) + j - 1
+                  do jjj = 1, option%knn
+                  if (msh(dim_i)%nns(edge_n, jjj) >= msh(dim_i)%basis_group(group_m(dim_i))%head .and. msh(dim_i)%nns(edge_n, jjj) <= msh(dim_i)%basis_group(group_m(dim_i))%tail) then
+                     Nmoresample = Nmoresample + 1
+                  endif
+                  enddo
+               enddo
+
+               if(Nmoresample>0)then
+                  sampleidx1(dim_i) = sampleidx(dim_i) + Nmoresample
+                  allocate(tmpidx(sampleidx(dim_i)))
+                  tmpidx=select_idx(dim_i)%dat
+                  deallocate(select_idx(dim_i)%dat)
+                  allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+                  select_idx(dim_i)%dat(1:sampleidx(dim_i))=tmpidx
+                  deallocate(tmpidx)
+                  Nmoresample=0
+                  do j = 1, nn(dim_i)
+                     edge_n = header_n(dim_i) + j - 1
+                     do jjj = 1, option%knn
+                     if (msh(dim_i)%nns(edge_n, jjj) >= msh(dim_i)%basis_group(group_m(dim_i))%head .and. msh(dim_i)%nns(edge_n, jjj) <= msh(dim_i)%basis_group(group_m(dim_i))%tail) then
+                        Nmoresample = Nmoresample + 1
+                        select_idx(dim_i)%dat(sampleidx(dim_i)+Nmoresample)=msh(dim_i)%nns(edge_n, jjj) + 1 - header_m(dim_i)
+                     endif
+                     enddo
+                  enddo
+                  call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+               endif               
+            enddo
+         endif
+      endif
+
       dims_row = sampleidx(1:Ndim)
       dims_col = sampleidx(1+Ndim:2*Ndim)
       dims_col(dim) = nn_scalar
 
 
-      do dim_i =1,Ndim
-         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
-         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
-         if (level > 0 .and. dim==dim_i) then
-            header_n1 = header_n(dim_i)
-            header_n2 = msh(dim_i)%basis_group(2*group_n(dim_i)+1)%head
-         endif
-      enddo
+
 
       allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
       subtensors(index_ij)%dat=0
@@ -1260,9 +1348,9 @@ do j_dim = 1,dims_col(dim)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:),p(:)
-      integer Nlayer, passflag, levelm, nrow, ncol,rank_new
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new, Nnear_dim(Ndim), edge_m, iii, Nmoresample
 
-      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:), tmpidx(:)
       real(kind=8)::n2, n1,overrate
 
       flops = 0
@@ -1310,6 +1398,15 @@ do j_dim = 1,dims_col(dim)
       mmnn(1:Ndim)=mm
       mmnn(1+Ndim:Ndim*2)=nn
 
+      do dim_i =1,Ndim
+         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+         if (level < level_butterfly+1 .and. dim==dim_i) then
+            header_m1 = header_m(dim_i)
+            header_m2 = msh(dim_i)%basis_group(2*group_m(dim_i)+1)%head
+         endif
+      enddo
+
       overrate=1
       ! select skeletons here, selection of at most (option%sample_para+option%knn)*nn columns, the first option%sample_para*nn are random, the next option%knn*nn are nearest points
       allocate (select_idx(Ndim*2))
@@ -1321,31 +1418,111 @@ do j_dim = 1,dims_col(dim)
             select_idx(dim_i)%dat(1)=1
             select_idx(dim_i)%dat(2)=mmnn(dim_i)
          else
-            sampleidx1(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
-            if (level == level_butterfly+1) sampleidx1(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
-            allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
-            call linspaceI(1, mmnn(dim_i), sampleidx1(dim_i), select_idx(dim_i)%dat(1:sampleidx1(dim_i)))
-            call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+            sampleidx(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
+            if (level == level_butterfly+1) sampleidx(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
+            allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
+            call linspaceI(1, mmnn(dim_i), sampleidx(dim_i), select_idx(dim_i)%dat(1:sampleidx(dim_i)))
          endif
       enddo
+
+
+      if(option%knn>0)then
+         Nnear_dim=0
+         do dim_i=1,Ndim ! first loop the Ndim-1 dimensions on the row dimension
+            do i = 1, mm(dim_i)
+               edge_m = header_m(dim_i) + i - 1
+               do iii = 1, option%knn
+               if (msh(dim_i)%nns(edge_m, iii) >= msh(dim_i)%basis_group(group_n(dim_i))%head .and. msh(dim_i)%nns(edge_m, iii) <= msh(dim_i)%basis_group(group_n(dim_i))%tail) then
+                  Nnear_dim(dim_i) = 1
+               endif
+               enddo
+            enddo
+         enddo
+         if(sum(Nnear_dim)==Ndim)then ! group_m and group_n are closeby
+            do dim_i=1,Ndim
+               if(dim_i/=dim)then
+                  Nmoresample=0
+                  do i = 1, mm(dim_i)
+                     edge_m = header_m(dim_i) + i - 1
+                     do iii = 1, option%knn
+                     if (msh(dim_i)%nns(edge_m, iii) >= msh(dim_i)%basis_group(group_n(dim_i))%head .and. msh(dim_i)%nns(edge_m, iii) <= msh(dim_i)%basis_group(group_n(dim_i))%tail) then
+                        Nmoresample = Nmoresample + 1
+                        exit
+                     endif
+                     enddo
+                  enddo
+                  if(Nmoresample>0)then
+                     sampleidx1(dim_i) = sampleidx(dim_i) + Nmoresample
+                     allocate(tmpidx(sampleidx(dim_i)))
+                     tmpidx=select_idx(dim_i)%dat
+                     deallocate(select_idx(dim_i)%dat)
+                     allocate(select_idx(dim_i)%dat(sampleidx1(dim_i)))
+                     select_idx(dim_i)%dat(1:sampleidx(dim_i))=tmpidx
+                     deallocate(tmpidx)
+                     Nmoresample=0
+
+                     do i = 1, mm(dim_i)
+                        edge_m = header_m(dim_i) + i - 1
+                        do iii = 1, option%knn
+                        if (msh(dim_i)%nns(edge_m, iii) >= msh(dim_i)%basis_group(group_n(dim_i))%head .and. msh(dim_i)%nns(edge_m, iii) <= msh(dim_i)%basis_group(group_n(dim_i))%tail) then
+                           Nmoresample = Nmoresample + 1
+                           select_idx(dim_i)%dat(sampleidx(dim_i)+Nmoresample)=i
+                           exit
+                        endif
+                        enddo
+                     enddo                     
+                     call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
+                  endif
+               endif
+            enddo
+
+            do dim_i=1,Ndim ! then loop the Ndim dimensions on the column dimension
+               Nmoresample=0
+               do i = 1, mm(dim_i)
+                  edge_m = header_m(dim_i) + i - 1
+                  do iii = 1, option%knn
+                  if (msh(dim_i)%nns(edge_m, iii) >= msh(dim_i)%basis_group(group_n(dim_i))%head .and. msh(dim_i)%nns(edge_m, iii) <= msh(dim_i)%basis_group(group_n(dim_i))%tail) then
+                     Nmoresample = Nmoresample + 1
+                  endif
+                  enddo
+               enddo
+
+               if(Nmoresample>0)then
+                  sampleidx1(dim_i+Ndim) = sampleidx(dim_i+Ndim) + Nmoresample
+                  allocate(tmpidx(sampleidx(dim_i+Ndim)))
+                  tmpidx=select_idx(dim_i+Ndim)%dat
+                  deallocate(select_idx(dim_i+Ndim)%dat)
+                  allocate(select_idx(dim_i+Ndim)%dat(sampleidx1(dim_i+Ndim)))
+                  select_idx(dim_i+Ndim)%dat(1:sampleidx(dim_i+Ndim))=tmpidx
+                  deallocate(tmpidx)
+                  Nmoresample=0
+                  do i = 1, mm(dim_i)
+                     edge_m = header_m(dim_i) + i - 1
+                     do iii = 1, option%knn
+                     if (msh(dim_i)%nns(edge_m, iii) >= msh(dim_i)%basis_group(group_n(dim_i))%head .and. msh(dim_i)%nns(edge_m, iii) <= msh(dim_i)%basis_group(group_n(dim_i))%tail) then
+                        Nmoresample = Nmoresample + 1
+                        select_idx(dim_i+Ndim)%dat(sampleidx(dim_i+Ndim)+Nmoresample)=msh(dim_i)%nns(edge_m, iii) + 1 - header_n(dim_i)
+                     endif
+                     enddo
+                  enddo
+                  call remove_dup_int(select_idx(dim_i+Ndim)%dat, sampleidx1(dim_i+Ndim), sampleidx(dim_i+Ndim))
+               endif               
+            enddo
+         endif
+      endif
+
+
       dims_row = sampleidx(1:Ndim)
       dims_col = sampleidx(1+Ndim:2*Ndim)
       dims_row(dim) = mm_scalar
 
 
-      do dim_i =1,Ndim
-         header_m(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
-         header_n(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
-         if (level < level_butterfly+1 .and. dim==dim_i) then
-            header_m1 = header_m(dim_i)
-            header_m2 = msh(dim_i)%basis_group(2*group_m(dim_i)+1)%head
-         endif
-      enddo
+
 
       allocate (subtensors(index_ij)%dat(product(dims_row),product(dims_col)))
       subtensors(index_ij)%dat=0
       call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
-allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
+      allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
       call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
       subtensors(index_ij)%masks=1
 
@@ -2235,9 +2412,9 @@ do i_dim = 1,dims_row(dim)
          idx_r_m = idx_r_m + blocks%idx_r_m - 1
          call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
          proc_of_groupr(idx_r_scalar)=pp
-      enddo  
+      enddo
       call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
- 
+
       do bb=1, product(blocks%nc_m)
          call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
          idx_c_m = idx_c_m + blocks%idx_c_m - 1
