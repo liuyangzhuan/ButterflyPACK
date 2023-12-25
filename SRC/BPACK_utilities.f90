@@ -709,6 +709,7 @@ contains
 
       call MPI_ALLREDUCE(stats%Mem_peak, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Peak mem:', rtemp, 'MB'
+      if (ptree%MyID == Main_ID) write (*, *) 'time_tmp', time_tmp
 
    end subroutine PrintStat
 

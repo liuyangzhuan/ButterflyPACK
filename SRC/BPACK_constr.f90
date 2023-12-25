@@ -2713,12 +2713,14 @@ contains
       integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
       DT, target, allocatable::alldat_loc(:)
-      integer:: Ninter, dims_r, dims_c, idx_m(Ndim), idx_r_m(Ndim), idx_c_m(Ndim), ntot_loc, level, Npmap, nproc, npavr, np
+      integer:: Ninter, dims_r, dims_c, dim_MD(Ndim*2), idx_MD(Ndim*2), idx_m(Ndim), idx_r_m(Ndim), idx_c_m(Ndim), ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect_MD)::subtensor(1)
       type(intersect_MD),allocatable::inter_MD(:)
-      integer level_butterfly,level_half,levelm,receiver, sender
-      integer,allocatable::order(:)
+      integer level_butterfly,level_half,levelm,receiver, sender, bbm
+      integer,allocatable::order(:),order_m(:)
       integer:: dims_row(Ndim),dims_col(Ndim), dims_one(Ndim),group_m(Ndim),group_n(Ndim)
+      real(kind=8)::dis
+      real(kind=8),allocatable::distances(:)
 
       level_butterfly=blocks%level_butterfly
       level_half=blocks%level_half
@@ -2729,15 +2731,49 @@ contains
       dims_r=2**level_half
       dims_c=2**(level_butterfly-level_half)
 
+
+      dim_MD(1:Ndim) = dims_r
+      dim_MD(1+Ndim:Ndim*2) = dims_c
+      allocate(distances(product(dim_MD)))
+      do bbm=1,product(dim_MD)
+         call SingleIndexToMultiIndex(Ndim*2, dim_MD, bbm, idx_MD)
+         group_m = blocks%row_group
+         group_m = group_m*2**levelm - 1 + idx_MD(1:Ndim)
+         group_n = blocks%col_group
+         group_n = group_n*2**(level_butterfly-levelm) - 1 + idx_MD(1+Ndim:Ndim*2)
+         if (option%nogeo == 1)then
+            if(ALL(group_m==group_n))then
+               distances(bbm)=0
+            else
+               distances(bbm)=1
+            endif
+         else
+            dis = 0d0
+            do i = 1, Ndim
+               dis = dis + (msh(i)%basis_group(group_m(i))%center(1) - msh(i)%basis_group(group_n(i))%center(1))**2
+            enddo
+            dis = dis**(1d0/2d0)
+            distances(bbm)= dis
+         endif
+      enddo
+      allocate(order_m(product(dim_MD)))
+      call quick_sort(distances, order_m, product(dim_MD))
+      call MPI_Bcast(order_m, product(dim_MD), MPI_INTEGER, 0, ptree%Comm, ierr)
+
+
       Ninter = min(4, min(dims_r**Ndim,dims_c**Ndim))
       allocate(inter_MD(Ninter))
       do nn=1,Ninter
          allocate(inter_MD(nn)%nr(Ndim))
          allocate(inter_MD(nn)%rows(Ndim))
+         bbm=order_m(nn)
+         call SingleIndexToMultiIndex(Ndim*2, dim_MD, bbm, idx_MD)
+
          do dim_i=1,Ndim
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
-            idx_r_m(dim_i) = max(floor_safe(dims_r*a), 1)
+            ! call random_number(a)
+            ! call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! idx_r_m(dim_i) = max(floor_safe(dims_r*a), 1)
+            idx_r_m(dim_i) = idx_MD(dim_i)
             group_m = blocks%row_group
             group_m(dim_i) = group_m(dim_i)*2**levelm - 1 + idx_r_m(dim_i)
             inter_MD(nn)%nr(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
@@ -2754,9 +2790,10 @@ contains
          allocate(inter_MD(nn)%nc(Ndim))
          allocate(inter_MD(nn)%cols(Ndim))
          do dim_i=1,Ndim
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
-            idx_c_m(dim_i) = max(floor_safe(dims_c*a), 1)
+            ! call random_number(a)
+            ! call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! idx_c_m(dim_i) = max(floor_safe(dims_c*a), 1)
+            idx_c_m(dim_i) = idx_MD(dim_i+Ndim)
             group_n = blocks%col_group
             group_n(dim_i) = group_n(dim_i)*2**(level_butterfly-levelm) - 1 + idx_c_m(dim_i)
             inter_MD(nn)%nc(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
@@ -2790,6 +2827,7 @@ contains
             allocate(inter_MD(nn)%dat(product(inter_MD(nn)%nr),product(inter_MD(nn)%nc)))
          endif
       enddo
+      deallocate(order_m)
 
       n1 = MPI_Wtime()
       call BF_MD_block_extraction(blocks, Ndim, Ninter, inter_MD, ptree, msh, stats)

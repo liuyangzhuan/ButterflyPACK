@@ -202,15 +202,15 @@ contains
          rad1 = rad1 + msh(i)%basis_group(group_m(i))%radius**2d0
          rad2 = rad2 + msh(i)%basis_group(group_n(i))%radius**2d0
       enddo
-      rad1 = rad1**(1d0/Dimn)
-      rad2 = rad2**(1d0/Dimn)
+      rad1 = rad1**(1d0/2)
+      rad2 = rad2**(1d0/2)
 
       if(option%per_geo==0)then
          dis = 0d0
          do i = 1, Dimn
             dis = dis + (a(i) - b(i))**2
          enddo
-         dis = dis**(1d0/Dimn)
+         dis = dis**(1d0/2)
       else
          write(*,*)'periodic geometry has not been implemented for near_or_far_geo_MD'
          stop
