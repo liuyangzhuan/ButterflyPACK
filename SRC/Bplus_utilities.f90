@@ -13370,14 +13370,26 @@ end subroutine BF_block_MVP_dat_batch_magma
 
          n2 = MPI_Wtime()
          !>**** Step 1: multiply the factor matrices out from outtermost to middle level along each dimension
+#ifdef HAVE_TASKLOOP
+         !$omp parallel
+         !$omp single
+#endif
          do nn=1,product(blocks%nc_m)
+#ifdef HAVE_TASKLOOP
+!$omp task default(shared) private(level) firstprivate(nn)
+#endif
             do level = 0, level_half
                call BF_MD_block_mvp_multiply_right(blocks, nn, Ndim, BFvec(nn), Nvec, level, ptree,stats)
             enddo
+#ifdef HAVE_TASKLOOP
+!$omp end task
+#endif
             ! write(*,*)nn,product(blocks%nc_m),ptree%MyID,'done'
          enddo
-
-
+#ifdef HAVE_TASKLOOP
+         !$omp end single
+         !$omp end parallel
+#endif
          !>**** Step 2: all to all communication of the right multiplication results
          n3 = MPI_Wtime()
          call BF_MD_all2all_mvp(Ndim, blocks, BFvec, BFvec_transposed, stats, msh, ptree)
@@ -13442,7 +13454,14 @@ end subroutine BF_block_MVP_dat_batch_magma
          !>**** Step 4: multiply the factor matrices out from middle level to the outtermost level along each dimension
          allocate(xout1(size(xout,1),size(xout,2)))
          xout1 = 0
+#ifdef HAVE_TASKLOOP
+         !$omp parallel
+         !$omp single
+#endif         
          do mm=1,product(blocks%nr_m)
+#ifdef HAVE_TASKLOOP
+!$omp task default(shared) private(level,group_m,idx_r_m,dims_ref_new,dim_i,dims_ref_old,offsets_ref) firstprivate(mm)
+#endif
             call SingleIndexToMultiIndex(Ndim, blocks%nr_m, mm, idx_r_m)
             group_m = blocks%row_group
             group_m = group_m*2**levelm - 1 + idx_r_m + blocks%idx_r_m - 1
@@ -13462,9 +13481,15 @@ end subroutine BF_block_MVP_dat_batch_magma
             offsets_ref(Ndim+1) = 0
 
             call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim,Ndim+1,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix, 'N', xout1,'T',0)
-
+#ifdef HAVE_TASKLOOP
+!$omp end task 
+#endif
             ! write(*,*)mm,product(blocks%nr_m),ptree%MyID,'done L'
          enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end single
+         !$omp end parallel
+#endif         
          xout=xout1
          deallocate(xout1)
 
@@ -14506,9 +14531,8 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 
          flops=0
 #ifdef HAVE_TASKLOOP
-         !$omp parallel
-         !$omp single
-         !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
+         ! !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
+         !$omp taskgroup task_reduction(+:flops)  
 #else
 #ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
@@ -14520,19 +14544,26 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
             nvec1 = size(mat,2)
 
+            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k) 
             call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, mat(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
+            !$omp end task
          enddo
 #ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-            !$omp end single
-            !$omp end parallel
+         !   !$omp end taskloop
+         !$omp end taskgroup
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
 #endif
+#ifdef HAVE_TASKLOOP
+         !$omp atomic
+#endif
          stats%Flop_Tmp = stats%Flop_Tmp + flops
+#ifdef HAVE_TASKLOOP
+         !$omp end atomic
+#endif
          deallocate(mat)
       enddo
    else
@@ -14568,9 +14599,8 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 
             flops=0
 #ifdef HAVE_TASKLOOP
-            !$omp parallel
-            !$omp single
-            !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
+            !   !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
+            !$omp taskgroup task_reduction(+:flops)   
 #else
 #ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
@@ -14582,21 +14612,33 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                nn2 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, 2)
                mm = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 1)
                nvec1 = size(mat,2)
+#ifdef HAVE_TASKLOOP
+               !$omp task default(shared) firstprivate(mm,nn1,nn2,nvec1,index_j_k)
+#endif               
                call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn1)
                call gemmf77('N', 'N', mm, nvec1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn2)
-            enddo
 #ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-            !$omp end single
-            !$omp end parallel
+               !$omp end task
+#endif                      
+            enddo
+
+#ifdef HAVE_TASKLOOP
+            !  !$omp end taskloop
+            !$omp end taskgroup
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
 #endif
+#ifdef HAVE_TASKLOOP
+            !$omp atomic
+#endif
             stats%Flop_Tmp = stats%Flop_Tmp + flops
+#ifdef HAVE_TASKLOOP
+            !$omp end atomic
+#endif
             deallocate(mat)
          enddo
       enddo
@@ -14658,9 +14700,8 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 
          flops=0
 #ifdef HAVE_TASKLOOP
-         !$omp parallel
-         !$omp single
-         !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
+       !  !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
+         !$omp taskgroup task_reduction(+:flops)   
 #else
 #ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
@@ -14671,20 +14712,30 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             mm = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,1)
             nn1 = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,2)
             nvec1 = size(mat,2)
-
+#ifdef HAVE_TASKLOOP
+            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_i_k) 
+#endif            
             call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix, mm, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,1)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level)%blocks(1,1)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_s,1)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level+1)%num_row+1,1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
+#ifdef HAVE_TASKLOOP
+            !$omp end task 
+#endif              
          enddo
 #ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-            !$omp end single
-            !$omp end parallel
+         !   !$omp end taskloop
+         !$omp end taskgroup 
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
 #endif
-         stats%Flop_Tmp = stats%Flop_Tmp + flops
+#ifdef HAVE_TASKLOOP
+            !$omp atomic
+#endif
+            stats%Flop_Tmp = stats%Flop_Tmp + flops
+#ifdef HAVE_TASKLOOP
+            !$omp end atomic
+#endif
          deallocate(mat)
       enddo
    else
@@ -14723,9 +14774,8 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 
                flops=0
 #ifdef HAVE_TASKLOOP
-               !$omp parallel
-               !$omp single
-               !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
+            !   !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
+               !$omp taskgroup task_reduction(+:flops)   
 #else
 #ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
@@ -14737,21 +14787,32 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                   mm2 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, 1)
                   nn = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 2)
                   nvec1 = size(mat,2)
+#ifdef HAVE_TASKLOOP
+                  !$omp task default(shared) firstprivate(mm1,mm2,nn,nvec1,index_i_k) 
+#endif                        
                   call gemmf77('N', 'N', mm1, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, mm1, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
                   flops = flops + flops_gemm(mm1, nvec1, nn)
                   call gemmf77('N', 'N', mm2, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, mm2, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k+1,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
                   flops = flops + flops_gemm(mm2, nvec1, nn)
+#ifdef HAVE_TASKLOOP
+                  !$omp end task 
+#endif                     
                enddo
 #ifdef HAVE_TASKLOOP
-            !$omp end taskloop
-            !$omp end single
-            !$omp end parallel
+          !  !$omp end taskloop
+          !$omp end taskgroup 
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
 #endif
+#ifdef HAVE_TASKLOOP
+               !$omp atomic
+#endif
                stats%Flop_Tmp = stats%Flop_Tmp + flops
+#ifdef HAVE_TASKLOOP
+               !$omp end atomic
+#endif
                deallocate(mat)
             enddo
 
