@@ -803,7 +803,7 @@ contains
                            exit
                         endif
                         enddo
-                     enddo                     
+                     enddo
                      call remove_dup_int(select_idx(dim_i+Ndim)%dat, sampleidx1(dim_i+Ndim), sampleidx(dim_i+Ndim))
                   endif
                endif
@@ -839,7 +839,7 @@ contains
                      enddo
                   enddo
                   call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
-               endif               
+               endif
             enddo
          endif
       endif
@@ -1470,7 +1470,7 @@ do j_dim = 1,dims_col(dim)
                            exit
                         endif
                         enddo
-                     enddo                     
+                     enddo
                      call remove_dup_int(select_idx(dim_i)%dat, sampleidx1(dim_i), sampleidx(dim_i))
                   endif
                endif
@@ -1506,7 +1506,7 @@ do j_dim = 1,dims_col(dim)
                      enddo
                   enddo
                   call remove_dup_int(select_idx(dim_i+Ndim)%dat, sampleidx1(dim_i+Ndim), sampleidx(dim_i+Ndim))
-               endif               
+               endif
             enddo
          endif
       endif
@@ -3612,6 +3612,10 @@ do i_dim = 1,dims_row(dim)
          do index_ij = 1, product(dim_subtensor)
             allocate(blocks%ButterflyMiddle(index_ij)%matrix(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
             blocks%ButterflyMiddle(index_ij)%matrix = subtensors(index_ij)%dat
+allocate(blocks%ButterflyMiddle(index_ij)%dims_m(Ndim))
+            blocks%ButterflyMiddle(index_ij)%dims_m = subtensors(index_ij)%nr
+            allocate(blocks%ButterflyMiddle(index_ij)%dims_n(Ndim))
+            blocks%ButterflyMiddle(index_ij)%dims_n = subtensors(index_ij)%nc
          enddo
 
          call BF_MD_delete_subtensors(Ndim, dim_subtensor, subtensors, stats)

@@ -52,7 +52,7 @@ contains
 			elseif(quant%tst==3)then
 				dist = sqrt(sum((pos_o-pos_s)**2d0))
 				waven=2*BPACK_pi/quant%wavelen
-				value = EXP(-BPACK_junit*waven*dist)/dist	
+				value = EXP(-BPACK_junit*waven*dist)/dist
 			elseif(quant%tst==4)then
 				dotp = dot_product(pos_o,pos_s)
 				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
@@ -121,9 +121,9 @@ PROGRAM ButterflyPACK_RankBenchmark
 	use z_BPACK_utilities
     implicit none
 
-    integer rank,ii,jj,kk
+    integer rank,ii,ii1,jj,kk,nvec
 	real(kind=8),allocatable:: datain(:)
-	real(kind=8) :: wavelen, ds, ppw
+	real(kind=8) :: wavelen, ds, ppw, a, v1,v2
 	integer :: ierr
 	type(z_Hoption),target::option
 	type(z_Hstat),target::stats
@@ -138,11 +138,14 @@ PROGRAM ButterflyPACK_RankBenchmark
 	integer,allocatable::Permutation(:)
 	integer,allocatable:: Nunk_m_loc(:), Nunk_n_loc(:)
 	integer,allocatable::tree(:),tree_m(:),tree_n(:)
-	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),x_glo(:,:),x_loc(:,:)
+	complex(kind=8),allocatable::rhs_glo(:,:),rhs_loc(:,:),rhs_loc_ref(:,:),x_glo(:,:),x_loc(:,:)
 	integer nrhs
 	type(z_matrixblock_MD) ::blocks
 	character(len=1024)  :: strings,strings1
-	integer flag,nargs,dim_i
+	integer flag,nargs,dim_i, Npt_src, ij, ij1
+	integer,allocatable::idx_src(:), idx_1(:), idx_2(:), idxs(:), idxe(:)
+	complex(kind=8)::tmp
+	class(*), pointer :: Quant_ref
 
 	!**** nmpi and groupmembers should be provided by the user
 	call MPI_Init(ierr)
@@ -281,7 +284,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		quant%locations_m(3,m)=m*ds
 	  enddo
 	  do n=1,Nperdim
-		quant%locations_n(1,n)=n*ds+2
+		quant%locations_n(1,n)=n*ds+ds+1
 		quant%locations_n(2,n)=n*ds
 		quant%locations_n(3,n)=n*ds
 	  enddo
@@ -325,6 +328,75 @@ PROGRAM ButterflyPACK_RankBenchmark
 	call MPI_Bcast(quant%Permutation_n,maxval(quant%Nunk_n)*quant%Ndim,MPI_integer,0,ptree%comm,ierr)
 
 	call z_BF_MD_Construct_Element_Compute(quant%Ndim, blocks, option, stats, msh, ker, ptree)
+
+
+	nvec=1
+	allocate(x_loc(product(Nunk_n_loc),nvec))
+	x_loc=0
+	
+	Npt_src = 10
+	allocate(idx_src(Npt_src))
+	do ij=1,Npt_src
+		call random_number(a)
+		idx_src(ij) = max(z_floor_safe(product(quant%Nunk_n)*a), 1)
+	enddo
+	call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+	allocate(idx_1(quant%Ndim))
+	allocate(idx_2(quant%Ndim))
+	allocate(idxs(quant%Ndim))
+	allocate(idxe(quant%Ndim))
+
+	idxs = blocks%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
+	idxe = idxs + Nunk_n_loc -1
+	do ij=1,Npt_src
+		call z_SingleIndexToMultiIndex(quant%Ndim,quant%Nunk_n, idx_src(ij), idx_1)
+		if(ALL(idx_1>=idxs) .and. ALL(idx_1<=idxe))then
+			idx_1 = idx_1 - idxs + 1
+			call z_MultiIndexToSingleIndex(quant%Ndim,Nunk_n_loc, ij1, idx_1)
+			x_loc(ij1,1) = 1
+		endif
+	enddo
+
+	allocate(rhs_loc(product(Nunk_m_loc),nvec))
+	rhs_loc=0
+	call z_BF_MD_block_mvp('N', x_loc, Nunk_n_loc, rhs_loc, Nunk_m_loc, nvec, blocks, quant%Ndim, ptree, stats, msh)
+
+	idxs = blocks%M_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
+	allocate(rhs_loc_ref(product(Nunk_m_loc),nvec))
+	rhs_loc_ref=0
+	Quant_ref =>quant
+	do ii=1, product(Nunk_m_loc)
+		call z_SingleIndexToMultiIndex(quant%Ndim,Nunk_m_loc, ii, idx_1)
+		idx_1 = idx_1 + idxs - 1
+		call z_MultiIndexToSingleIndex(quant%Ndim,quant%Nunk_m, ii1, idx_1)
+		do ij=1,Npt_src
+			call z_SingleIndexToMultiIndex(quant%Ndim,quant%Nunk_n, idx_src(ij), idx_2)
+			call ZBelem_MD_User(quant%Ndim, idx_1, -idx_2,tmp,Quant_ref)
+			rhs_loc_ref(ii,1) = rhs_loc_ref(ii,1) + tmp
+		enddo
+	enddo
+
+	rhs_loc = rhs_loc - rhs_loc_ref
+	v1 =(z_fnorm(rhs_loc,product(Nunk_m_loc),nvec))**2d0
+	v2 =(z_fnorm(rhs_loc_ref,product(Nunk_m_loc),nvec))**2d0
+	call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	if(ptree%MyID==Main_ID)then
+		write(*,*)'multiplication (contraction) error: ', sqrt(v1/v2)
+	endif
+
+	deallocate(x_loc)
+	deallocate(rhs_loc)
+	deallocate(rhs_loc_ref)
+	deallocate(idx_1)
+	deallocate(idx_2)
+	deallocate(idxs)
+	deallocate(idxe)
+	deallocate(idx_src)
+
+
+
+
 
 !******************************************************************************!
 

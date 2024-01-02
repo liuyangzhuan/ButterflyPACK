@@ -126,30 +126,6 @@ if(COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")
   endif()
 endif()
 
-# Test OPENMP TASKLOOP
-if(enable_openmp)
-  if(COMPILER_PGI OR COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")  # PGI and Cray taskloop seems buggy
-  else()
-    check_fortran_source_compiles(
-"PROGRAM TEST
-integer i
-!$omp parallel
-!$omp single
-!$omp taskloop default(shared) private(i)
-do i=1,10
-write(*,*)'iter:',i
-enddo
-!$omp end taskloop
-!$omp end single
-!$omp end parallel
-END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
-    if(BUTTERFLYPACK_USE_TASKLOOP)
-      set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
-      message("-- Using OpenMP taskloop")
-    endif()
-  endif()
-endif()
-
 set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 check_cxx_compiler_flag("-qopt-matmul" qoptmatmul)
 if(qoptmatmul)
@@ -186,6 +162,31 @@ if(enable_openmp)
     set(CMAKE_CXX_FLAGS "-DHAVE_OPENMP ${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
     set(OpenMP_CXX_FLAGS_EXPORT "${OpenMP_CXX_FLAGS}")
     set(CMAKE_CXX_IMPLICIT_LINK_LIBRARIES "${CMAKE_CXX_IMPLICIT_LINK_LIBRARIES} ${OpenMP_CXX_FLAGS}")
+  endif()
+
+
+# Test OPENMP TASKLOOP (Version 5.0)
+  if(COMPILER_PGI OR COMPILER_CRAY OR CMAKE_Fortran_COMPILER_ID STREQUAL "Cray")  # PGI and Cray taskloop seems buggy
+  else()
+    check_fortran_source_compiles(
+"PROGRAM TEST
+integer i,sum
+sum=0
+!$omp parallel
+!$omp single
+!$omp taskloop default(shared) private(i) reduction(+:sum)
+do i=1,10
+write(*,*)'iter:',i
+sum=sum+i
+enddo
+!$omp end taskloop
+!$omp end single
+!$omp end parallel
+END PROGRAM TEST" BUTTERFLYPACK_USE_TASKLOOP SRC_EXT F90)
+    if(BUTTERFLYPACK_USE_TASKLOOP)
+      set(CMAKE_Fortran_FLAGS "-DHAVE_TASKLOOP ${CMAKE_Fortran_FLAGS}")
+      message("-- Using OpenMP taskloop")
+    endif()
   endif()
 endif()
 

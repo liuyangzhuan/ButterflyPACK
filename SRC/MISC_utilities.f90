@@ -4267,6 +4267,128 @@ contains
 
 
 
+subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_old,ld_new,data_in,trans_in,data_out,trans_out,loopnew)
+   implicit none
+   integer Ndim,loopnew
+   integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar, idx_new(Ndim-1),idx_new_scalar,dims_old(Ndim-1),dims_old_scalar, idx_old(Ndim-1),idx_old_scalar
+   integer ld_old,ld_new, dim_i, i, j, j1
+   character::trans_in,trans_out
+   DT::data_in(:,:)
+   DT,allocatable::data_out(:,:)
+
+   i=0
+   do dim_i=1,Ndim
+      if(dim_i/=ld_old)then
+         i = i+ 1
+         dims_old(i) = dims_ref_old(dim_i)
+      else
+         dims_old_scalar = dims_ref_old(dim_i)
+      endif
+   enddo
+
+   i=0
+   do dim_i=1,Ndim
+      if(dim_i/=ld_new)then
+         i = i+ 1
+         dims_new(i) = dims_ref_new(dim_i)
+      else
+         dims_new_scalar = dims_ref_new(dim_i)
+      endif
+   enddo
+   if(.not. allocated(data_out))then
+      if(trans_out=='N')then
+         allocate(data_out(dims_new_scalar,product(dims_new)))
+      else
+         allocate(data_out(product(dims_new),dims_new_scalar))
+      endif
+      data_out=0
+   endif
+
+   if(loopnew==1)then
+      do idx_new_scalar=1,dims_new_scalar
+      do j=1,product(dims_new)
+         call SingleIndexToMultiIndex(Ndim-1, dims_new, j, idx_new)
+         !! get the Ndim dimensional index idx_ref
+         i=0
+         do dim_i=1,Ndim
+         if(dim_i/=ld_new)then
+            i=i+1
+            idx_ref(dim_i) = idx_new(i) + offsets_ref(dim_i)
+         else
+            idx_ref(dim_i) = idx_new_scalar + offsets_ref(dim_i)
+         endif
+         enddo
+         !! get the Ndim-1 dimensional index idx_old
+         i=0
+         do dim_i=1,Ndim
+         if(dim_i/=ld_old)then
+            i=i+1
+            idx_old(i)=idx_ref(dim_i)
+         else
+            idx_old_scalar=idx_ref(dim_i)
+         endif
+         enddo
+
+         call MultiIndexToSingleIndex(Ndim-1, dims_old, j1, idx_old)
+
+         if(trans_out=='N' .and. trans_in=='N')then
+            data_out(idx_new_scalar,j) = data_in(idx_old_scalar,j1)
+         else if(trans_out=='N' .and. trans_in=='T')then
+            data_out(idx_new_scalar,j) = data_in(j1,idx_old_scalar)
+         else if(trans_out=='T' .and. trans_in=='N')then
+            data_out(j,idx_new_scalar) = data_in(idx_old_scalar,j1)
+         else if(trans_out=='T' .and. trans_in=='T')then
+            data_out(j,idx_new_scalar) = data_in(j1,idx_old_scalar)
+         endif
+      enddo
+      enddo
+
+   else
+      do idx_old_scalar=1,dims_old_scalar
+      do j=1,product(dims_old)
+         call SingleIndexToMultiIndex(Ndim-1, dims_old, j, idx_old)
+         !! get the Ndim dimensional index idx_ref
+         i=0
+         do dim_i=1,Ndim
+         if(dim_i/=ld_old)then
+            i=i+1
+            idx_ref(dim_i) = idx_old(i) + offsets_ref(dim_i)
+         else
+            idx_ref(dim_i) = idx_old_scalar + offsets_ref(dim_i)
+         endif
+         enddo
+         !! get the Ndim-1 dimensional index idx_new
+         i=0
+         do dim_i=1,Ndim
+         if(dim_i/=ld_new)then
+            i=i+1
+            idx_new(i)=idx_ref(dim_i)
+         else
+            idx_new_scalar=idx_ref(dim_i)
+         endif
+         enddo
+
+         call MultiIndexToSingleIndex(Ndim-1, dims_new, j1, idx_new)
+
+         if(trans_out=='N' .and. trans_in=='N')then
+            data_out(idx_new_scalar,j1) = data_in(idx_old_scalar,j)
+         else if(trans_out=='N' .and. trans_in=='T')then
+            data_out(idx_new_scalar,j1) = data_in(j,idx_old_scalar)
+         else if(trans_out=='T' .and. trans_in=='N')then
+            data_out(j1,idx_new_scalar) = data_in(idx_old_scalar,j)
+         else if(trans_out=='T' .and. trans_in=='T')then
+            data_out(j1,idx_new_scalar) = data_in(j,idx_old_scalar)
+         endif
+      enddo
+      enddo
+
+   endif
+
+
+end subroutine TensorUnfoldingReshape
+
+
+
 !>**** computation of the sub process group that handles one block of the outtermost factor of a butterfly. Note: if level_butterfly=0, then pgno_sub=pgno
    !ptree: process tree
    !pgno: the process group number that shares this butterfly
@@ -4409,7 +4531,7 @@ contains
          endif
          idx_p(dim_i) = idx_tmp
          level_ps(dim_i) = level_ps(dim_i) + 1
-         dim_i = dim_i + 1         
+         dim_i = dim_i + 1
          dim_i = mod(dim_i-1,ndim)+1 ! reset dim to 1 if dim=ndim+1
       enddo
 
@@ -5557,7 +5679,6 @@ contains
    end subroutine Array1DtoPointer2D
 
    subroutine LogMemory(stats, mem)
-      use BPACK_DEFS
       implicit none
       type(Hstat)::stats
       real(kind=8):: mem
@@ -5569,7 +5690,6 @@ contains
 
 
    subroutine get_graph_colors_JP(rows,ia,ja,colors)
-      use BPACK_DEFS
       implicit none
       integer ja(:)
       integer rows,ia(rows+1),colors(rows),weights(rows),csp,remaining,i,c,largest,jp,neighbor

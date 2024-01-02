@@ -229,6 +229,7 @@ module BPACK_DEFS
         type(list):: lst !< a list of intersection#s
         integer, allocatable::index(:, :) !< an array of intersection#s
         integer::ndim = 0 !< number of skeletons
+integer,allocatable ::dims_m(:), dims_n(:) !< dimensions of the rows and columns (used in BF_MD)
     end type butterflymatrix
 
     !>**** index set for one butterfly block
@@ -264,6 +265,7 @@ module BPACK_DEFS
         type(butterflymatrix), allocatable :: blocks(:, :)
         type(list):: lst!< a list of active blocks
         integer, allocatable::index(:, :) !< an array of id of active blocks
+integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type butterfly_kerl
 
     !>**** one interior factor at level l (L: l=1,level_butterflyL. R: l=1:level_butterflyR)
