@@ -17,7 +17,7 @@ implicit none
 		integer:: Nunk_m,Nunk_n
 		integer:: Ndim
 		integer:: tst=1
-		real(kind=8)::wavelen
+		real(kind=8)::wavelen,zdist
 	end type quant_app
 
 contains
@@ -44,7 +44,7 @@ contains
 			else
 				pos_o(1:quant%Ndim) = quant%locations_m(:,m)
 				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
-				dist = sqrt(sum((pos_o-pos_s)**2d0))
+				dist = sqrt(sum((pos_o(1:quant%Ndim)-pos_s(1:quant%Ndim))**2d0))
 				waven=2*BPACK_pi/quant%wavelen
 				value = EXP(-BPACK_junit*waven*dist)/dist
 			endif
@@ -160,6 +160,8 @@ PROGRAM ButterflyPACK_RankBenchmark
 
 	quant%tst = 2
     quant%wavelen = 0.25d0/8d0
+	ppw=2
+	quant%zdist = 1
 
 	nargs = iargc()
 	ii=1
@@ -182,6 +184,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 							read(strings1,*)quant%Ndim
 						elseif(trim(strings)=='--N_FIO')then
 							read(strings1,*)Nperdim
+						elseif(trim(strings)=='--ppw')then
+							read(strings1,*)ppw
+						elseif(trim(strings)=='--zdist')then
+							read(strings1,*)quant%zdist
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -205,8 +211,6 @@ PROGRAM ButterflyPACK_RankBenchmark
 !******************************************************************************!
 ! Read a full non-square matrix and do a BF compression
 
-	ppw=2
-
     ds = quant%wavelen/ppw
     if(quant%tst==1)then ! two colinear plate
       Nperdim = NINT(1d0/ds)
@@ -219,7 +223,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		call z_SingleIndexToMultiIndex(2,dims, m, inds)
 		ii=inds(1)
 		jj=inds(2)
-		quant%locations_m(1,m)=ii*ds+2
+		quant%locations_m(1,m)=ii*ds+1+quant%zdist
 		quant%locations_m(2,m)=jj*ds
 		quant%locations_m(3,m)=0
 	  enddo
@@ -252,7 +256,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		call z_SingleIndexToMultiIndex(2,dims, n, inds)
 		ii=inds(1)
 		jj=inds(2)
-		quant%locations_n(1,n)=1
+		quant%locations_n(1,n)=quant%zdist
 		quant%locations_n(2,n)=ii*ds
 		quant%locations_n(3,n)=jj*ds
 	  enddo
@@ -278,7 +282,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		ii=inds(1)
 		jj=inds(2)
 		kk=inds(3)
-		quant%locations_n(1,n)=ii*ds+2
+		quant%locations_n(1,n)=ii*ds+1+quant%zdist
 		quant%locations_n(2,n)=jj*ds
 		quant%locations_n(3,n)=kk*ds
 	  enddo

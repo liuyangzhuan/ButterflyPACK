@@ -3212,7 +3212,7 @@ do i_dim = 1,dims_row(dim)
   subroutine BF_MD_delete_subtensors(Ndim, dims, subtensors, stats)
   implicit none
   integer Ndim,index_ij,dim_i
-  integer dims(Ndim)
+  integer dims(:)
   type(Hstat)::stats
   type(intersect_MD) :: subtensors(:)
 
@@ -3610,9 +3610,9 @@ do i_dim = 1,dims_row(dim)
 
          allocate(blocks%ButterflyMiddle(product(dim_subtensor)))
          do index_ij = 1, product(dim_subtensor)
-            allocate(blocks%ButterflyMiddle(index_ij)%matrix(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
-            blocks%ButterflyMiddle(index_ij)%matrix = subtensors(index_ij)%dat
-allocate(blocks%ButterflyMiddle(index_ij)%dims_m(Ndim))
+            blocks%ButterflyMiddle(index_ij)%matrix => subtensors(index_ij)%dat
+            subtensors(index_ij)%dat=>null()
+            allocate(blocks%ButterflyMiddle(index_ij)%dims_m(Ndim))
             blocks%ButterflyMiddle(index_ij)%dims_m = subtensors(index_ij)%nr
             allocate(blocks%ButterflyMiddle(index_ij)%dims_n(Ndim))
             blocks%ButterflyMiddle(index_ij)%dims_n = subtensors(index_ij)%nc
@@ -3692,7 +3692,7 @@ allocate(blocks%ButterflyMiddle(index_ij)%dims_m(Ndim))
       call BF_MD_ComputeMemory(Ndim, blocks, memory_dense,memory_comp)
       Memory = memory_dense + memory_comp
       call BF_MD_get_rank(Ndim, blocks, ptree)
-      if(option%verbosity>=2)write(*,*)"After BF_MD_compress_N: myID",ptree%MyID, "rankmin",blocks%rankmin,"rankmax",blocks%rankmax,"memory_subtensor",memory_dense,"memory_factormat",memory_comp
+      if(option%verbosity>=0 .and. ptree%MyID==Main_ID)write(*,*)"After BF_MD_compress_N: myID",ptree%MyID, "rankmin",blocks%rankmin,"rankmax",blocks%rankmax,"memory_subtensor",memory_dense,"memory_factormat",memory_comp
       return
 
    end subroutine BF_MD_compress_N

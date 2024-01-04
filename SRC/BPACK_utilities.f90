@@ -287,6 +287,42 @@ contains
    end subroutine HSSBF_delete
 
 
+
+   subroutine HSSBF_MD_delete(hss_bf1_md)
+      implicit none
+      integer ll,bb
+      type(hssbf_md)::hss_bf1_md
+
+      if (associated(hss_bf1_md%BP%LL)) then
+         do ll = 1, LplusMax
+            if (hss_bf1_md%BP%LL(ll)%Nbound > 0) then
+               if (associated(hss_bf1_md%BP%LL(ll)%matrices_block)) then
+               do bb = 1, hss_bf1_md%BP%LL(ll)%Nbound
+                  ! write(*,*)ll,hss_bf1_md%BP%Lplus,bb,hss_bf1_md%BP%LL(ll)%Nbound,'fff'
+                  call BF_MD_delete(hss_bf1_md%Ndim, hss_bf1_md%BP%LL(ll)%matrices_block(bb), 1)
+               end do
+               deallocate (hss_bf1_md%BP%LL(ll)%matrices_block)
+               endif
+               if (allocated(hss_bf1_md%BP%LL(ll)%boundary_map)) deallocate (hss_bf1_md%BP%LL(ll)%boundary_map)
+            end if
+         end do
+         deallocate (hss_bf1_md%BP%LL)
+      endif
+
+      if(allocated(hss_bf1_md%BP%row_group))then
+         deallocate(hss_bf1_md%BP%row_group)
+      endif
+      if(allocated(hss_bf1_md%BP%col_group))then
+         deallocate(hss_bf1_md%BP%col_group)
+      endif
+      if(allocated(hss_bf1_md%N))then
+         deallocate(hss_bf1_md%N)
+      endif
+
+   end subroutine HSSBF_MD_delete
+
+
+
    subroutine BPACK_delete(bmat)
 
       implicit none
@@ -305,6 +341,12 @@ contains
          call HSSBF_delete(bmat%hss_bf)
          deallocate (bmat%hss_bf)
          bmat%hss_bf => null()
+      endif
+
+      if (associated(bmat%hss_bf_md)) then
+         call HSSBF_MD_delete(bmat%hss_bf_md)
+         deallocate (bmat%hss_bf_md)
+         bmat%hss_bf_md => null()
       endif
 
    end subroutine BPACK_delete

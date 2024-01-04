@@ -1533,6 +1533,179 @@ contains
 
 
 
+   subroutine BF_MD_delete(Ndim, blocks, allflag)
+
+
+      implicit none
+
+      integer Ndim
+      integer butterflyB_inuse, num_col, num_row, bb, index_i_k, index_j_k, dim_i, nc(Ndim), dim_subtensor(Ndim*2)
+      integer index_ij, i, j, mm, nn, rank, num_blocks, level, level_butterfly, index_i_m, index_j_m, levelm
+      real(kind=8) memory_butterfly, rtemp
+      type(matrixblock_MD)::blocks
+      integer allflag
+
+      level_butterfly = blocks%level_butterfly
+
+
+      if(allocated(blocks%nr_m))then
+
+         if(allocated(blocks%ButterflyU))then
+            do bb=1, product(blocks%nr_m)
+               if(allocated(blocks%ButterflyU(bb)%blocks))then
+                  do index_i_k=1,blocks%ButterflyU(bb)%num_blk
+                     do dim_i=1,Ndim
+                        if(associated(blocks%ButterflyU(bb)%blocks(index_i_k,dim_i)%matrix))then
+                           deallocate(blocks%ButterflyU(bb)%blocks(index_i_k,dim_i)%matrix)
+                        endif
+                     enddo
+                  enddo
+                  deallocate(blocks%ButterflyU(bb)%blocks)
+               endif
+            enddo
+            deallocate(blocks%ButterflyU)
+         endif
+
+         if(allocated(blocks%ButterflyKerl_L))then
+            do bb=1, product(blocks%nr_m)
+               do level=blocks%level_half+1,level_butterfly
+                  if(allocated(blocks%ButterflyKerl_L(bb,level)%blocks))then
+                     do index_i_k=1,blocks%ButterflyKerl_L(bb,level)%nr(1)
+                        do index_j_k=1,product(blocks%ButterflyKerl_L(bb,level)%nc)
+                           do dim_i=1,Ndim
+                              if(associated(blocks%ButterflyKerl_L(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix))then
+                                 deallocate(blocks%ButterflyKerl_L(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix)
+                              endif
+                           enddo
+                        enddo
+                     enddo
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%num_row)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%num_col)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%nr)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%nc)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%idx_r)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%idx_c)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%inc_r)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%inc_c)
+                     deallocate(blocks%ButterflyKerl_L(bb,level)%blocks)
+                  endif
+               enddo
+            enddo
+            deallocate(blocks%ButterflyKerl_L)
+         endif
+
+         nc=2**(level_butterfly -blocks%level_half)
+         dim_subtensor(1:Ndim)=blocks%nr_m
+         dim_subtensor(1+Ndim:Ndim*2)=nc
+         if(allocated(blocks%ButterflyMiddle))then
+            do index_ij = 1, product(dim_subtensor)
+               if(associated(blocks%ButterflyMiddle(index_ij)%matrix))then
+                  deallocate(blocks%ButterflyMiddle(index_ij)%matrix)
+               endif
+               if(allocated(blocks%ButterflyMiddle(index_ij)%dims_m))then
+                  deallocate(blocks%ButterflyMiddle(index_ij)%dims_m)
+               endif
+               if(allocated(blocks%ButterflyMiddle(index_ij)%dims_n))then
+                  deallocate(blocks%ButterflyMiddle(index_ij)%dims_n)
+               endif
+            enddo
+            deallocate(blocks%ButterflyMiddle)
+         endif
+      endif
+
+      if(allocated(blocks%nc_m))then
+
+         if(allocated(blocks%ButterflyV))then
+            do bb=1, product(blocks%nc_m)
+               if(allocated(blocks%ButterflyV(bb)%blocks))then
+                  do index_i_k=1,blocks%ButterflyV(bb)%num_blk
+                     do dim_i=1,Ndim
+                        if(associated(blocks%ButterflyV(bb)%blocks(index_i_k,dim_i)%matrix))then
+                           deallocate(blocks%ButterflyV(bb)%blocks(index_i_k,dim_i)%matrix)
+                        endif
+                     enddo
+                  enddo
+                  deallocate(blocks%ButterflyV(bb)%blocks)
+               endif
+            enddo
+            deallocate(blocks%ButterflyV)
+         endif
+
+         if(allocated(blocks%ButterflyKerl_R))then
+            do bb=1, product(blocks%nc_m)
+               do level=1,blocks%level_half
+                  if(allocated(blocks%ButterflyKerl_R(bb,level)%blocks))then
+                     do index_j_k=1,blocks%ButterflyKerl_R(bb,level)%nc(1)
+                        do index_i_k=1,product(blocks%ButterflyKerl_R(bb,level)%nr)
+                           do dim_i=1,Ndim
+                              if(associated(blocks%ButterflyKerl_R(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix))then
+                                 deallocate(blocks%ButterflyKerl_R(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix)
+                              endif
+                           enddo
+                        enddo
+                     enddo
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%num_row)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%num_col)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%nr)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%nc)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%idx_r)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%idx_c)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%inc_r)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%inc_c)
+                     deallocate(blocks%ButterflyKerl_R(bb,level)%blocks)
+                  endif
+               enddo
+            enddo
+            deallocate(blocks%ButterflyKerl_R)
+         endif
+      endif
+
+      blocks%rankmax = -1000
+      blocks%rankmin = 1000
+
+      if (allocated(blocks%fullmat)) deallocate (blocks%fullmat)
+#if HAVE_ZFP
+      if (allocated(blocks%buffer_r)) then
+         deallocate (blocks%buffer_r)
+         call zFORp_stream_close(blocks%stream_r)
+      endif
+      if (allocated(blocks%buffer_i))then
+         deallocate (blocks%buffer_i)
+         call zFORp_stream_close(blocks%stream_i)
+      endif
+#endif
+      if (allocated(blocks%fullmat_MPI)) deallocate (blocks%fullmat_MPI)
+      if (allocated(blocks%ipiv)) deallocate (blocks%ipiv)
+      if (allocated(blocks%Butterfly_data_MPI)) deallocate (blocks%Butterfly_data_MPI)
+      if (allocated(blocks%Butterfly_index_MPI)) deallocate (blocks%Butterfly_index_MPI)
+      if (associated(blocks%ms)) deallocate (blocks%ms)
+      if (associated(blocks%ns)) deallocate (blocks%ns)
+
+
+      if (allflag == 1) then
+         if (associated(blocks%N_p)) deallocate (blocks%N_p)
+         if (associated(blocks%M_p)) deallocate (blocks%M_p)
+         if (allocated(blocks%row_group)) deallocate(blocks%row_group)
+         if (allocated(blocks%col_group)) deallocate(blocks%col_group)
+         if (allocated(blocks%M)) deallocate(blocks%M)
+         if (allocated(blocks%N)) deallocate(blocks%N)
+         if (allocated(blocks%M_loc)) deallocate(blocks%M_loc)
+         if (allocated(blocks%N_loc)) deallocate(blocks%N_loc)
+         if (allocated(blocks%headm)) deallocate(blocks%headm)
+         if (allocated(blocks%headn)) deallocate(blocks%headn)
+         if (allocated(blocks%nr_m)) deallocate(blocks%nr_m)
+         if (allocated(blocks%nc_m)) deallocate(blocks%nc_m)
+         if (allocated(blocks%idx_r_m)) deallocate(blocks%idx_r_m)
+         if (allocated(blocks%idx_c_m)) deallocate(blocks%idx_c_m)
+      endif
+      return
+
+   end subroutine BF_MD_delete
+
+
+
+
+
    integer function BF_Switchlevel(level_butterfly, pat_comp)
 
 
@@ -13457,7 +13630,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 #ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
-#endif         
+#endif
          do mm=1,product(blocks%nr_m)
 #ifdef HAVE_TASKLOOP
 !$omp task default(shared) private(level,group_m,idx_r_m,dims_ref_new,dim_i,dims_ref_old,offsets_ref) firstprivate(mm)
@@ -13482,14 +13655,14 @@ end subroutine BF_block_MVP_dat_batch_magma
 
             call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim,Ndim+1,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix, 'N', xout1,'T',0)
 #ifdef HAVE_TASKLOOP
-!$omp end task 
+!$omp end task
 #endif
             ! write(*,*)mm,product(blocks%nr_m),ptree%MyID,'done L'
          enddo
 #ifdef HAVE_TASKLOOP
          !$omp end single
          !$omp end parallel
-#endif         
+#endif
          xout=xout1
          deallocate(xout1)
 
@@ -14532,7 +14705,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
          flops=0
 #ifdef HAVE_TASKLOOP
          ! !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
-         !$omp taskgroup task_reduction(+:flops)  
+         !$omp taskgroup task_reduction(+:flops)
 #else
 #ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
@@ -14544,7 +14717,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
             nvec1 = size(mat,2)
 
-            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k) 
+            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k)
             call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, mat(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
             !$omp end task
@@ -14600,7 +14773,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             flops=0
 #ifdef HAVE_TASKLOOP
             !   !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
-            !$omp taskgroup task_reduction(+:flops)   
+            !$omp taskgroup task_reduction(+:flops)
 #else
 #ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
@@ -14614,14 +14787,14 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                nvec1 = size(mat,2)
 #ifdef HAVE_TASKLOOP
                !$omp task default(shared) firstprivate(mm,nn1,nn2,nvec1,index_j_k)
-#endif               
+#endif
                call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn1)
                call gemmf77('N', 'N', mm, nvec1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn2)
 #ifdef HAVE_TASKLOOP
                !$omp end task
-#endif                      
+#endif
             enddo
 
 #ifdef HAVE_TASKLOOP
@@ -14701,7 +14874,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
          flops=0
 #ifdef HAVE_TASKLOOP
        !  !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
-         !$omp taskgroup task_reduction(+:flops)   
+         !$omp taskgroup task_reduction(+:flops)
 #else
 #ifdef HAVE_OPENMP
          !$omp parallel do default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
@@ -14713,17 +14886,17 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             nn1 = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,2)
             nvec1 = size(mat,2)
 #ifdef HAVE_TASKLOOP
-            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_i_k) 
-#endif            
+            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_i_k)
+#endif
             call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix, mm, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,1)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level)%blocks(1,1)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_s,1)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level+1)%num_row+1,1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
 #ifdef HAVE_TASKLOOP
-            !$omp end task 
-#endif              
+            !$omp end task
+#endif
          enddo
 #ifdef HAVE_TASKLOOP
          !   !$omp end taskloop
-         !$omp end taskgroup 
+         !$omp end taskgroup
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
@@ -14775,7 +14948,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                flops=0
 #ifdef HAVE_TASKLOOP
             !   !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
-               !$omp taskgroup task_reduction(+:flops)   
+               !$omp taskgroup task_reduction(+:flops)
 #else
 #ifdef HAVE_OPENMP
                !$omp parallel do default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
@@ -14788,19 +14961,19 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                   nn = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 2)
                   nvec1 = size(mat,2)
 #ifdef HAVE_TASKLOOP
-                  !$omp task default(shared) firstprivate(mm1,mm2,nn,nvec1,index_i_k) 
-#endif                        
-                  call gemmf77('N', 'N', mm1, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, mm1, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
+                  !$omp task default(shared) firstprivate(mm1,mm2,nn,nvec1,index_i_k)
+#endif
+                  call gemmf77('N', 'N', mm1, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, mm1, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
                   flops = flops + flops_gemm(mm1, nvec1, nn)
-                  call gemmf77('N', 'N', mm2, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, mm2, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k+1,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
+                  call gemmf77('N', 'N', mm2, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, mm2, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k+1,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
                   flops = flops + flops_gemm(mm2, nvec1, nn)
 #ifdef HAVE_TASKLOOP
-                  !$omp end task 
-#endif                     
+                  !$omp end task
+#endif
                enddo
 #ifdef HAVE_TASKLOOP
           !  !$omp end taskloop
-          !$omp end taskgroup 
+          !$omp end taskgroup
 #else
 #ifdef HAVE_OPENMP
             !$omp end parallel do
@@ -18037,9 +18210,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       implicit none
 
 
-      integer Ndim, ii, jj, nn, pp, ij, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol, dim_i
+      integer Ndim, ii, jj, ij, nn, pp, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol, dim_i
       type(mesh)::msh(Ndim)
       integer:: dims(2*Ndim),num_threads
+      integer*8:: dims8(2*Ndim)
       integer,allocatable::idxs(:,:)
       type(proctree)::ptree
       type(Hoption)::option
@@ -18091,8 +18265,8 @@ integer, save:: my_tid = 0
                proc1 => ker%FuncZmn_MD
                dims(1:Ndim) = subtensors(nn)%nr
                dims(1+Ndim:2*Ndim) = subtensors(nn)%nc
-
-               if (product(dims)> 0) then
+               dims8 = dims
+               if (product(dims8)> 0) then
                   allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
                   !$omp parallel
@@ -18103,7 +18277,7 @@ integer, save:: my_tid = 0
                   !$omp parallel do default(shared) private(ij,i,j,value_e,dim_i,empty)
 #endif
 #endif
-                  do ij = 1, product(dims)
+                  do ij = 1, product(dims8)
                      call SingleIndexToMultiIndex(2*Ndim,dims, ij, idxs(:,my_tid+1))
 
                      call MultiIndexToSingleIndex(Ndim,dims(1:Ndim), i, idxs(1:Ndim,my_tid+1))

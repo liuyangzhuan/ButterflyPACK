@@ -754,7 +754,7 @@ contains
       integer times(8)
       real(kind=8) t1, t2
       character(len=1024)  :: strings
-      integer Maxgroup_rc,verbosity_save
+      integer Maxgroup_rc,verbosity_save, Maxlevel_m, Maxlevel_n
       integer(kind=8)::idx,kk,knn
       type(Bmatrix)::bmat_m,bmat_n ! dummy
 
@@ -781,15 +781,20 @@ contains
       verbosity_save=option%verbosity
       option%verbosity=-1
       call BPACK_MD_construction_Init(M, Ndim, Permutation_m, M_loc, bmat_m, option, stats, mshr, ker, ptree, Coordinates_m, tree_m)
+      Maxlevel_m=bmat_m%Maxlevel
+      call BPACK_delete(bmat_m)
+
       call BPACK_MD_construction_Init(N, Ndim, Permutation_n, N_loc, bmat_n, option, stats, mshc, ker, ptree, Coordinates_n, tree_n)
+      call BPACK_delete(bmat_n)
+      Maxlevel_n=bmat_n%Maxlevel
       option%verbosity=verbosity_save
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', bmat_m%Maxlevel
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_m:', Maxlevel_m
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', Maxlevel_n
       do dim_i=1,Ndim
-         N_leaf_m(dim_i)=int(mshr(dim_i)%Nunk/(2**bmat_m%Maxlevel))
-         N_leaf_n(dim_i)=int(mshc(dim_i)%Nunk/(2**bmat_n%Maxlevel))
+         N_leaf_m(dim_i)=int(mshr(dim_i)%Nunk/(2**Maxlevel_m))
+         N_leaf_n(dim_i)=int(mshc(dim_i)%Nunk/(2**Maxlevel_n))
       enddo
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', N_leaf_m
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', N_leaf_n
@@ -1547,8 +1552,8 @@ contains
          write(*,*)'forwardN15flag=',option%forwardN15flag,'is not supported in BF_MD_Construct_Element_Compute'
       end if
 
-      ! !!!! the following functions have not been tensorized
-      if (option%verbosity >= 0)call BF_MD_checkError(Ndim, blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
+      ! !!!! the following functions can be expensive as it extracts complete middle-level blocks, currently enabled with option%verbosity >= 2
+      if (option%verbosity >= 2)call BF_MD_checkError(Ndim, blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
       stats%Mem_Comp_for=Memory
       ! call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
@@ -2718,7 +2723,7 @@ contains
       type(intersect_MD),allocatable::inter_MD(:)
       integer level_butterfly,level_half,levelm,receiver, sender, bbm
       integer,allocatable::order(:),order_m(:)
-      integer:: dims_row(Ndim),dims_col(Ndim), dims_one(Ndim),group_m(Ndim),group_n(Ndim)
+      integer:: dims_row(Ndim),dims_col(Ndim), dims_one(Ndim),group_m(Ndim),group_n(Ndim),dims_1D(1)
       real(kind=8)::dis
       real(kind=8),allocatable::distances(:)
 
@@ -2876,6 +2881,9 @@ contains
             call element_Zmn_tensorlist_user(Ndim, subtensor, 0, msh, option, ker, 2, passflag, ptree, stats)
          endif
       enddo
+      dims_1D=Ninter
+      call BF_MD_delete_subtensors(Ndim, dims_1D, inter_MD, stats)
+      
       n2 = MPI_Wtime()
       call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)

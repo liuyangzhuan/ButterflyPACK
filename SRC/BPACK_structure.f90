@@ -1855,6 +1855,7 @@ end function distance_geo
       enddo
       if(nlist_MD(ll)%len>0)deallocate(nlist_MD(ll)%list)
       enddo
+      deallocate(nlist_MD)
 
       !!!!!! hss_bf1_md%BP_inverse has not been considered yet
       ! call Bplus_copy(hss_bf1_md%BP, hss_bf1_md%BP_inverse)

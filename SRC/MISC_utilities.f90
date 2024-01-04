@@ -1805,10 +1805,12 @@ contains
    subroutine assert(statement, msg)
       logical::statement
       character(*)::msg
+#ifndef NDEBUG
       if (.not. statement) then
          write (*, *) msg
          stop
       end if
+#endif
    end subroutine assert
 
    function floor_safe(input)
@@ -4107,7 +4109,14 @@ contains
       integer:: Ndim
       integer:: dims(Ndim)
       integer :: single_index, single_index_in, multi_index(Ndim)
-      integer:: i,product
+      integer:: i,product,dim_i
+      integer*8:: nelem
+
+      nelem=1
+      do dim_i=1,Ndim
+         nelem = nelem * dims(dim_i)
+      enddo
+      call assert(nelem<=2.14D9,'integer overflow in SingleIndexToMultiIndex')
 
       single_index = single_index_in
 
@@ -4131,7 +4140,14 @@ contains
       integer:: Ndim
       integer:: dims(Ndim)
       integer :: single_index, multi_index(Ndim)
-      integer :: i, product
+      integer :: i, product, dim_i
+      integer*8 :: nelem
+
+      nelem=1
+      do dim_i=1,Ndim
+         nelem = nelem * dims(dim_i)
+      enddo
+      call assert(nelem<=2.14D9,'integer overflow in MultiIndexToSingleIndex')
 
       ! Initialize single_index
       single_index = 1

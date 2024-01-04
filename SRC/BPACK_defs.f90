@@ -229,7 +229,7 @@ module BPACK_DEFS
         type(list):: lst !< a list of intersection#s
         integer, allocatable::index(:, :) !< an array of intersection#s
         integer::ndim = 0 !< number of skeletons
-integer,allocatable ::dims_m(:), dims_n(:) !< dimensions of the rows and columns (used in BF_MD)
+        integer,allocatable ::dims_m(:), dims_n(:) !< dimensions of the rows and columns (used in BF_MD)
     end type butterflymatrix
 
     !>**** index set for one butterfly block

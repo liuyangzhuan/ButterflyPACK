@@ -177,7 +177,8 @@ PROGRAM ButterflyPACK_RankBenchmark
 
 	quant%tst = 2
 	quant%wavelen = 0.25d0/8d0
-
+	quant%zdist = 1
+	ppw=2
 
 	nargs = iargc()
 	ii=1
@@ -200,6 +201,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 							read(strings1,*)quant%Ndim
 						elseif(trim(strings)=='--N_FIO')then
 							read(strings1,*)Nperdim
+						elseif(trim(strings)=='--ppw')then
+							read(strings1,*)ppw
+						elseif(trim(strings)=='--zdist')then
+							read(strings1,*)quant%zdist
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -226,12 +231,11 @@ PROGRAM ButterflyPACK_RankBenchmark
 !******************************************************************************!
 ! Read a full non-square matrix and do a BF compression
 
-	ppw=2
+
 
     ds = quant%wavelen/ppw
     if(quant%tst==1)then ! two colinear plate
 	  quant%Ndim = 2
-	  quant%zdist = 0
       Nperdim = NINT(1d0/ds)
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
@@ -240,7 +244,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  allocate(quant%locations_m(quant%Ndim,Nperdim))
 	  allocate(quant%locations_n(quant%Ndim,Nperdim))
 	  do m=1,Nperdim
-		quant%locations_m(1,m)=m*ds+2
+		quant%locations_m(1,m)=m*ds+1 + quant%zdist
 		quant%locations_m(2,m)=m*ds
 	  enddo
 	  do n=1,Nperdim
@@ -250,7 +254,6 @@ PROGRAM ButterflyPACK_RankBenchmark
 
     elseif(quant%tst==2)then ! two parallel plate
 	  quant%Ndim = 2
-	  quant%zdist = 1d0
       Nperdim = NINT(1d0/ds)
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
@@ -284,7 +287,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		quant%locations_m(3,m)=m*ds
 	  enddo
 	  do n=1,Nperdim
-		quant%locations_n(1,n)=n*ds+ds+1
+		quant%locations_n(1,n)=n*ds+1 + quant%zdist
 		quant%locations_n(2,n)=n*ds
 		quant%locations_n(3,n)=n*ds
 	  enddo
@@ -322,7 +325,6 @@ PROGRAM ButterflyPACK_RankBenchmark
 
 	allocate(quant%Permutation_m(maxval(quant%Nunk_m),quant%Ndim))
 	allocate(quant%Permutation_n(maxval(quant%Nunk_n),quant%Ndim))
-
 	call z_BF_MD_Construct_Init(quant%Ndim, quant%Nunk_m, quant%Nunk_n, Nunk_m_loc, Nunk_n_loc, quant%Permutation_m, quant%Permutation_n, blocks, option, stats, msh, ker, ptree, Coordinates_m=quant%locations_m,Coordinates_n=quant%locations_n)
 	call MPI_Bcast(quant%Permutation_m,maxval(quant%Nunk_m)*quant%Ndim,MPI_integer,0,ptree%comm,ierr)
 	call MPI_Bcast(quant%Permutation_n,maxval(quant%Nunk_n)*quant%Ndim,MPI_integer,0,ptree%comm,ierr)
@@ -333,8 +335,8 @@ PROGRAM ButterflyPACK_RankBenchmark
 	nvec=1
 	allocate(x_loc(product(Nunk_n_loc),nvec))
 	x_loc=0
-	
-	Npt_src = 10
+
+	Npt_src = min(100,product(quant%Nunk_n))
 	allocate(idx_src(Npt_src))
 	do ij=1,Npt_src
 		call random_number(a)
@@ -365,6 +367,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 	allocate(rhs_loc_ref(product(Nunk_m_loc),nvec))
 	rhs_loc_ref=0
 	Quant_ref =>quant
+
+#ifdef HAVE_OPENMP
+	!$omp parallel do default(shared) private(ii,idx_1,ii1,ij,idx_2,tmp)
+#endif
 	do ii=1, product(Nunk_m_loc)
 		call z_SingleIndexToMultiIndex(quant%Ndim,Nunk_m_loc, ii, idx_1)
 		idx_1 = idx_1 + idxs - 1
@@ -375,6 +381,9 @@ PROGRAM ButterflyPACK_RankBenchmark
 			rhs_loc_ref(ii,1) = rhs_loc_ref(ii,1) + tmp
 		enddo
 	enddo
+#ifdef HAVE_OPENMP
+	!$omp end parallel do
+#endif
 
 	rhs_loc = rhs_loc - rhs_loc_ref
 	v1 =(z_fnorm(rhs_loc,product(Nunk_m_loc),nvec))**2d0
@@ -393,6 +402,8 @@ PROGRAM ButterflyPACK_RankBenchmark
 	deallocate(idxs)
 	deallocate(idxe)
 	deallocate(idx_src)
+	deallocate(Nunk_m_loc)
+	deallocate(Nunk_n_loc)
 
 
 
@@ -403,6 +414,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	!**** print statistics
 	call z_PrintStat(stats,ptree)
 
+	call z_BF_MD_delete(quant%Ndim, blocks, 1)
 	call z_delete_proctree(ptree)
 	call z_delete_Hstat(stats)
 	do dim_i=1,quant%Ndim
