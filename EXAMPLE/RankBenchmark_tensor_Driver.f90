@@ -355,7 +355,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		if(ALL(idx_1>=idxs) .and. ALL(idx_1<=idxe))then
 			idx_1 = idx_1 - idxs + 1
 			call z_MultiIndexToSingleIndex(quant%Ndim,Nunk_n_loc, ij1, idx_1)
-			x_loc(ij1,1) = 1
+			x_loc(ij1,1) = x_loc(ij1,1) + 1 
 		endif
 	enddo
 

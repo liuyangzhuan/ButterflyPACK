@@ -14716,11 +14716,14 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             mm = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,2)
             nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
             nvec1 = size(mat,2)
-
+#ifdef HAVE_TASKLOOP
             !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k)
+#endif
             call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, mat(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
+#ifdef HAVE_TASKLOOP
             !$omp end task
+#endif
          enddo
 #ifdef HAVE_TASKLOOP
          !   !$omp end taskloop
