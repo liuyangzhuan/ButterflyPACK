@@ -852,7 +852,8 @@ integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly 
         subroutine C_Zelem_block(Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             type(c_ptr) :: quant
-            integer(kind=C_INT):: Ninter, Nallrows, Nallcols, Nalldat_loc
+            integer(kind=C_INT64_T):: Nalldat_loc
+            integer(kind=C_INT):: Ninter, Nallrows, Nallcols
             integer(kind=C_INT):: allrows(Nallrows), allcols(Nallcols)
             CBIND_DT,target::alldat_loc(Nalldat_loc)
             integer(kind=C_INT)::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)

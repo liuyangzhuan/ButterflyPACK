@@ -198,7 +198,7 @@ inline void C_FuncZmn(int *m, int *n, double *val, F2Cptr quant) {
 }
 
 // The entry evaluation function wrapper required by the Fortran code, alldat_loc returns all local entries of Z, F2Cptr is an alias of void*.
-inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 	// allrows: 1D array containing the global row indices (in original order starting from 1 to N) stacked together
 	// allcols: 1D array containing the global column indices (in original order starting from 1 to N) stacked together
@@ -298,7 +298,7 @@ inline void C_FuncBZmn(int *m, int *n, double *val, F2Cptr quant) {
 }
 
 // The entry evaluation function wrapper required by the Fortran code, alldat_loc returns all local entries of Z, F2Cptr is an alias of void*.
-inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
 	// allrows: 1D array containing the global row indices (in original order starting from 1 to N) stacked together
 	// allcols: 1D array containing the global column indices (in original order starting from 1 to N) stacked together

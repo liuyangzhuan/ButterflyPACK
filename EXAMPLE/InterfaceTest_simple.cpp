@@ -217,7 +217,7 @@ inline void C_FuncNearFar(int *m, int *n, int *val, C2Fptr quant) {
 }
 
 // The extraction sampling function wrapper required by the Fortran ButterflyPACK interface
-inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
 // not needed in this driver, but need to provide a dummy function to the interface
 }
 

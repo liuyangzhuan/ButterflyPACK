@@ -13533,7 +13533,11 @@ end subroutine BF_block_MVP_dat_batch_magma
                   k1 = 0
                   do i = 1, BFvec_transposed(mm)%vec(1)%nr
                      BFvec_transposed(mm)%vec(1)%index_MD(dim_i,i,j) = k1
-                     nnn = size(blocks%ButterflyKerl_L(mm,level_butterfly-level+1)%blocks(2*i-1, j, dim_i)%matrix, 2)
+                     if(level_butterfly>0)then
+                        nnn = size(blocks%ButterflyKerl_L(mm,level_butterfly-level+1)%blocks(2*i-1, j, dim_i)%matrix, 2)
+                     else
+                        nnn = size(blocks%ButterflyU(mm)%blocks(i,dim_i)%matrix, 2)
+                     endif
                      k1 = k1 + nnn
                   enddo
                   BFvec_transposed(mm)%vec(1)%index_MD(dim_i,BFvec_transposed(mm)%vec(1)%nr+1,j) = k1
@@ -17424,7 +17428,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(Hoption)::option
       type(Hstat)::stats
       type(kernelquant)::ker
-      integer ierr, idx_row, idx_col, idx_dat
+      integer ierr, idx_row, idx_col
+      integer*8 idx_dat
       integer, allocatable:: flags(:), dests(:), colidx1(:), rowidx1(:), colidx(:), rowidx(:), allrows(:), allcols(:), disps(:), pgidx(:), pmaps(:, :)
       procedure(F_Zelem_block), POINTER :: proc
       procedure(C_Zelem_block), POINTER :: proc_c
@@ -17684,7 +17689,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(Hoption)::option
       type(Hstat)::stats
       type(kernelquant)::ker
-      integer ierr, idx_row, idx_col, idx_dat
+      integer ierr, idx_row, idx_col
+      integer*8 idx_dat
       integer, allocatable:: flags(:), dests(:), colidx(:), rowidx(:), colidx1(:), rowidx1(:), allrows(:), allcols(:), disps(:), pgidx(:), pmaps(:, :),nsubs(:),mrange(:),nrange(:),nrows_loc(:),ncols_loc(:)
       procedure(F_Zelem_block), POINTER :: proc
       procedure(C_Zelem_block), POINTER :: proc_c
@@ -18222,7 +18228,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(Hoption)::option
       type(Hstat)::stats
       type(kernelquant)::ker
-      integer ierr, idx_row, idx_col, idx_dat
+      integer ierr, idx_row, idx_col
+      integer*8 idx_dat
       integer, allocatable:: flags(:), dests(:), colidx(:), rowidx(:), colidx1(:), rowidx1(:), allrows(:), allcols(:), disps(:), pgidx(:), pmaps(:, :),nsubs(:),mrange(:),nrange(:),nrows_loc(:),ncols_loc(:)
       procedure(F_Zelem_block), POINTER :: proc
       procedure(C_Zelem_block), POINTER :: proc_c

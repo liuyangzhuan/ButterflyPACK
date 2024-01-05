@@ -560,7 +560,8 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_m:', int(mshr%Nunk/(2**bmat_m%Maxlevel))
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc%Nunk/(2**bmat_n%Maxlevel))
-
+      call BPACK_delete(bmat_m)
+      call BPACK_delete(bmat_n)
 
       call BF_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, blocks, option, stats, msh, ker, ptree, nns_m, nns_n)
 
@@ -1252,7 +1253,8 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Maxlevel_for_blocks_n:', bmat_n%Maxlevel
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'N_leaf_n:', int(mshc%Nunk/(2**bmat_n%Maxlevel))
 
-
+      call BPACK_delete(bmat_m)
+      call BPACK_delete(bmat_n)
       call BP_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, BP, option, stats, msh, ker, ptree, nns_m, nns_n)
 
 
@@ -2883,7 +2885,7 @@ contains
       enddo
       dims_1D=Ninter
       call BF_MD_delete_subtensors(Ndim, dims_1D, inter_MD, stats)
-      
+
       n2 = MPI_Wtime()
       call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)

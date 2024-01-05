@@ -2354,7 +2354,8 @@ contains
       type(intersect), allocatable::inters(:)
       real(kind=8)::n0, n1, n2, n3, n4, n5
       integer Ntest, passflag
-      integer Nallrows, Nallcols, Nalldat_loc
+      integer Nallrows, Nallcols
+      integer*8 Nalldat_loc
       integer nsproc1, nsproc2, nprow, npcol, nprow1D, npcol1D, myrow, mycol, nprow1, npcol1, myrow1, mycol1, nprow2, npcol2, myrow2, mycol2, myArows, myAcols, rank1, rank2, ierr, MyID
       integer:: cridx, info
       integer, allocatable::rows(:), cols(:)
@@ -2467,8 +2468,8 @@ contains
       type(Bmatrix), pointer::bmat
       type(proctree), pointer::ptree
       type(mesh), pointer::msh
-
-      integer Nallrows, Nallcols, Nalldat_loc
+      integer*8 Nalldat_loc
+      integer Nallrows, Nallcols
       integer:: allrows(Nallrows), allcols(Nallcols)
       integer, allocatable:: allrows1(:), allcols1(:), pgidx1(:)
       integer:: Ninter, idx_row, idx_col

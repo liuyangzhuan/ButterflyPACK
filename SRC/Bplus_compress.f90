@@ -60,7 +60,8 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, idx_r, inc_r, nr, idx_c, inc_c, nc
-      integer passflag, nnz_loc
+      integer passflag
+      integer*8 ::nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
       type(intersect), allocatable :: submats(:)
@@ -394,7 +395,8 @@ contains
 
       implicit none
 
-      integer Nboundall,Ninadmissible, nnz_loc
+      integer Nboundall,Ninadmissible
+      integer*8 nnz_loc
       integer boundary_map(:,:)
       integer groupm_start
       type(intersect) :: submats(:)
@@ -2653,7 +2655,8 @@ do i_dim = 1,dims_row(dim)
       implicit none
 
       type(intersect) :: submats(:)
-      integer Nboundall,Ninadmissible,nnz_loc
+      integer Nboundall,Ninadmissible
+      integer*8 nnz_loc
       integer boundary_map(:,:)
       integer groupm_start
 
@@ -3275,7 +3278,8 @@ do i_dim = 1,dims_row(dim)
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, dim_MD(Ndim+2), idx_MD(Ndim+2), idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), idx_c_scalar, idx_r_scalar, dim_subtensor(Ndim*2),idx_subtensor(Ndim*2)
-      integer passflag, nnz_loc
+      integer passflag
+      integer*8 nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
       type(intersect_MD), allocatable :: subtensors(:)
