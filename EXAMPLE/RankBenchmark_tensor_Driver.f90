@@ -33,7 +33,7 @@ contains
 		complex(kind=8)::value
 		integer ii, dim_i
 
-		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven, dotp
+		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven, dotp, sx,cx,xk,kr
 
 		select TYPE(quant)
 		type is (quant_app)
@@ -56,6 +56,13 @@ contains
 			elseif(quant%tst==4)then
 				dotp = dot_product(pos_o,pos_s)
 				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
+			elseif(quant%tst==5)then
+				xk = dot_product(pos_o,pos_s)
+				sx = (2+sin(2*BPACK_pi*pos_s(1))*sin(2*BPACK_pi*pos_s(2)))/16d0;
+				cx = (2+cos(2*BPACK_pi*pos_s(1))*cos(2*BPACK_pi*pos_s(2)))/16d0;
+				kr = sqrt(sx**2*pos_o(1)**2 + cx**2*pos_o(2)**2);
+				value = EXP(2*BPACK_pi*BPACK_junit*(xk + kr))
+				! value = cos(2*BPACK_pi*(xk + kr))+Im*sin(2*BPACK_pi*(xk + kr));
 			else
 				write(*,*)'tst unknown'
 			endif
@@ -166,7 +173,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	!**** set solver parameters
 	option%ErrSol=1  ! whether or not checking the factorization accuracy
 	! option%format=  HODLR! HMAT!   ! the hierarhical format
-	option%near_para=2.01d0        ! admissibiltiy condition, not referenced if option%format=  HODLR
+	option%near_para=0.01d0        ! admissibiltiy condition, not referenced if option%format=  HODLR
 	option%verbosity=1             ! verbosity level
 	option%LRlevel=0             ! 0: low-rank compression 100: butterfly compression
 	option%format=HSS_MD           ! currently this is the only format supported in MD
@@ -305,6 +312,20 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  do n=1,Nperdim
 		quant%locations_n(:,n)=dble(n-1)/Nperdim
 	  enddo
+	elseif(quant%tst==5)then ! 2D Radon transform
+	  quant%Ndim = 2
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)=(m-1)-Nperdim/2
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)=dble(n-1)/Nperdim
+	  enddo
 	endif
 
 	allocate(Nunk_m_loc(quant%Ndim))
@@ -336,7 +357,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	allocate(x_loc(product(Nunk_n_loc),nvec))
 	x_loc=0
 
-	Npt_src = min(100,product(quant%Nunk_n))
+	Npt_src = min(10,product(quant%Nunk_n))
 	allocate(idx_src(Npt_src))
 	do ij=1,Npt_src
 		call random_number(a)
@@ -355,7 +376,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 		if(ALL(idx_1>=idxs) .and. ALL(idx_1<=idxe))then
 			idx_1 = idx_1 - idxs + 1
 			call z_MultiIndexToSingleIndex(quant%Ndim,Nunk_n_loc, ij1, idx_1)
-			x_loc(ij1,1) = x_loc(ij1,1) + 1 
+			x_loc(ij1,1) = x_loc(ij1,1) + 1
 		endif
 	enddo
 

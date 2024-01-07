@@ -777,15 +777,15 @@ contains
       blocks%rankmax = -1000
       blocks%rankmin = 1000
 
-      if (allocated(blocks%fullmat)) deallocate (blocks%fullmat)
+      if (associated(blocks%fullmat)) deallocate (blocks%fullmat)
 #if HAVE_ZFP
-      if (allocated(blocks%buffer_r)) then
-         deallocate (blocks%buffer_r)
-         call zFORp_stream_close(blocks%stream_r)
+      if (allocated(blocks%FullmatZFP%buffer_r)) then
+         deallocate (blocks%FullmatZFP%buffer_r)
+         call zFORp_stream_close(blocks%FullmatZFP%stream_r)
       endif
-      if (allocated(blocks%buffer_i))then
-         deallocate (blocks%buffer_i)
-         call zFORp_stream_close(blocks%stream_i)
+      if (allocated(blocks%FullmatZFP%buffer_i))then
+         deallocate (blocks%FullmatZFP%buffer_i)
+         call zFORp_stream_close(blocks%FullmatZFP%stream_i)
       endif
 #endif
       if (allocated(blocks%fullmat_MPI)) deallocate (blocks%fullmat_MPI)
@@ -951,7 +951,7 @@ contains
             end if
 
          else if (block_i%style == 1) then
-            if (allocated(block_i%fullmat)) then
+            if (associated(block_i%fullmat)) then
                mm = size(block_i%fullmat, 1)
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(mm, nn))
@@ -963,29 +963,29 @@ contains
                if (present(memory)) memory = memory + SIZEOF(block_o%fullmat)/1024.0d3
             endif
 #if HAVE_ZFP
-            if(allocated(block_i%buffer_r))then
-               call ZFP_Decompress(block_i,tol_used,1)
+            if(allocated(block_i%FullmatZFP%buffer_r))then
+               call ZFP_Decompress(block_i%fullmat,block_i%FullmatZFP,block_i%M,block_i%N,tol_used,1)
                mm = size(block_i%fullmat, 1)
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(mm, nn))
                block_o%fullmat = block_i%fullmat
-               call ZFP_Compress(block_i,tol_used,1)
-               call ZFP_Compress(block_o,tol_used,0)
-               if (present(memory)) memory = memory + SIZEOF(block_o%buffer_r)/1024.0d3
-               if (present(memory) .and. allocated(block_o%buffer_i)) memory = memory + SIZEOF(block_o%buffer_i)/1024.0d3
+               call ZFP_Compress(block_i%fullmat,block_i%FullmatZFP,block_i%M,block_i%N,tol_used,1)
+               call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,tol_used,0)
+               if (present(memory)) memory = memory + SIZEOF(block_o%FullmatZFP%buffer_r)/1024.0d3
+               if (present(memory) .and. allocated(block_o%FullmatZFP%buffer_i)) memory = memory + SIZEOF(block_o%FullmatZFP%buffer_i)/1024.0d3
 
-               ! mm = size(block_i%buffer_r,1)
-               ! allocate(block_o%buffer_r(mm))
-               ! block_o%buffer_r = block_i%buffer_r
-               ! block_o%stream_r = block_i%stream_r
-               ! if (present(memory)) memory = memory + SIZEOF(block_o%buffer_r)/1024.0d3
+               ! mm = size(block_i%FullmatZFP%buffer_r,1)
+               ! allocate(block_o%FullmatZFP%buffer_r(mm))
+               ! block_o%FullmatZFP%buffer_r = block_i%FullmatZFP%buffer_r
+               ! block_o%FullmatZFP%stream_r = block_i%FullmatZFP%stream_r
+               ! if (present(memory)) memory = memory + SIZEOF(block_o%FullmatZFP%buffer_r)/1024.0d3
             endif
-            ! if(allocated(block_i%buffer_i))then
-            !    mm = size(block_i%buffer_i,1)
-            !    allocate(block_o%buffer_i(mm))
-            !    block_o%buffer_i = block_i%buffer_i
-            !    block_o%stream_i = block_i%stream_i
-            !    if (present(memory)) memory = memory + SIZEOF(block_o%buffer_i)/1024.0d3
+            ! if(allocated(block_i%FullmatZFP%buffer_i))then
+            !    mm = size(block_i%FullmatZFP%buffer_i,1)
+            !    allocate(block_o%FullmatZFP%buffer_i(mm))
+            !    block_o%FullmatZFP%buffer_i = block_i%FullmatZFP%buffer_i
+            !    block_o%FullmatZFP%FullmatZFP%stream_i = block_i%FullmatZFP%stream_i
+            !    if (present(memory)) memory = memory + SIZEOF(block_o%FullmatZFP%buffer_i)/1024.0d3
             ! endif
 #endif
          else
@@ -1104,7 +1104,7 @@ contains
                end do
             end if
          else if (block_i%style == 1) then
-            if (allocated(block_i%fullmat)) then
+            if (associated(block_i%fullmat)) then
                mm = size(block_i%fullmat, 1)
                nn = size(block_i%fullmat, 2)
                allocate (block_o%fullmat(nn, mm))
@@ -1350,27 +1350,27 @@ contains
       else if (block_i%style == 1) then
          mm = size(block_i%fullmat, 1)
          nn = size(block_i%fullmat, 2)
-         if(allocated(block_i%fullmat))then
+         if(associated(block_i%fullmat))then
             allocate (block_o%fullmat(mm, nn))
             block_o%fullmat = block_i%fullmat
             deallocate (block_i%fullmat)
          endif
 #if HAVE_ZFP
-         if(allocated(block_i%buffer_r))then
-            mm = size(block_i%buffer_r,1)
-            allocate(block_o%buffer_r(mm))
-            block_o%buffer_r = block_i%buffer_r
-            block_o%stream_r = block_i%stream_r
-            deallocate(block_i%buffer_r)
-            call zFORp_stream_close(block_i%stream_r)
+         if(allocated(block_i%FullmatZFP%buffer_r))then
+            mm = size(block_i%FullmatZFP%buffer_r,1)
+            allocate(block_o%FullmatZFP%buffer_r(mm))
+            block_o%FullmatZFP%buffer_r = block_i%FullmatZFP%buffer_r
+            block_o%FullmatZFP%stream_r = block_i%FullmatZFP%stream_r
+            deallocate(block_i%FullmatZFP%buffer_r)
+            call zFORp_stream_close(block_i%FullmatZFP%stream_r)
          endif
-         if(allocated(block_i%buffer_i))then
-            mm = size(block_i%buffer_i,1)
-            allocate(block_o%buffer_i(mm))
-            block_o%buffer_i = block_i%buffer_i
-            block_o%stream_i = block_i%stream_i
-            deallocate(block_i%buffer_i)
-            call zFORp_stream_close(block_i%stream_i)
+         if(allocated(block_i%FullmatZFP%buffer_i))then
+            mm = size(block_i%FullmatZFP%buffer_i,1)
+            allocate(block_o%FullmatZFP%buffer_i(mm))
+            block_o%FullmatZFP%buffer_i = block_i%FullmatZFP%buffer_i
+            block_o%FullmatZFP%stream_i = block_i%FullmatZFP%stream_i
+            deallocate(block_i%FullmatZFP%buffer_i)
+            call zFORp_stream_close(block_i%FullmatZFP%stream_i)
          endif
 #endif
       else
@@ -1417,10 +1417,10 @@ contains
          endif
 
       else if (block_i%style == 1) then
-         if(allocated(block_i%fullmat))memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
+         if(associated(block_i%fullmat))memory = memory + SIZEOF(block_i%fullmat)/1024.0d3
 #if HAVE_ZFP
-         if(allocated(block_i%buffer_r))memory = memory + SIZEOF(block_i%buffer_r)/1024.0d3
-         if(allocated(block_i%buffer_i))memory = memory + SIZEOF(block_i%buffer_i)/1024.0d3
+         if(allocated(block_i%FullmatZFP%buffer_r))memory = memory + SIZEOF(block_i%FullmatZFP%buffer_r)/1024.0d3
+         if(allocated(block_i%FullmatZFP%buffer_i))memory = memory + SIZEOF(block_i%FullmatZFP%buffer_i)/1024.0d3
 #endif
       else
          write (*, *) 'block style not implemented'
@@ -1511,16 +1511,22 @@ contains
             dim_subtensor(1:Ndim)=blocks%nr_m
             dim_subtensor(1+Ndim:Ndim*2)=nc
             do index_ij=1,product(dim_subtensor)
-               memory_dense = memory_dense + SIZEOF(blocks%ButterflyMiddle(index_ij)%matrix)/1024.0d3
+               if(associated(blocks%ButterflyMiddle(index_ij)%matrix))memory_dense = memory_dense + SIZEOF(blocks%ButterflyMiddle(index_ij)%matrix)/1024.0d3
+#if HAVE_ZFP
+               if(allocated(blocks%MiddleZFP))then
+                  if(allocated(blocks%MiddleZFP(index_ij)%buffer_r))memory_dense = memory_dense + SIZEOF(blocks%MiddleZFP(index_ij)%buffer_r)/1024.0d3
+                  if(allocated(blocks%MiddleZFP(index_ij)%buffer_i))memory_dense = memory_dense + SIZEOF(blocks%MiddleZFP(index_ij)%buffer_i)/1024.0d3
+               endif
+#endif
             enddo
          endif
          endif
 
       else if (blocks%style == 1) then
-         if(allocated(blocks%fullmat))memory_dense = memory_dense + SIZEOF(blocks%fullmat)/1024.0d3
+         if(associated(blocks%fullmat))memory_dense = memory_dense + SIZEOF(blocks%fullmat)/1024.0d3
 #if HAVE_ZFP
-         if(allocated(blocks%buffer_r))memory_dense = memory_dense + SIZEOF(blocks%buffer_r)/1024.0d3
-         if(allocated(blocks%buffer_i))memory_dense = memory_dense + SIZEOF(blocks%buffer_i)/1024.0d3
+         if(allocated(blocks%FullmatZFP%buffer_r))memory_dense = memory_dense + SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
+         if(allocated(blocks%FullmatZFP%buffer_i))memory_dense = memory_dense + SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3
 #endif
       else
          write (*, *) 'block style not implemented'
@@ -1663,15 +1669,28 @@ contains
       blocks%rankmax = -1000
       blocks%rankmin = 1000
 
-      if (allocated(blocks%fullmat)) deallocate (blocks%fullmat)
+      if (associated(blocks%fullmat)) deallocate (blocks%fullmat)
 #if HAVE_ZFP
-      if (allocated(blocks%buffer_r)) then
-         deallocate (blocks%buffer_r)
-         call zFORp_stream_close(blocks%stream_r)
+      if (allocated(blocks%FullmatZFP%buffer_r)) then
+         deallocate (blocks%FullmatZFP%buffer_r)
+         call zFORp_stream_close(blocks%FullmatZFP%stream_r)
       endif
-      if (allocated(blocks%buffer_i))then
-         deallocate (blocks%buffer_i)
-         call zFORp_stream_close(blocks%stream_i)
+      if (allocated(blocks%FullmatZFP%buffer_i))then
+         deallocate (blocks%FullmatZFP%buffer_i)
+         call zFORp_stream_close(blocks%FullmatZFP%stream_i)
+      endif
+      if(allocated(blocks%MiddleZFP))then
+         do index_ij = 1, size(blocks%MiddleZFP,1)
+            if (allocated(blocks%MiddleZFP(index_ij)%buffer_r)) then
+               deallocate (blocks%MiddleZFP(index_ij)%buffer_r)
+               call zFORp_stream_close(blocks%MiddleZFP(index_ij)%stream_r)
+            endif
+            if (allocated(blocks%MiddleZFP(index_ij)%buffer_i))then
+               deallocate (blocks%MiddleZFP(index_ij)%buffer_i)
+               call zFORp_stream_close(blocks%MiddleZFP(index_ij)%stream_i)
+            endif
+         enddo
+         deallocate(blocks%MiddleZFP)
       endif
 #endif
       if (allocated(blocks%fullmat_MPI)) deallocate (blocks%fullmat_MPI)
@@ -1779,7 +1798,7 @@ contains
             endif
          enddo
       else if (block_i%style == 1) then
-         if (allocated(block_i%fullmat)) then
+         if (associated(block_i%fullmat)) then
             mm = size(block_i%fullmat, 1)
             nn = size(block_i%fullmat, 2)
             temp = temp + fnorm(block_i%fullmat, mm, nn)
@@ -1864,7 +1883,7 @@ contains
             endif
          enddo
       else if (block_i%style == 1) then
-         if (allocated(block_i%fullmat)) then
+         if (associated(block_i%fullmat)) then
             mm = size(block_i%fullmat, 1)
             nn = size(block_i%fullmat, 2)
             write (*, *) "Dense",block_i%row_group,block_i%col_group, 'size:', mm, nn
@@ -1881,11 +1900,13 @@ contains
 
 
 #ifdef HAVE_ZFP
-   !>**** ZFP compression of blocks%fullmat into blocks%buffer_r/buffer_i into with relative tolerance tol_comp. If the flag already_compressed is set to 1, only the fullmat will be deleted.
-   subroutine ZFP_Compress(blocks, tol_comp, already_compressed)
+   !>**** ZFP compression of fullmat into fullmatZFP%buffer_r/buffer_i into with relative tolerance tol_comp. If the flag already_compressed is set to 1, only the fullmat will be deleted.
+   subroutine ZFP_Compress(fullmat, fullmatZFP, M, N, tol_comp, already_compressed)
 
       implicit none
-      type(matrixblock)::blocks
+      DT,pointer::fullmat(:,:)
+      integer M,N
+      type(zfpquant)::fullmatZFP
       real(kind=8)::tol_comp,tol_abs
 
       ! input/decompressed arrays
@@ -1905,30 +1926,30 @@ contains
       integer :: zfp_type, already_compressed
 
       if(already_compressed==0)then
-         maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
+         maxval=fnorm(fullmat,M,N,'M')
          tol_abs = tol_comp * maxval
 
          ! setup zfp_field
-         allocate(input_array(blocks%M,blocks%N))
-         input_array=dble(blocks%fullmat)
+         allocate(input_array(M,N))
+         input_array=dble(fullmat)
          array_c_ptr = c_loc(input_array)
          zfp_type = DTZFP
-         field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+         field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
          ! setup bitstream
-         buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+         buffer_size_bytes = M*N*DTRBytes
          allocate(buffer(buffer_size_bytes))
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
          ! setup zfp_stream
-         blocks%stream_r = zFORp_stream_open(bitstream)
-         tol_result=zFORp_stream_set_accuracy(blocks%stream_r,tol_abs)
+         fullmatZFP%stream_r = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(fullmatZFP%stream_r,tol_abs)
 
          ! compress
-         bitstream_offset_bytes = zFORp_compress(blocks%stream_r, field)
-         allocate(blocks%buffer_r(bitstream_offset_bytes))
-         blocks%buffer_r=buffer(1:bitstream_offset_bytes)
+         bitstream_offset_bytes = zFORp_compress(fullmatZFP%stream_r, field)
+         allocate(fullmatZFP%buffer_r(bitstream_offset_bytes))
+         fullmatZFP%buffer_r=buffer(1:bitstream_offset_bytes)
          call zFORp_field_free(field)
          call zFORp_bitstream_stream_close(bitstream)
          deallocate(input_array)
@@ -1937,42 +1958,45 @@ contains
 
 #if DAT==0 || DAT==2
          ! setup zfp_field
-         allocate(input_array(blocks%M,blocks%N))
-         input_array=aimag(blocks%fullmat)
+         allocate(input_array(M,N))
+         input_array=aimag(fullmat)
          array_c_ptr = c_loc(input_array)
          zfp_type = DTZFP
-         field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+         field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
          ! setup bitstream
-         buffer_size_bytes = blocks%M*blocks%N*DTRBytes
+         buffer_size_bytes = M*N*DTRBytes
          allocate(buffer(buffer_size_bytes))
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
          ! setup zfp_stream
-         blocks%stream_i = zFORp_stream_open(bitstream)
-         tol_result=zFORp_stream_set_accuracy(blocks%stream_i,tol_abs)
+         fullmatZFP%stream_i = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(fullmatZFP%stream_i,tol_abs)
 
          ! compress
-         bitstream_offset_bytes = zFORp_compress(blocks%stream_i, field)
-         allocate(blocks%buffer_i(bitstream_offset_bytes))
-         blocks%buffer_i=buffer(1:bitstream_offset_bytes)
+         bitstream_offset_bytes = zFORp_compress(fullmatZFP%stream_i, field)
+         allocate(fullmatZFP%buffer_i(bitstream_offset_bytes))
+         fullmatZFP%buffer_i=buffer(1:bitstream_offset_bytes)
          call zFORp_field_free(field)
          call zFORp_bitstream_stream_close(bitstream)
          deallocate(input_array)
          deallocate(buffer)
 #endif
       endif
-      deallocate(blocks%fullmat)
+      deallocate(fullmat)
+      fullmat=>null()
 
    end subroutine ZFP_Compress
 
 
-   !>**** ZFP decompression of blocks%buffer_r/buffer_i into blocks%fullmat. tol_used is the relative tolerance in the compression phase. The flag keep_compressed incidates whether the compressed data will be deleted.
-   subroutine ZFP_Decompress(blocks, tol_used, keep_compressed)
+   !>**** ZFP decompression of fullmatZFP%buffer_r/buffer_i into fullmat. tol_used is the relative tolerance in the compression phase. The flag keep_compressed incidates whether the compressed data will be deleted.
+   subroutine ZFP_Decompress(fullmat, fullmatZFP, M, N, tol_used, keep_compressed)
 
       implicit none
-      type(matrixblock)::blocks
+      DT,pointer::fullmat(:,:)
+      integer M,N
+      type(zfpquant)::fullmatZFP
 
       ! input/decompressed arrays
       type(c_ptr) :: array_c_ptr
@@ -1990,27 +2014,27 @@ contains
       real (kind=8) :: tol_result,tol_used
       integer :: zfp_type, keep_compressed
 
-      tol_result = zFORp_stream_accuracy(blocks%stream_r)
+      tol_result = zFORp_stream_accuracy(fullmatZFP%stream_r)
 
-      allocate(blocks%fullmat(blocks%M,blocks%N))
+      allocate(fullmat(M,N))
 
       ! setup zfp_field
-      allocate(decompressed_array(blocks%M,blocks%N))
+      allocate(decompressed_array(M,N))
       array_c_ptr = c_loc(decompressed_array)
       zfp_type = DTZFP
-      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+      field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
       ! setup bitstream
-      buffer_size_bytes=size(blocks%buffer_r,1)
+      buffer_size_bytes=size(fullmatZFP%buffer_r,1)
       allocate(buffer(buffer_size_bytes))
-      buffer = blocks%buffer_r
+      buffer = fullmatZFP%buffer_r
       buffer_c_ptr = c_loc(buffer)
       bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
-      call zFORp_stream_set_bit_stream(blocks%stream_r, bitstream);
+      call zFORp_stream_set_bit_stream(fullmatZFP%stream_r, bitstream);
 
       ! decompress
-      bitstream_offset_bytes = zFORp_decompress(blocks%stream_r, field)
-      blocks%fullmat=decompressed_array
+      bitstream_offset_bytes = zFORp_decompress(fullmatZFP%stream_r, field)
+      fullmat=decompressed_array
 
       ! deallocations
       call zFORp_bitstream_stream_close(bitstream)
@@ -2019,28 +2043,28 @@ contains
       deallocate(decompressed_array)
       deallocate(buffer)
       if(keep_compressed==0)then
-         call zFORp_stream_close(blocks%stream_r)
-         deallocate(blocks%buffer_r)
+         call zFORp_stream_close(fullmatZFP%stream_r)
+         deallocate(fullmatZFP%buffer_r)
       endif
 
 #if DAT==0 || DAT==2
       ! setup zfp_field
-      allocate(decompressed_array(blocks%M,blocks%N))
+      allocate(decompressed_array(M,N))
       array_c_ptr = c_loc(decompressed_array)
       zfp_type = DTZFP
-      field = zFORp_field_2d(array_c_ptr, zfp_type, blocks%M, blocks%N)
+      field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
       ! setup bitstream
-      buffer_size_bytes=size(blocks%buffer_i,1)
+      buffer_size_bytes=size(fullmatZFP%buffer_i,1)
       allocate(buffer(buffer_size_bytes))
-      buffer = blocks%buffer_i
+      buffer = fullmatZFP%buffer_i
       buffer_c_ptr = c_loc(buffer)
       bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
-      call zFORp_stream_set_bit_stream(blocks%stream_i, bitstream);
+      call zFORp_stream_set_bit_stream(fullmatZFP%stream_i, bitstream);
 
       ! decompress
-      bitstream_offset_bytes = zFORp_decompress(blocks%stream_i, field)
-      blocks%fullmat=blocks%fullmat+BPACK_junit*decompressed_array
+      bitstream_offset_bytes = zFORp_decompress(fullmatZFP%stream_i, field)
+      fullmat=fullmat+BPACK_junit*decompressed_array
 
       ! deallocations
       call zFORp_bitstream_stream_close(bitstream)
@@ -2050,12 +2074,12 @@ contains
       deallocate(buffer)
 
       if(keep_compressed==0)then
-         call zFORp_stream_close(blocks%stream_i)
-         deallocate(blocks%buffer_i)
+         call zFORp_stream_close(fullmatZFP%stream_i)
+         deallocate(fullmatZFP%buffer_i)
       endif
 #endif
 
-   maxval=fnorm(blocks%fullmat,blocks%M,blocks%N,'M')
+   maxval=fnorm(fullmat,M,N,'M')
    if(maxval<BPACK_SafeEps)then
       tol_used = BPACK_SafeEps
    else
@@ -12077,7 +12101,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer ii, jj
       real(kind=8)::tol_used
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(blocks,tol_used,1)
+      if(option%use_zfp==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
       headm = msh%basis_group(blocks%row_group)%head
       headn = msh%basis_group(blocks%col_group)%head
@@ -12092,7 +12116,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          enddo
       enddo
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(blocks,option%tol_comp,1)
+      if(option%use_zfp==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,1)
 #endif
    end subroutine Full_block_extraction
 
@@ -13299,7 +13323,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer, allocatable::num_nods_i(:), num_nods_j(:)
       real(kind=8)::n1, n2, n3, n4, n5, n6, n7, t1, t2
       integer dims_c_m(Ndim),dims_r_m(Ndim),bbm_r,bbm_c,group_n(Ndim),group_n1(Ndim),group_m(Ndim),group_m1(Ndim), dims_MD_old(Ndim*2),dims_MD_new(Ndim*2),dims_ref(Ndim+1),dims_ref_old(Ndim+1),dims_ref_new(Ndim+1),offsets_ref(Ndim+1), dims_in(Ndim),idx_in(Ndim), dims_MD3(Ndim),idx_MD3(Ndim), idxr(Ndim), dim_subtensor(Ndim*2),idx_subtensor(Ndim*2), index_ij, index_scalar,index_vector(Ndim),index_scalar_old,index_vector_old(Ndim)
-      real(kind=8)::flop,flops
+      real(kind=8)::flop,flops,tol_used
       integer, save:: my_tid = 0
 #ifdef HAVE_OPENMP
       !$omp threadprivate(my_tid)
@@ -13582,10 +13606,10 @@ end subroutine BF_block_MVP_dat_batch_magma
 #ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
-         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref) reduction(+:flops)
+         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used) reduction(+:flops)
 #else
 #ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref) reduction(+:flops)
+         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used) reduction(+:flops)
 #endif
 #endif
          do index_ij = 1,product(dim_subtensor)
@@ -13600,9 +13624,23 @@ end subroutine BF_block_MVP_dat_batch_magma
 
             allocate(mats1(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec))
             mats1(my_tid+1)%vector=0
+
+#if HAVE_ZFP
+            if(allocated(blocks%MiddleZFP))then
+            if(allocated(blocks%MiddleZFP(index_ij)%buffer_r))then
+               call ZFP_Decompress(blocks%ButterflyMiddle(index_ij)%matrix,blocks%MiddleZFP(index_ij),product(blocks%ButterflyMiddle(index_ij)%dims_m),product(blocks%ButterflyMiddle(index_ij)%dims_n),tol_used,1)
+            endif
+            endif
+#endif
             call gemmf90(blocks%ButterflyMiddle(index_ij)%matrix, product(blocks%ButterflyMiddle(index_ij)%dims_m), mats(my_tid+1)%vector, product(blocks%ButterflyMiddle(index_ij)%dims_n), mats1(my_tid+1)%vector, product(blocks%ButterflyMiddle(index_ij)%dims_m), 'N', 'N', product(blocks%ButterflyMiddle(index_ij)%dims_m), Nvec, product(blocks%ButterflyMiddle(index_ij)%dims_n), BPACK_cone, BPACK_czero, flop)
             flops = flops + flop
-
+#if HAVE_ZFP
+            if(allocated(blocks%MiddleZFP))then
+            if(allocated(blocks%MiddleZFP(index_ij)%buffer_r))then
+               call ZFP_Compress(blocks%ButterflyMiddle(index_ij)%matrix,blocks%MiddleZFP(index_ij),product(blocks%ButterflyMiddle(index_ij)%dims_m),product(blocks%ButterflyMiddle(index_ij)%dims_n),tol_used,1)
+            endif
+            endif
+#endif
             dims_ref(1:Ndim) = blocks%ButterflyMiddle(index_ij)%dims_m
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
@@ -16976,12 +17014,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          ! write(*,*)blocks_l%level,blocks_l%pgno,ptree%MyID,blocks_l%headm,mm,idx_start,'daha'
 #if HAVE_ZFP
          zfpflag=0
-         if(allocated(blocks_l%buffer_r))zfpflag=1
-         if(zfpflag==1)call ZFP_Decompress(blocks_l,tol_used,1)
+         if(allocated(blocks_l%FullmatZFP%buffer_r))zfpflag=1
+         if(zfpflag==1)call ZFP_Decompress(blocks_l%fullmat,blocks_l%FullmatZFP,blocks_l%M,blocks_l%N,tol_used,1)
 #endif
          call trsmf90(blocks_l%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'L', trans, 'U', mm, nvec)
 #if HAVE_ZFP
-         if(zfpflag==1)call ZFP_Compress(blocks_l,tol_used,1)
+         if(zfpflag==1)call ZFP_Compress(blocks_l%fullmat,blocks_l%FullmatZFP,blocks_l%M,blocks_l%N,tol_used,1)
 #endif
          if (trans /= 'N') then
             do i = mm, 1, -1
@@ -17042,12 +17080,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          idxs_m = blocks_u%headm - idx_start + 1
 #if HAVE_ZFP
          zfpflag=0
-         if(allocated(blocks_u%buffer_r))zfpflag=1
-         if(zfpflag==1)call ZFP_Decompress(blocks_u,tol_used,1)
+         if(allocated(blocks_u%FullmatZFP%buffer_r))zfpflag=1
+         if(zfpflag==1)call ZFP_Decompress(blocks_u%fullmat,blocks_u%FullmatZFP,blocks_u%M,blocks_u%N,tol_used,1)
 #endif
          call trsmf90(blocks_u%fullmat, Vinout(idxs_m:idxs_m + mm - 1, 1:nvec), 'L', 'U', trans, 'N', mm, nvec)
 #if HAVE_ZFP
-         if(zfpflag==1)call ZFP_Compress(blocks_u,tol_used,1)
+         if(zfpflag==1)call ZFP_Compress(blocks_u%fullmat,blocks_u%FullmatZFP,blocks_u%M,blocks_u%N,tol_used,1)
 #endif
       endif
 
@@ -17106,8 +17144,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          if (style == 1) then
 #if HAVE_ZFP
             zfpflag=0
-            if(allocated(blocks%buffer_r))zfpflag=1
-            if(zfpflag==1)call ZFP_Decompress(blocks,tol_used,1)
+            if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
+            if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
             if (trans == 'N') then
                allocate (Vintmp(nn, Nrnd))
@@ -17129,7 +17167,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                deallocate (Vouttmp)
             endif
 #if HAVE_ZFP
-            if(zfpflag==1)call ZFP_Compress(blocks,tol_used,1)
+            if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
          else
             if (trans == 'N') then
@@ -17168,8 +17206,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT, allocatable :: random2tmp(:, :)
 #if HAVE_ZFP
       zfpflag=0
-      if(allocated(blocks%buffer_r))zfpflag=1
-      if(zfpflag==1)call ZFP_Decompress(blocks,tol_used,1)
+      if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
+      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
@@ -17192,7 +17230,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
 #if HAVE_ZFP
-      if(zfpflag==1)call ZFP_Compress(blocks,tol_used,1)
+      if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)
@@ -18213,7 +18251,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-   subroutine element_Zmn_tensorlist_user(Ndim, subtensors, Nsub, msh, option, ker, myflag, passflag, ptree, stats)
+   subroutine element_Zmn_tensorlist_user(Ndim, subtensors, Nsub, msh, option, ker, myflag, passflag, ptree, stats, zfpquants)
 
 
       implicit none
@@ -18242,6 +18280,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer reqm, reqn,empty
       integer statusm(MPI_status_size), statusn(MPI_status_size)
       type(intersect_MD) :: subtensors(*)
+      type(zfpquant),optional:: zfpquants(*)
       DT:: value_e
 integer, save:: my_tid = 0
 #ifdef HAVE_OPENMP
@@ -18277,6 +18316,9 @@ integer, save:: my_tid = 0
                dims(1+Ndim:2*Ndim) = subtensors(nn)%nc
                dims8 = dims
                if (product(dims8)> 0) then
+                  if(present(zfpquants))then
+                     allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
+                  endif
                   allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
                   !$omp parallel
@@ -18325,6 +18367,10 @@ else
                   !$omp end parallel do
 #endif
 #endif
+
+                  if(present(zfpquants))then
+                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
+                  endif
                   deallocate(idxs)
                endif
             endif

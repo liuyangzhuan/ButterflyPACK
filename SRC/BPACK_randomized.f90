@@ -1154,10 +1154,10 @@ contains
                      endif
 #if HAVE_ZFP
                      if(option%use_zfp==1)then
-                        call ZFP_Compress(blocks,option%tol_comp,0)
-                        Memory = Memory + SIZEOF(blocks%buffer_r)/1024.0d3
+                        call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,0)
+                        Memory = Memory + SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-                        Memory = Memory + SIZEOF(blocks%buffer_i)/1024.0d3
+                        Memory = Memory + SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3
 #endif
                      else
                         Memory = Memory + SIZEOF(blocks%fullmat)/1024.0d3
@@ -1833,10 +1833,10 @@ contains
 
 #if HAVE_ZFP
             if(option%use_zfp==1)then
-               call ZFP_Compress(block_o,option%tol_comp,0)
-               Memory = Memory + SIZEOF(block_o%buffer_r)/1024.0d3
+               call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,option%tol_comp,0)
+               Memory = Memory + SIZEOF(block_o%FullmatZFP%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-               Memory = Memory + SIZEOF(block_o%buffer_i)/1024.0d3
+               Memory = Memory + SIZEOF(block_o%FullmatZFP%buffer_i)/1024.0d3
 #endif
             else
                Memory = Memory + SIZEOF(block_o%fullmat)/1024.0d3

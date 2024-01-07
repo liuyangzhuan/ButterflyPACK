@@ -346,7 +346,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! DT, pointer::dat_loc(:, :) => null()
     end type intersect_MD
 
-
+    !>**** ZFP quantity (used for arrays of ZFP compressed data)
+    type zfpquant
+        type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
+        type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
+        character, allocatable :: buffer_r(:) !< ZFP buffer for the real part
+        character, allocatable :: buffer_i(:) !< ZFP buffer for the imaginary part
+    end type zfpquant
 
     !>**** butterfly or LR structure
     type matrixblock
@@ -368,12 +374,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, pointer:: N_p(:, :) => null() !< column sizes of all processes sharing this block
         integer, pointer:: ms(:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:) => null() !< sizes of accummulated local leaf column blocks
-        DT, allocatable :: fullmat(:, :) !< full matrix entries
+        DT, pointer :: fullmat(:, :) => null() !< full matrix entries
 #ifdef HAVE_ZFP
-        type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
-        type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
-        character, allocatable :: buffer_r(:) ! <ZFP buffer for the real part
-        character, allocatable :: buffer_i(:) ! <ZFP buffer for the imaginary part
+        type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
 #endif
         type(butterfly_UV) :: ButterflyU !< leftmost factor
         type(butterfly_UV) :: ButterflyV !< rightmost factor
@@ -422,12 +425,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, pointer:: N_p(:, :, :) => null() !< column sizes of all processes sharing this block
         integer, pointer:: ms(:,:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:,:) => null() !< sizes of accummulated local leaf column blocks
-        DT, allocatable :: fullmat(:, :) !< full matrix entries
+        DT, pointer :: fullmat(:, :) => null() !< full matrix entries
 #ifdef HAVE_ZFP
-        type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
-        type(zFORp_stream) :: stream_i !< ZFP stream for the imaginary part compression
-        character, allocatable :: buffer_r(:) !< ZFP buffer for the real part
-        character, allocatable :: buffer_i(:) !< ZFP buffer for the imaginary part
+        type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
+        type(zfpquant), allocatable :: MiddleZFP(:) ! ZFP quantity array for compressing ButterflyMiddle
 #endif
         integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
         integer, allocatable:: idx_r_m(:), idx_c_m(:) !< starting index for the middle-level groups per dimension

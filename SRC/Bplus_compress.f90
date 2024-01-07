@@ -3278,7 +3278,7 @@ do i_dim = 1,dims_row(dim)
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, dim_MD(Ndim+2), idx_MD(Ndim+2), idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), idx_c_scalar, idx_r_scalar, dim_subtensor(Ndim*2),idx_subtensor(Ndim*2)
-      integer passflag
+      integer passflag,use_zfp
       integer*8 nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
@@ -3312,10 +3312,13 @@ do i_dim = 1,dims_row(dim)
 
 
       if (level_butterfly == 0) then
-         write(*,*)'level_butterfly = 0 has not been implemented in BF_MD_compress_N'
-
+         if(ptree%pgrp(blocks%pgno)%nproc>1)then
+            write(*,*)'level_butterfly = 0 has not been implemented in parallel for BF_MD_compress_N'
+            stop
+         endif
+         go to 1001
       else
-         level_butterflyL = level_butterfly-blocks%level_half
+1001     level_butterflyL = level_butterfly-blocks%level_half
          level_butterflyR = blocks%level_half
          allocate(blocks%nr_m(Ndim))
          allocate(blocks%nc_m(Ndim))
@@ -3607,10 +3610,19 @@ do i_dim = 1,dims_row(dim)
                allocate (subtensors(index_ij)%cols(dim_i)%dat(subtensors(index_ij)%nc(dim_i)))
                subtensors(index_ij)%cols(dim_i)%dat = ButterflySkel_R_transposed(idx_r_scalar)%inds(1, idx_c_scalar, dim_i)%array + msh(dim_i)%basis_group(group_n(dim_i))%head - 1
             enddo
-            allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
+            use_zfp=0
+#if HAVE_ZFP
+            if(option%use_zfp==1)use_zfp=1
+#endif
+            if(use_zfp==0)allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
          enddo
 
-         call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats)
+         if(use_zfp==0)then
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats)
+         else
+            allocate(blocks%MiddleZFP(product(dim_subtensor)))
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats,blocks%MiddleZFP)
+         endif
 
          allocate(blocks%ButterflyMiddle(product(dim_subtensor)))
          do index_ij = 1, product(dim_subtensor)
@@ -9469,10 +9481,10 @@ time_tmp = time_tmp + n2 - n1
 
 #if HAVE_ZFP
       if(option%use_zfp==1)then
-         call ZFP_Compress(blocks, option%tol_comp,0)
-         memory = SIZEOF(blocks%buffer_r)/1024.0d3
+         call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N, option%tol_comp,0)
+         memory = SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
-         memory = memory + SIZEOF(blocks%buffer_i)/1024.0d3
+         memory = memory + SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3
 #endif
       else
          memory = SIZEOF(blocks%fullmat)/1024.0d3

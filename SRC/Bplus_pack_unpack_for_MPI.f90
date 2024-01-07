@@ -38,8 +38,6 @@ contains
    end subroutine MPI_verbose_barrier
 
    subroutine blocks_partial_bcast(block_s, block_r, send, recv, send_ID, msh, ptree, option)
-      use BPACK_DEFS
-      use MISC_Utilities
       implicit none
       type(matrixblock), pointer :: block_s, block_r
       integer send, recv, send_ID
@@ -116,8 +114,6 @@ contains
 
    subroutine blocks_send(block, indices, recv_ID, send_count, msh, ptree, option)
 
-      use BPACK_DEFS
-      use MISC_Utilities
       implicit none
 
       type(proctree)::ptree
@@ -168,8 +164,6 @@ contains
 
    recursive subroutine blocks_structure2buff(block, send_count_ind, send_count_dat, flag, msh, ptree)
 
-      use BPACK_DEFS
-      use MISC_Utilities
       implicit none
 
       integer count1, count2, requests, rank, group_m, group_n
@@ -239,8 +233,6 @@ contains
 
    subroutine blocks_recv(block, indices, send_ID, recv_count, msh, ptree, option)
 
-      use BPACK_DEFS
-      use MISC_Utilities
       implicit none
 
       integer blocks, flag_recv, count1, count2, recv_count, recv_count_loc, mm, nn, rank, mcnt
@@ -297,8 +289,6 @@ contains
 
    recursive subroutine blocks_buff2structure(block, recv_count_ind, recv_count_dat, msh, ptree)
 
-      use BPACK_DEFS
-      use MISC_Utilities
       implicit none
       type(proctree)::ptree
       type(mesh)::msh
@@ -391,7 +381,6 @@ contains
 
    recursive subroutine Hmat_block_copy_MPIdata(block2, block1, msh)
 
-      use BPACK_DEFS
       implicit none
 
       integer blocks, flag_recv, count1, count2, recv_count, mm, nn, length
@@ -464,7 +453,6 @@ contains
 
    subroutine pack_butterfly_blocks(block, msh)
 
-      use BPACK_DEFS
       implicit none
 
       integer i, j, k, ii, jj, kk, num_blocks, level_butterfly, level_blocks, level
@@ -637,7 +625,7 @@ contains
 
    subroutine unpack_butterfly_blocks(block, Maxlevel, ptree, msh, pgno)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer i, j, k, ii, jj, kk, num_blocks, level_butterfly, level_blocks, level
@@ -743,7 +731,7 @@ contains
 
    subroutine pack_full_blocks(block, msh, option)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer blocks, i, j, k, ii, jj, kk, group_m, group_n, mm, nn, flag
@@ -760,7 +748,7 @@ contains
       allocate (block%fullmat_MPI(mm*nn))
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block,tol_used,0) ! no need to recompress as fullmat will be deleted before exiting
+      if(option%use_zfp==1)call ZFP_Decompress(block%fullmat,block%FullmatZFP,block%M,block%N,tol_used,0) ! no need to recompress as fullmat will be deleted before exiting
 #endif
 #ifdef HAVE_OPENMP
       !$omp parallel do default(shared) private(i,j,indices)
@@ -782,7 +770,7 @@ contains
 
    subroutine unpack_full_blocks(block, Maxlevel, ptree, msh, pgno, option)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer blocks, i, j, k, ii, jj, kk, group_m, group_n, mm, nn, flag
@@ -813,7 +801,7 @@ contains
 #endif
       deallocate (block%fullmat_MPI)
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block,option%tol_comp,0)
+      if(option%use_zfp==1)call ZFP_Compress(block%fullmat,block%FullmatZFP,block%M,block%N,option%tol_comp,0)
 #endif
       return
 
@@ -821,7 +809,7 @@ contains
 
    recursive subroutine pack_all_blocks_one_node(block, msh, option)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_blocks
@@ -869,7 +857,7 @@ contains
 
    recursive subroutine unpack_all_blocks_one_node(block, Maxlevel, ptree, msh, pgno,option)
 
-      use BPACK_DEFS
+
       implicit none
 
       integer level_blocks

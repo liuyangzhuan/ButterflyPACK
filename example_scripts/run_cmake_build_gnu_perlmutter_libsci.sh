@@ -6,6 +6,8 @@ sed -i 's/^M$//' PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
+export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
+
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
 rm -rf CTestTestfile.cmake
@@ -14,6 +16,8 @@ rm -rf CMakeFiles
 cmake .. \
     -DCMAKE_INSTALL_LIBDIR=./lib \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE" \
+	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
+	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=ftn \

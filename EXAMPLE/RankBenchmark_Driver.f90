@@ -32,7 +32,7 @@ contains
 		complex(kind=8)::value
 		integer ii
 
-		real(kind=8)::pos_o(100),pos_s(100), dist, waven, dotp
+		real(kind=8)::pos_o(100),pos_s(100), dist, waven, dotp, sx,cx,xk,kr
 
 		select TYPE(quant)
 		type is (quant_app)
@@ -41,6 +41,14 @@ contains
 				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
 				dotp = dot_product(pos_o(1:quant%Ndim),pos_s(1:quant%Ndim))
 				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
+			elseif(quant%tst==5)then
+				pos_o(1:quant%Ndim) = quant%locations_m(:,m)
+				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
+				xk = dot_product(pos_o(1:quant%Ndim),pos_s(1:quant%Ndim))
+				sx = (2+sin(2*BPACK_pi*pos_s(1))*sin(2*BPACK_pi*pos_s(2)))/16d0;
+				cx = (2+cos(2*BPACK_pi*pos_s(1))*cos(2*BPACK_pi*pos_s(2)))/16d0;
+				kr = sqrt(sx**2*pos_o(1)**2 + cx**2*pos_o(2)**2);
+				value = EXP(2*BPACK_pi*BPACK_junit*(xk + kr))
 			else
 				pos_o(1:quant%Ndim) = quant%locations_m(:,m)
 				pos_s(1:quant%Ndim) = quant%locations_n(:,n)
@@ -148,7 +156,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	!**** set solver parameters
 	option%ErrSol=1  ! whether or not checking the factorization accuracy
 	! option%format=  HODLR! HMAT!   ! the hierarhical format
-	option%near_para=2.01d0        ! admissibiltiy condition, not referenced if option%format=  HODLR
+	option%near_para=0.01d0        ! admissibiltiy condition, not referenced if option%format=  HODLR
 	option%verbosity=1             ! verbosity level
 	option%LRlevel=0             ! 0: low-rank compression 100: butterfly compression
 
@@ -296,6 +304,26 @@ PROGRAM ButterflyPACK_RankBenchmark
 		call z_SingleIndexToMultiIndex(quant%Ndim,dims, m, inds)
 		do dim_i=1,quant%Ndim
 			quant%locations_m(dim_i,m)=inds(dim_i)-1
+		enddo
+	  enddo
+	  do n=1,quant%Nunk_n
+		call z_SingleIndexToMultiIndex(quant%Ndim,dims, n, inds)
+		do dim_i=1,quant%Ndim
+			quant%locations_n(dim_i,n)=dble(inds(dim_i)-1)/Nperdim
+		enddo
+	  enddo
+
+	elseif(quant%tst==5)then ! 2D Radon transform
+	  quant%Ndim = 2
+      quant%Nunk_m = Nperdim**quant%Ndim
+      quant%Nunk_n = Nperdim**quant%Ndim
+	  allocate(quant%locations_m(quant%Ndim,quant%Nunk_m))
+	  allocate(quant%locations_n(quant%Ndim,quant%Nunk_n))
+	  dims = Nperdim
+	  do m=1,quant%Nunk_m
+		call z_SingleIndexToMultiIndex(quant%Ndim,dims, m, inds)
+		do dim_i=1,quant%Ndim
+			quant%locations_m(dim_i,m)=inds(dim_i)-1-Nperdim/2
 		enddo
 	  enddo
 	  do n=1,quant%Nunk_n
