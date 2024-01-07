@@ -377,9 +377,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, pointer:: ms(:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:) => null() !< sizes of accummulated local leaf column blocks
         DT, pointer :: fullmat(:, :) => null() !< full matrix entries
-#ifdef HAVE_ZFP
         type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
-#endif
         type(butterfly_UV) :: ButterflyU !< leftmost factor
         type(butterfly_UV) :: ButterflyV !< rightmost factor
         type(butterflymatrix), allocatable :: ButterflyMiddle(:, :) !< middle factor
@@ -428,10 +426,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, pointer:: ms(:,:) => null() !< sizes of accummulated local leaf row blocks
         integer, pointer:: ns(:,:) => null() !< sizes of accummulated local leaf column blocks
         DT, pointer :: fullmat(:, :) => null() !< full matrix entries
-#ifdef HAVE_ZFP
         type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
         type(zfpquant), allocatable :: MiddleZFP(:) ! ZFP quantity array for compressing ButterflyMiddle
-#endif
         integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
         integer, allocatable:: idx_r_m(:), idx_c_m(:) !< starting index for the middle-level groups per dimension
         type(butterfly_UV_MD), allocatable :: ButterflyU(:) !< leftmost factor of length product(nr_m)
