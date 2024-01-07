@@ -18367,10 +18367,11 @@ else
                   !$omp end parallel do
 #endif
 #endif
-
+#if HAVE_ZFP
                   if(present(zfpquants))then
                      call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
                   endif
+#endif
                   deallocate(idxs)
                endif
             endif
