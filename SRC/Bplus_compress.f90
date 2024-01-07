@@ -3311,14 +3311,10 @@ do i_dim = 1,dims_row(dim)
 
 
 
-      if (level_butterfly == 0) then
-         if(ptree%pgrp(blocks%pgno)%nproc>1)then
+      if (level_butterfly == 0 .and. ptree%pgrp(blocks%pgno)%nproc>1) then
             write(*,*)'level_butterfly = 0 has not been implemented in parallel for BF_MD_compress_N'
-            stop
-         endif
-         go to 1001
       else
-1001     level_butterflyL = level_butterfly-blocks%level_half
+         level_butterflyL = level_butterfly-blocks%level_half
          level_butterflyR = blocks%level_half
          allocate(blocks%nr_m(Ndim))
          allocate(blocks%nc_m(Ndim))
