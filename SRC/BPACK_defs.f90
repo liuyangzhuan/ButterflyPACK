@@ -346,6 +346,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! DT, pointer::dat_loc(:, :) => null()
     end type intersect_MD
 
+#ifdef HAVE_ZFP
     !>**** ZFP quantity (used for arrays of ZFP compressed data)
     type zfpquant
         type(zFORp_stream) :: stream_r !< ZFP stream for the real part compression
@@ -353,6 +354,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         character, allocatable :: buffer_r(:) !< ZFP buffer for the real part
         character, allocatable :: buffer_i(:) !< ZFP buffer for the imaginary part
     end type zfpquant
+#endif
 
     !>**** butterfly or LR structure
     type matrixblock
