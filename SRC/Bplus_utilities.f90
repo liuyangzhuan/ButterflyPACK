@@ -1917,7 +1917,7 @@ contains
       ! bitstream
       character, dimension(:), allocatable, target :: buffer
       type(c_ptr) :: buffer_c_ptr
-      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes
+      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes,tmpint8
       type(zFORp_bitstream) :: bitstream
       ! zfp_stream
       type(zFORp_stream) :: stream, dstream
@@ -1937,7 +1937,8 @@ contains
          field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
          ! setup bitstream
-         buffer_size_bytes = M*N*DTRBytes
+         tmpint8 = N*DTRBytes
+         buffer_size_bytes = M*tmpint8
          allocate(buffer(buffer_size_bytes))
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
@@ -1965,7 +1966,8 @@ contains
          field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
 
          ! setup bitstream
-         buffer_size_bytes = M*N*DTRBytes
+         tmpint8 = N*DTRBytes
+         buffer_size_bytes = M*tmpint8
          allocate(buffer(buffer_size_bytes))
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
