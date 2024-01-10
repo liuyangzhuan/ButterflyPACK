@@ -1939,7 +1939,7 @@ contains
          ! setup bitstream
          tmpint8 = N*DTRBytes
          buffer_size_bytes = M*tmpint8
-         allocate(buffer(buffer_size_bytes))
+         allocate(buffer(buffer_size_bytes*2)) ! adding an extra factor of 2 as the compressed array can be larger than the input data
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 
@@ -1968,7 +1968,7 @@ contains
          ! setup bitstream
          tmpint8 = N*DTRBytes
          buffer_size_bytes = M*tmpint8
-         allocate(buffer(buffer_size_bytes))
+         allocate(buffer(buffer_size_bytes*2)) ! adding an extra factor of 2 as the compressed array can be larger than the input data
          buffer_c_ptr = c_loc(buffer)
          bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
 

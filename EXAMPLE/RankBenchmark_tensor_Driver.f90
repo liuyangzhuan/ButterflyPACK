@@ -5,7 +5,7 @@
 !> #include "zButterflyPACK_config.fi" \n
 !> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
-module APPLICATION_MODULE_FULL_SIMPLE
+module APPLICATION_MODULE_RankBenchmark_t
 use z_BPACK_DEFS
 implicit none
 
@@ -22,9 +22,12 @@ implicit none
 
 contains
 
+
+
 	!**** user-defined subroutine to sample Z_mn as full matrix
 	subroutine Zelem_MD_User(Ndim, m,n,value,quant)
 		use z_BPACK_DEFS
+		use z_MISC_Utilities
 		implicit none
 
 		class(*),pointer :: quant
@@ -54,6 +57,10 @@ contains
 				waven=2*BPACK_pi/quant%wavelen
 				value = EXP(-BPACK_junit*waven*dist)/dist
 			elseif(quant%tst==4)then
+				do dim_i=1,Ndim
+					pos_s(dim_i) = quant%locations_n(dim_i,z_bit_reverse(n(dim_i),INT((log(dble(quant%Nunk_n(dim_i))) / log(2d0)))))
+					pos_o(dim_i) = quant%locations_m(dim_i,z_bit_reverse(m(dim_i),INT((log(dble(quant%Nunk_m(dim_i))) / log(2d0)))))
+				enddo
 				dotp = dot_product(pos_o,pos_s)
 				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
 			elseif(quant%tst==5)then
@@ -109,12 +116,12 @@ contains
 	end subroutine ZBelem_MD_User
 
 
-end module APPLICATION_MODULE_FULL_SIMPLE
+end module APPLICATION_MODULE_RankBenchmark_t
 
 
 PROGRAM ButterflyPACK_RankBenchmark
     use z_BPACK_DEFS
-    use APPLICATION_MODULE_FULL_SIMPLE
+    use APPLICATION_MODULE_RankBenchmark_t
 	use z_BPACK_Solve_Mul
 
 	use z_BPACK_structure

@@ -5,7 +5,7 @@
 !> #include "zButterflyPACK_config.fi" \n
 !> which will macro replace precision-independent subroutine/module/type names "X" with "z_X" defined in SRC_DOUBLECOMLEX with double-complex precision
 
-module APPLICATION_MODULE_FULL_SIMPLE
+module APPLICATION_MODULE_RankBenchmark
 use z_BPACK_DEFS
 implicit none
 
@@ -95,12 +95,12 @@ contains
 	end subroutine ZBelem_User
 
 
-end module APPLICATION_MODULE_FULL_SIMPLE
+end module APPLICATION_MODULE_RankBenchmark
 
 
 PROGRAM ButterflyPACK_RankBenchmark
     use z_BPACK_DEFS
-    use APPLICATION_MODULE_FULL_SIMPLE
+    use APPLICATION_MODULE_RankBenchmark
 	use z_BPACK_Solve_Mul
 
 	use z_BPACK_structure

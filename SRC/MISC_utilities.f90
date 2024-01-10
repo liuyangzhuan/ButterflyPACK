@@ -5764,7 +5764,24 @@ end subroutine TensorUnfoldingReshape
 
    end subroutine get_graph_colors_JP
 
+   ! bit reversal operation for an integer n ranging from 1 to 2^bits
+integer function bit_reverse(n, bits)
+    integer, intent(in) :: n, bits
+    integer :: i, result, nwork, bitarray(bits)
 
+	nwork=n-1
+	do i=1,bits
+		bitarray(bits-i+1)=mod(nwork,2)
+		nwork=int(nwork/2)
+	enddo
+
+    result = 0
+    do i=1,bits
+		result = result + 2**(i-1)*bitarray(i)
+    end do
+
+    bit_reverse = result+1
+end function bit_reverse
 
 
 end module MISC_Utilities
