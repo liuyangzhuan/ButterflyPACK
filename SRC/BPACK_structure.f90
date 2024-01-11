@@ -211,6 +211,8 @@ contains
             dis = dis + (a(i) - b(i))**2
          enddo
          dis = dis**(1d0/2)
+      elseif(option%per_geo==2)then
+         dis =1e30 ! no inadmissible blocks
       else
          write(*,*)'periodic geometry has not been implemented for near_or_far_geo_MD'
          stop

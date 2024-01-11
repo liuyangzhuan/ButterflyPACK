@@ -22,9 +22,6 @@ fi
 
 
 
-
-
-
 # # ############## 3D seperated cubes
 # NTH=8
 # THREADS_PER_RANK=`expr $NTH \* 2`								 
@@ -32,15 +29,16 @@ fi
 # tol=1e-2
 # nmpi=64
 # # wavelen=0.001953125 0.00390625 0.0078125 0.015625 0.03125 0.0625
-# zdist=1.0
+# # zdist=1.0
+# zdist=0.001
 # ppw=4.0
-# nmin_leaf_t=16
-# nmin_leaf_m=4096
+# nmin_leaf_t=4
+# nmin_leaf_m=64
 # use_zfp=1
-# for wavelen in 0.0009765625  
+# for wavelen in 0.0625 
 # do
-# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 3 --wavelen ${wavelen} --zdist ${zdist} --ppw ${ppw} -option --use_zfp ${use_zfp} --xyzsort 1 --nmin_leaf ${nmin_leaf_t} --lrlevel 100 --verbosity 1 --tol_comp $tol --sample_para 0.8 --sample_para_outer 0.8 --fastsample_tensor 2 | tee a.out_tensor_3d_green_wavelen${wavelen}_zdist${zdist}_tol${tol}_mpi${nmpi}_omp${NTH}_nmin_leaf_t${nmin_leaf_t}_ppw${ppw}_use_zfp${use_zfp}
-# # srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 3 --wavelen ${wavelen} --zdist ${zdist} --ppw ${ppw} -option --xyzsort 1 --nmin_leaf ${nmin_leaf_m} --lrlevel 100 --verbosity 1 --tol_comp $tol --sample_para 2.0 --sample_para_outer 2.0  | tee a.out_matrix_3d_green_wavelen${wavelen}_zdist${zdist}_tol${tol}_mpi${nmpi}_omp${NTH}_nmin_leaf_m${nmin_leaf_m}_ppw${ppw}
+# # srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 3 --wavelen ${wavelen} --zdist ${zdist} --ppw ${ppw} -option --use_zfp ${use_zfp} --xyzsort 1 --nmin_leaf ${nmin_leaf_t} --lrlevel 100 --verbosity 1 --tol_comp $tol --sample_para 0.8 --sample_para_outer 0.8 --fastsample_tensor 2 | tee a.out_tensor_3d_green_wavelen${wavelen}_zdist${zdist}_tol${tol}_mpi${nmpi}_omp${NTH}_nmin_leaf_t${nmin_leaf_t}_ppw${ppw}_use_zfp${use_zfp}
+# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 3 --wavelen ${wavelen} --zdist ${zdist} --ppw ${ppw} -option --xyzsort 1 --nmin_leaf ${nmin_leaf_m} --lrlevel 100 --verbosity 1 --tol_comp $tol --sample_para 2.0 --knn 10 --sample_para_outer 2.0  | tee a.out_matrix_3d_green_wavelen${wavelen}_zdist${zdist}_tol${tol}_mpi${nmpi}_omp${NTH}_nmin_leaf_m${nmin_leaf_m}_ppw${ppw}
 # done
 
 
@@ -69,31 +67,32 @@ fi
 # # srun -n 4 -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 2 --wavelen 0.0156 --zdist 1.0 --ppw 2.0 -option --nmin_leaf 8 --xyzsort 1 --lrlevel 100 --verbosity 1 --tol_comp $tol --sample_para 0.8 --sample_para_outer 0.8 | tee a.out_tensor_2d_green_wavelen${wavelen}_zdist${zdist}_tol${tol}_mpi${nmpi}_omp${NTH}
 
 
-# ############## DFT
-# NTH=32
+############## DFT
+NTH=16
+THREADS_PER_RANK=`expr $NTH \* 2`								 
+export OMP_NUM_THREADS=$NTH
+tol=1e-8
+nmpi=32
+ndim_FIO=5
+use_zfp=1
+for N_FIO in 32
+do
+# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 4 --ndim_FIO ${ndim_FIO} --N_FIO ${N_FIO} -option --nmin_leaf 64  --xyzsort 1 --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 2.0 --sample_para_outer 2.0 | tee a.out_matrix_DFT_ndim_FIO${ndim_FIO}_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}
+srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 4 --ndim_FIO ${ndim_FIO} --N_FIO ${N_FIO} -option --nmin_leaf 2  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 1.0 --sample_para_outer 1.0 --fastsample_tensor 2 | tee a.out_tensor_DFT_ndim_FIO${ndim_FIO}_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}
+done
+
+
+# ############## 2D Radon
+# NTH=8
 # THREADS_PER_RANK=`expr $NTH \* 2`								 
 # export OMP_NUM_THREADS=$NTH
 # tol=1e-3
-# nmpi=16
-# ndim_FIO=3
+# nmpi=64
 # use_zfp=1
-# N_FIO=128
-# # srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 4 --ndim_FIO ${ndim_FIO} --N_FIO ${N_FIO} -option --nmin_leaf 64  --xyzsort 1 --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 2.0 --sample_para_outer 2.0 | tee a.out_matrix_DFT_ndim_FIO${ndim_FIO}_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}
-# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 4 --ndim_FIO ${ndim_FIO} --N_FIO ${N_FIO} -option --nmin_leaf 2  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 1.0 --sample_para_outer 1.0 --fastsample_tensor 2 | tee a.out_tensor_DFT_ndim_FIO${ndim_FIO}_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}
-
-
-
-############## 2D Radon
-NTH=8
-THREADS_PER_RANK=`expr $NTH \* 2`								 
-export OMP_NUM_THREADS=$NTH
-tol=1e-3
-nmpi=64
-use_zfp=1
-# N_FIO=256 512 1024 2048 4096
-for N_FIO in 16384
-do
-# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 16  --xyzsort 1 --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 2.0 --sample_para_outer 2.0 | tee a.out_matrix_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}
-srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 4  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 0.6 --sample_para_outer 0.6 --fastsample_tensor 0 | tee a.out_tensor_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}_fastsample_tensor0
-# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 4  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 0.8 --sample_para_outer 0.8 --fastsample_tensor 2 | tee a.out_tensor_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}_fastsample_tensor2
-done
+# # N_FIO=256 512 1024 2048 4096
+# for N_FIO in 16384
+# do
+# # srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 16  --xyzsort 1 --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 2.0 --sample_para_outer 2.0 | tee a.out_matrix_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}
+# srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 4  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 0.6 --sample_para_outer 0.6 --fastsample_tensor 0 | tee a.out_tensor_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}_fastsample_tensor0
+# # srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/frankben_t -quant --tst 5 --N_FIO ${N_FIO} -option --nmin_leaf 4  --xyzsort 1 --use_zfp ${use_zfp} --lrlevel 100 --verbosity 1 --tol_comp $tol --pat_comp 3 --sample_para 0.8 --sample_para_outer 0.8 --fastsample_tensor 2 | tee a.out_tensor_Radon2D_N_FIO${N_FIO}_tol${tol}_mpi${nmpi}_omp${NTH}_use_zfp${use_zfp}_fastsample_tensor2
+# done

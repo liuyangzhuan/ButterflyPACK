@@ -184,6 +184,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	option%verbosity=1             ! verbosity level
 	option%LRlevel=0             ! 0: low-rank compression 100: butterfly compression
 	option%format=HSS_MD           ! currently this is the only format supported in MD
+	option%per_geo=2 ! do not generate any inadmissible block in BPACK_structuring_MD
 
 	! geometry points available
 	option%xyzsort=TM ! no reordering will be perfomed
