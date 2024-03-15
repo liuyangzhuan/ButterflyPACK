@@ -36,7 +36,7 @@ contains
 		complex(kind=8)::value
 		integer ii, dim_i
 
-		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven, dotp, sx,cx,xk,kr
+		real(kind=8)::pos_o(Ndim),pos_s(Ndim), dist, waven, dotp, sx,cx,xk,kr,theta,phi,d,f,x,y,tau,p,h,k(3)
 
 		select TYPE(quant)
 		type is (quant_app)
@@ -65,11 +65,51 @@ contains
 				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
 			elseif(quant%tst==5)then
 				xk = dot_product(pos_o,pos_s)
-				sx = (2+sin(2*BPACK_pi*pos_s(1))*sin(2*BPACK_pi*pos_s(2)))/16d0;
-				cx = (2+cos(2*BPACK_pi*pos_s(1))*cos(2*BPACK_pi*pos_s(2)))/16d0;
-				kr = sqrt(sx**2*pos_o(1)**2 + cx**2*pos_o(2)**2);
+				sx = (2+sin(2*BPACK_pi*pos_o(1))*sin(2*BPACK_pi*pos_o(2)))/16d0;
+				cx = (2+cos(2*BPACK_pi*pos_o(1))*cos(2*BPACK_pi*pos_o(2)))/16d0;
+				kr = sqrt(sx**2*pos_s(1)**2 + cx**2*pos_s(2)**2);
 				value = EXP(2*BPACK_pi*BPACK_junit*(xk + kr))
 				! value = cos(2*BPACK_pi*(xk + kr))+Im*sin(2*BPACK_pi*(xk + kr));
+			elseif(quant%tst==6)then
+				theta = pos_o(1)*BPACK_pi/8d0 ! only constrain theta from 0 to pi/8, otherwise the phase function becomes unbounded
+				phi = pos_o(2)*2*BPACK_pi
+				d = pos_o(3)
+				x = pos_s(1)
+				y = pos_s(2)
+				f = pos_s(3) * size(quant%locations_n,2)
+				kr = f*(-tan(theta)*cos(phi)*x - tan(theta)*sin(phi)*y + d/cos(theta))
+				value = EXP(2*BPACK_pi*BPACK_junit*kr)
+			elseif(quant%tst==7)then
+				theta = pos_o(1)*BPACK_pi/4d0 ! only constrain theta from 0 to pi/4, otherwise the phase function becomes unbounded
+				d = pos_o(2)
+				x = pos_s(1)
+				f = pos_s(2) * size(quant%locations_n,2)
+				kr = f*(-tan(theta)*x + d/cos(theta))
+				value = EXP(2*BPACK_pi*BPACK_junit*kr)
+			elseif(quant%tst==8)then
+				tau = pos_o(1)
+				p = pos_o(2)
+				h = pos_s(1)
+				f = pos_s(2) * size(quant%locations_n,2)/10
+				kr = f*sqrt(tau**2d0+p**2d0*h**2d0)
+				value = EXP(2*BPACK_pi*BPACK_junit*kr)
+			elseif(quant%tst==9)then
+
+				! do dim_i=1,Ndim
+				! 	pos_s(dim_i) = quant%locations_n(dim_i,z_bit_reverse(n(dim_i),INT((log(dble(quant%Nunk_n(dim_i))) / log(2d0)))))
+				! 	pos_o(dim_i) = quant%locations_m(dim_i,z_bit_reverse(m(dim_i),INT((log(dble(quant%Nunk_m(dim_i))) / log(2d0)))))
+				! enddo
+
+				k = pos_s
+
+				! k(1) = sqrt(2d0)/2d0* size(quant%locations_n,2) * pos_s(1)*sin(BPACK_pi*pos_s(2))*cos(2*BPACK_pi*pos_s(3))
+				! k(2) = sqrt(2d0)/2d0* size(quant%locations_n,2) * pos_s(1)*sin(BPACK_pi*pos_s(2))*sin(2*BPACK_pi*pos_s(3))
+				! k(3) = sqrt(2d0)/2d0* size(quant%locations_n,2) * pos_s(1)*cos(BPACK_pi*pos_s(2))
+
+				cx = (3d0+sin(2*BPACK_pi*pos_o(1))*sin(2*BPACK_pi*pos_o(2))*sin(2*BPACK_pi*pos_o(3)))/100d0;
+				xk = dot_product(pos_o,k)
+				kr = xk+cx*sqrt(sum((k)**2d0))
+				value = EXP(2*BPACK_pi*BPACK_junit*kr)
 			else
 				write(*,*)'tst unknown'
 			endif
@@ -320,7 +360,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  do n=1,Nperdim
 		quant%locations_n(:,n)=dble(n-1)/Nperdim
 	  enddo
-	elseif(quant%tst==5)then ! 2D Radon transform
+	elseif(quant%tst==5)then ! 2D Radon transform for elipse integral from "Approximate inversion of discrete Fourier integral operators" and "Fast Computation of Fourier Integral Operators"
 	  quant%Ndim = 2
 	  allocate(quant%Nunk_m(quant%Ndim))
 	  allocate(quant%Nunk_n(quant%Ndim))
@@ -329,10 +369,66 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  allocate(quant%locations_m(quant%Ndim,Nperdim))
 	  allocate(quant%locations_n(quant%Ndim,Nperdim))
 	  do m=1,Nperdim
-		quant%locations_m(:,m)=(m-1)-Nperdim/2
+		quant%locations_m(:,m)=dble(m-1)/Nperdim
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)= (n-1)-Nperdim/2
+	  enddo
+	elseif(quant%tst==6)then ! 3D Radon transform for a plane interal generalized from "A fast butterfly algorithm for generalized Radon transforms"
+	  quant%Ndim = 3
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)=dble(m-1)/Nperdim+1d0/Nperdim/2d0
 	  enddo
 	  do n=1,Nperdim
 		quant%locations_n(:,n)=dble(n-1)/Nperdim
+	  enddo
+	elseif(quant%tst==7)then ! 2D Radon transform for a line integral generalized from "A fast butterfly algorithm for generalized Radon transforms"
+	  quant%Ndim = 2
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)=dble(m-1)/Nperdim+1d0/Nperdim/2d0
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)=dble(n-1)/Nperdim
+	  enddo
+	elseif(quant%tst==8)then ! 2D Radon transform for hyperbolic integral in "A fast butterfly algorithm for generalized Radon transforms"
+	  quant%Ndim = 2
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)=dble(m-1)/Nperdim+1d0/Nperdim/2d0
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)=dble(n-1)/Nperdim
+	  enddo
+	elseif(quant%tst==9)then ! 3D Radon transform for sphere integral from "A Fast Butterfly Algorithm for the Computation of Fourier Integral Operators"
+	  quant%Ndim = 3
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  do m=1,Nperdim
+		quant%locations_m(:,m)= dble(m-1)/Nperdim
+	  enddo
+	  do n=1,Nperdim
+		quant%locations_n(:,n)= (n-1)-Nperdim/2 !dble(n-1)/Nperdim
 	  enddo
 	endif
 

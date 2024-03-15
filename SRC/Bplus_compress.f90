@@ -3610,7 +3610,10 @@ do i_dim = 1,dims_row(dim)
 #if HAVE_ZFP
             if(option%use_zfp==1)use_zfp=1
 #endif
-            if(use_zfp==0)allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
+            if(use_zfp==0)then
+               allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
+               call LogMemory(stats, SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+            endif
          enddo
 
          if(use_zfp==0)then

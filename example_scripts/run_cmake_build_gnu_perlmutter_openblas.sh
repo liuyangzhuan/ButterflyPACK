@@ -1,5 +1,6 @@
 module load PrgEnv-gnu
 module load cmake
+module unload cray-libsci
 
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
@@ -26,9 +27,9 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-	-DTPL_BLAS_LIBRARIES="$CRAY_PE_LIBSCI_BASE_DIR/GNU/12.3/x86_64/lib/libsci_gnu_123_mpi_mp.so" \
-	-DTPL_LAPACK_LIBRARIES="$CRAY_PE_LIBSCI_BASE_DIR/GNU/12.3/x86_64/lib/libsci_gnu_123_mpi_mp.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$CRAY_PE_LIBSCI_BASE_DIR/GNU/12.3/x86_64/lib/libsci_gnu_123_mpi_mp.so"
+	-DTPL_BLAS_LIBRARIES="$CFS/m2957/liuyangz/my_software/OpenBLAS/libopenblas.so" \
+	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/liuyangz/my_software/OpenBLAS/libopenblas.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/liuyangz/my_software/scalapack-2.2.0/build/install/lib/libscalapack.so"
 
 make ie2d -j16
 make ie3dport -j16

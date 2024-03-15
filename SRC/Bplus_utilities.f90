@@ -18278,7 +18278,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT,pointer::alldat_loc(:)
       type(intersect), allocatable::inters(:)
       integer myArows, myAcols, Npmap
-      real(kind=8)::t1, t2, t3, t4
+      real(kind=8)::t1, t2, t3, t4, tmpmem
       integer reqm, reqn,empty
       integer statusm(MPI_status_size), statusn(MPI_status_size)
       type(intersect_MD) :: subtensors(*)
@@ -18320,6 +18320,7 @@ integer, save:: my_tid = 0
                if (product(dims8)> 0) then
                   if(present(zfpquants))then
                      allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
+                     call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
                   endif
                   allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
@@ -18371,7 +18372,11 @@ else
 #endif
 #if HAVE_ZFP
                   if(present(zfpquants))then
-                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
+                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)        
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)   
+                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
+                     call LogMemory(stats, -tmpmem)
                   endif
 #endif
                   deallocate(idxs)
