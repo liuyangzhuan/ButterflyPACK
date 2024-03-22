@@ -1,3 +1,15 @@
+Version 3.0.0: Released Mar 22, 2024
+===================================
+- Added butterfly tensor algorithms with additional ZFP compression
+- Added rank benchmark examples for matrix and tensor interfaces including 2D/3D Green's function, 2D/3D Radon transforms, and high-dimensional FFT
+
+
+Version 2.4.0: Released Oct 31, 2023
+===================================
+- Changed openmpi and scalapack as optional dependency
+- Added Fortran interface for compressing a non-square matrix as a HSS-BF or H matrix.
+
+
 Version 2.3.1: Released Aug 31, 2022
 ===================================
 - Added rank benchmark for low-rank and butterfly compression of free space green's functions
