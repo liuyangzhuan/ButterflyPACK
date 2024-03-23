@@ -1,5 +1,8 @@
 /*! \page algorithm Algorithm
-ButterflyPACK provides a collection of fast algebraic tools for compressing and manipulating dense matrices arising from integral equations for PDEs, kernel matrices in machine learning, and various integral transforms. ButterflyPACK represents the operators as low-rank or butterfly-compressed hierarchical matrices including H, H-BF, HODLR, HODBF and HSSBF formats, assuming only a user-supplied function to either evaluate any entry of the matrix, or to apply the matrix and its adjoint to any input matrix (matvec). Depending on the compression tolerance and application need, the hierarchical matrices can be used as fast matvec in iterative solvers, fast preconditioners, or fast direct solvers. ButterflyPACK also provides a TFQMR iterative solver. The supported matrix formats are briefly described:
+ButterflyPACK provides a collection of fast algebraic tools for compressing and manipulating dense matrices and tensors arising from integral equations for PDEs, kernel matrices in machine learning, and various integral transforms. ButterflyPACK represents the operators as low-rank or butterfly-compressed hierarchical matrices (both square and non-square ) including H, H-BF, HODLR, HODBF, HSSBF and SHNBF formats, assuming only a user-supplied function to either evaluate any entry of the matrix, or to apply the matrix and its adjoint to any input matrix (matvec). Depending on the compression tolerance and application need, the hierarchical matrices can be used as fast matvec in iterative solvers, fast preconditioners, or fast direct solvers. ButterflyPACK also provides a TFQMR iterative solver. The supported formats are briefly described:
+
+# Invertible matrix
+For square matrix operators, the supported APIs are BPACK_construction_Init (initialization), BPACK_construction_Element (element evaluation-based construction), BPACK_construction_Matvec (sketching-based construction), BPACK_Factorization (matrix inversion), BPACK_Mult (apply the matrix) and BPACK_Solution (solve with inverted or preconditioned matrices). 
 
 ## H matrix 
 The H matrix assumes that the matrix is first split into four smaller blocks. When any block representing interactions that are either too close or non-compressible, the block is further split into four small blocks. The recursive splitting leads to a partioned matrix of log(N) levels. Each compressible block is represented as a low-rank product. ButterflyPACK currently supports parallel construction and block LU factorization of H matrices, assuming any block is handled by one MPI. The relevant options are: 
@@ -8,6 +11,7 @@ option%format=2  ! format 2 is H or H-BF
 option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
 option%LRlevel=0 ! use LR representation from level 0 (i.e., all levels are compressed with LR). 
 option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks 
 \endcode
 
 ## H-BF matrix
@@ -19,6 +23,7 @@ option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e.,
 option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
 option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
 option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks 
 \endcode
 
 ## HODLR matrix
@@ -27,6 +32,7 @@ The HODLR (hierarchically off-diagonal low-rank) matrix assumes that the matrix 
 option%format=1  ! format 1 is HODLR or HODBF
 option%LRlevel=0 ! use LR representation from level 0 (i.e., all levels are compressed with LR). 
 option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the leaf-level diagonal blocks 
 \endcode
 
 ## HODBF matrix
@@ -36,17 +42,85 @@ option%format=1  ! format 1 is HODLR or HODBF
 option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
 option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
 option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
-option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the leaf-level diagonal blocks 
 \endcode
 
 ## HSSBF matrix
 The HSSBF (hierarchically semi-separable butterfly) format is an extension of HODBF. Unlike HODBF that leads to an O(logN) level partitioning, HSSBF uses an O(loglogN) level partitioning. For low-dimensional problems, this leads to much smaller prefactors compared to HODBF. The relevant options are: 
 \code{fortran} 
-option%format=3  ! format 3 is HSSBF
+option%format=3  ! format 3 is HSSBF or SHNBF 
+option%near_para=0.0 ! admissibility parameter. 
+option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the leaf-level diagonal blocks
+\endcode
+
+## SHNBF matrix
+The SHNBF (strongly admissible and hierarchically nested butterfly) format is a strong-admissible extension of HSSBF. SHNBF uses an O(loglogN) level partitioning. For high-dimensional problems, this leads to much smaller prefactors and low asymptotic complexities. The relevant options are: 
+\code{fortran} 
+option%format=3  ! format 3 is HSSBF or SHNBF 
+option%near_para=2.1 ! admissibility parameter. 
+option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks
+\endcode
+
+# Single matrix block
+For non-square matrix operators, the supported APIs are BF_Construct_Init/BP_Construct_Init (initialization), BF_Construct_Element_Compute/BP_Construct_Element_Compute (element evaluation-based construction), BF_Construct_Element_Matvec (sketching-based construction), and BF_Mult/BP_Mult (apply the matrix). 
+
+## H/H-BF matrix 
+The H matrix assumes that the matrix is first split into four smaller blocks. When any block representing interactions that are either too close or non-compressible, the block is further split into four small blocks. The recursive splitting leads to a partioned matrix of log(N) levels. Each compressible block is represented as a low-rank product or butterfly. ButterflyPACK currently supports parallel construction of non-square H matrices, assuming any block is handled by one MPI. The relevant options are: 
+\code{fortran} 
+option%format=2  ! format 2 is H or H-BF
+option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
+option%LRlevel=0 or 100 ! use LR representation from level 0 (i.e., all levels are compressed with LR). 
+option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks
+\endcode
+
+## Single LR or butterfly matrix
+The single LR or butterfly doesn't split the matrix due to admissibility conditions, but rather performs a single compression. The relevant options are: 
+\code{fortran} 
+option%format=1  ! format 1 is single Low-rank or single butterfly
+option%LRlevel=0 or 100 ! use LR representation (0) or butterfly representation (100). 
+option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
+\endcode
+
+## SHNBF matrix
+The SHNBF (hierarchically semi-separable butterfly) format for non-square matrix is similar to that of square matrix. The relevant options are: 
+\code{fortran} 
+option%format=3  ! format 3 is SHNBF 
+option%near_para=2.1 ! admissibility parameter. 
 option%LRlevel=100 ! use LR representation from level 100 to bottom level (i.e., all levels above 100 are compressed with Butterfly). 
 option%forwardN15flag=0 ! whether to use a slower n^1.5 algorithm (stable), or a nlogn algorithm (less stable)
 option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
 option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
 \endcode
+
+# Single tensor 
+ButterlfyPACK also supports compressing a tensor into a tensor-butterfly or tucker-like decomposition. The supported APIs are BF_MD_Construct_Init (initialization), BF_MD_Construct_Element_Compute (element evaluation-based construction), and BF_MD_block_mvp (apply the tensor). 
+
+## Butterfly-tensor or tensor interpolative decomposition
+The relevant options are: 
+\code{fortran} 
+option%format=4  ! format 4 is needed for tensor compression
+option%LRlevel=0 or 100 ! use tucker-like (i.e., tensor interpolative decomposition) representation (0) or tensor-butterfly representation (100). 
+option%knn=10 ! nearest neighbors per point used for selecting proxy points in butterfly compression 
+option%sample_para=4.0 ! oversampling factor used for selecting proxy points in butterfly compression 
+option%fastsample_tensor=0 or 1 or 2 ! How to quickly generate proxy indices for the compression operations
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the middle-level subtensors
+\endcode
+
 
 */

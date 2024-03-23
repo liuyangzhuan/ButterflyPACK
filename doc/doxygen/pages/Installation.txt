@@ -2,9 +2,9 @@
 \tableofcontents
 
 # CMake Based Build
-The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
+The installation uses CMake build system. You may need "bash" for the build process. When MPI is used, the software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
 
-For an installation with GNU compiliers, do:
+For an installation with GNU compiliers and MPI, do:
 
 \code {.bash}
 > export BLAS_LIB=<Lib of the BLAS installation>
@@ -39,6 +39,29 @@ the examples (C++: ctest, ctest_simple, cfio, cifio, cfio2d, go2d, go3d. Fortran
 
 ( see example cmake scripts in example_scripts: run_cmake_build_gnu_ubuntu.sh, run_cmake_build_intel_ubuntu.sh, run_cmake_build_gnu_cori.sh, run_cmake_build_intel_cori.sh)
 
+For an installation with GNU compiliers and no MPI, do:
+
+\code {.bash}
+> export BLAS_LIB=<Lib of the BLAS installation>
+> export LAPACK_LIB=<Lib of the LAPACK installation>
+> mkdir build ; cd build;
+> cmake .. \
+ 	-DCMAKE_Fortran_FLAGS="" \
+ 	-DCMAKE_CXX_FLAGS="" \
+ 	-Denable_doc=OFF \
+ 	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
+ 	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
+ 	-DBUILD_SHARED_LIBS=ON \
+ 	-DCMAKE_Fortran_COMPILER=gfortran \
+ 	-DCMAKE_CXX_COMPILER=g++ \
+ 	-DCMAKE_C_COMPILER=gcc \
+ 	-DCMAKE_INSTALL_PREFIX=. \ # installation path
+	-DCMAKE_INSTALL_LIBDIR=./lib \ # some system installs the libraries to lib64 by default
+ 	-DCMAKE_BUILD_TYPE=Release
+> make install
+\endcode
+
+( see example cmake script in example_scripts: run_cmake_build_gnu_ubuntu_mpi4_gcc910_sequential.sh)
 
 # SPACK, xSDK \& E4S
 

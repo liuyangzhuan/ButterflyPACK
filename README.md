@@ -70,13 +70,17 @@ make install
  - Yang Liu - liuyangzhuan@lbl.gov (Lawrence Berkeley National Laboratory)
 
 ## Other contributors
- - Wissam Sid-Lakhdar - wissam@lbl.gov (Lawrence Berkeley National Laboratory)
+ - Wissam Sid-Lakhdar - wissam@lbl.gov (University of Tennessee)
  - Pieter Ghysels - pghysels@lbl.gov (Lawrence Berkeley National Laboratory)
  - Xiaoye S. Li - xsli@lbl.gov (Lawrence Berkeley National Laboratory)
- - Han Guo - hanguo@umich.edu (University of Michigan)
+ - Han Guo - hanguo@umich.edu (Cadence)
  - Eric Michielssen - emichiel@umich.edu (University of Michigan)
- - Haizhao Yang - matyh@nus.edu.sg (National University of Singapore)
- - Allen Qiang - allenqiang1@gmail.com
+ - Haizhao Yang - matyh@nus.edu.sg (University of Maryland College Park)
+ - Allen Qiang - allenqiang1@gmail.com (Stanford University)
+ - Jianliang Qian - jqian@msu.edu (Michigan State University)
+ - Tianyi Shi - tianyishi@lbl.gov (Lawrence Berkeley National Laboratory)
+ - Hengrui Luo - hrluo@lbl.gov (Rice University)
+ - Paul Michael Kielstra - pmkielstra@lbl.gov (University of California Berkeley)
 
 ## Reference
 
