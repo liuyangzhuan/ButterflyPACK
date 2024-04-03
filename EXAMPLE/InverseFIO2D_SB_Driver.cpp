@@ -741,8 +741,12 @@ int main(int argc, char* argv[])
 	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
 	z_c_bpack_set_I_option(&option1, "per_geo", 1);// periodic geometry points
-	z_c_bpack_set_D_option(&option1, "period1", 1e0);// period in the first dimension
-	z_c_bpack_set_D_option(&option1, "period2", 1e0);// period in the second dimension
+  z_c_bpack_getstats(&stats_a, "Rank_max", &tmp);
+	z_c_bpack_set_I_option(&option1, "rank0", (int)tmp+10);// initial guess for the rank the same as the BF rank
+	z_c_bpack_set_D_option(&option1, "period1", (double)Ns);// period in the first dimension
+	z_c_bpack_set_D_option(&option1, "period2", (double)Ns);// period in the second dimension
+  // tol=1e-10;
+  // z_c_bpack_set_D_option(&option1, "tol_Rdetect", tol*3e-1);   // bf_mv uses this tolerance
 
   // tol=1e-4;
 	// z_c_bpack_set_D_option(&option1, "tol_comp", tol);
@@ -781,19 +785,28 @@ int main(int argc, char* argv[])
 	_Complex double* x = new _Complex double[nrhs*myseg_n];
 
 	//////////////////// Generate a true solution xtrue, and its rhs b using A
-	for (int r = 0; r<nrhs; r++){
+#if 0	
+  for (int i = 0; i < nrhs*myseg_n; i++){
+    if(myrank==master_rank && i<1)
+  		xtrue[i]=1;
+    else
+      xtrue[i]=0;
+	}  
+#else   
+  for (int r = 0; r<nrhs; r++){
     for (int i = 0; i < myseg_n; i++){
       int i_new_loc = i+1;
       int64_t i_new = i+(int64_t)myseg_n*r;
       int i_old;
       z_c_bpack_new2old(&msh1,&i_new_loc,&i_old);
 
-      if(i_old=(int)Npo1/4.0)
+      if(i_old==(int)Npo1/4.0)
         xtrue[i_new]=1;
       else
         xtrue[i_new]=0;
     }
   }
+#endif
   z_c_bf_mult(&transN, xtrue, b, &myseg_n, &myseg_m, &nrhs, &bf_a, &option, &stats_a, &ptree);
 
 
