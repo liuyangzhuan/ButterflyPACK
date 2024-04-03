@@ -981,6 +981,17 @@ contains
       bmag = sqrt(abs(bmag_sum1))
       rerr = ta/bmag
 
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         return
+      endif
+
+
       iters: do it = 1, itmax
          amgis_local = dot_product(r0_initial, v)
          call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &

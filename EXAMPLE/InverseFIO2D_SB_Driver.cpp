@@ -77,6 +77,9 @@ public:
   int _m_rand;
   int _n_rand;
   int _d=1;
+  double _mu=1.0; // parameters in Split Bregman
+  double _lambda=1.0; // parameters in Split Bregman
+  int _regularizer=1; // 1: L1, 2: TV norm
 
   vector<double> _data_m;
   vector<double> _data;
@@ -115,31 +118,32 @@ public:
         // m still need to convert to the original order, using new2old of rows
         int m_1;
         m_1 = _Hperm_m[m];
-        double k1 = _data_m[(m_1-1) * _d];
-        double k2 = _data_m[(m_1-1) * _d+1];
+        double x1 = _data_m[(m_1-1) * _d];
+        double x2 = _data_m[(m_1-1) * _d+1];
 
         // n still need to convert to the original order, using new2old of cols
         int n_1;
         n_1 = _Hperm[n];
-        double x1 = _data[(n_1-1) * _d];
-        double x2 = _data[(n_1-1) * _d+1];
+        double k1 = _data[(n_1-1) * _d];
+        double k2 = _data[(n_1-1) * _d+1];
 
         double xk = x1*k1+x2*k2;
-        double tmp = (2*M_PI)* (xk);
+        double xkabs = sqrt(pow(x1,2)+pow(x2,2))*sqrt(pow(k1,2)+pow(k2,2));
+        double tmp = (2*M_PI)* (xk+xkabs);
         *val = cos(tmp)+Im*sin(tmp);
 
 		}else if(_ker==2){
         // m still need to convert to the original order, using new2old of rows
         int m_1;
         m_1 = _Hperm_m[m];
-        double k1 = _data_m[(m_1-1) * _d];
-        double k2 = _data_m[(m_1-1) * _d+1];
+        double x1 = _data_m[(m_1-1) * _d];
+        double x2 = _data_m[(m_1-1) * _d+1];
 
         // n still need to convert to the original order, using new2old of cols
         int n_1;
         n_1 = _Hperm[n];
-        double x1 = _data[(n_1-1) * _d];
-        double x2 = _data[(n_1-1) * _d+1];
+        double k1 = _data[(n_1-1) * _d];
+        double k2 = _data[(n_1-1) * _d+1];
 
         double xk = x1*k1+x2*k2;
         double sx = (2+sin(2*M_PI*x1)*sin(2*M_PI*x2))/16.0;
@@ -218,8 +222,12 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
     for (int ii=0; ii<(*nvec)*(Q->_mloc); ii++)
       xbuf1[ii]=conj(xbuf1[ii]);
     z_c_bf_mult(&transT, xbuf1, xout, &(Q->_mloc), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
-    for (int ii=0; ii<cnt; ii++)
-      xout[ii]=conj(xout[ii]);
+    if(Q->_regularizer==1){
+      for (int ii=0; ii<cnt; ii++)
+        xout[ii]=conj(xout[ii])*Q->_mu +Q->_lambda*xin[ii];
+    }else if(Q->_regularizer==2){
+      std::cout<<"TV norm regularizer not yet implemented. "<<std::endl;
+    }
   }else if(*trans=='T'){
     for (int ii=0; ii<cnt; ii++)
       xin1[ii]=conj(xin[ii]);
@@ -227,6 +235,12 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
     for (int ii=0; ii<(*nvec)*(Q->_mloc); ii++)
       xbuf1[ii]=conj(xbuf1[ii]);
     z_c_bf_mult(trans, xbuf1, xout, &(Q->_mloc), nout, nvec, Q->bf_a,Q->option_a,Q->stats_a,Q->ptree_a);
+    if(Q->_regularizer==1){
+      for (int ii=0; ii<cnt; ii++)
+        xout[ii]=xout[ii]*Q->_mu +Q->_lambda*xin[ii];
+    }else if(Q->_regularizer==2){
+      std::cout<<"TV norm regularizer not yet implemented. "<<std::endl;
+    }
   }
 
   delete[] xbuf1;
@@ -449,6 +463,25 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
     }
   }
 
+
+inline _Complex double shrink(_Complex double x, double r) {
+  double absx = cabs(x);
+  if(absx<1e-12){
+    return 0;
+  }else{
+    return x/absx * max(absx - r, 0.0);
+  }
+}
+
+inline double l2_norm(_Complex double const* u, int n) {
+    double accum = 0.;
+    for (int i = 0; i < n; ++i) {
+        accum += pow(cabs(u[i]),2);
+    }
+    return sqrt(accum);
+}
+
+
 // This example uses entry evaluation to compute three butterflies and use matvec to compress their products. The three butterflies are of size MxN, NxK, KxL, the fourth butterfly is of size MxL
 ////////////////////////////////////////////////////////////////////////////////
 // --------------------------- Main Code Starts Here ------------------------ //
@@ -456,14 +489,12 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
 int main(int argc, char* argv[])
 {
 
-    int myrank, size;                     // Store values of processor rank and total no of procs requestedss
-    int master_rank = 0;
-	MPI_Init(&argc, &argv); 	                            // Initialize MPI, called only once
-    MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
-    MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
-    MPI_Op op;
-	double h=0.1; //kernel parameter
-	double lambda=10.0 ; //kernel parameter
+  int myrank, size;                     // Store values of processor rank and total no of procs requestedss
+  int master_rank = 0;
+  MPI_Init(&argc, &argv); 	                            // Initialize MPI, called only once
+  MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
+  MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
+  MPI_Op op;
 	int Npo=5000;   // matrix size
 	int Ndim=2; //data dimension
 	double starttime, endtime;
@@ -487,11 +518,16 @@ int main(int argc, char* argv[])
   int tst = 2;
 	int lrlevel=100;
 
-if(myrank==master_rank){
-	z_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
-	std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
-}
+  double mu=1.0; // parameters in Split Bregman
+  double lambda=1.0; // parameters in Split Bregman
+  int regularizer=1; // 1: L1, 2: TV norm
+  int maxitsb=10; // max number of Split Bregman iterations
+  double tol_sb=1e-10; // Split Bregman iteration termination criteria
 
+  if(myrank==master_rank){
+    z_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
+    std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
+  }
 
 
 	/*****************************************************************/
@@ -513,6 +549,11 @@ if(myrank==master_rank){
     {{"M",                   required_argument, 0, 1},
       {"N",                   required_argument, 0, 2},
       {"ker",             required_argument, 0, 3},
+      {"mu",             required_argument, 0, 4},
+      {"lambda",             required_argument, 0, 5},
+      {"regularizer",             required_argument, 0, 6},
+      {"maxitsb",             required_argument, 0, 7},
+      {"tol_sb",             required_argument, 0, 8},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -533,6 +574,26 @@ if(myrank==master_rank){
     case 3: {
       std::istringstream iss(optarg);
       iss >> ker;
+    } break;
+    case 4: {
+      std::istringstream iss(optarg);
+      iss >> mu;
+    } break;
+    case 5: {
+      std::istringstream iss(optarg);
+      iss >> lambda;
+    } break;
+    case 6: {
+      std::istringstream iss(optarg);
+      iss >> regularizer;
+    } break;
+    case 7: {
+      std::istringstream iss(optarg);
+      iss >> maxitsb;
+    } break;
+    case 8: {
+      std::istringstream iss(optarg);
+      iss >> tol_sb;
     } break;
     default: break;
     }
@@ -614,8 +675,8 @@ if(myrank==master_rank){
   for(int ii=0;ii<M;ii++){
     int idx_x = ii%Ms;
     int idx_y = ii/Ms;
-    data_geo_m[(ii) * Ndim] = idx_x-Ms/2.0;
-    data_geo_m[(ii) * Ndim+1] = idx_y-Ms/2.0;
+    data_geo_m[(ii) * Ndim] = idx_x/((double)Ms);
+    data_geo_m[(ii) * Ndim+1] = idx_y/((double)Ms);
   }
   vector<double> data_geo_n;
   int Ns = int(sqrt(N));
@@ -623,8 +684,8 @@ if(myrank==master_rank){
   for(int ii=0;ii<N;ii++){
     int idx_x = ii%Ns;
     int idx_y = ii/Ns;
-    data_geo_n[(ii) * Ndim] = idx_x/((double)Ns);
-    data_geo_n[(ii) * Ndim+1] = idx_y/((double)Ns);
+    data_geo_n[(ii) * Ndim] = idx_x-Ns/2.0;
+    data_geo_n[(ii) * Ndim+1] = idx_y-Ns/2.0;
   }
   quant_ptr_a=new C_QuantApp(M, N, Ndim, data_geo_m, data_geo_n, ker);
 
@@ -669,6 +730,9 @@ if(myrank==master_rank){
 	quant_ptr1->ptree_a=&ptree;
 	quant_ptr1->stats_a=&stats_a;
 	quant_ptr1->option_a=&option;
+	quant_ptr1->_mu=mu;
+	quant_ptr1->_lambda=lambda;
+	quant_ptr1->_regularizer=regularizer;
 
 	z_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
 	z_c_bpack_copyoption(&option,&option1);
@@ -713,34 +777,114 @@ if(myrank==master_rank){
 	_Complex double* b = new _Complex double[nrhs*myseg_m];
 	_Complex double* xtrue = new _Complex double[nrhs*myseg_n];
 	_Complex double* xbuf = new _Complex double[nrhs*myseg_n];
+	_Complex double* Atb = new _Complex double[nrhs*myseg_n];
 	_Complex double* x = new _Complex double[nrhs*myseg_n];
 
 	//////////////////// Generate a true solution xtrue, and its rhs b using A
-	for (int i = 0; i < nrhs*myseg_n; i++){
-		xtrue[i]=1;
-	}
+	for (int r = 0; r<nrhs; r++){
+    for (int i = 0; i < myseg_n; i++){
+      int i_new_loc = i+1;
+      int64_t i_new = i+(int64_t)myseg_n*r;
+      int i_old;
+      z_c_bpack_new2old(&msh1,&i_new_loc,&i_old);
+
+      if(i_old=(int)Npo1/4.0)
+        xtrue[i_new]=1;
+      else
+        xtrue[i_new]=0;
+    }
+  }
   z_c_bf_mult(&transN, xtrue, b, &myseg_n, &myseg_m, &nrhs, &bf_a, &option, &stats_a, &ptree);
 
 
-  //////////////////// Generate an approximate solution using (A^*A)^-1A^*b
+
+
+  //////////////////// Split Bregman Iterations
+
+  _Complex double* b0 = new _Complex double[nrhs*myseg_n];
+  _Complex double* d0 = new _Complex double[nrhs*myseg_n];
+  _Complex double* u0 = new _Complex double[nrhs*myseg_n];
+	for (int i = 0; i < nrhs*myseg_n; i++){
+		b0[i]=0;
+		d0[i]=0;
+		u0[i]=0;
+		x[i]=0;
+	}
+  // Generate xbuf=A^*b
 	for (int i = 0; i < nrhs*myseg_m; i++)
 		b[i]=conj(b[i]);
-  z_c_bf_mult(&transT, b, xbuf, &myseg_m, &myseg_n, &nrhs, &bf_a, &option, &stats_a, &ptree);
+  z_c_bf_mult(&transT, b, Atb, &myseg_m, &myseg_n, &nrhs, &bf_a, &option, &stats_a, &ptree);
+	for (int i = 0; i < nrhs*myseg_m; i++)
+		b[i]=conj(b[i]);
 	for (int i = 0; i < nrhs*myseg_n; i++)
-		xbuf[i]=conj(xbuf[i]);
-	z_c_bpack_solve(x,xbuf,&myseg_n,&nrhs,&bmat1,&option1,&stats1,&ptree);
+		Atb[i]=conj(Atb[i]);
 
-  double norm1=0,norm2=0,norm1t=0,norm2t=0;
-  for (int i = 0; i < nrhs*myseg_n; i++){
-		norm1+=pow(cabs(xtrue[i]),2);
-		norm2+=pow(cabs(xtrue[i]-x[i]),2);
-	}
+  if(quant_ptr1->_regularizer==1){
+    // The initial guess of x is a random vector
+    for (int i = 0; i < nrhs*myseg_n; i++)
+      x[i]=(double)rand()/RAND_MAX + Im*(double)rand()/RAND_MAX; //xtrue[i]; //
 
-  MPI_Reduce(&norm1,&norm1t,1,MPI_DOUBLE,MPI_MAX,master_rank,MPI_COMM_WORLD);
-  MPI_Reduce(&norm2,&norm2t,1,MPI_DOUBLE,MPI_MAX,master_rank,MPI_COMM_WORLD);
+    // The initial guess of d0 should be the same as initial guess for x
+    for (int i = 0; i < nrhs*myseg_n; i++)
+      d0[i]=x[i];
+    for (int i = 0; i < nrhs*myseg_n; i++)
+      u0[i]=x[i];
+
+  }else if(quant_ptr1->_regularizer==2){
+    std::cout<<"TV norm regularizer not yet implemented. "<<std::endl;
+  }
 
 
-  if(myrank==master_rank)std::cout<<"|x-xtrue|/|xtrue| for inverse FIO: "<< sqrt(norm2t)/sqrt(norm1t) <<std::endl;
+  for(int iter=0; iter<maxitsb;iter++){
+    if(quant_ptr1->_regularizer==1){
+
+      // Step 1: update u0 by linear solver
+      for (int i = 0; i < nrhs*myseg_n; i++)
+		    xbuf[i]=Atb[i]*quant_ptr1->_mu +quant_ptr1->_lambda*(d0[i]-b0[i]);
+
+      z_c_bpack_solve(x,xbuf,&myseg_n,&nrhs,&bmat1,&option1,&stats1,&ptree);
+
+      // check convergence
+      for (int i = 0; i < nrhs*myseg_n; i++)
+        u0[i] = u0[i]-x[i];
+      double norm3=pow(l2_norm(u0,nrhs*myseg_n),2);
+      MPI_Allreduce(MPI_IN_PLACE,&norm3,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);
+      double norm1=0,norm2=0,norm1t=0,norm2t=0;
+      for (int i = 0; i < nrhs*myseg_n; i++){
+        norm1+=pow(cabs(xtrue[i]),2);
+        norm2+=pow(cabs(xtrue[i]-x[i]),2);
+      }
+      MPI_Reduce(&norm1,&norm1t,1,MPI_DOUBLE,MPI_MAX,master_rank,MPI_COMM_WORLD);
+      MPI_Reduce(&norm2,&norm2t,1,MPI_DOUBLE,MPI_MAX,master_rank,MPI_COMM_WORLD);
+
+
+      if(myrank==master_rank)
+        std::cout<<"Bregman iteration "<<iter<<" |u_k-u_(k-1)|: "<<norm3<< " |x-xtrue|/|xtrue|: "<<sqrt(norm2t)/sqrt(norm1t)<<std::endl;
+
+      if(norm3<tol_sb){
+        break;
+      }
+
+      for (int i = 0; i < nrhs*myseg_n; i++)
+        u0[i] = x[i];
+
+      // Step 2: update d0 by shrinkage
+      for (int i = 0; i < nrhs*myseg_n; i++)
+        d0[i]=shrink(u0[i]+b0[i],1/quant_ptr1->_lambda);
+
+      // Step 3: update b0
+      for (int i = 0; i < nrhs*myseg_n; i++)
+        b0[i] = b0[i] + u0[i] - d0[i];
+    }else if(quant_ptr1->_regularizer==2){
+      std::cout<<"TV norm regularizer not yet implemented. "<<std::endl;
+    }
+  }
+
+
+
+
+
+
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the second Bmat: "<<std::endl;
 	z_c_bpack_printstats(&stats1,&ptree1);

@@ -184,6 +184,15 @@ target_link_libraries(cifio2d ${all_link_libs_d})
 target_link_libraries(cifio2d ${all_link_libs_z})
 add_dependencies(cifio2d cifio)
 endif()
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CIFEXM2D InverseFIO2D_SB_Driver.cpp)
+add_executable(cifio2dsb ${CIFEXM2D})
+target_link_libraries(cifio2dsb ${all_link_libs_d})
+target_link_libraries(cifio2dsb ${all_link_libs_z})
+add_dependencies(cifio2dsb cifio2d)
+endif()
+
 endif()
 
 

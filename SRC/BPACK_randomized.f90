@@ -205,7 +205,7 @@ contains
             call Hmat_randomized_OneL_Fullmat(h_mat, blackbox_Hmat_MVP, Nloc, level_c, Memtmp, ker, ptree, option, stats, msh, matnorm)
             stats%Mem_Direct_for = stats%Mem_Direct_for + Memtmp
          else
-            if (level_c > option%LRlevel) then
+            if (level_c >= option%LRlevel) then
                level_butterfly = 0
             else
                level_butterfly = h_mat%Maxlevel - level_c

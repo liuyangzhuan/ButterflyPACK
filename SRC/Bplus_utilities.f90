@@ -18373,8 +18373,8 @@ else
 #if HAVE_ZFP
                   if(present(zfpquants))then
                      tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
-                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)        
-                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)   
+                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
                      if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
                      call LogMemory(stats, -tmpmem)
                   endif
