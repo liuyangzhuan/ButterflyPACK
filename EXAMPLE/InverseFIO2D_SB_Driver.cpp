@@ -297,6 +297,8 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
        {"sample_para", required_argument, 0, 28},
        {"pat_comp",    required_argument, 0, 29},
        {"knn",         required_argument, 0, 30},
+       {"hextralevel",         required_argument, 0, 31},
+       {"use_zfp",         required_argument, 0, 32},
        {NULL, 0, NULL, 0}
       };
     int c, option_index = 0;
@@ -457,6 +459,16 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "knn", opt_i);
+      } break;
+      case 31: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "hextralevel", opt_i);
+      } break;
+      case 32: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "use_zfp", opt_i);
       } break;
       default: break;
       }
@@ -741,6 +753,7 @@ int main(int argc, char* argv[])
 	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
 	z_c_bpack_set_I_option(&option1, "per_geo", 1);// periodic geometry points
+	// z_c_bpack_set_I_option(&option1, "Nmin_leaf", 128);// leafsize
   z_c_bpack_getstats(&stats_a, "Rank_max", &tmp);
 	z_c_bpack_set_I_option(&option1, "rank0", (int)tmp+10);// initial guess for the rank the same as the BF rank
 	z_c_bpack_set_D_option(&option1, "period1", (double)Ns);// period in the first dimension
@@ -785,14 +798,14 @@ int main(int argc, char* argv[])
 	_Complex double* x = new _Complex double[nrhs*myseg_n];
 
 	//////////////////// Generate a true solution xtrue, and its rhs b using A
-#if 0	
+#if 0
   for (int i = 0; i < nrhs*myseg_n; i++){
     if(myrank==master_rank && i<1)
   		xtrue[i]=1;
     else
       xtrue[i]=0;
-	}  
-#else   
+	}
+#else
   for (int r = 0; r<nrhs; r++){
     for (int i = 0; i < myseg_n; i++){
       int i_new_loc = i+1;

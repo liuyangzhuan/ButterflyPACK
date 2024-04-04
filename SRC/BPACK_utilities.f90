@@ -782,6 +782,7 @@ contains
       option%RecLR_leaf = BACA
       option%nogeo = 0
       option%per_geo = 0
+      option%hextralevel = 0
       option%periods = 0
       option%ErrSol = 0
       option%LR_BLK_NUM = 1
@@ -876,6 +877,8 @@ contains
                   read (strings1, *) option%nogeo
                else if (trim(strings) == '--per_geo') then
                   read (strings1, *) option%per_geo
+               else if (trim(strings) == '--hextralevel') then
+                  read (strings1, *) option%hextralevel
                else if (trim(strings) == '--period1') then
                   read (strings1, *) option%periods(1)
                else if (trim(strings) == '--period2') then
@@ -973,6 +976,7 @@ contains
       option1%RecLR_leaf = option%RecLR_leaf
       option1%nogeo = option%nogeo
       option1%per_geo = option%per_geo
+      option1%hextralevel = option%hextralevel
       option1%periods = option%periods
       option1%ErrSol = option%ErrSol
       option1%LR_BLK_NUM = option%LR_BLK_NUM
@@ -1030,6 +1034,7 @@ option1%fastsample_tensor = option%fastsample_tensor
          write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
          write (*, '(A18,I8)') 'nogeo', option%nogeo
          write (*, '(A18,I8)') 'per_geo', option%per_geo
+         write (*, '(A18,I8)') 'hextralevel', option%hextralevel
          write (*, '(A18,Es14.7)') 'period1', option%periods(1)
          write (*, '(A18,Es14.7)') 'period2', option%periods(2)
          write (*, '(A18,Es14.7)') 'period3', option%periods(3)

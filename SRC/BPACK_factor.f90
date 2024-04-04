@@ -367,7 +367,7 @@ contains
         type(mesh)::msh
 
         integer level, flag, num_blocks, level_butterfly
-        integer Primary_block, kk, i, j, k, intemp, ierr
+        integer Primary_block, kk, i, j, k, ij, intemp, ierr
         integer systime0(8), systime1(8)
         character(len=10) :: date1, time1, zone1
         real*8 rtemp1, rtemp2, rtemp
@@ -383,7 +383,10 @@ contains
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
-
+! #ifdef HAVE_TASKLOOP
+!       !$omp parallel
+!       !$omp single
+! #endif
         nn1 = MPI_Wtime()
 
         if(option%ILU==1)then
@@ -471,6 +474,9 @@ contains
                     call Hmat_block_ComputeMemory(blocks_r, Memory)
                     call LogMemory(stats, Memory)
                 endif
+! #ifdef HAVE_TASKLOOP
+!                 !$omp taskloop default(shared) private(j,jproc1, myj1,blocks_uu,blocks_mm)
+! #endif
                 do j=kk+1,num_blocks
                     call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                     if(iproc==myrow .and. jproc1==mycol)then
@@ -480,6 +486,12 @@ contains
                         call pack_all_blocks_one_node(blocks_uu, msh, option)
                     endif
                 enddo
+! #ifdef HAVE_TASKLOOP
+!                 !$omp end taskloop
+! #endif
+! #ifdef HAVE_TASKLOOP
+!                 !$omp taskloop default(shared) private(i,iproc1, myi1,blocks_ll,blocks_mm)
+! #endif
                 do i=kk+1,num_blocks
                     call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
                     if(iproc1==myrow .and. jproc==mycol)then
@@ -489,6 +501,9 @@ contains
                         call pack_all_blocks_one_node(blocks_ll, msh, option)
                     endif
                 enddo
+! #ifdef HAVE_TASKLOOP
+!                 !$omp end taskloop
+! #endif
                 if (recv == 1)then
                     Memory=0
                     call Hmat_block_ComputeMemory(blocks_r, Memory)
@@ -575,26 +590,39 @@ contains
                 T4 = MPI_Wtime()
                 stats%Time_idle = stats%Time_idle + T4 - T3
 
-                do i=kk+1,num_blocks
-                do j=kk+1,num_blocks
-                    call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
-                    call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
-                    if(iproc1==myrow .and. jproc1==mycol)then
-                        blocks_ll => h_mat%Computing_matricesblock_l(myj1, myi1)
-                        blocks_uu => h_mat%Computing_matricesblock_u(myj1, myi1)
-                        blocks_mm => h_mat%Local_blocks(myj1, myi1)
-                        call Hmat_add_multiply(blocks_mm, '-', blocks_ll, blocks_uu, h_mat, option, stats, ptree, msh)
-                        Memory=0
-                        call Hmat_block_ComputeMemory(blocks_ll, Memory)
-                        call LogMemory(stats, -Memory)
-                        Memory=0
-                        call Hmat_block_ComputeMemory(blocks_uu, -Memory)
-                        call LogMemory(stats, -Memory)
-                        call Hmat_block_delete(blocks_ll)
-                        call Hmat_block_delete(blocks_uu)
-                    endif
-                enddo
-                enddo
+
+                if(kk+1<=num_blocks)then
+! #ifdef HAVE_TASKLOOP
+!                     !$omp taskloop default(shared) private(ij,i,j,iproc1, myi1,jproc1, myj1,blocks_ll,blocks_uu,blocks_mm,Memory)
+! #endif
+                    do ij = 1, (num_blocks-kk)*(num_blocks-kk)
+                        j = (ij - 1)/(num_blocks-kk) + 1
+                        i = mod(ij - 1, (num_blocks-kk)) + 1
+                        i = i + kk
+                        j = j + kk
+                        call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
+                        call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
+                        if(iproc1==myrow .and. jproc1==mycol)then
+                            blocks_ll => h_mat%Computing_matricesblock_l(myj1, myi1)
+                            blocks_uu => h_mat%Computing_matricesblock_u(myj1, myi1)
+                            blocks_mm => h_mat%Local_blocks(myj1, myi1)
+                            call Hmat_add_multiply(blocks_mm, '-', blocks_ll, blocks_uu, h_mat, option, stats, ptree, msh)
+                            Memory=0
+                            call Hmat_block_ComputeMemory(blocks_ll, Memory)
+                            call LogMemory(stats, -Memory)
+                            Memory=0
+                            call Hmat_block_ComputeMemory(blocks_uu, -Memory)
+                            call LogMemory(stats, -Memory)
+                            call Hmat_block_delete(blocks_ll)
+                            call Hmat_block_delete(blocks_uu)
+                        endif
+                    enddo
+! #ifdef HAVE_TASKLOOP
+!                     !$omp end taskloop
+! #endif
+                endif
+
+
             enddo
 
             deallocate(h_mat%Computing_matricesblock_m)
@@ -613,7 +641,10 @@ contains
 
         nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
-
+! #ifdef HAVE_TASKLOOP
+!       !$omp end single
+!       !$omp end parallel
+! #endif
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
         call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)

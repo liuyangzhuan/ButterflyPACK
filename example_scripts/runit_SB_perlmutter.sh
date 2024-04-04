@@ -43,8 +43,10 @@ maxitsb=40
 nmin_leaf=32
 nmpi=512
 precon=1
+use_zfp=0
+hextralevel=1
 # N_FIO=256 512 1024 2048 4096
-for N_FIO in 65536 #16384
+for N_FIO in 65536 #16384 #
 do
-srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/cifio2dsb -quant --ker ${ker} --M ${N_FIO} --N ${N_FIO} --mu ${mu} --lambda ${lambda} --maxitsb ${maxitsb} -option --format 2 --near_para 2.01 --tol_comp ${tol} --errsol 0 --precon ${precon} --tol_itersol ${tol_itersol} --xyzsort 1 --rank0 ${rank0} --rankrate ${rankrate} --nmin_leaf ${nmin_leaf} | tee a.out_matrix_IFIO2D_SB_N_FIO${N_FIO}_ker${ker}_tol${tol}_mpi${nmpi}_omp${NTH}
+srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/cifio2dsb -quant --ker ${ker} --M ${N_FIO} --N ${N_FIO} --mu ${mu} --lambda ${lambda} --maxitsb ${maxitsb} -option --use_zfp ${use_zfp} --format 2 --near_para 2.01 --tol_comp ${tol} --errsol 0 --precon ${precon} --tol_itersol ${tol_itersol} --xyzsort 1 --rank0 ${rank0} --hextralevel ${hextralevel} --rankrate ${rankrate} --nmin_leaf ${nmin_leaf} | tee a.out_matrix_IFIO2D_SB_N_FIO${N_FIO}_ker${ker}_tol${tol}_mpi${nmpi}_omp${NTH}
 done

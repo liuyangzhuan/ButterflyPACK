@@ -497,6 +497,10 @@ contains
          val_d = option%per_geo
          valid_opt = 1
       endif
+      if (trim(str) == 'hextralevel') then
+         val_d = option%hextralevel
+         valid_opt = 1
+      endif
       if (trim(str) == 'less_adapt') then
          val_d = option%less_adapt
          valid_opt = 1
@@ -747,6 +751,11 @@ contains
       if (trim(str) == 'per_geo') then
          call c_f_pointer(val_Cptr, val_i)
          option%per_geo = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'hextralevel') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%hextralevel = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'less_adapt') then

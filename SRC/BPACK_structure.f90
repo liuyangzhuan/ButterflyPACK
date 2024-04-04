@@ -2668,6 +2668,7 @@ end function distance_geo
       do while (2**level<ii)
          level = level + 1
       enddo
+      level =level + option%hextralevel
       msh%Dist_level = level
       h_mat%Dist_level = level
 

@@ -621,6 +621,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 0: do not use zfp
 
         ! options for matrix construction
+        integer Hextralevel !< extra levels for top partitioning of the H matrix based on MPI counts.
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
         real(kind=8) tol_comp      !< matrix construction tolerance
         integer::Nmin_leaf !< leaf sizes of HODLR tree
@@ -636,7 +637,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: elem_extract !< 1: use user-defined element extraction 0: use user-defined formula
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
         integer:: knn !< number of nearest neighbour points for each point
-integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
+        integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
