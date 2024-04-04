@@ -1024,6 +1024,14 @@ contains
          we_local = dot_product(w, w)
          call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (ta<=1d-30) then
+            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
+            err = rerr
+            iter = it
+            return
+            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+         end if
+
          we = sqrt(abs(we_sum))/ta
          cm = 1.0d0/sqrt(1.0d0 + we*we)
          ta = ta*we*cm

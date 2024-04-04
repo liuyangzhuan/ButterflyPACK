@@ -642,7 +642,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
         real(kind=8) tol_Rdetect  !< tolerance to detect numerical ranks
-        real(kind=8) tol_rand     !< tolerance for randomized contruction
+        real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
