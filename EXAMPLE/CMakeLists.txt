@@ -193,6 +193,16 @@ target_link_libraries(cifio2dsb ${all_link_libs_z})
 add_dependencies(cifio2dsb cifio2d)
 endif()
 
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CVIE2D VIE2D_Driver.cpp G2D/bessel.cpp)
+add_executable(cvie2d ${CVIE2D})
+target_link_libraries(cvie2d ${all_link_libs_d})
+target_link_libraries(cvie2d ${all_link_libs_z})
+add_dependencies(cvie2d cifio2dsb)
+endif()
+
+
+
 endif()
 
 

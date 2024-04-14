@@ -36,7 +36,7 @@ tol_rand=1e-4
 
 # ker=1
 # tol_comp=1e-10
-# tol_rand=1e-7
+# tol_rand=1e-8
 
 tol_itersol=1e-12
 rank0=100
@@ -50,7 +50,7 @@ precon=3
 use_zfp=0
 hextralevel=1
 # N_FIO=256 512 1024 2048 4096
-for N_FIO in 65536 #16384 #
+for N_FIO in 65536 # 262144 # 65536 #16384 #
 do
 srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores ../build/EXAMPLE/cifio2dsb -quant --ker ${ker} --M ${N_FIO} --N ${N_FIO} --mu ${mu} --lambda ${lambda} --maxitsb ${maxitsb} -option --use_zfp ${use_zfp} --format 2 --near_para 2.01 --tol_comp ${tol_comp} --tol_rand ${tol_rand} --errsol 0 --precon ${precon} --tol_itersol ${tol_itersol} --xyzsort 1 --rank0 ${rank0} --hextralevel ${hextralevel} --rankrate ${rankrate} --nmin_leaf ${nmin_leaf} | tee a.out_matrix_IFIO2D_SB_N_FIO${N_FIO}_ker${ker}_tol_comp${tol_comp}_tol_rand${tol_rand}_mpi${nmpi}_omp${NTH}
 done

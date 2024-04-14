@@ -719,9 +719,13 @@ int main(int argc, char* argv[])
 
 //////////////////////  construct the bf of FIO (A) from entry evaluation
 	z_c_bpack_createstats(&stats_a);
+
+  // z_c_bpack_getoption(&option, "tol_comp", &tmp);
+  // z_c_bpack_set_D_option(&option, "tol_comp", 1e-4);
 	z_c_bf_construct_init(&M, &N, &myseg_m, &myseg_n, nns_ptr_m, nns_ptr_n, &msh0_m, &msh0_n, &bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree,&C_FuncDistmn_dummy, &C_FuncNearFar_dummy, quant_ptr_a);
 	z_c_bf_construct_element_compute(&bf_a, &option, &stats_a, &msh_a, &kerquant_a, &ptree, &C_FuncBZmn, &C_FuncBZmnBlock, quant_ptr_a); // C_FuncBZmnBlock is not referenced since elem_extract=0
-	if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
+	// z_c_bpack_set_D_option(&option, "tol_comp", tmp);
+  if(myrank==master_rank)std::cout<<"\nPrinting stats of the first BF: "<<std::endl;
 	z_c_bpack_printstats(&stats_a,&ptree);
 
 
