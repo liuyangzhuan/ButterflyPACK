@@ -9549,15 +9549,15 @@ time_tmp = time_tmp + n2 - n1
          call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
       endif
       call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
-#if HAVE_ZFP      
+#if HAVE_ZFP
       if(use_zfp==1)then
          tmpmem = SIZEOF(subtensors(1)%dat)/1024.0d3
          call ZFP_Compress(subtensors(1)%dat,blocks%FullmatZFP,product(subtensors(1)%nr),product(subtensors(1)%nc),option%tol_comp,0)
          if(allocated(blocks%FullmatZFP%buffer_r))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3)
          if(allocated(blocks%FullmatZFP%buffer_i))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3)
-         call LogMemory(stats, -tmpmem)      
+         call LogMemory(stats, -tmpmem)
       endif
-#endif      
+#endif
       blocks%fullmat => subtensors(1)%dat
 
       subtensors(1)%dat=>null()

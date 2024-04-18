@@ -5643,8 +5643,8 @@ end subroutine TensorUnfoldingReshape
                offr(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_o(dim_i)
                sizer(dim_i) = sizes(dim_i)
             enddo
-            
-            do iii=1,product(sizes) 
+
+            do iii=1,product(sizes)
                call SingleIndexToMultiIndex(Ndim, sizes, iii, idx_MD)
                idx_r_MD = idx_MD + offr
                idx_s_MD = idx_MD + offs
@@ -5654,7 +5654,7 @@ end subroutine TensorUnfoldingReshape
                   dat_o(idx_r_scalar, 1:N) = dat_o(idx_r_scalar, 1:N) + dat_i(idx_s_scalar, 1:N)
                else
                   dat_o(idx_r_scalar, 1:N) = dat_i(idx_s_scalar, 1:N)
-               endif            
+               endif
             enddo
          endif
       else
@@ -5679,7 +5679,7 @@ end subroutine TensorUnfoldingReshape
          allocate (recvquant(nproc_i))
          do ii = 1, nproc_i
             allocate(recvquant(ii)%offset_md(Ndim))
-            allocate(recvquant(ii)%size_md(Ndim))         
+            allocate(recvquant(ii)%size_md(Ndim))
             recvquant(ii)%size_md = 0
             recvquant(ii)%offset_md = -1
          enddo
@@ -5703,7 +5703,7 @@ end subroutine TensorUnfoldingReshape
                         call SingleIndexToMultiIndex(Ndim, sendquant(jj)%size_md, iii, idx_MD)
                         idx_s_MD = idx_MD + sendquant(jj)%offset_md
                         call MultiIndexToSingleIndex(Ndim, ldi, idx_s_scalar, idx_s_MD)
-                        sendquant(jj)%dat(iii,1:N) = dat_i(idx_s_scalar, 1:N)         
+                        sendquant(jj)%dat(iii,1:N) = dat_i(idx_s_scalar, 1:N)
                      enddo
                   endif
                endif
@@ -5726,7 +5726,7 @@ end subroutine TensorUnfoldingReshape
                   if (ALL(recvquant(ii)%size_md > 0)) then
                      allocate (recvquant(ii)%dat(product(recvquant(ii)%size_md), N))
                      recvquant(ii)%dat = 0
-                  endif               
+                  endif
                endif
             enddo
          endif
@@ -5774,11 +5774,11 @@ end subroutine TensorUnfoldingReshape
                   idx_r_MD = idx_MD + recvquant(ii)%offset_md
                   call MultiIndexToSingleIndex(Ndim, ldo, idx_r_scalar, idx_r_MD)
                   if(present(addflag))then
-                     dat_o(idx_r_scalar, 1:N) = dat_o(idx_r_scalar, 1:N) + recvquant(ii)%dat(iii,1:N) 
-                  else 
-                     dat_o(idx_r_scalar, 1:N) = recvquant(ii)%dat(iii,1:N) 
-                  endif         
-               enddo               
+                     dat_o(idx_r_scalar, 1:N) = dat_o(idx_r_scalar, 1:N) + recvquant(ii)%dat(iii,1:N)
+                  else
+                     dat_o(idx_r_scalar, 1:N) = recvquant(ii)%dat(iii,1:N)
+                  endif
+               enddo
             endif
          enddo
 

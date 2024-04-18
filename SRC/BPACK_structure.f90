@@ -178,8 +178,8 @@ contains
             ! proc1 => ker%FuncNearFar
             ! call proc1(group_m, group_n, near_or_far_user, ker%QuantApp)
             write(*,*)"near_or_far_user_MD with nogeo=2 has not been implemented in the Fortran interface"
-            stop            
-         endif         
+            stop
+         endif
       endif
 
    end function near_or_far_user_MD

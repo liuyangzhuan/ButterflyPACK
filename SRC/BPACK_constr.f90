@@ -2854,7 +2854,7 @@ contains
                      Ninadmissible = size(bplus%LL(ll + 1)%boundary_map, 2)
                   endif
                   call assert(option%forwardN15flag == 0, "only forwardN15flag == 0 can be used for tensor butterfly")
-                  
+
                   call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
                   ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
 
@@ -4368,7 +4368,7 @@ contains
       case default
          write(*,*)'not supported format in BPACK_MD_CheckError:', option%format
          stop
-      end select      
+      end select
       do dim_i=1,Ndim
       Nunk_n_loc(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
       enddo
@@ -4419,7 +4419,7 @@ contains
       do dim_i=1,Ndim
          allocate (subtensors(1)%rows(dim_i)%dat(subtensors(1)%nr(dim_i)))
          allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
-      enddo      
+      enddo
       allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
 
 
@@ -4444,7 +4444,7 @@ contains
       v2 =(fnorm(rhs_loc_ref,product(Nunk_n_loc),nvec))**2d0
       rhs_loc = rhs_loc - rhs_loc_ref
       v3 =(fnorm(rhs_loc,product(Nunk_n_loc),nvec))**2d0
-      
+
       call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)

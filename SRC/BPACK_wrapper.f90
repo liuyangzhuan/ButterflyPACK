@@ -1070,7 +1070,7 @@ contains
       type(c_ptr), intent(in), target :: C_QuantApp
       type(c_funptr), intent(in), value, target :: C_FuncZmn_MD
       ! type(c_funptr), intent(in), value, target :: C_FuncZmnBlock ! need to think more about the list of subtensors interface
- 
+
       type(Hoption), pointer::option
       type(Hstat), pointer::stats
       type(mesh), pointer::msh(:)
@@ -1500,7 +1500,7 @@ contains
    end subroutine C_BPACK_New2Old
 
 
-!>**** C interface of converting from new,local index to old, global index, the indexs start from 1. Both newidx_loc and oldidx are Ndim dimensional. 
+!>**** C interface of converting from new,local index to old, global index, the indexs start from 1. Both newidx_loc and oldidx are Ndim dimensional.
    !> @param newidx_loc: new, local index, from 1 to Nloc
    !> @param oldidx: old, global index, from 1 to N (out)
    !> @param msh_Cptr: the structure containing points and ordering information
@@ -1520,13 +1520,13 @@ contains
 
 
 
-!>**** C interface of Fortran subroutine SingleIndexToMultiIndex for converting single index to multi-index 
+!>**** C interface of Fortran subroutine SingleIndexToMultiIndex for converting single index to multi-index
    !> @param Ndim: dimensionality
-   !> @param dims(Ndim): size of each dimension 
+   !> @param dims(Ndim): size of each dimension
    !> @param single_index_in: single index
    !> @param multi_index(Ndim): multi_index
    !>**** convert single index to multi-index, assuming first index is the fastest
-   subroutine C_SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_singleindex_to_multiindex")
+   subroutine C_SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_bpack_singleindex_to_multiindex")
       implicit none
       integer:: Ndim
       integer:: dims(Ndim)
@@ -1535,13 +1535,13 @@ contains
    end subroutine C_SingleIndexToMultiIndex
 
 
-!>**** C interface of Fortran subroutine MultiIndexToSingleIndex for converting multi-index to single index 
+!>**** C interface of Fortran subroutine MultiIndexToSingleIndex for converting multi-index to single index
    !> @param Ndim: dimensionality
-   !> @param dims(Ndim): size of each dimension 
+   !> @param dims(Ndim): size of each dimension
    !> @param single_index_in: single index
    !> @param multi_index(Ndim): multi_index
    !>**** convert single index to multi-index, assuming first index is the fastest
-   subroutine C_MultiIndexToSingleIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_multiindex_to_singleindex")
+   subroutine C_MultiIndexToSingleIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_bpack_multiindex_to_singleindex")
       implicit none
       integer:: Ndim
       integer:: dims(Ndim)
@@ -2333,7 +2333,7 @@ contains
    end subroutine C_BPACK_Solve
 
 
-!>**** C interface of H-tensor solve 
+!>**** C interface of H-tensor solve
    !> @param Ndim: dimensionality
    !> @param x: local solution vector
    !> @param b: local RHS
@@ -2833,8 +2833,8 @@ contains
 
       call assert(ALL(Noutloc == Ninloc), "not square Z")
       call BPACK_MD_Mult(Ndim, trim(str), Noutloc, Ncol, xin, xout, bmat, ptree, option, stats, msh)
-      
-    
+
+
 
       ! need to use another Flop counter for this operation in future
 

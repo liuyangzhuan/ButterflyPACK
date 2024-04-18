@@ -466,7 +466,7 @@ public:
 
 // Assemble a block of matrix entries from interpolated D1, D2, tau
 void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2, _Complex double* output, C_QuantApp_BF* Q){
-    
+
     int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2))<1e-20? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, x2, y2, output);
@@ -491,7 +491,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2, _Complex doub
 
 // Assemble a block of matrix entries from interpolated D1, D2, tau
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, _Complex double* output, C_QuantApp_BF* Q){
-  
+
     double s1 = slowness(x2,y2, Q->_slow_x0, Q->_slow_y0,Q->_ivelo);
     double s0=2;
     double k0 = s0*Q->_w;

@@ -1201,7 +1201,7 @@ contains
 
       itmax = iter
       if(option%precon==HODLRPRECON)then
-         write(*,*)"BPACK_ApplyPrecon has not been changed to BPACK_MD_ApplyPrecon!!" 
+         write(*,*)"BPACK_ApplyPrecon has not been changed to BPACK_MD_ApplyPrecon!!"
       endif
       call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
 
@@ -1539,7 +1539,7 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
       type(mesh)::msh(Ndim)
-      
+
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf_md, ptree, option, stats, msh)

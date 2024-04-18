@@ -480,7 +480,7 @@ public:
 
 // Assemble a block of matrix entries from interpolated D1, D2, tau
 void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2, _Complex double* output, C_QuantApp_BF* Q){
-    
+
     int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2))<1e-20? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, x2, y2, output);
@@ -505,7 +505,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2, _Complex doub
 
 // Assemble a block of matrix entries from interpolated D1, D2, tau
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, _Complex double* output, C_QuantApp_BF* Q){
-  
+
     double s1 = slowness(x2,y2, Q->_slow_x0, Q->_slow_y0,Q->_ivelo);
     double s0=2;
     double k0 = s0*Q->_w;
@@ -1216,7 +1216,7 @@ if(myrank==master_rank){
 }
 
 	/*****************************************************************/
-  int Nx, Ny; // number of grid points per x or y direction 
+  int Nx, Ny; // number of grid points per x or y direction
   int Nmax; // max between Nx and Ny
 
   // define the inner domain
@@ -1598,9 +1598,9 @@ if(myrank==master_rank){
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf,i_new_loc_md,i_old_md);
-      z_c_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
 
       double xs = data_geo[(i_old_md[0]-1) * Ndim];
       double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
@@ -1618,10 +1618,10 @@ if(myrank==master_rank){
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf,i_new_loc_md,i_old_md);
-      z_c_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);      
-      
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
+
       for (int nth=0; nth<nvec; nth++){
         u_inc_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = b.data()[i+nth*product(myseg,Ndim)];
       }
@@ -1657,7 +1657,7 @@ if(myrank==master_rank){
       }
     }
 
-    
+
     if(shape!=4){
       cout<<"The tensor VIE cannot handle irregular shape at this moment"<<endl;
       exit(1);
@@ -1724,11 +1724,11 @@ if(myrank==master_rank){
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
       i_old_md[0] += idx_off_x;
       i_old_md[1] += idx_off_y;
-      z_c_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
       for (int nth=0; nth<nvec; nth++){
         b_s[i+nth*product(myseg_s2s,Ndim)]=u_inc_glo[i_old_scalar-1+nth*product(Ns,Ndim)];
       }
@@ -1748,13 +1748,13 @@ if(myrank==master_rank){
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
       double xs = data_geo[(i_old_md[0]-1) * Ndim];
-      double ys = data_geo[(i_old_md[1]-1) * Ndim+1];      
+      double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
       i_old_md[0] += idx_off_x;
       i_old_md[1] += idx_off_y;
-      z_c_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);      
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
 
       for (int nth=0; nth<nvec; nth++){
         double ss = slowness(xs,ys,slow_x0, slow_y0,ivelo);
@@ -1769,15 +1769,15 @@ if(myrank==master_rank){
 
     vector<_Complex double> x_v(product(myseg,Ndim)*nvec,{0.0,0.0}),b_v(product(myseg,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg,Ndim); i++){
-      
+
       int i_new_loc_scalar = i+1;
       int i_new_loc_md[Ndim];
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf,i_new_loc_md,i_old_md);
-      z_c_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);          
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
       for (int nth=0; nth<nvec; nth++){
         x_v[i+nth*product(myseg,Ndim)] = x_v_glo[i_old_scalar-1+nth*product(Ns,Ndim)];
       }
@@ -1791,9 +1791,9 @@ if(myrank==master_rank){
       int i_old_scalar;
       int i_old_md[Ndim];
 
-      z_c_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf,i_new_loc_md,i_old_md);
-      z_c_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md); 
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
       for (int nth=0; nth<nvec; nth++){
         u_sca_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = b_v.data()[i+nth*product(myseg,Ndim)];
       }

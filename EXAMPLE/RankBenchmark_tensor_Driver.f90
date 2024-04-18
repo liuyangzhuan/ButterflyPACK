@@ -486,7 +486,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 
 	allocate(rhs_loc(product(Nunk_m_loc),nvec))
 	rhs_loc=0
-	call z_BF_MD_block_mvp('N', x_loc, Nunk_n_loc, rhs_loc, Nunk_m_loc, nvec, blocks, quant%Ndim, ptree, stats, msh)
+	call z_BF_MD_block_mvp('N', x_loc, Nunk_n_loc, rhs_loc, Nunk_m_loc, nvec, blocks, quant%Ndim, ptree, stats, msh, option)
 
 	idxs = blocks%M_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
 	allocate(rhs_loc_ref(product(Nunk_m_loc),nvec))

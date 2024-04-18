@@ -571,7 +571,7 @@ contains
                   endif
                   if (ALL(blocks%N_loc > 0)) allocate (Vin_locs(bb)%vector(product(blocks%N_loc), Nrnd))
                   call Redistribute1Dto1D_MD(Ndim, random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
-               else            
+               else
                   if (ALL(blocks%N_loc > 0))then
                      allocate (Vout_locs(bb)%vector(product(blocks%N_loc), Nrnd))
                      Vout_locs(bb)%vector=0
@@ -590,14 +590,14 @@ contains
                   dim_out = blocks%M_loc
                else
                   dim_in = blocks%M_loc
-                  dim_out = blocks%N_loc               
-               endif    
+                  dim_out = blocks%N_loc
+               endif
 
                if (ALL(blocks%N_loc > 0) .or. ALL(blocks%M_loc > 0)) then
                   if(blocks%style==1)then
                      call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(bb)%vector, product(dim_in), Vout_locs(bb)%vector, product(dim_out), ctemp1, ctemp2)
-                  else 
-                     call BF_MD_block_mvp(chara, Vin_locs(bb)%vector, dim_in, Vout_locs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)                
+                  else
+                     call BF_MD_block_mvp(chara, Vin_locs(bb)%vector, dim_in, Vout_locs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
                   endif
                endif
             enddo
@@ -17369,7 +17369,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine Full_block_MVP_dat
 
 
-   !>**** Multiply with dense blocks (as tensor). This is the same as Full_block_MVP_dat, except that blocks needs to be type(matrixblock_MD) 
+   !>**** Multiply with dense blocks (as tensor). This is the same as Full_block_MVP_dat, except that blocks needs to be type(matrixblock_MD)
    subroutine Full_block_MD_MVP_dat(blocks, chara, M, num_vectors, random1, ldi, random2, ldo, a, b)
 
 
@@ -18494,7 +18494,7 @@ integer, save:: my_tid = 0
          t1 = MPI_Wtime()
          if (option%cpp == 1) then
             call c_f_procpointer(ker%C_FuncZmn_MD, proc1_C)
-         else 
+         else
             proc1 => ker%FuncZmn_MD
          endif
          do nn=1,Nsub
@@ -18539,8 +18539,8 @@ integer, save:: my_tid = 0
                      value_e = 0
                      if (option%cpp == 1) then
                         call proc1_C(Ndim, idxs(1:Ndim,my_tid+1), idxs(1+Ndim:2*Ndim,my_tid+1),value_e, ker%C_QuantApp)
-                     else                         
-                        call proc1(Ndim, idxs(1:Ndim,my_tid+1), idxs(1+Ndim:2*Ndim,my_tid+1),value_e, ker%QuantApp)                           
+                     else
+                        call proc1(Ndim, idxs(1:Ndim,my_tid+1), idxs(1+Ndim:2*Ndim,my_tid+1),value_e, ker%QuantApp)
                      endif
                      value_e = value_e*option%scale_factor
                      subtensors(nn)%dat(i, j) = value_e
