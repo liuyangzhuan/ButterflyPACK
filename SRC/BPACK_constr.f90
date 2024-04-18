@@ -24,6 +24,7 @@ module BPACK_constr
 ! use Butterfly_exact
    use Bplus_compress
    use Bplus_randomizedop
+   use BPACK_Solve_Mul
 
 contains
 
@@ -204,7 +205,7 @@ contains
 !>**** Initialization of the construction phase for tensor butterfly-based hierarchical tensors
    ! Nunk(Ndim) is tensor size in each dimension
    ! Ndim is dimensionility
-   ! Permutation(Ndim) is the permutation vector (per dimension) returned
+   ! Permutation(maxval(Nunk),Ndim) is the permutation vector (per dimension) returned
    ! Nunk_loc(Ndim) is the local number of indices per dimension
    ! bmat is the meta-data storing the compressed matrix
    ! Coordinates(optional) of dimension dim*max(Nunk) is the array of Cartesian coordinates corresponding to each dimension
@@ -1549,7 +1550,7 @@ contains
       Ninadmissible = 0
       if (option%forwardN15flag == 0) then
 
-         call BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
+         call BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree,1, 0)
       else
          write(*,*)'forwardN15flag=',option%forwardN15flag,'is not supported in BF_MD_Construct_Element_Compute'
       end if
@@ -1657,6 +1658,41 @@ contains
       deallocate (fullmat_tmp)
 
    end subroutine FULLMAT_Element
+
+!>**** Computation of the construction phase with entry evaluation for the hierarchical tensros
+   subroutine BPACK_MD_construction_Element(Ndim, bmat, option, stats, msh, ker, ptree)
+
+      implicit none
+
+      integer Ndim
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer Maxlevel,ii
+
+      do ii=1,Ndim
+         if (allocated(msh(ii)%xyz)) deallocate (msh(ii)%xyz)
+      enddo
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical tensor construction......"
+
+      select case (option%format)
+      case (HSS_MD)
+         call HSS_MD_construction(Ndim, bmat%hss_bf_md, option, stats, msh, ker, ptree)
+      case default
+         write(*,*)'not supported format in BPACK_MD_construction_Element:', option%format
+         stop
+      end select
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical tensor construction finished"
+
+      if (option%verbosity >= 0) call BPACK_MD_CheckError(Ndim, bmat, option, msh, ker, stats, ptree)
+
+
+   end subroutine BPACK_MD_construction_Element
+
 
 !>**** Computation of the construction phase with matrix entry evaluation
    subroutine BPACK_construction_Element(bmat, option, stats, msh, ker, ptree)
@@ -2088,6 +2124,94 @@ contains
       return
 
    end subroutine HSS_construction
+
+
+   subroutine HSS_MD_construction(Ndim, hss_bf_md1, option, stats, msh, ker, ptree)
+
+      implicit none
+      integer Ndim
+      real(kind=8) n1, n2, n3, n4, n5
+      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
+      real T0
+      real(kind=8):: rtemp, rel_error, error, t1, t2, tim_tmp, rankrate_inner, rankrate_outter
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2
+      type(matrixblock)::block_tmp, block_tmp1
+      DT, allocatable::fullmat(:, :)
+      integer level_c, iter, level_cc, level_butterfly, Bidxs, Bidxe
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(hssbf_md)::hss_bf_md1
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer::passflag = 0
+      type(intersect_MD) :: subtensors_dummy(1)
+      integer::mrange_dummy(1), nrange_dummy(1)
+      DT::mat_dummy(1, 1)
+
+      ! Memory_direct_forward=0
+      ! Memory_butterfly_forward=0
+      tim_tmp = 0
+      !tolerance=0.001
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! write (*,*) 'ACA error threshold',tolerance
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'SVD error threshold', option%tol_comp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing HSS-BF-MD......"
+
+      n1 = MPI_Wtime()
+
+      allocate (stats%rankmax_of_level(0:hss_bf_md1%Maxlevel))
+      stats%rankmax_of_level = 0
+      allocate (stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel))
+      stats%rankmax_of_level_global = 0
+
+      call BP_MD_compress_entry(Ndim, hss_bf_md1%BP, option, rtemp, stats, msh, ker, ptree)
+      stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+
+      passflag = 0
+      do while (passflag < 2)
+         call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 2, passflag, ptree, stats)
+      enddo
+
+      do ll = 1, hss_bf_md1%BP%Lplus
+         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf_md1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf_md1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+      enddo
+
+
+      n2 = MPI_Wtime()
+      stats%Time_Fill = stats%Time_Fill + n2 - n1
+
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+
+      call MPI_ALLREDUCE(stats%rankmax_of_level(0:hss_bf_md1%Maxlevel), stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel), hss_bf_md1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Time_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total construction time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26Es14.2)') 'Total construction flops:', rtemp
+      call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for butterfly forward blocks'
+      call MPI_ALLREDUCE(stats%Mem_Direct_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for direct forward blocks'
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! stop
+
+      return
+
+   end subroutine HSS_MD_construction
+
 
    recursive subroutine Hmat_block_construction(blocks, Memory_far, Memory_near, option, stats, msh, ker, ptree)
 
@@ -2681,6 +2805,79 @@ contains
       return
 
    end subroutine BP_compress_entry
+
+
+
+
+
+   subroutine BP_MD_compress_entry(Ndim, bplus, option, Memory, stats, msh, ker, ptree)
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::bplus
+      integer:: ii, ll, bb, ierr, pp
+      real(kind=8) Memory, rtemp,rtemp1, error
+      integer:: level_butterfly, level_BP, levelm, statflag, knn_tmp
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(matrixblock), pointer::blocks
+      integer groupm_start(Ndim), Nboundall,Ninadmissible
+
+      Memory = 0
+      do ll = 1, bplus%Lplus
+         bplus%LL(ll)%rankmax = 0
+         statflag = 0
+         if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
+         do bb = 1, bplus%LL(ll)%Nbound
+            if (IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(bb)%pgno)) then
+               if(option%verbosity>=2 .and. ptree%MyID==ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head)then
+                  write(*,*)'Start compressing BF_MD',bb,' out of ', bplus%LL(ll)%Nbound, 'at level',ll
+               endif
+               if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
+                  call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
+                  call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
+                  Memory = Memory + rtemp
+               else
+
+                  level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
+                  bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
+                  levelm = bplus%LL(ll)%matrices_block(bb)%level_half
+                  groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+                  Nboundall = 0
+                  Ninadmissible = 0
+                  if (allocated(bplus%LL(ll + 1)%boundary_map)) then
+                     Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
+                     Nboundall = NINT(exp(log(dble(Nboundall)) / dble(Ndim)))
+                     Ninadmissible = size(bplus%LL(ll + 1)%boundary_map, 2)
+                  endif
+                  call assert(option%forwardN15flag == 0, "only forwardN15flag == 0 can be used for tensor butterfly")
+                  
+                  call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
+                  ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+
+                  Memory = Memory + rtemp
+                  bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
+               endif
+            endif
+         end do
+         if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
+            write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
+         endif
+      end do
+
+      ! ! !!!!!!! check error
+      ! if (option%ErrFillFull == 1) call Bplus_CheckError_Full(bplus, option, msh, ker, stats, ptree)
+      ! ! !!!!!!! check error
+
+      ! if(bplus%LL(1)%matrices_block(1)%level==1)write(*,*)bplus%LL(1)%rankmax,'dfdfdfdf'
+
+      return
+
+   end subroutine BP_MD_compress_entry
+
 
 
 
@@ -4134,6 +4331,137 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
    end subroutine BPACK_CheckError
+
+
+
+
+!!!!!!! check error of BPACK_MD construction using BPACK_MD matvec with a sparse vector
+   subroutine BPACK_MD_CheckError(Ndim, bmat, option, msh, ker, stats, ptree)
+
+      implicit none
+
+      integer Ndim
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer nvec
+      DT, allocatable:: x_loc(:, :), rhs_loc(:,:),rhs_loc_ref(:,:)
+      DT::tmp
+      integer dim_i,ij,ii,ii1,ij1
+      integer:: Nunk_n_loc(Ndim),idxs(Ndim),idxe(Ndim),idx_1(Ndim),idx_2(Ndim)
+      integer,allocatable:: idx_src(:)
+      integer:: Npt_src, N_glo(Ndim)
+      real(kind=8):: a, v1, v2, v3
+      integer ierr
+      type(intersect_MD) :: subtensors(1)
+      integer passflag
+      real(kind=8)::n1, n2, n3, n4
+      integer:: dims_one(Ndim)
+
+      select case (option%format)
+      case (HSS_MD)
+         N_glo=bmat%hss_bf_md%N
+         idxs = bmat%hss_bf_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
+      case default
+         write(*,*)'not supported format in BPACK_MD_CheckError:', option%format
+         stop
+      end select      
+      do dim_i=1,Ndim
+      Nunk_n_loc(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
+      enddo
+      nvec=1 !! currently this can only be 1
+      allocate(x_loc(product(Nunk_n_loc),nvec))
+      x_loc=0
+
+      ! Npt_src = min(10,product(N_glo))
+      ! allocate(idx_src(Npt_src))
+      ! do ij=1,Npt_src
+      !    call random_number(a)
+      !    idx_src(ij) = max(floor_safe(product(N_glo)*a), 1)
+      ! enddo
+      ! call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+
+
+      Npt_src=1
+      allocate(idx_src(Npt_src))
+      idx_src(1) =1
+
+      idxe = idxs + Nunk_n_loc -1
+      do ij=1,Npt_src
+         call SingleIndexToMultiIndex(Ndim,N_glo, idx_src(ij), idx_1)
+         if(ALL(idx_1>=idxs) .and. ALL(idx_1<=idxe))then
+            idx_1 = idx_1 - idxs + 1
+            call MultiIndexToSingleIndex(Ndim,Nunk_n_loc, ij1, idx_1)
+            x_loc(ij1,1) = x_loc(ij1,1) + 1
+         endif
+      enddo
+
+      n1 = MPI_Wtime()
+
+      !! Generate rhs_loc by using BPACK_MD_Mult
+      allocate(rhs_loc(product(Nunk_n_loc),nvec))
+      rhs_loc=0
+      call BPACK_MD_Mult(Ndim, 'N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats, msh)
+
+
+      !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
+      allocate(rhs_loc_ref(product(Nunk_n_loc),nvec))
+      rhs_loc_ref=0
+      allocate(subtensors(1)%nr(Ndim))
+      allocate(subtensors(1)%nc(Ndim))
+      allocate(subtensors(1)%rows(Ndim))
+      allocate(subtensors(1)%cols(Ndim))
+      subtensors(1)%nr = Nunk_n_loc
+      subtensors(1)%nc = 1
+      do dim_i=1,Ndim
+         allocate (subtensors(1)%rows(dim_i)%dat(subtensors(1)%nr(dim_i)))
+         allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
+      enddo      
+      allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
+
+
+      do ij=1,Npt_src
+         subtensors(1)%dat = 0
+         call SingleIndexToMultiIndex(Ndim,N_glo, idx_src(ij), idx_1)
+         do dim_i=1,Ndim
+            do ii=1,subtensors(1)%nr(dim_i)
+               subtensors(1)%rows(dim_i)%dat(ii) = msh(dim_i)%idxs + ii - 1
+            enddo
+            subtensors(1)%cols(dim_i)%dat(1) = idx_1(dim_i)
+         enddo
+
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+         rhs_loc_ref = rhs_loc_ref + subtensors(1)%dat
+      enddo
+      dims_one=1
+      call BF_MD_delete_subtensors(Ndim, dims_one, subtensors, stats)
+      n2 = MPI_Wtime()
+
+      v1 =(fnorm(rhs_loc,product(Nunk_n_loc),nvec))**2d0
+      v2 =(fnorm(rhs_loc_ref,product(Nunk_n_loc),nvec))**2d0
+      rhs_loc = rhs_loc - rhs_loc_ref
+      v3 =(fnorm(rhs_loc,product(Nunk_n_loc),nvec))**2d0
+      
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A28,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_MD_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+
+      deallocate(x_loc)
+      deallocate(rhs_loc)
+      deallocate(rhs_loc_ref)
+      deallocate(idx_src)
+
+   end subroutine BPACK_MD_CheckError
+
+
+
+
+
+
 
 !>*********** all to all communication of element extraction results from local layout to 2D block-cyclic layout of each intersection (each process knows where to send, but doesn't know where to receive without communication)
    subroutine BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, pgno, nproc, Npmap, pmaps)

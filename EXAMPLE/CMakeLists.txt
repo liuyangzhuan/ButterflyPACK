@@ -201,6 +201,13 @@ target_link_libraries(cvie2d ${all_link_libs_z})
 add_dependencies(cvie2d cifio2dsb)
 endif()
 
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CVIE2DT VIE2D_tensor_Driver.cpp G2D/bessel.cpp)
+add_executable(cvie2d_t ${CVIE2DT})
+target_link_libraries(cvie2d_t ${all_link_libs_d})
+target_link_libraries(cvie2d_t ${all_link_libs_z})
+add_dependencies(cvie2d_t cvie2d)
+endif()
 
 
 endif()

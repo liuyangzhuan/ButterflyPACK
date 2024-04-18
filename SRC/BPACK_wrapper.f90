@@ -1040,6 +1040,88 @@ contains
 
    end subroutine C_BPACK_Construct_Element_Compute
 
+
+
+!>**** C interface of tensor construction
+   !> @param Ndim: data dimensionality (in)
+   !> @param bmat_Cptr: the structure containing the hierarchical tensors
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param ker_Cptr: the structure containing kernel quantities
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param C_FuncZmn_MD: the C_pointer to user-provided function to sample mn^th entry of the tensor
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+   subroutine C_BPACK_MD_Construct_Element_Compute(Ndim,bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn_MD, C_QuantApp) bind(c, name="c_bpack_md_construct_element_compute")
+      implicit none
+
+      real(kind=8) para
+      real(kind=8) tolerance, h, lam
+      integer Primary_block, nn, mm, MyID_old, Maxlevel, give, need
+      integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
+      integer level,Ndim
+      integer groupm
+      type(c_ptr) :: bmat_Cptr
+      type(c_ptr) :: option_Cptr
+      type(c_ptr) :: stats_Cptr
+      type(c_ptr) :: msh_Cptr
+      type(c_ptr) :: ker_Cptr
+      type(c_ptr) :: ptree_Cptr
+      type(c_ptr), intent(in), target :: C_QuantApp
+      type(c_funptr), intent(in), value, target :: C_FuncZmn_MD
+      ! type(c_funptr), intent(in), value, target :: C_FuncZmnBlock ! need to think more about the list of subtensors interface
+ 
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(mesh), pointer::msh(:)
+      type(kernelquant), pointer::ker
+      type(Bmatrix), pointer::bmat
+      type(proctree), pointer::ptree
+      integer seed_myid(50)
+      integer times(8)
+      real(kind=8) t1, t2, x, y, z, r, theta, phi
+      character(len=1024)  :: strings
+
+      !>**** allocate HODLR solver structures
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(bmat_Cptr, bmat)
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      call c_f_pointer(ker_Cptr, ker)
+
+      !>**** register the user-defined function and type in ker
+      ker%C_QuantApp => C_QuantApp
+      ker%C_FuncZmn_MD => C_FuncZmn_MD
+
+      t1 = MPI_Wtime()
+      !>**** computation of the construction phase
+      call BPACK_MD_construction_Element(Ndim, bmat, option, stats, msh, ker, ptree)
+      ! call BPACK_CheckError(bmat,option,msh,ker,stats,ptree)
+      t2 = MPI_Wtime()
+
+      !>**** delete neighours in msh
+      do ii=1,Ndim
+      if(allocated(msh(ii)%nns))then
+         call LogMemory(stats, -SIZEOF(msh(ii)%nns)/1024.0d3)
+         deallocate(msh(ii)%nns)
+      endif
+      enddo
+      !>**** return the C address of hodlr structures to C caller
+      bmat_Cptr = c_loc(bmat)
+      option_Cptr = c_loc(option)
+      stats_Cptr = c_loc(stats)
+      msh_Cptr = c_loc(msh(1))
+      ker_Cptr = c_loc(ker)
+      ptree_Cptr = c_loc(ptree)
+
+   end subroutine C_BPACK_MD_Construct_Element_Compute
+
+
+
+
+
+
 !>**** C interface of matrix construction via entry evaluation
    !> @param N: matrix size (in)
    !> @param Ndim: data set dimensionality (not used if nogeo=1)
@@ -1256,9 +1338,9 @@ contains
    !> @param msh_Cptr: the structure containing points and ordering information per dimension (out)
    !> @param ker_Cptr: the structure containing kernel quantities (out)
    !> @param ptree_Cptr: the structure containing process tree (in)
-   !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
+   !> @param C_FuncNearFar_MD: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-   subroutine C_BPACK_MD_Construct_Init(Ns, Nmax, Ndim, Locations, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncNearFar, C_QuantApp) bind(c, name="c_bpack_md_construct_init")
+   subroutine C_BPACK_MD_Construct_Init(Ns, Nmax, Ndim, Locations, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncNearFar_MD, C_QuantApp) bind(c, name="c_bpack_md_construct_init")
       implicit none
       integer Ndim,Nmax
       integer Ns(Ndim)
@@ -1281,7 +1363,7 @@ contains
       type(c_ptr) :: ker_Cptr
       type(c_ptr) :: ptree_Cptr
       type(c_ptr), intent(in), target :: C_QuantApp
-      type(c_funptr), intent(in), value, target :: C_FuncNearFar
+      type(c_funptr), intent(in), value, target :: C_FuncNearFar_MD
 
       type(Hoption), pointer::option
       type(Hstat), pointer::stats
@@ -1343,9 +1425,8 @@ contains
 
       !>**** register the user-defined function and type in ker
       if (option%nogeo == 2) then
-         write(*,*)"option%nogeo not yet implemented for BPACK_MD_Construct_Init"
          ker%C_QuantApp => C_QuantApp
-         ker%C_FuncNearFar => C_FuncNearFar
+         ker%C_FuncNearFar_MD => C_FuncNearFar_MD
       endif
 
       t1 = MPI_Wtime()
@@ -1418,6 +1499,55 @@ contains
 
    end subroutine C_BPACK_New2Old
 
+
+!>**** C interface of converting from new,local index to old, global index, the indexs start from 1. Both newidx_loc and oldidx are Ndim dimensional. 
+   !> @param newidx_loc: new, local index, from 1 to Nloc
+   !> @param oldidx: old, global index, from 1 to N (out)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_New2Old(Ndim, msh_Cptr, newidx_loc, oldidx) bind(c, name="c_bpack_md_new2old")
+      implicit none
+      integer Ndim,dim_i
+      integer newidx_loc(Ndim),oldidx(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         oldidx(dim_i) = msh(dim_i)%new2old(msh(dim_i)%idxs + newidx_loc(dim_i) - 1)
+      enddo
+
+   end subroutine C_BPACK_MD_New2Old
+
+
+
+!>**** C interface of Fortran subroutine SingleIndexToMultiIndex for converting single index to multi-index 
+   !> @param Ndim: dimensionality
+   !> @param dims(Ndim): size of each dimension 
+   !> @param single_index_in: single index
+   !> @param multi_index(Ndim): multi_index
+   !>**** convert single index to multi-index, assuming first index is the fastest
+   subroutine C_SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_singleindex_to_multiindex")
+      implicit none
+      integer:: Ndim
+      integer:: dims(Ndim)
+      integer :: single_index_in, multi_index(Ndim)
+      call SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)
+   end subroutine C_SingleIndexToMultiIndex
+
+
+!>**** C interface of Fortran subroutine MultiIndexToSingleIndex for converting multi-index to single index 
+   !> @param Ndim: dimensionality
+   !> @param dims(Ndim): size of each dimension 
+   !> @param single_index_in: single index
+   !> @param multi_index(Ndim): multi_index
+   !>**** convert single index to multi-index, assuming first index is the fastest
+   subroutine C_MultiIndexToSingleIndex(Ndim,dims, single_index_in, multi_index)bind(c, name="c_multiindex_to_singleindex")
+      implicit none
+      integer:: Ndim
+      integer:: dims(Ndim)
+      integer :: single_index_in, multi_index(Ndim)
+      call MultiIndexToSingleIndex(Ndim,dims, single_index_in, multi_index)
+   end subroutine C_MultiIndexToSingleIndex
 
 
 
@@ -2203,6 +2333,62 @@ contains
    end subroutine C_BPACK_Solve
 
 
+!>**** C interface of H-tensor solve 
+   !> @param Ndim: dimensionality
+   !> @param x: local solution vector
+   !> @param b: local RHS
+   !> @param Nloc: size of local RHS
+   !> @param Nrhs: number of RHSs
+   !> @param bmat_Cptr: the structure containing H-tensor
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_Solve(Ndim, x, b, Nloc, Nrhs, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_md_solve")
+      implicit none
+      integer Ndim
+      integer Nloc(Ndim), Nrhs
+      DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs)
+
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: stats_Cptr
+      type(c_ptr), intent(in) :: msh_Cptr
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(Bmatrix), pointer::bmat
+      type(mesh), pointer::msh(:)
+
+      type(proctree), pointer::ptree
+
+      call c_f_pointer(bmat_Cptr, bmat)
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+
+      stats%Flop_Sol = 0
+      stats%Time_Sol = 0
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Solve ......"
+
+      if (option%ErrSol == 1) then
+         ! call BPACK_Test_Solve_error(bmat, Nloc, option, ptree, stats)
+         write(*,*)'not yet implemented BPACK_MD_Test_Solve_error'
+      endif
+
+      call BPACK_MD_Solution(Ndim,bmat, x, b, Nloc, Nrhs, option, ptree, stats,msh)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Solve finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+
+   end subroutine C_BPACK_MD_Solve
+
+
+
 !>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec
    !> @param x: local solution vector
    !> @param b: local RHS
@@ -2357,7 +2543,6 @@ contains
    !> @param Nallcols: total number of columns
    !> @param Nalldat_loc: total number of local entries
    subroutine C_BF_ExtractElement(block_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bf_extractelement")
-      use BPACK_DEFS
       implicit none
 
       type(intersect), allocatable::inters(:)
@@ -2464,7 +2649,6 @@ contains
    !> @param Nallcols: total number of columns
    !> @param Nalldat_loc: total number of local entries
    subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement")
-      use BPACK_DEFS
       implicit none
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -2586,6 +2770,87 @@ contains
       ! write(*,*)t2-t1
       deallocate (str)
    end subroutine C_BPACK_Mult
+
+
+
+
+!>**** C interface of BPACK_MD_Mult for BPACK_MD-vector multiply
+   !> @param Ndim: dimensionality of the kernel
+   !> @param xin: input vector
+   !> @param Ninloc: size of local input vectors
+   !> @param xout: output vector
+   !> @param Noutloc: size of local output vectors
+   !> @param Ncol: number of vectors
+   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information
+   !> @param trans: 'N', 'C' or 'T'
+   subroutine C_BPACK_MD_Mult(Ndim,trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_md_mult")
+      implicit none
+      real(kind=8) t1, t2
+      integer Ndim
+      integer Ninloc(Ndim), Noutloc(Ndim), Ncol
+      DT::xin(product(Ninloc), Ncol), xout(product(Noutloc), Ncol)
+
+      character(kind=c_char, len=1) :: trans(*)
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: stats_Cptr
+      type(c_ptr) :: msh_Cptr
+
+      integer strlen
+      character(len=:), allocatable :: str
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(Bmatrix), pointer::bmat
+      type(proctree), pointer::ptree
+      type(mesh), pointer::msh(:)
+
+      t1 = MPI_Wtime()
+
+      strlen = 1
+      ! do while(trans(strlen) /= c_null_char)
+      ! strlen = strlen + 1
+      ! enddo
+      ! strlen = strlen -1
+      allocate (character(len=strlen) :: str)
+      str = transfer(trans(1:strlen), str)
+
+      call c_f_pointer(bmat_Cptr, bmat)
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+
+      stats%Flop_C_Mult = 0
+      stats%Time_C_Mult = 0
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
+
+      call assert(ALL(Noutloc == Ninloc), "not square Z")
+      call BPACK_MD_Mult(Ndim, trim(str), Noutloc, Ncol, xin, xout, bmat, ptree, option, stats, msh)
+      
+    
+
+      ! need to use another Flop counter for this operation in future
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply finished"
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+
+      t2 = MPI_Wtime()
+
+      stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
+      stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+
+      ! write(*,*)t2-t1
+      deallocate (str)
+   end subroutine C_BPACK_MD_Mult
+
+
 
 !>**** C interface of HODLR(inverse)-vector multiplication
    !> @param xin: input vector

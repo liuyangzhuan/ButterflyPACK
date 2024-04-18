@@ -809,7 +809,7 @@ contains
       option%elem_extract = 0
       option%knn = 0
       option%cpp = 0
-      option%bp_cnt_lr = 0
+      option%bp_cnt_lr = 1
       option%less_adapt = 0
 
    end subroutine SetDefaultOptions

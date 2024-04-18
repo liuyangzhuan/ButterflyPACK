@@ -162,6 +162,8 @@ module BPACK_DEFS
         integer:: size=0 !< size of the message along first dimension
         integer:: size_i=0 !< size of the message along first dimension
         integer:: active=0 !< whether this communication pair is active
+        integer,allocatable:: offset_md(:) !< offset in my local array (tensor)
+        integer,allocatable:: size_md(:) !< size of the message along first dimensions (tensor)
         DT, allocatable::dat(:, :) !< communication buffer
         integer, allocatable::dat_i(:, :) !< communication buffer
         type(dat_pack), allocatable::dat_pk(:, :) !< communication buffer
@@ -714,8 +716,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         type(c_ptr), pointer :: C_QuantApp => null() !< Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
         type(c_funptr), pointer :: C_FuncZmn => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
+        type(c_funptr), pointer :: C_FuncZmn_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z (as tensors)
         type(c_funptr), pointer :: C_FuncDistmn => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing distance between one row and one column
         type(c_funptr), pointer :: C_FuncNearFar => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z is compressible or not
+        type(c_funptr), pointer :: C_FuncNearFar_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z (as tensors) is compressible or not
         type(c_funptr), pointer :: C_FuncZmnBlock => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
         type(c_funptr), pointer :: C_FuncHMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
         type(c_funptr), pointer :: C_FuncBMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
@@ -832,6 +836,17 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             CBIND_DT::val
         end subroutine C_Zelem
 
+
+        !> interface of user-defined element evaluation routine in C. m,n represents indices in natural order
+        subroutine C_Zelem_MD(Ndim, m, n, val, quant)
+            USE, INTRINSIC :: ISO_C_BINDING
+            type(c_ptr) :: quant
+            integer(kind=C_INT), INTENT(IN):: Ndim
+            integer(kind=C_INT), INTENT(IN):: m(Ndim), n(Ndim)
+            CBIND_DT::val
+        end subroutine C_Zelem_MD
+
+
         !> interface of user-defined distance computation routine in C. m,n represents indices in natural order
         subroutine C_Dist(m, n, val, quant)
             USE, INTRINSIC :: ISO_C_BINDING
@@ -847,6 +862,16 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             integer(kind=C_INT), INTENT(IN):: groupm, groupn
             integer(kind=C_INT)::val
         end subroutine C_Compressibility
+
+        !> interface of user-defined distance compressibility routine in C. groupm,groupn represents groups (multi-dimensional) in the permuted order
+        subroutine C_Compressibility_MD(Ndim,groupm, groupn, val, quant)
+            USE, INTRINSIC :: ISO_C_BINDING
+            type(c_ptr) :: quant
+            integer, INTENT(IN):: Ndim
+            integer(kind=C_INT), INTENT(IN):: groupm(Ndim), groupn(Ndim)
+            integer(kind=C_INT)::val
+        end subroutine C_Compressibility_MD
+
 
         !> interface of user-defined element extraction routine in C. allrows,allcols represents indices in natural order
         subroutine C_Zelem_block(Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)

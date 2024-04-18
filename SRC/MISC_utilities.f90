@@ -5613,6 +5613,200 @@ end subroutine TensorUnfoldingReshape
 
    end subroutine Redistribute2Dto1D
 
+
+
+! redistribute array 1D block array (the array has shape like n^d x k and is redistributed among n^d) dat_i distributed among process group pgno_i to 1D block array dat_o distributed among process group pgno_o, M_p_i/M_p_o denote the starting index of each process of each dimension, head_i/head_o denote the global index of the first element (among all processes) in the dat_i/dat_o of each dimension
+   subroutine Redistribute1Dto1D_MD(Ndim, dat_i, ldi, M_p_i, head_i, pgno_i, dat_o, ldo, M_p_o, head_o, pgno_o, N, ptree, addflag)
+      implicit none
+      integer Ndim
+      integer ldi(Ndim), ldo(Ndim), dim_i, idx_MD(Ndim), idx_s_MD(Ndim),idx_r_MD(Ndim), dims_md(Ndim),idx_r_scalar,idx_s_scalar
+      DT::dat_i(product(ldi), *), dat_o(product(ldo), *)
+      integer pgno_i, pgno_o, N
+      integer M_p_i(:, :, :), M_p_o(:, :, :)
+      integer nproc_i, nproc_o, idxs_i(Ndim), idxs_o(Ndim), idxe_i(Ndim), idxe_o(Ndim), ii, jj, iii, jjj
+      type(proctree)::ptree
+      type(commquant1D), allocatable::sendquant(:), recvquant(:)
+      integer, allocatable::S_req(:), R_req(:)
+      integer, allocatable:: statuss(:, :), statusr(:, :)
+      integer tag, Nreqs, Nreqr, recvid, sendid, ierr, head_i(Ndim), head_o(Ndim), sizes(Ndim), sizer(Ndim), offs(Ndim), offr(Ndim)
+      integer,optional::addflag
+
+      if (pgno_i == pgno_o .and. ptree%pgrp(pgno_i)%nproc == 1) then
+         idxs_i = M_p_i(1, 1, :) + head_i
+         idxe_i = M_p_i(1, 2, :) + head_i
+         idxs_o = M_p_o(1, 1, :) + head_o
+         idxe_o = M_p_o(1, 2, :) + head_o
+         if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+            do dim_i=1,Ndim
+               offs(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_i(dim_i)
+               sizes(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+               offr(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_o(dim_i)
+               sizer(dim_i) = sizes(dim_i)
+            enddo
+            
+            do iii=1,product(sizes) 
+               call SingleIndexToMultiIndex(Ndim, sizes, iii, idx_MD)
+               idx_r_MD = idx_MD + offr
+               idx_s_MD = idx_MD + offs
+               call MultiIndexToSingleIndex(Ndim, ldi, idx_s_scalar, idx_s_MD)
+               call MultiIndexToSingleIndex(Ndim, ldo, idx_r_scalar, idx_r_MD)
+               if(present(addflag))then
+                  dat_o(idx_r_scalar, 1:N) = dat_o(idx_r_scalar, 1:N) + dat_i(idx_s_scalar, 1:N)
+               else
+                  dat_o(idx_r_scalar, 1:N) = dat_i(idx_s_scalar, 1:N)
+               endif            
+            enddo
+         endif
+      else
+
+         nproc_i = ptree%pgrp(pgno_i)%nproc
+         nproc_o = ptree%pgrp(pgno_o)%nproc
+         tag = pgno_o
+
+         allocate (statuss(MPI_status_size, nproc_o))
+         allocate (statusr(MPI_status_size, nproc_i))
+         allocate (S_req(nproc_o))
+         allocate (R_req(nproc_i))
+
+         allocate (sendquant(nproc_o))
+         do ii = 1, nproc_o
+            allocate(sendquant(ii)%offset_md(Ndim))
+            allocate(sendquant(ii)%size_md(Ndim))
+            sendquant(ii)%size_md = 0
+            sendquant(ii)%offset_md = -1
+         enddo
+
+         allocate (recvquant(nproc_i))
+         do ii = 1, nproc_i
+            allocate(recvquant(ii)%offset_md(Ndim))
+            allocate(recvquant(ii)%size_md(Ndim))         
+            recvquant(ii)%size_md = 0
+            recvquant(ii)%offset_md = -1
+         enddo
+
+         if (IOwnPgrp(ptree, pgno_i)) then
+            ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+            idxs_i = M_p_i(ii, 1, :) + head_i
+            idxe_i = M_p_i(ii, 2, :) + head_i
+
+            do jj = 1, nproc_o
+               idxs_o = M_p_o(jj, 1, :) + head_o
+               idxe_o = M_p_o(jj, 2, :) + head_o
+               if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                  do dim_i=1,Ndim
+                     sendquant(jj)%offset_md(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_i(dim_i)
+                     sendquant(jj)%size_md(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                  enddo
+                  if (ALL(sendquant(jj)%size_md > 0)) then
+                     allocate (sendquant(jj)%dat(product(sendquant(jj)%size_md), N))
+                     do iii=1,product(sendquant(jj)%size_md)
+                        call SingleIndexToMultiIndex(Ndim, sendquant(jj)%size_md, iii, idx_MD)
+                        idx_s_MD = idx_MD + sendquant(jj)%offset_md
+                        call MultiIndexToSingleIndex(Ndim, ldi, idx_s_scalar, idx_s_MD)
+                        sendquant(jj)%dat(iii,1:N) = dat_i(idx_s_scalar, 1:N)         
+                     enddo
+                  endif
+               endif
+            enddo
+         endif
+
+         if (IOwnPgrp(ptree, pgno_o)) then
+            jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+            idxs_o = M_p_o(jj, 1, :) + head_o
+            idxe_o = M_p_o(jj, 2, :) + head_o
+
+            do ii = 1, nproc_i
+               idxs_i = M_p_i(ii, 1, :) + head_i
+               idxe_i = M_p_i(ii, 2, :) + head_i
+               if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                  do dim_i=1,Ndim
+                     recvquant(ii)%offset_md(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_o(dim_i)
+                     recvquant(ii)%size_md(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                  enddo
+                  if (ALL(recvquant(ii)%size_md > 0)) then
+                     allocate (recvquant(ii)%dat(product(recvquant(ii)%size_md), N))
+                     recvquant(ii)%dat = 0
+                  endif               
+               endif
+            enddo
+         endif
+
+         ! post receive
+         Nreqr = 0
+         do ii = 1, nproc_i
+            if (ALL(recvquant(ii)%size_md > 0)) then
+               jj = ptree%myid - ptree%pgrp(pgno_o)%head + 1
+               sendid = ii + ptree%pgrp(pgno_i)%head - 1
+               if (ptree%MyID /= sendid) then
+                  Nreqr = Nreqr + 1
+                  call MPI_Irecv(recvquant(ii)%dat, product(recvquant(ii)%size_md)*N, MPI_DT, sendid, tag, ptree%Comm, R_req(Nreqr), ierr)
+               endif
+            endif
+         enddo
+
+         ! post send
+         Nreqs = 0
+         do jj = 1, nproc_o
+            if (ALL(sendquant(jj)%size_md > 0)) then
+               ii = ptree%myid - ptree%pgrp(pgno_i)%head + 1
+               recvid = jj + ptree%pgrp(pgno_o)%head - 1
+               if (ptree%MyID == recvid) then
+                  recvquant(ii)%dat = sendquant(jj)%dat ! make the direct copy if I own both send and receive pieces
+               else
+                  Nreqs = Nreqs + 1
+                  call MPI_Isend(sendquant(jj)%dat, product(sendquant(jj)%size_md)*N, MPI_DT, recvid, tag, ptree%Comm, S_req(Nreqs), ierr)
+               endif
+            endif
+         enddo
+
+         if (Nreqs > 0) then
+            call MPI_waitall(Nreqs, S_req, statuss, ierr)
+         endif
+         if (Nreqr > 0) then
+            call MPI_waitall(Nreqr, R_req, statusr, ierr)
+         endif
+
+         ! copy data from receive buffer
+         do ii = 1, nproc_i
+            if (ALL(recvquant(ii)%size_md > 0)) then
+               do iii=1,product(recvquant(ii)%size_md)
+                  call SingleIndexToMultiIndex(Ndim, recvquant(ii)%size_md, iii, idx_MD)
+                  idx_r_MD = idx_MD + recvquant(ii)%offset_md
+                  call MultiIndexToSingleIndex(Ndim, ldo, idx_r_scalar, idx_r_MD)
+                  if(present(addflag))then
+                     dat_o(idx_r_scalar, 1:N) = dat_o(idx_r_scalar, 1:N) + recvquant(ii)%dat(iii,1:N) 
+                  else 
+                     dat_o(idx_r_scalar, 1:N) = recvquant(ii)%dat(iii,1:N) 
+                  endif         
+               enddo               
+            endif
+         enddo
+
+         ! deallocation
+         deallocate (S_req)
+         deallocate (R_req)
+         deallocate (statuss)
+         deallocate (statusr)
+         do jj = 1, nproc_o
+            if (allocated(sendquant(jj)%dat)) deallocate (sendquant(jj)%dat)
+            if (allocated(sendquant(jj)%offset_md)) deallocate (sendquant(jj)%offset_md)
+            if (allocated(sendquant(jj)%size_md)) deallocate (sendquant(jj)%size_md)
+         enddo
+         deallocate (sendquant)
+         do ii = 1, nproc_i
+            if (allocated(recvquant(ii)%dat)) deallocate (recvquant(ii)%dat)
+            if (allocated(recvquant(ii)%offset_md)) deallocate (recvquant(ii)%offset_md)
+            if (allocated(recvquant(ii)%size_md)) deallocate (recvquant(ii)%size_md)
+         enddo
+         deallocate (recvquant)
+      endif
+
+   end subroutine Redistribute1Dto1D_MD
+
+
+
+
+
 ! get the level (indexed from 1) of a node in a tree. gno is the node number starting from root (1). Note that the process tree levels are indexed from 1, the basis_group levels are indexed from 0
    integer function GetTreelevel(gno)
       implicit none

@@ -44,9 +44,14 @@ void c_bpack_construct_matvec_compute(F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* 
 void c_bpack_factor(F2Cptr*ho_bf_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh);
 void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*ho_bf_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_tfqmr_noprecon(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*ker, void (*C_FuncHMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), C2Fptr C_QuantApp);
+void c_bpack_md_construct_init(int* Ns, int* Nmax, int* Ndim, double* Locations, int* perms, int* Ns_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncNearFar_MD)(int*, int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
+void c_bpack_md_construct_element_compute(int* Ndim, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn_MD)(int*, int*, int*, C_DT *,C2Fptr), C2Fptr C_QuantApp);
 
-
-
+void c_bpack_md_mult(int* Ndim, char const * trans, C_DT  const * xin, C_DT * xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree,F2Cptr* msh);
+void c_bpack_md_solve(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, F2Cptr*ho_bf_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree,F2Cptr* msh);
+void c_bpack_md_new2old(int* Ndim, F2Cptr* msh, int* newidx_loc, int* oldidx);
+void c_singleindex_to_multiindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
+void c_multiindex_to_singleindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
 void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_extractelement(F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);

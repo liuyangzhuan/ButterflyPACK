@@ -516,6 +516,62 @@ contains
    end subroutine BPACK_Solution
 
 
+
+
+   subroutine BPACK_MD_Solution(Ndim, bmat, x, b, Ns_loc, num_vectors, option, ptree, stats, msh)
+
+      implicit none
+      integer Ndim
+      integer i, j, ii, jj, iii, jjj
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, Ns_loc(Ndim), num_vectors
+      real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+      real T0
+      real(kind=8):: rel_error
+      type(Hoption)::option
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT::x(product(Ns_loc), num_vectors), b(product(Ns_loc), num_vectors)
+      DT, allocatable::r0_initial(:)
+      real(kind=8) n1, n2, rtemp
+
+      n1 = MPI_Wtime()
+
+      if (option%precon /= NOPRECON) then
+         write(*,*)"only NOPRECON is supported so far as we haven't worked on the factorization"
+         stop
+      endif
+
+      if (option%precon /= DIRECT) then
+         allocate (r0_initial(1:product(Ns_loc)))
+         do ii = 1, product(Ns_loc)
+            call random_dp_number(r0_initial(ii))
+         end do
+
+         do ii = 1, num_vectors
+            iter = 0
+            rel_error = option%tol_itersol
+            call BPACK_MD_Ztfqmr(Ndim, option%precon, option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, bmat, ptree, option, stats, msh)
+         end do
+
+         deallocate (r0_initial)
+      else
+         write(*,*)'not yet implemented'
+      end if
+
+      n2 = MPI_Wtime()
+      stats%Time_Sol = stats%Time_Sol + n2 - n1
+
+      return
+
+   end subroutine BPACK_MD_Solution
+
+
+
+
    !!!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is the same as BPACK_Ztfqmr
    ! subroutine BPACK_Ztfqmr_usermatvec_noprecon(ntotal, nn_loc, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
    !    implicit none
@@ -1104,6 +1160,219 @@ contains
       return
    end subroutine BPACK_Ztfqmr
 
+
+   subroutine BPACK_MD_Ztfqmr(Ndim, precond, ntotal, nn_loc_md, b, x, err, iter, r0_initial, bmat, ptree, option, stats,msh)
+      implicit none
+      integer Ndim
+      integer level_c, rowblock, ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc,nn_loc_md(Ndim)
+      DT, dimension(1:product(nn_loc_md))::x, bb, b, ytmp
+      real(kind=8)::err, rerr
+      DT, dimension(1:product(nn_loc_md))::w, yo, ayo, ye, aye, r, d, v
+      real(kind=8)::ta, we, cm
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+      DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+      real(kind=8)::bmag
+      real(kind=8)::tim1, tim2
+      integer::kk, ll
+      ! Variables for storing current
+      integer::count_unk, srcbox_id
+      DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
+      real(kind=8)::mem_est
+      character:: trans
+      type(Hstat)::stats
+
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT::r0_initial(:)
+      integer precond
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      nn_loc = product(nn_loc_md)
+
+      if(myisnan(sum(abs(x))))then
+         write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed'
+         stop
+      endif
+
+      itmax = iter
+      if(option%precon==HODLRPRECON)then
+         write(*,*)"BPACK_ApplyPrecon has not been changed to BPACK_MD_ApplyPrecon!!" 
+      endif
+      call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
+
+      ! ! ! if (myid == main_id) then
+      ! ! ! call cpu_time(tim1)
+      ! ! ! open(unit=32,file='iterations.out',status='unknown')
+      ! ! ! end if
+
+      if (iter .eq. 0) itmax = ntotal
+
+      !  set initial values
+      !
+      d = 0d0
+      ! write(*,*)'1'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats, msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      r = bb - r !residual from the initial guess
+      w = r
+      yo = r
+      ! ! write(*,*)'2'
+      ! ! if(myisnan(sum(abs(yo)**2)))then
+      ! ! write(*,*)'shitddd'
+      ! ! stop
+      ! ! end if
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, yo, ytmp, bmat, ptree, option, stats, msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+      v = ayo
+      we = 0d0
+      etha = 0d0
+
+      ta_local = dot_product(r, r)
+      rho_local = dot_product(r0_initial, r)
+      bmag_local = dot_product(bb, bb)
+
+      dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+      call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+                         MPI_SUM, ptree%Comm, ierr)
+      ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+      ta = sqrt(abs(ta_sum))
+      bmag = sqrt(abs(bmag_sum1))
+      rerr = ta/bmag
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         return
+      endif
+
+
+      iters: do it = 1, itmax
+         amgis_local = dot_product(r0_initial, v)
+         call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         ahpla = rho/amgis
+         ye = yo - ahpla*v
+         ! write(*,*)'3'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
+         call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, ye, ytmp, bmat, ptree, option, stats,msh)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
+
+         !  start odd (2n-1) m loop
+         d = yo + (we*we*etha/ahpla)*d
+         w = w - ahpla*ayo
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+         !  check if the result has converged.
+         !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+         !
+         !  start even (2n)  m loop
+         d = ye + (we*we*etha/ahpla)*d
+         w = w - ahpla*aye
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta<=1d-30) then
+            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
+            err = rerr
+            iter = it
+            return
+            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+         end if
+
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+
+         !  check if the result has converged.
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+            ! write(*,*)'4'
+            ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+            call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats,msh)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+            r = bb - r
+            rerr_local = dot_product(r, r)
+            call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                               ptree%Comm, ierr)
+            rerr = sqrt(abs(rerr_sum))/bmag
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# ofiter,error:', it, rerr
+               ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+            end if
+
+            if (err > rerr) then
+               err = rerr
+               iter = it
+
+               ! ! ! if (myid == main_id) then
+               ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+               ! ! ! end if
+
+               return
+            endif
+         end if
+         !  make preparations for next iteration
+         dum_local = dot_product(r0_initial, w)
+         call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         beta = dum/rho
+         rho = dum
+         yo = w + beta*ye
+         ! write(*,*)'5'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+         call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, yo, ytmp, bmat, ptree, option, stats,msh)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+         !MAGIC
+         v = ayo + beta*(aye + beta*v)
+      enddo iters
+      ! write(*,*)'6'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats,msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      !MAGIC
+      r = bb - r
+      err_local = dot_product(r, r)
+      call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+                         ierr)
+      err = sqrt(abs(err_sum))/bmag
+      iter = itmax
+
+      print *, 'Iterative solver is terminated without convergence!!!', it, err
+      stop
+
+      return
+   end subroutine BPACK_MD_Ztfqmr
+
    subroutine BPACK_ApplyPrecon(precond, nn_loc, x, y, ptree, bmat, option, stats)
       implicit none
       integer nn_loc
@@ -1255,6 +1524,32 @@ contains
       end select
 
    end subroutine BPACK_Mult
+
+
+   subroutine BPACK_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats, msh)
+
+      implicit none
+      character trans
+      integer Ndim
+      integer Ns(Ndim)
+      integer num_vectors
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+      
+      select case (option%format)
+      case (HSS_MD)
+         call HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf_md, ptree, option, stats, msh)
+      case default
+         write(*,*)'not supported format in BPACK_MD_Mult:', option%format
+         stop
+      end select
+
+   end subroutine BPACK_MD_Mult
+
 
    subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
 
@@ -2032,6 +2327,62 @@ contains
       return
 
    end subroutine HSS_Mult
+
+
+
+
+   subroutine HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, hss_bf_md1, ptree, option, stats,msh)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ndim
+      integer Ns(Ndim)
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(hssbf_md)::hss_bf_md1
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+      call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HSS_MD_Mult
+
+
+
 
    subroutine Hmat_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, h_mat, ptree, option, stats)
       implicit none

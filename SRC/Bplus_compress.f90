@@ -934,9 +934,6 @@ contains
 
 
       if (Nboundall > 0) then
-         allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
-         call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
-         subtensors(index_ij)%masks = 1
          do i = 1, product(dims_row)
             call SingleIndexToMultiIndex(Ndim,dims_row, i, idx_m)
             do dim_i = 1,Ndim
@@ -1605,9 +1602,6 @@ do j_dim = 1,dims_col(dim)
 
 
       if (Nboundall > 0) then
-         allocate (subtensors(index_ij)%masks(product(dims_row),product(dims_col)))
-         call LogMemory(stats, SIZEOF(subtensors(index_ij)%masks)/1024.0d3)
-         subtensors(index_ij)%masks = 1
          do i = 1, product(dims_row)
             call SingleIndexToMultiIndex(Ndim,dims_row, i, idx_m)
             do dim_i = 1,Ndim
@@ -3247,7 +3241,7 @@ do i_dim = 1,dims_row(dim)
 
 
 
-   subroutine BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag)
+   subroutine BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, statflag, bplus_flag)
 
 
       implicit none
@@ -3285,6 +3279,8 @@ do i_dim = 1,dims_row(dim)
       type(intersect_MD), allocatable :: subtensors(:)
       type(intersect_MD) :: subtensors_dummy(1)
       type(butterfly_skel_MD), allocatable :: ButterflySkel_R_transposed(:)
+      integer bplus_flag
+
 
       ! DT:: mat_dummy(1, 1)
       Memory = 0.
@@ -3405,7 +3401,6 @@ do i_dim = 1,dims_row(dim)
                subtensors(index_ij)%nc=0
             enddo
             n1 = MPI_Wtime()
-
             do index_ij = 1, product(dim_MD)
                call BF_MD_compress_N_oneblock_R_sample(Ndim, dim_MD, subtensors, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_ij, bb, level, flops1)
             enddo
@@ -3448,7 +3443,7 @@ do i_dim = 1,dims_row(dim)
                call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c)
                idx_c=idx_c + blocks%idx_c_m -1
                call MultiIndexToSingleIndex(Ndim, nc, bb_g, idx_c)
-               if(option%verbosity>=1)write(*,*)"R: good until here!!",bb_g,product(nc),'rank_new',rank_new
+               if((option%verbosity>=1 .and. bplus_flag==0) .or. (option%verbosity>=2 .and. bplus_flag==1))write(*,*)"R: good until here!!",bb_g,product(nc),'rank_new',rank_new
                ! call BF_all2all_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'C')
             endif
             endif
@@ -3567,7 +3562,7 @@ do i_dim = 1,dims_row(dim)
                call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb, idx_r)
                idx_r=idx_r + blocks%idx_r_m -1
                call MultiIndexToSingleIndex(Ndim, nr, bb_g, idx_r)
-               if(option%verbosity>=1)write(*,*)"L: good until here!!",bb_g,product(nr),'rank_new',rank_new
+               if((option%verbosity>=1 .and. bplus_flag==0) .or. (option%verbosity>=2 .and. bplus_flag==1))write(*,*)"L: good until here!!",bb_g,product(nr),'rank_new',rank_new
                ! call BF_all2all_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'C')
             endif
 
@@ -3707,7 +3702,7 @@ do i_dim = 1,dims_row(dim)
       call BF_MD_ComputeMemory(Ndim, blocks, memory_dense,memory_comp)
       Memory = memory_dense + memory_comp
       call BF_MD_get_rank(Ndim, blocks, ptree)
-      if(option%verbosity>=0 .and. ptree%MyID==Main_ID)write(*,*)"After BF_MD_compress_N: myID",ptree%MyID, "rankmin",blocks%rankmin,"rankmax",blocks%rankmax,"memory_subtensor",memory_dense,"memory_factormat",memory_comp
+      if((option%verbosity>=1 .and. bplus_flag==0 .and. ptree%MyID==ptree%pgrp(blocks%pgno)%head) .or. (option%verbosity>=2 .and. bplus_flag==1 .and. ptree%MyID==ptree%pgrp(blocks%pgno)%head))write(*,*)"After BF_MD_compress_N: myID",ptree%MyID, "rankmin",blocks%rankmin,"rankmax",blocks%rankmax,"memory_subtensor",memory_dense,"memory_factormat",memory_comp
       return
 
    end subroutine BF_MD_compress_N
@@ -9499,4 +9494,81 @@ time_tmp = time_tmp + n2 - n1
 
    end subroutine Full_construction
 
+
+   subroutine Full_construction_MD(Ndim, blocks, msh, ker, stats, option, ptree)
+
+
+      implicit none
+
+      integer Ndim
+      integer group_m(Ndim), group_n(Ndim), i, j
+      integer mm, nn, dim_i, ii
+      integer use_zfp
+      DT value_Z
+      type(matrixblock_MD)::blocks
+      type(mesh)::msh(Ndim)
+      type(Hoption)::option
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      integer, allocatable::mrange(:), nrange(:)
+      integer passflag
+      integer dim_subtensor(Ndim)
+      real(kind=8)::memory,tmpmem
+      type(intersect_MD) :: subtensors(1)
+      type(intersect_MD) :: subtensors_dummy(1)
+
+      group_m = blocks%row_group
+      group_n = blocks%col_group
+
+      allocate(subtensors(1)%nr(Ndim))
+      allocate(subtensors(1)%nc(Ndim))
+      allocate(subtensors(1)%rows(Ndim))
+      allocate(subtensors(1)%cols(Ndim))
+      do dim_i=1,Ndim
+         subtensors(1)%nr(dim_i)=blocks%M(dim_i)
+         allocate (subtensors(1)%rows(dim_i)%dat(subtensors(1)%nr(dim_i)))
+         do ii=1,subtensors(1)%nr(dim_i)
+         subtensors(1)%rows(dim_i)%dat(ii) = blocks%headm(dim_i) + ii - 1
+         enddo
+      enddo
+
+      do dim_i=1,Ndim
+         subtensors(1)%nc(dim_i)=blocks%N(dim_i)
+         allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
+         do ii=1,subtensors(1)%nc(dim_i)
+         subtensors(1)%cols(dim_i)%dat(ii) = blocks%headn(dim_i) + ii - 1
+         enddo
+      enddo
+      use_zfp=0
+#if HAVE_ZFP
+      if(option%use_zfp==1)use_zfp=1
+#endif
+      if(use_zfp==0)then
+         allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
+         call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
+      endif
+      call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+#if HAVE_ZFP      
+      if(use_zfp==1)then
+         tmpmem = SIZEOF(subtensors(1)%dat)/1024.0d3
+         call ZFP_Compress(subtensors(1)%dat,blocks%FullmatZFP,product(subtensors(1)%nr),product(subtensors(1)%nc),option%tol_comp,0)
+         if(allocated(blocks%FullmatZFP%buffer_r))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3)
+         if(allocated(blocks%FullmatZFP%buffer_i))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3)
+         call LogMemory(stats, -tmpmem)      
+      endif
+#endif      
+      blocks%fullmat => subtensors(1)%dat
+
+      subtensors(1)%dat=>null()
+
+
+      call BF_MD_delete_subtensors(Ndim, dim_subtensor, subtensors, stats)
+      passflag = 0
+      do while (passflag == 0)
+         call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+      enddo
+      return
+
+   end subroutine Full_construction_MD
 end module Bplus_compress
