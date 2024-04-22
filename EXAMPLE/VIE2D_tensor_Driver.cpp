@@ -1589,7 +1589,7 @@ if(myrank==master_rank){
 
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=5;
+    int nvec=3; // the 4th rhs makes precon=2 really hard to converge
     vector<_Complex double> b(product(myseg,Ndim)*nvec,{0.0,0.0});
     vector<_Complex double> x(product(myseg,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg,Ndim); i++){
@@ -1644,7 +1644,7 @@ if(myrank==master_rank){
         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+".bin";
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_tensor.bin";
         fout1=fopen(filename.c_str(),"wb");
 
         int nx = round((x0max-x0min)/h+1);
@@ -1662,8 +1662,8 @@ if(myrank==master_rank){
       cout<<"The tensor VIE cannot handle irregular shape at this moment"<<endl;
       exit(1);
     }
-    int idx_off_x = round((-L/2.0 - x0min)/h);
-    int idx_off_y = round((-H/2.0 - y0min)/h);
+    int idx_off_x = round((-L/2.0 +center[0] - x0min)/h);
+    int idx_off_y = round((-H/2.0 +center[1] - y0min)/h);
 
   int Ns_s[Ndim];
   int Nx_s, Ny_s, Nmax_s;
@@ -1681,7 +1681,9 @@ if(myrank==master_rank){
     data_geo[(ii) * Ndim+1] = ii*h-H/2;
   }
 
-
+    if(myrank==0){
+      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" To: "<< Nx_s <<" x "<< Ny_s <<endl;
+    }
 	/*****************************************************************/
 	int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
 
@@ -1699,7 +1701,7 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, w, xmin, xmax, ymin, ymax, x0min, x0max, y0min, y0max, h, dl, nquad, ivelo,rmax,verbose,vs, x_cheb,y_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
 
 
-    z_c_bpack_md_construct_init(Ns_s,&Nmax, &Ndim, data_geo.data(), perms_bf_s2s, myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncNearFar_BF_MD, quant_ptr_bf_s2s);
+    z_c_bpack_md_construct_init(Ns_s,&Nmax_s, &Ndim, data_geo.data(), perms_bf_s2s, myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncNearFar_BF_MD, quant_ptr_bf_s2s);
 
     quant_ptr_bf_s2s->_Hperm.resize(Nmax_s*Ndim);
     std::copy(perms_bf_s2s, perms_bf_s2s + Nmax_s*Ndim, quant_ptr_bf_s2s->_Hperm.begin());
@@ -1734,9 +1736,7 @@ if(myrank==master_rank){
       }
     }
     int ErrSol=0;
-    int precon=2;
     z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
-    z_c_bpack_set_I_option(&option_bf, "precon", precon);
     vector<_Complex double> x_s(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
     z_c_bpack_md_solve(&Ndim, x_s.data(),b_s.data(),myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf, &msh_bf_s2s);
 
@@ -1819,7 +1819,7 @@ if(myrank==master_rank){
         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+".bin";
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_tensor.bin";
 #ifdef IVELO9_CONST
         filename +="_ivelo9_const";
 #endif

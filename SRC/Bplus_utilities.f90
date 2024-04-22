@@ -17393,7 +17393,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 #if HAVE_ZFP
       zfpflag=0
       if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
-      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
+      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
 #endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
@@ -17416,7 +17416,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
 #if HAVE_ZFP
-      if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
+      if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
 #endif
       ! write(*,*)'wo cao ni ma'
       deallocate (random2tmp)

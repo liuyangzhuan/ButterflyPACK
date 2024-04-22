@@ -29,15 +29,17 @@ shape=4
 
 tol_rand=1e-2
 tol_Rdetect=0.3e-2
+tol_itersol=1e-1 
 
 # tol=1d-4
 LRlevel=100
 h0=0.005
-nmin_leaf=100
+nmin_leaf_t=4
+nmin_leaf_m=16
 xyzsort=1
 BACA_Batch=100
 near_para=2.1d0
-
+precon=2
 
 # format=2
 # LRlevel=0
@@ -50,14 +52,14 @@ near_para=2.1d0
 # sample_para=2.0
 # sample_para_outer=2.0
 
-format=1
-elem_extract=2
-knn_near_para=20.0
-knn=600
-forwardN15flag=0
-rmax=1000
-sample_para=20.0
-sample_para_outer=4.0
+# format=1
+# elem_extract=2
+# knn_near_para=20.0
+# knn=600
+# forwardN15flag=0
+# rmax=1000
+# sample_para=20.0
+# sample_para_outer=4.0
 
 # # sample_para=4.0
 # # sample_para_outer=2.0
@@ -71,6 +73,17 @@ sample_para_outer=4.0
 # rmax=1000
 # sample_para=1.0
 # sample_para_outer=1.0
+
+
+
+
+knn_near_para=20.0
+knn=0
+forwardN15flag=0
+rmax=1000
+sample_para=0.8
+sample_para_outer=0.8
+verbosity=1
 
 
 # omega=25.132741228718345
@@ -242,5 +255,14 @@ ymax=1.2
 # ymax=1.2
 
 
+sample_para_outer=4.0
+sample_para=2.0
+elem_extract=0 # 2 is more OMP parallel, but cvie2d_t only supports 0 now. 
+format=1
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie2d --ivelo ${ivelo} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --xmax $xmax --ymax $ymax --TNx ${TNx} --TNy ${TNy} --h0 ${h0} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_m} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_matrix_ivelo_${ivelo}_TNx_${TNx}_TNy_${TNy}_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}
+elem_extract=0
+sample_para_outer=0.8
+sample_para=0.8
+format=4
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie2d_t --ivelo ${ivelo} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --xmax $xmax --ymax $ymax --TNx ${TNx} --TNy ${TNy} --h0 ${h0} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor 2 --verbosity ${verbosity} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_tensor_ivelo_${ivelo}_TNx_${TNx}_TNy_${TNy}_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}
 
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC --ivelo ${ivelo} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --xmax $xmax --ymax $ymax --TNx ${TNx} --TNy ${TNy} --h0 ${h0} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} | tee grep a.out_ivelo_${ivelo}_TNx_${TNx}_TNy_${TNy}_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}

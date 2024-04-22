@@ -1566,7 +1566,7 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=5;
+    int nvec=3; // the 4th rhs makes precon=2 really hard to converge
     vector<_Complex double> b(myseg*nvec,{0.0,0.0});
     vector<_Complex double> x(myseg*nvec,{0.0,0.0});
     for (int i=0; i<myseg; i++){
@@ -1609,7 +1609,7 @@ if(myrank==master_rank){
         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+".bin";
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
         fout1=fopen(filename.c_str(),"wb");
 
         int nx = round((x0max-x0min)/h+1);
@@ -1685,7 +1685,6 @@ if(myrank==master_rank){
     F2Cptr msh_bf_s2s;		   //d_mesh structure returned by Fortran code
     F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
     int myseg_s2s;
-    int precon=2;
 
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
@@ -1701,6 +1700,10 @@ if(myrank==master_rank){
 
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
     // factor hodlr
+
+    double opt_d;
+    z_c_bpack_getoption(&option_bf, "precon", &opt_d);
+    int precon=round(opt_d);
     if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
 
 
@@ -1716,7 +1719,6 @@ if(myrank==master_rank){
     }
     int ErrSol=0;
     z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
-    z_c_bpack_set_I_option(&option_bf, "precon", precon);
     vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
     z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
@@ -1780,7 +1782,7 @@ if(myrank==master_rank){
         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+".bin";
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
 #ifdef IVELO9_CONST
         filename +="_ivelo9_const";
 #endif
