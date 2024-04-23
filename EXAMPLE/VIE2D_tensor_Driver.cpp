@@ -1589,7 +1589,7 @@ if(myrank==master_rank){
 
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=3; // the 4th rhs makes precon=2 really hard to converge
+    int nvec=2; // the 4th rhs makes precon=2 really hard to converge
     vector<_Complex double> b(product(myseg,Ndim)*nvec,{0.0,0.0});
     vector<_Complex double> x(product(myseg,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg,Ndim); i++){
@@ -1730,7 +1730,7 @@ if(myrank==master_rank){
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
       i_old_md[0] += idx_off_x;
       i_old_md[1] += idx_off_y;
-      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
       for (int nth=0; nth<nvec; nth++){
         b_s[i+nth*product(myseg_s2s,Ndim)]=u_inc_glo[i_old_scalar-1+nth*product(Ns,Ndim)];
       }
@@ -1754,7 +1754,7 @@ if(myrank==master_rank){
       double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
       i_old_md[0] += idx_off_x;
       i_old_md[1] += idx_off_y;
-      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
 
       for (int nth=0; nth<nvec; nth++){
         double ss = slowness(xs,ys,slow_x0, slow_y0,ivelo);

@@ -1566,7 +1566,7 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=3; // the 4th rhs makes precon=2 really hard to converge
+    int nvec=2; // the 4th rhs makes precon=2 really hard to converge
     vector<_Complex double> b(myseg*nvec,{0.0,0.0});
     vector<_Complex double> x(myseg*nvec,{0.0,0.0});
     for (int i=0; i<myseg; i++){
