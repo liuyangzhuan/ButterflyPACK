@@ -466,6 +466,7 @@ contains
       implicit none
       type(Hstat)::stats
 
+      if (allocated(stats%leafs_of_level)) deallocate (stats%leafs_of_level)
       if (allocated(stats%rankmax_of_level)) deallocate (stats%rankmax_of_level)
       if (allocated(stats%rankmin_of_level)) deallocate (stats%rankmin_of_level)
       if (allocated(stats%rankmax_of_level_global)) deallocate (stats%rankmax_of_level_global)

@@ -1507,6 +1507,29 @@ contains
 
 
 
+!>**** Interface of BP (generally a rectangular matrix) deletion
+   !> @param BP: the structure containing the BP (inout)
+   subroutine BP_Delete(BP)
+      implicit none
+      type(blockplus)::BP
+      type(matrixblock),pointer::blocks
+
+      if(associated(BP%ll))then
+      if(associated(BP%ll(1)%matrices_block))then
+         blocks => BP%ll(1)%matrices_block(1)
+         if(blocks%style==4)then !!! H matrix
+            call Hmat_block_delete(blocks)
+            deallocate(BP%ll(1)%matrices_block)
+            deallocate(BP%ll)
+         else !!! HSS or HODLR(a single BF)
+            call Bplus_delete(BP)
+         endif
+      endif
+      endif
+   end subroutine BP_Delete
+
+
+
 !>**** Interface of BF construction via entry extraction
    !> @param Ndim: dimensionality (in)
    !> @param blocks: the structure containing the block (inout)
