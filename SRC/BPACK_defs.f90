@@ -194,13 +194,16 @@ module BPACK_DEFS
     end type nil_onelevel_MD
 
 
-    !>**** input and output vectors for applying a Bplus
+    !>**** input and output vectors for applying a Bplus at one level
     type vectorsblock
-        ! integer style
-        ! integer head
-        ! integer tail
         DT, allocatable :: vector(:, :)
     end type vectorsblock
+
+    !>**** input and output vectors for applying a Bplus at all levels
+    type vectorsblock_oneL
+        type(vectorsblock), allocatable :: vs(:)
+    end type vectorsblock_oneL
+
 
     !>**** a vector used to extract one element of a butterfly
     type vectorset
