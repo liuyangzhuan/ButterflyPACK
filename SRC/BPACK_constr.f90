@@ -914,7 +914,10 @@ contains
       case (HODLR)
          BP%Lplus=1
          BP%pgno=1
-         allocate (BP%LL(1))
+         allocate (BP%LL(LplusMax))
+         do ll = 1, LplusMax
+            BP%LL(ll)%Nbound = 0
+         end do
          BP%LL(1)%Nbound = 1
          allocate (BP%LL(1)%matrices_block(1))
          blocks => BP%LL(1)%matrices_block(1)
