@@ -520,7 +520,7 @@ contains
 
 
 
-
+   !!!!! this version is no more used as the communication is too slow
    ! subroutine Bplus_block_MVP_dat(bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, level_start, level_end)
 
 
@@ -630,6 +630,7 @@ contains
    ! end subroutine Bplus_block_MVP_dat
 
 
+
   subroutine Bplus_MD_block_MVP_dat(Ndim, bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, msh, option,level_start, level_end)
 
 
@@ -660,7 +661,7 @@ contains
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
       real(kind=8)::n2,n1
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
-      type(vectorsblock),allocatable:: Vin_locs(:), Vout_locs(:)
+      type(vectorsblock_oneL),allocatable::Vin_locs(:),Vout_locs(:)
 
       integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
 
@@ -680,34 +681,41 @@ contains
 
          ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
-         do ll = level_s, level_e
 
-            allocate(Vin_locs(bplus%LL(ll)%Nbound))
-            allocate(Vout_locs(bplus%LL(ll)%Nbound))
-            ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+         allocate(Vin_locs(level_s:level_e))
+         allocate(Vout_locs(level_s:level_e))
+
+         do ll = level_s, level_e
+            allocate(Vin_locs(ll)%vs(bplus%LL(ll)%Nbound))
+            allocate(Vout_locs(ll)%vs(bplus%LL(ll)%Nbound))
             do bb = 1, bplus%LL(ll)%Nbound
                blocks => bplus%LL(ll)%matrices_block(bb)
-
-               n1 = MPI_Wtime()
                if (chara == 'N') then
                   if (ALL(blocks%M_loc > 0)) then
-                     allocate (Vout_locs(bb)%vector(product(blocks%M_loc), Nrnd))
-                     Vout_locs(bb)%vector=0
+                     allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
+                     Vout_locs(ll)%vs(bb)%vector=0
                   endif
-                  if (ALL(blocks%N_loc > 0)) allocate (Vin_locs(bb)%vector(product(blocks%N_loc), Nrnd))
-                  call Redistribute1Dto1D_MD(Ndim, random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+                  if (ALL(blocks%N_loc > 0)) allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
                else
                   if (ALL(blocks%N_loc > 0))then
-                     allocate (Vout_locs(bb)%vector(product(blocks%N_loc), Nrnd))
-                     Vout_locs(bb)%vector=0
+                     allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
+                     Vout_locs(ll)%vs(bb)%vector=0
                   endif
-                  if (ALL(blocks%M_loc > 0)) allocate (Vin_locs(bb)%vector(product(blocks%M_loc), Nrnd))
-                  call Redistribute1Dto1D_MD(Ndim, random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+                  if (ALL(blocks%M_loc > 0)) allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
                endif
-               n2 = MPI_Wtime()
-               stats%Time_RedistV = stats%Time_RedistV + n2-n1
             enddo
+         enddo
 
+         n1 = MPI_Wtime()
+         if (chara == 'N') then
+            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,ptree%pgrp(blocks_1%pgno)%nproc)
+         else
+            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,ptree%pgrp(blocks_1%pgno)%nproc)
+         endif
+         n2 = MPI_Wtime()
+         stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+         do ll = level_s, level_e
             do bb = 1, bplus%LL(ll)%Nbound
                blocks => bplus%LL(ll)%matrices_block(bb)
                if (chara == 'N') then
@@ -720,38 +728,169 @@ contains
 
                if (ALL(blocks%N_loc > 0) .or. ALL(blocks%M_loc > 0)) then
                   if(blocks%style==1)then
-                     call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(bb)%vector, product(dim_in), Vout_locs(bb)%vector, product(dim_out), ctemp1, ctemp2)
+                     call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2)
                   else
-                     call BF_MD_block_mvp(chara, Vin_locs(bb)%vector, dim_in, Vout_locs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+                     call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
                   endif
                endif
             enddo
+         enddo
 
-            ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+
+         n1 = MPI_Wtime()
+         if (chara == 'N') then
+            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree,ptree%pgrp(blocks_1%pgno)%nproc)
+         else
+            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree,ptree%pgrp(blocks_1%pgno)%nproc)
+         endif
+         n2 = MPI_Wtime()
+         stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+
+         do ll = level_s, level_e
             do bb = 1, bplus%LL(ll)%Nbound
                blocks => bplus%LL(ll)%matrices_block(bb)
-               n1 = MPI_Wtime()
-               if (chara == 'N') then
-                  call Redistribute1Dto1D_MD(Ndim,Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
-                  if (ALL(blocks%M_loc > 0)) deallocate (Vout_locs(bb)%vector)
-                  if (ALL(blocks%N_loc > 0)) deallocate (Vin_locs(bb)%vector)
-               else
-                  call Redistribute1Dto1D_MD(Ndim,Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
-                  if (ALL(blocks%N_loc > 0)) deallocate (Vout_locs(bb)%vector)
-                  if (ALL(blocks%M_loc > 0)) deallocate (Vin_locs(bb)%vector)
+               if (ALL(blocks%M_loc > 0))then
+                  deallocate (Vout_locs(ll)%vs(bb)%vector)
+                  deallocate (Vin_locs(ll)%vs(bb)%vector)
                endif
-               n2 = MPI_Wtime()
-               stats%Time_RedistV = stats%Time_RedistV + n2-n1
-
             end do
-            deallocate(Vin_locs)
-            deallocate(Vout_locs)
+            deallocate(Vin_locs(ll)%vs)
+            deallocate(Vout_locs(ll)%vs)
          end do
+         deallocate(Vin_locs)
+         deallocate(Vout_locs)
 
          random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
          deallocate (Vout)
       endif
    end subroutine Bplus_MD_block_MVP_dat
+
+
+
+   !!!!! this version is no more used as the communication is too slow
+!   subroutine Bplus_MD_block_MVP_dat(Ndim, bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, msh, option,level_start, level_end)
+
+
+
+!       implicit none
+
+!       integer Ndim
+!       integer M(Ndim), N(Ndim), Nrnd, index_i, index_j, na, nb, index_start, num_vectors
+!       integer i, j, ii, jj, ij, level, level_butterfly, index_iijj, index_ij, k, k1, k2, kk, intemp1, intemp2
+!       integer vector_inuse, mm, nn, num_blocks, level_define, col_vector
+!       integer rank1, rank2, rank, num_groupm, num_groupn, butterflyB_inuse, header_nn, header_mm, ma, mb
+!       integer vector_a, vector_b, nn1, nn2, mm1, mm2, levelm
+!       DT ctemp, a, b, ctemp1, ctemp2
+!       character chara
+!       type(matrixblock_MD), pointer::blocks, blocks_1
+!       type(blockplus_MD)::bplus
+!       integer ll, bb
+!       integer, optional:: level_start, level_end
+!       integer:: level_s, level_e
+!       type(proctree)::ptree
+!       type(Hstat)::stats
+!       type(Hoption)::option
+!       type(mesh)::msh(Ndim)
+!       integer:: ldi(Ndim), ldo(Ndim)
+!       integer:: dim_in(Ndim), dim_out(Ndim)
+!       DT :: random1(product(ldi), *), random2(product(ldo), *)
+!       DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
+!       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
+!       real(kind=8)::n2,n1
+!       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
+!       type(vectorsblock),allocatable:: Vin_locs(:), Vout_locs(:)
+
+!       integer idx_start_m, idx_start_n, idx_start_n_loc, idx_start_m_loc, idx_end_n_loc, idx_end_m_loc, idx_start_i_loc, idx_start_o_loc, idx_end_i_loc, idx_end_o_loc
+
+!       blocks_1 => bplus%LL(1)%matrices_block(1)
+!       if(blocks_1%style==4)then
+!          write(*,*)"not supported style==4 in Bplus_MD_block_MVP_dat"
+!          stop
+!       else
+!          level_s = 1
+!          level_e = bplus%Lplus
+!          if (present(level_start)) level_s = level_start
+!          if (present(level_end)) level_e = level_end
+
+!          if (chara == 'N') allocate (Vout(product(M), Nrnd))
+!          if (chara == 'T') allocate (Vout(product(N), Nrnd))
+!          Vout = 0
+
+!          ctemp1 = 1.0d0; ctemp2 = 0.0d0
+
+!          do ll = level_s, level_e
+
+!             allocate(Vin_locs(bplus%LL(ll)%Nbound))
+!             allocate(Vout_locs(bplus%LL(ll)%Nbound))
+!             ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+!             do bb = 1, bplus%LL(ll)%Nbound
+!                blocks => bplus%LL(ll)%matrices_block(bb)
+
+!                n1 = MPI_Wtime()
+!                if (chara == 'N') then
+!                   if (ALL(blocks%M_loc > 0)) then
+!                      allocate (Vout_locs(bb)%vector(product(blocks%M_loc), Nrnd))
+!                      Vout_locs(bb)%vector=0
+!                   endif
+!                   if (ALL(blocks%N_loc > 0)) allocate (Vin_locs(bb)%vector(product(blocks%N_loc), Nrnd))
+!                   call Redistribute1Dto1D_MD(Ndim, random1, ldi, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Vin_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Nrnd, ptree)
+!                else
+!                   if (ALL(blocks%N_loc > 0))then
+!                      allocate (Vout_locs(bb)%vector(product(blocks%N_loc), Nrnd))
+!                      Vout_locs(bb)%vector=0
+!                   endif
+!                   if (ALL(blocks%M_loc > 0)) allocate (Vin_locs(bb)%vector(product(blocks%M_loc), Nrnd))
+!                   call Redistribute1Dto1D_MD(Ndim, random1, ldi, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Vin_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Nrnd, ptree)
+!                endif
+!                n2 = MPI_Wtime()
+!                stats%Time_RedistV = stats%Time_RedistV + n2-n1
+!             enddo
+
+!             do bb = 1, bplus%LL(ll)%Nbound
+!                blocks => bplus%LL(ll)%matrices_block(bb)
+!                if (chara == 'N') then
+!                   dim_in = blocks%N_loc
+!                   dim_out = blocks%M_loc
+!                else
+!                   dim_in = blocks%M_loc
+!                   dim_out = blocks%N_loc
+!                endif
+
+!                if (ALL(blocks%N_loc > 0) .or. ALL(blocks%M_loc > 0)) then
+!                   if(blocks%style==1)then
+!                      call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(bb)%vector, product(dim_in), Vout_locs(bb)%vector, product(dim_out), ctemp1, ctemp2)
+!                   else
+!                      call BF_MD_block_mvp(chara, Vin_locs(bb)%vector, dim_in, Vout_locs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+!                   endif
+!                endif
+!             enddo
+
+!             ! The followin loop for input redistrbution should be rewritten in a more efficient way rather than using Redistribute1Dto1D
+!             do bb = 1, bplus%LL(ll)%Nbound
+!                blocks => bplus%LL(ll)%matrices_block(bb)
+!                n1 = MPI_Wtime()
+!                if (chara == 'N') then
+!                   call Redistribute1Dto1D_MD(Ndim,Vout_locs(bb)%vector, blocks%M_loc, blocks%M_p, blocks%headm, blocks%pgno, Vout, M, blocks_1%M_p, blocks_1%headm, blocks_1%pgno, Nrnd, ptree, 1)
+!                   if (ALL(blocks%M_loc > 0)) deallocate (Vout_locs(bb)%vector)
+!                   if (ALL(blocks%N_loc > 0)) deallocate (Vin_locs(bb)%vector)
+!                else
+!                   call Redistribute1Dto1D_MD(Ndim,Vout_locs(bb)%vector, blocks%N_loc, blocks%N_p, blocks%headn, blocks%pgno, Vout, N, blocks_1%N_p, blocks_1%headn, blocks_1%pgno, Nrnd, ptree, 1)
+!                   if (ALL(blocks%N_loc > 0)) deallocate (Vout_locs(bb)%vector)
+!                   if (ALL(blocks%M_loc > 0)) deallocate (Vin_locs(bb)%vector)
+!                endif
+!                n2 = MPI_Wtime()
+!                stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+!             end do
+!             deallocate(Vin_locs)
+!             deallocate(Vout_locs)
+!          end do
+
+!          random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+!          deallocate (Vout)
+!       endif
+!    end subroutine Bplus_MD_block_MVP_dat
 
 
 
@@ -7918,6 +8057,452 @@ contains
 
    end subroutine Bplus_vec_1Dto1D
 
+
+
+
+   !>***** redistribute the input and output vectors in Bplus_MD_block_MVP_dat between layout of bplus%LL(1)%matrices_block(1) to the layout of bplus%LL(xx)%matrices_block(yy)
+   subroutine Bplus_MD_vec_1Dto1D(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree,nproc)
+
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::BP
+      integer::rowcol ! whether the distribution is along row or column dimension
+      integer::one2all ! whether the redistribution is from BP to the individual BFs or the other way
+      integer:: level_s, level_e, dim_i
+      integer ld1(Ndim),Nrnd
+      DT::dat_1(product(ld1), *)
+      type(vectorsblock_oneL)::vecs(level_s:level_e)
+      type(proctree)::ptree
+      integer ll,bb,offset_s(Ndim),offset_r(Ndim),sizen(Ndim), head_i(Ndim), head_o(Ndim)
+      type(matrixblock_MD),pointer::blocks,blocks_1
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
+      real(kind=8)::n1, n2
+      integer Nsendactive, Nrecvactive
+      integer rr, cc
+      integer i, j, ii, jj, ij, pp, tt, iii
+      integer ierr, tag, nproc, nproc_i, nproc_o, Nreqr, Nreqs, recvid, sendid, idxs_i(Ndim), idxe_i(Ndim), idxs_o(Ndim), idxe_o(Ndim), idx_MD(Ndim), idx_s_MD(Ndim),idx_r_MD(Ndim), dims_md(Ndim),dims_md_r(Ndim),idx_r_scalar,idx_s_scalar
+
+
+      n1 = MPI_Wtime()
+
+
+      blocks_1 => BP%LL(1)%matrices_block(1)
+      tag = blocks_1%pgno+1000
+
+      ! allocation of communication quantities
+      do ii = 1, nproc
+         sendquant(ii)%size = 0
+         sendquant(ii)%active = 0
+      enddo
+      do ii = 1, nproc
+         recvquant(ii)%size = 0
+         recvquant(ii)%active = 0
+      enddo
+
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      if(one2all==1)then
+         nproc_i = ptree%pgrp(blocks_1%pgno)%nproc
+         call assert(nproc_i==nproc,'nproc should equal nproc_i')
+
+         ii = ptree%myid - ptree%pgrp(blocks_1%pgno)%head + 1
+         if(rowcol==1)then
+            head_i = blocks_1%headm
+            idxs_i = blocks_1%M_p(ii, 1, :) + head_i
+            idxe_i = blocks_1%M_p(ii, 2, :) + head_i
+         else
+            head_i = blocks_1%headn
+            idxs_i = blocks_1%N_p(ii, 1, :) + head_i
+            idxe_i = blocks_1%N_p(ii, 2, :) + head_i
+         endif
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_o = ptree%pgrp(blocks%pgno)%nproc
+               do jj=1,nproc_o
+                  if(rowcol==1)then
+                     head_o = blocks%headm
+                     idxs_o = blocks%M_p(jj, 1, :) + head_o
+                     idxe_o = blocks%M_p(jj, 2, :) + head_o
+                  else
+                     head_o = blocks%headn
+                     idxs_o = blocks%N_p(jj, 1, :) + head_o
+                     idxe_o = blocks%N_p(jj, 2, :) + head_o
+                  endif
+                  if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                     pp = ptree%pgrp(blocks%pgno)%head + jj - ptree%pgrp(blocks_1%pgno)%head
+                     if (sendquant(pp)%active == 0) then
+                        sendquant(pp)%active = 1
+                        Nsendactive = Nsendactive + 1
+                        sendIDactive(Nsendactive) = pp
+                     endif
+                     do dim_i=1,Ndim
+                        offset_s(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_i(dim_i)
+                        sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                     enddo
+                     sendquant(pp)%size = sendquant(pp)%size + 2 + 2*Ndim + product(sizen)*Nrnd
+                  endif
+               enddo
+            enddo
+         enddo
+
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_o = ptree%pgrp(blocks%pgno)%nproc
+               if (IOwnPgrp(ptree, blocks%pgno)) then
+                  jj = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+                  if(rowcol==1)then
+                     head_o = blocks%headm
+                     idxs_o = blocks%M_p(jj, 1, :) + head_o
+                     idxe_o = blocks%M_p(jj, 2, :) + head_o
+                  else
+                     head_o = blocks%headn
+                     idxs_o = blocks%N_p(jj, 1, :) + head_o
+                     idxe_o = blocks%N_p(jj, 2, :) + head_o
+                  endif
+                  do ii = 1, nproc_i
+                     if(rowcol==1)then
+                        head_i = blocks_1%headm
+                        idxs_i = blocks_1%M_p(ii, 1, :) + head_i
+                        idxe_i = blocks_1%M_p(ii, 2, :) + head_i
+                     else
+                        head_i = blocks_1%headn
+                        idxs_i = blocks_1%N_p(ii, 1, :) + head_i
+                        idxe_i = blocks_1%N_p(ii, 2, :) + head_i
+                     endif
+                     if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                        pp = ii
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        do dim_i=1,Ndim
+                           sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                        enddo
+                        recvquant(pp)%size = recvquant(pp)%size + 2 + 2*Ndim + product(sizen)*Nrnd
+                     endif
+                  enddo
+               endif
+            enddo
+         enddo
+      else
+
+         nproc_o = ptree%pgrp(blocks_1%pgno)%nproc
+         call assert(nproc_o==nproc,'nproc should equal nproc_o')
+
+         ii = ptree%myid - ptree%pgrp(blocks_1%pgno)%head + 1
+         if(rowcol==1)then
+            head_o = blocks_1%headm
+            idxs_o = blocks_1%M_p(ii, 1, :) + head_o
+            idxe_o = blocks_1%M_p(ii, 2, :) + head_o
+         else
+            head_o = blocks_1%headn
+            idxs_o = blocks_1%N_p(ii, 1, :) + head_o
+            idxe_o = blocks_1%N_p(ii, 2, :) + head_o
+         endif
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_i = ptree%pgrp(blocks%pgno)%nproc
+               do jj=1,nproc_i
+                  if(rowcol==1)then
+                     head_i = blocks%headm
+                     idxs_i = blocks%M_p(jj, 1, :) + head_i
+                     idxe_i = blocks%M_p(jj, 2, :) + head_i
+                  else
+                     head_i = blocks%headn
+                     idxs_i = blocks%N_p(jj, 1, :) + head_i
+                     idxe_i = blocks%N_p(jj, 2, :) + head_i
+                  endif
+                  if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                     pp = ptree%pgrp(blocks%pgno)%head + jj - ptree%pgrp(blocks_1%pgno)%head
+                     if (recvquant(pp)%active == 0) then
+                        recvquant(pp)%active = 1
+                        Nrecvactive = Nrecvactive + 1
+                        recvIDactive(Nrecvactive) = pp
+                     endif
+                     do dim_i=1,Ndim
+                        sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                     enddo
+                     recvquant(pp)%size = recvquant(pp)%size + 2 + 2*Ndim + product(sizen)*Nrnd
+                  endif
+               enddo
+            enddo
+         enddo
+
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_i = ptree%pgrp(blocks%pgno)%nproc
+               if (IOwnPgrp(ptree, blocks%pgno)) then
+                  jj = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+                  if(rowcol==1)then
+                     head_i = blocks%headm
+                     idxs_i = blocks%M_p(jj, 1, :) + head_i
+                     idxe_i = blocks%M_p(jj, 2, :) + head_i
+                  else
+                     head_i = blocks%headn
+                     idxs_i = blocks%N_p(jj, 1, :) + head_i
+                     idxe_i = blocks%N_p(jj, 2, :) + head_i
+                  endif
+                  do ii = 1, nproc_o
+                     if(rowcol==1)then
+                        head_o = blocks_1%headm
+                        idxs_o = blocks_1%M_p(ii, 1, :) + head_o
+                        idxe_o = blocks_1%M_p(ii, 2, :) + head_o
+                     else
+                        head_o = blocks_1%headn
+                        idxs_o = blocks_1%N_p(ii, 1, :) + head_o
+                        idxe_o = blocks_1%N_p(ii, 2, :) + head_o
+                     endif
+                     if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                        pp = ii
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        do dim_i=1,Ndim
+                           sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + 2 + 2*Ndim + product(sizen)*Nrnd
+                     endif
+                  enddo
+               endif
+            enddo
+         enddo
+      endif
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         sendquant(pp)%size = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+      enddo
+
+      ! pack the send buffer in the second pass
+
+
+      if(one2all==1)then
+         nproc_i = ptree%pgrp(blocks_1%pgno)%nproc
+         call assert(nproc_i==nproc,'nproc should equal nproc_i')
+
+         ii = ptree%myid - ptree%pgrp(blocks_1%pgno)%head + 1
+         if(rowcol==1)then
+            head_i = blocks_1%headm
+            idxs_i = blocks_1%M_p(ii, 1, :) + head_i
+            idxe_i = blocks_1%M_p(ii, 2, :) + head_i
+         else
+            head_i = blocks_1%headn
+            idxs_i = blocks_1%N_p(ii, 1, :) + head_i
+            idxe_i = blocks_1%N_p(ii, 2, :) + head_i
+         endif
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_o = ptree%pgrp(blocks%pgno)%nproc
+               do jj=1,nproc_o
+                  if(rowcol==1)then
+                     head_o = blocks%headm
+                     idxs_o = blocks%M_p(jj, 1, :) + head_o
+                     idxe_o = blocks%M_p(jj, 2, :) + head_o
+                  else
+                     head_o = blocks%headn
+                     idxs_o = blocks%N_p(jj, 1, :) + head_o
+                     idxe_o = blocks%N_p(jj, 2, :) + head_o
+                  endif
+                  if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                     pp = ptree%pgrp(blocks%pgno)%head + jj - ptree%pgrp(blocks_1%pgno)%head
+                     do dim_i=1,Ndim
+                        offset_s(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_i(dim_i)
+                        offset_r(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_o(dim_i)
+                        sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                     enddo
+
+                     sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = ll
+                     sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = bb
+                     sendquant(pp)%dat(sendquant(pp)%size + 3:sendquant(pp)%size + 2 + Ndim, 1) = offset_r
+                     sendquant(pp)%dat(sendquant(pp)%size + 3 + Ndim: sendquant(pp)%size + 2 + 2*Ndim, 1) = sizen
+                     sendquant(pp)%size = sendquant(pp)%size + 2 + 2*Ndim
+
+                     do iii=1,product(sizen)
+                        call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+                        idx_s_MD = idx_MD + offset_s
+                        call MultiIndexToSingleIndex(Ndim, ld1, idx_s_scalar, idx_s_MD)
+                        do cc=1,Nrnd
+                           sendquant(pp)%dat(sendquant(pp)%size+(iii-1)*Nrnd+cc,1) = dat_1(idx_s_scalar, cc)
+                        enddo
+                     enddo
+                     sendquant(pp)%size = sendquant(pp)%size + product(sizen)*Nrnd
+                  endif
+               enddo
+            enddo
+         enddo
+      else
+         nproc_o = ptree%pgrp(blocks_1%pgno)%nproc
+         call assert(nproc_o==nproc,'nproc should equal nproc_o')
+
+         do ll=level_s,level_e
+            do bb = 1, BP%LL(ll)%Nbound
+               blocks => BP%LL(ll)%matrices_block(bb)
+               nproc_i = ptree%pgrp(blocks%pgno)%nproc
+               if (IOwnPgrp(ptree, blocks%pgno)) then
+                  jj = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+                  if(rowcol==1)then
+                     head_i = blocks%headm
+                     idxs_i = blocks%M_p(jj, 1, :) + head_i
+                     idxe_i = blocks%M_p(jj, 2, :) + head_i
+                     dims_md = blocks%M_loc
+                  else
+                     head_i = blocks%headn
+                     idxs_i = blocks%N_p(jj, 1, :) + head_i
+                     idxe_i = blocks%N_p(jj, 2, :) + head_i
+                     dims_md = blocks%N_loc
+                  endif
+                  do ii = 1, nproc_o
+                     if(rowcol==1)then
+                        head_o = blocks_1%headm
+                        idxs_o = blocks_1%M_p(ii, 1, :) + head_o
+                        idxe_o = blocks_1%M_p(ii, 2, :) + head_o
+                     else
+                        head_o = blocks_1%headn
+                        idxs_o = blocks_1%N_p(ii, 1, :) + head_o
+                        idxe_o = blocks_1%N_p(ii, 2, :) + head_o
+                     endif
+                     if (ALL(idxs_o <= idxe_i) .and. ALL(idxe_o >= idxs_i)) then
+                        pp = ii
+                        do dim_i=1,Ndim
+                           offset_s(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_i(dim_i)
+                           offset_r(dim_i) = max(idxs_i(dim_i), idxs_o(dim_i)) - idxs_o(dim_i)
+                           sizen(dim_i) = min(idxe_i(dim_i), idxe_o(dim_i)) - max(idxs_i(dim_i), idxs_o(dim_i)) + 1
+                        enddo
+
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = ll
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = bb
+                        sendquant(pp)%dat(sendquant(pp)%size + 3:sendquant(pp)%size + 2 + Ndim, 1) = offset_r
+                        sendquant(pp)%dat(sendquant(pp)%size + 3 + Ndim: sendquant(pp)%size + 2 + 2*Ndim, 1) = sizen
+                        sendquant(pp)%size = sendquant(pp)%size + 2 + 2*Ndim
+
+                        do iii=1,product(sizen)
+                           call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+                           idx_s_MD = idx_MD + offset_s
+                           call MultiIndexToSingleIndex(Ndim, dims_md, idx_s_scalar, idx_s_MD)
+                           do cc=1,Nrnd
+                              sendquant(pp)%dat(sendquant(pp)%size+(iii-1)*Nrnd+cc,1) = vecs(ll)%vs(bb)%vector(idx_s_scalar, cc)
+                           enddo
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + product(sizen)*Nrnd
+                     endif
+                  enddo
+               endif
+            enddo
+         enddo
+      endif
+
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1 + ptree%pgrp(blocks_1%pgno)%head
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks_1%pgno)%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1 + ptree%pgrp(blocks_1%pgno)%head
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag + 1, ptree%pgrp(blocks_1%pgno)%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1 - ptree%pgrp(blocks_1%pgno)%head
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size)
+            i = i + 1
+            ll = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            bb = NINT(dble(recvquant(pp)%dat(i, 1)))
+            do dim_i=1,Ndim
+               i = i + 1
+               offset_r(dim_i) = NINT(dble(recvquant(pp)%dat(i, 1)))
+            enddo
+            do dim_i=1,Ndim
+               i = i + 1
+               sizen(dim_i) = NINT(dble(recvquant(pp)%dat(i, 1)))
+            enddo
+
+            if(one2all==1)then
+               blocks => BP%LL(ll)%matrices_block(bb)
+               if(rowcol==1)then
+                  dims_md_r = blocks%M_loc
+               else
+                  dims_md_r = blocks%N_loc
+               endif            
+               do iii=1,product(sizen)
+                  call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+                  idx_r_MD = idx_MD + offset_r
+                  call MultiIndexToSingleIndex(Ndim, dims_md_r, idx_r_scalar, idx_r_MD)
+                  do cc=1,Nrnd
+                     i = i + 1
+                     vecs(ll)%vs(bb)%vector(idx_r_scalar, cc) = recvquant(pp)%dat(i,1)
+                  enddo
+               enddo
+            else
+               do iii=1,product(sizen)
+                  call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+                  idx_r_MD = idx_MD + offset_r
+                  call MultiIndexToSingleIndex(Ndim, ld1, idx_r_scalar, idx_r_MD)
+                  do cc=1,Nrnd
+                     i = i + 1
+                     dat_1(idx_r_scalar, cc) = dat_1(idx_r_scalar, cc) + recvquant(pp)%dat(i,1)
+                  enddo
+               enddo
+            endif
+         enddo
+      enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+      enddo
+
+      n2 = MPI_Wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+   end subroutine Bplus_MD_vec_1Dto1D
 
 
 
