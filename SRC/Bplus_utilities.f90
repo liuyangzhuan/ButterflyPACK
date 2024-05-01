@@ -7636,7 +7636,7 @@ contains
                         endif
                         sizen = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
                         recvquant(pp)%size = recvquant(pp)%size + 4 + sizen*Nrnd
-                     endif                     
+                     endif
                   enddo
                endif
             enddo
@@ -7719,7 +7719,7 @@ contains
                         offset_s = max(idxs_i, idxs_o) - idxs_i
                         sizen = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
                         sendquant(pp)%size = sendquant(pp)%size + 4 + sizen*Nrnd
-                     endif                     
+                     endif
                   enddo
                endif
             enddo
@@ -7834,7 +7834,7 @@ contains
                            sendquant(pp)%dat(sendquant(pp)%size + i, 1) = vecs(ll)%vs(bb)%vector(rr+offset_s, cc)
                         enddo
                         sendquant(pp)%size = sendquant(pp)%size + sizen*Nrnd
-                     endif                     
+                     endif
                   enddo
                endif
             enddo

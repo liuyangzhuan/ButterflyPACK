@@ -1179,6 +1179,7 @@ int main(int argc, char* argv[])
 	int lrlevel=100;
   int verbose=0;
   int elem_extract=0;
+  double opt_d;
 
 if(myrank==master_rank){
 	z_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
@@ -1493,7 +1494,11 @@ if(myrank==master_rank){
 	vector<double> panelnodes;
   double dl=0.01;
   int knn_pre;
-  int layer=10;
+
+  z_c_bpack_getoption(&option_bf, "knn", &opt_d);
+  int layer=0;
+  if(round(opt_d)>0)
+    layer=10;
   knn_pre= (2*layer+1)*(2*layer+1);
 
   double center[2];
@@ -1605,7 +1610,6 @@ if(myrank==master_rank){
         // str=to_string(h); // this only has 6-digit precision
         str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
         filename += "_h_"+str;
-        double opt_d;
         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
@@ -1701,7 +1705,7 @@ if(myrank==master_rank){
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
     // factor hodlr
 
-    double opt_d;
+
     z_c_bpack_getoption(&option_bf, "precon", &opt_d);
     int precon=round(opt_d);
     if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);

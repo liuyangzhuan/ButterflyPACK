@@ -745,6 +745,9 @@ contains
       call MPI_ALLREDUCE(stats%Flop_C_Mult, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'C_mult flops:', rtemp
 
+      call MPI_ALLREDUCE(stats%Time_RedistV, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if(ptree%MyID==Main_ID)write(*,'(A21,Es14.2,A8)') 'RedistV time: ', rtemp, 'Seconds'
+
       call MPI_ALLREDUCE(stats%Time_C_Extract, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_extract time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_C_Extract, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
