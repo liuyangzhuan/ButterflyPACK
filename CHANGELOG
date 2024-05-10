@@ -1,3 +1,14 @@
+Version 3.1.0: Released May 09, 2024
+===================================
+- Added more examples for Radon transforms
+- Added drivers for IFIO with Split Bregman iterations with L1 regularizer
+- Improved H matrix parallel performance by adding option%hextralevel
+- Added 2D and 3D VIE drivers (matrix and tensor) with voxel discretization and a 3D slowness generator
+- Added HSS-BF-MD format with iterative solvers only
+- Improved error checking for entry-based construction of hierarchical matirces by using sparse matvec
+- Added/Improved BPACK_(MD)_Ztfqmr_usermatvec_noprecon
+
+
 Version 3.0.0: Released Mar 22, 2024
 ===================================
 - Added butterfly tensor algorithms with additional ZFP compression
