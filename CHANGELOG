@@ -7,6 +7,7 @@ Version 3.1.0: Released May 09, 2024
 - Added HSS-BF-MD format with iterative solvers only
 - Improved error checking for entry-based construction of hierarchical matirces by using sparse matvec
 - Added/Improved BPACK_(MD)_Ztfqmr_usermatvec_noprecon
+- Improved Bplus_(MD_)block_MVP_dat communication performance
 
 
 Version 3.0.0: Released Mar 22, 2024
