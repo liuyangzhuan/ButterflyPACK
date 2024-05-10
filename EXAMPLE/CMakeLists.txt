@@ -210,6 +210,24 @@ add_dependencies(cvie2d_t cvie2d)
 endif()
 
 
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CVIE3D VIE3D_Driver.cpp G2D/bessel.cpp)
+add_executable(cvie3d ${CVIE3D})
+target_link_libraries(cvie3d ${all_link_libs_d})
+target_link_libraries(cvie3d ${all_link_libs_z})
+add_dependencies(cvie3d cvie2d_t)
+endif()
+
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CVIE3DT VIE3D_tensor_Driver.cpp G2D/bessel.cpp)
+add_executable(cvie3d_t ${CVIE3DT})
+target_link_libraries(cvie3d_t ${all_link_libs_d})
+target_link_libraries(cvie3d_t ${all_link_libs_z})
+add_dependencies(cvie3d_t cvie3d)
+endif()
+
+
 endif()
 
 

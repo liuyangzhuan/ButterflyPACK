@@ -8461,7 +8461,7 @@ contains
                   dims_md_r = blocks%M_loc
                else
                   dims_md_r = blocks%N_loc
-               endif            
+               endif
                do iii=1,product(sizen)
                   call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
                   idx_r_MD = idx_MD + offset_r

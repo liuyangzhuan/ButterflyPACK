@@ -754,8 +754,8 @@ contains
             select_idx(dim_i)%dat(1)=1
             select_idx(dim_i)%dat(2)=mmnn(dim_i)
          else
-            sampleidx(dim_i) = min(ceiling_safe(option%sample_para*nn_scalar*overrate), mmnn(dim_i))
-            if (level == 0) sampleidx(dim_i) = min(ceiling_safe(option%sample_para_outer*nn_scalar*overrate), mmnn(dim_i))
+            sampleidx(dim_i) = min(max(ceiling_safe(option%sample_para*nn_scalar*overrate),Nsample_min_MD), mmnn(dim_i))
+            if (level == 0) sampleidx(dim_i) = min(max(ceiling_safe(option%sample_para_outer*nn_scalar*overrate),Nsample_min_MD), mmnn(dim_i))
             allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
             call linspaceI(1, mmnn(dim_i), sampleidx(dim_i), select_idx(dim_i)%dat(1:sampleidx(dim_i)))
          endif
@@ -1417,8 +1417,8 @@ do j_dim = 1,dims_col(dim)
             select_idx(dim_i)%dat(1)=1
             select_idx(dim_i)%dat(2)=mmnn(dim_i)
          else
-            sampleidx(dim_i) = min(ceiling_safe(option%sample_para*mm_scalar*overrate), mmnn(dim_i))
-            if (level == level_butterfly+1) sampleidx(dim_i) = min(ceiling_safe(option%sample_para_outer*mm_scalar*overrate), mmnn(dim_i))
+            sampleidx(dim_i) = min(max(ceiling_safe(option%sample_para*mm_scalar*overrate),Nsample_min_MD), mmnn(dim_i))
+            if (level == level_butterfly+1) sampleidx(dim_i) = min(max(ceiling_safe(option%sample_para_outer*mm_scalar*overrate),Nsample_min_MD), mmnn(dim_i))
             allocate(select_idx(dim_i)%dat(sampleidx(dim_i)))
             call linspaceI(1, mmnn(dim_i), sampleidx(dim_i), select_idx(dim_i)%dat(1:sampleidx(dim_i)))
          endif

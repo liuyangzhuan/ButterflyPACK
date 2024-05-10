@@ -61,6 +61,35 @@ contains
    end subroutine matvec_user_C
 
 
+!>****** Fortran interface for the matvec function required by BPACK_construction_Matvec, inside which a c++ function pointer ker%C_FuncHMatVec is called \n
+   !>******! It is assumed the ker%C_FuncHMatVec interfaces with local input and output vectors, which assume an already ordered hierarchical matrix
+   !> @param ker: the structure containing kernel quantities
+   !> @param Vin: input vector
+   !> @param Vout: output vector
+   !> @param M: (local) row dimension of the matrix
+   !> @param N: (local) column dimension of the matrix
+   !> @param trans: 'N', 'C' or 'T'
+   !> @param num_vect: number of vectors
+   subroutine matvec_user_C_MD(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+
+      integer :: Ndim
+      integer, INTENT(IN):: M(Ndim), N(Ndim), num_vect
+      DT::Vin(:, :), Vout(:, :)
+      type(kernelquant)::ker
+      character trans
+
+      procedure(C_HMatVec_MD), POINTER :: proc
+
+      call c_f_procpointer(ker%C_FuncHMatVec_MD, proc)
+      if (trans == 'N') then  ! note that C_HMatVec takes Nin Nout, instead of takes M,N, so if statement is needed here
+         call proc(Ndim, trans//c_null_char, N, M, num_vect, Vin, Vout, ker%C_QuantApp)
+      else
+         call proc(Ndim, trans//c_null_char, M, N, num_vect, Vin, Vout, ker%C_QuantApp)
+      endif
+      return
+
+   end subroutine matvec_user_C_MD
+
 
 !>****** Fortran interface for the matvec function required by BF_randomized, inside which a c++ function pointer ker%C_FuncBMatVec is called \n
    !>******! It is assumed the ker%C_FuncBMatVec does not need ldi and ldo! \n
@@ -2298,6 +2327,8 @@ contains
 
       integer Nloc, Nrhs
       DT::x(Nloc, Nrhs), b(Nloc, Nrhs)
+      real(kind=8)::tmpnorm
+      integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -2321,11 +2352,23 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Solve ......"
 
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(b,Nloc,Nrhs))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
+      endif
+
       if (option%ErrSol == 1) then
          call BPACK_Test_Solve_error(bmat, Nloc, option, ptree, stats)
       endif
 
       call BPACK_Solution(bmat, x, b, Nloc, Nrhs, option, ptree, stats)
+
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(x,Nloc,Nrhs))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
+      endif
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Solve finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
@@ -2349,6 +2392,9 @@ contains
       integer Ndim
       integer Nloc(Ndim), Nrhs
       DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs)
+
+      real(kind=8)::tmpnorm
+      integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -2379,8 +2425,19 @@ contains
          ! call BPACK_Test_Solve_error(bmat, Nloc, option, ptree, stats)
          write(*,*)'not yet implemented BPACK_MD_Test_Solve_error'
       endif
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(b,product(Nloc),Nrhs))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
+      endif
 
       call BPACK_MD_Solution(Ndim,bmat, x, b, Nloc, Nrhs, option, ptree, stats,msh)
+
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(x,product(Nloc),Nrhs))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
+      endif
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Solve finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
@@ -2454,6 +2511,75 @@ contains
       ker_Cptr = c_loc(ker)
 
    end subroutine C_BPACK_TFQMR_Noprecon
+
+
+
+
+!>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec (tensor)
+   !> @param x: local solution vector
+   !> @param b: local RHS
+   !> @param Nloc: size of local RHS
+   !> @param Nrhs: number of RHSs
+   !> @param option_Cptr: the structure containing option
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+   !> @param ker_Cptr: the structure containing kernel quantities
+   !> @param C_FuncHMatVec_MD: the C_pointer to user-provided function to multiply A and A* with vectors (in)
+   subroutine C_BPACK_MD_TFQMR_Noprecon(Ndim, x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec_MD, C_QuantApp) bind(c, name="c_bpack_md_tfqmr_noprecon")
+      implicit none
+      integer Ndim
+      integer Nloc(Ndim), Nrhs
+      DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs), r0_initial(product(Nloc),1)
+
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: stats_Cptr
+      type(c_ptr) :: ker_Cptr
+      type(c_funptr), intent(in), value, target :: C_FuncHMatVec_MD
+      type(c_ptr), intent(in), target :: C_QuantApp
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      type(kernelquant), pointer::ker
+
+      real(kind=8):: rel_error, error, n1, n2
+      integer ii, iter
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      allocate (ker)
+
+      !>**** register the user-defined function and type in ker
+      ker%C_QuantApp => C_QuantApp
+      ker%C_FuncHMatVec_MD => C_FuncHMatVec_MD
+
+      stats%Flop_Sol = 0
+      stats%Time_Sol = 0
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve ......"
+
+      n1 = MPI_Wtime()
+      do ii = 1, product(Nloc)
+         call random_dp_number(r0_initial(ii,1))
+      end do
+
+      do ii = 1, Nrhs
+         iter = 0
+         rel_error = option%tol_itersol
+         call BPACK_MD_Ztfqmr_usermatvec_noprecon(Ndim, option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, matvec_user_C_MD, ptree, option, stats, ker)
+      end do
+      n2 = MPI_Wtime()
+      stats%Time_Sol = stats%Time_Sol + n2 - n1
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
+
+      ker_Cptr = c_loc(ker)
+
+   end subroutine C_BPACK_MD_TFQMR_Noprecon
 
 
 
@@ -2734,6 +2860,9 @@ contains
       type(Bmatrix), pointer::bmat
       type(proctree), pointer::ptree
 
+      real(kind=8)::tmpnorm
+      integer ierr
+
       t1 = MPI_Wtime()
 
       strlen = 1
@@ -2767,6 +2896,16 @@ contains
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(xin,Ninloc,Ncol))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
+         tmpnorm = (fnorm(xout,Noutloc,Ncol))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
+      endif
+
+
       ! write(*,*)t2-t1
       deallocate (str)
    end subroutine C_BPACK_Mult
@@ -2793,6 +2932,8 @@ contains
       integer Ndim
       integer Ninloc(Ndim), Noutloc(Ndim), Ncol
       DT::xin(product(Ninloc), Ncol), xout(product(Noutloc), Ncol)
+      real(kind=8)::tmpnorm
+      integer ierr
 
       character(kind=c_char, len=1) :: trans(*)
       type(c_ptr), intent(in) :: bmat_Cptr
@@ -2834,7 +2975,14 @@ contains
       call assert(ALL(Noutloc == Ninloc), "not square Z")
       call BPACK_MD_Mult(Ndim, trim(str), Noutloc, Ncol, xin, xout, bmat, ptree, option, stats, msh)
 
-
+      if(option%verbosity >=2)then
+         tmpnorm = (fnorm(xin,product(Ninloc),Ncol))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
+         tmpnorm = (fnorm(xout,product(Noutloc),Ncol))**2d0
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
+      endif
 
       ! need to use another Flop counter for this operation in future
 

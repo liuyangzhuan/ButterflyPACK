@@ -84,6 +84,7 @@ module BPACK_DEFS
     integer, parameter :: vec_oversample = 5 !< number of extra vectors adding onto estimated rank in the randomized scheme
     integer, parameter:: msg_chunk = 100000 !< used to determine message tag and hence the massage size
     integer, parameter:: Ndim_max = 100 !< maximum dimension of the inputs
+    integer, parameter:: Nsample_min_MD = 4 !< minimum number of subsamples in MD construction, useful whenrank at previous level or leaf size is too small
 
     !>**** parameters for CEM
     real(kind=8), parameter :: BPACK_cd = 299792458d0 !< free-space speed of light
@@ -716,6 +717,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         procedure(F_Compressibility), nopass, pointer :: FuncNearFar => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not
         procedure(F_Zelem_block), nopass, pointer :: FuncZmnBlock => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
         procedure(F_HMatVec), nopass, pointer :: FuncHMatVec => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
+        procedure(F_HMatVec_MD), nopass, pointer :: FuncHMatVec_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
         type(c_ptr), pointer :: C_QuantApp => null() !< Kernels Defined in C: c_pointer to the user-supplied object for computing one element of Z
         type(c_funptr), pointer :: C_FuncZmn => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing one element of Z
@@ -725,6 +727,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(c_funptr), pointer :: C_FuncNearFar_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z (as tensors) is compressible or not
         type(c_funptr), pointer :: C_FuncZmnBlock => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
         type(c_funptr), pointer :: C_FuncHMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+        type(c_funptr), pointer :: C_FuncHMatVec_MD => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
         type(c_funptr), pointer :: C_FuncBMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
     end type kernelquant
 
@@ -897,6 +900,18 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             character trans
         end subroutine HMatVec
 
+        subroutine HMatVec_MD(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+            import::mesh, kernelquant, proctree, Hstat
+            implicit none
+            integer Ndim
+            integer, INTENT(IN):: M(Ndim), N(Ndim), num_vect
+            DT::Vin(:, :), Vout(:, :)
+            type(kernelquant)::ker
+            character trans
+        end subroutine HMatVec_MD
+
+
+
         !> interface of user-defined HODLR/H MatVec routine in Fortran.
         subroutine F_HMatVec(trans, M, N, num_vect, Vin, Vout, quant)
             import::mesh, proctree, Hstat
@@ -905,6 +920,18 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             DT::Vin(:, :), Vout(:, :)
             character trans
         end subroutine F_HMatVec
+
+
+        !> interface of user-defined HODLR/H MatVec (tensor) routine in Fortran.
+        subroutine F_HMatVec_MD(Ndim,trans, M, N, num_vect, Vin, Vout, quant)
+            import::mesh, proctree, Hstat
+            integer Ndim
+            class(*), pointer :: quant
+            integer, INTENT(IN):: M(Ndim), N(Ndim), num_vect
+            DT::Vin(:, :), Vout(:, :)
+            character trans
+        end subroutine F_HMatVec_MD
+
 
         !> interface of user-defined HODLR/H MatVec routine in C.
         subroutine C_HMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant)
@@ -918,6 +945,21 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             type(Hstat)::stats
             character(kind=c_char, len=1) :: trans(*)
         end subroutine C_HMatVec
+
+
+        !> interface of user-defined HODLR/H MatVec (tensor) routine in C.
+        subroutine C_HMatVec_MD(Ndim, trans, Nin, Nout, num_vect, Vin, Vout, quant)
+            USE, INTRINSIC :: ISO_C_BINDING
+            import::mesh, proctree, Hstat
+            integer Ndim
+            type(c_ptr) :: quant
+            integer(kind=C_INT), INTENT(IN):: Nin(Ndim), Nout(Ndim), num_vect
+            CBIND_DT::Vin(product(Nin), num_vect), Vout(product(Nout), num_vect)
+            type(mesh)::msh(Ndim)
+            type(proctree)::ptree
+            type(Hstat)::stats
+            character(kind=c_char, len=1) :: trans(*)
+        end subroutine C_HMatVec_MD
 
         !> interface of user-defined Block MatVec routine in C.
         subroutine C_BMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant, a, b)

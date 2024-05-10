@@ -1714,7 +1714,7 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical tensor construction finished"
 
-      if (option%verbosity >= 0) call BPACK_MD_CheckError(Ndim, bmat, option, msh, ker, stats, ptree)
+      if (option%verbosity >= 0) call BPACK_MD_CheckError_SMVP(Ndim, bmat, option, msh, ker, stats, ptree)
 
 
    end subroutine BPACK_MD_construction_Element
@@ -1747,7 +1747,8 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction finished"
 
       Maxlevel = bmat%Maxlevel
-      if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
+      if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_entry(bmat, option, msh, ker, stats, ptree)
+      if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_SMVP(bmat, option, msh, ker, stats, ptree)
 
    end subroutine BPACK_construction_Element
 
@@ -1831,14 +1832,17 @@ contains
          call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
          ! call element_Zmn_block_user(0, 0, mrange, nrange, mat, msh, option, ker, 2, passflag, ptree, stats)
       enddo
-
+      
+      
+      !!!! It's safer to not modify option%scale_factor inside butterflypack 
+#if 0     
       option%scale_factor = 1d0/scale_factor
       call MPI_ALLREDUCE(MPI_IN_PLACE, option%scale_factor, 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          write (*, *) 'element_Zmn is scaled by a factor of:', option%scale_factor
       endif
-
+#endif
 
       do level = 0, h_mat%Maxlevel
          ! write(*,*)h_mat%lstblks%num_nods,'niam'
@@ -4139,7 +4143,7 @@ contains
    end subroutine BPACK_ExtractElement
 
 !!!!!!! check error of BPACK construction using parallel element extraction
-   subroutine BPACK_CheckError(bmat, option, msh, ker, stats, ptree)
+   subroutine BPACK_CheckError_entry(bmat, option, msh, ker, stats, ptree)
 
       implicit none
 
@@ -4354,15 +4358,138 @@ contains
       call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A32,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(entry): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
-   end subroutine BPACK_CheckError
+   end subroutine BPACK_CheckError_entry
+
+
+
+
+!!!!!!! check error of BPACK construction using BPACK matvec with a sparse vector
+   subroutine BPACK_CheckError_SMVP(bmat, option, msh, ker, stats, ptree)
+
+      implicit none
+
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer nvec
+      DT, allocatable:: x_loc(:, :), rhs_loc(:,:),rhs_loc_ref(:,:)
+      DT::tmp
+      integer dim_i,ij,ii,ii1,ij1
+      integer:: Nunk_n_loc,idxs,idxe,idx_1,idx_2
+      integer,allocatable:: idx_src(:)
+      integer:: Npt_src, N_glo
+      real(kind=8):: a, v1, v2, v3
+      integer ierr
+      type(intersect) :: submats(1)
+      integer passflag
+      real(kind=8)::n1, n2, n3, n4
+      integer:: dims_one
+
+      select case (option%format)
+      case (HODLR)
+         N_glo=bmat%ho_bf%N
+      case (HMAT)
+         N_glo=bmat%h_mat%N
+      case (HSS)
+         N_glo=bmat%hss_bf%N               
+      case default
+         write(*,*)'not supported format in BPACK_CheckError:', option%format
+         stop
+      end select
+      Nunk_n_loc = msh%idxe - msh%idxs + 1
+      idxs= msh%idxs
+
+      nvec=1 !! currently this can only be 1
+      allocate(x_loc(Nunk_n_loc,nvec))
+      x_loc=0
+
+      Npt_src = min(500,N_glo)
+      allocate(idx_src(Npt_src))
+      do ij=1,Npt_src
+         call random_number(a)
+         idx_src(ij) = max(floor_safe(N_glo*a), 1)
+      enddo
+      call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+
+
+      ! Npt_src=1
+      ! allocate(idx_src(Npt_src))
+      ! idx_src(1) =1
+
+      idxe = idxs + Nunk_n_loc -1
+      do ij=1,Npt_src
+         idx_1=idx_src(ij)
+         if(idx_1>=idxs .and. idx_1<=idxe)then
+            idx_1 = idx_1 - idxs + 1
+            x_loc(idx_1,1) = x_loc(idx_1,1) + 1
+         endif
+      enddo
+
+      n1 = MPI_Wtime()
+
+      !! Generate rhs_loc by using BPACK_MD_Mult
+      allocate(rhs_loc(Nunk_n_loc,nvec))
+      rhs_loc=0
+      call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats)
+
+
+      !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
+      allocate(rhs_loc_ref(Nunk_n_loc,nvec))
+      rhs_loc_ref=0
+
+
+      submats(1)%nr = Nunk_n_loc
+      submats(1)%nc = Npt_src
+      allocate(submats(1)%rows(submats(1)%nr))
+      allocate(submats(1)%cols(submats(1)%nc))
+      allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      submats(1)%dat = 0
+      do ii=1,submats(1)%nr
+         submats(1)%rows(ii) = msh%idxs + ii - 1
+      enddo
+      do ij=1,Npt_src
+         idx_1=idx_src(ij)
+         submats(1)%cols(ij) = idx_1      
+      enddo
+
+      call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
+      do ij=1,Npt_src
+         rhs_loc_ref(:,1) = rhs_loc_ref(:,1) + submats(1)%dat(:,ij)
+      enddo
+
+      deallocate(submats(1)%rows)
+      deallocate(submats(1)%cols)
+      deallocate(submats(1)%dat)
+
+      n2 = MPI_Wtime()
+
+      v1 =(fnorm(rhs_loc,Nunk_n_loc,nvec))**2d0
+      v2 =(fnorm(rhs_loc_ref,Nunk_n_loc,nvec))**2d0
+      rhs_loc = rhs_loc - rhs_loc_ref
+      v3 =(fnorm(rhs_loc,Nunk_n_loc,nvec))**2d0
+
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
+
+      deallocate(x_loc)
+      deallocate(rhs_loc)
+      deallocate(rhs_loc_ref)
+      deallocate(idx_src)
+
+   end subroutine BPACK_CheckError_SMVP
 
 
 
 
 !!!!!!! check error of BPACK_MD construction using BPACK_MD matvec with a sparse vector
-   subroutine BPACK_MD_CheckError(Ndim, bmat, option, msh, ker, stats, ptree)
+   subroutine BPACK_MD_CheckError_SMVP(Ndim, bmat, option, msh, ker, stats, ptree)
 
       implicit none
 
@@ -4402,18 +4529,18 @@ contains
       allocate(x_loc(product(Nunk_n_loc),nvec))
       x_loc=0
 
-      ! Npt_src = min(10,product(N_glo))
-      ! allocate(idx_src(Npt_src))
-      ! do ij=1,Npt_src
-      !    call random_number(a)
-      !    idx_src(ij) = max(floor_safe(product(N_glo)*a), 1)
-      ! enddo
-      ! call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
-
-
-      Npt_src=1
+      Npt_src = min(40,product(N_glo))
       allocate(idx_src(Npt_src))
-      idx_src(1) =1
+      do ij=1,Npt_src
+         call random_number(a)
+         idx_src(ij) = max(floor_safe(product(N_glo)*a), 1)
+      enddo
+      call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+
+
+      ! Npt_src=1
+      ! allocate(idx_src(Npt_src))
+      ! idx_src(1) =1
 
       idxe = idxs + Nunk_n_loc -1
       do ij=1,Npt_src
@@ -4481,7 +4608,7 @@ contains
       deallocate(rhs_loc_ref)
       deallocate(idx_src)
 
-   end subroutine BPACK_MD_CheckError
+   end subroutine BPACK_MD_CheckError_SMVP
 
 
 

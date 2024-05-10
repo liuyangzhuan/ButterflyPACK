@@ -29,7 +29,7 @@ shape=4
 
 tol_rand=1e-2
 tol_Rdetect=0.3e-2
-tol_itersol=3e-3 
+tol_itersol=1e-2
 
 # tol=1d-4
 LRlevel=100
