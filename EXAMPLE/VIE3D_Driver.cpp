@@ -454,7 +454,7 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
       if(Q->_scaleGreen==0){
         *output = -*output*coef + 1.0/pow(Q->_h,3.0);
       }else{
-        *output = -*output;  
+        *output = -*output;
       }
     }else{
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
@@ -654,6 +654,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
        {"forwardN15flag",         required_argument, 0, 32},
        {"sample_para_outer",         required_argument, 0, 33},
        {"elem_extract",         required_argument, 0, 34},
+       {"use_zfp",         required_argument, 0, 35},
        {NULL, 0, NULL, 0}
       };
     int c, option_index = 0;
@@ -834,6 +835,11 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "elem_extract", opt_i);
+      } break;
+      case 35: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "use_zfp", opt_i);
       } break;
       default: break;
       }
@@ -1602,7 +1608,7 @@ if(myrank==master_rank){
       // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       // if(myrank==master_rank){
       //   cout<<"norm"<<tmp<<endl;
-      // }   
+      // }
     }else{
       z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
@@ -1620,7 +1626,7 @@ if(myrank==master_rank){
       // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       // if(myrank==master_rank){
       //   cout<<"norm"<<tmp<<endl;
-      // }      
+      // }
     }
 
 

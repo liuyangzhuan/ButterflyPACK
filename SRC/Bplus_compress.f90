@@ -9547,17 +9547,21 @@ time_tmp = time_tmp + n2 - n1
       if(use_zfp==0)then
          allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
          call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+      else
+         allocate(blocks%MiddleZFP(1)) ! use MiddleZFP instead of FullmatZFP as element_Zmn_tensorlist_user needs array input
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,blocks%MiddleZFP)
+         allocate(blocks%FullmatZFP%buffer_r(size(blocks%MiddleZFP(1)%buffer_r,1)))
+         allocate(blocks%FullmatZFP%buffer_i(size(blocks%MiddleZFP(1)%buffer_i,1)))
+         blocks%FullmatZFP%buffer_r = blocks%MiddleZFP(1)%buffer_r
+         blocks%FullmatZFP%buffer_i = blocks%MiddleZFP(1)%buffer_i
+         deallocate(blocks%MiddleZFP(1)%buffer_r)
+         deallocate(blocks%MiddleZFP(1)%buffer_i)
+         blocks%FullmatZFP%stream_r = blocks%MiddleZFP(1)%stream_r
+         blocks%FullmatZFP%stream_i = blocks%MiddleZFP(1)%stream_i
+         deallocate(blocks%MiddleZFP)
       endif
-      call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
-#if HAVE_ZFP
-      if(use_zfp==1)then
-         tmpmem = SIZEOF(subtensors(1)%dat)/1024.0d3
-         call ZFP_Compress(subtensors(1)%dat,blocks%FullmatZFP,product(subtensors(1)%nr),product(subtensors(1)%nc),option%tol_comp,0)
-         if(allocated(blocks%FullmatZFP%buffer_r))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3)
-         if(allocated(blocks%FullmatZFP%buffer_i))call LogMemory(stats, SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3)
-         call LogMemory(stats, -tmpmem)
-      endif
-#endif
+
       blocks%fullmat => subtensors(1)%dat
 
       subtensors(1)%dat=>null()

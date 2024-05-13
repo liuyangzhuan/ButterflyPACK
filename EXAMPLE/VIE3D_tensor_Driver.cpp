@@ -303,7 +303,6 @@ public:
   vector<double> _panelnorms;
   vector<int> _v_sub2glo;
   int _d = 0;   // data dimension 2 or 3
-  int _n = 0;   // size of the matrix
   int _nx = 0;   // nx
   int _ny = 0;   // ny
   int _nz = 0;   // nz
@@ -360,7 +359,6 @@ public:
       _slow_x0 = (_x0min+_x0max)/2.0;
       _slow_y0 = (_y0min+_y0max)/2.0;
       _slow_z0 = (_z0min+_z0max)/2.0;
-       _n = max(max(_nx,_ny),_nz);
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D1_int_cheb.begin(),_D1_int_cheb.end());   // concatenate D1 and D2 into u1_square for later interpolation convenience
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D2_int_cheb.begin(),_D2_int_cheb.end());
 	}
@@ -569,7 +567,7 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
   int64_t cnt = (*nvec)*product(nout,*Ndim);
   _Complex double* xbuf1 = new _Complex double[cnt];
   _Complex double* xin1 = new _Complex double[cnt];
-  
+
   if(nout[0]!=nin[0] || nout[1]!=nin[1] || nout[2]!=nin[2]){
     cout<<"nin should equal nout"<<endl;
     exit(1);
@@ -587,6 +585,15 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
     double x1 = Q->_data[(i_old_md[0]-1) * Q->_d];
     double y1 = Q->_data[(i_old_md[1]-1) * Q->_d+1];
     double z1 = Q->_data[(i_old_md[2]-1) * Q->_d+2];
+
+    // double x2 = (i_old_md[0]-1+Q->_idx_off_x) * Q->_h;
+    // double y2 = (i_old_md[1]-1+Q->_idx_off_y) * Q->_h;
+    // double z2 = (i_old_md[2]-1+Q->_idx_off_z) * Q->_h;
+
+    // if(fabs(x1-x2)>Q->_h/2 || fabs(y1-y2)>Q->_h/2 || fabs(z1-z2)>Q->_h/2){
+    //   cout<<x1<<" "<<x2<<" "<<y1<<" "<<y2<<" "<<z1<<" "<<z2<<endl;
+    // }
+
 
     double s1 = slowness(x1,y1,z1,Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_nx, Q->_ny, Q->_nz);
     double s0=2;
@@ -663,6 +670,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
        {"sample_para_outer",         required_argument, 0, 33},
        {"elem_extract",         required_argument, 0, 34},
        {"fastsample_tensor",         required_argument, 0, 35},
+       {"use_zfp",         required_argument, 0, 36},
        {NULL, 0, NULL, 0}
       };
     int c, option_index = 0;
@@ -848,6 +856,11 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "fastsample_tensor", opt_i);
+      } break;
+      case 36: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "use_zfp", opt_i);
       } break;
       default: break;
       }
@@ -1491,7 +1504,7 @@ if(myrank==master_rank){
 
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
-    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, Nz_s, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
 
 
     // construct hodlr with geometrical points

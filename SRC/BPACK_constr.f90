@@ -1832,10 +1832,10 @@ contains
          call element_Zmn_blocklist_user(submats, 0, msh, option, ker, 2, passflag, ptree, stats)
          ! call element_Zmn_block_user(0, 0, mrange, nrange, mat, msh, option, ker, 2, passflag, ptree, stats)
       enddo
-      
-      
-      !!!! It's safer to not modify option%scale_factor inside butterflypack 
-#if 0     
+
+
+      !!!! It's safer to not modify option%scale_factor inside butterflypack
+#if 0
       option%scale_factor = 1d0/scale_factor
       call MPI_ALLREDUCE(MPI_IN_PLACE, option%scale_factor, 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
 
@@ -4396,7 +4396,7 @@ contains
       case (HMAT)
          N_glo=bmat%h_mat%N
       case (HSS)
-         N_glo=bmat%hss_bf%N               
+         N_glo=bmat%hss_bf%N
       case default
          write(*,*)'not supported format in BPACK_CheckError:', option%format
          stop
@@ -4454,7 +4454,7 @@ contains
       enddo
       do ij=1,Npt_src
          idx_1=idx_src(ij)
-         submats(1)%cols(ij) = idx_1      
+         submats(1)%cols(ij) = idx_1
       enddo
 
       call element_Zmn_blocklist_user(submats, 1, msh, option, ker, 0, passflag, ptree, stats)
