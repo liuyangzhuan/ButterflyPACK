@@ -1721,6 +1721,7 @@ end function distance_geo
                dims2 = Nboundall
                nlist_MD(ll+1)%len = Nboundall**Ndim
                allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
+               call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
 
                do bb = 1, Nboundall**Ndim
                   nlist_MD(ll+1)%list(bb)%nn=0
@@ -1759,6 +1760,7 @@ end function distance_geo
 
                do bb = 1, Nboundall**Ndim
                   allocate(nlist_MD(ll+1)%list(bb)%nlist(max(1,nlist_MD(ll+1)%list(bb)%nn),Ndim))
+                  call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
                   nlist_MD(ll+1)%list(bb)%nn=0
                enddo
 
@@ -1792,6 +1794,7 @@ end function distance_geo
 
                allocate (hss_bf1_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Ninadmissible_max,Ndim))
                hss_bf1_md%BP%LL(ll + 1)%boundary_map=-1
+               call LogMemory(stats, SIZEOF(hss_bf1_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
 
                do bb = 1, Nboundall**Ndim
                   do nn=1,nlist_MD(ll+1)%list(bb)%nn
@@ -1803,6 +1806,8 @@ end function distance_geo
 
 
                allocate (hss_bf1_md%BP%LL(ll + 1)%matrices_block(hss_bf1_md%BP%LL(ll + 1)%Nbound))
+               call LogMemory(stats, SIZEOF(hss_bf1_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
+
                cnt = 0
                do bb = 1, Nboundall**Ndim
                   call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
@@ -1843,6 +1848,9 @@ end function distance_geo
                               stop
                            endif
                         endif
+
+                        call LogMemory(stats, SIZEOF(blocks)/1024.0d3)
+
                      end if
                   enddo
                end do
@@ -1858,11 +1866,15 @@ end function distance_geo
       do ll = 1, LplusMax
       do bb = 1, nlist_MD(ll)%len
          if (allocated(nlist_MD(ll)%list(bb)%nlist)) then
+            call LogMemory(stats, -SIZEOF(nlist_MD(ll)%list(bb)%nlist)/1024.0d3)
             deallocate(nlist_MD(ll)%list(bb)%nlist)
             nlist_MD(ll)%list(bb)%nn=0
          endif
       enddo
-      if(nlist_MD(ll)%len>0)deallocate(nlist_MD(ll)%list)
+      if(nlist_MD(ll)%len>0)then
+         call LogMemory(stats, -SIZEOF(nlist_MD(ll)%list)/1024.0d3)
+         deallocate(nlist_MD(ll)%list)
+      endif
       enddo
       deallocate(nlist_MD)
 
@@ -2022,6 +2034,7 @@ end function distance_geo
                enddo
 
                allocate (hss_bf1%BP%LL(ll + 1)%boundary_map(Nboundall,Ninadmissible_max))
+               call LogMemory(stats, SIZEOF(hss_bf1%BP%LL(ll + 1)%boundary_map)/1024.0d3)
                hss_bf1%BP%LL(ll + 1)%boundary_map=-1
                do bb = 1, Nboundall
                   group_m = bb + groupm_start - 1
@@ -2034,6 +2047,7 @@ end function distance_geo
 
 
                allocate (hss_bf1%BP%LL(ll + 1)%matrices_block(hss_bf1%BP%LL(ll + 1)%Nbound))
+               call LogMemory(stats, SIZEOF(hss_bf1%BP%LL(ll + 1)%matrices_block)/1024.0d3)
                cnt = 0
                do bb = 1, Nboundall
                   do jj=1,Ninadmissible_max
@@ -2064,6 +2078,7 @@ end function distance_geo
                               stop
                            endif
                         endif
+                        call LogMemory(stats, SIZEOF(blocks)/1024.0d3)
                      end if
                   enddo
                end do
