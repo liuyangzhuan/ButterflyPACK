@@ -110,6 +110,16 @@ contains
 				xk = dot_product(pos_o,k)
 				kr = xk+cx*sqrt(sum((k)**2d0))
 				value = EXP(2*BPACK_pi*BPACK_junit*kr)
+			elseif(quant%tst==10)then
+				do dim_i=1,Ndim
+					! pos_s(dim_i) = quant%locations_n(dim_i,z_bit_reverse(n(dim_i),INT((log(dble(quant%Nunk_n(dim_i))) / log(2d0)))))
+					! pos_o(dim_i) = quant%locations_m(dim_i,z_bit_reverse(m(dim_i),INT((log(dble(quant%Nunk_m(dim_i))) / log(2d0)))))
+
+					pos_s(dim_i) = quant%locations_n(dim_i,n(dim_i))
+					pos_o(dim_i) = quant%locations_m(dim_i,m(dim_i))					
+				enddo
+				dotp = dot_product(pos_o,pos_s)
+				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)			
 			else
 				write(*,*)'tst unknown'
 			endif
@@ -176,7 +186,7 @@ PROGRAM ButterflyPACK_RankBenchmark
     implicit none
 
     integer rank,ii,ii1,jj,kk,nvec
-	real(kind=8),allocatable:: datain(:)
+	real(kind=8),allocatable:: datain(:),location_tmp(:)
 	real(kind=8) :: wavelen, ds, ppw, a, v1,v2
 	integer :: ierr
 	type(z_Hoption),target::option
@@ -197,8 +207,9 @@ PROGRAM ButterflyPACK_RankBenchmark
 	type(z_matrixblock_MD) ::blocks
 	character(len=1024)  :: strings,strings1
 	integer flag,nargs,dim_i, Npt_src, ij, ij1
-	integer,allocatable::idx_src(:), idx_1(:), idx_2(:), idxs(:), idxe(:)
+	integer,allocatable::idx_src(:), idx_1(:), idx_2(:), idxs(:), idxe(:), roundedindex(:,:),indexmapper(:,:),binsizes(:)
 	complex(kind=8)::tmp
+	integer:: binmax 
 	class(*), pointer :: Quant_ref
 
 	!**** nmpi and groupmembers should be provided by the user
@@ -430,6 +441,59 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  do n=1,Nperdim
 		quant%locations_n(:,n)= (n-1)-Nperdim/2 !dble(n-1)/Nperdim
 	  enddo
+	elseif(quant%tst==10)then ! NUFFT
+	  allocate(quant%Nunk_m(quant%Ndim))
+	  allocate(quant%Nunk_n(quant%Ndim))
+      quant%Nunk_m = Nperdim
+      quant%Nunk_n = Nperdim
+	  allocate(quant%locations_m(quant%Ndim,Nperdim))
+	  allocate(quant%locations_n(quant%Ndim,Nperdim))
+	  allocate(roundedindex(Nperdim,2))
+	  allocate(location_tmp(Nperdim))
+	  
+	  do dim_i=1,quant%Ndim
+		do m=1,Nperdim
+			call random_number(a)
+			! call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+			quant%locations_m(dim_i,m)=z_floor_safe(Nperdim*min(a,0.99999999999d0)) !! z_floor_safe makes the rank smaller when xyzsort=0, but gives large compression error
+			! quant%locations_m(dim_i,m)=Nperdim*min(a,0.99999999999d0)
+			! quant%locations_m(dim_i,m)=(m*(1-0.001*a)-1)
+			! quant%locations_m(dim_i,m)=m-1 
+		enddo
+		do n=1,Nperdim
+			call random_number(a)
+			! call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+			! quant%locations_n(dim_i,n)=z_floor_safe(Nperdim*min(a,0.99999999999d0))/dble(Nperdim)
+			! quant%locations_n(dim_i,n)=(n*(1-0.001*a)-1)/Nperdim
+			quant%locations_n(dim_i,n)=dble(n-1)/Nperdim 
+		enddo
+	  enddo	  
+
+	  ! The following will take no effect if option%xyzsort\=0 	
+	  do dim_i=1,quant%Ndim
+		do m=1,Nperdim
+		roundedindex(m,1) = z_bit_reverse(z_floor_safe(quant%locations_m(dim_i,m)/(1))+1,INT((log(dble(Nperdim)) / log(2d0))))
+		roundedindex(m,2) = m
+		enddo
+		call z_PIKSRT_INT_Multi(Nperdim,2,roundedindex)
+		location_tmp = quant%locations_m(dim_i,:)
+		quant%locations_m(dim_i,:) = location_tmp(roundedindex(:,2))
+
+		do n=1,Nperdim
+		roundedindex(n,1) = z_bit_reverse(z_floor_safe(quant%locations_n(dim_i,n)/(1d0/Nperdim))+1,INT((log(dble(Nperdim)) / log(2d0))))
+		roundedindex(n,2) = n
+		enddo
+		call z_PIKSRT_INT_Multi(Nperdim,2,roundedindex)
+		location_tmp = quant%locations_n(dim_i,:)
+		quant%locations_n(dim_i,:) = location_tmp(roundedindex(:,2))
+
+	  enddo
+	  call MPI_Bcast(quant%locations_m, quant%Ndim*Nperdim, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+	  call MPI_Bcast(quant%locations_n, quant%Ndim*Nperdim, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+	  
+
+	  deallocate(roundedindex)
+	  deallocate(location_tmp)
 	endif
 
 	allocate(Nunk_m_loc(quant%Ndim))
