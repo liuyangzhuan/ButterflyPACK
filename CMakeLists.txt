@@ -485,7 +485,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/butterflypack.pc.in ${CMAKE_CURRENT_B
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/butterflypack.pc
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-set(ConfigPackageLocation lib/cmake/ButterflyPACK)
+set(ConfigPackageLocation ${CMAKE_INSTALL_LIBDIR}/cmake/ButterflyPACK)
 install(EXPORT MYBPACKTargets FILE butterflypack-targets.cmake
   NAMESPACE ButterflyPACK:: DESTINATION ${ConfigPackageLocation})
 
