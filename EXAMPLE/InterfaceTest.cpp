@@ -48,6 +48,9 @@
 //------------------------------------------------------------------------------
 using namespace std;
 
+
+const double pi = 4.0 * atan(1.0);
+
 #ifdef HAVE_MPI
 extern "C" {
       ///////////////////////////////////////////////
@@ -87,6 +90,19 @@ inline double Gauss_kernel(double *x, double *y, int d, double h) {
   }
 }
 
+/**  Laplacian/Exponential Kernel */
+inline double Laplace_kernel(double *x, double *y, int d, double h) {
+  double dists;
+  dists = dist2(x, y, d);
+  // if(dists> -log(1e-30)*2.0*pow(h,2.0)){
+	// return 0;
+  // }else{
+	return exp(-sqrt(dists)/(h));
+  // } 
+}
+
+
+
 /** R^4 kernel */
 inline double K07_kernel(double *x, double *y, int d) {
   double dists;
@@ -98,14 +114,14 @@ inline double K07_kernel(double *x, double *y, int d) {
 inline double K08_kernel(double *x, double *y, int d, double h) {
   double dists;
   dists = dist2(x, y, d);
-  return sqrt(pow(dists,2)+h);
+  return sqrt(dists+h);
 }
 
 /**  1/sqrt(R^2+h) kernel */
 inline double K09_kernel(double *x, double *y, int d, double h) {
   double dists;
   dists = dist2(x, y, d);
-  return 1.0/sqrt(pow(dists,2)+h);
+  return 1.0/sqrt(dists+h);
 }
 
 /**  Polynomial kernel (X^tY+h)^2 */
@@ -123,6 +139,30 @@ inline double K10_kernel(double *x, double *y, int d, double h) {
 // }
 
 
+inline double GreenFun(int m, double w, double v0, double tau)
+{
+    double out;
+    double q = -(m-2.0)/2.0;
+    double v =q;
+    double z = w*tau;
+    double t0 = -sqrt(pi)/2*pow(2*tau/w,q)*((sqrt(2/(pi*z))*(sin(z)*cos(-v*pi) + cos(z)*sin(-v*pi)))*sin(q*pi) -sqrt(2/(pi*z))*(cos(z)*cos(-v*pi)-sin(z)*sin(-v*pi))*cos(q*pi));
+    out =  v0*t0;
+    return out;
+}
+
+inline double GreenFun_kernel(double *x, double *y, int d, double w)
+{ 
+    double dists = dist2(x, y, d);
+    int self = sqrt(dists)<1e-20? 1:0;
+    if(self==1){
+        return 100.0;
+    }else{
+        double s0 = 2.0;    
+        double tau = sqrt(pow(s0,2)* dists);   
+        double D1 = s0/(2.0*pi);
+        return GreenFun(d, w, D1, tau); 
+    }
+}
 
 /**  The object handling kernel parameters and sampling function */
 class C_QuantApp {
@@ -131,10 +171,11 @@ public:
   int _d = 0;
   int _n = 0;
   double _h = 0.;
+  double _w = 1.5;
   double _l = 0.;
   int _ker=1; //
 
-  int _rank_rand;
+  int _rank_rand=32;
   int _n_rand;
   std::vector<double> _MatU;
   std::vector<double> _MatV;
@@ -200,6 +241,23 @@ public:
 	case 7: //Full matrix
 		*val =_MatFull[n*_n+m];
 		// *val =_MatFull[_Hperm[n]*_n+_Hperm[m]];
+		break;
+	case 8: //Laplacian kernel
+		*val = Laplace_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
+		if (m==n)
+		*val += _l;
+		break;    
+	case 9: //Laplacian kernel with low-rank update
+		*val = Laplace_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
+		if (m==n)
+		*val += _l;
+    //  adding a low-rank update U*U^T of rank R where U(i,j) = j/R/10
+		for (int k = 0; k < _rank_rand; k++){
+			*val += pow(k+1,2)/(double)pow(_rank_rand,2)/100;
+		}
+		break;
+	case 10: //Wave equation kernel
+		*val = GreenFun_kernel(&_data[m * _d], &_data[n * _d], _d, _w);
 		break;
 	}
   }
@@ -441,8 +499,8 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
       } break;
       case 19: {
         std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "rankrate", opt_i);
+        iss >> opt_d;
+        d_c_bpack_set_D_option(&option0, "rankrate", opt_d);
       } break;
       case 20: {
         std::istringstream iss(optarg);
@@ -518,7 +576,7 @@ int main(int argc, char* argv[])
     MPI_Op op;
 	double h=0.1; //kernel parameter
 	double lambda=10.0 ; //kernel parameter
-	int ker=1 ; // kernel choice
+	int ker=8 ; // kernel choice
 	int Npo=5000;   // matrix size
 	int Ndim=1; //data dimension
 	int rank_rand=100;  //rank of the random LR product
@@ -548,9 +606,6 @@ int main(int argc, char* argv[])
 	string trainfile("../EXAMPLE/KRR_DATA/susy_10Kn");
 	string fullmatfile("../EXAMPLE/FULLMAT_DATA/FHODLR_colmajor_real_double_40000x40000.dat");
 	string leaffile("../EXAMPLE/FULLMAT_DATA/leafs_40000_noheader.dat");
-
-	tree[0] = Npo;
-
 
 
   //getting the example configurations from command line
@@ -639,7 +694,7 @@ if(myrank==master_rank){
 	d_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
 	std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
 }
-
+	tree[0] = Npo;
 
 	/*****************************************************************/
 
@@ -652,7 +707,7 @@ if(tst==1){
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];
 	nogeo=0;
-}
+} 
 
 	/*****************************************************************/
 	/** tst=2: Test Kernels for Random point clouds */
@@ -797,6 +852,8 @@ if(tst==4){
 	d_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_element_compute(&bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 
+
+  if(ker !=8 && ker !=9 && ker !=10){
 	// factor hodlr
 	d_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
 
@@ -809,7 +866,7 @@ if(tst==4){
 		b[i]=1;
 	}
 	d_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
-
+  }
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the first HODLR: "<<std::endl;
 	d_c_bpack_printstats(&stats,&ptree);
@@ -837,9 +894,9 @@ if(tst==4){
 	d_c_bpack_copyoption(&option,&option1);
 	d_c_bpack_createstats(&stats1);
 
-	d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
-	d_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
-	d_c_bpack_set_I_option(&option1, "format", 1);// HODLR format
+	// d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
+	// d_c_bpack_set_I_option(&option1, "xyzsort", 0);// natural ordering
+	// d_c_bpack_set_I_option(&option1, "format", 1);// HODLR format
 
 	int Npo1 = Npo;
 	int myseg1=0;     // local number of unknowns
@@ -848,8 +905,8 @@ if(tst==4){
 	int nlevel1 = 0; // 0: tree level, nonzero if a tree is provided
 	int* tree1 = new int[(int)pow(2,nlevel1)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	tree1[0] = Npo1;
-	int Ndim1=0; //data dimension
-	double* dat_ptr1;
+	int Ndim1=Ndim; //data dimension
+	double* dat_ptr1=dat_ptr;
 
 	d_c_bpack_construct_init(&Npo1, &Ndim1, dat_ptr1, nns_ptr,&nlevel1, tree1, perms1, &myseg1, &bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	d_c_bpack_construct_matvec_compute(&bmat1, &option1, &stats1, &msh1, &kerquant1, &ptree1, &C_FuncHMatVec, quant_ptr1);
@@ -869,7 +926,7 @@ if(tst==4){
 	delete[] tree1;
 
 
-
+  if(ker !=8 && ker !=9 && ker !=10){
 	//////////////////// use resulting hodlr as entry extraction to create a new holdr
 	quant_ptr1=new C_QuantApp();
 	quant_ptr1->bmat=&bmat;
@@ -915,6 +972,7 @@ if(tst==4){
 	delete quant_ptr1;
 	delete[] perms1;
 	delete[] tree1;
+  }
 
 
 

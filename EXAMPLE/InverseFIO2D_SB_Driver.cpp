@@ -756,12 +756,12 @@ int main(int argc, char* argv[])
 
 	z_c_bpack_set_I_option(&option1, "format", format_temp);// HODLR or H format
 	z_c_bpack_set_I_option(&option1, "LRlevel", 0);// LR format
-	z_c_bpack_set_I_option(&option1, "per_geo", 1);// periodic geometry points
+	z_c_bpack_set_I_option(&option1, "per_geo", 0);// periodic geometry points
 	// z_c_bpack_set_I_option(&option1, "Nmin_leaf", 128);// leafsize
   z_c_bpack_getstats(&stats_a, "Rank_max", &tmp);
 	z_c_bpack_set_I_option(&option1, "rank0", (int)tmp+10);// initial guess for the rank the same as the BF rank
-	z_c_bpack_set_D_option(&option1, "period1", (double)Ns);// period in the first dimension
-	z_c_bpack_set_D_option(&option1, "period2", (double)Ns);// period in the second dimension
+	// z_c_bpack_set_D_option(&option1, "period1", (double)Ns);// period in the first dimension
+	// z_c_bpack_set_D_option(&option1, "period2", (double)Ns);// period in the second dimension
   // tol=1e-10;
   // z_c_bpack_set_D_option(&option1, "tol_Rdetect", tol*3e-1);   // bf_mv uses this tolerance
 
