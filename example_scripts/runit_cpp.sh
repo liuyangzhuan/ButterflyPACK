@@ -24,7 +24,7 @@ export LD_LIBRARY_PATH=/global/cfs/cdirs/m2957/liuyangz/my_software/scalapack-2.
 THREADS_PER_RANK=`expr 2 \* $OMP_NUM_THREADS`
 
 
-for nmpi in 32
+for nmpi in 64
 do
 # ######## Liza's datset MNIST 10K
 # tst=1
@@ -105,19 +105,21 @@ do
 
 ######## Gaussian cloud
 tst=2
-N=16384
+# N=16384
 Ndim=3
 ker=9  # Wajih's paper: ker=8: Laplacian ker=9: Laplacian with low-rank update ker=10: Wave equation kernel 
 knn=0
 # h=0.2
 lambda=10.
-Nmin=256
+Nmin=128
 #tol=1e-4
 # com_opt=4
 checkerr=0
 # batch=32
 # blknum=1
-
+for N in 16384 32768 65536 131072 262144
+# for N in 16384 
+do
 for com_opt in 6
 do
 # checkerr=0
@@ -134,12 +136,13 @@ do
 for checkerr in 0 
 do										  
 # mpirun -n 1 $EXEC $tst $N $Ndim $ker $h $lambda $Nmin $tol $com_opt $checkerr $batch | tee -a cloud_kernel.out
-srun -n $nmpi -c 2 --cpu_bind=cores $EXEC --tst $tst --N $N --Ndim $Ndim --ker $ker --h $h --lambda $lambda --nmin_leaf $Nmin --tol_comp $tol --format 2 --near_para 2.01 --rankrate 2.0 --reclr_leaf $com_opt --errfillfull $checkerr --baca_batch $batch --LR_BLK_NUM $blknum --knn $knn --verbosity 1 | tee cloud_kernel_N_${N}_ker_${ker}_h_${h}_l_${lambda}_cherr_${checkerr}_bnum_${blknum}_comp_${com_opt}_tol_${tol}_mpi_${nmpi}_bsize_${batch}
+srun -n $nmpi -c 2 --cpu_bind=cores $EXEC --tst $tst --N $N --Ndim $Ndim --ker $ker --h $h --lambda $lambda --nmin_leaf $Nmin --tol_comp $tol --format 2 --near_para 2.01 --rankrate 2.0 --reclr_leaf $com_opt --errfillfull $checkerr --baca_batch $batch --LR_BLK_NUM $blknum --knn $knn --verbosity 1 | tee cloud_kernel_N_${N}_ker_${ker}_h_${h}_l_${lambda}_cherr_${checkerr}_bnum_${blknum}_comp_${com_opt}_tol_${tol}_mpi_${nmpi}_bsize_${batch}_Nmin_${Nmin}_nonHsketcher
 done
 done 
 done 
 done 
 done 										  
+done 
 done 
 
 

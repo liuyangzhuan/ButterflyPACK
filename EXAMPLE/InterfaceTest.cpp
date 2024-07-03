@@ -98,7 +98,7 @@ inline double Laplace_kernel(double *x, double *y, int d, double h) {
 	// return 0;
   // }else{
 	return exp(-sqrt(dists)/(h));
-  // } 
+  // }
 }
 
 
@@ -151,16 +151,16 @@ inline double GreenFun(int m, double w, double v0, double tau)
 }
 
 inline double GreenFun_kernel(double *x, double *y, int d, double w)
-{ 
+{
     double dists = dist2(x, y, d);
     int self = sqrt(dists)<1e-20? 1:0;
     if(self==1){
         return 100.0;
     }else{
-        double s0 = 2.0;    
-        double tau = sqrt(pow(s0,2)* dists);   
+        double s0 = 2.0;
+        double tau = sqrt(pow(s0,2)* dists);
         double D1 = s0/(2.0*pi);
-        return GreenFun(d, w, D1, tau); 
+        return GreenFun(d, w, D1, tau);
     }
 }
 
@@ -246,7 +246,7 @@ public:
 		*val = Laplace_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
 		if (m==n)
 		*val += _l;
-		break;    
+		break;
 	case 9: //Laplacian kernel with low-rank update
 		*val = Laplace_kernel(&_data[m * _d], &_data[n * _d], _d, _h);
 		if (m==n)
@@ -707,7 +707,7 @@ if(tst==1){
 	for(int ii=0;ii<data_train.size();ii++)
 		dat_ptr[ii] = data_train.data()[ii];
 	nogeo=0;
-} 
+}
 
 	/*****************************************************************/
 	/** tst=2: Test Kernels for Random point clouds */
@@ -846,6 +846,14 @@ if(tst==4){
 
 
 	set_option_from_command_line(argc, argv,option);
+
+  F2Cptr option_save;
+  d_c_bpack_copyoption(&option,&option_save); 
+  if(ker ==8 || ker ==9 || ker ==10){
+  d_c_bpack_set_I_option(&option, "format", 1); 
+  d_c_bpack_set_I_option(&option, "LRlevel", 100); 
+  d_c_bpack_set_I_option(&option, "knn", 100); 
+  }
 	d_c_bpack_printoption(&option,&ptree);
 
     // construct hodlr with geometrical points
@@ -891,7 +899,8 @@ if(tst==4){
 	quant_ptr1->option=&option;
 
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
-	d_c_bpack_copyoption(&option,&option1);
+	d_c_bpack_copyoption(&option_save,&option1);
+  d_c_bpack_printoption(&option1,&ptree);
 	d_c_bpack_createstats(&stats1);
 
 	// d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
@@ -936,7 +945,7 @@ if(tst==4){
 	quant_ptr1->option=&option;
 
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
-	d_c_bpack_copyoption(&option,&option1);
+	d_c_bpack_copyoption(&option_save,&option1);
 	d_c_bpack_createstats(&stats1);
 
 	d_c_bpack_set_I_option(&option1, "nogeo", 1); // no geometrical information
@@ -997,7 +1006,7 @@ if(tst==3){
 	quant_ptr2->option=&option;
 
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree2);
-	d_c_bpack_copyoption(&option,&option2);
+	d_c_bpack_copyoption(&option_save,&option2);
 	d_c_bpack_createstats(&stats2);
 
 	d_c_bpack_set_I_option(&option2, "nogeo", 1); // no geometrical information
@@ -1033,7 +1042,7 @@ if(tst==3){
 	quant_ptr2->_n=Npo;
 
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree2);
-	d_c_bpack_copyoption(&option,&option2);
+	d_c_bpack_copyoption(&option_save,&option2);
 	d_c_bpack_createstats(&stats2);
 
 	d_c_bpack_set_I_option(&option2, "nogeo", 1); // no geometrical information
