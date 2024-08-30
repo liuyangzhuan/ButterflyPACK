@@ -19630,7 +19630,21 @@ integer, save:: my_tid = 0
             if (product(dims8)> 0) then
                if(present(zfpquants))then
                   allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
+
+#if 0  
+! not sure why the following is causing compiling error for certain intel compilers
                   call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
+#else
+#if DAT==0
+                  call LogMemory(stats, 16*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==1
+                  call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==2
+                  call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==3
+                  call LogMemory(stats, 4*SIZE(subtensors(nn)%dat)/1024.0d3)
+#endif
+#endif
                endif
                allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
