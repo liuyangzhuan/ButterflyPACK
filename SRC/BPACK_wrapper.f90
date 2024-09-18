@@ -134,9 +134,9 @@ contains
    end subroutine Bmatvec_user_C
 
 !>**** C interface of process tree construction
-   !> @param nmpi: number of MPIs for one hodlr
+   !> @param nmpi: number of MPIs for one BPACK
    !> @param MPIcomm: MPI communicator from C caller
-   !> @param groupmembers: MPI ranks in MPIcomm for one hodlr
+   !> @param groupmembers: MPI ranks in MPIcomm for one BPACK
    !> @param ptree_Cptr: the structure containing process tree
    subroutine C_BPACK_Createptree(nmpi, groupmembers, MPIcomm, ptree_Cptr) bind(c, name="c_bpack_createptree")
       implicit none
@@ -384,7 +384,7 @@ contains
       type(Hoption), pointer::option
 
       allocate (option)
-      !>**** set default hodlr options
+      !>**** set default BPACK options
       call SetDefaultOptions(option)
 
       option_Cptr = c_loc(option)
@@ -401,7 +401,7 @@ contains
 
       call c_f_pointer(option_Cptr, option)
 
-      !>****copy hodlr options
+      !>****copy BPACK options
       allocate (option1)
       call CopyOptions(option, option1)
 
@@ -995,7 +995,7 @@ contains
 
 
 !>**** C interface of matrix construction
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param msh_Cptr: the structure containing points and ordering information
@@ -1034,7 +1034,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       character(len=1024)  :: strings
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
@@ -1059,7 +1059,7 @@ contains
          deallocate(msh%nns)
       endif
 
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1111,7 +1111,7 @@ contains
       real(kind=8) t1, t2, x, y, z, r, theta, phi
       character(len=1024)  :: strings
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
       call c_f_pointer(ptree_Cptr, ptree)
@@ -1136,7 +1136,7 @@ contains
          deallocate(msh(ii)%nns)
       endif
       enddo
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1160,7 +1160,7 @@ contains
    !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
    !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
    !> @param N_loc: number of local row/column indices (out)
-   !> @param bmat_Cptr: the structure containing HODLR (out)
+   !> @param bmat_Cptr: the structure containing BPACK (out)
    !> @param option_Cptr: the structure containing option (in)
    !> @param stats_Cptr: the structure containing statistics (inout)
    !> @param msh_Cptr: the structure containing points and ordering information (out)
@@ -1214,7 +1214,7 @@ contains
 
       call assert(option%xyzsort /= TM_GRAM, 'gram distance based clustering is not supported in this interface')
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       allocate (bmat)
       ! allocate(option)
       ! allocate(stats)
@@ -1249,7 +1249,7 @@ contains
       call init_random_seed()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-         write (*, *) "HODLR_BUTTERFLY_SOLVER"
+         write (*, *) "BPACK_BUTTERFLY_SOLVER"
          write (*, *) "   "
       endif
 
@@ -1340,7 +1340,7 @@ contains
          enddo
       ! endif
 
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1413,7 +1413,7 @@ contains
 
       call assert(option%xyzsort /= TM_GRAM, 'gram distance based clustering is not supported in this interface')
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       allocate (bmat)
       ! allocate(option)
       ! allocate(stats)
@@ -1448,7 +1448,7 @@ contains
       call init_random_seed()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-         write (*, *) "HODLR_BUTTERFLY_SOLVER"
+         write (*, *) "BPACK_BUTTERFLY_SOLVER"
          write (*, *) "   "
       endif
 
@@ -1501,7 +1501,7 @@ contains
          ! endif
       enddo
 
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1619,7 +1619,7 @@ contains
    !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
    !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
    !> @param N_loc: number of local row/column indices (out)
-   !> @param bmat_Cptr: the structure containing HODLR (out)
+   !> @param bmat_Cptr: the structure containing BPACK (out)
    !> @param option_Cptr: the structure containing option (in)
    !> @param stats_Cptr: the structure containing statistics (inout)
    !> @param msh_Cptr: the structure containing points and ordering information (out)
@@ -1673,7 +1673,7 @@ contains
 
       call assert(option%xyzsort == TM_GRAM, 'only gram distance based clustering is supported in this interface')
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       allocate (bmat)
       ! allocate(option)
       ! allocate(stats)
@@ -1708,7 +1708,7 @@ contains
       call init_random_seed()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-         write (*, *) "HODLR_BUTTERFLY_SOLVER"
+         write (*, *) "BPACK_BUTTERFLY_SOLVER"
          write (*, *) "   "
       endif
 
@@ -1798,7 +1798,7 @@ contains
          enddo
       endif
 
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1809,7 +1809,7 @@ contains
    end subroutine C_BPACK_Construct_Init_Gram
 
 !>**** C interface of matrix construction via blackbox matvec
-   !> @param bmat_Cptr: the structure containing HODLR (inout)
+   !> @param bmat_Cptr: the structure containing BPACK (inout)
    !> @param option_Cptr: the structure containing option (in)
    !> @param stats_Cptr: the structure containing statistics (inout)
    !> @param msh_Cptr: the structure containing points and ordering information (in)
@@ -1865,7 +1865,7 @@ contains
       option%less_adapt=0
       call BPACK_construction_Matvec(bmat, matvec_user_C, Memory, error, option, stats, ker, ptree, msh)
       option%less_adapt=1
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -1925,7 +1925,7 @@ contains
       type(c_funptr), intent(in), value, target :: C_FuncDistmn
       type(c_funptr), intent(in), value, target :: C_FuncNearFar
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
       allocate (blocks)
       allocate (msh)
       allocate (ker)
@@ -1957,7 +1957,7 @@ contains
       call init_random_seed()
 
       ! if(ptree%MyID==Main_ID)then
-      ! write(*,*) "HODLR_BUTTERFLY_SOLVER"
+      ! write(*,*) "BPACK_BUTTERFLY_SOLVER"
       ! write(*,*) "   "
       ! endif
 
@@ -2051,7 +2051,7 @@ contains
       M_loc = blocks%M_loc
       N_loc = blocks%N_loc
 
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -2097,7 +2097,7 @@ contains
       real(kind=8) t1, t2, error
       integer ierr
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -2139,7 +2139,7 @@ contains
       call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -2195,7 +2195,7 @@ contains
       integer:: boundary_map(1,1)
       integer groupm_start, Nboundall,Ninadmissible
 
-      !>**** allocate HODLR solver structures
+      !>**** allocate BPACK solver structures
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -2264,7 +2264,7 @@ contains
       call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
-      !>**** return the C address of hodlr structures to C caller
+      !>**** return the C address of BPACK structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)
       stats_Cptr = c_loc(stats)
@@ -2274,8 +2274,8 @@ contains
 
    end subroutine C_BF_Construct_Element_Compute
 
-!>**** C interface of HODLR factorization
-   !> @param bmat_Cptr: the structure containing HODLR
+!>**** C interface of BPACK factorization
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
@@ -2308,17 +2308,17 @@ contains
 
       call BPACK_Factorization(bmat, option, stats, ptree, msh)
 
-      ! return the C address of hodlr structures to C caller
+      ! return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
 
    end subroutine C_BPACK_Factor
 
-!>**** C interface of HODLR solve
+!>**** C interface of BPACK solve
    !> @param x: local solution vector
    !> @param b: local RHS
    !> @param Nloc: size of local RHS
    !> @param Nrhs: number of RHSs
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
@@ -2766,7 +2766,7 @@ contains
    !> @param pgidx: 1D array containing the process group number of each intersection, the number starts from 0
    !> @param Npmap: number of process groups
    !> @param pmaps: 2D array (Npmapx3) containing number of process rows, number of process columns, and starting process ID in each intersection
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
@@ -2830,13 +2830,13 @@ contains
 
    end subroutine C_BPACK_ExtractElement
 
-!>**** C interface of HODLR-vector multiplication
+!>**** C interface of BPACK-vector multiplication
    !> @param xin: input vector
    !> @param Ninloc: size of local input vectors
    !> @param xout: output vector
    !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
@@ -2920,7 +2920,7 @@ contains
    !> @param xout: output vector
    !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
@@ -3000,13 +3000,13 @@ contains
 
 
 
-!>**** C interface of HODLR(inverse)-vector multiplication
+!>**** C interface of BPACK(inverse)-vector multiplication
    !> @param xin: input vector
    !> @param Ninloc: size of local input vectors
    !> @param xout: output vector
    !> @param Noutloc: size of local output vectors
    !> @param Ncol: number of vectors
-   !> @param bmat_Cptr: the structure containing HODLR
+   !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree

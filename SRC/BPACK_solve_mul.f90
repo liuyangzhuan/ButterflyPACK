@@ -1550,7 +1550,7 @@ contains
       endif
 
       itmax = iter
-      if(option%precon==HODLRPRECON)then
+      if(option%precon==BPACKPRECON)then
          write(*,*)"BPACK_ApplyPrecon has not been changed to BPACK_MD_ApplyPrecon!!"
       endif
       call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
@@ -1735,7 +1735,7 @@ contains
 
       if (precond == NOPRECON) then
          y = x
-      else if (precond == HODLRPRECON) then
+      else if (precond == BPACKPRECON) then
          call BPACK_Inv_Mult('N', nn_loc, 1, x, y, bmat, ptree, option, stats)
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
       endif

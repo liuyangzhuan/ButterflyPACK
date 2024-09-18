@@ -94,16 +94,16 @@ module BPACK_DEFS
     real(kind=8), parameter :: BPACK_impedence0 = sqrt(BPACK_mu0/BPACK_eps0) !< free-space wave impedance
 
     !>**** solver parameters
-    integer, parameter:: DIRECT = 1         !< use factored HODLR as direct solver
-    integer, parameter:: NOPRECON = 2  !< use compressed HODLR as fast matvec
-    integer, parameter:: HODLRPRECON = 3        !< use factored HODLR as preconditioner
+    integer, parameter:: DIRECT = 1         !< use factored BPACK as direct solver
+    integer, parameter:: NOPRECON = 2  !< use compressed BPACK as fast matvec
+    integer, parameter:: BPACKPRECON = 3        !< use factored BPACK as preconditioner
 
     integer, parameter:: LplusMax = 10
 
-    integer, parameter:: HODLR = 1  !< use hodlr solver
-    integer, parameter:: HMAT = 2  !< use H matrix solver
-    integer, parameter:: HSS = 3  !< use hss_bf solver
-    integer, parameter:: HSS_MD = 4  !< use hss_bf_md solver
+    integer, parameter:: HODLR = 1  !< use hodlr/hodbf solver
+    integer, parameter:: HMAT = 2  !< use H matrix (lr/bf) solver
+    integer, parameter:: HSS = 3  !< use hss_bf/shnbf solver
+    integer, parameter:: HSS_MD = 4  !< use hss_bf_md/shn_bf_md solver
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -366,7 +366,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type matrixblock
         integer pgno !< process group
         integer pgno_db !< process group when MPI count is doubled
-        integer level !< level in HODLR
+        integer level !< level in BPACK
         integer col_group !< column group number
         integer row_group !< row group number
         integer style !< 1: full block 2: compressed block 4: hierarchical block
@@ -415,7 +415,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Ndim !< dimensionality
         integer pgno !< process group
         integer pgno_db !< process group when MPI count is doubled
-        integer level !< level in HODLR
+        integer level !< level in BPACK
         integer, allocatable:: col_group(:) !< column group number per dimension
         integer, allocatable:: row_group(:) !< row group number per dimension
         integer style !< 1: full block 2: compressed block 4: hierarchical block
@@ -484,7 +484,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
     !>**** Bplus structure
     type blockplus
-        integer level !< block level in HODLR
+        integer level !< block level in BPACK
         integer col_group !< column group number
         integer row_group !< row group number
         integer pgno   !< process group number
@@ -497,7 +497,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
     !>**** Bplus structure
     type blockplus_MD
-        integer level !< block level in HODLR
+        integer level !< block level in BPACK
         integer, allocatable:: col_group(:) !< column group number
         integer, allocatable:: row_group(:) !< row group number
         integer pgno   !< process group number
@@ -526,7 +526,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer hardstart !< 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
     end type schulz_operand
 
-    !>**** One level in HODLR
+    !>**** One level in BPACK
     type cascadingfactors
         integer level  !< level number
         integer N_block_forward !< # of forward blocks
@@ -538,10 +538,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus), pointer:: BP_inverse_schur(:) => null() !< schur complement blocks
     end type cascadingfactors
 
-    !>**** HODLR structure
+    !>**** HODLR/HODBF structure
     type hobf
-        integer Maxlevel, N !< HODLR levels and sizes
-        integer ind_lv, ind_bk !< iterator of level and block number in a HODLR
+        integer Maxlevel, N !< HODLR/HODBF levels and sizes
+        integer ind_lv, ind_bk !< iterator of level and block number in a HODLR/HODBF
         type(cascadingfactors), allocatable::levels(:) !
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hobf
@@ -569,7 +569,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** HSS structure
     type hssbf
         integer Maxlevel, N !< HSS levels and sizes
-        ! ! integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
+        ! ! integer ind_lv,ind_bk ! iterator of level and block number in a hssbf/shnbf
         type(blockplus)::BP, BP_inverse !< a single butterfly plus for the entire matrix
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hssbf
@@ -578,7 +578,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type hssbf_md
         integer Maxlevel, Ndim !< HSS_MD levels and dimensionility
         integer, allocatable:: N(:) !< size per dimension
-        ! ! integer ind_lv,ind_bk ! iterator of level and block number in a HODLR
+        ! ! integer ind_lv,ind_bk ! iterator of level and block number in a hssbf_md/shnbf_md
         type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
     end type hssbf_md
 
@@ -608,10 +608,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(butterfly_kerl), allocatable :: vec(:)
     end type butterfly_vec
 
-    !>**** HODLR solver options
+    !>**** BPACK solver options
     type Hoption
 
-        integer::format !< HODLR or HMAT or format
+        integer::format !< HODLR, HMAT, HSS, HSS_MD, BLR
         integer::verbosity !< printlevel -1: no printing except error and warning. 0: default printing. 1: print info for each high-level operation 2: print information for each low-level operation
 
         ! options for Bplus, Butterfly or LR
@@ -630,8 +630,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Hextralevel !< extra levels for top partitioning of the H matrix based on MPI counts.
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
         real(kind=8) tol_comp      !< matrix construction tolerance
-        integer::Nmin_leaf !< leaf sizes of HODLR tree
-        integer nogeo !< 1: no geometrical information available to hodlr, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided
+        integer::Nmin_leaf !< leaf sizes of BPACK tree
+        integer nogeo !< 1: no geometrical information available to BPACK, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided
         integer per_geo !< 1: the geomerical points are periodical. 0: the points are not periodical
         real(kind=8):: periods(Ndim_max) !< the periods in each dimension (currently only supports maximum of 3 dimensions) of the geometry points when per_geo=1
         integer xyzsort !< clustering methods given geometrical points: CKD: cartesian kd tree SKD: spherical kd tree (only for 3D points) TM: (2 mins no recursive)
@@ -665,7 +665,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! options for solve
         real(kind=8) tol_itersol  !< tolerance for iterative solvers
         integer n_iter  !< maximum number of iterations for iterative solver
-        integer precon  !< DIRECT: use factored HODLR as direct solver, HODLRPRECON: use factored HODLR as preconditioner, NOPRECON: use forward HODLR as fast matvec,
+        integer precon  !< DIRECT: use factored BPACK as direct solver, BPACKPRECON: use factored BPACK as preconditioner, NOPRECON: use forward BPACK as fast matvec,
 
         ! options for error checking
         integer::level_check !< check compression quality by picking random entries at level_check (only work for nmpi=1 now)
@@ -683,9 +683,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_Tmp
-        integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of HODLR during matrix fill
-        integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of HODLR during matrix fill
-        integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of HODLR during matrix factorization
+        integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
+        integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
+        integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
         integer, allocatable:: Add_random_CNT(:), Mul_random_CNT(:), XLUM_random_CNT(:) !< record number of randomized operations
         real(kind=8), allocatable:: Add_random_Time(:), Mul_random_Time(:), XLUM_random_Time(:) !< record number of randomized operations
         integer, allocatable:: leafs_of_level(:) !< number of compressed blocks at each level
@@ -912,7 +912,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
 
 
-        !> interface of user-defined HODLR/H MatVec routine in Fortran.
+        !> interface of user-defined HODLR/HODBF/H-LR/H-BF MatVec routine in Fortran.
         subroutine F_HMatVec(trans, M, N, num_vect, Vin, Vout, quant)
             import::mesh, proctree, Hstat
             class(*), pointer :: quant
@@ -922,7 +922,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         end subroutine F_HMatVec
 
 
-        !> interface of user-defined HODLR/H MatVec (tensor) routine in Fortran.
+        !> interface of user-defined HODLR/HODBF/H-LR/H-BF MatVec (tensor) routine in Fortran.
         subroutine F_HMatVec_MD(Ndim,trans, M, N, num_vect, Vin, Vout, quant)
             import::mesh, proctree, Hstat
             integer Ndim
@@ -933,7 +933,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         end subroutine F_HMatVec_MD
 
 
-        !> interface of user-defined HODLR/H MatVec routine in C.
+        !> interface of user-defined HODLR/HODBF/H-LR/H-BF MatVec routine in C.
         subroutine C_HMatVec(trans, Nin, Nout, num_vect, Vin, Vout, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             import::mesh, proctree, Hstat
@@ -947,7 +947,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         end subroutine C_HMatVec
 
 
-        !> interface of user-defined HODLR/H MatVec (tensor) routine in C.
+        !> interface of user-defined HODLR/HODBF/H-LR/H-BF MatVec (tensor) routine in C.
         subroutine C_HMatVec_MD(Ndim, trans, Nin, Nout, num_vect, Vin, Vout, quant)
             USE, INTRINSIC :: ISO_C_BINDING
             import::mesh, proctree, Hstat

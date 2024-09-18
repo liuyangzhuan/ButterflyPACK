@@ -527,7 +527,7 @@ end function distance_geo
          msh%new2old(ii) = ii
       end do
 
-      !>************Compute Maxlevel of hodlr tree*******************
+      !>************Compute Maxlevel of BPACK tree*******************
       nlevel_pre = 0
       if (allocated(msh%pretree)) then
          nlevel_pre = ceiling_safe(log(dble(size(msh%pretree, 1)))/log(2d0))
@@ -1023,7 +1023,7 @@ end function distance_geo
          Ns_max = max(msh(dim_i)%Nunk,Ns_max)
       end do
 
-      !>************Compute Maxlevel of hodlr tree*******************
+      !>************Compute Maxlevel of BPACK tree*******************
       nlevel_pre = 0
       level = 0; i = 1
       do while (int(Ns_max/i) > option%Nmin_leaf)

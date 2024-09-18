@@ -14,7 +14,7 @@
 ! Developers: Yang Liu
 !             (Lawrence Berkeley National Lab, Computational Research Division).
 !> @file Bplus_factor.f90
-!> @brief Low-level subroutines for factorizing a BPACK (H/HODBF/HODLR/HSS-BF) matrix
+!> @brief Low-level subroutines for factorizing a BPACK (HMAT-LR/HMAT-BF/BLR/HODBF/HODLR/HSS-BF) matrix
 
 
 
@@ -2498,12 +2498,12 @@ contains
       enddo
    end subroutine BF_get_rank_ABCD
 
-!>**** Update one off-diagonal block in HODLR compressed as
+!>**** Update one off-diagonal block in HODLR/HODBF compressed as
 ! Bplus/Butterfly/LR by multiplying on it left the inverse of diagonal block
 ! If LR, call LR_Sblock; if butterfly, call BF_randomized; if Bplus, call Bplus_randomized_constr
-   !ho_bf1: working HODLR
-   !level_c: level# of the block in HODLR
-   !rowblock: block# of the block at this level in HODLR
+   !ho_bf1: working HODLR/HODBF
+   !level_c: level# of the block in HODLR/HODBF
+   !rowblock: block# of the block at this level in HODLR/HODBF
    !option: containing compression options
    !stats: statistics
    !ptree: process tree

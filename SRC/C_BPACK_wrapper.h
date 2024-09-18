@@ -34,7 +34,7 @@ typedef void*F2Cptr; //pointer passing fortran derived types to c
 typedef void*C2Fptr; //pointer passing c objects to fortran
 
 //------------------------------------------------------------------------------
-//Declartion of FORTRAN subroutines to HODLR code
+//Declartion of FORTRAN subroutines to BPACK code
 extern "C"{
 
 void c_bpack_construct_element_compute(F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
