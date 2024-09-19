@@ -947,7 +947,7 @@ contains
          N_loc = blocks%N_loc
 
 
-      case (HMAT)
+      case (HMAT,BLR)
          msh%Dist_level=0
          Maxlevel = GetTreelevel(msh%Maxgroup) - 1
          allocate (stats%leafs_of_level(0:Maxlevel))
@@ -1431,7 +1431,7 @@ contains
          call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
          if (option%verbosity >= 2)call BF_print_size(blocks)
          rankmax = blocks%rankmax
-      case (HMAT)
+      case (HMAT,BLR)
          blocks => BP%ll(1)%matrices_block(1)
          Maxlevel = GetTreelevel(msh%Maxgroup) - 1
          allocate (stats%rankmax_of_level(0:Maxlevel))
@@ -1738,7 +1738,7 @@ contains
       select case (option%format)
       case (HODLR)
          call HODLR_construction(bmat%ho_bf, option, stats, msh, ker, ptree)
-      case (HMAT)
+      case (HMAT,BLR)
          call Hmat_construction(bmat%h_mat, option, stats, msh, ker, ptree)
       case (HSS)
          call HSS_construction(bmat%hss_bf, option, stats, msh, ker, ptree)
@@ -2641,7 +2641,7 @@ contains
       select case (option%format)
       case (HODLR)
          call BF_ExtractElement(blocks, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
-      case (HMAT)
+      case (HMAT,BLR)
          call BP_ExtractElement(BP, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
       case (HSS)
          call BP_ExtractElement(BP, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
@@ -3638,7 +3638,7 @@ contains
                select case (option%format)
                case (HODLR)
                   call Hmat_MapIntersec2Block_Loc(blocks_o, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk)
-               case (HMAT)
+               case (HMAT,BLR)
                   call Hmat_MapIntersec2Block_Loc(blocks_o, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk)
                case (HSS)
                   call BP_MapIntersec2Block(BP_o, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, BP_o%LL(1)%Nbound)
@@ -3947,7 +3947,7 @@ contains
                select case (option%format)
                case (HODLR)
                   call HODLR_MapIntersec2Block(bmat%ho_bf, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, 1, 0)
-               case (HMAT)
+               case (HMAT,BLR)
                   num_blocks = 2**msh%Dist_level
                   call Hmat_MapIntersec2Block(bmat%h_mat, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, num_blocks)
                case (HSS)
@@ -4181,7 +4181,7 @@ contains
       ! select case(option%format)
       ! case(HODLR)
       ! level=bmat%ho_bf%Maxlevel
-      ! case(HMAT)
+      ! case(HMAT,BLR)
       ! level=bmat%h_mat%Maxlevel
       ! end select
 
@@ -4393,7 +4393,7 @@ contains
       select case (option%format)
       case (HODLR)
          N_glo=bmat%ho_bf%N
-      case (HMAT)
+      case (HMAT,BLR)
          N_glo=bmat%h_mat%N
       case (HSS)
          N_glo=bmat%hss_bf%N

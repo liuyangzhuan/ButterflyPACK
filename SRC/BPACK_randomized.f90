@@ -67,7 +67,7 @@ contains
       select case (option%format)
       case (HODLR)
          call HODLR_randomized(bmat%ho_bf, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
-      case (HMAT)
+      case (HMAT,BLR)
          call Hmat_randomized(bmat%h_mat, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
       end select
       t2 = MPI_Wtime()

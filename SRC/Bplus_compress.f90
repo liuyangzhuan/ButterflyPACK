@@ -9549,7 +9549,7 @@ time_tmp = time_tmp + n2 - n1
          call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
          call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
       else
-#if HAVE_ZFP      
+#if HAVE_ZFP
          allocate(blocks%MiddleZFP(1)) ! use MiddleZFP instead of FullmatZFP as element_Zmn_tensorlist_user needs array input
          call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,blocks%MiddleZFP)
          allocate(blocks%FullmatZFP%buffer_r(size(blocks%MiddleZFP(1)%buffer_r,1)))

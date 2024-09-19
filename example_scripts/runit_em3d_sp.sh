@@ -26,7 +26,7 @@ sample_para_outer=2.0d0
 pat_comp=3
 schulzlevel=3000
 Nbundle=1
-format=2
+format=5
 knn=0
 less_adapt=1
 verbosity=1
@@ -47,10 +47,10 @@ do
 # filename=halfsphere_1200
 # srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC ../EXAMPLE/preprocessor_3dmesh/$filename $wavelength $precon $sort | tee $filename.out_precon_$precon_sort_$sort
 
-nmpi=32
-wavelength=2.0
-filename=sphere_2300
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --verbosity ${verbosity} --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --less_adapt ${less_adapt} --sample_para_outer $sample_para_outer --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history_$EXENAME
+# nmpi=32
+# wavelength=2.0
+# filename=sphere_2300
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --verbosity ${verbosity} --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --less_adapt ${less_adapt} --sample_para_outer $sample_para_outer --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history_$EXENAME
 
 
 # nmpi=32
@@ -76,19 +76,19 @@ srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores $EXEC -quant --data_dir ../E
 
 
 # # ######## sphere
-# nmpi=16
+nmpi=16
 
 # # # wavelength=0.5
 # # # filename=plate_8000
 # # wavelength=0.25
 # # filename=halfsphere_32000
-# wavelength=2.0
-# filename=sphere_2300
-
+wavelength=2.0
+filename=sphere_2300
 # # wavelength=0.25
 # # filename=plate_32000
-
-# mpirun --allow-run-as-root -n $nmpi $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --verbosity ${verbosity} --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --less_adapt ${less_adapt} --sample_para_outer $sample_para_outer --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history_$EXENAME
+unset OMP_PLACES
+unset OMP_PROC_BIND
+mpirun --allow-run-as-root -n $nmpi $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/$filename --wavelength $wavelength -option --lr_blk_num $blknum --tol_comp $tol --errfillfull $errcheck --reclr_leaf $com_opt --baca_batch $batch --lrlevel $LRlevel --precon $precon --xyzsort $xyzsort --nmin_leaf $leafsize --near_para $para --sample_para $sample_para --verbosity ${verbosity} --pat_comp $pat_comp --schulzlevel $schulzlevel --nbundle $Nbundle --format $format --less_adapt ${less_adapt} --sample_para_outer $sample_para_outer --knn $knn | tee $filename.out_precon_${precon}_sort_${xyzsort}_comp_${com_opt}_tol_${tol}_bsize_${batch}_history_$EXENAME
 
 
 # nmpi=4

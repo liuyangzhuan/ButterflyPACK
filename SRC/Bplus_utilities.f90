@@ -19631,7 +19631,7 @@ integer, save:: my_tid = 0
                if(present(zfpquants))then
                   allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
 
-#if 0  
+#if 0
 ! not sure why the following is causing compiling error for certain intel compilers
                   call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
 #else

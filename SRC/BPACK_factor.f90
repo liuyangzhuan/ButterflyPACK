@@ -44,7 +44,7 @@ contains
             select case (option%format)
             case (HODLR)
                 call HODLR_factorization(bmat%ho_bf, option, stats, ptree, msh)
-            case (HMAT)
+            case (HMAT,BLR)
                 call Hmat_Factorization(bmat%h_mat, option, stats, ptree, msh)
             case (HSS)
                 call HSS_factorization(bmat%hss_bf, option, stats, ptree, msh)

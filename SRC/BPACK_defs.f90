@@ -104,6 +104,7 @@ module BPACK_DEFS
     integer, parameter:: HMAT = 2  !< use H matrix (lr/bf) solver
     integer, parameter:: HSS = 3  !< use hss_bf/shnbf solver
     integer, parameter:: HSS_MD = 4  !< use hss_bf_md/shn_bf_md solver
+    integer, parameter:: BLR = 5  !< use single-level matrix (lr/bf) solver
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -627,7 +628,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 0: do not use zfp
 
         ! options for matrix construction
-        integer Hextralevel !< extra levels for top partitioning of the H matrix based on MPI counts.
+        integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
         real(kind=8) tol_comp      !< matrix construction tolerance
         integer::Nmin_leaf !< leaf sizes of BPACK tree

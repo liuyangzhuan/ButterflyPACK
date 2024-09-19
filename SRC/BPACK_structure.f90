@@ -426,7 +426,7 @@ end function distance_geo
          ! blocks%prestyle=2
          ! blocks%data_type=1
       else
-         if (level == Maxlevel) then
+         if (level == Maxlevel .or. (msh%Dist_level==level .and. option%format==BLR)) then
             blocks%style = 1
             ! blocks%prestyle=1
             ! blocks%data_type=1
@@ -561,7 +561,7 @@ end function distance_geo
       case (HODLR)
          allocate (bmat%ho_bf)
          bmat%ho_bf%Maxlevel = Maxlevel
-      case (HMAT)
+      case (HMAT,BLR)
          allocate (bmat%h_mat)
          bmat%h_mat%Maxlevel = Maxlevel
       case (HSS)
@@ -1588,7 +1588,7 @@ end function distance_geo
       select case (option%format)
       case (HODLR)
          call HODLR_structuring(bmat%ho_bf, option, msh, ker, ptree, stats)
-      case (HMAT)
+      case (HMAT,BLR)
          call Hmat_structuring(bmat%h_mat, option, msh, ker, ptree, stats)
       case (HSS)
          call HSS_structuring(bmat%hss_bf, option, msh, ker, ptree, stats)
@@ -2690,9 +2690,16 @@ end function distance_geo
       do while (2**level<ii)
          level = level + 1
       enddo
-      level =level + option%hextralevel
-      msh%Dist_level = level
-      h_mat%Dist_level = level
+
+      if(option%format==BLR)then ! Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks, the butterfly level of each B-BF block is option%hextralevel
+         msh%Dist_level = max(min(h_mat%Maxlevel,level),h_mat%Maxlevel-option%hextralevel)
+         h_mat%Dist_level = max(min(h_mat%Maxlevel,level),h_mat%Maxlevel-option%hextralevel)
+      else
+         level =level + option%hextralevel ! hextralevel is the extra number of refinement levels used to determine the top-level compressed blocks
+         msh%Dist_level = min(h_mat%Maxlevel,level)
+         h_mat%Dist_level = min(h_mat%Maxlevel,level)
+      endif
+
 
       Maxgrp = 2**(ptree%nlevel) - 1
       do level = h_mat%Maxlevel, h_mat%Maxlevel

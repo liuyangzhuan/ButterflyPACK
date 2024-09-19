@@ -26,6 +26,28 @@ option%sample_para=4.0 ! oversampling factor used for selecting proxy points in 
 option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks 
 \endcode
 
+## B-LR matrix 
+The B-LR (block low-rank) matrix is a single-level format where the matrix is partitioned into MxM blocks where each block representing well-seperated interactions are low-rank compressed. ButterflyPACK supports parallel construction and block LU factorization of B-LR matrices, assuming any block is handled by one MPI. The relevant options are: 
+\code{fortran} 
+option%format=5  ! format 5 is B-LR or B-BF
+option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
+option%LRlevel=0 ! use LR compression
+option%Hextralevel=0 ! use LR compression
+option%RecLR_leaf=BACA ! LR compression algorithms: SVD, RRQR, ACA, BACA 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks 
+\endcode
+
+## B-BF matrix 
+The B-BF (block butterfly) matrix is a single-level format where the matrix is partitioned into MxM blocks where each block representing well-seperated interactions are butterfly compressed. ButterflyPACK supports parallel construction and block LU factorization of B-BF matrices, assuming any block is handled by one MPI. The relevant options are: 
+\code{fortran} 
+option%format=5  ! format 5 is B-LR or B-BF
+option%near_para=2.1 ! admissibility parameter. 0.0 means weak admissibility. 
+option%LRlevel=100 ! use BF compression
+option%Hextralevel=1 ! number of butterfly levels of each BF block 
+option%use_zfp=1 ! whether to use ZFP lossy-compression on the inadmissible blocks 
+\endcode
+
+
 ## HODLR matrix
 The HODLR (hierarchically off-diagonal low-rank) matrix assumes that the matrix is first split into four smaller blocks. Any block representing self interactions (i.e., the diagonal block) is further split into four small blocks. The recursive splitting leads to a partitioned matrix of log(N) levels. Each offdiagonal block is represented as a low-rank product. Compared with the strong-admissible H matrix, the weak-admissible HODLR is more aggressive and parallelizable, leading to much smaller prefactors. But HODLR typically exhibits much larger ranks and worse scalings for high-dimensional problems. ButterflyPACK currently supports parallel construction and inversion of HODLR matrices. Unlike the H matrix, here each block is handled by multiple MPIs. The relevant options are: 
 \code{fortran} 

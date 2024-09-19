@@ -1820,7 +1820,7 @@ contains
          call HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%ho_bf, ptree, option, stats)
       case (HSS)
          call HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
-      case (HMAT)
+      case (HMAT,BLR)
          call Hmat_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%h_mat, ptree, option, stats)
       end select
 
@@ -1867,7 +1867,7 @@ contains
       select case (option%format)
       case (HODLR)
          call HODLR_Mult(trans, Ns, num_vectors, 1, bmat%ho_bf%Maxlevel + 1, Vin, Vout, bmat%ho_bf, ptree, option, stats)
-      case (HMAT)
+      case (HMAT,BLR)
          call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
       case (HSS)
          call HSS_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)

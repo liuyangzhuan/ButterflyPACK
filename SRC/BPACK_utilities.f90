@@ -1021,6 +1021,50 @@ option1%fastsample_tensor = option%fastsample_tensor
          write (*, *) '***************************'
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
+         write (*, '(A18,I8)') 'lrlevel', option%LRlevel
+         write (*, '(A18,Es14.7)') 'near_para', option%near_para
+         if(option%format==HMAT)then
+            if(option%LRlevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'H-LR'
+            else
+               write (*, '(A18,A10)') 'algorithm', 'H-BF'
+            endif
+         else if(option%format==HODLR)then
+            if(option%LRlevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'HODLR'
+            else
+               write (*, '(A18,A10)') 'algorithm', 'HODBF'
+            endif
+         else if(option%format==BLR)then
+            if(option%LRlevel==0 .or. option%Hextralevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'Block-LR'
+            else
+               write (*, '(A18,A10)') 'algorithm', 'Block-BF'
+            endif
+         else if(option%format==HSS)then
+            if(option%LRlevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'INVALID'
+               stop
+            else
+               if(option%near_para>1.0)then
+                  write (*, '(A18,A10)') 'algorithm', 'SHNBF'
+               else
+                  write (*, '(A18,A10)') 'algorithm', 'HSSBF'
+               endif
+            endif
+         else if(option%format==HSS_MD)then
+            if(option%LRlevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'INVALID'
+               stop
+            else
+               if(option%near_para>1.0)then
+                  write (*, '(A18,A10)') 'algorithm', 'SHNBF_MD'
+               else
+                  write (*, '(A18,A10)') 'algorithm', 'HSSBF_MD'
+               endif
+            endif
+         endif
+
          write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
          write (*, '(A18,I8)') 'n_iter', option%n_iter
          write (*, '(A18,I8)') 'level_check', option%level_check
@@ -1033,7 +1077,6 @@ option1%fastsample_tensor = option%fastsample_tensor
          write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
          write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
          write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
-         write (*, '(A18,I8)') 'lrlevel', option%LRlevel
          write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
          write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
          write (*, '(A18,I8)') 'nogeo', option%nogeo
@@ -1069,7 +1112,6 @@ option1%fastsample_tensor = option%fastsample_tensor
          write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
          write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
          write (*, '(A18,Es14.7)') 'touch_para', option%touch_para
-         write (*, '(A18,Es14.7)') 'near_para', option%near_para
          write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
          write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
          write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
