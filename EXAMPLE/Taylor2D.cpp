@@ -425,19 +425,46 @@ if(myrank==master_rank){
 	z_c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
 	z_c_bpack_construct_element_compute(&bmat, &option, &stats, &msh, &kerquant, &ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 
-	// // factor hodlr
-	// z_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
+	// factor hodlr
+	z_c_bpack_factor(&bmat,&option,&stats,&ptree,&msh);
 
-	// // solve the system
-	// int nrhs=1;
-	// _Complex double* b = new _Complex double[nrhs*myseg];
-	// _Complex double* x = new _Complex double[nrhs*myseg];
 
-	// for (int i = 0; i < nrhs*myseg; i++){
-	// 	b[i]=1;
-	// }
-	// z_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
 
+
+	// solve the system
+	int nrhs=1;
+	// generate a global rhs vector b_glo
+    vector<_Complex double> x_glo(Npo*nrhs,0.0);
+    vector<_Complex double> b_glo(Npo*nrhs,0.0);
+
+	// The local rhs and solution vectors
+	_Complex double* b = new _Complex double[nrhs*myseg];
+	_Complex double* x = new _Complex double[nrhs*myseg];
+
+	b_glo.data()[0]=1.0; // all but 1 element is zero in the RHS
+
+	// map b_glo to the local rhs vector b
+	for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh,&i_new_loc,&i_old);
+      for (int nth=0; nth<nrhs; nth++){
+        b[i+nth*myseg] = b_glo.data()[i_old-1+nth*Npo];
+      }
+    }
+
+	// solve the system
+	z_c_bpack_solve(x,b,&myseg,&nrhs,&bmat,&option,&stats,&ptree);
+
+	// map local solution vector x to the global solution vector x_glo
+	for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh,&i_new_loc,&i_old);
+      for (int nth=0; nth<nrhs; nth++){
+        x_glo.data()[i_old-1+nth*Npo] = x[i+nth*myseg];
+      }
+    }
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the first HODLR: "<<std::endl;
 	z_c_bpack_printstats(&stats,&ptree);
