@@ -59,6 +59,7 @@ contains
       type(mesh)::msh
       type(kernelquant)::ker
       type(proctree)::ptree
+      integer nsample_tot
 
       if (allocated(msh%xyz)) deallocate (msh%xyz)
 
@@ -66,18 +67,18 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction......"
       select case (option%format)
       case (HODLR)
-         call HODLR_randomized(bmat%ho_bf, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
+         call HODLR_randomized(bmat%ho_bf, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh, nsample_tot)
       case (HMAT,BLR)
-         call Hmat_randomized(bmat%h_mat, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh)
+         call Hmat_randomized(bmat%h_mat, blackbox_BMAT_MVP, Memory, error, option, stats, ker, ptree, msh, nsample_tot)
       end select
       t2 = MPI_Wtime()
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction finished", t2 - t1, 'secnds. Error: ', error
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based Matrix construction finished", t2 - t1, 'secnds. Error: ', error, 'Total #sample: ', nsample_tot
 
    end subroutine BPACK_construction_Matvec
 
 
 
-   subroutine Hmat_randomized(h_mat, blackbox_Hmat_MVP, Memory, error, option, stats, ker, ptree, msh)
+   subroutine Hmat_randomized(h_mat, blackbox_Hmat_MVP, Memory, error, option, stats, ker, ptree, msh, nsample_tot)
       implicit none
       type(Hmat)::h_mat
       real(kind=8):: n1, n2, n3, n4, Memory, Memtmp, tmpfact, error, tmp1, tmp2, norm1, norm2
@@ -100,7 +101,9 @@ contains
       type(nod), pointer::curr
       class(*), pointer::ptrr
       real(kind=8):: scale_factor_bac
+      integer nsample_tot
 
+      nsample_tot=0
       scale_factor_bac = option%scale_factor
       option%scale_factor=1d0
 
@@ -226,6 +229,7 @@ contains
                call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' #sample:', rank_pre_max
+               nsample_tot = nsample_tot + rank_pre_max
 
                !!!!>*** terminate if 1. rank smaller than num_vec
                if (rank_new_max == rank_pre_max) then
@@ -1181,7 +1185,7 @@ contains
    end subroutine Hmat_randomized_OneL_Fullmat
 
 
-   subroutine HODLR_randomized(ho_bf1, blackbox_HODLR_MVP, Memory, error, option, stats, ker, ptree, msh)
+   subroutine HODLR_randomized(ho_bf1, blackbox_HODLR_MVP, Memory, error, option, stats, ker, ptree, msh, nsample_tot)
 
 
       implicit none
@@ -1200,8 +1204,11 @@ contains
       type(mesh)::msh
       integer Bidxs, Bidxe, ierr, tt
       integer vecCNT,num_vect,nn,mm,ranktmp,rank,mn
+      integer nsample_tot
       DT, allocatable:: RandVectIn(:, :),RandVectOut(:, :)
       DTR, allocatable:: Singular(:)
+
+      nsample_tot=0
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:ho_bf1%Maxlevel))
       stats%rankmax_of_level = 0
@@ -1328,7 +1335,7 @@ contains
                call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A7,Es14.7,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max
-
+               nsample_tot = nsample_tot + rank_pre_max
                ! !!!!>*** terminate if 1. error small enough or 2. error not decreasing or 3. rank not increasing
                ! if(error_inout>option%tol_rand .and. error_inout<error_lastiter .and. ((rank_new_max>rank_max_lastiter .and. tt>1).or.tt==1))then
 
