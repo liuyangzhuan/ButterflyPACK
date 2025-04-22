@@ -729,7 +729,7 @@ contains
       call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Factor flops:', rtemp
       if (ptree%MyID == Main_ID .and. allocated(stats%rankmax_of_level_global_factor)) write (*, '(A21,I14)') 'Rank after factor:', maxval(stats%rankmax_of_level_global_factor)
-      
+
       call MPI_ALLREDUCE(stats%Time_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Solve time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -806,6 +806,7 @@ contains
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
+      option%use_qtt = 0
       ! option%sample_heuristic = 1
       option%pat_comp = 3
       option%elem_extract = 0
@@ -921,6 +922,8 @@ contains
                   read (strings1, *) option%sample_para_outer
                else if (trim(strings) == '--use_zfp') then
                   read (strings1, *) option%use_zfp
+               else if (trim(strings) == '--use_qtt') then
+                  read (strings1, *) option%use_qtt
                ! else if (trim(strings) == '--sample_heuristic') then
                !    read (strings1, *) option%sample_heuristic
                else if (trim(strings) == '--pat_comp') then
@@ -1000,6 +1003,7 @@ option1%fastsample_tensor = option%fastsample_tensor
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
+      option1%use_qtt = option%use_qtt
       ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
       option1%elem_extract = option%elem_extract
@@ -1102,6 +1106,7 @@ option1%fastsample_tensor = option%fastsample_tensor
          ! write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
          write (*, '(A18,I8)') 'less_adapt', option%less_adapt
          write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+         write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
          write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
          write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp

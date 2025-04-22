@@ -3064,7 +3064,7 @@ contains
       deallocate(order_m)
 
       n1 = MPI_Wtime()
-      call BF_MD_block_extraction(blocks, Ndim, Ninter, inter_MD, ptree, msh, stats)
+      call BF_MD_block_extraction(blocks, Ndim, Ninter, inter_MD, ptree, msh, stats, option)
 
 
       ! compare extracted values with element_Zmn

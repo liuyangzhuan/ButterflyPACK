@@ -4103,6 +4103,36 @@ contains
       endif
    end subroutine GetLocalBlockRange
 
+
+
+
+   !>****  reallocate a(:) to a new size while preserving old data. If new_size<old_size, the old data is truncated.
+   subroutine array_resize(a, new_size)
+      implicit none
+      DT, allocatable, intent(inout) :: a(:)
+      integer      :: new_size
+
+      integer :: old_size
+      DT, allocatable :: tmp(:)
+
+      call assert(new_size>=0,"array new size incorrect")
+
+      if(.not. allocated(a))then
+         if(new_size>0)allocate(a(new_size))
+      else
+         old_size = size(a)
+         allocate(tmp(old_size))
+         tmp = a
+         deallocate(a)
+
+         allocate(a(new_size))
+         a=0d0
+         a(1:min(old_size,new_size)) = tmp(1:min(old_size,new_size))
+         deallocate(tmp)
+      endif
+   end subroutine array_resize
+
+
    !>**** convert single index to multi-index, assuming first index is the fastest
    subroutine SingleIndexToMultiIndex(Ndim,dims, single_index_in, multi_index)
       implicit none
@@ -4402,6 +4432,47 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
 
 
 end subroutine TensorUnfoldingReshape
+
+
+
+
+subroutine TensorPermute(tensor_data, shape_in, perm)
+   implicit none
+   DT :: tensor_data(:)
+   integer  :: shape_in(:)
+   integer   :: perm(:)
+   DT, allocatable :: tmp_data(:)
+   integer,allocatable :: shape_out(:)
+
+   integer :: ndims, totalSize
+   integer :: lin,lin_new
+   integer, allocatable :: idxs(:), new_idxs(:)
+   ndims = size(shape_in)
+   allocate(shape_out(ndims))
+   shape_out = shape_in(perm)
+
+   totalSize = size(tensor_data)
+   allocate(tmp_data(totalSize))
+
+   allocate(idxs(ndims), new_idxs(ndims))
+
+   tmp_data = 0d0
+
+   do lin=1,totalSize
+      call SingleIndexToMultiIndex(ndims,shape_in, lin, idxs)
+      ! dimension i of new index = dimension perm(i) of old
+      new_idxs = idxs(perm)
+      call MultiIndexToSingleIndex(ndims,shape_out, lin_new, new_idxs)
+      tmp_data(lin_new ) = tensor_data(lin)
+   end do
+
+   tensor_data = tmp_data
+   deallocate(tmp_data)
+   deallocate(shape_out)
+   deallocate(idxs, new_idxs)
+end subroutine TensorPermute
+
+
 
 
 
@@ -5976,6 +6047,935 @@ integer function bit_reverse(n, bits)
 
     bit_reverse = result+1
 end function bit_reverse
+
+
+
+
+#ifdef HAVE_ZFP
+   !>**** ZFP compression of fullmat into fullmatZFP%buffer_r/buffer_i into with relative tolerance tol_comp. If the flag already_compressed is set to 1, only the fullmat will be deleted.
+   subroutine ZFP_Compress(fullmat, fullmatZFP, M, N, tol_comp, already_compressed)
+
+      implicit none
+      DT,pointer::fullmat(:,:)
+      integer M,N
+      type(zfpquant)::fullmatZFP
+      real(kind=8)::tol_comp,tol_abs
+
+      ! input/decompressed arrays
+      type(c_ptr) :: array_c_ptr
+      DTR, dimension(:, :), allocatable, target :: input_array
+      ! zfp_field
+      type(zFORp_field) :: field
+      ! bitstream
+      character, dimension(:), allocatable, target :: buffer
+      type(c_ptr) :: buffer_c_ptr
+      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes,tmpint8
+      type(zFORp_bitstream) :: bitstream
+      ! zfp_stream
+      type(zFORp_stream) :: stream, dstream
+      real (kind=8) :: tol_result, maxcal
+      DTR::maxval
+      integer :: zfp_type, already_compressed
+
+      if(already_compressed==0)then
+         maxval=fnorm(fullmat,M,N,'M')
+         tol_abs = tol_comp * maxval
+
+         ! setup zfp_field
+         allocate(input_array(M,N))
+         input_array=dble(fullmat)
+         array_c_ptr = c_loc(input_array)
+         zfp_type = DTZFP
+         field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
+
+         ! setup bitstream
+         tmpint8 = N*DTRBytes
+         buffer_size_bytes = M*tmpint8
+         allocate(buffer(buffer_size_bytes*2)) ! adding an extra factor of 2 as the compressed array can be larger than the input data
+         buffer_c_ptr = c_loc(buffer)
+         bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+         ! setup zfp_stream
+         fullmatZFP%stream_r = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(fullmatZFP%stream_r,tol_abs)
+
+         ! compress
+         bitstream_offset_bytes = zFORp_compress(fullmatZFP%stream_r, field)
+         allocate(fullmatZFP%buffer_r(bitstream_offset_bytes))
+         fullmatZFP%buffer_r=buffer(1:bitstream_offset_bytes)
+         call zFORp_field_free(field)
+         call zFORp_bitstream_stream_close(bitstream)
+         deallocate(input_array)
+         deallocate(buffer)
+
+
+#if DAT==0 || DAT==2
+         ! setup zfp_field
+         allocate(input_array(M,N))
+         input_array=aimag(fullmat)
+         array_c_ptr = c_loc(input_array)
+         zfp_type = DTZFP
+         field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
+
+         ! setup bitstream
+         tmpint8 = N*DTRBytes
+         buffer_size_bytes = M*tmpint8
+         allocate(buffer(buffer_size_bytes*2)) ! adding an extra factor of 2 as the compressed array can be larger than the input data
+         buffer_c_ptr = c_loc(buffer)
+         bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+
+         ! setup zfp_stream
+         fullmatZFP%stream_i = zFORp_stream_open(bitstream)
+         tol_result=zFORp_stream_set_accuracy(fullmatZFP%stream_i,tol_abs)
+
+         ! compress
+         bitstream_offset_bytes = zFORp_compress(fullmatZFP%stream_i, field)
+         allocate(fullmatZFP%buffer_i(bitstream_offset_bytes))
+         fullmatZFP%buffer_i=buffer(1:bitstream_offset_bytes)
+         call zFORp_field_free(field)
+         call zFORp_bitstream_stream_close(bitstream)
+         deallocate(input_array)
+         deallocate(buffer)
+#endif
+      endif
+      deallocate(fullmat)
+      fullmat=>null()
+
+   end subroutine ZFP_Compress
+
+
+   !>**** ZFP decompression of fullmatZFP%buffer_r/buffer_i into fullmat. tol_used is the relative tolerance in the compression phase. The flag keep_compressed incidates whether the compressed data will be deleted.
+   subroutine ZFP_Decompress(fullmat, fullmatZFP, M, N, tol_used, keep_compressed)
+
+      implicit none
+      DT,pointer::fullmat(:,:)
+      integer M,N
+      type(zfpquant)::fullmatZFP
+
+      ! input/decompressed arrays
+      type(c_ptr) :: array_c_ptr
+      DTR::maxval
+      DTR, dimension(:, :), allocatable, target :: decompressed_array
+      ! zfp_field
+      type(zFORp_field) :: field
+      ! bitstream
+      character, dimension(:), allocatable, target :: buffer
+      type(c_ptr) :: buffer_c_ptr
+      integer (kind=8) buffer_size_bytes, bitstream_offset_bytes
+      type(zFORp_bitstream) :: bitstream
+      ! zfp_stream
+      type(zFORp_stream) :: stream
+      real (kind=8) :: tol_result,tol_used
+      integer :: zfp_type, keep_compressed
+
+      tol_result = zFORp_stream_accuracy(fullmatZFP%stream_r)
+
+      allocate(fullmat(M,N))
+
+      ! setup zfp_field
+      allocate(decompressed_array(M,N))
+      array_c_ptr = c_loc(decompressed_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
+
+      ! setup bitstream
+      buffer_size_bytes=size(fullmatZFP%buffer_r,1)
+      allocate(buffer(buffer_size_bytes))
+      buffer = fullmatZFP%buffer_r
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+      call zFORp_stream_set_bit_stream(fullmatZFP%stream_r, bitstream);
+
+      ! decompress
+      bitstream_offset_bytes = zFORp_decompress(fullmatZFP%stream_r, field)
+      fullmat=decompressed_array
+
+      ! deallocations
+      call zFORp_bitstream_stream_close(bitstream)
+      call zFORp_field_free(field)
+
+      deallocate(decompressed_array)
+      deallocate(buffer)
+      if(keep_compressed==0)then
+         call zFORp_stream_close(fullmatZFP%stream_r)
+         deallocate(fullmatZFP%buffer_r)
+      endif
+
+#if DAT==0 || DAT==2
+      ! setup zfp_field
+      allocate(decompressed_array(M,N))
+      array_c_ptr = c_loc(decompressed_array)
+      zfp_type = DTZFP
+      field = zFORp_field_2d(array_c_ptr, zfp_type, M, N)
+
+      ! setup bitstream
+      buffer_size_bytes=size(fullmatZFP%buffer_i,1)
+      allocate(buffer(buffer_size_bytes))
+      buffer = fullmatZFP%buffer_i
+      buffer_c_ptr = c_loc(buffer)
+      bitstream = zFORp_bitstream_stream_open(buffer_c_ptr, buffer_size_bytes)
+      call zFORp_stream_set_bit_stream(fullmatZFP%stream_i, bitstream);
+
+      ! decompress
+      bitstream_offset_bytes = zFORp_decompress(fullmatZFP%stream_i, field)
+      fullmat=fullmat+BPACK_junit*decompressed_array
+
+      ! deallocations
+      call zFORp_bitstream_stream_close(bitstream)
+      call zFORp_field_free(field)
+
+      deallocate(decompressed_array)
+      deallocate(buffer)
+
+      if(keep_compressed==0)then
+         call zFORp_stream_close(fullmatZFP%stream_i)
+         deallocate(fullmatZFP%buffer_i)
+      endif
+#endif
+
+   maxval=fnorm(fullmat,M,N,'M')
+   if(maxval<BPACK_SafeEps)then
+      tol_used = BPACK_SafeEps
+   else
+      tol_used = tol_result/maxval
+   endif
+
+   end subroutine ZFP_Decompress
+
+#endif
+
+
+
+!>**** TT decomposition via SVD of a full array
+!b: the d-dimensional input tensor, stored as 1D array
+!eps_in: the relative compression tolerance
+!t: the TT decomposition. At input, t contains only d, n (and m_n)
+!ZFP_flag: whether to further compress the core with zfp
+subroutine TT_Compress_SVD(b, eps_in, t, ZFP_flag)
+   implicit none
+   DT   :: b(:)
+   real*8   :: eps_in, tmpsize
+   type(TTtype) :: t
+   integer,optional :: ZFP_flag
+   integer :: d, i, ii,jj, dd
+   integer :: pos
+   integer :: m, chunk_n,mn_min
+   DT, allocatable :: c(:)
+   DTR, allocatable :: s(:)
+   DT, allocatable :: u(:,:), vt(:,:), mat(:,:)
+   integer :: lwork, info, ranki
+   integer :: old_size, new_size, final_block, block_size, shape_flat(1)
+   integer,allocatable :: shape_hd(:), perm(:)
+   real*8  :: ep_s
+   DT, pointer:: data_buffer(:,:), data_buffer1(:,:)
+   type(zfpquant)::tmpzfp
+
+   integer :: rowdim, coldim
+   integer :: lda, ldu, ldvt
+
+   integer :: idx, currentsize
+
+   d = size(t%n)
+
+   allocate(t%r(d+1))
+   t%r = 1
+   allocate(t%psa(d+1))
+   t%psa = 0
+
+   t%d = d
+
+   allocate(c(size(b)))
+   c = b
+
+
+   if(t%mpo==1)then ! MPO
+      allocate(shape_hd(2*d))
+      shape_hd(1:d) = t%m_n(:,1)
+      shape_hd(1+d:2*d) = t%m_n(:,2)
+      allocate(perm(2*d))
+      perm = 0
+      do idx=1,d
+        perm(2*(idx-1)+1 ) = idx            ! row bits
+        perm(2*(idx-1)+2 ) = d + idx        ! col bits
+      enddo
+      call TensorPermute(c, shape_hd, perm)
+      deallocate(perm)
+      deallocate(shape_hd)
+   endif
+
+
+
+
+   ! ep = eps_in/sqrt(d-1)  (avoid d=1 corner case)
+   if (d>1) then
+      ep_s = eps_in / dsqrt(d-1.d0)
+   else
+      ep_s = eps_in
+   end if
+
+   pos = 1
+
+! write(*,*)'c',c(1:512)
+   tmpsize=0
+   !=== TT-SVD main loop for first d-1 cores
+   do i=1,d-1
+      m       = t%n(i)*t%r(i)
+   !  write(*,*)i,d,t%n(i),t%r(i),'dim'
+      chunk_n = size(c)/m
+
+
+      ! reshape c => (m x chunk_n)
+      allocate(mat(m, chunk_n))
+      mat = reshape(c, shape(mat))
+   !  write(*,*)'c', c
+   !  write(*,*)'re c', mat
+
+      ! SVD of mat => U*S*V^T
+      mn_min = min(m,chunk_n)
+      allocate(u(m,mn_min), vt(mn_min,chunk_n))
+      allocate(s(mn_min))
+
+
+      call SVD_Truncate(mat, m, chunk_n, mn_min, u, vt, s, ep_s, BPACK_SafeUnderflow, ranki)
+
+      t%r(i+1) = ranki
+
+      ! Store U(:,1:ranki) into TT core
+      currentsize=0
+      if(allocated(t%core))currentsize=size(t%core)
+      block_size = t%r(i)*t%n(i)*ranki
+      call array_resize(t%core, currentsize + block_size)
+      shape_flat(1) = block_size
+      t%core(pos : pos+block_size-1) = reshape(u(1:m,1:ranki), shape_flat)
+
+      ! allocate(data_buffer1(block_size,1))
+      ! data_buffer1(:,1)=t%core(pos : pos+block_size-1)
+      ! call ZFP_Compress(data_buffer1,tmpzfp,block_size,1, ep_s,0)
+      ! write(*,*)'core',i,block_size*16, (SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i)),dble(block_size*16)/(SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i))
+      ! tmpsize = tmpsize + (SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i))
+      ! deallocate(tmpzfp%buffer_r)
+      ! deallocate(tmpzfp%buffer_i)
+
+      pos = pos + block_size
+
+      ! Construct c = V(1:ranki, :) * diag(s(1:ranki))
+   do ii=1, ranki
+      vt(ii,:) = vt(ii,:)*s(ii)
+   end do
+   deallocate(c)
+   allocate(c(ranki*chunk_n))
+   c = reshape(vt(1:ranki,1:chunk_n), shape(c))
+
+      deallocate(u, vt, s, mat)
+   end do
+
+   !=== Last core
+   ! We have c(:) dimension = ( t%r(d)*t%n(d)*r(d+1) ) => but r(d+1) might be unknown until now
+   ! r(d+1) should come from size(c)/( t%r(d)* t%n(d) )
+   t%r(d+1) = size(c) / ( t%r(d)*t%n(d) )
+   final_block = t%r(d)*t%n(d)*t%r(d+1)
+
+   currentsize=0
+   if(allocated(t%core))currentsize=size(t%core)
+   call array_resize(t%core, currentsize + final_block)
+   t%core(pos: pos+final_block-1) = c(:)
+
+      ! allocate(data_buffer1(final_block,1))
+      ! data_buffer1(:,1)=t%core(pos : pos+final_block-1)
+      ! call ZFP_Compress(data_buffer1,tmpzfp,final_block,1, eps_in,0)
+      ! write(*,*)'core L',final_block*16, (SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i)),dble(final_block*16)/(SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i))
+      ! tmpsize = tmpsize + (SIZEOF(tmpzfp%buffer_r)+SIZEOF(tmpzfp%buffer_i))
+      ! deallocate(tmpzfp%buffer_r)
+      ! deallocate(tmpzfp%buffer_i)
+
+
+
+
+#if HAVE_ZFP
+   if(present(ZFP_flag))then
+      if(ZFP_flag==1)then
+         allocate(data_buffer(size(t%core),1))
+         data_buffer(:,1)=t%core
+         call ZFP_Compress(data_buffer,t%coreZFP,size(t%core),1, eps_in/10,0)
+         ! write(*,*)SIZEOF(t%core),(SIZEOF(t%coreZFP%buffer_r)+SIZEOF(t%coreZFP%buffer_i)),tmpsize
+         deallocate(t%core)
+      endif
+   endif
+#endif
+
+
+
+
+   ! prefix sums
+   t%psa(1)=1
+   do idx=1,d
+      t%psa(idx+1) = t%psa(idx) + t%n(idx)*t%r(idx)*t%r(idx+1)
+   end do
+
+end subroutine TT_Compress_SVD
+
+
+integer function next_power_of_2(n)
+  implicit none
+  integer, intent(in) :: n
+  integer :: power
+
+  if (n <= 1) then
+     power = 1
+  else
+     power = 1
+     do while (power < n)
+        power = power * 2
+     end do
+  end if
+  next_power_of_2 = power
+end function next_power_of_2
+
+
+!>**** QTT decomposition via SVD of a full array (zero padding each mode size to power of 2)
+!b: the d_org-dimensional input tensor, stored as 1D array
+!tol: the relative compression tolerance
+!t: the QTT decomposition. At input, t contains only d_org, n_org (and m_n_org)
+!ZFP_flag: whether to further compress the core with zfp
+subroutine QTT_Compress_SVD(b, tol, t, ZFP_flag)
+   implicit none
+   DT   :: b(:)
+   real*8   :: tol
+   type(TTtype) :: t
+   integer,optional::ZFP_flag
+
+   integer :: dd, i, ii,jj,N, d_org, iii,iii_new,s, tot_size,num_twos,idx
+   integer, allocatable:: dims_org(:), dims(:), idx_MD_org(:), idx_MD(:),perm(:),shapes(:),shape_hd(:), Ns(:)
+   DT, allocatable :: tensor_hd(:)
+
+   allocate(Ns(t%d_org)) ! we enforce that for MPO, each dimension is padded to the same next power of 2
+   if(t%mpo==1)then ! MPO
+      do dd=1,t%d_org
+         Ns(dd) = next_power_of_2(max(t%m_n_org(dd,1),t%m_n_org(dd,2)))
+      enddo
+      d_org = t%d_org*2
+      allocate(tensor_hd(product(Ns)**2))
+      tensor_hd = 0
+      allocate(dims_org(d_org))
+      dims_org(1:t%d_org) = t%m_n_org(1:t%d_org,1)
+      dims_org(1+t%d_org:2*t%d_org) = t%m_n_org(1:t%d_org,2)
+      allocate(dims(d_org))
+      dims(1:t%d_org) = Ns
+      dims(1+t%d_org:2*t%d_org) = Ns
+
+   else ! MPS
+      do dd=1,t%d_org
+         Ns(dd) = next_power_of_2(t%n_org(dd))
+      enddo
+      d_org = t%d_org
+      allocate(tensor_hd(product(Ns)))
+      tensor_hd = 0
+      allocate(dims_org(d_org))
+      dims_org(1:t%d_org) = t%n_org(1:t%d_org)
+      allocate(dims(d_org))
+      dims = Ns
+   endif
+
+
+   allocate(idx_MD_org(d_org))
+   do iii=1,product(dims_org)
+      call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
+      call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
+      tensor_hd(iii_new) = b(iii)
+   enddo
+   deallocate(dims)
+   deallocate(dims_org)
+   deallocate(idx_MD_org)
+
+   s = 0
+   do dd=1,t%d_org
+      s =s + int(log(real(Ns(dd)))/log(2d0))
+   enddo
+   num_twos = s
+
+
+   if(t%mpo==1)then ! MPO
+
+      allocate(shapes(num_twos))
+      shapes = 4
+      ! Build TT decomposition
+      t%d = num_twos
+      allocate(t%n(num_twos))
+      t%n = shapes
+      shapes = 2
+      allocate(t%m_n(num_twos,2))
+      t%m_n(:,1)=shapes
+      t%m_n(:,2)=shapes
+      call TT_Compress_SVD(tensor_hd, tol, t, ZFP_flag)
+      deallocate(shapes)
+      deallocate(tensor_hd)
+
+   else ! MPS
+      allocate(shapes(num_twos))
+      shapes = 2
+      ! Build TT decomposition
+      t%d = num_twos
+      allocate(t%n(num_twos))
+      t%n = shapes
+      call TT_Compress_SVD(tensor_hd, tol, t, ZFP_flag)
+      deallocate(shapes)
+      deallocate(tensor_hd)
+   endif
+   deallocate(Ns)
+
+end subroutine QTT_Compress_SVD
+
+
+
+
+
+
+
+subroutine TT_Decompress(t, b)
+   implicit none
+   ! Input TT tensor
+   type(TTtype)  :: t
+   ! Output full array
+   DT, allocatable  :: b(:)
+   DT, pointer ::data_buffer(:,:)
+   integer :: d, i, prod_prev, prod_curr, total_size, idx
+   DT, allocatable :: Y_in(:), Y(:)
+   integer :: r_left, r_right, n_k
+   integer, allocatable:: inv_perm(:),perm(:),shape_hd(:)
+   real(kind=8)::tol_used
+
+   d = t%d
+   total_size = product(t%n)
+   r_left  = t%r(1)         ! should be 1
+   n_k     = t%n(1)
+   r_right = t%r(2)
+   prod_prev = n_k
+
+
+#if HAVE_ZFP
+   if(allocated(t%coreZFP%buffer_r))then
+      allocate(data_buffer(t%psa(d+1)-1, 1))
+      call ZFP_Decompress(data_buffer,t%coreZFP, t%psa(d+1)-1, 1, tol_used, 1)
+      allocate(t%core(t%psa(d+1)-1))
+      t%core = data_buffer(:,1)
+      deallocate(data_buffer)
+   endif
+#endif
+
+
+   allocate(Y(n_k * r_right))
+   Y = t%core(t%psa(1) : t%psa(2)-1)
+
+   do i = 2, d
+      n_k = t%n(i)
+      r_left = t%r(i)
+      r_right = t%r(i+1)
+      prod_curr = prod_prev * n_k
+
+      allocate(Y_in(prod_prev*r_left))
+      Y_in=Y
+      deallocate(Y)
+      allocate(Y(prod_prev * n_k * r_right))
+
+      call gemmf77('N', 'N', prod_prev, n_k * r_right, r_left, BPACK_cone, Y_in, prod_prev, t%core(t%psa(i):t%psa(i+1)-1), r_left, BPACK_czero, Y, prod_prev)
+
+      prod_prev = prod_curr
+
+      deallocate(Y_in)
+   end do
+
+
+   if(t%mpo==1)then ! MPO
+      allocate(shape_hd(2*d))
+      shape_hd(1:d) = t%m_n(:,1)
+      shape_hd(1+d:2*d) = t%m_n(:,2)
+      allocate(perm(2*d))
+      perm = 0
+      do idx=1,d
+        perm(2*(idx-1)+1 ) = idx            ! row bits
+        perm(2*(idx-1)+2 ) = d + idx        ! col bits
+      enddo
+
+      allocate(inv_perm(2*d))
+      inv_perm = 0
+      do idx = 1, 2*d
+         inv_perm( perm(idx) ) = idx
+      end do
+      call TensorPermute(Y, shape_hd, inv_perm)
+      deallocate(perm)
+      deallocate(inv_perm)
+      deallocate(shape_hd)
+   endif
+
+
+   allocate(b(total_size))
+   b = Y
+   deallocate(Y)
+
+#if HAVE_ZFP
+   if(allocated(t%coreZFP%buffer_r))then
+      deallocate(t%core)
+   endif
+#endif
+
+
+end subroutine TT_Decompress
+
+
+
+subroutine QTT_Decompress(t, b)
+   implicit none
+   ! Input QTT tensor
+   type(TTtype)  :: t
+   ! Output full array
+   DT, allocatable  :: b(:), tensor_hd(:)
+   integer :: d, i, ii,jj,N, d_org, iii,iii_new,s,dd, tot_size,num_twos,idx
+   integer, allocatable:: dims_org(:), dims(:), idx_MD_org(:), idx_MD(:),perm(:),inv_perm(:),shapes(:),shape_hd(:),Ns(:)
+
+
+   call TT_Decompress(t,tensor_hd)
+
+   allocate(Ns(t%d_org)) ! we enforce that for MPO, each dimension is padded to the same next power of 2
+
+   if(t%mpo==1)then ! MPO
+      do dd=1,t%d_org
+         Ns(dd) = next_power_of_2(max(t%m_n_org(dd,1),t%m_n_org(dd,2)))
+      enddo
+      allocate(b(product(t%m_n_org(:,1))*product(t%m_n_org(:,2))))
+      b = 0
+      d_org = t%d_org*2
+      allocate(dims_org(d_org))
+      dims_org(1:t%d_org) = t%m_n_org(1:t%d_org,1)
+      dims_org(1+t%d_org:2*t%d_org) = t%m_n_org(1:t%d_org,2)
+      allocate(dims(d_org))
+      dims(1:t%d_org) = Ns
+      dims(1+t%d_org:2*t%d_org) = Ns
+   else ! MPS
+      do dd=1,t%d_org
+         Ns(dd) = next_power_of_2(t%n_org(dd))
+      enddo
+      allocate(b(product(t%n_org)))
+      b = 0
+      d_org = t%d_org
+      allocate(dims_org(d_org))
+      dims_org(1:t%d_org) = t%n_org(1:t%d_org)
+      allocate(dims(d_org))
+      dims = Ns
+   endif
+
+   allocate(idx_MD_org(d_org))
+   do iii=1,product(dims_org)
+      call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
+      call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
+      b(iii) = tensor_hd(iii_new)
+   enddo
+   deallocate(dims)
+   deallocate(dims_org)
+   deallocate(idx_MD_org)
+   deallocate(Ns)
+
+end subroutine QTT_Decompress
+
+
+
+subroutine TT_Delete(t)
+   type(TTtype)  :: t
+
+   if(allocated(t%n_org))deallocate(t%n_org)
+   if(allocated(t%n))deallocate(t%n)
+   if(allocated(t%m_n))deallocate(t%m_n)
+   if(allocated(t%m_n_org))deallocate(t%m_n_org)
+   if(allocated(t%r))deallocate(t%r)
+   if(allocated(t%psa))deallocate(t%psa)
+   if(allocated(t%core))deallocate(t%core)
+
+end subroutine TT_Delete
+
+
+
+subroutine TT_Copy(t,t_new)
+   type(TTtype)  :: t,t_new
+
+   t_new%mpo=t%mpo
+   t_new%d=t%d
+   t_new%d_org=t%d_org
+
+   if(allocated(t%n_org))then
+      allocate(t_new%n_org(size(t%n_org)))
+      t_new%n_org = t%n_org
+   endif
+   if(allocated(t%n))then
+      allocate(t_new%n(size(t%n)))
+      t_new%n = t%n
+   endif
+   if(allocated(t%m_n))then
+      allocate(t_new%m_n(size(t%m_n,1),size(t%m_n,2)))
+      t_new%m_n = t%m_n
+   endif
+   if(allocated(t%m_n_org))then
+      allocate(t_new%m_n_org(size(t%m_n_org,1),size(t%m_n_org,2)))
+      t_new%m_n_org = t%m_n_org
+   endif
+   if(allocated(t%r))then
+      allocate(t_new%r(size(t%r)))
+      t_new%r = t%r
+   endif
+   if(allocated(t%psa))then
+      allocate(t_new%psa(size(t%psa)))
+      t_new%psa = t%psa
+   endif
+   if(allocated(t%core))then
+      allocate(t_new%core(size(t%core)))
+      t_new%core = t%core
+   endif
+
+end subroutine TT_Copy
+
+
+!>**** TT application/contraction assuming the input vector is a full array
+!tmat: the MPO
+!b: the input array
+!c: the output array
+subroutine TT_Apply_Fullvec(tmat, b, c)
+   implicit none
+   type(TTtype)  :: tmat
+   DT        :: b(:)
+   DT       :: c(:)
+
+   integer :: d, k
+   integer, allocatable :: psa(:), r(:)
+   DT, allocatable :: cra(:)
+   DT, allocatable :: ctmp(:)
+   integer :: rb
+   integer :: rk, rk1, n_k, m_k
+   integer :: crSize, restDim
+   integer :: irow, icol, i3, shape_tmp(2), perm_tmp(2), shape_tmp4(4), perm_tmp4(4)
+   DT, allocatable :: cr(:), cc(:)
+   DT, pointer::data_buffer(:,:)
+   real(kind=8)::tol_used
+
+   d  = tmat%d
+
+#if HAVE_ZFP
+   if(allocated(tmat%coreZFP%buffer_r))then
+      allocate(data_buffer(tmat%psa(d+1)-1, 1))
+      call ZFP_Decompress(data_buffer,tmat%coreZFP, tmat%psa(d+1)-1, 1, tol_used, 1)
+      allocate(tmat%core(tmat%psa(d+1)-1))
+      tmat%core = data_buffer(:,1)
+      deallocate(data_buffer)
+   endif
+#endif
+
+   allocate(cc(size(b)))
+   cc = b
+
+   do k=1,d
+      rk = tmat%r(k)
+      rk1 = tmat%r(k+1)
+      m_k  = tmat%m_n(k,1)
+      n_k  = tmat%m_n(k,2)
+
+      crSize = tmat%psa(k+1)-tmat%psa(k)
+      allocate(cr(crSize))
+      cr = tmat%core(tmat%psa(k):tmat%psa(k+1)-1)
+
+      shape_tmp4(1)=rk
+      shape_tmp4(2)=m_k
+      shape_tmp4(3)=n_k
+      shape_tmp4(4)=rk1
+      perm_tmp4(1) =2
+      perm_tmp4(2) =4
+      perm_tmp4(3) =1
+      perm_tmp4(4) =3
+      ! [rk,m_k,n_k,rk1] -> [m_k,rk1,rk,n_k]
+      call TensorPermute(cr, shape_tmp4, perm_tmp4)
+
+      restDim = size(cc)/(rk*n_k)
+      allocate(ctmp(m_k*rk1*restDim))
+      ctmp=0
+      call gemmf77('N', 'N', m_k*rk1, restDim, n_k*rk, BPACK_cone, cr, m_k*rk1, cc, rk*n_k, BPACK_czero, ctmp, m_k*rk1)
+
+
+      deallocate(cc)
+      allocate(cc(m_k*rk1*restDim))
+
+      shape_tmp(1)=m_k
+      shape_tmp(2)=rk1*restDim
+      perm_tmp(1) =2
+      perm_tmp(2) =1
+      ! [m_k,rk1*restDim] -> [rk1*restDim,m_k]
+      call TensorPermute(ctmp, shape_tmp, perm_tmp)
+
+      cc = ctmp
+      deallocate(ctmp, cr)
+   end do
+
+   c = cc
+   deallocate(cc)
+
+#if HAVE_ZFP
+   deallocate(tmat%core)
+#endif
+
+end subroutine TT_Apply_Fullvec
+
+
+
+
+!>**** QTT application/contraction assuming the input vector is a full array (the input and output will be possibly zero padded)
+!tmat: the MPO
+!b: the input array
+!c: the output array
+subroutine QTT_Apply_Fullvec(tmat, b, c)
+   implicit none
+   type(TTtype)  :: tmat
+   DT        :: b(:)
+   DT       :: c(:)
+   DT,allocatable :: c_tmp(:), b_tmp(:)
+   integer :: d,dd,d_org,iii,iii_new,nvec,nelem,vv
+   integer,allocatable:: dims_org(:),dims(:),idx_MD_org(:), Ns(:)
+
+   allocate(Ns(tmat%d_org)) ! we enforce that for MPO, each dimension is padded to the same next power of 2
+
+   d_org = tmat%d_org
+   do dd=1,tmat%d_org
+      Ns(dd) = next_power_of_2(max(tmat%m_n_org(dd,1),tmat%m_n_org(dd,2)))
+   enddo
+
+   allocate(dims_org(d_org))
+   dims_org(1:d_org) = tmat%m_n_org(1:d_org,2)
+   nelem = product(dims_org)
+   nvec = size(b)/nelem
+
+   allocate(b_tmp(product(Ns)*nvec))
+   b_tmp = 0
+
+   allocate(dims(d_org))
+   dims = Ns
+   allocate(idx_MD_org(d_org))
+
+   do vv=1,nvec
+   do iii=1,product(dims_org)
+      call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
+      call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
+      b_tmp(iii_new+(vv-1)*nelem) = b(iii+(vv-1)*nelem)
+   enddo
+   enddo
+
+   allocate(c_tmp(product(Ns)*nvec))
+   nelem = product(dims_org)
+   c_tmp = 0
+   call TT_Apply_Fullvec(tmat, b_tmp, c_tmp)
+
+   dims_org(1:d_org) = tmat%m_n_org(1:d_org,1)
+   do vv=1,nvec
+   do iii=1,product(dims_org)
+      call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
+      call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
+      c(iii+(vv-1)*nelem) = c_tmp(iii_new+(vv-1)*nelem)
+   enddo
+   enddo
+
+   deallocate(dims)
+   deallocate(dims_org)
+   deallocate(idx_MD_org)
+   deallocate(b_tmp)
+   deallocate(c_tmp)
+   deallocate(Ns)
+
+end subroutine QTT_Apply_Fullvec
+
+
+!>**** TT application/contraction assuming the input vector is also in TT format
+!tmat: the MPO
+!b: the input MPS
+!c: the output MPS
+subroutine TT_Apply_TTvec(tmat, b, c)
+   implicit none
+   type(TTtype)  :: tmat
+   type(TTtype) :: b
+   type(TTtype) :: c
+   integer :: rbk, rbk1, rak, rak1, n_k, m_k,shape_tmp(2), perm_tmp(2), shape_tmp5(5), perm_tmp5(5), shape_tmp3(3), perm_tmp3(3)
+   DT, allocatable :: cr(:), cc(:), ctmp(:)
+
+   integer :: d, i
+   integer, allocatable :: psp(:)
+
+
+
+   d = tmat%d
+   c%d = d
+   allocate(c%n(d))
+   c%n = tmat%m_n(:,2)
+
+   allocate(c%r(d+1))
+   do i=1,d+1
+      c%r(i) = tmat%r(i)*b%r(i)
+   end do
+
+
+   allocate(c%psa(d+1))
+   c%psa(1) = 1
+   do i=1,d
+      c%psa(i+1) = c%psa(i) + c%n(i)*c%r(i)*c%r(i+1)
+   end do
+
+   allocate(c%core(c%psa(d+1)-1))
+   c%core = 0d0
+
+   do i=1,d
+      m_k  = tmat%m_n(i,1)
+      n_k  = tmat%m_n(i,2)
+      allocate(cr(tmat%psa(i+1)-tmat%psa(i)))
+      allocate(cc(b%psa(i+1)-b%psa(i)))
+      cr=tmat%core(tmat%psa(i):tmat%psa(i+1)-1)
+      cc=b%core(b%psa(i):b%psa(i+1)-1)
+      rak = tmat%r(i)
+      rak1 = tmat%r(i+1)
+      rbk = b%r(i)
+      rbk1 = b%r(i+1)
+
+      shape_tmp(1)=rak*m_k*n_k
+      shape_tmp(2)=rak1
+      perm_tmp(1) =2
+      perm_tmp(2) =1
+      ! [rak,m_k,n_k,rak1] -> [rak1,rak,m_k,n_k]
+      call TensorPermute(cr, shape_tmp, perm_tmp)
+
+      shape_tmp3(1)=rbk
+      shape_tmp3(2)=n_k
+      shape_tmp3(3)=rbk1
+      perm_tmp3(1) =2
+      perm_tmp3(2) =1
+      perm_tmp3(3) =3
+      ! [rbk,n_k,rbk1] -> [n_k,rbk,rbk1]
+      call TensorPermute(cc, shape_tmp3, perm_tmp3)
+
+      allocate(ctmp(rak1*rak*m_k*rbk*rbk1))
+      ctmp=0
+      call gemmf77('N', 'N', rak1*rak*m_k, rbk*rbk1, n_k, BPACK_cone, cr, rak1*rak*m_k, cc, n_k, BPACK_czero, ctmp, rak1*rak*m_k)
+
+
+      shape_tmp5(1)=rak1
+      shape_tmp5(2)=rak
+      shape_tmp5(3)=m_k
+      shape_tmp5(4)=rbk
+      shape_tmp5(5)=rbk1
+      perm_tmp5(1) =2
+      perm_tmp5(2) =4
+      perm_tmp5(3) =3
+      perm_tmp5(4) =1
+      perm_tmp5(5) =5
+      ! [rak1,rak,m_k,rbk,rbk1] -> [rak,rbk,m_k,rak1,rbk1]
+      call TensorPermute(ctmp, shape_tmp5, perm_tmp5)
+      c%core(c%psa(i):c%psa(i+1)-1) = ctmp
+
+      deallocate(ctmp,cc,cr)
+   enddo
+
+end subroutine TT_Apply_TTvec
+
+
 
 
 end module MISC_Utilities

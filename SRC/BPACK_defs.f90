@@ -60,7 +60,7 @@ module BPACK_DEFS
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
     integer, parameter:: BPACK_MAJOR_VERSION = 3
-    integer, parameter:: BPACK_MINOR_VERSION = 1
+    integer, parameter:: BPACK_MINOR_VERSION = 2
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !>**** common parameters
@@ -229,6 +229,9 @@ module BPACK_DEFS
     end type acaquant
 
 
+
+
+
     !>**** one rank*rank butterfly block
     type butterflymatrix
         DT, pointer :: matrix(:, :)=> null() !< entries of the block
@@ -363,6 +366,22 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         character, allocatable :: buffer_i(:) !< ZFP buffer for the imaginary part
     end type zfpquant
 
+    !>**** A derived type to hold the TT or QTT decomposition
+    type :: TTtype
+    integer :: mpo =0                 ! whether this TT represents MPO or MPS
+    integer :: d =1                    ! number of dimensions
+    integer :: d_org = 1                ! number of original dimensions if this is QTT
+    integer, allocatable :: n(:)    ! mode sizes
+    integer, allocatable :: n_org(:)    ! mode sizes of the original tensor if this is QTT
+    integer, allocatable :: m_n(:,:)  ! mode sizes if representing MPO
+    integer, allocatable :: m_n_org(:,:)  ! mode sizes if representing MPO of a QTT
+    integer, allocatable :: r(:)    ! TT ranks
+    integer, allocatable :: psa(:)   ! prefix sums for core offsets
+    DT,  allocatable :: core(:) ! the concatenated TT cores
+    type(zfpquant):: coreZFP !< ZFP quantity for compressing the TT cores
+    end type TTtype
+
+
     !>**** butterfly or LR structure
     type matrixblock
         integer pgno !< process group
@@ -434,7 +453,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, pointer:: ns(:,:) => null() !< sizes of accummulated local leaf column blocks
         DT, pointer :: fullmat(:, :) => null() !< full matrix entries
         type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
+        type(TTtype):: FullmatQTT !< QTT quantity for compressing fullmat
         type(zfpquant), allocatable :: MiddleZFP(:) ! ZFP quantity array for compressing ButterflyMiddle
+        type(TTtype), allocatable :: MiddleQTT(:) ! QTT quantity array for compressing ButterflyMiddle
         integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
         integer, allocatable:: idx_r_m(:), idx_c_m(:) !< starting index for the middle-level groups per dimension
         type(butterfly_UV_MD), allocatable :: ButterflyU(:) !< leftmost factor of length product(nr_m)
@@ -626,6 +647,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! integer sample_heuristic   !< 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp !< pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
         integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 0: do not use zfp
+        integer:: use_qtt  !< 1: use qtt for the dense blocks 0: do not use qtt
 
         ! options for matrix construction
         integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks

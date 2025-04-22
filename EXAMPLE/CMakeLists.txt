@@ -89,6 +89,22 @@ target_link_libraries(frankben_t ${all_link_libs_z})
 add_dependencies(frankben_t frankben)
 install(TARGETS frankben_t RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
+set(FZEXM13 Test_TT_Driver.f90)
+add_executable(testtt ${FZEXM13})
+target_link_libraries(testtt ${all_link_libs_z})
+add_dependencies(testtt frankben_t)
+install(TARGETS testtt RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
+
+set(FZEXM14 Test_QTT_Driver.f90)
+add_executable(testqtt ${FZEXM14})
+target_link_libraries(testqtt ${all_link_libs_z})
+add_dependencies(testqtt testtt)
+install(TARGETS testqtt RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
+
+
+
 
 ########################################### double Fortran drivers
 set(FDEXMSEQ1 KERREG_Driver_seq.f90)

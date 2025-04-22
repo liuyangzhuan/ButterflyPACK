@@ -1169,7 +1169,7 @@ contains
 
       integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
       type(iarray),allocatable::select_idx(:)
-      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order_skel(:)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:)
@@ -1308,6 +1308,16 @@ do j_dim = 1,dims_col(dim)
                blocks%ButterflySkel_R(bb_m,level)%inds(index_i_scalar, index_j_s,dim)%array(j) = blocks%ButterflySkel_R(bb_m,level - 1)%inds(index_ii_scalar, index_jj + 1,dim)%array(jpvt(j) - nn1) + nnn1
             endif
          enddo
+
+
+         ! ! The following reordering might improve the QTT compressibility
+         ! allocate(order_skel(rank_new))
+         ! call quick_sort_int(blocks%ButterflySkel_R(bb_m,level)%inds(index_i_scalar, index_j_s,dim)%array,order_skel,rank_new)
+         ! blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k,dim)%matrix(:,:)=blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k,dim)%matrix(order_skel,:)
+         ! blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k+1,dim)%matrix(:,:)=blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_scalar, index_j_k+1,dim)%matrix(order_skel,:)
+         ! deallocate(order_skel)
+
+
 
       endif
 
@@ -1662,7 +1672,7 @@ do j_dim = 1,dims_col(dim)
 
       integer, allocatable:: select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
       type(iarray),allocatable::select_idx(:)
-      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order_skel(:)
       DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
 
       integer, allocatable::jpvt(:)
@@ -1805,6 +1815,13 @@ do i_dim = 1,dims_row(dim)
                blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,index_j_scalar,dim)%array(j) = blocks%ButterflySkel_L(bb_m,level + 1)%inds(index_ii+1, index_jj_scalar,dim)%array(jpvt(j) - mm1) + mmm1
             endif
          enddo
+
+         ! ! The following reordering might improve the QTT compressibility
+         ! allocate(order_skel(rank_new))
+         ! call quick_sort_int(blocks%ButterflySkel_L(bb_m,level)%inds(index_i_s,index_j_scalar,dim)%array,order_skel,rank_new)
+         ! blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k,index_j_scalar,dim)%matrix(:,:)=blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k,index_j_scalar,dim)%matrix(:,order_skel)
+         ! blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k+1,index_j_scalar,dim)%matrix(:,:)=blocks%ButterflyKerl_L(bb_m,level)%blocks(index_i_k+1,index_j_scalar,dim)%matrix(:,order_skel)
+         ! deallocate(order_skel)
 
       endif
 
@@ -3611,11 +3628,14 @@ do i_dim = 1,dims_row(dim)
             endif
          enddo
 
-         if(use_zfp==0)then
-            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats)
-         else
+         if(use_zfp==1 .and. option%use_qtt==0)then
             allocate(blocks%MiddleZFP(product(dim_subtensor)))
-            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats,blocks%MiddleZFP)
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats,zfpquants=blocks%MiddleZFP)
+         else if(option%use_qtt==1)then
+            allocate(blocks%MiddleQTT(product(dim_subtensor)))
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats,qttquants=blocks%MiddleQTT)
+         else
+            call element_Zmn_tensorlist_user(Ndim, subtensors, product(dim_subtensor), msh, option, ker, 0, passflag, ptree, stats)
          endif
 
          allocate(blocks%ButterflyMiddle(product(dim_subtensor)))
@@ -9544,14 +9564,10 @@ time_tmp = time_tmp + n2 - n1
 #if HAVE_ZFP
       if(option%use_zfp==1)use_zfp=1
 #endif
-      if(use_zfp==0)then
-         allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
-         call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
-         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
-      else
+      if(use_zfp==1 .and. option%use_qtt==0)then
 #if HAVE_ZFP
          allocate(blocks%MiddleZFP(1)) ! use MiddleZFP instead of FullmatZFP as element_Zmn_tensorlist_user needs array input
-         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,blocks%MiddleZFP)
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,zfpquants=blocks%MiddleZFP)
          allocate(blocks%FullmatZFP%buffer_r(size(blocks%MiddleZFP(1)%buffer_r,1)))
          allocate(blocks%FullmatZFP%buffer_i(size(blocks%MiddleZFP(1)%buffer_i,1)))
          blocks%FullmatZFP%buffer_r = blocks%MiddleZFP(1)%buffer_r
@@ -9562,13 +9578,23 @@ time_tmp = time_tmp + n2 - n1
          blocks%FullmatZFP%stream_i = blocks%MiddleZFP(1)%stream_i
          deallocate(blocks%MiddleZFP)
 #endif
+      else if(option%use_qtt==1)then
+         allocate(blocks%MiddleQTT(1)) ! use MiddleQTT instead of FullmatQTT as element_Zmn_tensorlist_user needs array input
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,qttquants=blocks%MiddleQTT)
+         call TT_Copy(blocks%MiddleQTT(1),blocks%FullmatQTT)
+         call TT_Delete(blocks%MiddleQTT(1))
+         deallocate(blocks%MiddleQTT)
+      else
+         allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
+         call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
       endif
 
       blocks%fullmat => subtensors(1)%dat
 
       subtensors(1)%dat=>null()
 
-
+      dim_subtensor=1
       call BF_MD_delete_subtensors(Ndim, dim_subtensor, subtensors, stats)
       passflag = 0
       do while (passflag == 0)

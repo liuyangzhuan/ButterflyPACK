@@ -1,9 +1,9 @@
 #!/bin/zsh
 
-export GPTUNEROOT=/Users/liuyangzhuan/Desktop/GPTune/
-export MPICC="$GPTUNEROOT/openmpi-4.1.5/bin/mpicc"
-export MPICXX="$GPTUNEROOT/openmpi-4.1.5/bin/mpicxx"
-export MPIF90="$GPTUNEROOT/openmpi-4.1.5/bin/mpif90"
+export GPTUNEROOT=/Users/liuyangzhuan/GPTune_testbuild/
+export MPICC="$GPTUNEROOT/openmpi-5.0.6/bin/mpicc"
+export MPICXX="$GPTUNEROOT/openmpi-5.0.6/bin/mpicxx"
+export MPIF90="$GPTUNEROOT/openmpi-5.0.6/bin/mpif90"
 
 cd ..
 sed -i "" 's/^M$//' PrecisionPreprocessing.sh
@@ -18,8 +18,8 @@ cmake .. \
 	-DCMAKE_Fortran_FLAGS="-ftracer -funswitch-loops -ftree-vectorize -fimplicit-none -finit-real=nan" \
 	-DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
-	-DTPL_BLAS_LIBRARIES="/usr/local/Cellar/openblas/0.3.23/lib/libblas.dylib" \
-	-DTPL_LAPACK_LIBRARIES="/usr/local/Cellar/openblas/0.3.23/lib/liblapack.dylib" \
+	-DTPL_BLAS_LIBRARIES="/usr/local/Cellar/openblas/0.3.29/lib/libblas.dylib" \
+	-DTPL_LAPACK_LIBRARIES="/usr/local/Cellar/openblas/0.3.29/lib/liblapack.dylib" \
 	-DTPL_SCALAPACK_LIBRARIES="$GPTUNEROOT/scalapack-2.2.0/build/install/lib/libscalapack.dylib" \
 	-DCMAKE_Fortran_COMPILER=$MPIF90 \
 	-DMPI_Fortran_COMPILER=$MPIF90 \
@@ -28,7 +28,7 @@ cmake .. \
 	-DCMAKE_C_COMPILER=$MPICC \
 	-DMPI_C_COMPILER=$MPICC \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
 
