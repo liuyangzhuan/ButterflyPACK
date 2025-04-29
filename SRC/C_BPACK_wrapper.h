@@ -46,7 +46,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*ho_bf_for, F2Cptr*
 void c_bpack_tfqmr_noprecon(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*ker, void (*C_FuncHMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_md_tfqmr_noprecon(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*ker, void (*C_FuncHMatVec_MD)(int*, char const *, int*, int*, int*, C_DT  const*,C_DT *,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_md_construct_init(int* Ns, int* Nmax, int* Ndim, double* Locations, int* perms, int* Ns_loc, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncNearFar_MD)(int*, int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
-void c_bpack_md_construct_element_compute(int* Ndim, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn_MD)(int*, int*, int*, C_DT *,C2Fptr), C2Fptr C_QuantApp);
+void c_bpack_md_construct_element_compute(int* Ndim, F2Cptr* ho_bf_for, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn_MD)(int*, int*, int*, C_DT *,C2Fptr), void (*C_FuncZmnBlock_MD)(int*, int*, int*, int*, int64_t*, int*, int*, C_DT *, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 
 void c_bpack_md_mult(int* Ndim, char const * trans, C_DT  const * xin, C_DT * xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* ho_bf_for,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree,F2Cptr* msh);
 void c_bpack_md_solve(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, F2Cptr*ho_bf_for, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree,F2Cptr* msh);
@@ -73,6 +73,7 @@ void c_bpack_treeindex_merged2child(int*idx_merge, int*idx_child);
 void c_bpack_deletestats(F2Cptr*stats);
 void c_bpack_deleteproctree(F2Cptr*ptree);
 void c_bpack_deletemesh(F2Cptr*msh);
+void c_bpack_md_deletemesh(int* Ndim, F2Cptr*msh);
 void c_bpack_deletekernelquant(F2Cptr*ker);
 void c_bpack_delete(F2Cptr*ho_bf);
 void c_bpack_deleteoption(F2Cptr*option);
