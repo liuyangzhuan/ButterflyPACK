@@ -1090,8 +1090,9 @@ contains
    !> @param ker_Cptr: the structure containing kernel quantities
    !> @param ptree_Cptr: the structure containing process tree
    !> @param C_FuncZmn_MD: the C_pointer to user-provided function to sample mn^th entry of the tensor
+   !> @param C_FuncZmnBlock_MD: the C_pointer to user-provided function to sample a list of subtensors
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-   subroutine C_BPACK_MD_Construct_Element_Compute(Ndim,bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn_MD, C_QuantApp) bind(c, name="c_bpack_md_construct_element_compute")
+   subroutine C_BPACK_MD_Construct_Element_Compute(Ndim,bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn_MD, C_FuncZmnBlock_MD, C_QuantApp) bind(c, name="c_bpack_md_construct_element_compute")
       implicit none
 
       real(kind=8) para
@@ -1108,7 +1109,7 @@ contains
       type(c_ptr) :: ptree_Cptr
       type(c_ptr), intent(in), target :: C_QuantApp
       type(c_funptr), intent(in), value, target :: C_FuncZmn_MD
-      ! type(c_funptr), intent(in), value, target :: C_FuncZmnBlock ! need to think more about the list of subtensors interface
+      type(c_funptr), intent(in), value, target :: C_FuncZmnBlock_MD
 
       type(Hoption), pointer::option
       type(Hstat), pointer::stats
@@ -1132,6 +1133,7 @@ contains
       !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncZmn_MD => C_FuncZmn_MD
+      ker%C_FuncZmnBlock_MD => C_FuncZmnBlock_MD
 
       t1 = MPI_Wtime()
       !>**** computation of the construction phase
@@ -3119,6 +3121,28 @@ contains
       msh_Cptr = c_null_ptr
 
    end subroutine C_BPACK_Deletemesh
+
+
+!>**** C interface of deleting mesh
+   !> @param Ndim: dimensionality of the kernel
+   !> @param msh_Cptr: the structure containing mesh
+   subroutine C_BPACK_MD_Deletemesh(Ndim, msh_Cptr) bind(c, name="c_bpack_md_deletemesh")
+      implicit none
+      type(c_ptr), intent(inout) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+      integer :: Ndim, dim_i
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+
+      do dim_i=1,Ndim
+         call delete_mesh(msh(dim_i))
+      enddo
+      deallocate (msh)
+      msh_Cptr = c_null_ptr
+
+   end subroutine C_BPACK_MD_Deletemesh
+
+
 
 !>**** C interface of deleting kernelquant
    !> @param ker_Cptr: the structure containing kernelquant

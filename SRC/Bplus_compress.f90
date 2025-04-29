@@ -9582,7 +9582,7 @@ time_tmp = time_tmp + n2 - n1
          allocate(blocks%MiddleQTT(1)) ! use MiddleQTT instead of FullmatQTT as element_Zmn_tensorlist_user needs array input
          call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,qttquants=blocks%MiddleQTT)
          call TT_Copy(blocks%MiddleQTT(1),blocks%FullmatQTT)
-         call TT_Delete(blocks%MiddleQTT(1))
+         call TT_Delete(blocks%MiddleQTT(1),1)
          deallocate(blocks%MiddleQTT)
       else
          allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))

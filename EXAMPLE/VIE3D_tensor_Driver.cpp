@@ -462,6 +462,39 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
 }
 
 
+
+
+
+// Assemble a block of matrix entries from interpolated D1, D2, tau
+void assemble_fromD1D2Tau_block(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, _Complex double* alldat_loc, int64_t* idx_val_map, double *fr, C_QuantApp_BF* Q){
+    #pragma omp parallel for
+    for (int idxrc=0;idxrc<nr*nc;idxrc++){
+      int idxr = idxrc%nr;
+      int idxc = idxrc/nr;
+
+      _Complex double valtmp;
+      assemble_fromD1D2Tau(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],&valtmp, Q);
+      alldat_loc[idx_val_map[nth]+idxr+idxc*nr]=valtmp;
+    }
+}
+
+
+// Assemble a block of matrix entries from interpolated D1, D2, tau
+void assemble_fromD1D2Tau_block_s2s(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, _Complex double* alldat_loc, int64_t* idx_val_map, double *fr, C_QuantApp_BF* Q){
+    #pragma omp parallel for
+    for (int idxrc=0;idxrc<nr*nc;idxrc++){
+      int idxr = idxrc%nr;
+      int idxc = idxrc/nr;
+
+      _Complex double valtmp;
+      assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],&valtmp, Q);
+      alldat_loc[idx_val_map[nth]+idxr+idxc*nr]=valtmp;
+    }
+}
+
+
+
+
 // The distance function wrapper required by the Fortran HODLR code
 inline void C_FuncDistmn_dummy(int *m, int *n, double *val, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
@@ -545,17 +578,272 @@ inline void C_FuncNearFar_BF(int *m, int *n, int *val, C2Fptr quant) {
 }
 
 
-// The extraction sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmnBlock_BF_V2V(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+// The entry evaluation routine for a list of subtensors for the VIE operator
+inline void C_FuncZmnBlock_BF_S2S(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+
+    int myrank, size;                     // Store values of processor rank and total no of procs requested
+    MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
+    int64_t idx_row_1=0;
+    int64_t idx_row_2=0;
+    int64_t idx_row_3=0;
+    int64_t idx_col_1=0;
+    int64_t idx_col_2=0;
+    int64_t idx_col_3=0;
+    int64_t idx_val=0;
+    int nrmax=0;
+    int ncmax=0;
+    int nvalmax=0;
+    vector<int64_t> idx_row_map_1(*Ninter,0);
+    vector<int64_t> idx_row_map_2(*Ninter,0);
+    vector<int64_t> idx_row_map_3(*Ninter,0);
+    vector<int64_t> idx_col_map_1(*Ninter,0);
+    vector<int64_t> idx_col_map_2(*Ninter,0);
+    vector<int64_t> idx_col_map_3(*Ninter,0);
+    vector<int64_t> idx_val_map(*Ninter,0);
+
+    time_t start, end;
+    time(&start);
+    for (int nn=0;nn<*Ninter;nn++){
+      int pp = pgidx[nn];
+      int nprow = pmaps[pp];
+      int npcol = pmaps[*Npmap+pp];
+      int pid = pmaps[(*Npmap)*2+pp];
+      int nr_1 = rowidx[*Ndim*nn];
+      int nr_2 = rowidx[*Ndim*nn+1];
+      int nr_3 = rowidx[*Ndim*nn+2];
+      int nc_1 = colidx[*Ndim*nn];
+      int nc_2 = colidx[*Ndim*nn+1];
+      int nc_3 = colidx[*Ndim*nn+2];
+
+      if(nprow*npcol==1){
+        idx_row_map_1[nn]=idx_row_1;
+        idx_row_map_2[nn]=idx_row_2;
+        idx_row_map_3[nn]=idx_row_3;
+        idx_col_map_1[nn]=idx_col_1;
+        idx_col_map_2[nn]=idx_col_2;
+        idx_col_map_3[nn]=idx_col_3;
+        idx_val_map[nn]=idx_val;
+        idx_val+=nr_1*nr_2*nr_3*nc_1*nc_2*nc_3;
+        idx_row_1+=nr_1;
+        idx_row_2+=nr_2;
+        idx_row_3+=nr_3;
+        idx_col_1+=nc_1;
+        idx_col_2+=nc_2;
+        idx_col_3+=nc_3;
+        nrmax = max(nr_1*nr_2*nr_3,nrmax);
+        ncmax = max(nc_1*nc_2*nc_3,ncmax);
+        nvalmax = max(nr_1*nr_2*nr_3*nc_1*nc_2*nc_3,nvalmax);
+      }else{
+        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_V2V"<<std::endl;
+        exit(0);
+      }
+    }
+
+    double *x1,*y1,*z1;
+    double *x2,*y2,*z2;
+    double *fr;
+    // cout<<" "<<myrank<<" "<<NinterNew<<endl;
+    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    {
+    x1= (double*)malloc(nrmax*sizeof(double));
+    y1= (double*)malloc(nrmax*sizeof(double));
+    z1= (double*)malloc(nrmax*sizeof(double));
+    x2= (double*)malloc(ncmax*sizeof(double));
+    y2= (double*)malloc(ncmax*sizeof(double));
+    z2= (double*)malloc(ncmax*sizeof(double));
+    fr= (double*)malloc(nvalmax*3*sizeof(double));
+    // #pragma omp for
+    for (int nn=0;nn<*Ninter;nn++){
+      int nr_1 = rowidx[*Ndim*nn];
+      int nr_2 = rowidx[*Ndim*nn+1];
+      int nr_3 = rowidx[*Ndim*nn+2];
+      int nc_1 = colidx[*Ndim*nn];
+      int nc_2 = colidx[*Ndim*nn+1];
+      int nc_3 = colidx[*Ndim*nn+2];
+
+      for (int idxr_1=0;idxr_1<nr_1;idxr_1++){
+      for (int idxr_2=0;idxr_2<nr_2;idxr_2++){
+      for (int idxr_3=0;idxr_3<nr_3;idxr_3++){
+        int idxr = idxr_1 + nr_1*idxr_2 + + nr_1*nr_2*idxr_3;
+        int m_1=allrows[idx_row_map_1[nn]+idxr_1];
+        int m_2=allrows[*Nrow_max + idx_row_map_2[nn]+idxr_2];
+        int m_3=allrows[*Nrow_max*2 + idx_row_map_3[nn]+idxr_3];
+        x1[idxr] = Q->_data[(m_1-1) * Q->_d];
+        y1[idxr] = Q->_data[(m_2-1) * Q->_d+1];
+        z1[idxr] = Q->_data[(m_3-1) * Q->_d+2];
+      }
+      }
+      }
+
+      for (int idxc_1=0;idxc_1<nc_1;idxc_1++){
+      for (int idxc_2=0;idxc_2<nc_2;idxc_2++){
+      for (int idxc_3=0;idxc_3<nc_3;idxc_3++){
+        int idxc = idxc_1 + nc_1*idxc_2 + nc_1*nc_2*idxc_3;
+        int n_1=allcols[idx_col_map_1[nn]+idxc_1];
+        int n_2=allcols[*Ncol_max + idx_col_map_2[nn]+idxc_2];
+        int n_3=allcols[*Ncol_max*2 + idx_col_map_3[nn]+idxc_3];
+        x2[idxc] = Q->_data[(n_1-1) * Q->_d];
+        y2[idxc] = Q->_data[(n_2-1) * Q->_d+1];
+        z2[idxc] = Q->_data[(n_3-1) * Q->_d+2];
+      }
+      }
+      }
+
+      // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
+
+      assemble_fromD1D2Tau_block_s2s(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, alldat_loc, idx_val_map.data(),fr, Q);
+
+    }
+
+    free(x1);
+    free(y1);
+    free(z1);
+    free(x2);
+    free(y2);
+    free(z2);
+    free(fr);
+    }
+time(&end);
+timer += difftime(end,start);
+
 }
 
 
 
-// The extraction sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+// The entry evaluation routine for a list of subtensors for the background operator
+inline void C_FuncZmnBlock_BF_V2V(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+
+    int myrank, size;                     // Store values of processor rank and total no of procs requested
+    MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
+    int64_t idx_row_1=0;
+    int64_t idx_row_2=0;
+    int64_t idx_row_3=0;
+    int64_t idx_col_1=0;
+    int64_t idx_col_2=0;
+    int64_t idx_col_3=0;
+    int64_t idx_val=0;
+    int nrmax=0;
+    int ncmax=0;
+    int nvalmax=0;
+    vector<int64_t> idx_row_map_1(*Ninter,0);
+    vector<int64_t> idx_row_map_2(*Ninter,0);
+    vector<int64_t> idx_row_map_3(*Ninter,0);
+    vector<int64_t> idx_col_map_1(*Ninter,0);
+    vector<int64_t> idx_col_map_2(*Ninter,0);
+    vector<int64_t> idx_col_map_3(*Ninter,0);
+    vector<int64_t> idx_val_map(*Ninter,0);
+
+    time_t start, end;
+    time(&start);
+    for (int nn=0;nn<*Ninter;nn++){
+      int pp = pgidx[nn];
+      int nprow = pmaps[pp];
+      int npcol = pmaps[*Npmap+pp];
+      int pid = pmaps[(*Npmap)*2+pp];
+      int nr_1 = rowidx[*Ndim*nn];
+      int nr_2 = rowidx[*Ndim*nn+1];
+      int nr_3 = rowidx[*Ndim*nn+2];
+      int nc_1 = colidx[*Ndim*nn];
+      int nc_2 = colidx[*Ndim*nn+1];
+      int nc_3 = colidx[*Ndim*nn+2];
+
+      if(nprow*npcol==1){
+        idx_row_map_1[nn]=idx_row_1;
+        idx_row_map_2[nn]=idx_row_2;
+        idx_row_map_3[nn]=idx_row_3;
+        idx_col_map_1[nn]=idx_col_1;
+        idx_col_map_2[nn]=idx_col_2;
+        idx_col_map_3[nn]=idx_col_3;
+        idx_val_map[nn]=idx_val;
+        idx_val+=nr_1*nr_2*nr_3*nc_1*nc_2*nc_3;
+        idx_row_1+=nr_1;
+        idx_row_2+=nr_2;
+        idx_row_3+=nr_3;
+        idx_col_1+=nc_1;
+        idx_col_2+=nc_2;
+        idx_col_3+=nc_3;
+        nrmax = max(nr_1*nr_2*nr_3,nrmax);
+        ncmax = max(nc_1*nc_2*nc_3,ncmax);
+        nvalmax = max(nr_1*nr_2*nr_3*nc_1*nc_2*nc_3,nvalmax);
+      }else{
+        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_V2V"<<std::endl;
+        exit(0);
+      }
+    }
+
+    double *x1,*y1,*z1;
+    double *x2,*y2,*z2;
+    double *fr;
+    // cout<<" "<<myrank<<" "<<NinterNew<<endl;
+    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    {
+    x1= (double*)malloc(nrmax*sizeof(double));
+    y1= (double*)malloc(nrmax*sizeof(double));
+    z1= (double*)malloc(nrmax*sizeof(double));
+    x2= (double*)malloc(ncmax*sizeof(double));
+    y2= (double*)malloc(ncmax*sizeof(double));
+    z2= (double*)malloc(ncmax*sizeof(double));
+    fr= (double*)malloc(nvalmax*3*sizeof(double));
+    // #pragma omp for
+    for (int nn=0;nn<*Ninter;nn++){
+      int nr_1 = rowidx[*Ndim*nn];
+      int nr_2 = rowidx[*Ndim*nn+1];
+      int nr_3 = rowidx[*Ndim*nn+2];
+      int nc_1 = colidx[*Ndim*nn];
+      int nc_2 = colidx[*Ndim*nn+1];
+      int nc_3 = colidx[*Ndim*nn+2];
+
+      for (int idxr_1=0;idxr_1<nr_1;idxr_1++){
+      for (int idxr_2=0;idxr_2<nr_2;idxr_2++){
+      for (int idxr_3=0;idxr_3<nr_3;idxr_3++){
+        int idxr = idxr_1 + nr_1*idxr_2 + + nr_1*nr_2*idxr_3;
+        int m_1=allrows[idx_row_map_1[nn]+idxr_1];
+        int m_2=allrows[*Nrow_max + idx_row_map_2[nn]+idxr_2];
+        int m_3=allrows[*Nrow_max*2 + idx_row_map_3[nn]+idxr_3];
+        x1[idxr] = Q->_data[(m_1-1) * Q->_d];
+        y1[idxr] = Q->_data[(m_2-1) * Q->_d+1];
+        z1[idxr] = Q->_data[(m_3-1) * Q->_d+2];
+      }
+      }
+      }
+
+      for (int idxc_1=0;idxc_1<nc_1;idxc_1++){
+      for (int idxc_2=0;idxc_2<nc_2;idxc_2++){
+      for (int idxc_3=0;idxc_3<nc_3;idxc_3++){
+        int idxc = idxc_1 + nc_1*idxc_2 + nc_1*nc_2*idxc_3;
+        int n_1=allcols[idx_col_map_1[nn]+idxc_1];
+        int n_2=allcols[*Ncol_max + idx_col_map_2[nn]+idxc_2];
+        int n_3=allcols[*Ncol_max*2 + idx_col_map_3[nn]+idxc_3];
+        x2[idxc] = Q->_data[(n_1-1) * Q->_d];
+        y2[idxc] = Q->_data[(n_2-1) * Q->_d+1];
+        z2[idxc] = Q->_data[(n_3-1) * Q->_d+2];
+      }
+      }
+      }
+
+      // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
+
+      assemble_fromD1D2Tau_block(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, alldat_loc, idx_val_map.data(),fr, Q);
+
+    }
+
+    free(x1);
+    free(y1);
+    free(z1);
+    free(x2);
+    free(y2);
+    free(z2);
+    free(fr);
+    }
+time(&end);
+timer += difftime(end,start);
+
 }
+
 
 
 
@@ -671,6 +959,7 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
        {"elem_extract",         required_argument, 0, 34},
        {"fastsample_tensor",         required_argument, 0, 35},
        {"use_zfp",         required_argument, 0, 36},
+       {"use_qtt",         required_argument, 0, 37},
        {NULL, 0, NULL, 0}
       };
     int c, option_index = 0;
@@ -861,6 +1150,11 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
         std::istringstream iss(optarg);
         iss >> opt_i;
         z_c_bpack_set_I_option(&option0, "use_zfp", opt_i);
+      } break;
+      case 37: {
+        std::istringstream iss(optarg);
+        iss >> opt_i;
+        z_c_bpack_set_I_option(&option0, "use_qtt", opt_i);
       } break;
       default: break;
       }
@@ -1392,7 +1686,7 @@ if(myrank==master_rank){
 
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-    z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, quant_ptr_bf);
+    z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
@@ -1514,7 +1808,7 @@ if(myrank==master_rank){
 
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, quant_ptr_bf_s2s);
+  	z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
 
 #if 0
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
@@ -1702,9 +1996,15 @@ if(myrank==master_rank){
     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
     z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
 
-
-
+    delete quant_ptr_bf_s2s;
     delete quant_ptr_bf;
+    z_c_bpack_deletestats(&stats_bf_s2s);
+    z_c_bpack_md_deletemesh(&Ndim,&msh_bf_s2s);
+    z_c_bpack_deletekernelquant(&kerquant_bf_s2s);
+    z_c_bpack_delete(&bmat_bf_s2s);
+    delete[] perms_bf_s2s;
+
+
 
   }else{
 
@@ -1715,13 +2015,17 @@ if(myrank==master_rank){
 
 	z_c_bpack_deletestats(&stats_bf);
 	z_c_bpack_deleteproctree(&ptree_bf);
-	z_c_bpack_deletemesh(&msh_bf);
+	z_c_bpack_md_deletemesh(&Ndim,&msh_bf);
 	z_c_bpack_deletekernelquant(&kerquant_bf);
 	z_c_bpack_delete(&bmat_bf);
 	z_c_bpack_deleteoption(&option_bf);
 
 	delete[] perms_bf;
 	delete[] tree_bf;
+	delete[] groups;
+	free(tx);
+	free(ty);
+	free(tz);
 
 
 	Cblacs_exit(1);

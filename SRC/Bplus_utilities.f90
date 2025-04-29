@@ -2098,7 +2098,7 @@ contains
          call TT_Delete(blocks%MiddleQTT(1))
          deallocate(blocks%MiddleQTT)
       endif
-      if (allocated(blocks%FullmatQTT%core)) then
+      if (allocated(blocks%FullmatQTT%core) .or. allocated(blocks%FullmatQTT%coreZFP%buffer_r)) then
          call TT_Delete(blocks%FullmatQTT)
       endif
       if (allocated(blocks%fullmat_MPI)) deallocate (blocks%fullmat_MPI)
@@ -18382,11 +18382,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT:: al, be
       DT, allocatable :: random2tmp(:, :),random1tmp(:, :),random2tmp_1D(:)
 
-      if(allocated(blocks%FullmatQTT%core))qttflag=1
+      qttflag=0
+      if(allocated(blocks%FullmatQTT%core) .or. allocated(blocks%FullmatQTT%coreZFP%buffer_r))qttflag=1
+
       zfpflag=0
 #if HAVE_ZFP
       if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
-      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
+      if(zfpflag==1 .and. qttflag==0)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
 #endif
       M1=size(blocks%fullmat, 1)
       N1=size(blocks%fullmat, 2)
@@ -18405,6 +18407,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             random1tmp = random1(1:N1, 1:num_vectors)
             allocate(random2tmp_1D(M1*num_vectors))
             random2tmp_1D = 0
+            ! write(*,*)blocks%row_group, blocks%col_group, 'jiba', allocated(blocks%FullmatQTT%core)
             call QTT_Apply_Fullvec(blocks%FullmatQTT,reshape(random1tmp,[N1*num_vectors]),random2tmp_1D)
             random2tmp = reshape(random2tmp_1D,[M1,num_vectors])
             deallocate(random1tmp)
@@ -18425,7 +18428,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
-      if(zfpflag==1)then
+      if(zfpflag==1 .and. qttflag==0)then
 #if HAVE_ZFP
       call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
 #endif
@@ -19457,7 +19460,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       implicit none
 
 
-      integer Ndim, ii, jj, ij, nn, pp, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc, nr, pgno, ctxt, nprow, npcol, myrow, mycol, dim_i
+      integer Ndim, ii, jj, ij, nn, pp, i, j, nrow, ncol, passflag, myflag,myflag1, Ninter, Ninter_loc,Nsub,Nzero, idx, nc(Ndim), nr(Ndim), pgno, ctxt, nprow, npcol, myrow, mycol, dim_i
       type(mesh)::msh(Ndim)
       integer:: dims(2*Ndim),num_threads
       integer*8:: dims8(2*Ndim)
@@ -19466,11 +19469,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(Hoption)::option
       type(Hstat)::stats
       type(kernelquant)::ker
-      integer ierr, idx_row, idx_col
+      integer ierr, Nrow_max, Ncol_max
       integer*8 idx_dat
-      integer, allocatable:: flags(:), dests(:), colidx(:), rowidx(:), colidx1(:), rowidx1(:), allrows(:), allcols(:), disps(:), pgidx(:), pmaps(:, :),nsubs(:),mrange(:),nrange(:),nrows_loc(:),ncols_loc(:)
-      procedure(F_Zelem_block), POINTER :: proc
-      procedure(C_Zelem_block), POINTER :: proc_c
+      integer, allocatable:: flags(:), dests(:), colidx(:,:), rowidx(:,:), colidx1(:), rowidx1(:), allrows(:,:), allcols(:,:), disps(:), pgidx(:), pmaps(:, :),nsubs(:),mrange(:),nrange(:),nrows_loc(:),ncols_loc(:)
+      procedure(F_Zelem_MD_block), POINTER :: proc
+      procedure(C_Zelem_MD_block), POINTER :: proc_c
       procedure(F_Zelem_MD), POINTER :: proc1
       procedure(C_Zelem_MD), POINTER :: proc1_c
       DT,pointer::alldat_loc(:)
@@ -19621,7 +19624,155 @@ integer, save:: my_tid = 0
       else if (option%elem_extract == 1) then
          write(*,*)"elem_extract == 1 not implemented in element_Zmn_tensorlist_user"
       else if (option%elem_extract == 2) then
-         write(*,*)"elem_extract == 2 not implemented in element_Zmn_tensorlist_user"
+
+         t1 = MPI_Wtime()
+         nr=0
+         nc=0
+         do nn=1,Nsub
+            nr = nr + subtensors(nn)%nr
+            nc = nc + subtensors(nn)%nc
+         enddo
+        if(Nsub>0)then
+            allocate(rowidx(Ndim,Nsub))  ! rowidx
+            allocate(colidx(Ndim,Nsub))  ! colidx
+            allocate(allrows(maxval(nr),Ndim))             ! allrows
+            allrows = -1
+            allocate(allcols(maxval(nc),Ndim))             ! allcols
+            allcols = -1
+            Nrow_max=maxval(nr)
+            Ncol_max=maxval(nc)
+            idx_dat=0
+            nr=0
+            nc=0
+            do nn=1,Nsub
+               do dim_i=1,Ndim
+                  allrows(nr(dim_i)+1:nr(dim_i)+subtensors(nn)%nr(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%rows(dim_i)%dat))
+                  allcols(nc(dim_i)+1:nc(dim_i)+subtensors(nn)%nc(dim_i),dim_i) = abs(msh(dim_i)%new2old(subtensors(nn)%cols(dim_i)%dat))
+               enddo
+               nr = nr + subtensors(nn)%nr
+               nc = nc + subtensors(nn)%nc
+               rowidx(:,nn) = subtensors(nn)%nr
+               colidx(:,nn) = subtensors(nn)%nc
+               idx_dat = idx_dat + product(subtensors(nn)%nr)*product(subtensors(nn)%nc)
+            enddo
+
+            !>***** Generate pmaps and pgidx for all intersections
+            Npmap = 1
+            Ninter = Nsub
+            allocate (pmaps(Npmap, 3))
+            do pp = 1, Npmap
+               pmaps(pp, 1) = 1
+               pmaps(pp, 2) = 1
+               pmaps(pp, 3) = ptree%MyID
+            enddo
+            allocate (pgidx(Ninter))
+            pgidx=1
+
+
+            !>***** count number of local data
+            allocate (alldat_loc(idx_dat))
+            alldat_loc(1:idx_dat) = 0
+            call LogMemory(stats, SIZEOF(alldat_loc)/1024.0d3)
+
+
+            if (option%cpp == 1) then
+               call c_f_procpointer(ker%C_FuncZmnBlock_MD, proc_C)
+               pgidx = pgidx - 1
+               call proc_C(Ndim, Ninter, Nrow_max, Ncol_max, idx_dat, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%C_QuantApp)
+            else
+               proc => ker%FuncZmnBlock_MD
+               call proc(Ndim, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, ker%QuantApp)
+            endif
+
+            !>***** copy from alldat_loc to subtensors(nn)%dat, accouting for the zero masks
+            idx = 0
+            do nn=1,Nsub
+               dims(1:Ndim) = subtensors(nn)%nr
+               dims(1+Ndim:2*Ndim) = subtensors(nn)%nc
+               dims8 = dims
+               if (product(dims8)> 0) then
+                  if(present(zfpquants) .or. present(qttquants))then
+                     allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
+#if 0
+! not sure why the following is causing compiling error for certain intel compilers
+                     call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
+#else
+#if DAT==0
+                     call LogMemory(stats, 16*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==1
+                     call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==2
+                     call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
+#elif DAT==3
+                     call LogMemory(stats, 4*SIZE(subtensors(nn)%dat)/1024.0d3)
+#endif
+#endif
+                  endif
+                  allocate(idxs(2*Ndim,1))
+                  do ij = 1, product(dims8)
+                     idx = idx + 1
+                     call SingleIndexToMultiIndex(2*Ndim,dims, ij, idxs(:,1))
+
+                     call MultiIndexToSingleIndex(Ndim,dims(1:Ndim), i, idxs(1:Ndim,1))
+                     call MultiIndexToSingleIndex(Ndim,dims(1+Ndim:2*Ndim), j, idxs(1+Ndim:2*Ndim,1))
+
+                     empty = 0
+                     if(allocated(subtensors(nn)%masks))then
+                        if (subtensors(nn)%masks(i,j) == 0) then
+                           empty=1
+                        endif
+                     endif
+                     if(empty==0)then
+                        subtensors(nn)%dat(i, j) = alldat_loc(idx)*option%scale_factor
+                     else
+                        subtensors(nn)%dat(i, j) = 0
+                     endif
+                  enddo
+#if HAVE_ZFP
+                  if(present(zfpquants))then
+                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                     call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
+                     call LogMemory(stats, -tmpmem)
+                  endif
+#endif
+                  if(present(qttquants))then
+                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+
+                     qttquants(nn)%d_org = Ndim
+                     qttquants(nn)%mpo = 1
+                     allocate(qttquants(nn)%m_n_org(qttquants(nn)%d_org,2))
+                     qttquants(nn)%m_n_org(:,1)=dims(1:Ndim)
+                     qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
+                     call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
+                     deallocate(subtensors(nn)%dat)
+                     if(allocated(qttquants(nn)%core))call LogMemory(stats, SIZEOF(qttquants(nn)%core)/1024.0d3)
+
+                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_r)/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_i)/1024.0d3)
+
+                     call LogMemory(stats, -tmpmem)
+                  endif
+
+                  deallocate(idxs)
+               endif
+            enddo
+
+
+            call LogMemory(stats, -SIZEOF(alldat_loc)/1024.0d3)
+            deallocate (alldat_loc)
+            deallocate (allrows)
+            deallocate (allcols)
+            deallocate (colidx)
+            deallocate (rowidx)
+            deallocate (pgidx)
+            deallocate (pmaps)
+         endif
+         passflag=2
+         t2 = MPI_Wtime()
+         stats%Time_Entry = stats%Time_Entry + t2 - t1
+
       endif
 
       return

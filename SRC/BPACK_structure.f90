@@ -1015,7 +1015,7 @@ end function distance_geo
       !>*************Initialize permutation vector ********
       Ns_max=0
       do dim_i=1, Ndim
-         allocate (msh(dim_i)%new2old(msh(dim_i)%Nunk))
+         allocate(msh(dim_i)%new2old(msh(dim_i)%Nunk))
          call LogMemory(stats, SIZEOF(msh(dim_i)%new2old)/1024.0d3)
          do ii = 1, msh(dim_i)%Nunk
             msh(dim_i)%new2old(ii) = ii

@@ -601,10 +601,23 @@ contains
       type(Hoption)::option
 
 
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
       if(myisnan(sum(abs(x))))then
          write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
          stop
       endif
+
+      if(sum(abs(b))==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
 
       itmax = iter
 
@@ -1157,9 +1170,21 @@ contains
 
       nn_loc = product(nn_loc_md)
 
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
       if(myisnan(sum(abs(x))))then
          write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed'
          stop
+      endif
+
+      if(sum(abs(b))==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_noprecon! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
       endif
 
       itmax = iter
@@ -1332,11 +1357,23 @@ contains
       type(proctree)::ptree
       type(Hoption)::option
 
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
 
       if(myisnan(sum(abs(x))))then
          write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
          stop
       endif
+      if(sum(abs(b))==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+
 
       itmax = iter
 
@@ -1544,9 +1581,21 @@ contains
 
       nn_loc = product(nn_loc_md)
 
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
       if(myisnan(sum(abs(x))))then
          write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed'
          stop
+      endif
+
+      if(sum(abs(b))==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
       endif
 
       itmax = iter
@@ -2703,6 +2752,7 @@ contains
       type(mesh)::msh(Ndim)
 
       integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+      type(matrixblock_MD), pointer::blocks
 
       DT, allocatable::vec_old(:, :), vec_new(:, :)
       ! complex(kind=8)::Vin(:,:),Vout(:,:)
@@ -2716,6 +2766,10 @@ contains
       endif
       Vout=0
       stats%Flop_Tmp = 0
+
+   ! blocks => hss_bf_md1%BP%LL(1)%matrices_block(1)
+   ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
+
       call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
 
       if (trans == 'C') then

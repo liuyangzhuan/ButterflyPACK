@@ -375,7 +375,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     integer, allocatable :: n_org(:)    ! mode sizes of the original tensor if this is QTT
     integer, allocatable :: m_n(:,:)  ! mode sizes if representing MPO
     integer, allocatable :: m_n_org(:,:)  ! mode sizes if representing MPO of a QTT
-    integer, allocatable :: r(:)    ! TT ranks
+    integer, allocatable :: r(:)     ! TT ranks
     integer, allocatable :: psa(:)   ! prefix sums for core offsets
     DT,  allocatable :: core(:) ! the concatenated TT cores
     type(zfpquant):: coreZFP !< ZFP quantity for compressing the TT cores
@@ -739,6 +739,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         procedure(F_Dist), nopass, pointer :: FuncDistmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing distance between one row and one column
         procedure(F_Compressibility), nopass, pointer :: FuncNearFar => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for determining whether a block in Z (after permutation) is compressible or not
         procedure(F_Zelem_block), nopass, pointer :: FuncZmnBlock => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided)
+        procedure(F_Zelem_MD_block), nopass, pointer :: FuncZmnBlock_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing a list of intersection of indices from Z (data layout needs to be provided) (as tensors)
         procedure(F_HMatVec), nopass, pointer :: FuncHMatVec => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
         procedure(F_HMatVec_MD), nopass, pointer :: FuncHMatVec_MD => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing matvec of Z
 
@@ -749,6 +750,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(c_funptr), pointer :: C_FuncNearFar => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z is compressible or not
         type(c_funptr), pointer :: C_FuncNearFar_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for determine whether a block in Z (as tensors) is compressible or not
         type(c_funptr), pointer :: C_FuncZmnBlock => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
+        type(c_funptr), pointer :: C_FuncZmnBlock_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided) (as tensors)
         type(c_funptr), pointer :: C_FuncHMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
         type(c_funptr), pointer :: C_FuncHMatVec_MD => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
         type(c_funptr), pointer :: C_FuncBMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
@@ -857,6 +859,18 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             integer::Npmap, pmaps(Npmap, 3)
         end subroutine F_Zelem_block
 
+        !> interface of user-defined element extraction routine in Fortran. allrows,allcols represents (multi-dimensional) indices in natural order
+        subroutine F_Zelem_MD_block(Ndim, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
+            integer, INTENT(IN):: Ndim
+            class(*), pointer :: quant
+            integer:: Ninter
+            integer:: allrows(:,:), allcols(:,:)
+            DT,target::alldat_loc(:)
+            integer::colidx(Ndim,Ninter), rowidx(Ndim,Ninter), pgidx(Ninter)
+            integer::Npmap, pmaps(Npmap, 3)
+        end subroutine F_Zelem_MD_block
+
+
         !> interface of user-defined element evaluation routine in C. m,n represents indices in natural order
         subroutine C_Zelem(m, n, val, quant)
             USE, INTRINSIC :: ISO_C_BINDING
@@ -913,6 +927,19 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
             integer(kind=C_INT)::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
             integer(kind=C_INT)::Npmap, pmaps(Npmap, 3)
         end subroutine C_Zelem_block
+
+        !> interface of user-defined element extraction routine in C. allrows,allcols represents (multi-dimensional) indices in natural order
+        subroutine C_Zelem_MD_block(Ndim, Ninter, Nrow_max, Ncol_max, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
+            USE, INTRINSIC :: ISO_C_BINDING
+            type(c_ptr) :: quant
+            integer(kind=C_INT64_T):: Nalldat_loc
+            integer(kind=C_INT):: Ndim, Ninter, Nrow_max, Ncol_max
+            integer(kind=C_INT):: allrows(Nrow_max,Ndim), allcols(Ncol_max,Ndim)
+            CBIND_DT,target::alldat_loc(Nalldat_loc)
+            integer(kind=C_INT)::colidx(Ndim,Ninter), rowidx(Ndim,Ninter), pgidx(Ninter)
+            integer(kind=C_INT)::Npmap, pmaps(Npmap, 3)
+        end subroutine C_Zelem_MD_block
+
 
         subroutine HMatVec(trans, M, N, num_vect, Vin, Vout, ker)
             import::mesh, kernelquant, proctree, Hstat

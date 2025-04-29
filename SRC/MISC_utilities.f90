@@ -6421,7 +6421,7 @@ integer function next_power_of_2(n)
   integer :: power
 
   if (n <= 1) then
-     power = 1
+     power = 2 ! power is at least 2 instead of 1 for convenience
   else
      power = 1
      do while (power < n)
@@ -6678,8 +6678,9 @@ end subroutine QTT_Decompress
 
 
 
-subroutine TT_Delete(t)
+subroutine TT_Delete(t,keep_zfpstream)
    type(TTtype)  :: t
+   integer,optional :: keep_zfpstream
 
    if(allocated(t%n_org))deallocate(t%n_org)
    if(allocated(t%n))deallocate(t%n)
@@ -6689,12 +6690,27 @@ subroutine TT_Delete(t)
    if(allocated(t%psa))deallocate(t%psa)
    if(allocated(t%core))deallocate(t%core)
 
+
+#if HAVE_ZFP
+   if (allocated(t%coreZFP%buffer_r)) then
+      deallocate (t%coreZFP%buffer_r)
+      if(.not. present(keep_zfpstream))call zFORp_stream_close(t%coreZFP%stream_r)
+   endif
+   if (allocated(t%coreZFP%buffer_i))then
+      deallocate (t%coreZFP%buffer_i)
+      if(.not. present(keep_zfpstream))call zFORp_stream_close(t%coreZFP%stream_i)
+   endif
+#endif
+
+
+
 end subroutine TT_Delete
 
 
 
 subroutine TT_Copy(t,t_new)
    type(TTtype)  :: t,t_new
+   integer :: mm
 
    t_new%mpo=t%mpo
    t_new%d=t%d
@@ -6728,6 +6744,23 @@ subroutine TT_Copy(t,t_new)
       allocate(t_new%core(size(t%core)))
       t_new%core = t%core
    endif
+
+
+#if HAVE_ZFP
+   if(allocated(t%coreZFP%buffer_r))then
+      mm = size(t%coreZFP%buffer_r,1)
+      allocate(t_new%coreZFP%buffer_r(mm))
+      t_new%coreZFP%buffer_r = t%coreZFP%buffer_r
+      t_new%coreZFP%stream_r = t%coreZFP%stream_r
+   endif
+   if(allocated(t%coreZFP%buffer_i))then
+      mm = size(t%coreZFP%buffer_i,1)
+      allocate(t_new%coreZFP%buffer_i(mm))
+      t_new%coreZFP%buffer_i = t%coreZFP%buffer_i
+      t_new%coreZFP%stream_i = t%coreZFP%stream_i
+   endif
+#endif
+
 
 end subroutine TT_Copy
 
@@ -6814,7 +6847,9 @@ subroutine TT_Apply_Fullvec(tmat, b, c)
    deallocate(cc)
 
 #if HAVE_ZFP
-   deallocate(tmat%core)
+   if(allocated(tmat%coreZFP%buffer_r))then
+      deallocate(tmat%core)
+   endif
 #endif
 
 end subroutine TT_Apply_Fullvec
@@ -6863,11 +6898,12 @@ subroutine QTT_Apply_Fullvec(tmat, b, c)
    enddo
 
    allocate(c_tmp(product(Ns)*nvec))
-   nelem = product(dims_org)
    c_tmp = 0
    call TT_Apply_Fullvec(tmat, b_tmp, c_tmp)
 
    dims_org(1:d_org) = tmat%m_n_org(1:d_org,1)
+   nelem = product(dims_org)
+
    do vv=1,nvec
    do iii=1,product(dims_org)
       call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
