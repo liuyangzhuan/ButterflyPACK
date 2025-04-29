@@ -530,7 +530,7 @@ inline void C_FuncZmn_BF(int *m, int *n, _Complex double *val, C2Fptr quant) {
 
 
 // The sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmn_BF_V2V(int* Ndim, int *m, int *n, _Complex double *val, C2Fptr quant) {
+inline void C_FuncZmn_BF_V2V_MD(int* Ndim, int *m, int *n, _Complex double *val, C2Fptr quant) {
 
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
 
@@ -546,7 +546,7 @@ inline void C_FuncZmn_BF_V2V(int* Ndim, int *m, int *n, _Complex double *val, C2
 
 
 // The sampling function wrapper required by the Fortran HODLR code
-inline void C_FuncZmn_BF_S2S(int* Ndim, int *m, int *n, _Complex double *val, C2Fptr quant) {
+inline void C_FuncZmn_BF_S2S_MD(int* Ndim, int *m, int *n, _Complex double *val, C2Fptr quant) {
 
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
 
@@ -579,7 +579,7 @@ inline void C_FuncNearFar_BF(int *m, int *n, int *val, C2Fptr quant) {
 
 
 // The entry evaluation routine for a list of subtensors for the VIE operator
-inline void C_FuncZmnBlock_BF_S2S(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock_BF_S2S_MD(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
 
     int myrank, size;                     // Store values of processor rank and total no of procs requested
@@ -636,7 +636,7 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ndim, int* Ninter, int* Nrow_max, int* Nc
         ncmax = max(nc_1*nc_2*nc_3,ncmax);
         nvalmax = max(nr_1*nr_2*nr_3*nc_1*nc_2*nc_3,nvalmax);
       }else{
-        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_V2V"<<std::endl;
+        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_S2S_MD"<<std::endl;
         exit(0);
       }
     }
@@ -713,7 +713,7 @@ timer += difftime(end,start);
 
 
 // The entry evaluation routine for a list of subtensors for the background operator
-inline void C_FuncZmnBlock_BF_V2V(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+inline void C_FuncZmnBlock_BF_V2V_MD(int* Ndim, int* Ninter, int* Nrow_max, int* Ncol_max, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
 
     int myrank, size;                     // Store values of processor rank and total no of procs requested
@@ -770,7 +770,7 @@ inline void C_FuncZmnBlock_BF_V2V(int* Ndim, int* Ninter, int* Nrow_max, int* Nc
         ncmax = max(nc_1*nc_2*nc_3,ncmax);
         nvalmax = max(nr_1*nr_2*nr_3*nc_1*nc_2*nc_3,nvalmax);
       }else{
-        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_V2V"<<std::endl;
+        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_V2V_MD"<<std::endl;
         exit(0);
       }
     }
@@ -1686,7 +1686,7 @@ if(myrank==master_rank){
 
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-    z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
+    z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V_MD, &C_FuncZmnBlock_BF_V2V_MD, quant_ptr_bf);
 
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
@@ -1808,7 +1808,7 @@ if(myrank==master_rank){
 
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
+  	z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
 
 #if 0
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
