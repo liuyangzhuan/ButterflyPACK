@@ -83,6 +83,7 @@ jobs:
           cd $GITHUB_WORKSPACE/installDir
           git clone https://github.com/opencollab/arpack-ng.git
           cd arpack-ng
+          git checkout f670e731b7077c78771eb25b48f6bf9ca47a490e
           rm -rf build
           mkdir -p build
           cd build
