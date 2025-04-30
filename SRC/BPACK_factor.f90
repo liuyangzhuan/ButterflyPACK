@@ -243,7 +243,7 @@ contains
         call MPI_ALLREDUCE(time_tmp5, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp5', rtemp
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21,Es14.2)') 'Factorization flops:', rtemp
 
         stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
         call LogMemory(stats, stats%Mem_Factor)
@@ -342,7 +342,7 @@ contains
         call MPI_ALLREDUCE(time_tmp5, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp5', rtemp
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21Es14.2)') 'Factorization flops:', rtemp
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21,Es14.2)') 'Factorization flops:', rtemp
 
         call LogMemory(stats, stats%Mem_Factor)
 

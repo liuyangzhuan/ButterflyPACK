@@ -1894,7 +1894,7 @@ contains
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26Es14.2)') 'Total construction flops:', rtemp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
       call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -2053,7 +2053,7 @@ contains
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26Es14.2)') 'Total construction flops:', rtemp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
       call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
 
@@ -2139,7 +2139,7 @@ contains
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26Es14.2)') 'Total construction flops:', rtemp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
       call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
 
@@ -2226,7 +2226,7 @@ contains
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26Es14.2)') 'Total construction flops:', rtemp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
       call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
 
