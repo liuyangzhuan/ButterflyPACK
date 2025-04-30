@@ -174,11 +174,11 @@ PROGRAM ButterflyPACK_IE_2D
 						else if	(trim(strings)=='--nev')then
 							read(strings1,*)quant%nev
 						else if	(trim(strings)=='--tol_eig')then
-							read(strings1,*)quant%tol_eig						
+							read(strings1,*)quant%tol_eig
 						else if	(trim(strings)=='--shift_r')then
 							read(strings1,*)shift_r
 						else if	(trim(strings)=='--shift_i')then
-							read(strings1,*)shift_i					
+							read(strings1,*)shift_i
 						else if	(trim(strings)=='--which')then
 							quant%which=trim(strings1)
 						else

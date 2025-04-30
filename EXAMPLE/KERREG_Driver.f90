@@ -340,7 +340,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Solving:',rtemp,'Seconds'
 	call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
+	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',rtemp
 
 	!**** prediction on the test sets
 

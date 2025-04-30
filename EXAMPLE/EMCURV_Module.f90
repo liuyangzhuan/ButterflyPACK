@@ -1021,7 +1021,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 			write (*,*) ''
 		endif
 		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',rtemp
 
 		n1 = MPI_Wtime()
         call RCS_bistatic_CURV(Current,msh,quant,ptree)
@@ -1094,7 +1094,7 @@ subroutine EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
 			write (*,*) ''
 		endif
 		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',rtemp
+		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',rtemp
 
 	! call MPI_ALLREDUCE(stats%Time_RedistV,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 	! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) '     Time_RedistV:', rtemp

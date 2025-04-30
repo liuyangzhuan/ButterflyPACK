@@ -327,7 +327,7 @@ subroutine RBF_solve(bmat,option,msh,quant,ptree,stats)
 	n2 = d_seq_wtime()
 	stats%Time_Sol = stats%Time_Sol + n2-n1
 	if(option%verbosity>=0)write (*,*) 'Solving:',stats%Time_Sol,'Seconds'
-	if(option%verbosity>=0)write (*,'(A13Es14.2)') 'Solve flops:',stats%Flop_Sol
+	if(option%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',stats%Flop_Sol
 
 	!**** prediction on the test sets
 
