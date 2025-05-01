@@ -18380,7 +18380,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       real(kind=8)::tol_used
       DT :: random1(ldi, *), random2(ldo, *)
       DT:: al, be
-      DT, allocatable :: random2tmp(:, :),random1tmp(:, :),random2tmp_1D(:)
+      DT, allocatable :: random2tmp(:, :),random1tmp(:, :),random2tmp_1D(:),random2tmp_1D1(:),random1tmp_1D(:), mat_1D(:)
 
       qttflag=0
       if(allocated(blocks%FullmatQTT%core) .or. allocated(blocks%FullmatQTT%coreZFP%buffer_r))qttflag=1
@@ -18401,17 +18401,41 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       if (chara == 'N') then
          allocate (random2tmp(M1, num_vectors))
-         random2tmp = random2(1:M1, 1:num_vectors)
+         random2tmp = 0
          if(qttflag==1)then
+
             allocate(random1tmp(N1, num_vectors))
             random1tmp = random1(1:N1, 1:num_vectors)
             allocate(random2tmp_1D(M1*num_vectors))
             random2tmp_1D = 0
-            ! write(*,*)blocks%row_group, blocks%col_group, 'jiba', allocated(blocks%FullmatQTT%core)
             call QTT_Apply_Fullvec(blocks%FullmatQTT,reshape(random1tmp,[N1*num_vectors]),random2tmp_1D)
             random2tmp = reshape(random2tmp_1D,[M1,num_vectors])
             deallocate(random1tmp)
+
+
+            ! allocate(random2tmp_1D1(M1*num_vectors))
+            ! allocate(random1tmp(N1, num_vectors))
+            ! random1tmp = random1(1:N1, 1:num_vectors)
+            ! random2tmp = 0
+            ! call QTT_Decompress(blocks%FullmatQTT, mat_1D)
+            ! allocate(blocks%Fullmat(M1,N1))
+            ! blocks%Fullmat = reshape(mat_1D,[M1,N1])
+            ! call gemmf90(blocks%Fullmat, M1, random1tmp, N1, random2tmp, M1, 'N', 'N', M1, num_vectors, N1, BPACK_cone, BPACK_czero)
+            ! random2tmp_1D1 = reshape(random2tmp,[M1*num_vectors])
+            ! ! if(sqrt(sum(abs(random2tmp_1D1)**2d0))>0 .and. sqrt(sum(abs(random2tmp_1D1)**2d0))/10d0<sqrt(sum(abs(random2tmp_1D1-random2tmp_1D)**2d0)))then
+            ! if(sqrt(sum(abs(random2tmp_1D1)**2d0))>0)then
+            ! write(*,*)fnorm(blocks%Fullmat,M1,N1),sqrt(sum(abs(blocks%FullmatQTT%core)**2d0)),'groups',blocks%row_group,blocks%col_group,'fnorm of output (gemm):', sqrt(sum(abs(random2tmp_1D1)**2d0)), sqrt(sum(abs(random2tmp_1D)**2d0)),sqrt(sum(abs(random2tmp_1D1-random2tmp_1D)**2d0))
+            ! endif
+            ! deallocate(blocks%Fullmat)
+            ! deallocate(random1tmp)
+            ! deallocate(mat_1D)
+            ! deallocate(random2tmp_1D1)
+
+
+
+
             deallocate(random2tmp_1D)
+
          else
             call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M1, 'N', 'N', M1, num_vectors, N1, BPACK_cone, BPACK_czero)
          endif
@@ -18419,7 +18443,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       elseif (chara == 'T') then
          allocate (random2tmp(N1, num_vectors))
-         random2tmp = random2(1:N1, 1:num_vectors)
+         random2tmp = 0
          if(qttflag==1)then
             write(*,*)"QTT_Apply hasn't been implmented for transposed multiply"
             stop

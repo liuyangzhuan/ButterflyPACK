@@ -6780,9 +6780,9 @@ subroutine TT_Apply_Fullvec(tmat, b, c)
    DT, allocatable :: cra(:)
    DT, allocatable :: ctmp(:)
    integer :: rb
-   integer :: rk, rk1, n_k, m_k
+   integer :: rk, rk1, n_k, m_k, nvec
    integer :: crSize, restDim
-   integer :: irow, icol, i3, shape_tmp(2), perm_tmp(2), shape_tmp4(4), perm_tmp4(4)
+   integer :: irow, icol, i3, shape_tmp(3), perm_tmp(3), shape_tmp4(4), perm_tmp4(4)
    DT, allocatable :: cr(:), cc(:)
    DT, pointer::data_buffer(:,:)
    real(kind=8)::tol_used
@@ -6798,7 +6798,7 @@ subroutine TT_Apply_Fullvec(tmat, b, c)
       deallocate(data_buffer)
    endif
 #endif
-
+   nvec = size(b)/product(tmat%m_n(:,2))
    allocate(cc(size(b)))
    cc = b
 
@@ -6833,10 +6833,12 @@ subroutine TT_Apply_Fullvec(tmat, b, c)
       allocate(cc(m_k*rk1*restDim))
 
       shape_tmp(1)=m_k
-      shape_tmp(2)=rk1*restDim
+      shape_tmp(2)=rk1*restDim/nvec
+      shape_tmp(3)=nvec
       perm_tmp(1) =2
       perm_tmp(2) =1
-      ! [m_k,rk1*restDim] -> [rk1*restDim,m_k]
+      perm_tmp(3) =3
+      ! [m_k,rk1*restDim/nvec,nvec] -> [rk1*restDim/nvec,m_k,nvec]
       call TensorPermute(ctmp, shape_tmp, perm_tmp)
 
       cc = ctmp
@@ -6867,7 +6869,7 @@ subroutine QTT_Apply_Fullvec(tmat, b, c)
    DT        :: b(:)
    DT       :: c(:)
    DT,allocatable :: c_tmp(:), b_tmp(:)
-   integer :: d,dd,d_org,iii,iii_new,nvec,nelem,vv
+   integer :: d,dd,d_org,iii,iii_new,nvec,nelem,nelem_new,vv
    integer,allocatable:: dims_org(:),dims(:),idx_MD_org(:), Ns(:)
 
    allocate(Ns(tmat%d_org)) ! we enforce that for MPO, each dimension is padded to the same next power of 2
@@ -6881,6 +6883,7 @@ subroutine QTT_Apply_Fullvec(tmat, b, c)
    dims_org(1:d_org) = tmat%m_n_org(1:d_org,2)
    nelem = product(dims_org)
    nvec = size(b)/nelem
+   nelem_new = product(Ns)
 
    allocate(b_tmp(product(Ns)*nvec))
    b_tmp = 0
@@ -6893,7 +6896,7 @@ subroutine QTT_Apply_Fullvec(tmat, b, c)
    do iii=1,product(dims_org)
       call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
       call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
-      b_tmp(iii_new+(vv-1)*nelem) = b(iii+(vv-1)*nelem)
+      b_tmp(iii_new+(vv-1)*nelem_new) = b(iii+(vv-1)*nelem)
    enddo
    enddo
 
@@ -6903,12 +6906,13 @@ subroutine QTT_Apply_Fullvec(tmat, b, c)
 
    dims_org(1:d_org) = tmat%m_n_org(1:d_org,1)
    nelem = product(dims_org)
+   nelem_new = product(Ns)
 
    do vv=1,nvec
    do iii=1,product(dims_org)
       call SingleIndexToMultiIndex(d_org, dims_org, iii, idx_MD_org)
       call MultiIndexToSingleIndex(d_org, dims, iii_new, idx_MD_org)
-      c(iii+(vv-1)*nelem) = c_tmp(iii_new+(vv-1)*nelem)
+      c(iii+(vv-1)*nelem) = c_tmp(iii_new+(vv-1)*nelem_new)
    enddo
    enddo
 
