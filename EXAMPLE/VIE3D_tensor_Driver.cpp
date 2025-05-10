@@ -302,7 +302,9 @@ public:
   vector<double> _panelnodes;
   vector<double> _panelnorms;
   vector<int> _v_sub2glo;
+  int _bdiag_precon = 0; // whether to construct block-diagonal preconditioners
   int _d = 0;   // data dimension 2 or 3
+  int _n = 0;   // size of the matrix
   int _nx = 0;   // nx
   int _ny = 0;   // ny
   int _nz = 0;   // nz
@@ -331,6 +333,9 @@ public:
   int _verbose=0;
   int _vs=1;
   F2Cptr* bmat_bf, *option_bf, *stats_bf, *ptree_bf, *msh_bf;
+  F2Cptr* bmat_diags, *stats_diags, *msh_diags, *kerquant_diags;
+  F2Cptr option_diag, ptree_diag;
+  C_QuantApp_BF** quant_ptr_diags;
 
 
 
@@ -345,14 +350,16 @@ public:
   std::vector<int> _iHperm;
 
   std::vector<int> _Hperm_m;
+  std::vector<int> _headarray;
+  int _nc_m[3];
   std::vector<int> _iHperm_m;
   vector<double> _slowness_array;
 
   C_QuantApp_BF() = default;
 
-  // constructor for the v2v operator
-  C_QuantApp_BF(vector<double> data, int d, int nx, int ny, int nz, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
-    :_data(move(data)), _d(d), _nx(nx), _ny(ny), _nz(nz), _scaleGreen(scaleGreen), _w(w),_x0min(x0min),_x0max(x0max),_y0min(y0min),_y0max(y0max),_z0min(z0min),_z0max(z0max),_h(h),_dl(dl),_ivelo(ivelo),_slowness_array(move(slowness_array)), _rmax(rmax),_verbose(verbose),_vs(vs),_x_cheb(move(x_cheb)),_y_cheb(move(y_cheb)),_z_cheb(move(z_cheb)),_u1_square_int_cheb(move(u1_square_int_cheb)),_D1_int_cheb(move(D1_int_cheb)),_D2_int_cheb(move(D2_int_cheb)){
+  // constructor for the tensor operator
+  C_QuantApp_BF(vector<double> data, int d, int nx, int ny, int nz, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, int bdiag_precon, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
+    :_data(move(data)), _d(d), _nx(nx), _ny(ny), _nz(nz), _scaleGreen(scaleGreen), _w(w),_x0min(x0min),_x0max(x0max),_y0min(y0min),_y0max(y0max),_z0min(z0min),_z0max(z0max),_h(h),_dl(dl),_ivelo(ivelo),_slowness_array(move(slowness_array)), _rmax(rmax),_verbose(verbose),_vs(vs),_bdiag_precon(bdiag_precon),_x_cheb(move(x_cheb)),_y_cheb(move(y_cheb)),_z_cheb(move(z_cheb)),_u1_square_int_cheb(move(u1_square_int_cheb)),_D1_int_cheb(move(D1_int_cheb)),_D2_int_cheb(move(D2_int_cheb)){
       _TNx = _x_cheb.size();
       _TNy = _y_cheb.size();
       _TNz = _z_cheb.size();
@@ -362,6 +369,24 @@ public:
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D1_int_cheb.begin(),_D1_int_cheb.end());   // concatenate D1 and D2 into u1_square for later interpolation convenience
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D2_int_cheb.begin(),_D2_int_cheb.end());
 	}
+
+
+  // constructor for the matrix operator
+  C_QuantApp_BF(vector<double> data, int d, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
+    :_data(move(data)), _d(d), _n(_data.size() / _d), _scaleGreen(scaleGreen), _w(w),_x0min(x0min),_x0max(x0max),_y0min(y0min),_y0max(y0max),_z0min(z0min),_z0max(z0max),_h(h),_dl(dl),_ivelo(ivelo),_slowness_array(move(slowness_array)), _rmax(rmax),_verbose(verbose),_vs(vs),_x_cheb(move(x_cheb)),_y_cheb(move(y_cheb)),_z_cheb(move(z_cheb)),_u1_square_int_cheb(move(u1_square_int_cheb)),_D1_int_cheb(move(D1_int_cheb)),_D2_int_cheb(move(D2_int_cheb)){
+      _TNx = _x_cheb.size();
+      _TNy = _y_cheb.size();
+      _TNz = _z_cheb.size();
+      _slow_x0 = (_x0min+_x0max)/2.0;
+      _slow_y0 = (_y0min+_y0max)/2.0;
+      _slow_z0 = (_z0min+_z0max)/2.0;
+      _nx = round((_x0max-_x0min)/_h+1);
+      _ny = round((_y0max-_y0min)/_h+1);
+      _nz = round((_z0max-_z0min)/_h+1);
+      _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D1_int_cheb.begin(),_D1_int_cheb.end());   // concatenate D1 and D2 into u1_square for later interpolation convenience
+      _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D2_int_cheb.begin(),_D2_int_cheb.end());
+	}
+
 
 
   inline void SampleSelf(double x1, double y1, double z1, double x2, double y2,double z2, _Complex double* val){
@@ -645,17 +670,17 @@ inline void C_FuncZmnBlock_BF_S2S_MD(int* Ndim, int* Ninter, int* Nrow_max, int*
     double *x2,*y2,*z2;
     double *fr;
     // cout<<" "<<myrank<<" "<<NinterNew<<endl;
-    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    #pragma omp parallel private(x1,y1,x2,y2,z1,z2,fr)
     {
-    x1= (double*)malloc(nrmax*sizeof(double));
-    y1= (double*)malloc(nrmax*sizeof(double));
-    z1= (double*)malloc(nrmax*sizeof(double));
-    x2= (double*)malloc(ncmax*sizeof(double));
-    y2= (double*)malloc(ncmax*sizeof(double));
-    z2= (double*)malloc(ncmax*sizeof(double));
-    fr= (double*)malloc(nvalmax*3*sizeof(double));
-    // #pragma omp for
+    #pragma omp for
     for (int nn=0;nn<*Ninter;nn++){
+      x1= (double*)malloc(nrmax*sizeof(double));
+      y1= (double*)malloc(nrmax*sizeof(double));
+      z1= (double*)malloc(nrmax*sizeof(double));
+      x2= (double*)malloc(ncmax*sizeof(double));
+      y2= (double*)malloc(ncmax*sizeof(double));
+      z2= (double*)malloc(ncmax*sizeof(double));
+      fr= (double*)malloc(nvalmax*3*sizeof(double));
       int nr_1 = rowidx[*Ndim*nn];
       int nr_2 = rowidx[*Ndim*nn+1];
       int nr_3 = rowidx[*Ndim*nn+2];
@@ -694,16 +719,14 @@ inline void C_FuncZmnBlock_BF_S2S_MD(int* Ndim, int* Ninter, int* Nrow_max, int*
       // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
 
       assemble_fromD1D2Tau_block_s2s(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, alldat_loc, idx_val_map.data(),fr, Q);
-
+      free(x1);
+      free(y1);
+      free(z1);
+      free(x2);
+      free(y2);
+      free(z2);
+      free(fr);
     }
-
-    free(x1);
-    free(y1);
-    free(z1);
-    free(x2);
-    free(y2);
-    free(z2);
-    free(fr);
     }
 time(&end);
 timer += difftime(end,start);
@@ -779,17 +802,17 @@ inline void C_FuncZmnBlock_BF_V2V_MD(int* Ndim, int* Ninter, int* Nrow_max, int*
     double *x2,*y2,*z2;
     double *fr;
     // cout<<" "<<myrank<<" "<<NinterNew<<endl;
-    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    #pragma omp parallel private(x1,y1,x2,y2,z1,z2,fr)
     {
-    x1= (double*)malloc(nrmax*sizeof(double));
-    y1= (double*)malloc(nrmax*sizeof(double));
-    z1= (double*)malloc(nrmax*sizeof(double));
-    x2= (double*)malloc(ncmax*sizeof(double));
-    y2= (double*)malloc(ncmax*sizeof(double));
-    z2= (double*)malloc(ncmax*sizeof(double));
-    fr= (double*)malloc(nvalmax*3*sizeof(double));
-    // #pragma omp for
+    #pragma omp for
     for (int nn=0;nn<*Ninter;nn++){
+      x1= (double*)malloc(nrmax*sizeof(double));
+      y1= (double*)malloc(nrmax*sizeof(double));
+      z1= (double*)malloc(nrmax*sizeof(double));
+      x2= (double*)malloc(ncmax*sizeof(double));
+      y2= (double*)malloc(ncmax*sizeof(double));
+      z2= (double*)malloc(ncmax*sizeof(double));
+      fr= (double*)malloc(nvalmax*3*sizeof(double));
       int nr_1 = rowidx[*Ndim*nn];
       int nr_2 = rowidx[*Ndim*nn+1];
       int nr_3 = rowidx[*Ndim*nn+2];
@@ -828,20 +851,120 @@ inline void C_FuncZmnBlock_BF_V2V_MD(int* Ndim, int* Ninter, int* Nrow_max, int*
       // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
 
       assemble_fromD1D2Tau_block(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, alldat_loc, idx_val_map.data(),fr, Q);
-
+      free(x1);
+      free(y1);
+      free(z1);
+      free(x2);
+      free(y2);
+      free(z2);
+      free(fr);
     }
-
-    free(x1);
-    free(y1);
-    free(z1);
-    free(x2);
-    free(y2);
-    free(z2);
-    free(fr);
     }
 time(&end);
 timer += difftime(end,start);
 
+}
+
+
+
+// The sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncZmn_BF_S2S(int *m, int *n, _Complex double *val, C2Fptr quant) {
+
+  C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+
+  double x1 = Q->_data[(*m-1) * Q->_d];
+  double y1 = Q->_data[(*m-1) * Q->_d+1];
+  double z1 = Q->_data[(*m-1) * Q->_d+2];
+  double x2 = Q->_data[(*n-1) * Q->_d];
+  double y2 = Q->_data[(*n-1) * Q->_d+1];
+  double z2 = Q->_data[(*n-1) * Q->_d+2];
+  assemble_fromD1D2Tau_s2s(x1,x2,y1,y2,z1,z2, val, Q);
+}
+
+
+// The extraction sampling function wrapper required by the Fortran HODLR code
+inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
+  C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+}
+
+
+
+
+inline void C_FuncApplyDiagPrecond(int* Ndim_p, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
+  C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+  int Ndim = *Ndim_p;
+
+  if(Q->_bdiag_precon==1){
+    int nblock = product(Q->_nc_m,Ndim);
+    for (int bb=0; bb<nblock; bb++){
+      int nout_diag[3];
+      int offset_diag[3];
+      int cnt=0;
+      int bb_scalar = bb+1;
+      int bb_md[3];
+      z_c_bpack_singleindex_to_multiindex(&Ndim,Q->_nc_m,&bb_scalar,bb_md);
+      for (int dim_i=0; dim_i<Ndim; dim_i++){
+        offset_diag[dim_i] = Q->_headarray[cnt+bb_md[dim_i]-1];
+        nout_diag[dim_i] = Q->_headarray[cnt+bb_md[dim_i]] - Q->_headarray[cnt+bb_md[dim_i]-1];
+        cnt += Q->_nc_m[dim_i]+1;
+      }
+      int Npo_diag = product(nout_diag,Ndim);
+      int Npo = product(nout,Ndim);
+      int64_t cnt_diag = (*nvec)*Npo_diag;
+      _Complex double* xin_diag = new _Complex double[cnt_diag];
+      _Complex double* xout_diag = new _Complex double[cnt_diag];       
+
+
+      for(int i0=0;i0<Npo_diag;i0++){
+        int i_new_diag_scalar = i0+1;
+        int ii;
+        z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
+        int i_old_diag_md[Ndim];
+        int i_new_loc_md[Ndim];
+        int i_new_loc_scalar;
+        int i_old_md[Ndim];
+
+        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&ii,i_old_diag_md);
+        for (int dim_i=0; dim_i<Ndim; dim_i++){
+          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
+        }
+        z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_new_loc_scalar,i_new_loc_md);
+        for (int nth=0; nth<*nvec; nth++){
+          xin_diag[i0+nth*Npo_diag] = xin[(i_new_loc_scalar-1)+nth*Npo];
+        }
+      }
+
+      z_c_bpack_inv_mult("N",xin_diag,xout_diag,&Npo_diag,&Npo_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diag));
+
+      for(int i0=0;i0<Npo_diag;i0++){
+        int i_new_diag_scalar = i0+1;
+        int ii;
+        z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
+        int i_old_diag_md[Ndim];
+        int i_new_loc_md[Ndim];
+        int i_new_loc_scalar;
+        int i_old_md[Ndim];
+
+        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&ii,i_old_diag_md);
+        for (int dim_i=0; dim_i<Ndim; dim_i++){
+          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
+        }
+        z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_new_loc_scalar,i_new_loc_md);
+        for (int nth=0; nth<*nvec; nth++){
+          xout[(i_new_loc_scalar-1)+nth*Npo] = xout_diag[i0+nth*Npo_diag];
+        }
+      }
+      delete[] xin_diag;
+      delete[] xout_diag;
+    }
+  }else{
+    int Npo = product(nout,Ndim);
+    for(int i0=0;i0<Npo;i0++){
+      for (int nth=0; nth<*nvec; nth++){
+        xout[i0+nth*Npo]=xin[i0+nth*Npo];
+      }        
+    }
+  }
 }
 
 
@@ -852,8 +975,10 @@ timer += difftime(end,start);
 inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
 
-  int64_t cnt = (*nvec)*product(nout,*Ndim);
+  int nin_loc = product(nout,*Ndim);
+  int64_t cnt = (*nvec)*nin_loc;
   _Complex double* xbuf1 = new _Complex double[cnt];
+  _Complex double* xout_before_precon = new _Complex double[cnt];
   _Complex double* xin1 = new _Complex double[cnt];
 
   if(nout[0]!=nin[0] || nout[1]!=nin[1] || nout[2]!=nin[2]){
@@ -895,17 +1020,26 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
       xin1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]*coef;
     }
   }
-  z_c_bpack_md_mult(Ndim,trans,xin1,xout,nin,nout,nvec,Q->bmat_bf,Q->option_bf,Q->stats_bf,Q->ptree_bf,Q->msh_bf);
+  z_c_bpack_md_mult(Ndim,trans,xin1,xout_before_precon,nin,nout,nvec,Q->bmat_bf,Q->option_bf,Q->stats_bf,Q->ptree_bf,Q->msh_bf);
 
   for (int i=0; i<product(nout,*Ndim); i++){
     for (int nth=0; nth<*nvec; nth++){
-      xout[i+nth*product(nout,*Ndim)]=xout[i+nth*product(nout,*Ndim)] + xbuf1[i+nth*product(nout,*Ndim)];
+      xout_before_precon[i+nth*product(nout,*Ndim)]=xout_before_precon[i+nth*product(nout,*Ndim)] + xbuf1[i+nth*product(nout,*Ndim)];
     }
   }
   delete[] xbuf1;
   delete[] xin1;
+  
+  C_FuncApplyDiagPrecond(Ndim, nout, nvec, xout_before_precon, xout, Q);
+  delete[] xout_before_precon;
 
 }
+
+
+
+
+
+
 
 
 
@@ -1162,8 +1296,6 @@ void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr opti
   }
 
 
-
-// This example uses Chebshev interpolation from WENO to compute the phase and amplitudes, and then use entry evaluation to compute the hodbf
 ////////////////////////////////////////////////////////////////////////////////
 // --------------------------- Main Code Starts Here ------------------------ //
 
@@ -1574,6 +1706,7 @@ if(myrank==master_rank){
 	bnum = 1; //sqrt of #of subblocks in H-BACA
 	knn=0; //k nearest neighbours stored per point
 	double eps1 =1e-6;
+  int bdiag_precon = 1 ;
 
 	//quantities for the first holdr
 	F2Cptr bmat_bf;  //hierarchical matrix returned by Fortran code
@@ -1675,7 +1808,7 @@ if(myrank==master_rank){
     z_c_bpack_createstats(&stats_bf);
     z_c_bpack_set_I_option(&option_bf, "cpp", cpp);
 
-    quant_ptr_bf=new C_QuantApp_BF(data_geo, Ndim, Nx, Ny, Nz, 0, w,x0min, x0max, y0min, y0max, z0min, z0max, h, dl, 1, slowness_array, rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf=new C_QuantApp_BF(data_geo, Ndim, Nx, Ny, Nz, 0, w,x0min, x0max, y0min, y0max, z0min, z0max, h, dl, 1, slowness_array, rmax,verbose,vs, 0, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
 
 
 
@@ -1798,15 +1931,13 @@ if(myrank==master_rank){
 
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
-    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
 
 
     // construct hodlr with geometrical points
     z_c_bpack_md_construct_init(Ns_s,&Nmax_s, &Ndim, data_geo.data(), perms_bf_s2s, myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncNearFar_BF_MD, quant_ptr_bf_s2s);
     quant_ptr_bf_s2s->_Hperm.resize(Nmax_s*Ndim);
     std::copy(perms_bf_s2s, perms_bf_s2s + Nmax_s*Ndim, quant_ptr_bf_s2s->_Hperm.begin());
-
-
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
   	z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
 
@@ -1814,13 +1945,136 @@ if(myrank==master_rank){
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
     // factor hodlr
 
-
     z_c_bpack_getoption(&option_bf, "precon", &opt_d);
     int precon=round(opt_d);
     if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
+
+#else // construct a block-diagonal preconditioner
+  MPI_Group world_group;
+  MPI_Group single_group;
+  MPI_Comm single_comm;
+  if(bdiag_precon==1){
+    // Construct a MPI communicator with only my rank
+    MPI_Comm_group(MPI_COMM_WORLD, &world_group);
+    int ranks[1];
+    ranks[0] = myrank;
+    MPI_Group_incl(world_group, 1, ranks, &single_group);
+    MPI_Comm_create(MPI_COMM_WORLD, single_group, &single_comm);
+    MPI_Fint Fcomm_single;  // the fortran MPI communicator
+    Fcomm_single = MPI_Comm_c2f(single_comm);
+
+    quant_ptr_bf_s2s->_headarray.resize(Nmax_s*Ndim);
+    z_c_bpack_md_get_local_midlevel_blocks(&Ndim, quant_ptr_bf_s2s->_nc_m, quant_ptr_bf_s2s->_headarray.data(), &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
+    // std::cout<< quant_ptr_bf_s2s->_nc_m[0] << " "<< quant_ptr_bf_s2s->_nc_m[1] << " "<< quant_ptr_bf_s2s->_nc_m[2] << std::endl;
+
+    int nblock = product(quant_ptr_bf_s2s->_nc_m,Ndim);
+    int size_diag = 1;
+    int* groups_diag = new int[size_diag];
+    groups_diag[0]=0;
+    z_c_bpack_createptree(&size_diag, groups_diag, &Fcomm_single, &(quant_ptr_bf_s2s->ptree_diag));
+	  z_c_bpack_copyoption(&option_bf,&(quant_ptr_bf_s2s->option_diag));
+
+
+  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", 0); // HODLR
+  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 1); // HODLR
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "xyzsort", 1); // KD-tree ordering
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "knn", 0); // HODLR requires no knn
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "precon", 1); // Direct solver
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "elem_extract", 0); // Need to add elem_extract=2 for the matrix solver
+
+    quant_ptr_bf_s2s->bmat_diags = new F2Cptr[nblock];
+    quant_ptr_bf_s2s->kerquant_diags = new F2Cptr[nblock];
+    quant_ptr_bf_s2s->stats_diags = new F2Cptr[nblock];
+    quant_ptr_bf_s2s->msh_diags = new F2Cptr[nblock];
+    quant_ptr_bf_s2s->quant_ptr_diags = new C_QuantApp_BF*[nblock];
+
+
+    for (int bb=0; bb<nblock; bb++){
+      vector<double> data_geo_diag;      
+      z_c_bpack_createstats(&(quant_ptr_bf_s2s->stats_diags[bb]));
+
+      int nout_diag[3];
+      int offset_diag[3];
+      int cnt=0;
+      int bb_scalar = bb+1;
+      int bb_md[3];
+      z_c_bpack_singleindex_to_multiindex(&Ndim,quant_ptr_bf_s2s->_nc_m,&bb_scalar,bb_md);
+      for (int dim_i=0; dim_i<Ndim; dim_i++){
+        offset_diag[dim_i] = quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]-1];
+        nout_diag[dim_i] = quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]] - quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]-1];
+        cnt += quant_ptr_bf_s2s->_nc_m[dim_i]+1;
+      }
+      int Npo = product(nout_diag,Ndim);
+      data_geo_diag.resize(Ndim*Npo);
+
+      std::cout<<"Rank "<< myrank <<": Constructing HODLR for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo <<std::endl;
+
+      for(int ii=0;ii<Npo;ii++){
+        int i_old_diag_md[Ndim];
+        int i_new_loc_md[Ndim];
+        int i_old_md[Ndim];
+        int i_old_diag_scalar = ii+1;
+
+        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&i_old_diag_scalar,i_old_diag_md);
+        for (int dim_i=0; dim_i<Ndim; dim_i++){
+          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
+        }
+
+        z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
+
+        double xs = data_geo[(i_old_md[0]-1) * Ndim];
+        double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
+        double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
+
+        data_geo_diag[(ii) * Ndim] = xs;
+        data_geo_diag[(ii) * Ndim+1] = ys;
+        data_geo_diag[(ii) * Ndim+2] = zs;
+      }
+
+
+
+    // create hodlr data structures
+    quant_ptr_bf_s2s->quant_ptr_diags[bb]=new C_QuantApp_BF(data_geo_diag, Ndim, 0, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+
+
+  	int myseg_diag=0;     // local number of unknowns
+	  int* perms_diag = new int[Npo]; //permutation vector returned by HODLR
+    int nlevel_diag = 0; // 0: tree level, nonzero if a tree is provided
+    int* tree_diag = new int[(int)pow(2,nlevel_diag)]; //user provided array containing size of each leaf node, not used if nlevel=0
+    tree_diag[0] = Npo;
+
+    // construct hodlr with geometrical points
+    z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1); // suppress prining
+    z_c_bpack_construct_init(&Npo, &Ndim, data_geo_diag.data(), nns_ptr, &nlevel_diag, tree_diag, perms_diag, &myseg_diag, &(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diag), &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+
+    quant_ptr_bf_s2s->quant_ptr_diags[bb]->_Hperm.resize(Npo);
+    std::copy(perms_diag, perms_diag + Npo, quant_ptr_bf_s2s->quant_ptr_diags[bb]->_Hperm.begin());
+
+    if(myrank==master_rank && bb==nblock-1){ // only printing information for the last diagonal block of rank 0
+      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 0); // suppress prining
+      z_c_bpack_printoption(&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->ptree_diag));
+    }
+	  
+  	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diag), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+    z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diag),&(quant_ptr_bf_s2s->msh_diags[bb]));
+
+    quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
+    
+    delete[] tree_diag;
+    delete[] groups_diag;
+    delete[] perms_diag;
+    }
+  }
+
+
 #endif
 
+
+
+
+
     if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
+    int nin_loc = product(myseg_s2s,Ndim);
     vector<_Complex double> b_s(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg_s2s,Ndim); i++){
 
@@ -1853,7 +2107,12 @@ if(myrank==master_rank){
       quant_ptr_bf_s2s->_idx_off_y = idx_off_y;
       quant_ptr_bf_s2s->_idx_off_z = idx_off_z;
       F2Cptr kerquant_s2s;
-      z_c_bpack_md_tfqmr_noprecon(&Ndim, x_s.data(),b_s.data(),myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec_MD, quant_ptr_bf_s2s);
+
+
+      vector<_Complex double> b_s_precon(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
+      C_FuncApplyDiagPrecond(&Ndim, myseg_s2s, &nvec, b_s.data(), b_s_precon.data(), quant_ptr_bf_s2s);
+      z_c_bpack_md_tfqmr_noprecon(&Ndim, x_s.data(),b_s_precon.data(),myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec_MD, quant_ptr_bf_s2s);
+      z_c_bpack_deletekernelquant(&kerquant_s2s);
 
       // vector<_Complex double> xx_s(product(myseg_s2s,Ndim)*nvec,{1.0,0.0});
       // vector<_Complex double> bb_s(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
@@ -1996,6 +2255,28 @@ if(myrank==master_rank){
     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
     z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
 
+
+    if(bdiag_precon){
+      int nblock = product(quant_ptr_bf_s2s->_nc_m,Ndim);
+      for (int bb=0; bb<nblock; bb++){
+        z_c_bpack_deletestats(&(quant_ptr_bf_s2s->stats_diags[bb]));
+        z_c_bpack_deletemesh(&(quant_ptr_bf_s2s->msh_diags[bb]));
+        z_c_bpack_deletekernelquant(&(quant_ptr_bf_s2s->kerquant_diags[bb]));
+        z_c_bpack_delete(&(quant_ptr_bf_s2s->bmat_diags[bb]));
+        delete quant_ptr_bf_s2s->quant_ptr_diags[bb];
+      }
+      z_c_bpack_deleteoption(&(quant_ptr_bf_s2s->option_diag));
+      z_c_bpack_deleteproctree(&(quant_ptr_bf_s2s->ptree_diag));
+      delete[] quant_ptr_bf_s2s->bmat_diags;
+      delete[] quant_ptr_bf_s2s->kerquant_diags;
+      delete[] quant_ptr_bf_s2s->stats_diags;
+      delete[] quant_ptr_bf_s2s->msh_diags;
+      delete[] quant_ptr_bf_s2s->quant_ptr_diags;
+      MPI_Comm_free(&single_comm);
+      MPI_Group_free(&single_group);
+      MPI_Group_free(&world_group);
+    }
+    
     delete quant_ptr_bf_s2s;
     delete quant_ptr_bf;
     z_c_bpack_deletestats(&stats_bf_s2s);
@@ -2030,6 +2311,7 @@ if(myrank==master_rank){
 
 	Cblacs_exit(1);
 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
-    return 0;
+  return 0;
 }
 // // //------------------------------------------------------------------------------
+

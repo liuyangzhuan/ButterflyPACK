@@ -750,15 +750,15 @@ inline void C_FuncZmnBlock_BF_V2V(int* Ninter, int* Nallrows, int* Nallcols, int
     double *x2,*y2;
     double *fr;
     // cout<<" "<<myrank<<" "<<NinterNew<<endl;
-    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    #pragma omp parallel private(x1,y1,x2,y2,fr)
     {
-    x1= (double*)malloc(nrmax*sizeof(double));
-    y1= (double*)malloc(nrmax*sizeof(double));
-    x2= (double*)malloc(ncmax*sizeof(double));
-    y2= (double*)malloc(ncmax*sizeof(double));
-    fr= (double*)malloc(nvalmax*3*sizeof(double));
-    // #pragma omp for
+    #pragma omp for
     for (int nn1=0;nn1<NinterNew;nn1++){
+      x1= (double*)malloc(nrmax*sizeof(double));
+      y1= (double*)malloc(nrmax*sizeof(double));
+      x2= (double*)malloc(ncmax*sizeof(double));
+      y2= (double*)malloc(ncmax*sizeof(double));
+      fr= (double*)malloc(nvalmax*3*sizeof(double));
       int nn =inter_map[nn1];
       int pp = pgidx[nn];
       int nprow = pmaps[pp];
@@ -782,13 +782,14 @@ inline void C_FuncZmnBlock_BF_V2V(int* Ninter, int* Nallrows, int* Nallcols, int
 
       assemble_fromD1D2Tau_block(nn1,nr, nc, x1,x2,y1,y2, alldat_loc, idx_val_map.data(),fr, Q);
 
+      free(x1);
+      free(y1);
+      free(x2);
+      free(y2);
+      free(fr);
+
     }
 
-    free(x1);
-    free(y1);
-    free(x2);
-    free(y2);
-    free(fr);
     }
 time(&end);
 timer += difftime(end,start);
@@ -856,15 +857,15 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
     double *x2,*y2;
     double *fr;
     // cout<<" "<<myrank<<" "<<NinterNew<<endl;
-    // #pragma omp parallel private(x1,y1,x2,y2,fr)
+    #pragma omp parallel private(x1,y1,x2,y2,fr)
     {
-    x1= (double*)malloc(nrmax*sizeof(double));
-    y1= (double*)malloc(nrmax*sizeof(double));
-    x2= (double*)malloc(ncmax*sizeof(double));
-    y2= (double*)malloc(ncmax*sizeof(double));
-    fr= (double*)malloc(nvalmax*3*sizeof(double));
-    // #pragma omp for
+    #pragma omp for
     for (int nn1=0;nn1<NinterNew;nn1++){
+      x1= (double*)malloc(nrmax*sizeof(double));
+      y1= (double*)malloc(nrmax*sizeof(double));
+      x2= (double*)malloc(ncmax*sizeof(double));
+      y2= (double*)malloc(ncmax*sizeof(double));
+      fr= (double*)malloc(nvalmax*3*sizeof(double));
       int nn =inter_map[nn1];
       int pp = pgidx[nn];
       int nprow = pmaps[pp];
@@ -887,14 +888,15 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
       // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
 
       assemble_fromD1D2Tau_block_s2s(nn1,nr, nc, x1,x2,y1,y2, alldat_loc, idx_val_map.data(),fr, Q);
+      free(x1);
+      free(y1);
+      free(x2);
+      free(y2);
+      free(fr);
 
     }
 
-    free(x1);
-    free(y1);
-    free(x2);
-    free(y2);
-    free(fr);
+
     }
 time(&end);
 timer += difftime(end,start);

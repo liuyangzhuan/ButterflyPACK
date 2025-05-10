@@ -2458,6 +2458,77 @@ contains
 
 
 
+
+!>**** C interface for getting the starting indices (w.r.t. msh(dim_i)%idxs) of each local middle-level blocks
+   !> @param Ndim: dimensionality
+   !> @param nc_m: number of local middle-level blocks
+   !> @param head_array: head of each middle-level blocks
+   !> @param bmat_Cptr: the structure containing H-tensor
+   !> @param option_Cptr: the structure containing option
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_Get_Local_Midlevel_Blocks(Ndim, nc_m, head_array,bmat_Cptr, option_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_md_get_local_midlevel_blocks")
+      implicit none
+      integer Ndim
+      integer nc_m(Ndim), Nrhs, head_array(*)
+      integer idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), group_n(Ndim), idx_c_m(Ndim)
+      integer levelm,level_butterfly,index_j,group_n1,cnt,dim_i
+
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: msh_Cptr
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(Bmatrix), pointer::bmat
+      type(mesh), pointer::msh(:)
+      type(matrixblock_MD),pointer::blocks
+
+      type(proctree), pointer::ptree
+
+      call c_f_pointer(bmat_Cptr, bmat)
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+
+
+      select case (option%format)
+      case (HSS_MD)
+         blocks => bmat%hss_bf_md%BP%LL(1)%matrices_block(1)
+      case default
+         write(*,*)'not supported format in C_BPACK_MD_Get_Local_Midlevel_Blocks:', option%format
+         stop
+      end select
+
+
+      level_butterfly = blocks%level_butterfly
+      levelm = blocks%level_half
+      call GetLocalBlockRange_MD(ptree, blocks%pgno, blocks%level_half, level_butterfly, Ndim, 1, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
+      call assert(product(inc_c)==1,'inc_c has to be 1 for matrixblock_MD type')
+
+      nc_m = nc
+      idx_c_m = idx_c
+      group_n = blocks%col_group
+      group_n = group_n*2**(level_butterfly-levelm) + idx_c_m - 1
+
+      cnt=0
+      do dim_i=1,Ndim
+         do index_j=1,nc_m(dim_i)
+            cnt = cnt + 1
+            group_n1 = group_n(dim_i) + index_j -1
+            head_array(cnt) =  msh(dim_i)%basis_group(group_n1)%head - msh(dim_i)%idxs + 1
+         enddo
+         cnt = cnt + 1
+         head_array(cnt) = msh(dim_i)%basis_group(group_n1)%tail+1 - msh(dim_i)%idxs + 1
+         ! write(*,*)ptree%MyID, head_array(cnt-nc_m(dim_i):cnt)
+      enddo
+
+   end subroutine C_BPACK_MD_Get_Local_Midlevel_Blocks
+
+
+
 !>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec
    !> @param x: local solution vector
    !> @param b: local RHS

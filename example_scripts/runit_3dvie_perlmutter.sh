@@ -27,7 +27,7 @@ nmpi=64
 
 vs=1
 shape=4
-scaleGreen=0
+scaleGreen=1
 L=0.4
 H=0.4
 W=0.4
@@ -143,11 +143,11 @@ python ../EXAMPLE/slowness_model3d_generator.py --shape_background ${I} ${J} ${K
 # srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max  --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 1 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_m} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --reclr_leaf 2 --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_matrix_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_m}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_format_${format}
 
 
-sample_para_outer=16.0
-sample_para=16.0
-elem_extract=0 # 2 is more OMP parallel, but cvie2d_t only supports 0 now. 
-format=3
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max  --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 1 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_m} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_matrix_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_m}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_format_${format}
+# sample_para_outer=16.0
+# sample_para=16.0
+# elem_extract=0 # 2 is more OMP parallel, but cvie2d_t only supports 0 now. 
+# format=3
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max  --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 1 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_m} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --forwardN15flag ${forwardN15flag} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_matrix_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_m}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_format_${format}
 
 
 # sample_para_outer=32.0
@@ -158,9 +158,9 @@ srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d --ivelo ${
 
 
 
-elem_extract=0
+elem_extract=2
 sample_para_outer=0.8
 sample_para=0.8
 format=4
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max  --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 1 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max  --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 0 --use_qtt 0 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}
 
