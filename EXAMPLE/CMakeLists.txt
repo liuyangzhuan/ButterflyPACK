@@ -144,6 +144,9 @@ set(CDEXM_SEQ InterfaceTest_simple_seq.cpp)
 add_executable(ctest_simple_seq ${CDEXM_SEQ})
 target_link_libraries(ctest_simple_seq ${all_link_libs_d})
 
+set(CDEXM_SEQ InterfaceTest_simple_seq_newapi.cpp)
+add_executable(ctest_simple_seq_newapi ${CDEXM_SEQ})
+target_link_libraries(ctest_simple_seq_newapi ${all_link_libs_d})
 
 if(enable_mpi) # YL: I haven't add the MPI dummy library in C yet.
 

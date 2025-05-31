@@ -33,6 +33,7 @@ cmake .. \
 
 make krr_seq -j16
 make ctest_simple_seq -j16
+make butterflypack_cpp
 
 
 	# -DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \

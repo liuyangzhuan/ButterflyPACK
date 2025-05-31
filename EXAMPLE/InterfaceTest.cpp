@@ -848,11 +848,11 @@ if(tst==4){
 	set_option_from_command_line(argc, argv,option);
 
   F2Cptr option_save;
-  d_c_bpack_copyoption(&option,&option_save); 
+  d_c_bpack_copyoption(&option,&option_save);
   if(ker ==8 || ker ==9 || ker ==10){
-  d_c_bpack_set_I_option(&option, "format", 1); 
-  d_c_bpack_set_I_option(&option, "LRlevel", 100); 
-  d_c_bpack_set_I_option(&option, "knn", 100); 
+  d_c_bpack_set_I_option(&option, "format", 1);
+  d_c_bpack_set_I_option(&option, "LRlevel", 100);
+  d_c_bpack_set_I_option(&option, "knn", 100);
   }
 	d_c_bpack_printoption(&option,&ptree);
 

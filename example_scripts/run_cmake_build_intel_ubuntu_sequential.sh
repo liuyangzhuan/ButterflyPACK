@@ -20,19 +20,16 @@ rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
+	-Denable_mpi=OFF \
 	-DCMAKE_CXX_FLAGS="-I$MKLROOT/include " \
 	-DTPL_BLAS_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.so;$MKLROOT//lib/intel64/libmkl_intel_thread.so;$MKLROOT//lib/intel64/libmkl_core.so" \
 	-DTPL_LAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_intel_lp64.so;$MKLROOT//lib/intel64/libmkl_intel_thread.so;$MKLROOT//lib/intel64/libmkl_core.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$MKLROOT//lib/intel64/libmkl_blacs_intelmpi_lp64.so;$MKLROOT//lib/intel64/libmkl_scalapack_lp64.so" \
 	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
 	-DBUILD_SHARED_LIBS=OFF \
-	-DCMAKE_Fortran_COMPILER=mpiifort \
-	-DCMAKE_CXX_COMPILER=mpiicpc \
-	-DCMAKE_C_COMPILER=mpiicc \
-	-DMPI_CXX_COMPILER=mpiicpc \
-	-DMPI_C_COMPILER=mpiicc \
-	-DMPI_Fortran_COMPILER=mpiifort \
+	-DCMAKE_Fortran_COMPILER=ifort \
+	-DCMAKE_CXX_COMPILER=icpc \
+	-DCMAKE_C_COMPILER=icc \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON

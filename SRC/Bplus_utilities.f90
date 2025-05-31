@@ -19546,20 +19546,8 @@ integer, save:: my_tid = 0
                if(present(zfpquants) .or. present(qttquants))then
                   allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
 
-#if 0
-! not sure why the following is causing compiling error for certain intel compilers
-                  call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
-#else
-#if DAT==0
-                  call LogMemory(stats, 16*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==1
-                  call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==2
-                  call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==3
-                  call LogMemory(stats, 4*SIZE(subtensors(nn)%dat)/1024.0d3)
-#endif
-#endif
+                  call LogMemory(stats, storage_size(subtensors(nn)%dat)/8/1024.0d3)
+
                endif
                allocate(idxs(2*Ndim,num_threads))
 #ifdef HAVE_TASKLOOP
@@ -19614,15 +19602,15 @@ integer, save:: my_tid = 0
 #endif
 #if HAVE_ZFP
                if(present(zfpquants))then
-                  tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                  tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
                   call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
-                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r)/8/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i)/8/1024.0d3)
                   call LogMemory(stats, -tmpmem)
                endif
 #endif
                if(present(qttquants))then
-                  tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                  tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
 
                   qttquants(nn)%d_org = Ndim
                   qttquants(nn)%mpo = 1
@@ -19631,10 +19619,10 @@ integer, save:: my_tid = 0
                   qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                   call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                   deallocate(subtensors(nn)%dat)
-                  if(allocated(qttquants(nn)%core))call LogMemory(stats, SIZEOF(qttquants(nn)%core)/1024.0d3)
+                  if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core)/8/1024.0d3)
 
-                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_r)/1024.0d3)
-                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_i)/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i)/8/1024.0d3)
 
                   call LogMemory(stats, -tmpmem)
                endif
@@ -19717,20 +19705,7 @@ integer, save:: my_tid = 0
                if (product(dims8)> 0) then
                   if(present(zfpquants) .or. present(qttquants))then
                      allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
-#if 0
-! not sure why the following is causing compiling error for certain intel compilers
-                     call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
-#else
-#if DAT==0
-                     call LogMemory(stats, 16*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==1
-                     call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==2
-                     call LogMemory(stats, 8*SIZE(subtensors(nn)%dat)/1024.0d3)
-#elif DAT==3
-                     call LogMemory(stats, 4*SIZE(subtensors(nn)%dat)/1024.0d3)
-#endif
-#endif
+                     call LogMemory(stats, storage_size(subtensors(nn)%dat)/8/1024.0d3)
                   endif
                   allocate(idxs(2*Ndim,1))
                   do ij = 1, product(dims8)
@@ -19754,15 +19729,15 @@ integer, save:: my_tid = 0
                   enddo
 #if HAVE_ZFP
                   if(present(zfpquants))then
-                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                     tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
                      call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
-                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r)/8/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i)/8/1024.0d3)
                      call LogMemory(stats, -tmpmem)
                   endif
 #endif
                   if(present(qttquants))then
-                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
+                     tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
 
                      qttquants(nn)%d_org = Ndim
                      qttquants(nn)%mpo = 1
@@ -19771,10 +19746,10 @@ integer, save:: my_tid = 0
                      qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                      call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                      deallocate(subtensors(nn)%dat)
-                     if(allocated(qttquants(nn)%core))call LogMemory(stats, SIZEOF(qttquants(nn)%core)/1024.0d3)
+                     if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core)/8/1024.0d3)
 
-                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_r)/1024.0d3)
-                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_i)/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i)/8/1024.0d3)
 
                      call LogMemory(stats, -tmpmem)
                   endif

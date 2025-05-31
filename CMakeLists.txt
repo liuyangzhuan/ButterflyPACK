@@ -464,6 +464,8 @@ add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(SRC_SINGLE)
 add_subdirectory(SRC_COMPLEX)
 add_subdirectory(EXAMPLE)
+add_subdirectory(CPP_INTERFACE)
+
 
 # Documentation
 if(enable_doc)
