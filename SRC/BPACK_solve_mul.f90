@@ -3006,6 +3006,8 @@ contains
       integer ierr,num_vectors,selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo
       integer,allocatable:: fmod(:), frecv(:),sendflagarray(:), receiverlists(:,:)
       type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
+      integer,allocatable:: tags(:)
+      integer tagij
 
       if (trans == 'N') then
          Nreq=0
@@ -3107,6 +3109,14 @@ contains
          call g2l(ii, num_blocks, nprow, 1, iproc, myi)
          call g2l(jj, num_blocks, npcol, 1, jproc, myj)
 
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
          if(iproc==myrow .and. jproc==mycol)then
             blocks_l => h_mat%Local_blocks(myj, myi)
 
@@ -3117,19 +3127,39 @@ contains
                if(receiverlists(i,myj)==1)then
                   receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
-                  call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij +1
+                     tags(tagij) = jj
+                  endif
                endif
             enddo
          endif
          do nrecv=1, nrecvx+nrecvmod
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            tag = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            nn = m_size/nvec
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
-
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  nn = size(sendbufmod(ii)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufmod(ii)%vector
+               endif
+            endif
             if(tag<=num_blocks)then
                jj=tag
                call g2l(jj, num_blocks, npcol, 1, jproc, myj)
@@ -3148,8 +3178,12 @@ contains
                         ! offdiagonal block: send right to diagonal block
                         receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
-
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii+num_blocks
+                        endif
                      endif
                   endif
                enddo
@@ -3157,7 +3191,9 @@ contains
                ii=tag-num_blocks
                call g2l(ii, num_blocks, nprow, 1, iproc, myi)
                call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
-               sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               if(ptree%nproc>1 .or. ii>1)then
+                  sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               endif
                frecv(myi) = frecv(myi)-1
                if(frecv(myi)==0 .and. fmod(myi)==0)then
                   blocks_l => h_mat%Local_blocks(myj1, myi)
@@ -3168,15 +3204,25 @@ contains
                      if(receiverlists(i1,myj1)==1)then
                         receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii
+                        endif
                      endif
                   enddo
                endif
             endif
             deallocate (vin)
+
          enddo
 
-         if (Nreq > 0) then
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
             call MPI_waitall(Nreq, request_all, status_all, ierr)
             deallocate (status_all)
             deallocate (request_all)
@@ -3240,7 +3286,8 @@ contains
       integer selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo,tag
       integer,allocatable:: bmod(:), brecv(:),sendflagarray(:), receiverlists(:,:)
       type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
-
+      integer,allocatable:: tags(:)
+      integer tagij
 
 
       if (trans == 'N') then
@@ -3344,6 +3391,14 @@ contains
          call g2l(ii, num_blocks, nprow, 1, iproc, myi)
          call g2l(jj, num_blocks, npcol, 1, jproc, myj)
 
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
          if(iproc==myrow .and. jproc==mycol)then
             blocks_u => h_mat%Local_blocks(myj, myi)
 
@@ -3354,19 +3409,43 @@ contains
                if(receiverlists(i,myj)==1)then
                   receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
-                  call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij + 1
+                     tags(tagij)=jj
+                  endif
                endif
             enddo
          endif
 
          do nrecv=1, nrecvx+nrecvmod
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            tag = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            nn = m_size/nvec
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  if(ii<num_blocks)then
+                     nn = size(sendbufmod(ii)%vector,1)
+                     allocate (vin(nn, nvec))
+                     vin = sendbufmod(ii)%vector
+                  endif
+               endif
+            endif
+
 
             if(tag<=num_blocks)then
                jj=tag
@@ -3386,7 +3465,12 @@ contains
                         ! offdiagonal block: send left to diagonal block
                         receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii+num_blocks
+                        endif
                      endif
                   endif
                enddo
@@ -3405,7 +3489,12 @@ contains
                      if(receiverlists(i1,myj1)==1)then
                         receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii
+                        endif
                      endif
                   enddo
                endif
@@ -3413,7 +3502,11 @@ contains
             deallocate (vin)
          enddo
 
-         if (Nreq > 0) then
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
             call MPI_waitall(Nreq, request_all, status_all, ierr)
             deallocate (status_all)
             deallocate (request_all)

@@ -27,7 +27,7 @@
  *
  */
 /*! \file CPPWrapper.hpp
- * \brief Templated CPP Interface to ButterflyPACK.
+ * \brief Templated CPP Interface to ButterflyPACK, modified from HODLRWrapper.hpp of STRUMPACK
  */
 #ifndef BUTTERFLYPACK_WRAPPER_HPP
 #define BUTTERFLYPACK_WRAPPER_HPP
@@ -35,33 +35,39 @@
 #include <cassert>
 #include <complex>
 #include <cstdint>
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <cstring>
+#include <getopt.h>
+#include <unistd.h>
 
-#include "dense/DenseMatrix.hpp"
-#include "misc/MPIWrapper.hpp"
 typedef void* F2Cptr;
 typedef void* C2Fptr;
 
-namespace strumpack {
-  namespace HODLR {
+namespace butterflypack {
 
-    template<typename scalar_t> void HODLR_createptree
+  template<class T> struct RealType { typedef T value_type; };
+  template<class T> struct RealType<std::complex<T>> { typedef T value_type; };
+
+    void bpack_createptree
     (int& P, int* groups, MPI_Fint comm, F2Cptr& ptree);
 
-    template<typename scalar_t> void HODLR_createoptions(F2Cptr& options);
+    void bpack_createoptions(F2Cptr& options);
 
-    template<typename scalar_t> void HODLR_copyoptions(F2Cptr& in, F2Cptr& out);
+    void bpack_copyoptions(F2Cptr& in, F2Cptr& out);
 
-    template<typename scalar_t> void HODLR_printoptions(F2Cptr& options, F2Cptr& ptree);
+    void bpack_printoptions(F2Cptr& options, F2Cptr& ptree);
 
-    template<typename scalar_t> void HODLR_printstats(F2Cptr& stats, F2Cptr& ptree);
+    void bpack_printstats(F2Cptr& stats, F2Cptr& ptree);
 
-    template<typename scalar_t> void HODLR_createstats(F2Cptr& stats);
+    void bpack_createstats(F2Cptr& stats);
 
-    template<typename scalar_t> void HODLR_set_D_option
-    (F2Cptr options, const std::string& opt, double v);
+    void bpack_set_option
+    (F2Cptr& options, const std::string& opt, double v);
 
-    template<typename scalar_t> void HODLR_set_I_option
-    (F2Cptr options, const std::string& opt, int v);
+    void bpack_set_option
+    (F2Cptr& options, const std::string& opt, int v);
 
     /**
      * Possible values:
@@ -78,22 +84,20 @@ namespace strumpack {
      *
      *  Rank_max
      */
-    template<typename scalar_t> double BPACK_get_stat
-    (F2Cptr stats, const std::string& name);
+    double bpack_get_stat
+    (F2Cptr& stats, const std::string& name);
 
-    template<typename scalar_t,
-             typename real_t = typename RealType<scalar_t>::value_type>
-    void HODLR_construct_init
-    (int N, int d, real_t* data, int* nns, int lvls, int* tree, int* perm,
+    template<typename scalar_t>
+    void bpack_construct_ho_init
+    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata);
 
-    template<typename scalar_t,
-             typename real_t = typename RealType<scalar_t>::value_type>
-    void HODLR_construct_init_Gram
-    (int N, int d, real_t* data, int* nns, int lvls, int* tree, int* perm,
+    template<typename scalar_t>
+    void bpack_construct_ho_init_Gram
+    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, scalar_t*, C2Fptr),
@@ -103,7 +107,7 @@ namespace strumpack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata);
 
-    template<typename scalar_t> void HODLR_construct_element_compute
+    template<typename scalar_t> void bpack_construct_ho_element_compute
     (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, scalar_t*, C2Fptr),
@@ -113,7 +117,7 @@ namespace strumpack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr K);
 
-    template<typename scalar_t> void HODLR_construct_matvec_compute
+    template<typename scalar_t> void bpack_construct_ho_matvec_compute
     (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*matvec)
@@ -121,20 +125,20 @@ namespace strumpack {
      C2Fptr fdata);
 
     template<typename scalar_t>
-    void LRBF_construct_init
+    void bpack_construct_bf_init
     (int M, int N, int& lrows, int& lcols, int* nsr, int* nnsc,
      F2Cptr rmsh, F2Cptr cmsh, F2Cptr& lr_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata);
 
-    template<typename scalar_t> void LRBF_construct_matvec_compute
+    template<typename scalar_t> void bpack_construct_bf_matvec_compute
     (F2Cptr& lr_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*matvec)
      (const char*, int*, int*, int*, const scalar_t*,
       scalar_t*, C2Fptr, scalar_t*, scalar_t*), C2Fptr fdata);
 
-    template<typename scalar_t> void LRBF_construct_element_compute
+    template<typename scalar_t> void bpack_construct_bf_element_compute
     (F2Cptr& lr_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*element)
      (int* Ninter, int* Nallrows, int* Nallcols, std::int64_t* Nalldat_loc,
@@ -142,54 +146,56 @@ namespace strumpack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata);
 
-    template<typename scalar_t> void HODLR_extract_elements
+    template<typename scalar_t> void bpack_extract_elements_ho
     (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols,
      std::int64_t Nalldat_loc, int* allrows, int* allcols, scalar_t* alldat_loc,
      int* rowidx, int* colidx, int* pgidx, int Npmap, int* pmaps);
 
-    template<typename scalar_t> void LRBF_extract_elements
+    template<typename scalar_t> void bpack_extract_elements_bf
     (F2Cptr& lr_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols,
      std::int64_t Nalldat_loc, int* allrows, int* allcols, scalar_t* alldat_loc,
      int* rowidx, int* colidx, int* pgidx, int Npmap, int* pmaps);
 
-    template<typename scalar_t> void HODLR_deletestats(F2Cptr&);
+    void bpack_deletestats(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_deleteproctree(F2Cptr&);
+    void bpack_deleteproctree(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_deletemesh(F2Cptr&);
+    void bpack_deletemesh(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_deletekernelquant(F2Cptr&);
+    void bpack_deletekernelquant(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_delete(F2Cptr&);
+    void bpack_delete_ho(F2Cptr&);
 
-    template<typename scalar_t> void LRBF_deletebf(F2Cptr&);
+    void bpack_delete_bf(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_deleteoptions(F2Cptr&);
+    void bpack_deleteoptions(F2Cptr&);
 
-    template<typename scalar_t> void HODLR_mult
+    void bpack_getversionnumber(int& v_major, int& v_minor, int& v_bugfix);
+
+    template<typename scalar_t> void bpack_mult_ho
     (char op, const scalar_t* X, scalar_t* Y, int Xlrows, int Ylrows, int cols,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr stats, F2Cptr ptree);
+     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
-    template<typename scalar_t> void LRBF_mult
+    template<typename scalar_t> void bpack_mult_bf
     (char op, const scalar_t* X, scalar_t* Y, int Xlrows, int Ylrows, int cols,
-     F2Cptr lr_bf, F2Cptr options, F2Cptr stats, F2Cptr ptree);
+     F2Cptr lr_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
-    template<typename scalar_t> void HODLR_factor
-    (F2Cptr ho_bf, F2Cptr options, F2Cptr stats, F2Cptr ptree, F2Cptr msh);
+    template<typename scalar_t> void bpack_factor_ho
+    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh);
 
-    template<typename scalar_t> void HODLR_solve
+    template<typename scalar_t> void bpack_solve_ho
     (scalar_t* X, const scalar_t* B, int lrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr stats, F2Cptr ptree);
+     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
-    template<typename scalar_t> void HODLR_inv_mult
+    template<typename scalar_t> void bpack_inv_mult_ho
     (char op, const scalar_t* B, scalar_t* X, int Xlrows, int Blrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr stats, F2Cptr ptree);
+     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
-    int LRBF_treeindex_merged2child(int idx_merge);
+    int bpack_treeindex_merged2child(int idx_merge);
+    int bpack_new2old(F2Cptr msh, int i_new_loc);
+    void bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0);
+} // end namespace butterflypack
 
-  } // end namespace HODLR
-} // end namespace strumpack
-
-#endif // STRUMPACK_HODLR_WRAPPER_HPP
+#endif // BUTTERFLYPACK_WRAPPER_HPP

@@ -1,3 +1,8 @@
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE)
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX)
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_SINGLE)
+include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_COMPLEX)
+include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
 if(NOT enable_mpi)
 include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
 endif()
@@ -46,5 +51,4 @@ install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 
 #SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_INSTALL_INCLUDEDIR})
-install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-        FILES_MATCHING PATTERN "*.mod")
+# install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
