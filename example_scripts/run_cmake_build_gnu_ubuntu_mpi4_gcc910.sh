@@ -36,6 +36,8 @@ cmake .. \
 	-DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
+make ctest_simple_newapi -j
+
 	chmod -R 777 ../SRC*
 
 	# -DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \
