@@ -164,6 +164,11 @@ add_executable(ctest_simple ${CDEXM2})
 target_link_libraries(ctest_simple ${all_link_libs_d})
 add_dependencies(ctest_simple ctest)
 
+set(CDEXM3 InterfaceTest_simple_newapi.cpp)
+add_executable(ctest_simple_newapi ${CDEXM3})
+target_link_libraries(ctest_simple_newapi ${all_link_libs_cpp})
+
+
 ########################################### double complex C++ drivers
 
 set(CZEXM1 Taylor2D.cpp G2D/G2D.cpp G2D/rtGetInf.cpp G2D/rtGetNaN.cpp G2D/rt_nonfinite.cpp G2D/bessel.cpp)
