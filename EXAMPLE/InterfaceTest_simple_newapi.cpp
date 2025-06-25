@@ -284,12 +284,9 @@ int main(int argc, char* argv[])
     int tst = 1;
 	int lrlevel=0;
 
-	int nlevel = 0; // 0: tree level, nonzero if a tree is provided
-	int* tree = new int[(int)pow(2,nlevel)]; //user provided array containing size of each leaf node, not used if nlevel=0
 	string trainfile("../EXAMPLE/KRR_DATA/susy_10Kn");
 	// string fullmatfile("../EXAMPLE/FULLMAT_DATA/FHODLR_colmajor_real_double_40000x40000.dat");
 	// string leaffile("../EXAMPLE/FULLMAT_DATA/leafs_40000_noheader.dat");
-	tree[0] = Npo;
 
   //getting the example configurations from command line
   std::vector<std::unique_ptr<char[]>> argv_data(argc);
@@ -393,6 +390,13 @@ if(tst==1){
 	nogeo=0;
 }
 
+	// int nlevel = 0; // 0: tree will not be referenced, >0: a tree of nlevel levels is provided, <0: a tree of nlevel (value modifed when returned) levels will be returned
+	// int* tree = new int[(int)pow(2,nlevel)]; //nlevel=0: not referenced, nlevel>0: user provided array containing size of each leaf node, nlevel<0: a generated tree is returned
+	// // tree[0] = Npo;
+
+	int nlevel = -1; // 0: tree will not be referenced, >0: a tree of nlevel levels is provided, <0: a tree of nlevel (value modifed when returned) levels will be returned
+	int* tree = new int[Npo]; //nlevel=0: not referenced, nlevel>0: user provided array containing size of each leaf node, nlevel<0: a generated tree is returned
+
 	/*****************************************************************/
 
 	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
@@ -453,6 +457,13 @@ if(tst==1){
 
     // construct matrix with geometrical points
 	bpack_construct_ho_init<scalart>(Npo, Ndim, dat_ptr, nns_ptr,nlevel, tree, perms, myseg, bmat, option, stats, msh, kerquant, ptree, &C_FuncDistmn, &C_FuncNearFar, quant_ptr);
+
+	if(nlevel>0){
+		if(myrank==master_rank)std::cout<<"BPACK uses a clustering tree of "<<nlevel<<" levels:"<<std::endl;
+		for (int bb=0; bb<(int)pow(nlevel,2.0);bb++)
+			if(myrank==master_rank)std::cout<<tree[bb]<<" ";
+		if(myrank==master_rank)std::cout<<std::endl;
+	}
 
 	bpack_construct_ho_element_compute<scalart>(bmat, option, stats, msh, kerquant, ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 

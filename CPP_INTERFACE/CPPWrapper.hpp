@@ -89,7 +89,7 @@ namespace butterflypack {
 
     template<typename scalar_t>
     void bpack_construct_ho_init
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
@@ -97,7 +97,7 @@ namespace butterflypack {
 
     template<typename scalar_t>
     void bpack_construct_ho_init_Gram
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, scalar_t*, C2Fptr),

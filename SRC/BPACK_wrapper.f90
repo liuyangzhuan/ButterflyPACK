@@ -1168,8 +1168,8 @@ contains
    !> @param Ndim: data set dimensionality (not used if nogeo=1)
    !> @param Locations: coordinates used for clustering (not used if nogeo=1)
    !> @param nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
-   !> @param nlevel: the number of top levels that have been ordered (in)
-   !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
+   !> @param nlevel: If nevel>0: the number of top levels that have been ordered. If nlevel=-1, nlevel will be returned as the actual number of tree levels. (inout)
+   !> @param tree: If nlevel>0: the order tree provided by the caller, if incomplete, the init routine will make it complete; if nlevel=-1, tree returns the list of actual leaf sizes (note that the length of tree needs to be at least 2**nlevel when passed into this function); if nlevel=0, not referenced  (inout)
    !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
    !> @param N_loc: number of local row/column indices (out)
    !> @param bmat_Cptr: the structure containing BPACK (out)
@@ -1219,6 +1219,7 @@ contains
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
       integer(kind=8) idx,kk,knn
+      integer group
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1277,34 +1278,42 @@ contains
       t1 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
-      Maxlevel = nlevel
-      allocate (msh%pretree(2**Maxlevel))
 
-      msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
+      if(nlevel>0)then
+         Maxlevel = nlevel
+         allocate (msh%pretree(2**Maxlevel))
 
-      !>**** make 0-element node a 1-element node
+         msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
 
-      ! write(*,*)'before adjustment:',msh%pretree
-      call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
-      need = 0
-      do ii = 1, 2**Maxlevel
-         if (msh%pretree(ii) == 0) need = need + 1
-      enddo
-      do while (need > 0)
-         give = ceiling_safe(need/dble(2**Maxlevel - need))
+         !>**** make 0-element node a 1-element node
+
+         ! write(*,*)'before adjustment:',msh%pretree
+         call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
+         need = 0
          do ii = 1, 2**Maxlevel
-            nn = msh%pretree(ii)
-            if (nn > 1) then
-               msh%pretree(ii) = msh%pretree(ii) - min(min(nn - 1, give), need)
-               need = need - min(min(nn - 1, give), need)
-            endif
+            if (msh%pretree(ii) == 0) need = need + 1
          enddo
-      enddo
-      do ii = 1, 2**Maxlevel
-         if (msh%pretree(ii) == 0) msh%pretree(ii) = 1
-      enddo
-      ! write(*,*)'after adjustment:',msh%pretree
-      tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
+         do while (need > 0)
+            give = ceiling_safe(need/dble(2**Maxlevel - need))
+            do ii = 1, 2**Maxlevel
+               nn = msh%pretree(ii)
+               if (nn > 1) then
+                  msh%pretree(ii) = msh%pretree(ii) - min(min(nn - 1, give), need)
+                  need = need - min(min(nn - 1, give), need)
+               endif
+            enddo
+         enddo
+         do ii = 1, 2**Maxlevel
+            if (msh%pretree(ii) == 0) msh%pretree(ii) = 1
+         enddo
+         ! write(*,*)'after adjustment:',msh%pretree
+         tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
+      else
+         Maxlevel = 0
+         allocate (msh%pretree(2**Maxlevel))
+         msh%pretree(1:2**Maxlevel) = N
+      endif
+
 
       !>**** the geometry points are provided by user
       if (option%nogeo == 0 .or. option%nogeo == 4) then
@@ -1351,6 +1360,15 @@ contains
             Permutation(edge) = msh%new2old(edge)
          enddo
       ! endif
+
+
+      !>**** return the clustering tree
+      if(nlevel==-1)then
+         do group = 2**bmat%Maxlevel, 2**(bmat%Maxlevel + 1) - 1
+            tree(group-2**bmat%Maxlevel+1) = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+         enddo
+         nlevel = bmat%Maxlevel
+      endif
 
       !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)

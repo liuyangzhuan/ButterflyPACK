@@ -94,7 +94,7 @@ namespace butterflypack {
 
 
     template<> void bpack_construct_ho_init<float>
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
@@ -105,7 +105,7 @@ namespace butterflypack {
            fdata);
     }
     template<> void bpack_construct_ho_init<double>
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
@@ -116,7 +116,7 @@ namespace butterflypack {
          fdata);
     }
     template<> void bpack_construct_ho_init<_Complex float>
-    (int N, int d, double* data, int* nns, int lvls, int* tree,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree,
      int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
@@ -127,7 +127,7 @@ namespace butterflypack {
           C_FuncNearFar, fdata);
     }
     template<> void bpack_construct_ho_init<_Complex double>
-    (int N, int d, double* data, int* nns, int lvls, int* tree,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree,
      int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
@@ -139,7 +139,7 @@ namespace butterflypack {
     }
 
     template<> void bpack_construct_ho_init_Gram<float>
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, float*, C2Fptr),
@@ -153,7 +153,7 @@ namespace butterflypack {
            &stats, &msh, &kerquant, &ptree, C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_init_Gram<double>
-    (int N, int d, double* data, int* nns, int lvls, int* tree, int* perm,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
      int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, double*, C2Fptr),
@@ -167,7 +167,7 @@ namespace butterflypack {
          &stats, &msh, &kerquant, &ptree, C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_init_Gram<_Complex float>
-    (int N, int d, double* data, int* nns, int lvls, int* tree,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree,
      int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex float*, C2Fptr),
@@ -188,7 +188,7 @@ namespace butterflypack {
                    C2Fptr elems)>(C_FuncZmnBlock), fdata);
     }
     template<> void bpack_construct_ho_init_Gram<_Complex double>
-    (int N, int d, double* data, int* nns, int lvls, int* tree,
+    (int N, int d, double* data, int* nns, int& lvls, int* tree,
      int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex double*, C2Fptr),
