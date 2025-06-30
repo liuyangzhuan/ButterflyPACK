@@ -478,7 +478,7 @@ int main(int argc, char* argv[])
 	int batch = 16; //batch size for BACA
 	int bnum = 1; //sqrt of #of subblocks in H-BACA
 	int knn=0; //k nearest neighbours stored per point
-	int format=1; //1: HOD-LR/BF  2:H-LR/BF
+	int format=1; //1: HOD-LR/BF  2:H-LR/BF 3: HSSBF/SHNBF 4: HSSBF-MD/SHNBF-MD 5: B-LR/B-BF
 	double near_para=0.01; // control the admissibility
 	C_QuantApp *quant_ptr;
 	int v_major,v_minor,v_bugfix; //version numbers

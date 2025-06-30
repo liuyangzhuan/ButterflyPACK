@@ -32,6 +32,7 @@ module BPACK_factor
     use BPACK_Solve_Mul
 contains
 
+
     subroutine BPACK_Factorization(bmat, option, stats, ptree, msh)
         implicit none
         type(Hoption)::option
@@ -953,8 +954,10 @@ contains
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
-            if(option%use_zfp==1)then
+            if(option%use_zfp>=1)then
                  call ZFP_Decompress(blocks_m%fullmat,blocks_m%FullmatZFP,blocks_m%M,blocks_m%N,tol_used,0)
+            endif
+            if(option%use_zfp==1)then
                  call ZFP_Decompress(blocks_l%fullmat,blocks_l%FullmatZFP,blocks_l%M,blocks_l%N,tol_used,1)
             endif
 #endif
@@ -974,10 +977,13 @@ contains
                 enddo
                 call trsmf90(blocks_l%fullmat, blocks_m%fullmat, 'L', 'L', 'N', 'U', mm, nn)
 #if HAVE_ZFP
-                if(option%use_zfp==1)then
+                if(option%use_zfp>=1)then
                     call ZFP_Compress(blocks_m%fullmat,blocks_m%FullmatZFP,blocks_m%M,blocks_m%N,option%tol_comp,0)
+                endif
+                if(option%use_zfp==1)then
                     call ZFP_Compress(blocks_l%fullmat,blocks_l%FullmatZFP,blocks_l%M,blocks_l%N,option%tol_comp,1)
                 endif
+
 #endif
 
             else
@@ -1077,18 +1083,23 @@ contains
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
 #if HAVE_ZFP
-                if(option%use_zfp==1)then
+                if(option%use_zfp>=1)then
                     call ZFP_Decompress(blocks_m%fullmat,blocks_m%FullmatZFP,blocks_m%M,blocks_m%N,tol_used,0)
+                endif
+                if(option%use_zfp==1)then
                     call ZFP_Decompress(blocks_u%fullmat,blocks_u%FullmatZFP,blocks_u%M,blocks_u%N,tol_used,1)
                 endif
+
 #endif
                 mm = size(blocks_m%fullmat, 1)
                 nn = size(blocks_m%fullmat, 2)
                 call trsmf90(blocks_u%fullmat, blocks_m%fullmat, 'R', 'U', 'N', 'N', mm, nn)
 #if HAVE_ZFP
-                if(option%use_zfp==1)then
+                if(option%use_zfp>=1)then
                     call ZFP_Compress(blocks_m%fullmat,blocks_m%FullmatZFP,blocks_m%M,blocks_m%N,option%tol_comp,0)
-                    call ZFP_Compress(blocks_u%fullmat,blocks_u%FullmatZFP,blocks_u%M,blocks_u%N,option%tol_comp,1)
+                endif
+                if(option%use_zfp==1)then
+                   call ZFP_Compress(blocks_u%fullmat,blocks_u%FullmatZFP,blocks_u%M,blocks_u%N,option%tol_comp,1)
                 endif
 #endif
             else

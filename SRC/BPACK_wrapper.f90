@@ -376,6 +376,34 @@ contains
 
    end subroutine C_BPACK_Printstats
 
+!>**** C interface of printing the structure, size, and memory of each admissible block of the hierarchical matrix
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param bmat_Cptr: the structure containing the hierarchical matrix
+   !> @param option_Cptr: the structure containing option
+   !> @param inverse: 0 (printing the forward matrix) or 1 (printing the inverse matrix)
+   subroutine C_BPACK_PrintStructure(bmat_Cptr,inverse, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_printstructure")
+      implicit none
+      type(c_ptr) :: stats_Cptr
+      type(c_ptr) :: ptree_Cptr
+      type(c_ptr) :: bmat_Cptr
+      type(c_ptr) :: option_Cptr
+
+      type(Hoption), pointer::option
+      type(Bmatrix), pointer::bmat
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      integer inverse
+
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(bmat_Cptr, bmat)
+      call c_f_pointer(option_Cptr, option)
+      !>**** print statistics variables
+      call BPACK_PrintStructure(bmat, inverse, option, stats, ptree)
+
+   end subroutine C_BPACK_PrintStructure
+
 !>**** C interface of initializing option
    !> @param option_Cptr: the structure containing option
    subroutine C_BPACK_Createoption(option_Cptr) bind(c, name="c_bpack_createoption")
@@ -3248,7 +3276,7 @@ contains
    end subroutine C_BPACK_Deletekernelquant
 
 !>**** C interface of deleting HOBF
-   !> @param bmat_Cptr: the structure containing HOBF
+   !> @param bmat_Cptr: the structure containing the hierarchical matrix
    subroutine C_BPACK_Delete(bmat_Cptr) bind(c, name="c_bpack_delete")
       implicit none
       type(c_ptr), intent(inout) :: bmat_Cptr

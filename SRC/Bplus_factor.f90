@@ -36,7 +36,7 @@ contains
       type(Hstat)::stats
 
       integer size_m, size_n
-      integer i, j, k, ii, jj, kk
+      integer i, j, k, ii, jj, kk, zfpflag
       real*8 T0, T1, tol_used
       type(matrixblock) :: blocks
       real(kind=8) flop
@@ -44,8 +44,11 @@ contains
       T0 = MPI_Wtime()
       size_m = size(blocks%fullmat, 1)
       if (option%ILU == 0) then
+
+      zfpflag=0
+      if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,0)
+      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,0)
 #endif
          ! do ii=1,size_m
          ! do jj=1,size_m
@@ -60,7 +63,7 @@ contains
          ! enddo
          ! enddo
 #if HAVE_ZFP
-         if(option%use_zfp==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,0)
+         if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,0)
 #endif
       else
          do ii = 1, size_m
@@ -85,7 +88,7 @@ contains
 
       integer level_butterfly, flag
       integer i, j, k, ii, level, mm, nn, kk, rank, level_blocks, mn, group_k
-      integer style(3), data_type(3), id1, id2, id3
+      integer style(3), data_type(3), id1, id2, id3, zfpflag
       character chara
       DT, allocatable::Vin(:, :), Vin1(:, :), fullmat(:, :), fullmatrix(:, :)
       real*8 T0, T1, tol_used
@@ -102,8 +105,11 @@ contains
 
       call assert(style(3) == 1, 'block3 supposed to be style 1')
 
+      zfpflag=0
+      if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+      if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
 #endif
 
       mm = size(block3%fullmat, 1)
@@ -129,7 +135,7 @@ contains
       deallocate (Vin1)
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
+      if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
 #endif
 
       T1 = MPI_Wtime()
@@ -145,7 +151,7 @@ contains
       implicit none
 
       type(Hoption)::option
-      integer level_butterfly, flag, group_n, group_m
+      integer level_butterfly, flag, group_n, group_m, zfpflag
       integer i, j, k, level, mm, nn, rank, level_blocks, mn, ii, jj
       integer style(3), data_type(3), id1, id2, id3
       character chara
@@ -185,12 +191,15 @@ contains
 
       if (chara == '-') fullmatrix = -fullmatrix
 
+      zfpflag=0
+      if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+      if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
 #endif
       block3%fullmat = block3%fullmat + fullmatrix
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
+      if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
 #endif
       deallocate (fullmatrix)
       deallocate (Vin)
@@ -2927,7 +2936,7 @@ contains
                n1 = MPI_Wtime()
                if (block_o%style == 1) then
 #if HAVE_ZFP
-                  if(option%use_zfp==1)call ZFP_Decompress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,tol_used,0)
+                  if(option%use_zfp==1 .or. (option%use_zfp==2 .and. block_o%row_group /=block_o%col_group))call ZFP_Decompress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,tol_used,0)
 #endif
 #if 0
                   allocate (ipiv(block_o%M))
@@ -2947,7 +2956,7 @@ contains
                   deallocate(matrixtemp)
 #endif
 #if HAVE_ZFP
-                  if(option%use_zfp==1)call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,option%tol_comp,0)
+                  if(option%use_zfp==1 .or. (option%use_zfp==2 .and. block_o%row_group /=block_o%col_group))call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,option%tol_comp,0)
 #endif
                else
                   !!!!! invert I+B1 to be I+B2

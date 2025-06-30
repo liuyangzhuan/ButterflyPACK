@@ -416,6 +416,9 @@ PROGRAM ButterflyPACK_IE_2D
 	!**** factorization phase
     call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
 
+	! call z_BPACK_PrintStructure(bmat,0, option,stats,ptree)
+	! call z_BPACK_PrintStructure(bmat,1, option,stats,ptree)
+
 
 	! !**** solve phase
 	! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)

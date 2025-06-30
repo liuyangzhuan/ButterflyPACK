@@ -22,6 +22,138 @@ module BPACK_Utilities
 contains
 
 
+    subroutine BPACK_PrintStructure(bmat, inverse, option, stats, ptree)
+        implicit none
+        type(Hoption)::option
+        type(Hstat)::stats
+        type(Bmatrix)::bmat
+        type(proctree)::ptree
+        type(mesh)::msh
+        integer:: inverse
+
+        if (option%precon /= NOPRECON) then
+            select case (option%format)
+            case (HODLR)
+                call HODLR_PrintStructure(bmat%ho_bf, inverse, option, stats, ptree)
+            case (HMAT,BLR)
+                call Hmat_PrintStructure(bmat%h_mat, inverse, option, stats, ptree)
+            case (HSS)
+               write(*,*)"HSS_PrintStructure not yet implemented"
+               !  call HSS_PrintStructure(bmat%hss_bf, inverse, option, stats, ptree)
+            end select
+        endif
+
+
+    end subroutine BPACK_PrintStructure
+
+
+
+   subroutine Hmat_PrintStructure(h_mat, inverse, option, stats, ptree)
+      implicit none
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Hmat)::h_mat
+      type(proctree)::ptree
+      type(matrixblock), pointer :: blocks
+      integer i,j
+      integer inverse,filename_offset
+
+      if(inverse==0)then
+         filename_offset=100000
+         if (ptree%MyID == Main_ID)write (ptree%MyID + filename_offset, '(A12,A12,A12,A12,A12,A12,A12,A12,A12,A12)') 'start_row', 'start_col', 'nrow', 'ncol', 'nmpi', 'admissible', 'rank(min)', 'rank(max)', 'memory(GB)', 'comp_ratio'
+      endif
+      if(inverse==1)then
+         filename_offset=200000
+         if (ptree%MyID == Main_ID)write (ptree%MyID + filename_offset, '(A12,A12,A12,A12,A12,A12,A12,A12,A12,A12)') 'start_row', 'start_col', 'nrow', 'ncol', 'nmpi', 'admissible', 'rank(min)', 'rank(max)', 'memory(GB)', 'comp_ratio'
+      endif
+
+
+      do i = 1, h_mat%myArows
+         do j = 1, h_mat%myAcols
+            if(inverse==0)blocks => h_mat%Local_blocks_copy(j, i)
+            if(inverse==1)blocks => h_mat%Local_blocks(j, i)
+            call Hmat_block_printinfo(blocks, option, stats, ptree,filename_offset)
+         enddo
+      enddo
+
+
+
+
+   end subroutine Hmat_PrintStructure
+
+
+
+
+
+
+
+    subroutine HODLR_PrintStructure(ho_bf1, inverse, option, stats, ptree)
+
+        implicit none
+
+        integer i, j, ii, jj, iii, jjj, index_ij, mm, nn
+        integer level, blocks, edge, patch, node, group, level_c, groupm_diag
+        integer rank, index_near, m, n, length, flag, itemp
+        real T0
+        real(kind=8)::rtemp = 0
+        real(kind=8) tmpfact, tol_used
+        real(kind=8) Memory, Memory_near
+        integer, allocatable:: index_old(:), index_new(:)
+        integer::block_num, block_num_new, level_butterfly
+        integer, allocatable :: ipiv(:)
+        integer rowblock, pgno1, pgno2, pgno, ierr, rowblock_inv
+        type(matrixblock), pointer::block_o, block_off, block_off1, block_off2
+        type(matrixblock)::block_tmp
+        real(kind=8) n1, n2, nn1, nn2, flop, norm
+        type(Hoption)::option
+        type(Hstat)::stats
+        type(hobf)::ho_bf1
+        type(proctree)::ptree
+        type(mesh)::msh
+
+        integer filename_offset,inverse
+
+         if(inverse==0)then
+            filename_offset=100000
+            if (ptree%MyID == Main_ID)write (ptree%MyID + filename_offset, '(A12,A12,A12,A12,A12,A12,A12,A12,A12,A12)') 'start_row', 'start_col', 'nrow', 'ncol', 'nmpi', 'admissible', 'rank(min)', 'rank(max)', 'memory(GB)', 'comp_ratio'
+         endif
+         if(inverse==1)then
+            filename_offset=200000
+            if (ptree%MyID == Main_ID)write (ptree%MyID + filename_offset, '(A12,A12,A12,A12,A12,A12,A12,A12,A12,A12)') 'start_row', 'start_col', 'nrow', 'ncol', 'nmpi', 'admissible', 'rank(min)', 'rank(max)', 'memory(GB)', 'comp_ratio'
+         endif
+
+        level_c = ho_bf1%Maxlevel + 1
+        do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+            if(inverse==0)call BF_printinfo(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), option, stats, ptree, filename_offset)
+            if(inverse==1)call BF_printinfo(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1), option, stats, ptree, filename_offset)
+        end do
+
+        do level_c = ho_bf1%Maxlevel, 1, -1
+            call MPI_barrier(ptree%Comm, ierr)
+            do rowblock_inv = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+            do rowblock = rowblock_inv*2 - 1, rowblock_inv*2
+                if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(rowblock)%pgno)) then
+                     if(inverse==0)call BF_printinfo(ho_bf1%levels(level_c)%BP(rowblock)%LL(1)%matrices_block(1), option, stats, ptree, filename_offset)
+                     if(inverse==1)call BF_printinfo(ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1), option, stats, ptree, filename_offset)
+                end if
+            end do
+            end do
+
+            call MPI_barrier(ptree%Comm, ierr)
+            do rowblock = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+                pgno = ho_bf1%levels(level_c)%BP_inverse(rowblock)%pgno
+                if (IOwnPgrp(ptree, pgno)) then
+                    if(inverse==1)call BF_printinfo(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1), option, stats, ptree, filename_offset)
+                endif
+            end do
+        end do
+        return
+
+    end subroutine HODLR_PrintStructure
+
+
+
+
    recursive subroutine Hmat_GetBlkLst(blocks, ptree, lstblks, Maxlevel)
       implicit none
       ! type(Hoption)::option

@@ -3,6 +3,7 @@ module load gcc/9.1.0
 # module load openmpi/gcc-9.1.0/4.0.1
 # module load scalapack-netlib/gcc-9.1.0/2.2.0
 module load cmake/3.19.2
+export ZFP_INSTALL_DIR=/home/administrator/Desktop/Research/zfp/install/
 
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
@@ -21,6 +22,8 @@ cmake .. \
 	-Denable_doc=OFF \
 	-Denable_openmp=ON \
 	-Denable_mpi=OFF \
+	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib/libzFORp.so;$ZFP_INSTALL_DIR/lib/libzfp.so" \
+	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
 	-DTPL_BLAS_LIBRARIES="/usr/lib/x86_64-linux-gnu/libblas.so" \
 	-DTPL_LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/liblapack.so" \
 	-DCMAKE_Fortran_COMPILER=$F90 \
@@ -28,7 +31,7 @@ cmake .. \
 	-DCMAKE_C_COMPILER=$CC \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_INSTALL_LIBDIR=./lib \
-	-DCMAKE_BUILD_TYPE=Debug\
+	-DCMAKE_BUILD_TYPE=Release\
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 
 make krr_seq -j16

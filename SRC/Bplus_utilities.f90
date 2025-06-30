@@ -1773,6 +1773,41 @@ contains
 
    end subroutine BF_copy_delete
 
+
+   subroutine BF_printinfo(block_i, option, stats, ptree, filename_offset)
+
+      implicit none
+      type(matrixblock)::block_i
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer filename_offset
+      integer i, j, ii, jj, iii, jjj, index_ij, mm, nn, rank, index_i, index_j, levelm, index_i_m, index_j_m
+      integer level, blocks, edge, patch, node, group, level_c
+      integer::block_num, block_num_new, num_blocks, level_butterfly, ierr
+      real(kind=8)::memory,compression_ratio
+      DT:: tmp
+      memory = 0
+
+      if (IOwnPgrp(ptree, block_i%pgno)) then
+         call BF_ComputeMemory(block_i, memory)
+         compression_ratio = 1 - memory/(storage_size(tmp)*block_i%M*block_i%N/8d0/1024.0d3)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, memory, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(block_i%pgno)%Comm, ierr)
+         call BF_get_rank(block_i, ptree)
+
+         if (ptree%pgrp(block_i%pgno)%head == ptree%MyID)then !!! only the head process prints the information about this block
+            write (ptree%MyID + filename_offset, '(I12,I12,I12,I12,I12,I12,I12,I12,Es12.4,Es12.2)') block_i%headm, block_i%headn, block_i%M, block_i%N, ptree%pgrp(block_i%pgno)%nproc, block_i%style, block_i%rankmin, block_i%rankmax, memory, compression_ratio
+         endif
+      endif
+
+   end subroutine BF_printinfo
+
+
+
+
+
+
    subroutine BF_ComputeMemory(block_i, memory)
 
 
@@ -13177,7 +13212,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer ii, jj
       real(kind=8)::tol_used
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
+      if(allocated(blocks%FullmatZFP%buffer_r))call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,1)
 #endif
       headm = msh%basis_group(blocks%row_group)%head
       headn = msh%basis_group(blocks%col_group)%head
@@ -13191,9 +13226,9 @@ end subroutine BF_block_MVP_dat_batch_magma
             enddo
          enddo
       enddo
-#if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,1)
-#endif
+! #if HAVE_ZFP
+!       if(allocated(blocks%FullmatZFP%buffer_r))call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,1)
+! #endif
    end subroutine Full_block_extraction
 
    subroutine LR_block_extraction(blocks, inters, ptree, msh, stats)
@@ -13722,7 +13757,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             allocate(mat1(product(dims_MD_old(1:Ndim)),product(dims_MD_old(1+Ndim:2*Ndim))))
 
 #if HAVE_ZFP
-            if(option%use_zfp==1 .and. option%use_qtt==0)call ZFP_Decompress(blocks%ButterflyMiddle(index_ij)%matrix,blocks%MiddleZFP(index_ij),product(blocks%ButterflyMiddle(index_ij)%dims_m),product(blocks%ButterflyMiddle(index_ij)%dims_n),tol_used,1)
+            if(option%use_zfp>=1 .and. option%use_qtt==0)call ZFP_Decompress(blocks%ButterflyMiddle(index_ij)%matrix,blocks%MiddleZFP(index_ij),product(blocks%ButterflyMiddle(index_ij)%dims_m),product(blocks%ButterflyMiddle(index_ij)%dims_n),tol_used,1)
 #endif
             if(option%use_qtt==1)then
                call QTT_Decompress(blocks%MiddleQTT(index_ij), data_buffer)
@@ -13733,7 +13768,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             endif
 
 #if HAVE_ZFP
-            if(option%use_zfp==1 .and. option%use_qtt==0)deallocate(blocks%ButterflyMiddle(index_ij)%matrix)
+            if(option%use_zfp>=1 .and. option%use_qtt==0)deallocate(blocks%ButterflyMiddle(index_ij)%matrix)
 #endif
 
 
@@ -16633,53 +16668,59 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(proctree)::ptree
       integer lve, lvs
 
-      block_i%rankmin = 100000
-      block_i%rankmax = -100000
+      if(block_i%style==1)then
+         rank= min(block_i%M,block_i%N)
+         block_i%rankmin=rank
+         block_i%rankmax=rank
+      else
 
-      if (IOwnPgrp(ptree, block_i%pgno)) then
+         block_i%rankmin = 100000
+         block_i%rankmax = -100000
 
-         level_butterfly = block_i%level_butterfly
-         num_blocks = 2**level_butterfly
+         if (IOwnPgrp(ptree, block_i%pgno)) then
 
-         lvs = 0
-         lve = level_butterfly + 1
-         if (present(level_o)) then
-            lvs = level_o
-            lve = level_o
-         endif
+            level_butterfly = block_i%level_butterfly
+            num_blocks = 2**level_butterfly
 
-         do level = lvs, lve
-            if (level == 0) then
-               do jj = 1, block_i%ButterflyV%nblk_loc
-                  nn = size(block_i%ButterflyV%blocks(jj)%matrix, 1)
-                  rank = size(block_i%ButterflyV%blocks(jj)%matrix, 2)
-                  block_i%rankmin = min(block_i%rankmin, rank)
-                  block_i%rankmax = max(block_i%rankmax, rank)
-               enddo
-            elseif (level == level_butterfly + 1) then
-               do jj = 1, block_i%ButterflyU%nblk_loc
-                  mm = size(block_i%ButterflyU%blocks(jj)%matrix, 1)
-                  rank = size(block_i%ButterflyU%blocks(jj)%matrix, 2)
-                  block_i%rankmin = min(block_i%rankmin, rank)
-                  block_i%rankmax = max(block_i%rankmax, rank)
-               enddo
-            else
-               do ii = 1, block_i%ButterflyKerl(level)%nr
-                  do jj = 1, block_i%ButterflyKerl(level)%nc
-                     nn = size(block_i%ButterflyKerl(level)%blocks(ii, jj)%matrix, 2)
-                     rank = size(block_i%ButterflyKerl(level)%blocks(ii, jj)%matrix, 1)
+            lvs = 0
+            lve = level_butterfly + 1
+            if (present(level_o)) then
+               lvs = level_o
+               lve = level_o
+            endif
+
+            do level = lvs, lve
+               if (level == 0) then
+                  do jj = 1, block_i%ButterflyV%nblk_loc
+                     nn = size(block_i%ButterflyV%blocks(jj)%matrix, 1)
+                     rank = size(block_i%ButterflyV%blocks(jj)%matrix, 2)
                      block_i%rankmin = min(block_i%rankmin, rank)
                      block_i%rankmax = max(block_i%rankmax, rank)
                   enddo
-               enddo
-            endif
-         enddo
+               elseif (level == level_butterfly + 1) then
+                  do jj = 1, block_i%ButterflyU%nblk_loc
+                     mm = size(block_i%ButterflyU%blocks(jj)%matrix, 1)
+                     rank = size(block_i%ButterflyU%blocks(jj)%matrix, 2)
+                     block_i%rankmin = min(block_i%rankmin, rank)
+                     block_i%rankmax = max(block_i%rankmax, rank)
+                  enddo
+               else
+                  do ii = 1, block_i%ButterflyKerl(level)%nr
+                     do jj = 1, block_i%ButterflyKerl(level)%nc
+                        nn = size(block_i%ButterflyKerl(level)%blocks(ii, jj)%matrix, 2)
+                        rank = size(block_i%ButterflyKerl(level)%blocks(ii, jj)%matrix, 1)
+                        block_i%rankmin = min(block_i%rankmin, rank)
+                        block_i%rankmax = max(block_i%rankmax, rank)
+                     enddo
+                  enddo
+               endif
+            enddo
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
 
+         endif
       endif
-
    end subroutine BF_get_rank
 
 
@@ -18055,6 +18096,40 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       return
 
    end subroutine Hmat_block_delete
+
+
+
+
+   recursive subroutine Hmat_block_printinfo(blocks, option, stats, ptree, filename_offset)
+
+      implicit none
+
+      integer level_actual, num_col, num_row, filename_offset
+      integer i, j, mm, nn, rank, num_blocks, level, level_butterfly
+      real*8 memory_butterfly, rtemp
+      type(matrixblock) :: blocks
+      type(matrixblock), pointer :: blocks_son
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      if (blocks%style == 4) then
+         blocks_son => blocks%sons(1, 1)
+         call Hmat_block_printinfo(blocks_son, option, stats, ptree, filename_offset)
+         blocks_son => blocks%sons(2, 1)
+         call Hmat_block_printinfo(blocks_son, option, stats, ptree, filename_offset)
+         blocks_son => blocks%sons(1, 2)
+         call Hmat_block_printinfo(blocks_son, option, stats, ptree, filename_offset)
+         blocks_son => blocks%sons(2, 2)
+         call Hmat_block_printinfo(blocks_son, option, stats, ptree, filename_offset)
+      else
+         call BF_printinfo(blocks, option, stats, ptree, filename_offset)
+      endif
+
+      return
+
+   end subroutine Hmat_block_printinfo
+
 
    recursive subroutine Hmat_block_ComputeMemory(blocks, memory)
 

@@ -3620,7 +3620,7 @@ do i_dim = 1,dims_row(dim)
             enddo
             use_zfp=0
 #if HAVE_ZFP
-            if(option%use_zfp==1)use_zfp=1
+            if(option%use_zfp>=1)use_zfp=1
 #endif
             if(use_zfp==0)then
                allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
@@ -9494,7 +9494,7 @@ time_tmp = time_tmp + n2 - n1
       deallocate(submats(1)%dat)
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)then
+      if(option%use_zfp==1 .or. (option%use_zfp==2 .and. blocks%row_group/=blocks%col_group))then
          call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N, option%tol_comp,0)
          memory = SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
@@ -9562,7 +9562,7 @@ time_tmp = time_tmp + n2 - n1
       enddo
       use_zfp=0
 #if HAVE_ZFP
-      if(option%use_zfp==1)use_zfp=1
+      if(option%use_zfp>=1)use_zfp=1
 #endif
       if(use_zfp==1 .and. option%use_qtt==0)then
 #if HAVE_ZFP

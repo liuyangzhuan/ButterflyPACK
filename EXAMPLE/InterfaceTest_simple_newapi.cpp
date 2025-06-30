@@ -276,7 +276,7 @@ int main(int argc, char* argv[])
 	int batch = 16; //batch size for BACA
 	int bnum = 1; //sqrt of #of subblocks in H-BACA
 	int knn=0; //k nearest neighbours stored per point
-	int format=1; //1: HOD-LR/BF  2:H-LR/BF
+	int format=1; //1: HOD-LR/BF  2:H-LR/BF 3: HSSBF/SHNBF 4: HSSBF-MD/SHNBF-MD 5: B-LR/B-BF
 	double near_para=0.01; // control the admissibility
 	C_QuantApp *quant_ptr;
 	int v_major,v_minor,v_bugfix; //version numbers
@@ -460,7 +460,7 @@ if(tst==1){
 
 	if(nlevel>0){
 		if(myrank==master_rank)std::cout<<"BPACK uses a clustering tree of "<<nlevel<<" levels:"<<std::endl;
-		for (int bb=0; bb<(int)pow(nlevel,2.0);bb++)
+		for (int bb=0; bb<round(pow(nlevel,2.0));bb++)
 			if(myrank==master_rank)std::cout<<tree[bb]<<" ";
 		if(myrank==master_rank)std::cout<<std::endl;
 	}
@@ -470,6 +470,9 @@ if(tst==1){
 
 	// factor matrix
 	bpack_factor_ho<scalart>(bmat,option,stats,ptree,msh);
+
+	bpack_printstructure<scalart>(bmat, 0, option, stats, ptree);
+	bpack_printstructure<scalart>(bmat, 1, option, stats, ptree);
 
 	int nrhs=1;
 	scalart* b = new scalart[nrhs*myseg];
