@@ -129,7 +129,9 @@ endif()
 set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 check_cxx_compiler_flag("-qopt-matmul" qoptmatmul)
 if(qoptmatmul)
-  set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
+  if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
+  endif()
 endif()
 
 ######################################################################
