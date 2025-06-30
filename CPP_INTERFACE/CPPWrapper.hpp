@@ -87,10 +87,13 @@ namespace butterflypack {
     double bpack_get_stat
     (F2Cptr& stats, const std::string& name);
 
+    template<typename scalar_t> void bpack_printstructure
+    (F2Cptr bmat, int inverse, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
+
     template<typename scalar_t>
     void bpack_construct_ho_init
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata);
@@ -98,7 +101,7 @@ namespace butterflypack {
     template<typename scalar_t>
     void bpack_construct_ho_init_Gram
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, scalar_t*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -108,7 +111,7 @@ namespace butterflypack {
       C2Fptr elems), C2Fptr fdata);
 
     template<typename scalar_t> void bpack_construct_ho_element_compute
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, scalar_t*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -118,7 +121,7 @@ namespace butterflypack {
       C2Fptr elems), C2Fptr K);
 
     template<typename scalar_t> void bpack_construct_ho_matvec_compute
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*matvec)
      (char const*, int*, int*, int*, const scalar_t*, scalar_t*, C2Fptr),
@@ -147,7 +150,7 @@ namespace butterflypack {
       C2Fptr elems), C2Fptr fdata);
 
     template<typename scalar_t> void bpack_extract_elements_ho
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols,
      std::int64_t Nalldat_loc, int* allrows, int* allcols, scalar_t* alldat_loc,
      int* rowidx, int* colidx, int* pgidx, int Npmap, int* pmaps);
@@ -176,22 +179,22 @@ namespace butterflypack {
 
     template<typename scalar_t> void bpack_mult_ho
     (char op, const scalar_t* X, scalar_t* Y, int Xlrows, int Ylrows, int cols,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
     template<typename scalar_t> void bpack_mult_bf
     (char op, const scalar_t* X, scalar_t* Y, int Xlrows, int Ylrows, int cols,
      F2Cptr lr_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
     template<typename scalar_t> void bpack_factor_ho
-    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh);
+    (F2Cptr& bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh);
 
     template<typename scalar_t> void bpack_solve_ho
     (scalar_t* X, const scalar_t* B, int lrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
     template<typename scalar_t> void bpack_inv_mult_ho
     (char op, const scalar_t* B, scalar_t* X, int Xlrows, int Blrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree);
 
     int bpack_treeindex_merged2child(int idx_merge);
     int bpack_new2old(F2Cptr msh, int i_new_loc);

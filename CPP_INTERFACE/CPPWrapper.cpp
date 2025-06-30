@@ -93,54 +93,72 @@ namespace butterflypack {
     }
 
 
+    template<> void bpack_printstructure<float>
+    (F2Cptr bmat, int inverse, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+      s_c_bpack_printstructure(&bmat, &inverse, &options, &stats, &ptree);
+    }
+    template<> void bpack_printstructure<double>
+    (F2Cptr bmat, int inverse, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+      d_c_bpack_printstructure(&bmat, &inverse, &options, &stats, &ptree);
+    }
+    template<> void bpack_printstructure<_Complex float>
+    (F2Cptr bmat, int inverse, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+      c_c_bpack_printstructure(&bmat, &inverse, &options, &stats, &ptree);
+    }
+    template<> void bpack_printstructure<_Complex double>
+    (F2Cptr bmat, int inverse, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+      z_c_bpack_printstructure(&bmat, &inverse, &options, &stats, &ptree);
+    }
+
+
     template<> void bpack_construct_ho_init<float>
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata) {
         s_c_bpack_construct_init
-          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
            &stats, &msh, &kerquant, &ptree, C_FuncDistmn, C_FuncNearFar,
            fdata);
     }
     template<> void bpack_construct_ho_init<double>
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata) {
       d_c_bpack_construct_init
-        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
          &stats, &msh, &kerquant, &ptree, C_FuncDistmn, C_FuncNearFar,
          fdata);
     }
     template<> void bpack_construct_ho_init<_Complex float>
     (int N, int d, double* data, int* nns, int& lvls, int* tree,
-     int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
+     int* perm, int& lrow, F2Cptr& bmat, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata) {
       c_c_bpack_construct_init
-        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
           &stats, &msh, &kerquant, &ptree, C_FuncDistmn,
           C_FuncNearFar, fdata);
     }
     template<> void bpack_construct_ho_init<_Complex double>
     (int N, int d, double* data, int* nns, int& lvls, int* tree,
-     int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
+     int* perm, int& lrow, F2Cptr& bmat, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncDistmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr fdata) {
       z_c_bpack_construct_init
-        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
          &stats, &msh, &kerquant, &ptree, C_FuncDistmn,
          C_FuncNearFar, fdata);
     }
 
     template<> void bpack_construct_ho_init_Gram<float>
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, float*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -149,12 +167,12 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
         s_c_bpack_construct_init_gram
-          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
            &stats, &msh, &kerquant, &ptree, C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_init_Gram<double>
     (int N, int d, double* data, int* nns, int& lvls, int* tree, int* perm,
-     int& lrow, F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+     int& lrow, F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -163,12 +181,12 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       d_c_bpack_construct_init_gram
-        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
          &stats, &msh, &kerquant, &ptree, C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_init_Gram<_Complex float>
     (int N, int d, double* data, int* nns, int& lvls, int* tree,
-     int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
+     int* perm, int& lrow, F2Cptr& bmat, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex float*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -177,7 +195,7 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
         c_c_bpack_construct_init_gram
-          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+          (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
            &stats, &msh, &kerquant, &ptree,
            reinterpret_cast<
            void(*)(int*, int*, _Complex float*, C2Fptr)>(C_FuncZmn),
@@ -189,7 +207,7 @@ namespace butterflypack {
     }
     template<> void bpack_construct_ho_init_Gram<_Complex double>
     (int N, int d, double* data, int* nns, int& lvls, int* tree,
-     int* perm, int& lrow, F2Cptr& ho_bf, F2Cptr& options,
+     int* perm, int& lrow, F2Cptr& bmat, F2Cptr& options,
      F2Cptr& stats, F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex double*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -198,7 +216,7 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       z_c_bpack_construct_init_gram
-        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &ho_bf, &options,
+        (&N, &d, data, nns, &lvls, tree, perm, &lrow, &bmat, &options,
          &stats, &msh, &kerquant, &ptree,
          reinterpret_cast<
          void(*)(int*, int*, _Complex double*, C2Fptr)>(C_FuncZmn),
@@ -211,7 +229,7 @@ namespace butterflypack {
 
 
     template<> void bpack_construct_ho_element_compute<float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, float*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -220,11 +238,11 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       s_c_bpack_construct_element_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_element_compute<double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, double*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -233,11 +251,11 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       d_c_bpack_construct_element_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          C_FuncZmn, C_FuncZmnBlock, fdata);
     }
     template<> void bpack_construct_ho_element_compute<_Complex float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex float*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -246,7 +264,7 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       c_c_bpack_construct_element_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          reinterpret_cast<
          void(*)(int*, int*, _Complex float*, C2Fptr)>(C_FuncZmn),
          reinterpret_cast<
@@ -257,7 +275,7 @@ namespace butterflypack {
          fdata);
     }
     template<> void bpack_construct_ho_element_compute<_Complex double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats,
      F2Cptr& msh, F2Cptr& kerquant, F2Cptr& ptree,
      void (*C_FuncZmn)(int*, int*, _Complex double*, C2Fptr),
      void (*C_FuncZmnBlock)
@@ -266,7 +284,7 @@ namespace butterflypack {
       int* rowids, int* colids, int* pgids, int* Npmap, int* pmaps,
       C2Fptr elems), C2Fptr fdata) {
       z_c_bpack_construct_element_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          reinterpret_cast<
          void(*)(int*, int*, _Complex double*, C2Fptr)>(C_FuncZmn),
          reinterpret_cast<
@@ -278,39 +296,39 @@ namespace butterflypack {
     }
 
     template<> void bpack_construct_ho_matvec_compute<float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*matvec)
      (char const*, int*, int*, int*, const float*, float*, C2Fptr),
      C2Fptr fdata) {
       s_c_bpack_construct_matvec_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree, matvec, fdata);
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree, matvec, fdata);
     }
     template<> void bpack_construct_ho_matvec_compute<double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*matvec)
      (char const*, int*, int*, int*, const double*, double*, C2Fptr),
      C2Fptr fdata) {
       d_c_bpack_construct_matvec_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree, matvec, fdata);
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree, matvec, fdata);
     }
     template<> void bpack_construct_ho_matvec_compute<_Complex float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*matvec)
      (char const*, int*, int*, int*, const _Complex float*,
       _Complex float*, C2Fptr), C2Fptr fdata) {
       c_c_bpack_construct_matvec_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          reinterpret_cast<
          void(*)(char const*, int*, int*, int*, const _Complex float*,
                  _Complex float*, C2Fptr)>(matvec), fdata);
     }
     template<> void bpack_construct_ho_matvec_compute<_Complex double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& stats, F2Cptr& msh,
      F2Cptr& kerquant, F2Cptr& ptree, void (*matvec)
      (char const*, int*, int*, int*, const _Complex double*,
       _Complex double*, C2Fptr), C2Fptr fdata) {
       z_c_bpack_construct_matvec_compute
-        (&ho_bf, &options, &stats, &msh, &kerquant, &ptree,
+        (&bmat, &options, &stats, &msh, &kerquant, &ptree,
          reinterpret_cast<
          void(*)(char const*, int*, int*, int*, const _Complex double*,
                  _Complex double*, C2Fptr)>(matvec), fdata);
@@ -456,12 +474,12 @@ namespace butterflypack {
     }
 
     template<> void bpack_extract_elements_ho<float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols, std::int64_t Nalldat_loc,
      int* allrows, int* allcols, float* alldat_loc, int* rowidx, int* colidx,
      int* pgidx, int Npmap, int* pmaps) {
       s_c_bpack_extractelement
-        (&ho_bf, &options, &msh, &stats, &ptree, &Ninter, &Nallrows,
+        (&bmat, &options, &msh, &stats, &ptree, &Ninter, &Nallrows,
          &Nallcols, &Nalldat_loc, allrows, allcols, alldat_loc,
          rowidx, colidx, pgidx, &Npmap, pmaps);
 #if defined(STRUMPACK_COUNT_FLOPS)
@@ -471,12 +489,12 @@ namespace butterflypack {
 #endif
     }
     template<> void bpack_extract_elements_ho<double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols, std::int64_t Nalldat_loc,
      int* allrows, int* allcols, double* alldat_loc, int* rowidx, int* colidx,
      int* pgidx, int Npmap, int* pmaps) {
       d_c_bpack_extractelement
-        (&ho_bf, &options, &msh, &stats, &ptree, &Ninter, &Nallrows,
+        (&bmat, &options, &msh, &stats, &ptree, &Ninter, &Nallrows,
          &Nallcols, &Nalldat_loc, allrows, allcols, alldat_loc,
          rowidx, colidx, pgidx, &Npmap, pmaps);
 #if defined(STRUMPACK_COUNT_FLOPS)
@@ -486,12 +504,12 @@ namespace butterflypack {
 #endif
     }
     template<> void bpack_extract_elements_ho<_Complex float>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols, std::int64_t Nalldat_loc,
      int* allrows, int* allcols, _Complex float* alldat_loc,
      int* rowidx, int* colidx, int* pgidx, int Npmap, int* pmaps) {
       c_c_bpack_extractelement
-        (&ho_bf, &options, &msh, &stats, &ptree,
+        (&bmat, &options, &msh, &stats, &ptree,
          &Ninter, &Nallrows, &Nallcols, &Nalldat_loc,
          allrows, allcols, reinterpret_cast<_Complex float*>(alldat_loc),
          rowidx, colidx, pgidx, &Npmap, pmaps);
@@ -502,12 +520,12 @@ namespace butterflypack {
 #endif
     }
     template<> void bpack_extract_elements_ho<_Complex double>
-    (F2Cptr& ho_bf, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
+    (F2Cptr& bmat, F2Cptr& options, F2Cptr& msh, F2Cptr& stats,
      F2Cptr& ptree, int Ninter, int Nallrows, int Nallcols, std::int64_t Nalldat_loc,
      int* allrows, int* allcols, _Complex double* alldat_loc,
      int* rowidx, int* colidx, int* pgidx, int Npmap, int* pmaps) {
       z_c_bpack_extractelement
-        (&ho_bf, &options, &msh, &stats, &ptree,
+        (&bmat, &options, &msh, &stats, &ptree,
          &Ninter, &Nallrows, &Nallcols, &Nalldat_loc,
          allrows, allcols, reinterpret_cast<_Complex double*>(alldat_loc),
          rowidx, colidx, pgidx, &Npmap, pmaps);
@@ -589,7 +607,7 @@ namespace butterflypack {
 
     void bpack_deletekernelquant(F2Cptr& kerquant) { d_c_bpack_deletekernelquant(&kerquant); }
 
-    void bpack_delete_ho(F2Cptr& ho_bf) { d_c_bpack_delete(&ho_bf); }
+    void bpack_delete_ho(F2Cptr& bmat) { d_c_bpack_delete(&bmat); }
 
     void bpack_delete_bf(F2Cptr& lr_bf) { d_c_bf_deletebf(&lr_bf); }
 
@@ -597,31 +615,31 @@ namespace butterflypack {
 
     template<> void bpack_mult_ho<float>
     (char op, const float* X, float* Y, int Xlrows, int Ylrows, int cols,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       s_c_bpack_mult(&op, X, Y, &Xlrows, &Ylrows,
-                     &cols, &ho_bf, &options, &stats, &ptree);
+                     &cols, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_mult_ho<double>
     (char op, const double* X, double* Y, int Xlrows, int Ylrows, int cols,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       d_c_bpack_mult(&op, X, Y, &Xlrows, &Ylrows,
-                     &cols, &ho_bf, &options, &stats, &ptree);
+                     &cols, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_mult_ho<_Complex float>
     (char op, const _Complex float* X, _Complex float* Y,
-     int Xlrows, int Ylrows, int cols, F2Cptr ho_bf, F2Cptr options,
+     int Xlrows, int Ylrows, int cols, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       c_c_bpack_mult(&op, reinterpret_cast<const _Complex float*>(X),
                      reinterpret_cast<_Complex float*>(Y), &Xlrows, &Ylrows,
-                     &cols, &ho_bf, &options, &stats, &ptree);
+                     &cols, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_mult_ho<_Complex double>
     (char op, const _Complex double* X, _Complex double* Y,
-     int Xlrows, int Ylrows, int cols, F2Cptr ho_bf, F2Cptr options,
+     int Xlrows, int Ylrows, int cols, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       z_c_bpack_mult(&op, reinterpret_cast<const _Complex double*>(X),
                      reinterpret_cast<_Complex double*>(Y), &Xlrows, &Ylrows,
-                     &cols, &ho_bf, &options, &stats, &ptree);
+                     &cols, &bmat, &options, &stats, &ptree);
     }
 
     template<> void bpack_mult_bf<float>
@@ -657,85 +675,85 @@ namespace butterflypack {
 
 
     template<> void bpack_factor_ho<float>
-    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
-      s_c_bpack_factor(&ho_bf, &options, &stats, &ptree, &msh);
+    (F2Cptr& bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
+      s_c_bpack_factor(&bmat, &options, &stats, &ptree, &msh);
     }
     template<> void bpack_factor_ho<double>
-    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
-      d_c_bpack_factor(&ho_bf, &options, &stats, &ptree, &msh);
+    (F2Cptr& bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
+      d_c_bpack_factor(&bmat, &options, &stats, &ptree, &msh);
     }
     template<> void bpack_factor_ho<_Complex float>
-    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
-      c_c_bpack_factor(&ho_bf, &options, &stats, &ptree, &msh);
+    (F2Cptr& bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
+      c_c_bpack_factor(&bmat, &options, &stats, &ptree, &msh);
     }    
     template<> void bpack_factor_ho<_Complex double>
-    (F2Cptr& ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
-      z_c_bpack_factor(&ho_bf, &options, &stats, &ptree, &msh);
+    (F2Cptr& bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree, F2Cptr msh) {
+      z_c_bpack_factor(&bmat, &options, &stats, &ptree, &msh);
     }
 
 
     template<> void bpack_solve_ho<float>
     (float* X, const float* B, int lrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       s_c_bpack_solve(X, const_cast<float*>(B), &lrows, &rhs,
-                      &ho_bf, &options, &stats, &ptree);
+                      &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_solve_ho<double>
     (double* X, const double* B, int lrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       d_c_bpack_solve(X, const_cast<double*>(B), &lrows, &rhs,
-                      &ho_bf, &options, &stats, &ptree);
+                      &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_solve_ho<_Complex float>
     (_Complex float* X, const _Complex float* B,
-     int lrows, int rhs, F2Cptr ho_bf, F2Cptr options,
+     int lrows, int rhs, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       c_c_bpack_solve
         (reinterpret_cast<_Complex float*>(X),
          reinterpret_cast<_Complex float*>
          (const_cast<_Complex float*>(B)), &lrows, &rhs,
-         &ho_bf, &options, &stats, &ptree);
+         &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_solve_ho<_Complex double>
     (_Complex double* X, const _Complex double* B,
-     int lrows, int rhs, F2Cptr ho_bf, F2Cptr options,
+     int lrows, int rhs, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       z_c_bpack_solve
         (reinterpret_cast<_Complex double*>(X),
          reinterpret_cast<_Complex double*>
          (const_cast<_Complex double*>(B)), &lrows, &rhs,
-         &ho_bf, &options, &stats, &ptree);
+         &bmat, &options, &stats, &ptree);
     }
 
     template<> void bpack_inv_mult_ho<float>
     (char op, const float* B, float* X, int Xlrows, int Blrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       s_c_bpack_inv_mult
-        (&op, B, X, &Xlrows, &Blrows, &rhs, &ho_bf, &options, &stats, &ptree);
+        (&op, B, X, &Xlrows, &Blrows, &rhs, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_inv_mult_ho<double>
     (char op, const double* B, double* X, int Xlrows, int Blrows, int rhs,
-     F2Cptr ho_bf, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
+     F2Cptr bmat, F2Cptr options, F2Cptr& stats, F2Cptr ptree) {
       d_c_bpack_inv_mult
-        (&op, B, X, &Xlrows, &Blrows, &rhs, &ho_bf, &options, &stats, &ptree);
+        (&op, B, X, &Xlrows, &Blrows, &rhs, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_inv_mult_ho<_Complex float>
     (char op, const _Complex float* B, _Complex float* X,
-     int Xlrows, int Blrows, int rhs, F2Cptr ho_bf, F2Cptr options,
+     int Xlrows, int Blrows, int rhs, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       c_c_bpack_inv_mult
         (&op, reinterpret_cast<const _Complex float*>(B),
          reinterpret_cast<_Complex float*>(X),
-         &Xlrows, &Blrows, &rhs, &ho_bf, &options, &stats, &ptree);
+         &Xlrows, &Blrows, &rhs, &bmat, &options, &stats, &ptree);
     }
     template<> void bpack_inv_mult_ho<_Complex double>
     (char op, const _Complex double* B, _Complex double* X,
-     int Xlrows, int Blrows, int rhs, F2Cptr ho_bf, F2Cptr options,
+     int Xlrows, int Blrows, int rhs, F2Cptr bmat, F2Cptr options,
      F2Cptr& stats, F2Cptr ptree) {
       z_c_bpack_inv_mult
         (&op, reinterpret_cast<const _Complex double*>(B),
          reinterpret_cast<_Complex double*>(X),
-         &Xlrows, &Blrows, &rhs, &ho_bf, &options, &stats, &ptree);
+         &Xlrows, &Blrows, &rhs, &bmat, &options, &stats, &ptree);
     }
 
     int bpack_treeindex_merged2child(int idx_merge) {
