@@ -625,7 +625,7 @@ contains
 
          inner_UV = 0
 #ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+         !!$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
 #endif
          do j = 1, rank
             inner_U = 0
@@ -645,7 +645,7 @@ contains
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
          enddo
 #ifdef HAVE_OPENMP
-         !$omp end parallel do
+         !!$omp end parallel do
 #endif
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
@@ -1080,7 +1080,7 @@ contains
             end if
             A_tmp = 0
 #ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(ii,jj)
+            !!$omp parallel do default(shared) private(ii,jj)
 #endif
             do ii = 1, mn
                do jj = ii, mn
@@ -1088,7 +1088,7 @@ contains
                enddo
             enddo
 #ifdef HAVE_OPENMP
-            !$omp end parallel do
+            !!$omp end parallel do
 #endif
             rank = mn
             do i = 1, mn

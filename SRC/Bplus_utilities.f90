@@ -18196,7 +18196,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                ii = blocks_l%ipiv(i)
                if (ii /= i) then
 #ifdef HAVE_OPENMP
-                  !$omp parallel do default(shared) private(j,ctemp)
+                  !!$omp parallel do default(shared) private(j,ctemp)
 #endif
                   do j = 1, nvec
                      ctemp = Vinout(idxs_m + i - 1, j)
@@ -18204,7 +18204,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      Vinout(idxs_m + ii - 1, j) = ctemp
                   enddo
 #ifdef HAVE_OPENMP
-                  !$omp end parallel do
+                  !!$omp end parallel do
 #endif
                endif
             enddo
@@ -18224,7 +18224,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                ii = blocks_l%ipiv(i)
                if (ii /= i) then
 #ifdef HAVE_OPENMP
-                  !$omp parallel do default(shared) private(j,ctemp)
+                  !!$omp parallel do default(shared) private(j,ctemp)
 #endif
                   do j = 1, nvec
                      ctemp = Vinout(idxs_m + i - 1, j)
@@ -18232,7 +18232,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      Vinout(idxs_m + ii - 1, j) = ctemp
                   enddo
 #ifdef HAVE_OPENMP
-                  !$omp end parallel do
+                  !!$omp end parallel do
 #endif
                endif
             enddo
