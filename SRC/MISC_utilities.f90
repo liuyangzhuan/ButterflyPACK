@@ -3196,6 +3196,14 @@ contains
             end if
          end do
       endif
+
+      if (rank==0) then
+         rank = 1
+         UU = 0
+         VV = 0
+         Singular = 0
+      endif
+
       deallocate (mat0)
 
    end subroutine SVD_Truncate
