@@ -148,18 +148,21 @@ if(style(3) == 1)then
 
 else
          T2 = MPI_Wtime()
+#if HAVE_ZFP
          if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Decompress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,tol_used,1)
          if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Decompress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,tol_used,1)
+#endif
 
          allocate (fullmatrix(mm, nn))
          fullmatrix = 0d0
          call gemmf90(block1%fullmat, block1%M, block2%fullmat, block2%M, fullmatrix, mm, 'N', 'N', mm, nn, kk, BPACK_cone, BPACK_czero, flop=flop_tmp)
          stats%Flop_Tmp = stats%Flop_Tmp + flop_tmp
          if (chara == '-') fullmatrix = -fullmatrix
-
+         
+#if HAVE_ZFP
          if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Compress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,option%tol_comp,1)
          if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Compress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,option%tol_comp,1)
-
+#endif
          allocate (Vin2(nn, nn))
          Vin2 = 0d0
          do ii = 1, nn
