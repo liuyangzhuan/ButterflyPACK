@@ -210,7 +210,8 @@ public:
   C_QuantApp(int n, int ker, vector<double> MatFull, vector<int> perm)
     : _n(n), _ker(ker), _MatFull(move(MatFull)), _Hperm(move(perm)){
 	// cout<<_n_rand<<_rank_rand<<_MatU.size()<<endl;
-    assert(size_t(_n * _n) == _MatFull.size());
+    assert((size_t)_n * (size_t)_n == _MatFull.size());
+    // cout<<(size_t)_n * (size_t)_n<<" "<<_MatFull.size()<<endl;
 	}
 
   inline void Sample(int m, int n, double* val){
@@ -239,7 +240,7 @@ public:
 		}
 		break;
 	case 7: //Full matrix
-		*val =_MatFull[n*_n+m];
+		*val =_MatFull[(size_t)n*(size_t)_n+(size_t)m];
 		// *val =_MatFull[_Hperm[n]*_n+_Hperm[m]];
 		break;
 	case 8: //Laplacian kernel
@@ -758,12 +759,12 @@ if(tst==4){
 	delete(tree);
 	// nlevel = 7;
 	vector<int> t1((int)pow(2,nlevel));
-	vector<double> matFull(Npo*Npo);
+	vector<double> matFull(Npo*(size_t)Npo);
 	vector<int> perm(Npo);
 	if(myrank==master_rank){
 		// vector<double> matFull1(Npo*Npo);
 		ifstream f(fullmatfile, ios::binary);
-		f.read((char*)matFull.data(), sizeof(double)*Npo*Npo);
+		f.read((char*)matFull.data(), sizeof(double)*Npo*(size_t)Npo);
 
 		// perm = write_from_file<int>("../EXAMPLE/FULLMAT_DATA/sorder_40000.dat");
 
