@@ -1104,7 +1104,7 @@ contains
 
 
 
-   subroutine BF_delete(blocks, allflag)
+   subroutine BF_delete(blocks, allflag, keep_metadata)
 
 
       implicit none
@@ -1114,6 +1114,7 @@ contains
       real(kind=8) memory_butterfly, rtemp
       type(matrixblock)::blocks
       integer allflag
+      integer,optional::keep_metadata
 
       level_butterfly = blocks%level_butterfly
 
@@ -1185,17 +1186,22 @@ contains
       if (allocated(blocks%ipiv)) deallocate (blocks%ipiv)
       if (allocated(blocks%Butterfly_data_MPI)) deallocate (blocks%Butterfly_data_MPI)
       if (allocated(blocks%Butterfly_index_MPI)) deallocate (blocks%Butterfly_index_MPI)
-      if (associated(blocks%ms)) deallocate (blocks%ms)
-      if (associated(blocks%ns)) deallocate (blocks%ns)
 
+      if(.not. present(keep_metadata))then
+         if (associated(blocks%ms)) deallocate (blocks%ms)
+         if (associated(blocks%ns)) deallocate (blocks%ns)
+      endif
+
+      if(.not. present(keep_metadata))then
       if (allocated(blocks%lstblks)) then
          do level = 0, size(blocks%lstblks)-1
             call list_finalizer(blocks%lstblks(level))
          enddo
          deallocate (blocks%lstblks)
       endif
+      endif
 
-      if (allflag == 1) then
+      if (allflag == 1 .and. .not. present(keep_metadata)) then
          if (associated(blocks%N_p)) deallocate (blocks%N_p)
          if (associated(blocks%M_p)) deallocate (blocks%M_p)
       endif

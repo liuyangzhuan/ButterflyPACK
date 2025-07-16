@@ -87,56 +87,115 @@ contains
       type(mesh)::msh
 
       integer level_butterfly, flag
-      integer i, j, k, ii, level, mm, nn, kk, rank, level_blocks, mn, group_k
+      integer i, j, k, ii, level, mm, nn, kk, rank, level_blocks, mn, group_k, rmax, rank_new
       integer style(3), data_type(3), id1, id2, id3, zfpflag
       character chara
-      DT, allocatable::Vin(:, :), Vin1(:, :), fullmat(:, :), fullmatrix(:, :)
-      real*8 T0, T1, tol_used
+      DT, allocatable::Vin(:, :), Vin1(:, :), Vin2(:, :), fullmat(:, :), fullmatrix(:, :), matrix_U(:,:), matrix_V(:,:)
+      real*8 T0, T1,T2,T3, tol_used, flop_tmp
       type(matrixblock) :: block1, block2, block3
 
       stats%Flop_Tmp = 0
 
       T0 = MPI_Wtime()
       style(3) = block3%style
+      style(1) = block1%style
+      style(2) = block2%style
       level_blocks = block3%level
 
       group_k = block1%col_group
       kk = msh%basis_group(group_k)%tail - msh%basis_group(group_k)%head + 1
 
-      call assert(style(3) == 1, 'block3 supposed to be style 1')
 
-      zfpflag=0
-      if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+      if(style(3) == 1)then
+         zfpflag=0
+         if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+#if HAVE_ZFP
+         if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+#endif
+      else
+         call assert(style(1) == 1 .and. style(2) == 1, 'both block1 and block2 supposed to be style 1')
+         zfpflag=0
+         if(allocated(block1%FullmatZFP%buffer_r))zfpflag=1
+      endif
+
+         mm = block3%m
+         nn = block3%n
+
+if(style(3) == 1)then
+
+         allocate (Vin(nn, nn))
+         Vin = 0d0
+         do ii = 1, nn
+            Vin(ii, ii) = 1d0
+         enddo
+         allocate (Vin1(kk, nn))
+         Vin1 = 0d0
+         allocate (fullmatrix(mm, nn))
+         fullmatrix = 0d0
+
+         call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, BPACK_cone, ptree, stats)
+         call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, BPACK_cone, ptree, stats)
+
+         if (chara == '-') fullmatrix = -fullmatrix
+         block3%fullmat = block3%fullmat + fullmatrix
+         deallocate (Vin)
+         deallocate (Vin1)
+         deallocate (fullmatrix)
 
 #if HAVE_ZFP
-      if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+         if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
 #endif
 
-      mm = size(block3%fullmat, 1)
-      nn = size(block3%fullmat, 2)
+else
+         T2 = MPI_Wtime()
+         if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Decompress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,tol_used,1)
+         if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Decompress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,tol_used,1)
 
-      allocate (Vin(nn, nn))
-      Vin = 0d0
-      do ii = 1, nn
-         Vin(ii, ii) = 1d0
-      enddo
-      allocate (Vin1(kk, nn))
-      Vin1 = 0d0
-      allocate (fullmatrix(mm, nn))
-      fullmatrix = 0d0
+         allocate (fullmatrix(mm, nn))
+         fullmatrix = 0d0
+         call gemmf90(block1%fullmat, block1%M, block2%fullmat, block2%M, fullmatrix, mm, 'N', 'N', mm, nn, kk, BPACK_cone, BPACK_czero, flop=flop_tmp)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop_tmp
+         if (chara == '-') fullmatrix = -fullmatrix
 
-      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, BPACK_cone, ptree, stats)
-      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, BPACK_cone, ptree, stats)
+         if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Compress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,option%tol_comp,1)
+         if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Compress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,option%tol_comp,1)
 
-      if (chara == '-') fullmatrix = -fullmatrix
-      block3%fullmat = block3%fullmat + fullmatrix
-      deallocate (fullmatrix)
-      deallocate (Vin)
-      deallocate (Vin1)
+         allocate (Vin2(nn, nn))
+         Vin2 = 0d0
+         do ii = 1, nn
+            Vin2(ii, ii) = 1d0
+         enddo
+         allocate (fullmat(mm, nn))
+         fullmat = 0d0
+         call Hmat_block_MVP_dat(block3, 'N', msh%basis_group(block3%row_group)%head, msh%basis_group(block3%col_group)%head, nn, Vin2, nn, fullmat, mm, BPACK_cone, ptree, stats)
+         fullmat = fullmat + fullmatrix
 
-#if HAVE_ZFP
-      if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
-#endif
+
+         rmax = min(mm, nn)
+         allocate (matrix_U(mm, rmax))
+         allocate (matrix_V(rmax, nn))
+         call ACA_CompressionFull(fullmat, matrix_U, matrix_V, mm, nn, rmax, rank_new, option%tol_comp*0.3d0, option%tol_comp)
+
+         deallocate(block3%ButterflyU%blocks(1)%matrix)
+         allocate(block3%ButterflyU%blocks(1)%matrix(mm,rank_new))
+         block3%ButterflyU%blocks(1)%matrix=matrix_U(:,1:rank_new)
+
+         deallocate(block3%ButterflyV%blocks(1)%matrix)
+         allocate(block3%ButterflyV%blocks(1)%matrix(nn,rank_new))
+         call copymatT(matrix_V(1:rank_new,:), block3%ButterflyV%blocks(1)%matrix, rank_new, nn)
+
+         block3%rankmax=rank_new
+         block3%rankmin=rank_new
+         deallocate(matrix_U)
+         deallocate(matrix_V)
+
+         deallocate(Vin2)
+         deallocate(fullmat)
+         deallocate (fullmatrix)
+         T3 = MPI_Wtime()
+         ! time_tmp = time_tmp + T3-T2
+endif
+
 
       T1 = MPI_Wtime()
       stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0

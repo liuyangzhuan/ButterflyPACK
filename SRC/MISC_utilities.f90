@@ -2862,7 +2862,7 @@ contains
       DT value_Z, value_UV, maxvalue
       DT inner_U, inner_V, ctemp
       real(kind=8) inner_UV
-      integer, allocatable:: select_column(:), select_row(:)
+      integer:: select_column(rmax+1), select_row(rmax+1)
       DT::mat(rankmax_r, rankmax_c), matU(rankmax_r, rmax), matV(rmax, rankmax_c)
 
       DT, allocatable:: row_R(:), column_R(:)
@@ -3090,9 +3090,6 @@ contains
          matU(1:rankmax_r, i) = matU(1:rankmax_r, i)*Singularsml(i)
       end do
       deallocate (mattemp, RR1, RR2, QQ1, QQ2, UUsml, VVsml, Singularsml)
-
-      deallocate (select_column)
-      deallocate (select_row)
 
       return
 

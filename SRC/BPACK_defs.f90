@@ -579,8 +579,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: myArows=0,myAcols=0 !< local number of row and column blocks
         type(matrixblock), pointer :: Local_blocks(:, :) => null()
         type(matrixblock), pointer :: Local_blocks_copy(:, :) => null() !< copy of the forward matrix
-      type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()
-        type(matrixblock), pointer:: blocks_1 => null(), blocks_2 => null()
+        type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()
+        type(block_ptr), pointer:: blocks_1(:)=> null(), blocks_2(:)=> null()
         type(list), allocatable::lstblks(:) !< lstblks(level) is the list of blocks at that level
         type(list),allocatable::admissibles(:) !< a list of admissible and inadmissible groups per each group
         type(iarray),allocatable::colorsets(:) !< the colorset (an integer array) of each level

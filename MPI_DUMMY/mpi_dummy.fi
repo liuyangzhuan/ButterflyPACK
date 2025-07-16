@@ -50,7 +50,17 @@
   parameter ( mpi_min = 3 )
   integer mpi_product
   parameter ( mpi_product = 4 )
-  
+
+
+  integer MPI_THREAD_SINGLE
+  parameter ( MPI_THREAD_SINGLE = 0 )
+  integer MPI_THREAD_FUNNELED
+  parameter ( MPI_THREAD_FUNNELED = 1 )
+  integer MPI_THREAD_SERIALIZED
+  parameter ( MPI_THREAD_SERIALIZED = 2 )  
+  integer MPI_THREAD_MULTIPLE
+  parameter ( MPI_THREAD_MULTIPLE = 3 )
+
 
   ! YL: I cannot find better ways than the following. It's possible that data equals 2147483646, then the MPI function will give wrong results. 
   integer MPI_IN_PLACE

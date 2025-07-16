@@ -1587,122 +1587,163 @@ contains
 
       if (present(flops)) flops = 0
 
-      if (IOwnPgrp(ptree, block_rand%pgno)) then
-
-         !!!!>**** generate 2D grid blacs quantities
-         ctxt = ptree%pgrp(block_rand%pgno)%ctxt
-         call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
-         if (myrow /= -1 .and. mycol /= -1) then
-            myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            ! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQ2D')
-            allocate (matQ2D(max(1,myArows), max(1,myAcols)))
-            matQ2D = 0
-
-            myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
-            allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
-            MatQcA_trans2D = 0
+      if(ptree%pgrp(block_rand%pgno)%nproc==1)then
 
             mnmin = min(block_rand%N, rmax)
-
-            myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
-            allocate (UU(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)ptree%MyID,'descUU',N, mnmin
-            call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descUU')
+            allocate (UU(block_rand%N, mnmin))
             UU = 0
-
-            myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            allocate (VV(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descVV')
+            allocate (VV(mnmin, rmax))
             VV = 0
-
             allocate (Singular(mnmin))
             Singular = 0
 
-         else
-            descQ2D(2) = -1
-            descQcA_trans2D(2) = -1
-            descUU(2) = -1
-            descVV(2) = -1
-            allocate (matQ2D(1, 1))   ! required for Redistribute1Dto2D
-            matQ2D = 0
-            allocate (matQcA_trans2D(1, 1)) ! required for Redistribute1Dto2D
-            matQcA_trans2D = 0
-            allocate (UU(1, 1))  ! required for Redistribute2Dto1D
-            UU = 0
-            allocate (VV(1, 1))
-            VV = 0
-         endif
-
-!!!!>**** redistribution into 2D grid
-         call Redistribute1Dto2D(matQ, block_rand%M_p, 0, block_rand%pgno, matQ2D, block_rand%M, 0, block_rand%pgno, rmax, ptree)
-         call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
-
-!!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
-         rank = 0
-         if (myrow /= -1 .and. mycol /= -1) then
-            call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
-            if (present(flops)) flops = flops + flop/dble(nprow*npcol)
-            ! do ii=1,rank
-            ! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
-            ! if(jproc==mycol)then
-            ! UU(:,myj) = UU(:,myj)*Singular(ii)
-            ! endif
-            ! enddo
-
+   !!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
+            rank = 0
+            call SVD_Truncate(matQcA_trans, block_rand%N, rmax, mnmin, UU, VV, Singular, option%tol_Rdetect, tolerance_abs, rank, flop=flop)
+            if (present(flops)) flops = flops + flop
             do ii = 1, rank
-               call g2l(ii, rank, nprow, nbslpk, iproc, myi)
-               if (iproc == myrow) then
-                  VV(myi, :) = VV(myi, :)*Singular(ii)
-               endif
+                  VV(ii, :) = VV(ii, :)*Singular(ii)
             enddo
 
-            myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-            allocate (matQUt2D(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)'descQUt2D', M, rank
-            call descinit_wp(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQUt2D')
+            allocate (matQUt2D(block_rand%M, rank))
             matQUt2D = 0
 
-            call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
-            if (present(flops)) flops = flops + flop/dble(nprow*npcol)
-         else
-            allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
-         endif
+            call gemmf90(matQ,block_rand%M,VV,mnmin,matQUt2D,block_rand%M,'N','T',block_rand%M, rank, rmax,BPACK_cone,BPACK_czero)
+            if (present(flops)) flops = flops + flop
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+            block_rand%rankmax = rank
+            block_rand%rankmin = rank
+            allocate (block_rand%ButterflyU%blocks(1))
+            allocate (block_rand%ButterflyV%blocks(1))
+            allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
+            allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
+            block_rand%ButterflyU%blocks(1)%matrix = matQUt2D
+            block_rand%ButterflyV%blocks(1)%matrix = UU(:, 1:rank)
 
-         block_rand%rankmax = rank
-         block_rand%rankmin = rank
-         allocate (block_rand%ButterflyU%blocks(1))
-         allocate (block_rand%ButterflyV%blocks(1))
-         allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
-         allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
-
-         !!!!>**** redistribution into 1D grid conformal to leaf sizes
-         call Redistribute2Dto1D(matQUt2D, block_rand%M, 0, block_rand%pgno, block_rand%ButterflyU%blocks(1)%matrix, block_rand%M_p, 0, block_rand%pgno, rank, ptree)
-         call Redistribute2Dto1D(UU, block_rand%N, 0, block_rand%pgno, block_rand%ButterflyV%blocks(1)%matrix, block_rand%N_p, 0, block_rand%pgno, rank, ptree)
-
-         if (myrow /= -1 .and. mycol /= -1) then
             deallocate (Singular)
+            deallocate (UU)
+            deallocate (VV)
+            deallocate (matQUt2D)
+
+      else
+
+         if (IOwnPgrp(ptree, block_rand%pgno)) then
+
+            !!!!>**** generate 2D grid blacs quantities
+            ctxt = ptree%pgrp(block_rand%pgno)%ctxt
+            call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
+            if (myrow /= -1 .and. mycol /= -1) then
+               myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               ! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQ2D')
+               allocate (matQ2D(max(1,myArows), max(1,myAcols)))
+               matQ2D = 0
+
+               myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
+               allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
+               MatQcA_trans2D = 0
+
+               mnmin = min(block_rand%N, rmax)
+
+               myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
+               allocate (UU(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)ptree%MyID,'descUU',N, mnmin
+               call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descUU')
+               UU = 0
+
+               myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               allocate (VV(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descVV')
+               VV = 0
+
+               allocate (Singular(mnmin))
+               Singular = 0
+
+            else
+               descQ2D(2) = -1
+               descQcA_trans2D(2) = -1
+               descUU(2) = -1
+               descVV(2) = -1
+               allocate (matQ2D(1, 1))   ! required for Redistribute1Dto2D
+               matQ2D = 0
+               allocate (matQcA_trans2D(1, 1)) ! required for Redistribute1Dto2D
+               matQcA_trans2D = 0
+               allocate (UU(1, 1))  ! required for Redistribute2Dto1D
+               UU = 0
+               allocate (VV(1, 1))
+               VV = 0
+            endif
+
+   !!!!>**** redistribution into 2D grid
+            call Redistribute1Dto2D(matQ, block_rand%M_p, 0, block_rand%pgno, matQ2D, block_rand%M, 0, block_rand%pgno, rmax, ptree)
+            call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
+
+   !!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
+            rank = 0
+            if (myrow /= -1 .and. mycol /= -1) then
+               call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
+               if (present(flops)) flops = flops + flop/dble(nprow*npcol)
+               ! do ii=1,rank
+               ! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
+               ! if(jproc==mycol)then
+               ! UU(:,myj) = UU(:,myj)*Singular(ii)
+               ! endif
+               ! enddo
+
+               do ii = 1, rank
+                  call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+                  if (iproc == myrow) then
+                     VV(myi, :) = VV(myi, :)*Singular(ii)
+                  endif
+               enddo
+
+               myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+               allocate (matQUt2D(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)'descQUt2D', M, rank
+               call descinit_wp(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQUt2D')
+               matQUt2D = 0
+
+               call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
+               if (present(flops)) flops = flops + flop/dble(nprow*npcol)
+            else
+               allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
+            endif
+
+            call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+
+            block_rand%rankmax = rank
+            block_rand%rankmin = rank
+            allocate (block_rand%ButterflyU%blocks(1))
+            allocate (block_rand%ButterflyV%blocks(1))
+            allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
+            allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
+
+            !!!!>**** redistribution into 1D grid conformal to leaf sizes
+            call Redistribute2Dto1D(matQUt2D, block_rand%M, 0, block_rand%pgno, block_rand%ButterflyU%blocks(1)%matrix, block_rand%M_p, 0, block_rand%pgno, rank, ptree)
+            call Redistribute2Dto1D(UU, block_rand%N, 0, block_rand%pgno, block_rand%ButterflyV%blocks(1)%matrix, block_rand%N_p, 0, block_rand%pgno, rank, ptree)
+
+            if (myrow /= -1 .and. mycol /= -1) then
+               deallocate (Singular)
+            endif
+            deallocate (matQ2D)
+            deallocate (MatQcA_trans2D)
+            deallocate (UU)
+            deallocate (VV)
+            deallocate (matQUt2D)
          endif
-         deallocate (matQ2D)
-         deallocate (MatQcA_trans2D)
-         deallocate (UU)
-         deallocate (VV)
-         deallocate (matQUt2D)
       endif
 
    end subroutine PQxSVDTruncate
@@ -3263,7 +3304,7 @@ contains
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      integer ldi, ldo
+      integer ldi, ldo, tid
       DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
@@ -3275,13 +3316,20 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
+
+        tid = 0
+#ifdef HAVE_OPENMP
+        tid = omp_get_thread_num()
+#endif
+
+
       select TYPE (h_mat)
       type is (Hmat)
          select TYPE (chara)
          type is (character(*))
 
-            block_off1 => h_mat%blocks_1
-            block_off2 => h_mat%blocks_2
+            block_off1 => h_mat%blocks_1(tid+1)%ptr
+            block_off2 => h_mat%blocks_2(tid+1)%ptr
 
             mm = block_o%M_loc
             nn = block_o%N_loc

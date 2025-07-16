@@ -381,13 +381,30 @@ contains
         type(matrixblock), pointer :: blocks, blocks_r, blocks_s, blocks_mm, blocks_uu, blocks_ll
         integer nprow, npcol, myrow, mycol, iproc, myi, jproc, myj, jproc1, myj1, iproc1, myi1, recv,send, send_ID
         real(kind=8) T0, T1, T3, T4
+        integer             :: tid, nthreads
+        double precision    :: t_start, t_stop
+        double precision, allocatable :: t_total(:)
+
+        nthreads=1
+#ifdef HAVE_OPENMP
+        nthreads = omp_get_max_threads()
+#endif
+
+        allocate(h_mat%blocks_1(nthreads))
+        allocate(h_mat%blocks_2(nthreads))
+
+        allocate(t_total(nthreads))
+        t_total = 0.0d0
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
-! #ifdef HAVE_TASKLOOP
-!       !$omp parallel
-!       !$omp single
-! #endif
+        
+#ifdef HAVE_TOPLEVEL_OPENMP
+#ifdef HAVE_TASKLOOP
+      !$omp parallel
+      !$omp single
+#endif
+#endif
         nn1 = MPI_Wtime()
 
         if(option%ILU==1)then
@@ -475,9 +492,12 @@ contains
                     call Hmat_block_ComputeMemory(blocks_r, Memory)
                     call LogMemory(stats, Memory)
                 endif
-! #ifdef HAVE_TASKLOOP
-!                 !$omp taskloop default(shared) private(j,jproc1, myj1,blocks_uu,blocks_mm)
-! #endif
+
+#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TASKLOOP
+                !$omp taskloop default(shared) private(j,jproc1, myj1,blocks_uu,blocks_mm)
+#endif
+#endif
                 do j=kk+1,num_blocks
                     call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                     if(iproc==myrow .and. jproc1==mycol)then
@@ -487,12 +507,16 @@ contains
                         call pack_all_blocks_one_node(blocks_uu, msh, option)
                     endif
                 enddo
-! #ifdef HAVE_TASKLOOP
-!                 !$omp end taskloop
-! #endif
-! #ifdef HAVE_TASKLOOP
-!                 !$omp taskloop default(shared) private(i,iproc1, myi1,blocks_ll,blocks_mm)
-! #endif
+#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TASKLOOP
+                !$omp end taskloop
+#endif
+#endif
+#ifdef HAVE_TOPLEVEL_OPENMP
+#ifdef HAVE_TASKLOOP
+                !$omp taskloop default(shared) private(i,iproc1, myi1,blocks_ll,blocks_mm)
+#endif
+#endif
                 do i=kk+1,num_blocks
                     call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
                     if(iproc1==myrow .and. jproc==mycol)then
@@ -502,9 +526,11 @@ contains
                         call pack_all_blocks_one_node(blocks_ll, msh, option)
                     endif
                 enddo
-! #ifdef HAVE_TASKLOOP
-!                 !$omp end taskloop
-! #endif
+#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TASKLOOP
+                !$omp end taskloop
+#endif
+#endif
                 if (recv == 1)then
                     Memory=0
                     call Hmat_block_ComputeMemory(blocks_r, Memory)
@@ -593,14 +619,19 @@ contains
 
 
                 if(kk+1<=num_blocks)then
-! #ifdef HAVE_TASKLOOP
-!                     !$omp taskloop default(shared) private(ij,i,j,iproc1, myi1,jproc1, myj1,blocks_ll,blocks_uu,blocks_mm,Memory)
-! #endif
+                    T3 = MPI_Wtime()
+#ifdef HAVE_TOPLEVEL_OPENMP                    
+#ifdef HAVE_TASKLOOP
+             !$omp taskloop default(shared) private(i,j,iproc1, myi1,jproc1, myj1,blocks_ll,blocks_uu,blocks_mm,Memory,t_start, t_stop, tid)
+#endif
+#endif
                     do ij = 1, (num_blocks-kk)*(num_blocks-kk)
+                        t_start = omp_get_wtime()
                         j = (ij - 1)/(num_blocks-kk) + 1
                         i = mod(ij - 1, (num_blocks-kk)) + 1
                         i = i + kk
                         j = j + kk
+                        tid = omp_get_thread_num()
                         call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
                         call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                         if(iproc1==myrow .and. jproc1==mycol)then
@@ -617,12 +648,23 @@ contains
                             call Hmat_block_delete(blocks_ll)
                             call Hmat_block_delete(blocks_uu)
                         endif
+                        t_stop  = omp_get_wtime()
+                        t_total(tid+1) = t_total(tid+1) + (t_stop - t_start)
                     enddo
-! #ifdef HAVE_TASKLOOP
-!                     !$omp end taskloop
-! #endif
-                endif
+#ifdef HAVE_TOPLEVEL_OPENMP                    
+#ifdef HAVE_TASKLOOP
+                   !$omp end taskloop
+#endif
+#endif
+                    T4 = MPI_Wtime()
+                    ! time_tmp = time_tmp + T4 - T3
+                    ! write(*,*)"total_time: ", T4 - T3
+                    ! do tid = 1, nthreads
+                    !     write(*,'(A,I3,2A,F8.4,A)') 'Thread ', tid-1, ': ', &
+                    !         'spent ', t_total(tid), '  seconds in tasks'
+                    ! end do
 
+                endif
 
             enddo
 
@@ -642,10 +684,17 @@ contains
 
         nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
-! #ifdef HAVE_TASKLOOP
-!       !$omp end single
-!       !$omp end parallel
-! #endif
+#ifdef HAVE_TOPLEVEL_OPENMP        
+#ifdef HAVE_TASKLOOP
+      !$omp end single
+      !$omp end parallel
+#endif
+#endif
+
+        deallocate(t_total)
+        deallocate(h_mat%blocks_1)
+        deallocate(h_mat%blocks_2)
+
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
         call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -767,7 +816,7 @@ contains
         type(proctree)::ptree
         type(mesh)::msh
 
-        integer rank0
+        integer rank0,tid
         integer level_butterfly
         integer style(3), mark(3)
         integer ii, jj, i, j, k, level, mm, nn, rank, level_blocks, kk, found_flag, group_m, group_n, m, n
@@ -777,6 +826,11 @@ contains
         type(matrixblock), pointer :: matrices_tmpblock
         type(matrixblock), target :: block2, block1, block3
         type(matrixblock), pointer :: block1_son, block2_son, block3_son
+
+        tid = 0
+#ifdef HAVE_OPENMP
+        tid = omp_get_thread_num()
+#endif
 
         style(3) = block3%style
         style(1) = block1%style
@@ -837,13 +891,14 @@ contains
             block2_son => block2%sons(2, 2)
             block3_son => block3%sons(2, 2)
             call Hmat_add_multiply(block3_son, chara, block1_son, block2_son, h_mat, option, stats, ptree, msh)
-        elseif (style(3) == 1) then
+        elseif (style(3) == 1 .or. (style(1) == 1 .and. style(2) == 1 .and. block3%level_butterfly==0)) then
+        ! elseif (style(3) == 1) then
             call Full_add_multiply(block3, chara, block1, block2, h_mat, option, stats, ptree, msh)
         elseif (style(3) == 2) then
             T0 = MPI_Wtime()
 
-            h_mat%blocks_1 => block1
-            h_mat%blocks_2 => block2
+            h_mat%blocks_1(tid+1)%ptr => block1
+            h_mat%blocks_2(tid+1)%ptr => block2
             rank0 = block3%rankmax
             call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, operand1=chara)
             T1 = MPI_Wtime()
@@ -898,7 +953,7 @@ contains
         integer style(3), mark, style_m
         integer i, j, k, ii
         integer mm, nn, rank
-        real(kind=8) T0, T1, error, tol_used
+        real(kind=8) T0, T1, T2, T3, error, tol_used
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         type(matrixblock) :: blocks_l, blocks_m
         DT:: ctemp
@@ -941,15 +996,17 @@ contains
                 rank = size(blocks_m%butterflyU%blocks(1)%matrix,2)
                 call Hmat_Lsolve(blocks_l, 'N', blocks_l%headm, rank, blocks_m%butterflyU%blocks(1)%matrix, blocks_l%M, ptree, stats)
             else
+                T2 = MPI_Wtime()
                 rank0 = blocks_m%rankmax
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
+                T3 = MPI_Wtime()
+                stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T3 - T2
+                stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
             endif
             T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
-            stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0
-            stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
         else
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
@@ -1030,7 +1087,7 @@ contains
         integer style(3), mark, style_m
         integer i, j, k, mm, nn, rank
         integer mm_1, mm_2, nn_1, nn_2, rank_1, rank_2, mm_3, nn_3, rank_3
-        real(kind=8) T0, T1, error, tol_used
+        real(kind=8) T0, T1, T2, T3, error, tol_used
         type(matrixblock) :: blocks_u, blocks_m
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         integer rank0
@@ -1070,15 +1127,17 @@ contains
                 rank = size(blocks_m%butterflyV%blocks(1)%matrix,2)
                 call Hmat_Usolve(blocks_u, 'T', blocks_u%headm, rank, blocks_m%butterflyV%blocks(1)%matrix, blocks_m%N, ptree, stats)
             else
+                T2 = MPI_Wtime()
                 rank0 = blocks_m%rankmax
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
+                T3 = MPI_Wtime()
+                stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T3 - T2
+                stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
             endif
             T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(blocks_m%level)=max(stats%rankmax_of_level_global_factor(blocks_m%level),blocks_m%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_XLUM = stats%Time_XLUM + T1 - T0
-            stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T1 - T0
-            stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
         else
             T0 = MPI_Wtime()
             if (blocks_m%style == 1) then
@@ -1128,15 +1187,20 @@ contains
         type(proctree)::ptree
         type(mesh)::msh
 
-        integer group_m, group_n, mm, nn,rank
+        integer group_m, group_n, mm, nn,rank,tid
         integer level_blocks, level_butterfly
         character chara, charatmp
-        real*8 T0, T1
+        real*8 T0, T1, T2, T3
         type(matrixblock), target :: block1, block2
         type(matrixblock) :: blocks
         real*8:: error_inout
         type(matrixblock), pointer::block_agent
         integer rank0
+
+        tid = 0
+#ifdef HAVE_OPENMP
+        tid = omp_get_thread_num()
+#endif
 
         if (block1%style == 2) then
             level_butterfly = block1%level_butterfly
@@ -1150,8 +1214,8 @@ contains
         allocate (block_agent)
         call BF_Init_randomized(level_butterfly, rank0, blocks%row_group, blocks%col_group, blocks, block_agent, msh, ptree, option, 1)
 
-        h_mat%blocks_1 => block1
-        h_mat%blocks_2 => block2
+        h_mat%blocks_1(tid+1)%ptr => block1
+        h_mat%blocks_2(tid+1)%ptr => block2
 
         T0 = MPI_Wtime()
         if(level_butterfly==0)then ! use faster, deterministic schemes
@@ -1176,14 +1240,16 @@ contains
                 stop
             endif
         else
+            T2 = MPI_Wtime()
             call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
+            T3 = MPI_Wtime()
+            stats%Mul_random_Time(blocks%level) = stats%Mul_random_Time(blocks%level) + T3 - T2
+            stats%Mul_random_CNT(blocks%level) = stats%Mul_random_CNT(blocks%level) + 1
         endif
         T1 = MPI_Wtime()
 
         stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
         stats%Time_Multiply = stats%Time_Multiply + T1 - T0
-        stats%Mul_random_Time(blocks%level) = stats%Mul_random_Time(blocks%level) + T1 - T0
-        stats%Mul_random_CNT(blocks%level) = stats%Mul_random_CNT(blocks%level) + 1
 
         call Hmat_BF_add(blocks, chara, block_agent, h_mat, option, stats, ptree, msh)
 
@@ -1207,10 +1273,15 @@ contains
         type(matrixblock), pointer::blocks_1_son, blocks_o_son
         character chara
         real(kind=8) error,flop
-        real(kind=8) T0, T1
-        integer rank0
+        real(kind=8) T0, T1, T2, T3
+        integer rank0, tid
         integer rankmax,rankmax2,ranknew,i,j
         DT,allocatable::matUnew(:,:),matVnew(:,:)
+
+        tid = 0
+#ifdef HAVE_OPENMP
+        tid = omp_get_thread_num()
+#endif
 
         if (blocks_o%style == 4) then
             T0 = MPI_Wtime()
@@ -1243,7 +1314,7 @@ contains
             endif
         else if (blocks_o%style == 2) then
             T0 = MPI_Wtime()
-            h_mat%blocks_1 => blocks_1
+            h_mat%blocks_1(tid+1)%ptr => blocks_1
             rank0 = blocks_o%rankmax
 
 
@@ -1281,22 +1352,20 @@ contains
                      blocks_o%rankmax = ranknew
 
                 else
+                    T2 = MPI_Wtime()
                     if (chara == '+') then
                     call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='a')
                     elseif (chara == '-') then
                     call BF_randomized(blocks_o%pgno, blocks_o%level_butterfly, rank0, option%rankrate, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add', option, stats, ptree, msh, operand1='s')
                     endif
+                    T3 = MPI_Wtime()
+                    stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T3 - T2
+                    stats%Add_random_CNT(blocks_o%level) = stats%Add_random_CNT(blocks_o%level) + 1
                 endif
-
-
-
-
             T1 = MPI_Wtime()
             ! time_tmp = time_tmp + T1-T0
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
-            stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T1 - T0
-            stats%Add_random_CNT(blocks_o%level) = stats%Add_random_CNT(blocks_o%level) + 1
         else if (blocks_o%style == 1) then
             call Full_add(blocks_o, chara, blocks_1, ptree, stats, option)
         end if

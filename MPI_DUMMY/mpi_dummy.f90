@@ -842,6 +842,20 @@ subroutine mpi_init ( ierror )
   return
 end subroutine mpi_init
 
+subroutine mpi_init_thread (required, provided, ierror )
+
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer required, provided, ierror
+
+  ierror = MPI_SUCCESS
+
+  return
+end subroutine mpi_init_thread
+
+
 subroutine mpi_irecv ( data, n, datatype, iproc, itag, comm, irequest, ierror )
 
 !*****************************************************************************80

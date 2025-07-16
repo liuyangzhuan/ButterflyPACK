@@ -19,6 +19,7 @@ set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 # Set up options
 option(enable_doc       "Build doxygen documentation" OFF)
 option(enable_openmp    "Build with OpenMP support" ON)
+option(enable_toplevel_openmp    "Use OpenMP at top levels of the solver" OFF)
 option(enable_mpi    "Build with MPI support" ON)
 
 ######################################################################
@@ -159,7 +160,18 @@ if(enable_openmp)
     set(CMAKE_Fortran_FLAGS "-DHAVE_OPENMP ${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
     set(OpenMP_Fortran_FLAGS_EXPORT "${OpenMP_Fortran_FLAGS}")
     set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
+
+    if(enable_toplevel_openmp)
+        set(CMAKE_Fortran_FLAGS "-DHAVE_TOPLEVEL_OPENMP ${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
+        set(OpenMP_Fortran_FLAGS_EXPORT "${OpenMP_Fortran_FLAGS}")
+        set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
+    endif()
+
   endif()
+
+
+
+
   if(OPENMP_CXX_FOUND)
     set(CMAKE_CXX_FLAGS "-DHAVE_OPENMP ${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
     set(OpenMP_CXX_FLAGS_EXPORT "${OpenMP_CXX_FLAGS}")
