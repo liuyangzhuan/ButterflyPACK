@@ -2810,7 +2810,7 @@ contains
       call psgemr2d(M, N, MatA, ia, ja, desca, MatB, ib, jb, descb, ictxt)
 #endif
 #else
-      MatB(1:M,1:N) = MatA(1:M,1:N)
+      MatB(ib:ib+M-1,jb:jb+N-1) = MatA(ia:ia+M-1,ja:ja+N-1)
 #endif
    end subroutine pgemr2df90
 
@@ -3063,7 +3063,9 @@ contains
       call psgesvdf90(jobu, jobvt, m, n, a, ia, ja, desca, s, u, iu, ju, descu, vt, ivt, jvt, descvt, flop)
 #endif
 #else
-      call gesvdf90(a, s, u, vt, flop)
+      ! call gesvdf90(a, s, u, vt, flop)
+      call gesvd_robust(a, s, u, vt, m, n, min(m,n), flop)
+
 #endif
 
    end subroutine pgesvdf90
