@@ -1535,8 +1535,8 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
 		n2 = MPI_Wtime()
 
-		! call current_node_patch_mapping('V',curr(:,1),msh)
-		! call current_node_patch_mapping('H',curr(:,2),msh)
+		call current_node_patch_mapping('V_current',Current(:,1),msh,quant,ptree)
+		call current_node_patch_mapping('H_current',Current(:,2),msh,quant,ptree)
 
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
