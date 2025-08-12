@@ -48,9 +48,15 @@
 //------------------------------------------------------------------------------
 using namespace std;
 using namespace butterflypack;
+
 using scalart = double;
+MPI_Datatype mpi_scalar = MPI_C_DOUBLE;
+
 // using scalart = float;
+// MPI_Datatype mpi_scalar = MPI_C_FLOAT;
+
 // using scalart = _Complex double;
+// MPI_Datatype mpi_scalar = MPI_C_DOUBLE_COMPLEX;
 
 
 
@@ -505,6 +511,7 @@ if(tst==1){
         x_glo.data()[i_old-1+nth*Npo] = x[i+nth*myseg];
       }
     }
+	MPI_Allreduce(MPI_IN_PLACE,x_glo.data(), Npo*nrhs, mpi_scalar, MPI_SUM, MPI_COMM_WORLD);
 
 
 

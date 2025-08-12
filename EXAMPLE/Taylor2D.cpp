@@ -465,6 +465,7 @@ if(myrank==master_rank){
         x_glo.data()[i_old-1+nth*Npo] = x[i+nth*myseg];
       }
     }
+	MPI_Allreduce(MPI_IN_PLACE,x_glo.data(), Npo*nrhs, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
 	if(myrank==master_rank)std::cout<<"Printing stats of the first HODLR: "<<std::endl;
 	z_c_bpack_printstats(&stats,&ptree);
