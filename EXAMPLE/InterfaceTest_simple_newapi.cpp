@@ -50,10 +50,10 @@ using namespace std;
 using namespace butterflypack;
 
 using scalart = double;
-MPI_Datatype mpi_scalar = MPI_C_DOUBLE;
+MPI_Datatype mpi_scalar = MPI_DOUBLE;
 
 // using scalart = float;
-// MPI_Datatype mpi_scalar = MPI_C_FLOAT;
+// MPI_Datatype mpi_scalar = MPI_FLOAT;
 
 // using scalart = _Complex double;
 // MPI_Datatype mpi_scalar = MPI_C_DOUBLE_COMPLEX;
