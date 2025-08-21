@@ -1,11 +1,11 @@
-image: gcc:11
+image: gcc
 default:
   before_script:
     - echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
     - apt update
-    - apt-get -y install gcc-11 g++-11 gfortran-11
-    - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 60 --slave /usr/bin/g++ g++ /usr/bin/g++-11
-    - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-11 60
+    - apt-get -y install gcc-13 g++-13 gfortran-13
+    - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
+    - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-13 60
     - apt-get -y install openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
 
 stages:
