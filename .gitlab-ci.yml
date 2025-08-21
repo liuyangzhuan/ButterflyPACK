@@ -1,4 +1,4 @@
-image: gcc
+image: gcc:11
 default:
   before_script:
     - echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
