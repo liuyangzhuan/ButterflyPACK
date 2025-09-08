@@ -48,9 +48,12 @@
 //------------------------------------------------------------------------------
 using namespace std;
 using namespace butterflypack;
-using scalart = double;
+// using scalart = double;
 // using scalart = float;
+// using scalart = _Complex float;
+// using scalart = std::complex<float>;
 // using scalart = _Complex double;
+using scalart = std::complex<double>;
 
 
 // 2-norm distance
