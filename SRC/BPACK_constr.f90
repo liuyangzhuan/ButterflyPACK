@@ -4175,7 +4175,7 @@ contains
       integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
       DT, target, allocatable::alldat_loc(:)
-      integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
+      integer:: Ninter, nr, nrmax, nc, ncmax, ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect)::submats(1)
 
       ! select case(option%format)
@@ -4195,16 +4195,16 @@ contains
       ! nr=msh%Nunk
       ! nc=msh%Nunk
 
-      nr = 100
-      nc = 100
+      nrmax = 100
+      ncmax = 100
 
       allocate (colidx(Ninter))
       allocate (rowidx(Ninter))
       allocate (pgidx(Ninter))
       ! allocate(datidx(Ninter))
 
-      allocate (allrows(Ninter*nr))
-      allocate (allcols(Ninter*nc))
+      allocate (allrows(Ninter*nrmax))
+      allocate (allcols(Ninter*ncmax))
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
@@ -4230,6 +4230,33 @@ contains
       ! ntot_loc=0
       pp = 0
       do nn = 1, Ninter
+
+         do ii = 1, nrmax
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+            allrows(idx_row + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allrows(idx_row + 1) = max(floor_safe(3125*a), 1)+3125*0
+            ! allrows(idx_row + 1) = max(floor_safe(7812*a), 1)+7812*0
+            ! allrows(idx_row + 1) = max(floor_safe(19531*a), 1)+19531*0
+            ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
+            idx_row = idx_row + 1
+         enddo
+         call remove_dup_int(allrows, nrmax, nr)
+
+
+         do ii = 1, ncmax
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+            allcols(idx_col + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allcols(idx_col + 1) = max(floor_safe(3125*a), 1)+3125*1
+            ! allcols(idx_col + 1) = max(floor_safe(7812*a), 1)+7812*1
+            ! allcols(idx_col + 1) = max(floor_safe(19531*a), 1)+19531*1
+            ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
+            idx_col = idx_col + 1
+         enddo
+         call remove_dup_int(allcols, ncmax, nc)
+
+
          rowidx(nn) = nr
          colidx(nn) = nc
          pp = pp + 1
@@ -4245,27 +4272,7 @@ contains
             idx_dat = idx_dat + myArows*myAcols
          endif
 
-         do ii = 1, nr
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-            allrows(idx_row + 1) = max(floor_safe(msh%Nunk*a), 1)
-            ! allrows(idx_row + 1) = max(floor_safe(3125*a), 1)+3125*0
-            ! allrows(idx_row + 1) = max(floor_safe(7812*a), 1)+7812*0
-            ! allrows(idx_row + 1) = max(floor_safe(19531*a), 1)+19531*0
-            ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
-            idx_row = idx_row + 1
-         enddo
 
-         do ii = 1, nc
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-            allcols(idx_col + 1) = max(floor_safe(msh%Nunk*a), 1)
-            ! allcols(idx_col + 1) = max(floor_safe(3125*a), 1)+3125*1
-            ! allcols(idx_col + 1) = max(floor_safe(7812*a), 1)+7812*1
-            ! allcols(idx_col + 1) = max(floor_safe(19531*a), 1)+19531*1
-            ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
-            idx_col = idx_col + 1
-         enddo
       enddo
 
       allocate (alldat_loc(idx_dat))
@@ -4382,7 +4389,7 @@ contains
       integer dim_i,ij,ii,ii1,ij1
       integer:: Nunk_n_loc,idxs,idxe,idx_1,idx_2
       integer,allocatable:: idx_src(:)
-      integer:: Npt_src, N_glo
+      integer:: Npt_src, N_glo, Npt_src_tmp
       real(kind=8):: a, v1, v2, v3
       integer ierr
       type(intersect) :: submats(1)
@@ -4416,6 +4423,8 @@ contains
       enddo
       call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
 
+      Npt_src_tmp = Npt_src
+      call remove_dup_int(idx_src, Npt_src_tmp, Npt_src)
 
       ! Npt_src=1
       ! allocate(idx_src(Npt_src))
