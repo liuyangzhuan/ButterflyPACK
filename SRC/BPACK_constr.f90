@@ -4241,7 +4241,8 @@ contains
             ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
             idx_row = idx_row + 1
          enddo
-         call remove_dup_int(allrows, nrmax, nr)
+         call remove_dup_int(allrows(idx_row-nrmax+1:idx_row), nrmax, nr)
+         idx_row = idx_row - (nrmax-nr)
 
 
          do ii = 1, ncmax
@@ -4254,7 +4255,8 @@ contains
             ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
             idx_col = idx_col + 1
          enddo
-         call remove_dup_int(allcols, ncmax, nc)
+         call remove_dup_int(allcols(idx_col-ncmax+1:idx_col), ncmax, nc)
+         idx_col = idx_col - (ncmax-nc)
 
 
          rowidx(nn) = nr
