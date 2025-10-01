@@ -817,6 +817,17 @@ contains
       type(proctree)::ptree
       real(kind=8)::rtemp, rtemp1, rtemp2
       integer ierr
+      character(len=1024)  :: fname,substring1
+      logical :: exists
+
+		write(substring1 , *) ptree%MyID
+      fname="Stat_PID_"//trim(adjustl(substring1))//".txt"
+      inquire(file=fname, exist=exists)
+      if (exists) then
+         open(200, file=fname, status="old", action="write")
+      else
+         open(200, file=fname, status="new", action="write")
+      end if
 
       ! stats%Time_random=0  ! Intialization, MVP, Reconstruction
       ! stats%Time_Sblock=0
@@ -839,53 +850,82 @@ contains
 
       call MPI_ALLREDUCE(stats%Time_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Constr time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'Constr time:', stats%Time_Fill, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'EntryEval time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'EntryEval time:', stats%Time_Entry, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_Entry_Traverse, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') '   traversal time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') '   traversal time:', stats%Time_Entry_Traverse, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_Entry_BF, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') '  BF compute time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') '  stats%Time_Entry_BF:', rtemp, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_Entry_Comm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') '  communicate time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') '  communicate time:', stats%Time_Entry_Comm, 'Seconds'
       call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       call MPI_ALLREDUCE(stats%Mem_Direct_for, rtemp1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Tot constr mem:', rtemp + rtemp1, 'MB'
+      write (200, '(A21,Es14.2,A3)') 'Constr mem:', stats%Mem_Comp_for + stats%Mem_Direct_for, 'MB'
+      write (200, '(A21,Es14.2,A3)') 'Constr mem (compr):', stats%Mem_Comp_for, 'MB'
+      write (200, '(A21,Es14.2,A3)') 'Constr mem (dense):', stats%Mem_Direct_for, 'MB'
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Constr flops:', rtemp
+      write (200, '(A21,Es14.2)') 'Constr flops:', stats%Flop_Fill
       if (ptree%MyID == Main_ID .and. allocated(stats%rankmax_of_level_global)) write (*, '(A21,I14)') 'Rank before factor:', maxval(stats%rankmax_of_level_global)
+      if (allocated(stats%rankmax_of_level)) write (200, *) 'Ranks before factor:', stats%rankmax_of_level
 
       call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Factor time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'Factor time:', stats%Time_Factor, 'Seconds'
       call MPI_ALLREDUCE(stats%Mem_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Tot factor mem:', rtemp, 'MB'
+      write (200, '(A21,Es14.2,A3)') 'Factor mem:', stats%Mem_Factor, 'MB'
       call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Factor flops:', rtemp
+      write (200, '(A21,Es14.2)') 'Factor flops:', stats%Flop_Factor
       if (ptree%MyID == Main_ID .and. allocated(stats%rankmax_of_level_global_factor)) write (*, '(A21,I14)') 'Rank after factor:', maxval(stats%rankmax_of_level_global_factor)
+      if (allocated(stats%rankmax_of_level_global_factor)) write (200, *) 'Rank after factor:', stats%rankmax_of_level_global_factor
 
       call MPI_ALLREDUCE(stats%Time_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'Solve time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'Solve time:', stats%Time_Sol, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_Sol, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'Solve flops:', rtemp
+      write (200, '(A21,Es14.2)') 'Solve flops:', stats%Flop_Sol
 
       call MPI_ALLREDUCE(stats%Time_BLK_MVP, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'BLK_mult time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'BLK_mult time:', stats%Time_BLK_MVP, 'Seconds'
 
       call MPI_ALLREDUCE(stats%Time_C_Mult, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult time:', stats%Time_C_Mult, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_C_Mult, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'C_mult flops:', rtemp
+      write (200, '(A21,Es14.2)') 'C_mult flops:', stats%Flop_C_Mult
 
       call MPI_ALLREDUCE(stats%Time_RedistV, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if(ptree%MyID==Main_ID)write(*,'(A21,Es14.2,A8)') 'RedistV time: ', rtemp, 'Seconds'
+      write(200,'(A21,Es14.2,A8)') 'RedistV time: ', stats%Time_RedistV, 'Seconds'
 
       call MPI_ALLREDUCE(stats%Time_C_Extract, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_extract time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_extract time:', stats%Time_C_Extract, 'Seconds'
       call MPI_ALLREDUCE(stats%Flop_C_Extract, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'C_extract flops:', rtemp
+      write (200, '(A21,Es14.2)') 'C_extract flops:', stats%Flop_C_Extract
 
       call MPI_ALLREDUCE(stats%Mem_peak, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Peak mem:', rtemp, 'MB'
-      if (ptree%MyID == Main_ID) write (*, *) 'time_tmp', time_tmp
+      write (200, '(A21,Es14.2,A3)') 'Peak mem:', stats%Mem_peak, 'MB'
+      write (200, *) 'time_tmp', time_tmp
+
+      close(200)
+
+
+
+
 
    end subroutine PrintStat
 
@@ -967,7 +1007,7 @@ contains
                ii = ii + 1
                call getarg(ii, strings1)
 
-               if (trim(strings) == '--nmin_leaf') then
+               if (trim(strings) == '--nmin_leaf' .or. trim(strings) == '--Nmin_leaf') then
                   read (strings1, *) option%Nmin_leaf
                else if (trim(strings) == '--tol_comp') then
                   read (strings1, *) option%tol_comp
@@ -976,10 +1016,12 @@ contains
                else if (trim(strings) == '--tol_rand') then
                   read (strings1, *) option%tol_rand
                   option%tol_Rdetect = option%tol_rand*1d-1
-               else if (trim(strings) == '--tol_Rdetect') then
+               else if (trim(strings) == '--tol_rdetect' .or. trim(strings) == '--tol_Rdetect') then
                   read (strings1, *) option%tol_Rdetect
                else if (trim(strings) == '--tol_itersol') then
                   read (strings1, *) option%tol_itersol
+               else if (trim(strings) == '--tol_ls' .or. trim(strings) == '--tol_LS') then
+                  read (strings1, *) option%tol_LS
                else if (trim(strings) == '--n_iter') then
                   read (strings1, *) option%n_iter
                else if (trim(strings) == '--level_check') then
@@ -996,17 +1038,17 @@ contains
                   read (strings1, *) option%schulzsplitlevel
                else if (trim(strings) == '--schulzlevel') then
                   read (strings1, *) option%schulzlevel
-               else if (trim(strings) == '--lrlevel') then
+               else if (trim(strings) == '--lrlevel' .or. trim(strings) == '--LRlevel') then
                   read (strings1, *) option%LRlevel
-               else if (trim(strings) == '--errfillfull') then
+               else if (trim(strings) == '--errfillfull' .or. trim(strings) == '--ErrFillFull') then
                   read (strings1, *) option%ErrFillFull
-               else if (trim(strings) == '--forwardN15flag') then
+               else if (trim(strings) == '--forwardn15flag' .or. trim(strings) == '--forwardN15flag') then
                   read (strings1, *) option%forwardN15flag
                else if (trim(strings) == '--fastsample_tensor') then
                   read (strings1, *) option%fastsample_tensor
-               else if (trim(strings) == '--baca_batch') then
+               else if (trim(strings) == '--baca_batch' .or. trim(strings) == '--BACA_Batch') then
                   read (strings1, *) option%BACA_Batch
-               else if (trim(strings) == '--reclr_leaf') then
+               else if (trim(strings) == '--reclr_leaf' .or. trim(strings) == '--RecLR_leaf') then
                   read (strings1, *) option%RecLR_leaf
                else if (trim(strings) == '--nogeo') then
                   read (strings1, *) option%nogeo
@@ -1022,9 +1064,9 @@ contains
                   read (strings1, *) option%periods(3)
                else if (trim(strings) == '--less_adapt') then
                   read (strings1, *) option%less_adapt
-               else if (trim(strings) == '--errsol') then
+               else if (trim(strings) == '--errsol' .or. trim(strings) == '--ErrSol') then
                   read (strings1, *) option%ErrSol
-               else if (trim(strings) == '--lr_blk_num') then
+               else if (trim(strings) == '--lr_blk_num' .or. trim(strings) == '--LR_BLK_NUM') then
                   read (strings1, *) option%LR_BLK_NUM
                else if (trim(strings) == '--rank0') then
                   read (strings1, *) option%rank0
@@ -1034,9 +1076,9 @@ contains
                   read (strings1, *) option%itermax
                else if (trim(strings) == '--powiter') then
                   read (strings1, *) option%powiter
-               else if (trim(strings) == '--ilu') then
+               else if (trim(strings) == '--ilu' .or. trim(strings) == '--ILU') then
                   read (strings1, *) option%ILU
-               else if (trim(strings) == '--nbundle') then
+               else if (trim(strings) == '--nbundle' .or. trim(strings) == '--Nbundle') then
                   read (strings1, *) option%Nbundle
                else if (trim(strings) == '--near_para') then
                   read (strings1, *) option%near_para
@@ -1066,7 +1108,7 @@ contains
                   read (strings1, *) option%knn
                else if (trim(strings) == '--cpp') then
                   read (strings1, *) option%cpp
-               else if (trim(strings) == '--lnobp') then
+               else if (trim(strings) == '--lnobp' .or. trim(strings) == '--lnoBP') then
                   read (strings1, *) option%lnoBP
                else if (trim(strings) == '--bp_cnt_lr') then
                   read (strings1, *) option%bp_cnt_lr

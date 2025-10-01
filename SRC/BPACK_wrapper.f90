@@ -749,7 +749,7 @@ contains
          option%xyzsort = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'lnoBP') then
+      if (trim(str) == 'lnobp' .or. trim(str) == 'lnoBP') then
          call c_f_pointer(val_Cptr, val_i)
          option%lnoBP = val_i
          valid_opt = 1
@@ -759,7 +759,7 @@ contains
          option%bp_cnt_lr = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'TwoLayerOnly') then
+      if (trim(str) == 'twolayeronly' .or. trim(str) == 'TwoLayerOnly') then
          call c_f_pointer(val_Cptr, val_i)
          option%TwoLayerOnly = val_i
          valid_opt = 1
@@ -784,22 +784,22 @@ contains
          option%schulzlevel = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'LRlevel') then
+      if (trim(str) == 'lrlevel' .or. trim(str) == 'LRlevel') then
          call c_f_pointer(val_Cptr, val_i)
          option%LRlevel = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ErrFillFull') then
+      if (trim(str) == 'errfillfull' .or. trim(str) == 'ErrFillFull') then
          call c_f_pointer(val_Cptr, val_i)
          option%ErrFillFull = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'BACA_Batch') then
+      if (trim(str) == 'baca_batch' .or. trim(str) == 'BACA_Batch') then
          call c_f_pointer(val_Cptr, val_i)
          option%BACA_Batch = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ErrSol') then
+      if (trim(str) == 'errsol' .or. trim(str) == 'ErrSol') then
          call c_f_pointer(val_Cptr, val_i)
          option%ErrSol = val_i
          valid_opt = 1
@@ -824,17 +824,17 @@ contains
          option%less_adapt = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'RecLR_leaf') then
+      if (trim(str) == 'reclr_leaf' .or. trim(str) == 'RecLR_leaf') then
          call c_f_pointer(val_Cptr, val_i)
          option%RecLR_leaf = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'Nmin_leaf') then
+      if (trim(str) == 'nmin_leaf' .or. trim(str) == 'Nmin_leaf') then
          call c_f_pointer(val_Cptr, val_i)
          option%Nmin_leaf = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'LR_BLK_NUM') then
+      if (trim(str) == 'lr_blk_num' .or. trim(str) == 'LR_BLK_NUM') then
          call c_f_pointer(val_Cptr, val_i)
          option%LR_BLK_NUM = val_i
          valid_opt = 1
@@ -854,12 +854,12 @@ contains
          option%powiter = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ILU') then
+      if (trim(str) == 'ilu' .or. trim(str) == 'ILU') then
          call c_f_pointer(val_Cptr, val_i)
          option%ILU = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'Nbundle') then
+      if (trim(str) == 'nbundle' .or. trim(str) == 'Nbundle') then
          call c_f_pointer(val_Cptr, val_i)
          option%Nbundle = val_i
          valid_opt = 1
@@ -938,12 +938,12 @@ contains
          option%tol_comp = val_d
          valid_opt = 1
       endif
-      if (trim(str) == 'tol_Rdetect') then
+      if (trim(str) == 'tol_rdetect' .or. trim(str) == 'tol_Rdetect') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_Rdetect = val_d
          valid_opt = 1
       endif
-      if (trim(str) == 'tol_LS') then
+      if (trim(str) == 'tol_ls' .or. trim(str) == 'tol_LS') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_LS = val_d
          valid_opt = 1
