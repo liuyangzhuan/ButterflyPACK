@@ -918,6 +918,8 @@ contains
 
       call MPI_ALLREDUCE(stats%Mem_peak, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Peak mem:', rtemp, 'MB'
+      call MPI_ALLREDUCE(stats%Mem_peak, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A3)') 'Peak mem (sum):', rtemp, 'MB'
       write (200, '(A21,Es14.2,A3)') 'Peak mem:', stats%Mem_peak, 'MB'
       write (200, *) 'time_tmp', time_tmp
 
@@ -985,7 +987,7 @@ contains
       option%knn = 0
       option%cpp = 0
       option%bp_cnt_lr = 1
-      option%less_adapt = 0
+      option%less_adapt = 1
 
    end subroutine SetDefaultOptions
 
